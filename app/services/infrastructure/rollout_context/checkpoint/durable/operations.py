@@ -134,12 +134,10 @@ class RolloutCheckpointOperationsMixin:
                 )
                 cutoff = len(source_sequences)
                 if base_message_sequence is not None:
-                    matching = [
-                        index
-                        for index, sequence in enumerate(source_sequences)
-                        if sequence <= base_message_sequence
-                    ]
-                    cutoff = matching[-1] + 1 if matching else 0
+                    cutoff = 0
+                    for sequence_index, sequence in enumerate(source_sequences):
+                        if sequence <= base_message_sequence:
+                            cutoff = sequence_index + 1
                 if source_anchor is not None:
                     anchor_row = find_message_locator(connection, source_anchor, sequences=source_sequences)
                     if anchor_row is None:

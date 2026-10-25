@@ -18,7 +18,7 @@ media/
 
 - `utils/fileTransferHost.ts`：工作区文件下载执行器（`FileTransferHost.downloadWorkspaceFile` 以 anchor 触发浏览器原生导航），服务于 `api/workspaceFilesystem.ts` 的下载链路，不含任何媒体类型判定，**不属于本包**。
 - `utils/selection/`：浏览器元素选择与工作区目录选择工具，与媒体附件无关。
-- `utils/markdown/markdown.ts`、`utils/markdown/workspaceMarkdown.ts`、`utils/skillMarkdown.ts`：Markdown 渲染与解析族，与媒体附件无关。
+- `utils/markdown/workspaceMarkdown.ts`：工作区 Markdown 链接与图片目标解析，与媒体附件无关。
 - `types/`：后端协议类型（如 `AttachmentRef`）的权威来源，本包只消费不定义。
 
 # 可修改内容

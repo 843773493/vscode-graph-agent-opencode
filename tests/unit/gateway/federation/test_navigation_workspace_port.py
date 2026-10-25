@@ -13,7 +13,7 @@ from app.gateway.federation.errors import (
     FEDERATION_TARGET_OWNER_REJECTED,
     FederationError,
 )
-from tests.support.communication import WORKSPACE_ID
+from tests.support.communication.probe import WORKSPACE_ID
 from tests.unit.gateway.test_federation_workspace_port import REQUEST_ID, _HTTPContext
 from tests.unit.gateway.test_federation_workspace_port import (
     http_context as http_context,  # noqa: PLC0414 - 复用真实 HTTP port fixture

@@ -246,7 +246,7 @@ def prepare_registered_context(
             if frozen_skills is not None:
                 install_frozen_skill_catalog(
                     context_source_manager, frozen_skills,
-                    include_instructions="read_file" in tool_set.tool_names,
+                    include_instructions="skill_load" in tool_set.tool_names,
                 )
             rebuild = None if summary_candidate is not None else owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,

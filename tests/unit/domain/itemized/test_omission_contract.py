@@ -14,7 +14,7 @@ from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def omitted_tool_snapshot(
     omitted_snapshot: ContextAssemblySnapshot,
 ) -> ContextAssemblySnapshot:
@@ -149,7 +149,7 @@ def test_available_omitted_overlay_seals_without_resolving_contribution(
     assert restored.selection[0].base_delta_role == role
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ...]]:
     contributions = []
     entries = []

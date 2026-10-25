@@ -16,7 +16,14 @@ export const SERVICE_LOG_MAX_BYTES = 64 * 1024 * 1024;
 export const SERVICE_LOG_ROTATIONS = 3;
 
 export function rotateServiceLog(logPath) {
-  if (!existsSync(logPath) || statSync(logPath).size < SERVICE_LOG_MAX_BYTES) return;
+  let logStat;
+  try {
+    logStat = statSync(logPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (logStat.size < SERVICE_LOG_MAX_BYTES) return;
   for (let index = SERVICE_LOG_ROTATIONS - 1; index >= 1; index -= 1) {
     const source = `${logPath}.${index}`;
     const target = `${logPath}.${index + 1}`;

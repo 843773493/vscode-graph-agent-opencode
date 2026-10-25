@@ -42,10 +42,9 @@ class ConfigSnapshotMixin:
         *,
         validate_schema: bool = True,
     ) -> ConfigSnapshot:
-        config, source_paths, source_details = self._read_effective_config()
-        schema_path = self._resolve_schema_path()
+        config, source_paths, source_details, schema_path = self._read_effective_config()
         if validate_schema:
-            validate_config_payload(config, schema=self._load_schema())
+            validate_config_payload(config, schema=self._load_schema(schema_path))
         snapshot = build_config_snapshot(
             config,
             source_paths=source_paths,

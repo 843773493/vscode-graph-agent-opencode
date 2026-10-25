@@ -14,9 +14,9 @@ import { useSessionRunActions } from "../../hooks/session/useSessionRunActions";
 import { selectComposerState } from "../../state/composerState";
 import {
   installGatewayFetch,
-  mountSessionRunActions,
-  restoreSessionHookGlobals,
-} from "../../hooks/session/sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { mountSessionRunActions } from "../../tests/fixtures/session/sessionRunActions";
 
 /**
  * AppState.error 是「工作区初始化失败」出口的专属状态，唯一设计场景是整个应用
@@ -91,7 +91,7 @@ const { default: App } = await import("../../App");
 const { default: WarmConfirmProvider } = await import("./WarmConfirmProvider");
 
 afterEach(() => {
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
 });
 
 const WORKSPACE_ID = "ws_error_channel";

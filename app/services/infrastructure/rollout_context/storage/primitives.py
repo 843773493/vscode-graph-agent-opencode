@@ -280,7 +280,9 @@ class _RolloutPathLock:
 
     def _notify(self) -> None:
         self._condition.notify_all()
-        for ticket in self._queue:
+        if self._queue:
+            ticket = self._queue[0]
+            # FIFO 只允许队首通过，异步通知只需唤醒它。
             if ticket.loop is not None and ticket.ready is not None:
                 ticket.loop.call_soon_threadsafe(ticket.ready.set)
 

@@ -1196,6 +1196,12 @@ button:focus-visible,
   color: #64748b;
 }
 
+.debug-element-truncated {
+  padding: 8px 10px;
+  color: #b45309;
+  font-size: 12px;
+}
+
 .debug-console-list,
 .debug-network-list,
 .debug-sources-list {

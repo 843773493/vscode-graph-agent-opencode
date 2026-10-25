@@ -18,7 +18,7 @@ from app.domain.itemized.enums import CanonicalItemStatus, PayloadKind, Semantic
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -30,13 +30,13 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
-from tests.support.session_catalog_owner import fixture_catalog_scope
-from tests.support.web_boundary_seeding import (
+from tests.support.rollout.web_boundary_seeding import (
     boundary_item,
     seed_boundary_turn,
     tool_call_payload,
     tool_result_payload,
 )
+from tests.support.session_catalog_owner import fixture_catalog_scope
 
 
 def _seed_rollout(workspace_root: Path, session_id: str, count: int) -> None:

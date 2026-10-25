@@ -137,7 +137,8 @@ export function createIndexedDbCatalogOutboxPort(
         "读取会话目录 outbox",
       );
       await done;
-      return records.sort((left, right) => left.client_sequence - right.client_sequence);
+      // IDB 按索引键、再按复合主键排序；同分区内主键第二项就是 client_sequence。
+      return records;
     },
     async insert(partitionKey, operation) {
       if (operation.client_sequence !== null) {
@@ -303,7 +304,8 @@ function catalogOutboxFromRecords(
   records: readonly CatalogOutboxStoredOperation[],
 ): CatalogOutbox {
   const partitionKey = catalogOutboxPartitionKey(partition);
-  let outbox = createCatalogOutbox(partition);
+  const outbox = createCatalogOutbox(partition);
+  const operations = outbox.operations;
   const operationIds = new Set<string>();
   const sequences = new Set<number>();
   for (const record of records) {
@@ -329,10 +331,12 @@ function catalogOutboxFromRecords(
     }
     operationIds.add(record.operation.client_operation_id);
     sequences.add(record.client_sequence);
-    outbox = { ...outbox, operations: [...outbox.operations, record.operation] };
+    operations.push(record.operation);
   }
-  outbox = { ...outbox, operations: orderedCatalogOutboxOperations(outbox) };
-  return normalizeRestoredCatalogOutbox(outbox);
+  return normalizeRestoredCatalogOutbox({
+    ...outbox,
+    operations: orderedCatalogOutboxOperations(outbox),
+  });
 }
 
 /** 只清理 operation，不清理分区高水位。 */

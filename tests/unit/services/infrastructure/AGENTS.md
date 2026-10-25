@@ -9,17 +9,21 @@
 ```text
 infrastructure/
 ├── conftest.py            # 每项测试隔离的 EventChannelService
-├── config/                # 配置监听、快照与 shadow lifecycle
+├── config/                # 配置策略、路径差异、监听、快照与 shadow lifecycle
 ├── events/                # typed 事件与 channel 生命周期/重放
+├── file_tree_settings/    # 会话和工作区文件树快捷方式设置
 ├── gateway_clients/       # Gateway HTTP client 的就绪检查、上下文与 fork relay
 ├── mcp/                   # MCP catalog owner、binding、配置与工具指引
-├── node_debug/            # Node Debug 进程 identity 专项测试
+├── node_debug/            # Node Debug 进程身份、Inspector、会话和恢复测试
 ├── resource_platform/     # 资源观察、注册与虚拟资源
 ├── rollout_context/       # rollout/checkpoint 持久化及恢复职责
 ├── team/                  # 团队协作服务
+├── tool_services/         # 工具目录、选择、输出存储与服务接口
 ├── trace_event_store/     # 事件采集、trace 存储、索引和恢复
 ├── turn_history/          # 回合历史索引读取与重建
 ├── workspace_activity/    # 工作区活动事件与游标
+├── workspace_files/       # 工作区文件路径、读取写入、资源观察与持久操作
+├── workspace_service_clients/ # Browser/Terminal 辅助服务 HTTP client
 └── workspace_state_store/ # 工作区状态库的配置与组合职责
 ```
 

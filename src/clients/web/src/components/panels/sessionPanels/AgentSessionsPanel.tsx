@@ -19,7 +19,6 @@ import AgentSessionsContextMenus, {
 } from '../../agentSessions/AgentSessionsContextMenus';
 import AgentSessionsFilterMenu from '../../agentSessions/AgentSessionsFilterMenu';
 import AgentSessionsSessionTree from '../../agentSessions/AgentSessionsSessionTree';
-import SessionResourceExplorer from '../../agentSessions/SessionResourceExplorer';
 import { useAgentSessionsTreeState } from '../../agentSessions/useAgentSessionsTreeState';
 import WorkspaceRenameDialog from '../../workspace/WorkspaceRenameDialog';
 import WorkspaceAddDialog from '../../workspace/WorkspaceAddDialog';
@@ -41,6 +40,10 @@ import {
 } from '../../agentSessions/agentSessionsUtils';
 import { errorMessage } from "../../../utils/errorMessage";
 
+const SessionResourceExplorer = React.lazy(
+  () => import('../../agentSessions/SessionResourceExplorer'),
+);
+
 interface AgentSessionsPanelProps {
   apiPort: number;
   sessions: Session[];
@@ -58,6 +61,7 @@ interface AgentSessionsPanelProps {
     sourceSessionId: string,
   ) => Promise<void>;
   onStatusChange: (message: string) => void;
+  onOpenDiagnostic: (title: string, detail: string) => void;
   isOpen: boolean;
   workspaceName: string;
   gatewayWorkspaces: GatewayWorkspace[];
@@ -128,6 +132,7 @@ export default function AgentSessionsPanel({
   onSetSessionParent,
   onForkSessionContext,
   onStatusChange,
+  onOpenDiagnostic,
   isOpen,
   workspaceName,
   gatewayWorkspaces,
@@ -484,38 +489,41 @@ export default function AgentSessionsPanel({
           ) : null}
 
           {gatewayWorkspaces.length > 0 ? (
-            <SessionResourceExplorer
-              apiPort={apiPort}
-              workspaces={gatewayWorkspaces}
-              activeWorkspaceId={activeGatewayWorkspaceId}
-              currentSessionId={currentSessionId}
-              searchOpen={searchOpen}
-              searchQuery={searchQuery}
-              workspaceSwitching={workspaceSwitching}
-              startingWorkspaceIds={startingWorkspaceIds}
-              removingWorkspaceIds={removingGatewayWorkspaceIds}
-              onActivateWorkspace={onActivateWorkspace}
-              onSetWorkspaceParent={onSetWorkspaceParent}
-              onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
-              onCreateSessionInFolder={onCreateSessionInFolder}
-              onSessionFolderDeleted={onSessionFolderDeleted}
-              catalogSyncKeys={catalogSyncKeys}
-              catalogRefreshVersions={catalogRefreshVersions}
-              sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
-              sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
-              gatewayUserAccess={gatewayUserAccess}
-              onSelectSession={onSelectWorkspaceSession}
-              onStatusChange={onStatusChange}
-              onOpenWorkspaceMenu={openWorkspaceMenu}
-              onOpenSessionMenu={openSessionMenu}
-              activeJobIdsBySession={activeJobIdsBySession}
-              unreadSessionKeys={unreadSessionKeys}
-              onRequestAddWorkspace={() => setWorkspaceAddOpen(true)}
-              onOpenConnectionManager={onOpenGatewayControl}
-              onReconnectWorkspace={onReconnectWorkspace}
-              onStartWorkspace={handleStartWorkspace}
-              generatorResources={generatorResources}
-            />
+            <React.Suspense fallback={null}>
+              <SessionResourceExplorer
+                apiPort={apiPort}
+                workspaces={gatewayWorkspaces}
+                activeWorkspaceId={activeGatewayWorkspaceId}
+                currentSessionId={currentSessionId}
+                searchOpen={searchOpen}
+                searchQuery={searchQuery}
+                workspaceSwitching={workspaceSwitching}
+                startingWorkspaceIds={startingWorkspaceIds}
+                removingWorkspaceIds={removingGatewayWorkspaceIds}
+                onActivateWorkspace={onActivateWorkspace}
+                onSetWorkspaceParent={onSetWorkspaceParent}
+                onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
+                onCreateSessionInFolder={onCreateSessionInFolder}
+                onSessionFolderDeleted={onSessionFolderDeleted}
+                catalogSyncKeys={catalogSyncKeys}
+                catalogRefreshVersions={catalogRefreshVersions}
+                sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
+                sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
+                gatewayUserAccess={gatewayUserAccess}
+                onSelectSession={onSelectWorkspaceSession}
+                onStatusChange={onStatusChange}
+                onOpenDiagnostic={onOpenDiagnostic}
+                onOpenWorkspaceMenu={openWorkspaceMenu}
+                onOpenSessionMenu={openSessionMenu}
+                activeJobIdsBySession={activeJobIdsBySession}
+                unreadSessionKeys={unreadSessionKeys}
+                onRequestAddWorkspace={() => setWorkspaceAddOpen(true)}
+                onOpenConnectionManager={onOpenGatewayControl}
+                onReconnectWorkspace={onReconnectWorkspace}
+                onStartWorkspace={handleStartWorkspace}
+                generatorResources={generatorResources}
+              />
+            </React.Suspense>
           ) : null}
 
           {gatewayWorkspaces.length === 0 ? (

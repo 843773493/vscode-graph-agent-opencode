@@ -9,15 +9,24 @@ import { applyCatalogOutboxOperationReceipt, catalogOutboxBatchToIntents } from 
 import { useSessionCatalogActions } from "../shell/useSessionCatalogActions";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import {
-  apiResponse, errorResponse, emptyGeneratorResources, explorerProps, flushEffects,
-  installGatewayFetch, restoreSessionHookGlobals, testGatewayUserAccess,
-  TEST_WORKSPACE_REQUEST_TARGET, withCatalogDefaults,
-} from "./sessionHookTestFixtures";
+  apiSuccessResponse,
+  apiErrorResponse,
+  installGatewayFetch,
+  restoreGatewayTestEnvironment,
+  testGatewayUserAccess,
+  TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
+  withDefaultGatewayApiResponses,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { createEmptyGeneratorResourcesController } from "../../tests/fixtures/session/appState";
+import {
+  createSessionResourceExplorerProps,
+} from "../../tests/fixtures/session/sessionResourceExplorer";
+import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   for (const dispose of cleanup.splice(0).reverse()) dispose();
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
 });
 
 /** 只替换持久端口与 HTTP 结果；两条真实 hook 共用生产 runtime/driver/投影。 */
@@ -77,26 +86,26 @@ async function mountPendingParent(options: {
   let releaseDelayedRead: (() => void) | undefined;
   let nextExportMutation: (() => void) | undefined;
   const refreshReads: string[] = [];
-  installGatewayFetch(withCatalogDefaults(({ path, url }) => {
-    if (path === "/api/gateway/health") return apiResponse({ gateway_id: "pending-parent-gateway" });
+  installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+    if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "pending-parent-gateway" });
     if (path === "/api/v1/workspace") {
-      return apiResponse({ workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id });
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id });
     }
     if (path === "/api/v1/session-catalog/snapshot") {
-      if (readFailure === "snapshot") return errorResponse(500, "权威 snapshot 读取失败");
-      return apiResponse({ workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+      if (readFailure === "snapshot") return apiErrorResponse(500, "权威 snapshot 读取失败");
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
         catalog_revision: revision,
         event_seq_watermark: revision - 7, generation: 1 });
     }
     if (path === "/api/v1/session-catalog/navigation-events") {
-      return apiResponse({ workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
         event_seq_watermark: revision - 7, items: [], next_cursor: null,
         has_more: false, cursor_gone: revision > 7 });
     }
     if (path === "/api/v1/session-catalog/export") {
-      if (readFailure === "export") return errorResponse(500, "权威 export 读取失败");
+      if (readFailure === "export") return apiErrorResponse(500, "权威 export 读取失败");
       refreshReads.push("export");
-      const response = apiResponse({ revision: `catalog-${revision}`, catalog_revision: revision, items: [...nodes.values()] });
+      const response = apiSuccessResponse({ revision: `catalog-${revision}`, catalog_revision: revision, items: [...nodes.values()] });
       // 模拟完整节点集冻结后、根页请求前的另一个客户端提交。
       if (nextExportMutation) {
         nextExportMutation(); nextExportMutation = undefined; revision += 1;
@@ -106,17 +115,17 @@ async function mountPendingParent(options: {
     if (path === "/api/v1/session-catalog/refresh") {
       refreshReads.push("refresh");
       const items = [...nodes.values()].filter((node) => node.parent_node_id === null);
-      return apiResponse({ revision: `catalog-${revision}`, catalog_revision: revision,
+      return apiSuccessResponse({ revision: `catalog-${revision}`, catalog_revision: revision,
         parent_node_id: null, items, cursor: null, total: items.length, consistency_warning: null });
     }
     if (path === "/api/v1/session-catalog/children") {
-      if (readFailure === "children") return errorResponse(500, "权威 children 读取失败");
+      if (readFailure === "children") return apiErrorResponse(500, "权威 children 读取失败");
       const parent = new URL(url).searchParams.get("parent_node_id");
       childQueries.push(parent);
-      if (parent !== null && !nodes.has(parent)) return errorResponse(404, `会话目录节点不存在: ${parent}`);
+      if (parent !== null && !nodes.has(parent)) return apiErrorResponse(404, `会话目录节点不存在: ${parent}`);
       const items = [...nodes.values()].filter((node) => node.parent_node_id === parent);
       const limit = parent === null ? options.rootPageLimit ?? items.length : items.length;
-      const response = apiResponse({
+      const response = apiSuccessResponse({
         revision: `catalog-${revision}`, catalog_revision: revision,
         parent_node_id: parent, items: items.slice(0, limit),
         cursor: items.length > limit ? "root-more" : null, total: items.length,
@@ -165,8 +174,8 @@ async function mountPendingParent(options: {
   const access = testGatewayUserAccess();
   runtime.activatePrincipal(access);
   cleanup.push(() => runtime.dispose());
-  const generatorResources = emptyGeneratorResources();
-  const workspaces = [{ ...TEST_WORKSPACE_REQUEST_TARGET, name: "待提交父目录工作区" }] as GatewayWorkspace[];
+  const generatorResources = createEmptyGeneratorResourcesController();
+  const workspaces = [{ ...TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, name: "待提交父目录工作区" }] as GatewayWorkspace[];
   const sessions = new Map();
   let explorer!: ReturnType<typeof useSessionResourceExplorer>;
   let actions!: ReturnType<typeof useSessionCatalogActions>;
@@ -174,7 +183,7 @@ async function mountPendingParent(options: {
   function Harness() {
     const liveSnapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
     const snapshot = heldSnapshot ?? liveSnapshot;
-    explorer = useSessionResourceExplorer({ ...explorerProps({
+    explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({
       sessionCatalogOutboxRuntime: runtime, sessionCatalogOutboxSnapshot: snapshot,
       gatewayUserAccess: access,
     }), generatorResources });
@@ -192,9 +201,9 @@ async function mountPendingParent(options: {
     return null;
   }
   let renderer!: ReactTestRenderer;
-  await act(async () => { renderer = create(<Harness />); await flushEffects(); });
+  await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
   cleanup.push(() => act(() => renderer.unmount()));
-  const handle = await runtime.openWorkspace(TEST_WORKSPACE_REQUEST_TARGET, access);
+  const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
   return {
     explorer: () => explorer, actions: () => actions, handle, receipts, nodes, errors, statuses, childQueries, refreshReads,
     releaseAcceptance: () => releaseAcceptance(),
@@ -202,7 +211,7 @@ async function mountPendingParent(options: {
     holdSnapshotUntilPrune: () => { heldSnapshot = runtime.getSnapshot(); },
     releaseSnapshot: async () => {
       heldSnapshot = null;
-      await act(async () => { renderer.update(<Harness />); await flushEffects(); });
+      await act(async () => { renderer.update(<Harness />); await flushReactEffects(); });
     },
     afterNextExport: (mutation: () => void) => { nextExportMutation = mutation; },
     setReadFailure: (failure: typeof readFailure) => { readFailure = failure; },
@@ -239,7 +248,7 @@ async function mountPendingParent(options: {
       await act(async () => {
         await handle.driver.reconcile();
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 850));
-        await flushEffects();
+        await flushReactEffects();
       });
     },
   };
@@ -281,7 +290,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
           statusReconciliation = mounted.handle.driver.reconcile();
         }
         else mounted.releaseAcceptance();
-        await flushEffects();
+        await flushReactEffects();
       });
       mounted.releaseAcceptance();
       const reservedParent = mounted.handle.driver.current().operations[0]!;
@@ -300,7 +309,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       await act(async () => {
         mounted.releaseAcceptance();
         await statusReconciliation;
-        await flushEffects();
+        await flushReactEffects();
       });
       const acceptedChild = mounted.handle.driver.current().operations[1]!;
       const acceptedClosed = mounted.handle.driver.current().operations[2]!;
@@ -320,7 +329,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       await act(async () => {
         await mounted.explorer().reconcileCatalogBranches("ws-test", [null, reservedParent.created_node_id],
           [parent.client_operation_id, child.client_operation_id, closed.client_operation_id]);
-        await flushEffects();
+        await flushReactEffects();
       });
       expect(mounted.handle.driver.current().operations).toEqual([]);
       await mounted.releaseSnapshot();
@@ -425,7 +434,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     const expanded = [...mounted.explorer().expandedIds];
     const release = mounted.delayChildRead("deleted-child");
     let lateRead!: Promise<unknown>;
-    await act(async () => { lateRead = mounted.explorer().loadBranch("ws-test", "deleted-child"); await flushEffects(); });
+    await act(async () => { lateRead = mounted.explorer().loadBranch("ws-test", "deleted-child"); await flushReactEffects(); });
     mounted.nodes.delete("host");
     mounted.nodes.delete("deleted-child");
     mounted.nodes.set("moved", { ...mounted.nodes.get("moved")!, parent_node_id: "outside", node_revision: 2 });
@@ -449,7 +458,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       mounted.afterNextExport(() => mounted.nodes.set("outside", {
         ...mounted.nodes.get("outside")!, name: "另一客户端的最新根名称", node_revision: 2,
       }));
-      await act(async () => { await flushEffects(); await mounted.explorer().refreshResourceTree(); });
+      await act(async () => { await flushReactEffects(); await mounted.explorer().refreshResourceTree(); });
       expect(mounted.refreshReads.slice(-2)).toEqual(["export", "refresh"]);
       expect(mounted.explorer().branches.has("ws-test:deleted-child")).toBe(false);
       expect(mounted.explorer().branches.get("ws-test:root")?.cursor).toBeNull();
@@ -466,7 +475,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       catalogOutboxPartitionKey, catalogOutboxBatchToIntents, createCatalogOutbox, markCatalogOutboxOperationPersisted } =
       await import('../../state/session/sessionCatalogOutbox');
     const ids = ['a', 'b', 'd', 'c'].map((suffix) => 'op_' + suffix.repeat(32));
-    const partition = { gatewayId: 'failure-gateway', workspaceId: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id!, principal: 'guest' };
+    const partition = { gatewayId: 'failure-gateway', workspaceId: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id!, principal: 'guest' };
     let seed = createCatalogOutbox(partition);
     const intents = [
       { kind: 'rename_node' as const, targetNodeId: 'cnode_a', name: 'A已提交' },
@@ -531,16 +540,16 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       node_id: 'cnode_' + suffix, kind: 'folder', name: suffix === 'a' ? 'A已提交' : suffix,
       parent_node_id: null, has_children: false, node_revision: 3, state: 'active',
     }));
-    installGatewayFetch(withCatalogDefaults(async ({ path }) => {
-      if (path === '/api/gateway/health') return apiResponse({ gateway_id: partition.gatewayId });
-      if (path === '/api/v1/workspace') return apiResponse({ workspace_id: partition.workspaceId });
-      if (path === '/api/v1/session-catalog/snapshot') return apiResponse({ workspace_id: partition.workspaceId,
+    installGatewayFetch(withDefaultGatewayApiResponses(async ({ path }) => {
+      if (path === '/api/gateway/health') return apiSuccessResponse({ gateway_id: partition.gatewayId });
+      if (path === '/api/v1/workspace') return apiSuccessResponse({ workspace_id: partition.workspaceId });
+      if (path === '/api/v1/session-catalog/snapshot') return apiSuccessResponse({ workspace_id: partition.workspaceId,
         catalog_revision: 12, event_seq_watermark: 4, generation: 1 });
       if (path === '/api/v1/session-catalog/children') {
         if (refreshing) { branchRequested(); await branchGate; }
         const items = nodes.map((node) => refreshing && node.node_id === 'cnode_external'
           ? { ...node, name: '外部客户端已提交', node_revision: 4 } : node);
-        return apiResponse({ revision: refreshing ? 'catalog-12' : 'catalog-7',
+        return apiSuccessResponse({ revision: refreshing ? 'catalog-12' : 'catalog-7',
           catalog_revision: refreshing ? 12 : 7, parent_node_id: null, items,
           total: items.length, cursor: null, consistency_warning: null });
       }
@@ -570,17 +579,17 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     const access = testGatewayUserAccess();
     runtime.activatePrincipal(access);
     let renderer!: ReactTestRenderer;
-    const generatorResources = emptyGeneratorResources();
+    const generatorResources = createEmptyGeneratorResourcesController();
     function Harness() {
       const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
-      explorer = useSessionResourceExplorer({ ...explorerProps({ sessionCatalogOutboxRuntime: runtime,
+      explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({ sessionCatalogOutboxRuntime: runtime,
         sessionCatalogOutboxSnapshot: snapshot, gatewayUserAccess: access }), generatorResources });
       return null;
     }
     try {
-      await act(async () => { renderer = create(<Harness />); await flushEffects(); });
+      await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
       await act(async () => { await explorer.loadBranch('ws-test'); });
-      const handle = await runtime.openWorkspace(TEST_WORKSPACE_REQUEST_TARGET, access);
+      const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
       await act(async () => { explorer.toggleExpanded("catalog:ws-test:cnode_external"); });
       const expandedBefore = [...explorer.expandedIds];
       expect(expandedBefore).toContain("catalog:ws-test:cnode_external");
@@ -589,8 +598,8 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       expect(dispatchedFacts).toEqual([]);
       expect(deleted).toEqual([]);
       expect(handle.driver.current().operations.map((operation) => operation.client_operation_id)).toEqual(ids);
-      await act(async () => { releaseBranch(); await flushEffects(); });
-      await act(async () => { await flushEffects(); });
+      await act(async () => { releaseBranch(); await flushReactEffects(); });
+      await act(async () => { await flushReactEffects(); });
       await dispatchStarted;
       expect(dispatchedFacts).toHaveLength(1);
       expect(dispatchedFacts[0]!.names).toContain('外部客户端已提交');
@@ -629,7 +638,7 @@ describe("真实 confirmed owner 刷新失败的恢复", () => {
       await expect(mounted.settle(true)).rejects.toThrow(`权威 ${stage} 读取失败`);
       await act(async () => {
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 800));
-        await flushEffects();
+        await flushReactEffects();
       });
       expect(catalogOutboxBatchToIntents(mounted.handle.driver.current().operations)).toEqual(accepted);
       expect(mounted.handle.driver.current().operations.map((operation) => operation.state)).toEqual(["accepted", "accepted", "accepted"]);

@@ -45,7 +45,7 @@ from app.services.mapping.itemized.provider_history import (
     visible_text,
 )
 from app.services.mapping.turn_response_parts import response_parts_from_records
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.view_mutations import mutate_view_members
 
 
 def test_plain_turn_has_zero_expandable_items() -> None:

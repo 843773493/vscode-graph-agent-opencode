@@ -110,7 +110,10 @@ export function appendReceivedEvents(
   }
 
   const current = map.get(mapKey) ?? [];
-  const seen = new Set(current.map((item) => item.id));
+  const seen = new Set<string>();
+  for (const item of current) {
+    seen.add(item.id);
+  }
   const receivedAt = new Date().toISOString();
   const appended: FrontendReceivedEvent[] = [];
 
@@ -159,17 +162,27 @@ export function trimReceivedEventQueue(
     return items;
   }
 
-  const pinned: FrontendReceivedEvent[] = [];
-  const unpinned: FrontendReceivedEvent[] = [];
-  for (const item of items) {
-    (isPinnedEventQueueItem(item) ? pinned : unpinned).push(item);
+  const latestPinnedIds: string[] = [];
+  const latestUnpinnedIds: string[] = [];
+  let pinnedCount = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (isPinnedEventQueueItem(item)) {
+      pinnedCount += 1;
+      latestPinnedIds.push(item.id);
+      if (latestPinnedIds.length === limit) {
+        break;
+      }
+    } else if (latestUnpinnedIds.length < limit) {
+      latestUnpinnedIds.push(item.id);
+    }
   }
-  const keepUnpinnedCount = Math.max(limit - pinned.length, 0);
-  const kept = [
-    ...pinned.slice(-limit),
-    ...unpinned.slice(-keepUnpinnedCount),
-  ];
-  const keptIds = new Set(kept.map((item) => item.id));
+
+  const keepUnpinnedCount = Math.max(limit - pinnedCount, 0);
+  const keptIds = new Set(latestPinnedIds);
+  for (const id of latestUnpinnedIds.slice(0, keepUnpinnedCount)) {
+    keptIds.add(id);
+  }
   return items.filter((item) => keptIds.has(item.id));
 }
 

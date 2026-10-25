@@ -155,7 +155,9 @@ class GoalRuntimeService:
         if task is not None and task is not asyncio.current_task():
             await task
 
-    async def _continue_after_agent_end(self, job_id: str, tokens: int = 0) -> None:
+    async def _continue_after_agent_end(
+        self, job_id: str, total_tokens: int = 0
+    ) -> None:
         await self._wait_for_goal_capture(job_id)
         job = await self._job_service.get(job_id)
         if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
@@ -164,8 +166,7 @@ class GoalRuntimeService:
         owner_goal_id = self._job_goal_ids.pop(job_id, None)
         if goal is None or owner_goal_id != goal.goal_id:
             return
-        elapsed = 0
-        elapsed = max(
+        elapsed_seconds = max(
             0,
             int(
                 (
@@ -175,7 +176,10 @@ class GoalRuntimeService:
             ),
         )
         goal = await self._goal_service.account_job(
-            job.session_id, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed
+            job.session_id,
+            job_id=job_id,
+            tokens=total_tokens,
+            elapsed_seconds=elapsed_seconds,
         )
         if goal is None:
             return
@@ -350,7 +354,7 @@ class GoalRuntimeService:
                 continue
             if self._job_goal_ids.get(job.job_id) != goal.goal_id:
                 continue
-            elapsed = max(
+            elapsed_seconds = max(
                 0,
                 int(
                     (
@@ -362,7 +366,7 @@ class GoalRuntimeService:
                 session_id,
                 job_id=job.job_id,
                 tokens=0,
-                elapsed_seconds=elapsed,
+                elapsed_seconds=elapsed_seconds,
                 close_time=True,
             )
 

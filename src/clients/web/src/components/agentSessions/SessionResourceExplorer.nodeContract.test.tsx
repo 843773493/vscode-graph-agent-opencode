@@ -4,14 +4,14 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayWorkspace } from "../../types/backend";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import {
-  apiResponse,
+  apiSuccessResponse,
   installGatewayFetch,
-  installTestWindow,
-  restoreSessionHookGlobals,
-} from "../../hooks/session/sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import SessionResourceExplorer from "./SessionResourceExplorer";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 const generatorResources = {
   generators: null,
@@ -56,14 +56,15 @@ function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
 /** 渲染导航树 + 一个契约被破坏的会话目录节点，展开工作区后返回渲染器。 */
 async function renderWithBranchItem(
   branchItems: unknown[],
+  onOpenDiagnostic: (title: string, detail: string) => void,
 ): Promise<ReactTestRenderer> {
-  installTestWindow(80_141);
+  installGatewayTestWindow(80_141);
   installGatewayFetch((request) => {
     if (request.path.includes("/api/gateway/workspace-navigation")) {
-      return apiResponse({ revision: "navigation", nodes: [navigationNode("gw_1", "gw_1")] });
+      return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode("gw_1", "gw_1")] });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
-      return apiResponse({
+      return apiSuccessResponse({
         revision: "catalog",
         catalog_revision: 3,
         parent_node_id: null,
@@ -73,7 +74,7 @@ async function renderWithBranchItem(
       });
     }
     if (request.path.includes("/api/gateway/session-generators")) {
-      return apiResponse({ revision: "generators", items: [] });
+      return apiSuccessResponse({ revision: "generators", items: [] });
     }
     return undefined;
   });
@@ -100,6 +101,7 @@ async function renderWithBranchItem(
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onStatusChange={() => undefined}
+        onOpenDiagnostic={onOpenDiagnostic}
         onOpenWorkspaceMenu={() => undefined}
         onOpenSessionMenu={() => undefined}
         activeJobIdsBySession={new Map()}
@@ -138,9 +140,9 @@ function actionErrorText(tree: ReactTestRenderer): string {
       typeof instance.props.className === "string"
       && instance.props.className.split(" ").includes("session-resource-error"),
   );
-  // 收集横幅子树内的全部文本节点，避免依赖具体层级结构。
+  // 操作失败保留简短标题，技术诊断通过输出入口查看。
   return banners
-    .flatMap((banner) => banner.findAllByType("span"))
+    .flatMap((banner) => banner.findAllByType("strong"))
     .map((span) => span.props.children)
     .filter((child): child is string => typeof child === "string")
     .join(" ");
@@ -148,9 +150,10 @@ function actionErrorText(tree: ReactTestRenderer): string {
 
 describe("会话目录节点右键菜单的契约破坏", () => {
   test("文件夹节点缺 folder_id 时响亮报错，而不是右键静默无反应", async () => {
+    const diagnostics: string[] = [];
     const tree = await renderWithBranchItem([
       { node_id: "ses_broken_folder", kind: "folder", name: "坏文件夹", has_children: true },
-    ]);
+    ], (_title, detail) => diagnostics.push(detail));
     expect(actionErrorText(tree)).toBe("");
 
     act(() => {
@@ -162,13 +165,17 @@ describe("会话目录节点右键菜单的契约破坏", () => {
       });
     });
 
-    expect(actionErrorText(tree)).toContain("folder_id");
+    expect(actionErrorText(tree)).toContain("失败");
+    act(() => tree.root.findAllByType("button").find((button) => button.props.children === "查看日志")!.props.onClick());
+    expect(diagnostics[0]).toContain("folder_id");
+    act(() => tree.unmount());
   });
 
   test("会话节点缺 session_id 时响亮报错，而不是右键静默无反应", async () => {
+    const diagnostics: string[] = [];
     const tree = await renderWithBranchItem([
       { node_id: "ses_broken", kind: "session", name: "坏会话", has_children: false },
-    ]);
+    ], (_title, detail) => diagnostics.push(detail));
 
     act(() => {
       catalogNodeRow(tree, "ses_broken").props.onContextMenu({
@@ -179,6 +186,9 @@ describe("会话目录节点右键菜单的契约破坏", () => {
       });
     });
 
-    expect(actionErrorText(tree)).toContain("会话 ID");
+    expect(actionErrorText(tree)).toContain("失败");
+    act(() => tree.root.findAllByType("button").find((button) => button.props.children === "查看日志")!.props.onClick());
+    expect(diagnostics[0]).toContain("会话 ID");
+    act(() => tree.unmount());
   });
 });

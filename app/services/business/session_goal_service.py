@@ -181,8 +181,26 @@ class SessionGoalService:
     async def update_for_agent(
         self, session_id: str, status: GoalStatus
     ) -> SessionGoalDTO:
+        if status == GoalStatus.paused:
+            thread_id = await self._session_service.resolve_main_thread(session_id)
+            async with self.lock_for(session_id):
+                current = self._store.read(session_id)
+                if current is None or current.status != GoalStatus.active:
+                    raise ValueError("当前没有进行中的 Goal 可以暂停")
+                paused = current.model_copy(
+                    update={
+                        "status": GoalStatus.paused,
+                        "revision": current.revision + 1,
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+                if paused.thread_id != thread_id:
+                    raise ValueError("Goal 只能更新权威 main Thread")
+                self._store.write(paused)
+                await self._publish_updated(paused)
+                return paused
         if status not in {GoalStatus.complete, GoalStatus.blocked}:
-            raise ValueError("Agent 只能将 Goal 更新为 complete 或 blocked")
+            raise ValueError("Agent 只能将 Goal 更新为 paused、complete 或 blocked")
         return await self.set(session_id, status=status)
 
     async def clear(self, session_id: str) -> SessionGoalClearResultDTO:

@@ -19,8 +19,8 @@ from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetIdentityRef,
     ToolSetRef,
+    ref_identity,
     selection_ref_identity,
-    unique_ref_identities,
 )
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
@@ -106,7 +106,16 @@ class ContextRequestPlan:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 plan")
             if ref.ref_type == "request_only" and ref.thread_id != self.thread_id:
                 raise ItemSchemaError("source-mismatch: request-only ContextRef 不属于当前 thread")
-        unique_ref_identities(self.refs)
+        # 复用thread-qualified identity建selection查找表并完成唯一性校验。
+        # sibling thread 的同名ref不能互相覆盖。
+        ref_registry: dict[tuple[str, ...], ContextRef] = {}
+        for ref in self.refs:
+            identity = ref_identity(ref)
+            if identity in ref_registry:
+                raise ItemSchemaError(
+                    "context ref registry 存在重复 ref_type/ref_id/thread_id"
+                )
+            ref_registry[identity] = ref
         for tool_ref in self.tool_set_refs:
             if not isinstance(tool_ref, ToolSetRef):
                 raise ItemSchemaError("ContextRequestPlan.tool_set_refs 元素非法")
@@ -116,9 +125,6 @@ class ContextRequestPlan:
                 self.plan_id,
             ):
                 raise ItemSchemaError("source-mismatch: ToolSetRef 不属于当前 session/thread/plan")
-        # registry 查找统一按 thread-qualified identity，禁止退回
-        # (ref_type, ref_id) 二元组，否则 sibling thread 的同名 ref 会互相覆盖。
-        ref_registry = {selection_ref_identity(ref): ref for ref in self.refs}
         for contribution in self.contributions:
             if not isinstance(contribution, ContextContribution):
                 raise ItemSchemaError("ContextRequestPlan.contributions 元素非法")
@@ -147,11 +153,12 @@ class ContextRequestPlan:
                 raise ItemSchemaError(
                     "sealed plan 的 contribution 必须绑定当前 assembly 和 ordinal"
                 )
-        contribution_ids_list = [
-            contribution.contribution_id for contribution in self.contributions
-        ]
-        if len(contribution_ids_list) != len(set(contribution_ids_list)):
-            raise ItemSchemaError("ContextRequestPlan.contributions 存在重复 identity")
+        contribution_registry: dict[str, ContextContribution] = {}
+        for contribution in self.contributions:
+            contribution_id = contribution.contribution_id
+            if contribution_id in contribution_registry:
+                raise ItemSchemaError("ContextRequestPlan.contributions 存在重复 identity")
+            contribution_registry[contribution_id] = contribution
         if self.plan_state == "sealed":
             contribution_ordinals = [
                 int(contribution.contribution_ordinal)
@@ -181,13 +188,9 @@ class ContextRequestPlan:
                 for entry in self.selection
             ):
                 ref.validate_manifest()
-        contribution_registry = {
-            item.contribution_id: item for item in self.contributions
-        }
         ordered_selection(self.selection)
         if any(entry.assembly_id != self.assembly_id for entry in self.selection):
             raise ItemSchemaError("selection entry 必须绑定当前 plan assembly")
-        selected_keys: set[tuple[str, ...]] = set()
         for entry in self.selection:
             if not isinstance(entry, ContextSelectionEntry):
                 raise ItemSchemaError("ContextRequestPlan.selection 元素非法")
@@ -195,9 +198,6 @@ class ContextRequestPlan:
             if ref.session_id != self.session_id:
                 raise ItemSchemaError("source-mismatch: selection ref 不属于当前 session")
             identity = selection_ref_identity(ref)
-            if identity in selected_keys:
-                raise ItemSchemaError(f"selection 重复 ref: {identity}")
-            selected_keys.add(identity)
             if isinstance(ref, ToolSetIdentityRef):
                 registered_tool_ref = tool_registry.get(ref.ref_id)
                 if ref.thread_id != self.thread_id or ref.plan_id != self.plan_id or ref.assembly_id != self.assembly_id:
@@ -401,7 +401,7 @@ class ContextRequestPlan:
             plan_id=self.plan_id,
             refs=self.refs,
             contributions=bound_contributions,
-            tool_snapshot=self.tool_snapshot,
+            tool_snapshot=object.__getattribute__(self, "tool_snapshot"),
             history_view_revision=self.history_view_revision,
             source_overlay_epoch=self.source_overlay_epoch,
             compiler_version=self.compiler_version,

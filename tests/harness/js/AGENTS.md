@@ -10,7 +10,7 @@ js/
 
 上下文管理释放顺序，具体资源的回调只关闭自己持有的句柄。停止接收资源登记与全部释放完成是两个阶段：关闭开始立即拒绝新增登记；并发关闭共同等待唯一在途清理，失败向所有等待方保留同一个聚合错误。清理结束后的重复关闭不重试回调，不重新报告上一轮错误。
 
-`fromTestFile`与构造器先确定显式`projectRoot`（缺省为cwd），再以它解析相对测试文件；绝对文件路径保持原目标。随后统一校验`tests/`边界并推导正式产物根，不能把调用者的cwd当成另一个项目根；测试ID仍用正斜杠，真实路径沿宿主path规则。
+`fromTestFile`与构造器先确定显式`projectRoot`（缺省为cwd），再以它解析相对测试文件；绝对文件路径保持原目标。随后统一校验`tests/`边界并推导正式产物根；每次测试运行按`BOXTEAM_TEST_RUN_ID`与pytest-xdist worker分隔。继承`PYTEST_CURRENT_TEST`的子进程再按当前 pytest 节点写入`outputRoot/runs/<run-id>/nodes/<node-id>/artifacts/`；独立 JS 测试脚本写入`outputRoot/runs/<run-id>/artifacts/`，防止同一 worker 的多个用例互相覆盖。工作区和`BOXTEAM_HOME`仍位于固定的`outputRoot/`子目录。不能把调用者的cwd当成另一个项目根；测试ID仍用正斜杠，真实路径沿宿主path规则。
 
 ## 可修改内容
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Iterator
 from contextlib import ExitStack
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from unittest.mock import Mock
@@ -14,18 +15,22 @@ import pytest
 from tests.support.processes.gateway import wait_for_gateway_ready
 
 
-@pytest.fixture
-def health_endpoint(
-    request: pytest.FixtureRequest,
-) -> Iterator[tuple[int, list[tuple[str, str | None]]]]:
-    status: int = request.param
-    observed: list[tuple[str, str | None]] = []
+@dataclass(slots=True)
+class _GatewayHealthResponse:
+    status: int = 200
+    observed_requests: list[tuple[str, str | None]] = field(default_factory=list)
+
+
+@pytest.fixture(scope="module")
+def health_server() -> Iterator[tuple[int, _GatewayHealthResponse]]:
+    response = _GatewayHealthResponse()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             token = self.headers.get("X-Local-Token")
-            observed.append((self.path, token))
-            self.send_response(status if token == "local-dev-token" else 401)
+            response.observed_requests.append((self.path, token))
+            status = response.status if token == "local-dev-token" else 401
+            self.send_response(status)
             self.end_headers()
 
     with ExitStack() as lifetime:
@@ -40,7 +45,19 @@ def health_endpoint(
 
         lifetime.callback(join_server_thread)
         lifetime.callback(server.shutdown)
-        yield server.server_port, observed
+        yield server.server_port, response
+
+
+@pytest.fixture
+def health_endpoint(
+    request: pytest.FixtureRequest,
+    health_server: tuple[int, _GatewayHealthResponse],
+) -> tuple[int, list[tuple[str, str | None]]]:
+    response_status = request.param
+    port, response = health_server
+    response.status = response_status
+    response.observed_requests.clear()
+    return port, response.observed_requests
 
 
 @pytest.fixture

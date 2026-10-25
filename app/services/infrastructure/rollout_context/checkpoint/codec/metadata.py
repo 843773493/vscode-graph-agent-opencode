@@ -17,6 +17,7 @@ TOOL_BINDING_KEYS = {
     "tool_call": ("tool_call_id", "tool_invocation_id", "tool_attempt_id"),
     "tool_result": ("tool_call_id", "tool_invocation_id", "tool_attempt_id", "result_id"),
 }
+_MISSING_ANNOTATION = object()
 
 
 def canonical_message_anchor(message: Mapping[str, object]) -> str | None:
@@ -28,10 +29,15 @@ def canonical_message_anchor(message: Mapping[str, object]) -> str | None:
         return None
     if not isinstance(manifests, list) or not manifests:
         raise ValueError("checkpoint canonical group manifest 必须是非空有序 array")
-    ids = [entry.get("item_id") if isinstance(entry, Mapping) else None for entry in manifests]
-    if any(not isinstance(item_id, str) or not item_id for item_id in ids) or len(set(ids)) != len(ids):
-        raise ValueError("checkpoint canonical group manifest item identity 非法")
-    return ids[-1]
+    seen: set[str] = set()
+    anchor_item_id: str | None = None
+    for entry in manifests:
+        item_id = entry.get("item_id") if isinstance(entry, Mapping) else None
+        if not isinstance(item_id, str) or not item_id or item_id in seen:
+            raise ValueError("checkpoint canonical group manifest item identity 非法")
+        seen.add(item_id)
+        anchor_item_id = item_id
+    return anchor_item_id
 
 
 # 普通消息的既有控制字段保留原合同；生成结果只接受闭合的结构标记。
@@ -63,7 +69,9 @@ def message_annotations(response: Mapping[str, object]) -> dict[str, object]:
             raise ValueError("generated_session_result metadata 含控制字段: " + ",".join(sorted(forbidden)))
     value = {}
     for name in (GENERATED_RESULT_ANNOTATION_FIELDS if generated_result else ANNOTATION_FIELDS):
-        child = response.get(name, nested.get(name))
+        child = response.get(name, _MISSING_ANNOTATION)
+        if child is _MISSING_ANNOTATION:
+            child = nested.get(name)
         if child is not None:
             canonical_json_bytes(child)
             value[name] = deepcopy(child)

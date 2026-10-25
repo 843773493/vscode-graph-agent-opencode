@@ -55,6 +55,21 @@ def _truncation_fallback(serialized_source: bytes, max_bytes: int) -> object:
     )
 
 
+def _compact_text(
+    value: str,
+    max_bytes: int,
+    *,
+    serialized_source: bytes | None = None,
+) -> tuple[object, int]:
+    compacted = _truncated_text(value, max_bytes)
+    compacted_byte_count = len(_encoded(compacted))
+    if compacted_byte_count <= max_bytes:
+        return compacted, compacted_byte_count
+    source = _encoded(value) if serialized_source is None else serialized_source
+    fallback = _truncation_fallback(source, max_bytes)
+    return fallback, len(_encoded(fallback))
+
+
 def _compact(
     value: object,
     max_bytes: int,
@@ -64,14 +79,15 @@ def _compact(
     if max_bytes < 64:
         compacted = "...[BoxTeam JSON payload 已截断]"
         return compacted, len(_encoded(compacted))
+    if isinstance(value, str) and len(value) + 2 > max_bytes:
+        return _compact_text(value, max_bytes, serialized_source=serialized_source)
     serialized_value = (
         _encoded(value) if serialized_source is None else serialized_source
     )
     if len(serialized_value) <= max_bytes:
         return value, len(serialized_value)
     if isinstance(value, str):
-        compacted = _truncated_text(value, max_bytes)
-        return compacted, len(_encoded(compacted))
+        return _compact_text(value, max_bytes, serialized_source=serialized_value)
     if isinstance(value, Mapping):
         source_item_count = len(value)
         result: dict[str, object] = {}
@@ -147,6 +163,11 @@ def bound_json_value(value: Any, *, max_bytes: int) -> object:
     """返回带明确截断标记、且序列化后不超过上限的 JSON 值。"""
     if max_bytes < 128:
         raise ValueError("JSON payload 上限至少需要 128 字节")
+    if isinstance(value, str) and len(value) + 2 > max_bytes:
+        compacted, compacted_byte_count = _compact_text(value, max_bytes)
+        if compacted_byte_count <= max_bytes:
+            return compacted
+        return _truncation_fallback(_encoded(value), max_bytes)
     serialized_value = _encoded(value)
     if len(serialized_value) <= max_bytes:
         return value

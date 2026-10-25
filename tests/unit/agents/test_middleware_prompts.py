@@ -150,6 +150,39 @@ def test_workspace_skills_uses_compact_project_template(
     assert "quantum computing" not in middleware.system_prompt_template
 
 
+@pytest.mark.parametrize("read_enabled", [False, True])
+@pytest.mark.parametrize("skill_enabled", [False, True])
+def test_skill_catalog_prompt_depends_on_skill_load_instead_of_file_reading(
+    tmp_path: Path,
+    demo_skill_catalog: PublishedSkillCatalog,
+    read_enabled: bool,
+    skill_enabled: bool,
+) -> None:
+    manager = ContextSourceManager()
+    denied = {
+        name for name, enabled in (
+            ("read_file", read_enabled), ("skill_load", skill_enabled),
+        ) if not enabled
+    }
+    middleware = _build_middleware(
+        tmp_path,
+        denylist=denied,
+        resolved_skill_catalog=demo_skill_catalog,
+        context_source_manager=manager,
+    )
+    skills = _find_middleware(middleware, WorkspaceSkillsMiddleware)
+    skills.before_agent({}, None, {})
+    sources = {
+        source.descriptor.source_id: source
+        for source in manager.prepare_sources().sources
+    }
+    assert ("instruction:skill-catalog" in sources) is skill_enabled
+    if skill_enabled:
+        assert "装配测试 Skill" in sources["instruction:skill-catalog"].content
+        assert 'skill_load(name="...")' in sources["instruction:skill-catalog"].content
+        assert "# demo" not in sources["instruction:skill-catalog"].content
+
+
 @pytest.mark.parametrize("deny_history", [False, True])
 def test_denylist_removes_tool_specific_middleware_and_prompts(
     tmp_path: Path,
@@ -157,7 +190,7 @@ def test_denylist_removes_tool_specific_middleware_and_prompts(
     demo_skill_catalog: PublishedSkillCatalog,
 ) -> None:
     manager = ContextSourceManager()
-    denied = {"write_todos", "task", "compact_conversation", "read_file"}
+    denied = {"write_todos", "task", "compact_conversation", "read_file", "skill_load"}
     if deny_history:
         denied.add("read_compaction_history")
     middleware = _build_middleware(

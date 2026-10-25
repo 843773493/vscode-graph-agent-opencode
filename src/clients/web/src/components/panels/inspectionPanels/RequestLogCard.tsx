@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { formatDateTime } from "../../../utils/format";
-import { prettyJson } from "../../../utils/jsonDisplay";
+import { isRecord, prettyJson } from "../../../utils/jsonDisplay";
 import {
   buildRequestLogDisplay,
   buildUpstreamAttemptDisplay,
@@ -231,7 +231,18 @@ function UpstreamAttemptCard({
 
 function UpstreamExchangeCard({ log }: { log: LLMRequestLogRecord }) {
   const [open, setOpen] = useState(false);
-  const attempts = useMemo(() => buildUpstreamAttemptDisplay(log), [log]);
+  const attemptCount = useMemo(() => {
+    if (!isRecord(log.upstream) || !Array.isArray(log.upstream.attempts)) return 0;
+    let count = 0;
+    for (const attempt of log.upstream.attempts) {
+      if (isRecord(attempt)) count += 1;
+    }
+    return count;
+  }, [log]);
+  const attempts = useMemo(
+    () => open ? buildUpstreamAttemptDisplay(log) : [],
+    [log, open],
+  );
   return (
     <section className={`request-log-upstream${open ? " is-open" : ""}`}>
       <button
@@ -241,8 +252,8 @@ function UpstreamExchangeCard({ log }: { log: LLMRequestLogRecord }) {
         onClick={() => setOpen((current) => !current)}
       >
         <span className="request-log-summary-title">上游实际请求 / 响应</span>
-        <span>{attempts.length} 次尝试</span>
-        {attempts.length === 0 ? <span className="request-log-legacy">旧日志未采集</span> : null}
+        <span>{attemptCount} 次尝试</span>
+        {attemptCount === 0 ? <span className="request-log-legacy">旧日志未采集</span> : null}
       </button>
       {open ? (
         <div className="request-log-upstream-list">

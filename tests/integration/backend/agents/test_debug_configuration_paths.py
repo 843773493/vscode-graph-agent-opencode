@@ -15,7 +15,7 @@ from tests.harness.python.run_context import TestRunContext
 @pytest.fixture
 def debug_path_targets(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
-) -> tuple[Path, Path, Path]:
+) -> tuple[TestRunContext, Path, Path, Path]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     root = Path(integration_workspace_root_path)
     source = root / "debug-path-errors" / "entry.mjs"
@@ -23,18 +23,17 @@ def debug_path_targets(
     source.write_text("export {};\n", encoding="utf-8")
     outside = context.runtime_root_for_node(request.node.nodeid) / "outside-debug-directory"
     outside.mkdir(parents=True, exist_ok=True)
-    return root, source, outside
+    return context, root, source, outside
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["configurations", "start"])
 async def test_debug_path_errors_keep_uri_and_leave_configuration_unchanged(
     integration_client: httpx.AsyncClient,
-    debug_path_targets: tuple[Path, Path, Path],
-    request: pytest.FixtureRequest,
+    debug_path_targets: tuple[TestRunContext, Path, Path, Path],
     entrypoint: str,
 ) -> None:
-    root, source, outside = debug_path_targets
+    context, root, source, outside = debug_path_targets
     client = integration_client
     created = await client.post("/api/v1/sessions", json={"title": "调试路径错误合同"})
     assert created.status_code == 200, created.text
@@ -96,7 +95,6 @@ async def test_debug_path_errors_keep_uri_and_leave_configuration_unchanged(
     assert repaired.json()["data"]["active_configuration_id"] is not None
     assert repaired.json()["data"]["pid"] is None
     assert str(root) not in repaired.text
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"{entrypoint}-path-errors.json").write_text(
         json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
@@ -106,11 +104,10 @@ async def test_debug_path_errors_keep_uri_and_leave_configuration_unchanged(
 @pytest.mark.parametrize("entrypoint", ["configurations", "action"])
 async def test_breakpoint_source_read_error_uses_uri_and_recovers_after_repair(
     integration_client: httpx.AsyncClient,
-    debug_path_targets: tuple[Path, Path, Path],
-    request: pytest.FixtureRequest,
+    debug_path_targets: tuple[TestRunContext, Path, Path, Path],
     entrypoint: str,
 ) -> None:
-    root, source, _outside = debug_path_targets
+    context, root, source, _outside = debug_path_targets
     client = integration_client
     created = await client.post("/api/v1/sessions", json={"title": "断点源码读取合同"})
     assert created.status_code == 200, created.text
@@ -166,7 +163,6 @@ async def test_breakpoint_source_read_error_uses_uri_and_recovers_after_repair(
     assert breakpoint["relocation_status"] == "current"
     assert response.json()["data"]["pid"] is None
     assert str(root) not in response.text
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"{entrypoint}-source-errors.json").write_text(
         json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )

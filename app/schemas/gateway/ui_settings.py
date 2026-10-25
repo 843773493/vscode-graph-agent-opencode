@@ -42,10 +42,10 @@ class WebUILayoutSettingsDTO(BaseModel):
     chat_visible: bool | None = None
     auxiliary_visible: bool | None = None
     panel_visible: bool | None = None
-    auxiliary_tab: Literal["changes", "files", "resources", "debug"] | None = None
+    auxiliary_tab: Literal["changes", "files", "goal", "resources", "debug"] | None = None
     auxiliary_tab_order: (
-        list[Literal["changes", "files", "resources", "debug"]] | None
-    ) = Field(default=None, min_length=4, max_length=4)
+        list[Literal["changes", "files", "goal", "resources", "debug"]] | None
+    ) = Field(default=None, min_length=4, max_length=5)
     main_area_ratios: WebUIMainAreaRatiosDTO | None = None
     bottom_panel_by_workspace: (
         dict[str, WebUIWorkspaceBottomPanelSettingsDTO] | None
@@ -99,13 +99,15 @@ class WebUILayoutSettingsDTO(BaseModel):
         cls,
         value: list[str] | None,
     ) -> list[str] | None:
-        if value is not None and set(value) != {
-            "changes",
-            "files",
-            "resources",
-            "debug",
-        }:
-            raise ValueError("右侧侧边栏标签顺序必须包含且仅包含全部四个标签")
+        if value is None:
+            return None
+        required = {"changes", "files", "resources", "debug"}
+        if len(value) != len(set(value)) or not required.issubset(value):
+            raise ValueError("右侧侧边栏标签顺序必须包含全部标签，且不得重复")
+        # TODO：已有布局读取时补齐 Goal，后续统一设置迁移时可移除此补齐步骤。
+        if "goal" not in value:
+            value = [*value]
+            value.insert(value.index("debug"), "goal")
         return value
 
 

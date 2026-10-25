@@ -18,18 +18,33 @@ from app.core.path_utils import (
     get_workspace_id,
     get_workspace_root,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
+
+
+@pytest.fixture
+def workspace_roots(request: pytest.FixtureRequest) -> tuple[Path, Path]:
+    output_workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
+    roots = (output_workspace / "workspace-a", output_workspace / "workspace-b")
+    for root in roots:
+        prepare_test_workspace(
+            workspace_root=root,
+            template_root=template_root,
+            template_items=(),
+        )
+    return roots
 
 
 @pytest.mark.asyncio
 async def test_concurrent_requests_keep_workspace_context_through_child_tasks(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    workspace_roots: tuple[Path, Path],
 ) -> None:
-    roots = [tmp_path / "workspace-a", tmp_path / "workspace-b"]
+    roots = workspace_roots
     workspace_ids = [str(uuid4()), str(uuid4())]
     mounts = []
     for workspace_id, root in zip(workspace_ids, roots, strict=True):
-        root.mkdir()
         mounts.append(
             MountedWorkspace(workspace_id, root).to_payload()
         )

@@ -28,7 +28,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
-from tests.support.model_stream_config import model_stream_replay
+from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     close_backend_process,

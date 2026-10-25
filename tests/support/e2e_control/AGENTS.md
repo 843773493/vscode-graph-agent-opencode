@@ -11,13 +11,13 @@ e2e_control/
 ├── communication_backend_app.py  在同一受控Backend安装通信故障及真实工具提交观测
 ├── gateway_app.py         连接受控 Backend ASGI app 的真实 Gateway app
 ├── mcp_stdio_server.py    接受测试 catalog 的真实 MCP stdio server
-└── browser_client.mjs     浏览器端控制客户端与 fork deadline watchdog
+└── browser_client.mjs     浏览器端控制客户端、fork deadline 状态机和 watchdog 协议客户端
 ```
 
 ## 可修改内容
 
 - E2E 控制协议及 pytest 所拥有的时钟、进程租约、phase barrier 和资源观测。
-- 绑定控制协议的真实服务组合与浏览器控制客户端。
+- 绑定控制协议的真实服务组合与浏览器控制客户端；deadline watchdog 的进程身份和终止操作由 `tests/support/fork_deadline.py` 按宿主平台执行。
 - 真实外部 MCP stdio 服务的测试专用实现。
 
 ## 不可修改内容

@@ -1,11 +1,14 @@
+import type { WorkspaceFileNode } from "../../../types/backend";
+
 export function fileTreeNodeFixture(
-  path: string,
+  treePath: string,
   kind: "file" | "directory" = "file",
   size: number | null = kind === "file" ? 1 : null,
-): Record<string, unknown> {
+): WorkspaceFileNode {
+  const name = treePath.slice(treePath.lastIndexOf("/") + 1) || treePath;
   return {
-    name: path.split("/").pop() ?? path,
-    path,
+    name,
+    path: treePath,
     kind,
     has_children: kind === "directory",
     size,

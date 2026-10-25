@@ -22,6 +22,10 @@ from app.agents.providers.litellm_chat import (
 from app.agents.providers.openai_responses import (
     BoxteamOpenAIResponsesModel,
 )
+from app.agents.providers.wire_finalize import (
+    chat_send_params,
+    wire_request_params,
+)
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
     begin_upstream_capture,
@@ -73,6 +77,34 @@ def _provider(api_mode: str) -> dict[str, object]:
 def test_chat_completions_mode_uses_litellm_chat_model():
     model = build_model_from_provider(_provider("chat_completions"), {})
     assert isinstance(model, BoxteamLiteLLMChatModel)
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses", "anthropic_messages"])
+def test_input_context_capacity_sets_profile_without_changing_wire(protocol):
+    provider = _provider(protocol)
+    if protocol == "anthropic_messages":
+        provider["custom_llm_provider"] = "anthropic"
+        provider["api_mode"] = {
+            "protocol": protocol,
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {
+                "thinking_blocks": {"thinking": True, "redacted_thinking": False}
+            },
+        }
+    baseline = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
+    provider["api_mode"]["model_info"]["max_input_tokens"] = 400000
+    model = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
+
+    assert model.profile["max_input_tokens"] == 400000
+    if protocol == "responses":
+        baseline_body = baseline._responses_payload([HumanMessage("hello")], None, {})
+        body = model._responses_payload([HumanMessage("hello")], None, {})
+    else:
+        baseline_body = chat_send_params(baseline, stream=True)
+        body = chat_send_params(model, stream=True)
+    body = wire_request_params(model, body)
+    assert body == wire_request_params(baseline, baseline_body)
+    assert {"max_input_tokens", "profile", "max_tokens", "max_output_tokens"}.isdisjoint(body)
 
 
 def test_litellm_output_projection_preserves_reasoning_and_provider_summary():

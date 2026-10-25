@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
@@ -88,7 +91,7 @@ def parse_detail_payload(
     if type(value["format_version"]) is not int or value["format_version"] != 3:
         raise DetailUnavailableError("assembly detail manifest format_version 非法")
     try:
-        canonical = canonical_json_bytes(value)
+        canonical, envelope_hash = canonical_json_bytes_and_hash(value)
         ref = DetailRef.from_dict(value["detail_ref"])
     except (TypeError, ValueError) as error:
         raise DetailUnavailableError(
@@ -111,7 +114,7 @@ def parse_detail_payload(
         retention_class=value["retention_class"],
         visibility=value["visibility"],
         relative_path=detail_relative_path(ref).as_posix(),
-        content_hash=sha256_jcs(value),
+        content_hash=envelope_hash,
         length=value["length"],
         source_revision=value["source_revision"],
         required=value["required"],
@@ -122,9 +125,12 @@ def parse_detail_payload(
         protection=value["protection"],
         availability="available",
     )
+    canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(
+        value["detail"]
+    )
     if (
-        value["detail_content_hash"] != sha256_jcs(value["detail"])
-        or len(canonical_json_bytes(value["detail"])) != record.length
+        value["detail_content_hash"] != detail_hash
+        or len(canonical_detail_bytes) != record.length
     ):
         raise DetailUnavailableError("assembly detail content manifest hash/length 不一致")
     return value, record

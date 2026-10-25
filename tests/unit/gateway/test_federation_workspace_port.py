@@ -40,7 +40,7 @@ from app.services.infrastructure.resource_platform.sources import resource_navig
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     NAVIGATION_DEADLINE_HEADER,
 )
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     TARGET_SESSION,

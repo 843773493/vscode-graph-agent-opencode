@@ -73,6 +73,22 @@ describe("浏览器元素选择消息", () => {
     })).toBeNull();
   });
 
+  test("拒绝属性字典、样式字典或几何字段中的错误类型", () => {
+    const malformedElements = [
+      { ...element, attributes: { id: 7 } },
+      { ...element, computedStyles: { display: false } },
+      { ...element, bounds: { ...element.bounds, x: "10" } },
+      { ...element, dimensions: { ...element.dimensions, top: null } },
+    ];
+
+    for (const malformedElement of malformedElements) {
+      expect(parseBrowserElementSelectedMessage({
+        ...message,
+        element: malformedElement,
+      })).toBeNull();
+    }
+  });
+
   test("选择元素+使用 rich 模式但仍只携带一个元素", () => {
     const bundle = parseBrowserElementSelectionBundle({
       ...message,

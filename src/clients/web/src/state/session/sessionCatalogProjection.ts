@@ -231,9 +231,7 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     }
   }
 
-  for (const entry of live.values()) {
-    assertParentChainIsAcyclic(live, entry.node.node_id);
-  }
+  assertParentChainsAreAcyclic(live);
   const childCounts = new Map<string, number>();
   for (const entry of live.values()) {
     const parentId = entry.node.parent_node_id;
@@ -251,18 +249,27 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
   return live;
 }
 
-function assertParentChainIsAcyclic(
+function assertParentChainsAreAcyclic(
   live: ReadonlyMap<string, EffectiveNode>,
-  nodeId: string,
 ): void {
-  const seen = new Set<string>();
-  let cursor: string | null = nodeId;
-  while (cursor !== null) {
-    if (seen.has(cursor)) {
-      throw new Error(`pending 投影包含祖先环: ${nodeId}`);
+  const state = new Map<string, "visiting" | "complete">();
+  for (const nodeId of live.keys()) {
+    if (state.get(nodeId) === "complete") continue;
+    const chain: string[] = [];
+    let cursor: string | null = nodeId;
+    while (cursor !== null) {
+      const entry = live.get(cursor);
+      if (!entry) break;
+      const currentState = state.get(cursor);
+      if (currentState === "visiting") {
+        throw new Error(`pending 投影包含祖先环: ${nodeId}`);
+      }
+      if (currentState === "complete") break;
+      state.set(cursor, "visiting");
+      chain.push(cursor);
+      cursor = entry.node.parent_node_id;
     }
-    seen.add(cursor);
-    cursor = live.get(cursor)?.node.parent_node_id ?? null;
+    for (const chainNodeId of chain) state.set(chainNodeId, "complete");
   }
 }
 

@@ -1,10 +1,31 @@
 import { mkdtemp, mkdir, open, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const temporaryEnvironmentNames = ["TMPDIR", "TMP", "TEMP"];
 
-async function releaseTemporaryDirectoryResources(directoryHandle, aliasDirectory) {
+function restoreTemporaryEnvironment(temporaryDirectory, originalEnvironment) {
+  for (const name of temporaryEnvironmentNames) {
+    if (process.env[name] !== temporaryDirectory) continue;
+    const originalValue = originalEnvironment.get(name);
+    if (originalValue === undefined) delete process.env[name];
+    else process.env[name] = originalValue;
+  }
+}
+
+async function releaseTemporaryDirectoryResources(
+  directoryHandle,
+  aliasDirectory,
+  restoreEnvironment,
+) {
   const errors = [];
+  if (restoreEnvironment) {
+    try {
+      restoreEnvironment();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
   if (directoryHandle) {
     try {
       await directoryHandle.close();
@@ -35,11 +56,16 @@ export async function configureChromiumTemporaryDirectory(runtimeDirectory) {
     if (process.platform === "linux") {
       directoryHandle = await open(absoluteRuntimeDirectory, "r");
       temporaryDirectory = `/proc/${process.pid}/fd/${directoryHandle.fd}`;
-    } else if (process.platform === "darwin") {
-      // macOS 的 TMPDIR 可能较长；系统 /tmp 提供稳定的短别名根目录。
-      aliasDirectory = await mkdtemp(join("/tmp", "boxteam-chromium-"));
+    } else if (process.platform === "darwin" || process.platform === "win32") {
+      // macOS 使用 /tmp；Windows 使用系统临时目录并通过 junction 避免权限要求。
+      const aliasRoot = process.platform === "darwin" ? "/tmp" : tmpdir();
+      aliasDirectory = await mkdtemp(join(aliasRoot, "boxteam-chromium-"));
       temporaryDirectory = join(aliasDirectory, "runtime");
-      await symlink(absoluteRuntimeDirectory, temporaryDirectory, "dir");
+      await symlink(
+        absoluteRuntimeDirectory,
+        temporaryDirectory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
     }
   } catch (setupError) {
     try {
@@ -50,9 +76,16 @@ export async function configureChromiumTemporaryDirectory(runtimeDirectory) {
     throw setupError;
   }
 
+  const originalEnvironment = new Map(
+    temporaryEnvironmentNames.map((name) => [name, process.env[name]]),
+  );
   for (const name of temporaryEnvironmentNames) {
     process.env[name] = temporaryDirectory;
   }
 
-  return () => releaseTemporaryDirectoryResources(directoryHandle, aliasDirectory);
+  return () => releaseTemporaryDirectoryResources(
+    directoryHandle,
+    aliasDirectory,
+    () => restoreTemporaryEnvironment(temporaryDirectory, originalEnvironment),
+  );
 }

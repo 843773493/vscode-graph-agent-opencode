@@ -99,7 +99,7 @@ def model_protocol(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
     requests: list[dict[str, object]] = []
     protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
@@ -150,7 +150,9 @@ def shutdown_http_asset(
     model_protocol: str, model_replay: tuple[str, list[dict[str, object]]],
 ) -> tuple[str, str, list[dict[str, object]]]:
     # 真实网络和业务关闭验收经同一个 pytest fixture 注入资产与 socket 生命周期。
-    return model_protocol, *model_replay
+    replay_url, recorded_requests = model_replay
+    recorded_requests.clear()
+    return model_protocol, replay_url, recorded_requests
 
 
 @pytest.mark.parametrize("async_sdk", [False, True])

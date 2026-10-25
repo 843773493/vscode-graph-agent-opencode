@@ -15,7 +15,17 @@ python/
 
 先按被管理的资源划分启动和清理，再把确实共用的输出载体放到 `process_output.py`；它不接管就绪、端口或移交成功后的进程清理，避免不同资源互相导入启动装具。
 
-`TestRunContext.from_test_file`先确定显式`project_root`（缺省为cwd），再以它解析相对测试文件；绝对文件路径保持原目标。完成解析后统一校验文件属于该项目的`tests/`并镜像到`out/tests/`，不能把显式项目根与启动进程的cwd混作同一基准。
+`TestRunContext.from_test_file`先确定显式`project_root`（缺省为cwd），再以它解析相对测试文件；绝对文件路径保持原目标。完成解析后统一校验文件属于该项目的`tests/`并镜像到`out/tests/`。`output_root/workspace/`与Gateway fixture共享的`output_root/boxteam-home/`保留固定位置；pytest 用例按`PYTEST_CURRENT_TEST`中的节点 ID 将产物放到`output_root/runs/<run-id>/nodes/<node-id>/artifacts/`，独立脚本使用`output_root/runs/<run-id>/artifacts/`，节点运行时与节点级`BOXTEAM_HOME`位于`output_root/runtime/<run-id>/node-<node-id>/`下。不能把显式项目根与启动进程的cwd混作同一基准。
+
+```text
+out/tests/<test-id>/
+├── workspace/                         固定工作区位置
+├── boxteam-home/                      Gateway fixture 的共享控制面
+├── runtime/<run-id>/node-<node-id>/    pytest 节点隔离的运行时与全局配置
+└── runs/<run-id>/
+    ├── artifacts/                      独立脚本产物
+    └── nodes/<node-id>/artifacts/       pytest 用例与子进程产物
+```
 
 ## 可修改内容
 

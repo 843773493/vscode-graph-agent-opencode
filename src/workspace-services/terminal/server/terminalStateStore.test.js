@@ -7,7 +7,7 @@ import { after, test } from "node:test";
 
 import { TerminalStateStore } from "./terminalStateStore.js";
 
-const { cp, mkdir, readFile, readdir, rm, writeFile } = fs;
+const { mkdir, readFile, readdir, rm, writeFile } = fs;
 const workspaceRunRoot = path.join(
   process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalStateStore/workspace", randomUUID(),
 );
@@ -19,7 +19,7 @@ async function createStore(t) {
     syncBuiltinESMExports();
   });
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
-  await cp(path.join(process.cwd(), "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
+  await mkdir(workspaceRoot, { recursive: true });
   return new TerminalStateStore({ workspaceRoot, workspaceId: "00000000-0000-4000-8000-000000000001" });
 }
 

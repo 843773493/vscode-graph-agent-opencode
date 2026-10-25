@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,16 +18,15 @@ from app.services.infrastructure.background_work_handlers import (
 )
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
-from tests.harness.python.run_context import TestRunContext
 from tests.support.background_work import ControlledBackgroundHandler
 
 
 @pytest.fixture
-async def background_case(request, session_bundle_factory):
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace_root = context.workspace_root
-    shutil.rmtree(workspace_root)
-    workspace_root.mkdir()
+async def background_case(
+    empty_workspace_scope: tuple[str, Path],
+    session_bundle_factory,
+):
+    _, workspace_root = empty_workspace_scope
     sessions = workspace_root / ".boxteam" / "sessions"
     session_id = "ses_019c3df7f8527d568e834acf3c0f6612"
     session_bundle_factory(sessions, session_id)

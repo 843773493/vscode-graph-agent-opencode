@@ -15,11 +15,12 @@ from app.services.infrastructure.workspace_files import text_journal
 
 
 @pytest.fixture
-def journal_case(tmp_path: Path):
+def journal_case(empty_workspace_scope: tuple[str, Path]):
+    workspace_root = empty_workspace_scope[1]
     snapshots = [{"uri": "bt://workspace/ws_test/files/root/notes.txt", "before_content": "before"}]
-    journal_id = text_journal.write_text_mutation_journal(snapshots, workspace_root=tmp_path)
-    path = tmp_path / ".boxteam/cache/text_mutations" / f"{journal_id}.json"
-    return SimpleNamespace(root=tmp_path, path=path, journal_id=journal_id,
+    journal_id = text_journal.write_text_mutation_journal(snapshots, workspace_root=workspace_root)
+    path = workspace_root / ".boxteam/cache/text_mutations" / f"{journal_id}.json"
+    return SimpleNamespace(root=workspace_root, path=path, journal_id=journal_id,
                            original=path.read_bytes(), snapshots=snapshots)
 
 

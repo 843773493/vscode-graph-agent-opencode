@@ -18,7 +18,8 @@ tests/unit/gateway/
     │   └── test_config_*.py
     ├── 凭据与身份
     │   ├── test_control_plane_auth.py、test_device_connections.py
-    │   ├── test_gateway_route_credential_coverage.py、test_request_id.py
+    │   ├── test_private_credentials.py、test_gateway_route_credential_coverage.py
+    │   ├── test_request_id.py
     │   └── test_user_access.py、test_user_profile.py
     ├── 工作区目标
     │   ├── test_registry.py、test_managed_workspaces.py、test_gateway_docker.py

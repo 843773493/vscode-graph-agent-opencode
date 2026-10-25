@@ -38,7 +38,7 @@ from tests.integration.backend.sessions.test_catalog_startup_journal_metadata im
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
 )
-from tests.support.session_navigation_queue import (
+from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
 )

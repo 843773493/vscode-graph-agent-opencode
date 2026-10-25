@@ -9,7 +9,7 @@ from app.services.mapping.trace_event_mapper import TraceEventMapper
 _THREAD_ID = "thr_00000000700070008000000000000001"
 
 
-def _event() -> dict[str, object]:
+def _trace_event() -> dict[str, object]:
     return {
         "event_id": "evt_1",
         "job_id": "job_1",
@@ -21,7 +21,9 @@ def _event() -> dict[str, object]:
 
 def test_mapper_uses_explicit_session_scope_and_preserves_ids() -> None:
     mapped = TraceEventMapper().map_one(
-        _event(), session_id="ses_1", thread_id=_THREAD_ID,
+        trace_event=_trace_event(),
+        session_id="ses_1",
+        thread_id=_THREAD_ID,
     )
 
     assert mapped is not None
@@ -33,43 +35,49 @@ def test_mapper_uses_explicit_session_scope_and_preserves_ids() -> None:
 
 @pytest.mark.parametrize("field", ["event_id", "job_id", "timestamp"])
 def test_mapper_rejects_missing_authoritative_fields(field: str) -> None:
-    event = _event()
-    event.pop(field)
+    trace_event = _trace_event()
+    trace_event.pop(field)
 
     with pytest.raises((TypeError, ValueError), match=field):
-        TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
+        TraceEventMapper().map_one(
+            trace_event, session_id="ses_1", thread_id=_THREAD_ID
+        )
 
 
 def test_mapper_rejects_missing_session_scope() -> None:
     with pytest.raises(ValueError, match="session_id"):
-        TraceEventMapper().map_one(_event(), thread_id=_THREAD_ID)
+        TraceEventMapper().map_one(_trace_event(), thread_id=_THREAD_ID)
 
 
 def test_mapper_rejects_empty_thread_scope() -> None:
     with pytest.raises(ValueError):
-        TraceEventMapper().map_one(_event(), session_id="ses_1", thread_id="")
+        TraceEventMapper().map_one(_trace_event(), session_id="ses_1", thread_id="")
 
 
 def test_mapper_rejects_naive_timestamp() -> None:
-    event = _event()
-    event["timestamp"] = datetime(2026, 7, 14)  # noqa: DTZ001 - 明确验证缺少时区时拒绝。
+    trace_event = _trace_event()
+    trace_event["timestamp"] = datetime(2026, 7, 14)  # noqa: DTZ001 - 明确验证缺少时区时拒绝。
 
     with pytest.raises(ValueError, match="必须包含时区"):
-        TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
+        TraceEventMapper().map_one(
+            trace_event, session_id="ses_1", thread_id=_THREAD_ID
+        )
 
 
 def test_mapper_marks_failed_tool_result_as_failed() -> None:
-    event = _event()
-    event["type"] = "tool_call_end"
-    event["part_id"] = "run_tool"
-    event["payload"] = {
+    trace_event = _trace_event()
+    trace_event["type"] = "tool_call_end"
+    trace_event["part_id"] = "run_tool"
+    trace_event["payload"] = {
         "tool_name": "read_context",
         "result": "Gateway 工作区不存在: gw_typo",
         "status": "error",
         "failed": True,
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
+    mapped = TraceEventMapper().map_one(
+        trace_event, session_id="ses_1", thread_id=_THREAD_ID
+    )
 
     assert mapped is not None
     assert mapped.title == "工具失败"
@@ -78,16 +86,18 @@ def test_mapper_marks_failed_tool_result_as_failed() -> None:
 
 
 def test_mapper_preserves_model_failure_details() -> None:
-    event = _event()
-    event["type"] = "model_failed"
-    event["payload"] = {
+    trace_event = _trace_event()
+    trace_event["type"] = "model_failed"
+    trace_event["payload"] = {
         "provider_id": "primary",
         "model": "big-pickle",
         "error_type": "RateLimitError",
         "error": "Rate limit exceeded",
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
+    mapped = TraceEventMapper().map_one(
+        trace_event, session_id="ses_1", thread_id=_THREAD_ID
+    )
 
     assert mapped is not None
     assert mapped.phase == "llm"
@@ -99,15 +109,17 @@ def test_mapper_preserves_model_failure_details() -> None:
 
 
 def test_mapper_exposes_process_exit_as_execution_lost() -> None:
-    event = _event()
-    event["type"] = "session_interrupted"
-    event["payload"] = {
+    trace_event = _trace_event()
+    trace_event["type"] = "session_interrupted"
+    trace_event["payload"] = {
         "phase": "process_exit",
         "code": "execution_lost",
         "message": "工作区后端重启，无法安全续接原 AgentLoop 执行",
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
+    mapped = TraceEventMapper().map_one(
+        trace_event, session_id="ses_1", thread_id=_THREAD_ID
+    )
 
     assert mapped is not None
     assert mapped.phase == "session"

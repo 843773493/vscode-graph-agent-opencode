@@ -9,7 +9,7 @@ from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash, sha256_jcs
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.runtime import ProvenanceEdge
 from app.services.infrastructure.rollout_context.storage.serialization import (
@@ -334,11 +334,12 @@ class RolloutPartsMixin:
                         raise ItemSchemaError(
                             f"content part json_pointer 不存在: {item_id}{pointer}"
                         )
-                if sha256_jcs(selected) != part.content_hash:
+                selected_bytes, selected_hash = canonical_json_bytes_and_hash(selected)
+                if selected_hash != part.content_hash:
                     raise ItemSchemaError(
                         f"content part 正文与父 JSONL payload 不一致: {item_id}/{part.part_id}"
                     )
-                selected_length = len(canonical_json_bytes(selected))
+                selected_length = len(selected_bytes)
                 if length != selected_length:
                     raise ItemSchemaError(
                         "content part locator length 与 JCS fragment 长度不一致: "

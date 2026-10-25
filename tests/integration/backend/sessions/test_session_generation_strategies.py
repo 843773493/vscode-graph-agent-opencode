@@ -15,7 +15,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -23,7 +23,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 @pytest.fixture(scope="module")

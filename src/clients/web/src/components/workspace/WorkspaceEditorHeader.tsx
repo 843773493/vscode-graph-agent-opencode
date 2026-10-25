@@ -28,6 +28,12 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
     icon: "codicon-diff",
   },
   {
+    tab: "goal",
+    label: "Goal",
+    description: "管理当前会话的 Goal、查看耗时和 Token 用量",
+    icon: "codicon-target",
+  },
+  {
     tab: "debug",
     label: "调试",
     description: "暂停 Agent、管理断点和查看停止快照",

@@ -2,6 +2,70 @@
 
 `app/services/infrastructure/` 放服务层中的基础设施型实现，例如配置读取、事件查询与推送、日志、工具、工作区相关能力。
 
+## 模块职责树
+
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 30 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+
+```text
+infrastructure/
+├── attachment_blob_catalog/   附件正文 blob、locator、fork 引用与回收
+├── config/                    配置解析、事件游标和重载状态组件
+├── config_service/            工作区 ConfigService 实现
+├── events/                    有界事件 channel 与 typed 事件合同
+├── mcp/                       MCP 连接、工具目录与 Agent 工具适配
+├── node_debug/                Node 调试运行时；按 breakpoint/config/process/session 分区
+├── resource_platform/         资源观察与已发布快照
+├── rollout_context/           rollout、checkpoint、fork、seal 的 I/O owner
+├── rollout_history/           rollout 历史只读快照和分页
+├── team/                      Session 团队协作存储访问
+├── turn_history/              按 Job Turn 组织的派生读取模型与恢复
+├── workspace_activity/        工作区活动状态持久化
+├── workspace_config_events/   工作区配置事件游标与状态
+├── workspace_config_source/   工作区配置来源与快照
+├── workspace_files/           工作区文件树观察、operation 与恢复
+├── workspace_state_store/     工作区 SQLite 状态库与迁移
+└── 根级模块（仍实际放在本层）
+    ├── 外部服务客户端与资源租约
+    │   ├── browser_manager_client.py
+    │   ├── terminal_manager_client.py
+    │   └── external_resource_leases.py
+    ├── Gateway 通信客户端
+    │   ├── gateway_client_common.py
+    │   ├── gateway_communication_client.py
+    │   └── gateway_session_context_client.py
+    ├── 会话、队列与后台工作状态
+    │   ├── message_stream_store.py
+    │   ├── pending_queue_migration.py
+    │   ├── pending_request_store.py
+    │   ├── session_changes_store.py
+    │   ├── session_goal_store.py
+    │   ├── session_message_idempotency_store.py
+    │   ├── background_work_handlers.py
+    │   └── background_work_store.py
+    ├── 工具运行时与选择
+    │   ├── tool_catalog_service.py
+    │   ├── tool_output_store.py
+    │   ├── tool_selection_store.py
+    │   └── tool_service.py
+    ├── 日志与 trace
+    │   ├── llm_request_log_service.py
+    │   ├── log_service.py
+    │   ├── trace_event_recorder.py
+    │   └── trace_event_store.py
+    ├── 工作区文件与服务装配
+    │   ├── file_tree_settings_service.py
+    │   ├── workspace_file_watch_service.py
+    │   └── workspace_service.py
+    └── 其他基础设施
+        ├── artifact_service.py
+        ├── attachment_content_service.py
+        ├── rollout_checkpoint_runtime.py
+        ├── rollout_history_reader.py
+        └── runtime_service.py
+```
+
+新增实现优先归入职责匹配的现有子目录；跨域根级模块只在确实服务多个子域时保留。迁移既有文件时，全量平移导入方与对应测试，并同步修订这棵树；不要只移动文件留下旧路径或重复入口。
+
 ## 可修改内容
 
 - 可以新增、修改、删除基础设施服务实现文件。

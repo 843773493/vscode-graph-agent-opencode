@@ -13,6 +13,7 @@ from app.core.config_sources import (
     read_stable_config_file,
     verify_stable_config_file,
 )
+from app.core.file_permissions import restrict_private_path_access
 from app.gateway.control.gateway_state import GatewayConfigRecord, GatewayStateStore
 from app.services.infrastructure.config.state import ConfigConflictError, new_config_id
 
@@ -109,9 +110,11 @@ def _atomic_write_gateway_jsonc(path: Path, raw_bytes: bytes) -> None:
             file.write(raw_bytes)
             file.flush()
             os.fsync(file.fileno())
-        if path.exists():
+        if os.name == "nt":
+            restrict_private_path_access(temporary_path)
+        elif path.exists():
             shutil.copymode(path, temporary_path)
-        elif os.name != "nt":
+        else:
             temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
     finally:

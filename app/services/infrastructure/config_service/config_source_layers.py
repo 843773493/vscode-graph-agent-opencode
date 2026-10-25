@@ -81,9 +81,11 @@ class ConfigSourceLayersMixin:
             "Workspace 配置 schema 不存在: 工作区引用、发行包引用、配置目录及用户安装目录均无可用文件"
         ) from error
 
-    def _load_schema(self) -> dict[str, Any]:
+    def _load_schema(self, schema_path: Path | None = None) -> dict[str, Any]:
         if self._schema is None:
-            self._schema = read_jsonc_object(self._resolve_schema_path())
+            self._schema = read_jsonc_object(
+                schema_path if schema_path is not None else self._resolve_schema_path()
+            )
         return self._schema
 
     def _get_workspace_config_path(self) -> Path:
@@ -97,6 +99,7 @@ class ConfigSourceLayersMixin:
         dict[str, Any],
         tuple[Path, ...],
         tuple[ConfigSource, ...],
+        Path,
     ]:
         config_path = self._get_workspace_config_path()
         source_paths: list[Path] = [self._inline_config_path]
@@ -144,10 +147,12 @@ class ConfigSourceLayersMixin:
             )
             self._append_source_path(source_paths, local_config_path)
 
+        schema_path: Path | None = None
         if self._workspace_root is not None:
+            schema_path = self._resolve_schema_path()
             migrate_legacy_workspace_configuration(
                 workspace_root=self._workspace_root,
-                workspace_schema_path=self._resolve_schema_path(),
+                workspace_schema_path=schema_path,
             )
             workspace_path = get_workspace_config_path(self._workspace_root)
             workspace_override = self._read_shared_override(
@@ -173,7 +178,9 @@ class ConfigSourceLayersMixin:
                 self._runtime_config_overrides,
             )
         self._validate_agent_tool_policies(config)
-        return config, tuple(source_paths), tuple(source_details)
+        if schema_path is None:
+            schema_path = self._resolve_schema_path()
+        return config, tuple(source_paths), tuple(source_details), schema_path
 
     def _runtime_override_source(self) -> ConfigSource:
         # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，

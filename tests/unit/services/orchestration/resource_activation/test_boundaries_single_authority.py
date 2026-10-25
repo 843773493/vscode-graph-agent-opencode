@@ -1,6 +1,6 @@
 """activation boundary/token 的单一权威防漂移合同。
 
-boundary 集合与 token 正则只在 domain common.py 定义一次；orchestration
+boundary 集合与 token 正则只在 domain shared_contract.py 定义一次；orchestration
 contracts.py 直接使用领域 policy 类型，不得重新定义边界或 policy 副本。
 """
 

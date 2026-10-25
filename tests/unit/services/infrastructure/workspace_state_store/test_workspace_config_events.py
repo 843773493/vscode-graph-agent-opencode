@@ -8,8 +8,8 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
-def test_workspace_config_events_are_durable_replayable_and_idempotent(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_config_events_are_durable_replayable_and_idempotent(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = store.append_config_event(
             event_id="config-event-1",
@@ -49,8 +49,8 @@ def test_workspace_config_events_are_durable_replayable_and_idempotent(tmp_path)
     finally:
         store.close()
 
-def test_workspace_config_event_outbox_claim_retry_and_dedup(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_config_event_outbox_claim_retry_and_dedup(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         created = store.append_config_event(
             event_id="config-outbox-1",
@@ -111,8 +111,8 @@ def test_workspace_config_event_outbox_claim_retry_and_dedup(tmp_path):
     finally:
         store.close()
 
-def test_workspace_config_event_relay_is_independent_per_consumer(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_config_event_relay_is_independent_per_consumer(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         event = store.append_config_event(
             event_id="config-consumer-independent",
@@ -156,8 +156,8 @@ def test_workspace_config_event_relay_is_independent_per_consumer(tmp_path):
     finally:
         store.close()
 
-def test_workspace_config_event_cursor_reports_snapshot_required(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_config_event_cursor_reports_snapshot_required(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         for index in range(3):
             store.append_config_event(

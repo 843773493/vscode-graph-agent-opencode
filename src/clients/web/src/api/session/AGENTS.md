@@ -16,7 +16,7 @@ api/session/
 ├── sessionCatalog.ts               会话目录快照读取
 ├── sessionCatalogOperations.ts     目录变更请求、回执与回压状态
 ├── sessionActivity.ts              会话活动事件请求
-├── sessionMessages.ts              消息发送
+├── sessionMessages.ts              消息操作与附件内容读取
 ├── sessionTurnHistory.ts            Turn 历史读取与分页
 ├── sessionContext.ts                会话上下文投影读取
 ├── sessionGoals.ts                  会话目标读写

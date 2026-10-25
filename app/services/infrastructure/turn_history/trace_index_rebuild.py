@@ -5,18 +5,21 @@ import threading
 from pathlib import Path
 from typing import BinaryIO
 
+from app.core.atomic_fs import fsync_directory
 from app.schemas.event import Event
 
 from .trace_index_compaction import (
     MAX_COMPACT_LINE_BYTES,
     _AnyEvent,
-    compact_event,
+    compact_event_json,
     is_turn_projected_event,
 )
 from .trace_index_models import TraceTurnIndexEntry, TraceTurnIndexManifest
 
 
-def _read_complete_event(stream: BinaryIO, *, source: str) -> tuple[Event, int, int] | None:
+def _read_complete_event(
+    stream: BinaryIO, *, source: str
+) -> tuple[Event, int, int] | None:
     start = stream.tell()
     line = stream.readline()
     if not line:
@@ -40,13 +43,13 @@ def _find_trace_event(
                 "events/messages 语义事件类型不一致: "
                 f"event_id={event.event_id}, trace={event.type}, message={expected.type}"
             )
-        full_event_payload = event.model_dump(mode="json")
-        if full_event_payload != expected.model_dump(mode="json"):
+        event_json = event.model_dump(mode="json")
+        if event_json != expected.model_dump(mode="json"):
             raise RuntimeError(
                 "events/messages 语义事件内容不一致: "
                 f"event_id={event.event_id}, type={event.type}"
             )
-        return event, trace_start, trace_end, full_event_payload
+        return event, trace_start, trace_end, event_json
     raise RuntimeError(
         "messages.jsonl 事件在权威 Trace 中不存在: "
         f"event_id={expected.event_id}, type={expected.type}"
@@ -57,14 +60,14 @@ def _write_entry(
     stream: BinaryIO,
     *,
     event: Event,
-    full_event_payload: dict[str, object],
+    event_json: dict[str, object],
     trace_start: int,
     trace_end: int,
     message_start: int,
     message_end: int,
 ) -> tuple[TraceTurnIndexEntry, int, int]:
     index_start = stream.tell()
-    compact_payload = compact_event(event)
+    compact_payload = compact_event_json(event_json)
     entry = TraceTurnIndexEntry(
         event_id=event.event_id,
         event_type=event.type,
@@ -74,7 +77,7 @@ def _write_entry(
         trace_end=trace_end,
         message_start=message_start,
         message_end=message_end,
-        source_compacted=compact_payload != full_event_payload,
+        source_compacted=compact_payload != event_json,
         compact_event=compact_payload,
     )
     line = entry.model_dump_json().encode("utf-8") + b"\n"
@@ -131,14 +134,14 @@ def _build_temp_index(
                     "messages.jsonl 含不支持的语义事件: "
                     f"event_id={message_event.event_id}, type={message_event.type}"
                 )
-            event, trace_start, trace_end, full_event_payload = _find_trace_event(
+            event, trace_start, trace_end, event_json = _find_trace_event(
                 trace_stream,
                 expected=message_event,
             )
             entry, index_start, index_end = _write_entry(
                 index_stream,
                 event=event,
-                full_event_payload=full_event_payload,
+                event_json=event_json,
                 trace_start=trace_start,
                 trace_end=trace_end,
                 message_start=message_start,
@@ -183,13 +186,7 @@ def rebuild_trace_turn_index(
             os.fsync(stream.fileno())
         os.replace(temp_index, index_path)
         os.replace(temp_manifest, manifest_path)
-        # TODO: Windows 不能像 POSIX 一样打开目录并 fsync；文件替换本身仍已完成。
-        if os.name != "nt":
-            directory_fd = os.open(trace_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+        fsync_directory(trace_dir)
         return manifest
     finally:
         temp_index.unlink(missing_ok=True)

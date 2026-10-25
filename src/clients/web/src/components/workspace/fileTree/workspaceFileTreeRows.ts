@@ -6,6 +6,16 @@ import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 
 export const FILE_TREE_VIRTUALIZATION_THRESHOLD = 300;
 
+interface NormalizedFileTreeNodeText {
+  name: string;
+  path: string;
+  normalizedName: string;
+  normalizedPath: string;
+}
+
+// 文件树节点会跨搜索输入复用；弱键避免缓存延长已淘汰目录节点的生命周期。
+const normalizedTextByNode = new WeakMap<WorkspaceFileNode, NormalizedFileTreeNodeText>();
+
 // 只有 kind === "directory" 的节点可以展开。后端列举目录时使用
 // follow_symlinks=False（见 app/services/infrastructure/workspace_service.py），
 // 符号链接一律返回 kind: "symlink" 且 has_children=false，是刻意的 fail-closed
@@ -27,8 +37,22 @@ export function fileTreeNodeTextMatchesQuery(
   if (!normalizedQuery) {
     return true;
   }
-  return node.name.toLowerCase().includes(normalizedQuery)
-    || node.path.toLowerCase().includes(normalizedQuery);
+  let normalizedText = normalizedTextByNode.get(node);
+  if (
+    normalizedText === undefined
+    || normalizedText.name !== node.name
+    || normalizedText.path !== node.path
+  ) {
+    normalizedText = {
+      name: node.name,
+      path: node.path,
+      normalizedName: node.name.toLowerCase(),
+      normalizedPath: node.path.toLowerCase(),
+    };
+    normalizedTextByNode.set(node, normalizedText);
+  }
+  return normalizedText.normalizedName.includes(normalizedQuery)
+    || normalizedText.normalizedPath.includes(normalizedQuery);
 }
 
 export type WorkspaceFileTreeSearchMatcher = (

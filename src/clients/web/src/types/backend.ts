@@ -597,7 +597,7 @@ export type WebUiLayoutSettings = Omit<
 > & {
   main_area_ratios?: WebUiMainAreaRatios | null;
   auxiliary_tab_order?: Array<
-    "changes" | "files" | "resources" | "debug"
+    "changes" | "files" | "goal" | "resources" | "debug"
   > | null;
   workspace_preview_file_paths?: string[] | null;
 };

@@ -10,7 +10,7 @@ import type {
   SessionViewStateHost,
   SessionViewStateLoadOutcome,
 } from "./useSessionViewState";
-import { mountViewStateController } from "./sessionHookTestFixtures";
+import { mountViewStateController } from "../../tests/fixtures/session/sessionViewState";
 
 function viewState(overrides: Partial<GatewayUserViewState> = {}): GatewayUserViewState {
   return {

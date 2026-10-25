@@ -14,7 +14,7 @@ def _log_candidate(
         source=source,
         service="test",
         label=log_id,
-        path=Path("candidate-logs") / f"{log_id.replace(':', '-')}.log",
+        log_path=Path("candidate-logs") / f"{log_id.replace(':', '-')}.log",
         workspace_id=workspace_id,
     )
 

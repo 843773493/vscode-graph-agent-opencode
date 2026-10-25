@@ -18,7 +18,7 @@ def _is_windows() -> bool:
 
 
 def _windows_acl_is_private(path: Path, *, is_directory: bool) -> bool:
-    """用原生 DACL 查询确认只存在预期主体，避免健康路径反复启动 icacls。"""
+    """用原生 DACL 确认目录已关闭继承且只含预期主体，避免反复启动 icacls。"""
     import pywintypes
     import win32security
 
@@ -34,6 +34,10 @@ def _windows_acl_is_private(path: Path, *, is_directory: bool) -> bool:
     access_control_list = descriptor.GetSecurityDescriptorDacl()
     if access_control_list is None or access_control_list.GetAceCount() != 3:
         return False
+    if is_directory:
+        control, _revision = descriptor.GetSecurityDescriptorControl()
+        if (control & win32security.SE_DACL_PROTECTED) == 0:
+            return False
 
     expected_sids = {"S-1-3-4", "S-1-5-18", "S-1-5-32-544"}
     actual_access: dict[str, int] = {}

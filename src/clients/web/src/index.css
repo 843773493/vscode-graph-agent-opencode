@@ -786,6 +786,26 @@ body > #root {
   font-size: 11px;
   line-height: 1.35;
 }
+.composer-goal-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 4px 0;
+  color: var(--bt-text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.composer-goal-status-label {
+  flex: 0 0 auto;
+  color: var(--bt-status-success);
+}
+.composer-goal-status-objective {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .composer-slash-menu {
   width: min(520px, calc(100vw - 40px), var(--anchored-overlay-available-width, 520px));
   max-height: min(320px, 48vh, var(--anchored-overlay-available-height, 320px));

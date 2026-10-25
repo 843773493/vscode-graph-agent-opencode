@@ -17,6 +17,7 @@ from app.agents.tools.terminal_contract import (
     DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
     classify_terminal_environment_issue,
     clean_terminal_delta,
+    contains_command_completion_marker,
     effective_yield_time_ms,
     extract_command_output,
     tool_output,
@@ -146,19 +147,33 @@ def create_exec_command_tool(
                 command=cmd,
             )
             deadline = asyncio.get_running_loop().time() + resolved_yield_time_ms / 1000
-            consumed_output = ""
+            output_chunks: list[str] = []
+            completion_scan_tail = ""
+            # Windows PowerShell 的 int32 退出码最多10位，另留一位给冒号。
+            completion_scan_tail_length = len(done_marker) + 11
             while True:
                 pending_output, _latest_terminal = await _read_pending_output(
                     terminal_client=terminal_client,
                     terminal_id=terminal_id,
                 )
-                consumed_output += pending_output
-                completed, raw_output, exit_code = extract_command_output(
-                    buffer=consumed_output,
-                    start_marker=start_marker,
-                    done_marker=done_marker,
+                output_chunks.append(pending_output)
+                completion_scan_buffer = completion_scan_tail + pending_output
+                completed_marker_seen = contains_command_completion_marker(
+                    completion_scan_buffer,
+                    done_marker,
                 )
-                if completed:
+                completion_scan_tail = completion_scan_buffer[-completion_scan_tail_length:]
+                if completed_marker_seen:
+                    consumed_output = "".join(output_chunks)
+                    completed, raw_output, exit_code = extract_command_output(
+                        buffer=consumed_output,
+                        start_marker=start_marker,
+                        done_marker=done_marker,
+                    )
+                    if not completed:
+                        raise RuntimeError(
+                            f"终端完成标记与输出解析结果不一致: terminal_id={terminal_id}"
+                        )
                     await terminal_client.complete_terminal(terminal_id)
                     result = tool_output(
                         terminal_id=terminal_id,
@@ -179,6 +194,7 @@ def create_exec_command_tool(
                     break
                 await asyncio.sleep(min(0.25, remaining_seconds))
 
+            consumed_output = "".join(output_chunks)
             _, raw_output, _ = extract_command_output(
                 buffer=consumed_output,
                 start_marker=start_marker,
@@ -239,10 +255,11 @@ def create_write_stdin_tool(
                     f"command_status={command_status}"
                 )
 
-            consumed_output, latest_terminal = await _read_pending_output(
+            first_output, latest_terminal = await _read_pending_output(
                 terminal_client=terminal_client,
                 terminal_id=session_id,
             )
+            output_chunks = [first_output]
             if chars:
                 await terminal_client.write_terminal(
                     terminal_id=session_id,
@@ -260,10 +277,11 @@ def create_write_stdin_tool(
                     terminal_client=terminal_client,
                     terminal_id=session_id,
                 )
-                consumed_output += pending_output
+                output_chunks.append(pending_output)
                 if latest_terminal.get("last_command_status") != "running":
                     break
 
+            consumed_output = "".join(output_chunks)
             output = clean_terminal_delta(consumed_output, latest_terminal)
             latest_command_status = latest_terminal.get("last_command_status")
             user_owned_shell = latest_terminal.get("last_command") is None

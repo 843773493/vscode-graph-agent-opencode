@@ -18,6 +18,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from app.core.file_permissions import (
+    require_private_file_access,
+    restrict_private_path_access,
+)
 from app.gateway.federation.errors import (
     FEDERATION_CHANNEL_EPOCH_STALE,
     FEDERATION_GRANT_INVALID_SIGNATURE,
@@ -39,12 +43,9 @@ def load_or_create_signing_key(gateway_root: Path) -> Ed25519PrivateKey:
 
     path = signing_key_path(gateway_root)
     if path.exists():
-        # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
-        if os.name != "nt" and path.stat().st_mode & 0o077:
-            raise PermissionError(f"Gateway 联邦签名私钥权限必须为 0600: {path}")
-        private_key = serialization.load_pem_private_key(
-            path.read_bytes(), password=None
-        )
+        with path.open("rb") as file:
+            require_private_file_access(path, descriptor=file.fileno())
+            private_key = serialization.load_pem_private_key(file.read(), password=None)
         if not isinstance(private_key, Ed25519PrivateKey):
             raise ValueError(f"Gateway 联邦签名私钥类型非法: {path}")
         return private_key
@@ -57,6 +58,7 @@ def load_or_create_signing_key(gateway_root: Path) -> Ed25519PrivateKey:
     )
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as file:
+        restrict_private_path_access(path, descriptor=file.fileno())
         file.write(payload)
     return private_key
 

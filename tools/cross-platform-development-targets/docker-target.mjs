@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { runChecked } from "./process.mjs";
+import { commandForCurrentPlatform, runChecked } from "./process.mjs";
 
 export function dockerPersistentPaths(target) {
   const root = path.resolve(target.docker.persistentRoot);
@@ -177,7 +177,14 @@ function installDockerKnownHost(target) {
     const remainingMs = Math.floor(deadline - performance.now());
     if (remainingMs <= 0) break;
     const result = Bun.spawnSync(
-      ["ssh-keyscan", "-p", String(target.ssh.port), "-t", "ed25519", target.ssh.host],
+      commandForCurrentPlatform([
+        "ssh-keyscan",
+        "-p",
+        String(target.ssh.port),
+        "-t",
+        "ed25519",
+        target.ssh.host,
+      ]),
       { stdout: "pipe", stderr: "pipe", timeout: remainingMs },
     );
     if (result.exitedDueToTimeout) {
@@ -220,7 +227,12 @@ export function provisionDockerTarget({ target, projectRoot, rebuild = false }) 
   const environment = dockerComposeEnvironment({ target, projectRoot });
   const argumentsList = ["up", "-d"];
   const imageExists = Bun.spawnSync(
-    [...dockerCommandPrefix(), "image", "inspect", target.docker.image],
+    commandForCurrentPlatform([
+      ...dockerCommandPrefix(),
+      "image",
+      "inspect",
+      target.docker.image,
+    ]),
     { stdout: "ignore", stderr: "ignore", env: environment },
   ).exitCode === 0;
   argumentsList.push(rebuild || !imageExists ? "--build" : "--no-build");

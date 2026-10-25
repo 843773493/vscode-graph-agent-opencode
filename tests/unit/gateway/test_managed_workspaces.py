@@ -42,7 +42,7 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def controlled_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def controlled_controller_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def build(registry: GatewayWorkspaceRegistry) -> GatewayWorkspaceRuntimeController:
         controller = GatewayWorkspaceRuntimeController(
             registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
@@ -62,7 +62,7 @@ def controlled_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    controlled_controller,
+    controlled_controller_factory,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
@@ -131,7 +131,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     )
 
     result = await remove_direct_managed_workspace(
-        registry, target.workspace_id, controller=controlled_controller(registry), request_id="remove",
+        registry, target.workspace_id, controller=controlled_controller_factory(registry), request_id="remove",
     )
     assert result.status == "stopped"
 
@@ -170,7 +170,7 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
 
 @pytest.mark.asyncio
 async def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
-    tmp_path: Path, controlled_controller,
+    tmp_path: Path, controlled_controller_factory,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert(
@@ -200,13 +200,13 @@ async def test_remove_direct_managed_workspace_rejects_default_and_external_targ
     )
 
     with pytest.raises(PermissionError, match="默认工作区"):
-        await remove_direct_managed_workspace(registry, "default", controller=controlled_controller(registry), request_id="default")
+        await remove_direct_managed_workspace(registry, "default", controller=controlled_controller_factory(registry), request_id="default")
     with pytest.raises(ValueError, match="直接托管"):
-        await remove_direct_managed_workspace(registry, "external", controller=controlled_controller(registry), request_id="external")
+        await remove_direct_managed_workspace(registry, "external", controller=controlled_controller_factory(registry), request_id="external")
 
 
 @pytest.mark.asyncio
-async def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path, controlled_controller) -> None:
+async def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path, controlled_controller_factory) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert(
         WorkspaceTarget(
@@ -221,7 +221,7 @@ async def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path,
     )
 
     with pytest.raises(ValueError, match="至少需要保留"):
-        await remove_direct_managed_workspace(registry, "only", controller=controlled_controller(registry), request_id="only")
+        await remove_direct_managed_workspace(registry, "only", controller=controlled_controller_factory(registry), request_id="only")
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from app.services.business.communication.errors import CommunicationContractErro
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
+from tests.support.communication.probe import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
 from tests.unit.services.infrastructure.gateway_clients.test_gateway_communication_client import (
     GATEWAY_ID,
     REQUEST_ID,

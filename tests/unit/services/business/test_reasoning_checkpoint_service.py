@@ -1232,7 +1232,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
 
 
 @pytest.fixture
-def reasoning_items():
+def reasoning_items_factory():
     """输入顺序来自已提交 selection；物理 sequence 故意与它不同。"""
 
     def make(*indices: int) -> list[CanonicalItemRecord]:
@@ -1287,8 +1287,8 @@ def reasoning_items():
     return make
 
 
-def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items):
-    items = reasoning_items(0, 2)
+def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items_factory):
+    items = reasoning_items_factory(0, 2)
     message = AIMessage(
         response_metadata={"model_call_id": "model-call-1"},
         content="",
@@ -1305,7 +1305,7 @@ def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items):
 
 
 def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(
-    reasoning_items,
+    reasoning_items_factory,
 ):
     protected = {
         "type": "reasoning",
@@ -1321,7 +1321,7 @@ def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(
         content=[protected, text],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    items = reasoning_items(0, 2)
+    items = reasoning_items_factory(0, 2)
     original_items = [item.to_dict() for item in items]
     result = merge_canonical_reasoning([message], items)
     assert result[0].content == [
@@ -1340,7 +1340,7 @@ def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(
 
 
 def test_agent_state_reasoning_merge_reports_unidentified_provider_carrier(
-    reasoning_items,
+    reasoning_items_factory,
 ):
     message = AIMessage(
         response_metadata={"model_call_id": "model-call-1"},
@@ -1352,7 +1352,7 @@ def test_agent_state_reasoning_merge_reports_unidentified_provider_carrier(
         ],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    result = merge_canonical_reasoning([message], reasoning_items(0))
+    result = merge_canonical_reasoning([message], reasoning_items_factory(0))
     assert result[0].content == message.content
     assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
     assert (
@@ -1362,9 +1362,9 @@ def test_agent_state_reasoning_merge_reports_unidentified_provider_carrier(
 
 
 def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
-    reasoning_items,
+    reasoning_items_factory,
 ):
-    items = reasoning_items(0)
+    items = reasoning_items_factory(0)
     items.insert(
         1,
         replace(
@@ -1390,9 +1390,9 @@ def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
 
 
 def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_message(
-    reasoning_items,
+    reasoning_items_factory,
 ):
-    items = reasoning_items(0)
+    items = reasoning_items_factory(0)
     post_tool = replace(
         items[0],
         item_id="reasoning-after-tool",
@@ -1460,7 +1460,7 @@ def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_mess
 
 @pytest.mark.parametrize("indices", [(0, 2), (2, 0)])
 def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
-    reasoning_items,
+    reasoning_items_factory,
     indices,
 ):
     message = AIMessage(
@@ -1468,7 +1468,7 @@ def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
         content="缺少 content-part 顺序的正文",
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    result = merge_canonical_reasoning([message], reasoning_items(*indices))
+    result = merge_canonical_reasoning([message], reasoning_items_factory(*indices))
     assert result[0].content == message.content
     assert result[0].response_metadata["reasoning_merge_status"] == (
         "skipped_ambiguous_order"
@@ -1480,14 +1480,14 @@ def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
 
 
 def test_agent_state_reasoning_merge_keeps_conflicting_part_order_explicit(
-    reasoning_items,
+    reasoning_items_factory,
 ):
     message = AIMessage(
         response_metadata={"model_call_id": "model-call-1"},
         content=[{"type": "text", "text": "调用前说明", "index": 1}],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
-    result = merge_canonical_reasoning([message], reasoning_items(2, 0))
+    result = merge_canonical_reasoning([message], reasoning_items_factory(2, 0))
     assert result[0].content == message.content
     assert result[0].response_metadata["reasoning_merge_status"] == (
         "skipped_ambiguous_order"

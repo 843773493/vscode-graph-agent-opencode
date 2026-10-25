@@ -16,6 +16,8 @@ processes/
 
 `TerminalProcessStat`统一说明PID、进程组、操作系统SID/Darwin sess与`processStartTime`。启动标记只用于同平台身份联合核验：Linux为启动后的时钟滴答数，其他POSIX为ps原文；不是业务Session ID或UTC时间。Linux僵尸进程已停止执行，等待父进程回收不属于终端停止职责。真实信号与身份检查位于`tests/integration/workspace_services/terminal/test_process_release.py`。
 
+退出等待只核验进程是否仍存在：Linux读取`/proc`并忽略僵尸状态，Darwin及其他POSIX直接用`process.kill(pid, 0)`检查，避免每轮、每个PID都启动`ps`；Windows在`taskkill`成功后用同一存在性检查确认根进程退出。需要启动标记或进程组/session信息时才读取完整元数据。
+
 Windows通过`taskkill /T /F /PID`请求进程树终止，工具调用有独立上限并保留启动错误、退出码、信号和stderr。目标仍存活时的工具失败必须抛出，不能返回`missing`；工具成功后仍在有界期限内用Node的PID存在性查询确认执行根消失，持续存活返回`still_running`。该查询不依赖POSIX元数据，不能把Windows的`readProcessStat() === null`当作退出证据；也不声称已逐个独立核验树内后代。Windows单测在隔离Node进程模拟平台、工具与存在性边界，不调用宿主taskkill或发送真实信号，不能代替Windows原生验收。
 
 Windows和POSIX共用的退出宽限等待按`performance.now()`的单调毫秒计时，轮询间隔不超过剩余预算；系统校时前跳或回拨不改变宽限长度。期限只限制轮询等待，不取消正在执行的进程状态查询，也不代表整个终端关闭入口的硬期限。

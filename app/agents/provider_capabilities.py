@@ -41,11 +41,12 @@ def parse_provider_capabilities(provider: dict[str, Any]) -> set[ProviderCapabil
     return capabilities
 
 
-def detect_required_capabilities(content: object) -> set[ProviderCapability]:
-    """根据消息 content blocks 推导当前请求需要的模型输入能力。"""
-    required: set[ProviderCapability] = {TEXT_INPUT}
+def _add_content_capabilities(
+    content: object,
+    required: set[ProviderCapability],
+) -> None:
     if not isinstance(content, list):
-        return required
+        return
 
     for part in content:
         if not isinstance(part, dict):
@@ -61,7 +62,15 @@ def detect_required_capabilities(content: object) -> set[ProviderCapability]:
             # UserContentBuilder 仍会发送 manifest 路径文本，由模型自行使用已有工具。
             continue
         if isinstance(block_type, str):
-            required.update(CONTENT_BLOCK_CAPABILITY_REQUIREMENTS.get(block_type, set()))
+            capabilities = CONTENT_BLOCK_CAPABILITY_REQUIREMENTS.get(block_type)
+            if capabilities:
+                required.update(capabilities)
+
+
+def detect_required_capabilities(content: object) -> set[ProviderCapability]:
+    """根据消息 content blocks 推导当前请求需要的模型输入能力。"""
+    required: set[ProviderCapability] = {TEXT_INPUT}
+    _add_content_capabilities(content, required)
     return required
 
 
@@ -77,7 +86,7 @@ def detect_required_capabilities_from_messages(
         else:
             content = getattr(message, "content", None)
             content_blocks = getattr(message, "content_blocks", None)
-        required.update(detect_required_capabilities(content))
+        _add_content_capabilities(content, required)
         if content_blocks is not content:
-            required.update(detect_required_capabilities(content_blocks))
+            _add_content_capabilities(content_blocks, required)
     return required

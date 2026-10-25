@@ -10,7 +10,7 @@ from app.agents.tools.session_messaging import create_send_message_to_session_to
 from app.schemas.internal_v2.communication import CommunicationReceipt
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     TARGET_SESSION,

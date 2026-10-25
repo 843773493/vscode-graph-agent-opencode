@@ -56,9 +56,14 @@ export function activityPreviewForItems(
   items: WorkItem[],
   stats: ConversationView["activityStats"],
 ): string {
-  const latestTool = [...items].reverse().find(
-    (item): item is ToolTimelineItem => item.kind === "aggregated_tool",
-  );
+  let latestTool: ToolTimelineItem | undefined;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === "aggregated_tool") {
+      latestTool = item;
+      break;
+    }
+  }
   const statsPreview = activityStatsPreview(stats);
   return latestTool
     && !latestTool.active
@@ -269,10 +274,7 @@ export function TurnActivitySummary({
         ) : null}
       </section>
       {groups.map((group) => group.kind === "response" ? (
-        <div key={group.id}>
-          <ResponsePart item={group.item} />
-          <ForkItemButtons item={group.item} onForkItem={onForkItem} />
-        </div>
+        <ResponsePart key={group.id} item={group.item} />
       ) : open && !error ? (
         <div key={group.id} className="chat-thinking-body">
           <ActivityDetails

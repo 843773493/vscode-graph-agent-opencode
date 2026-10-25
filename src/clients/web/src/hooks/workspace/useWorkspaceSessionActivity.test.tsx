@@ -71,6 +71,7 @@ function appState(
     apiPort: API_PORT,
     activeGatewayWorkspaceId: WORKSPACE_ID,
     gatewayWorkspaces,
+    unreadSessionKeys: new Set<string>(),
     status: "准备就绪",
   } as unknown as AppState;
 }
@@ -141,6 +142,59 @@ afterEach(() => {
 });
 
 describe("useWorkspaceSessionActivity 重连与卸载", () => {
+  test("同一会话重复活动不产生即时提交，已读事件重放不恢复未读", async () => {
+    installControlledWindow();
+    const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
+      .mockResolvedValue({ items: [], next_cursor: 0 } as never);
+    let emitActivity!: (event: SessionActivity, nextCursor: number) => void;
+    const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
+      .mockImplementation(async (_apiPort, _target, options) => {
+        emitActivity = (event, nextCursor) => options?.onEvent?.(event, nextCursor);
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+    restoreSpies.push(() => listSpy.mockRestore(), () => streamSpy.mockRestore());
+
+    let commitCount = 0;
+    let latestState!: AppState;
+    let clearUnread!: () => void;
+    function Probe(): React.ReactNode {
+      const [state, setState] = React.useState<AppState>(appState());
+      latestState = state;
+      clearUnread = () => {
+        setState((previous) => ({ ...previous, unreadSessionKeys: new Set<string>() }));
+      };
+      React.useEffect(() => { commitCount += 1; });
+      useWorkspaceSessionActivity({
+        apiPort: API_PORT,
+        workspaceTarget: WORKSPACE_TARGET,
+        currentSessionCacheKey: null,
+        setState,
+      });
+      return null;
+    }
+
+    await act(async () => { renderer = create(<Probe />); });
+    await drainMicrotasks();
+    const beforeActivity = commitCount;
+    await act(async () => { emitActivity(activity("evt-1"), 1); });
+    expect(commitCount).toBe(beforeActivity + 1);
+    const afterFirstActivity = commitCount;
+
+    await act(async () => { emitActivity(activity("evt-2"), 2); });
+
+    expect(latestState.unreadSessionKeys.has(`${WORKSPACE_ID}::session-1`)).toBe(true);
+    expect(commitCount).toBe(afterFirstActivity);
+
+    await act(async () => { clearUnread(); });
+    const afterRead = commitCount;
+    await act(async () => { emitActivity(activity("evt-2"), 2); });
+
+    expect(latestState.unreadSessionKeys.has(`${WORKSPACE_ID}::session-1`)).toBe(false);
+    expect(commitCount).toBe(afterRead);
+  });
+
   test("AppState 重新加载后只重建一次订阅，并使用新 backend UUID", async () => {
     installWindow();
     const listedBackendWorkspaceIds: Array<string | null | undefined> = [];

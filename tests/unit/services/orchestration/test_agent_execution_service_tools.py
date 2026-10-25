@@ -26,7 +26,6 @@ from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from tests.support.background_work import build_background_registry
 
-pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
 
 class _DummyConfigService:
     def get_llm_providers(self):
@@ -261,7 +260,10 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
 
 
 @pytest.mark.asyncio
-async def test_agent_includes_background_message_collection_tool(text_mutations_factory, communication_probe, tmp_path):
+async def test_agent_includes_background_message_collection_tool(
+    text_mutations_factory, communication_probe, empty_workspace_scope,
+):
+    workspace_root = empty_workspace_scope[1]
     background_message_bus = _BlueprintBackgroundService()
     background_task_registry = _BlueprintBackgroundService()
     job_event_bus = _FakeJobEventBus()
@@ -270,7 +272,7 @@ async def test_agent_includes_background_message_collection_tool(text_mutations_
     config_service = _DummyConfigService()
     job_service = _FakeJobService()
 
-    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="ses_019bca51019973818b63e9d44c0e94f5",
         agent_id="deep_agent",
         background_task_registry=background_task_registry,
@@ -284,7 +286,7 @@ async def test_agent_includes_background_message_collection_tool(text_mutations_
         team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_resource_owner=_FakeTerminalManagerClient(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         invocation_context=ToolInvocationContext(),
         include_test_tools=True,
         include_team_tools=True,
@@ -311,8 +313,11 @@ async def test_agent_includes_background_message_collection_tool(text_mutations_
 
 
 @pytest.mark.asyncio
-async def test_agent_omits_test_tool_without_development_config(text_mutations_factory, communication_probe, tmp_path):
-    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
+async def test_agent_omits_test_tool_without_development_config(
+    text_mutations_factory, communication_probe, empty_workspace_scope,
+):
+    workspace_root = empty_workspace_scope[1]
+    tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_production",
         background_task_registry=_BlueprintBackgroundService(),
         background_message_bus=_BlueprintBackgroundService(),
@@ -325,7 +330,7 @@ async def test_agent_omits_test_tool_without_development_config(text_mutations_f
         team_service=_FakeTeamService(),
         config_service=_DummyConfigService(),
         terminal_resource_owner=_FakeTerminalManagerClient(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         invocation_context=ToolInvocationContext(),
         include_team_tools=True,
     )
@@ -334,8 +339,11 @@ async def test_agent_omits_test_tool_without_development_config(text_mutations_f
 
 
 @pytest.mark.asyncio
-async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_factory, communication_probe, tmp_path):
-    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
+async def test_single_agent_tool_set_omits_team_board_tools(
+    text_mutations_factory, communication_probe, empty_workspace_scope,
+):
+    workspace_root = empty_workspace_scope[1]
+    tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_single_agent",
         background_task_registry=_BlueprintBackgroundService(),
         background_message_bus=_BlueprintBackgroundService(),
@@ -347,7 +355,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_facto
         session_subagent_service=_FakeSessionSubagentService(),
         config_service=_DummyConfigService(),
         terminal_resource_owner=_FakeTerminalManagerClient(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         invocation_context=ToolInvocationContext(),
         include_team_tools=False,
     )
@@ -368,7 +376,10 @@ async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_facto
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_mutations_factory, communication_probe, tmp_path):
+async def test_agent_tool_denylist_filters_direct_and_middleware_tools(
+    text_mutations_factory, communication_probe, empty_workspace_scope,
+):
+    workspace_root = empty_workspace_scope[1]
     job_event_bus = _FakeJobEventBus()
 
     class _DenylistConfigService(_DummyConfigService):
@@ -380,7 +391,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_muta
 
     config_service = _DenylistConfigService()
 
-    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_denylist",
         agent_id="deep_agent",
         background_task_registry=_BlueprintBackgroundService(),
@@ -394,7 +405,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_muta
         team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_resource_owner=_FakeTerminalManagerClient(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         invocation_context=ToolInvocationContext(),
         include_test_tools=True,
         include_team_tools=True,
@@ -426,10 +437,11 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_muta
 @pytest.mark.asyncio
 async def test_emit_system_time_messages_tool_emits_periodic_messages(
     monkeypatch,
-    tmp_path,
+    empty_workspace_scope,
     session_bundle_factory,
 ):
-    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    workspace_root = empty_workspace_scope[1]
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, "ses_019bca51019973818b63e9d44c0e94f5")
     background_message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=sessions_dir))
     background_task_registry = build_background_registry(sessions_dir)

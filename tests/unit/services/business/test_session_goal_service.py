@@ -85,12 +85,16 @@ async def test_budget_is_nullable_and_accounting_is_idempotent(goal_service):
 
 
 @pytest.mark.asyncio
-async def test_agent_cannot_replace_unfinished_goal_or_set_user_status(goal_service):
+async def test_agent_can_pause_goal_but_cannot_replace_or_resume_it(goal_service):
     await goal_service.create_for_agent("sess_1", "目标", None)
     with pytest.raises(RuntimeError, match="已有未完成 Goal"):
         await goal_service.create_for_agent("sess_1", "另一个目标", None)
-    with pytest.raises(ValueError, match="complete 或 blocked"):
+    paused = await goal_service.update_for_agent("sess_1", GoalStatus.paused)
+    assert paused.status == GoalStatus.paused
+    with pytest.raises(ValueError, match="没有进行中的 Goal"):
         await goal_service.update_for_agent("sess_1", GoalStatus.paused)
+    with pytest.raises(ValueError, match="paused、complete 或 blocked"):
+        await goal_service.update_for_agent("sess_1", GoalStatus.active)
 
 
 @pytest.mark.asyncio

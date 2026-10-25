@@ -55,19 +55,21 @@ class _HistoryArchiveCase:
 
 
 @pytest.fixture
-def archive_case(tmp_path: Path) -> _HistoryArchiveCase:
+def archive_case(empty_workspace_scope: tuple[str, Path]) -> _HistoryArchiveCase:
+    workspace_id, workspace_root = empty_workspace_scope
     session_id = "ses_019c58e6e9f5713785f99a3f3e5768d8"
     main_thread_id = "thr_019c58e6e9f5713785f99a3f3e5768d8"
     child_thread_id = "thr_019c58e6e9f5713785f99a3f3e5768d9"
     bundle = seed_catalog_session_bundle(
-        tmp_path / ".boxteam" / "sessions",
+        workspace_root / ".boxteam" / "sessions",
         session_id,
+        workspace_id=workspace_id,
         main_thread_id=main_thread_id,
     )
     return _HistoryArchiveCase(
-        build_workspace_backend(tmp_path),
+        build_workspace_backend(workspace_root),
         bundle.directory,
-        tmp_path,
+        workspace_root,
         bundle.node.workspace_id,
         (
             MutationIntentOwner(session_id, main_thread_id),

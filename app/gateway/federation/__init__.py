@@ -98,7 +98,7 @@ def obtain_pairing_credential_over_ssh(
     ssh_config_host: str | None,
     remote_pair_command: str | None = None,
 ) -> FederationCredential:
-    # TODO: Windows source-development 目标没有安装 boxteam 命令，需使用其固定运行时。
+    # Windows 源码开发目标未安装发行命令，因此使用其固定 Python 运行时启动配对模块。
     pairing_command = (
         remote_pair_command
         if remote_pair_command is not None

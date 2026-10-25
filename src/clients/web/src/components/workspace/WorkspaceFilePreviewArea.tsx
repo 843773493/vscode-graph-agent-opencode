@@ -91,6 +91,33 @@ function lineRows(content: string): string[] {
   return normalized.split("\n");
 }
 
+function projectDiffLines(
+  content: string,
+  maxRenderedLines: number | null,
+): { lines: string[]; lineCount: number } {
+  const lines: string[] = [];
+  let lineStart = 0;
+  let lineCount = 1;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content.charCodeAt(index);
+    if (character !== 10 && character !== 13) continue;
+
+    if (maxRenderedLines === null || lines.length < maxRenderedLines) {
+      lines.push(content.slice(lineStart, index));
+    }
+    if (character === 13 && content.charCodeAt(index + 1) === 10) index += 1;
+    lineStart = index + 1;
+    lineCount += 1;
+  }
+
+  if (maxRenderedLines === null || lines.length < maxRenderedLines) {
+    lines.push(content.slice(lineStart));
+  }
+
+  return { lines, lineCount };
+}
+
 function diffLineKind(line: string): "add" | "remove" | "meta" | "context" {
   if (line.startsWith("+") && !line.startsWith("+++")) {
     return "add";
@@ -154,18 +181,18 @@ export default function WorkspaceFilePreviewArea({
   const activeDiffText = activeTab?.previewType === "session-diff"
     ? activeTab.change.diff_text
     : null;
-  const activeDiffLines = useMemo(
-    () => activeDiffText === null ? [] : lineRows(activeDiffText),
-    [activeDiffText],
+  const activeDiffProjection = useMemo(
+    () => activeDiffText === null
+      ? { lines: [], lineCount: 0 }
+      : projectDiffLines(
+        activeDiffText,
+        diffFullyExpanded ? null : MAX_RENDERED_DIFF_LINES,
+      ),
+    [activeDiffText, diffFullyExpanded],
   );
-  const diffTruncated = activeDiffLines.length > MAX_RENDERED_DIFF_LINES;
-  const visibleDiffLines = useMemo(
-    () => diffTruncated && !diffFullyExpanded
-      ? activeDiffLines.slice(0, MAX_RENDERED_DIFF_LINES)
-      : activeDiffLines,
-    [activeDiffLines, diffTruncated, diffFullyExpanded],
-  );
-  const diffLineNumberWidth = Math.max(2, String(activeDiffLines.length).length);
+  const diffTruncated = activeDiffProjection.lineCount > MAX_RENDERED_DIFF_LINES;
+  const visibleDiffLines = activeDiffProjection.lines;
+  const diffLineNumberWidth = Math.max(2, String(activeDiffProjection.lineCount).length);
   const showLoadingEmpty = loadingPath &&
     (!activeTab || activeTab.previewType === "file-placeholder");
   const editingActiveFile = activeTab?.previewType === "file" &&
@@ -432,7 +459,7 @@ export default function WorkspaceFilePreviewArea({
               {diffTruncated ? (
                 <div className="workspace-preview-truncation-notice" role="status">
                   <span>
-                    变更共 {activeDiffLines.length} 行，已只渲染前 {MAX_RENDERED_DIFF_LINES} 行以避免界面卡顿。
+                    变更共 {activeDiffProjection.lineCount} 行，已只渲染前 {MAX_RENDERED_DIFF_LINES} 行以避免界面卡顿。
                   </span>
                   <button
                     type="button"
@@ -440,7 +467,7 @@ export default function WorkspaceFilePreviewArea({
                   >
                     {diffFullyExpanded
                       ? `仅显示前 ${MAX_RENDERED_DIFF_LINES} 行`
-                      : `渲染全部 ${activeDiffLines.length} 行`}
+                      : `渲染全部 ${activeDiffProjection.lineCount} 行`}
                   </button>
                 </div>
               ) : null}

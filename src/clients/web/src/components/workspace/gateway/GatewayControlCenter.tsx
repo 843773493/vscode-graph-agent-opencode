@@ -155,6 +155,7 @@ export default function GatewayControlCenter({
   };
 
   const available = health?.status === "ok";
+  const feedbackError = gatewayError || healthError || operationError;
 
   return (
     <main className="gateway-control-shell">
@@ -228,10 +229,29 @@ export default function GatewayControlCenter({
               <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
             ) : <>
 
-          {gatewayError || healthError || operationError ? (
-            <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>连接操作失败</strong><span>{gatewayError ?? healthError ?? operationError}</span></div></div>
-          ) : null}
-          {operationNotice ? <div className="gateway-console-notice" role="status"><span className="codicon codicon-pass-filled" aria-hidden="true" />{operationNotice}</div> : null}
+          <div className="gateway-console-feedback-slot">
+            {feedbackError ? (
+              <div
+                className="gateway-console-feedback error"
+                role="alert"
+                title={`连接操作失败：${feedbackError}`}
+              >
+                <span className="codicon codicon-error" aria-hidden="true" />
+                <strong>连接操作失败</strong>
+                <span className="gateway-console-feedback-message">{feedbackError}</span>
+              </div>
+            ) : null}
+            {operationNotice ? (
+              <div
+                className="gateway-console-feedback notice"
+                role="status"
+                title={operationNotice}
+              >
+                <span className="codicon codicon-pass-filled" aria-hidden="true" />
+                <span className="gateway-console-feedback-message">{operationNotice}</span>
+              </div>
+            ) : null}
+          </div>
 
           <section className="gateway-local-connection-card" aria-label="本机 Gateway 连接">
             <span className="gateway-device-icon"><span className="codicon codicon-device-desktop" aria-hidden="true" /></span>

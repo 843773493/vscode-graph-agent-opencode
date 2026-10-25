@@ -17,8 +17,11 @@ from app.core.workspace_identity import load_or_create_workspace_id
 
 
 @pytest.fixture
-def search_case(configure_filesystem_tools, tmp_path: Path):
-    workspace = tmp_path / "workspace"
+def search_case(
+    configure_filesystem_tools,
+    empty_workspace_scope: tuple[str, Path],
+):
+    workspace = empty_workspace_scope[1]
     (workspace / "src/deep").mkdir(parents=True)
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
     old_glob = next(tool for tool in middleware.tools if tool.name == "glob")
@@ -167,13 +170,18 @@ async def test_search_deadline_includes_input_resolution(search_case, monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("synchronous", [False, True])
-async def test_search_does_not_publish_denied_file_matches(configure_filesystem_tools, tmp_path, synchronous):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src/secret.txt").write_text("needle SECRET")
-    (tmp_path / "src/public.txt").write_text("needle PUBLIC")
-    middleware = FilesystemMiddleware(backend=build_workspace_backend(tmp_path),
+async def test_search_does_not_publish_denied_file_matches(
+    configure_filesystem_tools,
+    empty_workspace_scope: tuple[str, Path],
+    synchronous,
+):
+    workspace = empty_workspace_scope[1]
+    (workspace / "src").mkdir()
+    (workspace / "src/secret.txt").write_text("needle SECRET")
+    (workspace / "src/public.txt").write_text("needle PUBLIC")
+    middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace),
         _permissions=[FilesystemPermission(operations=["read"], paths=["/src/secret.txt"], mode="deny")])
-    configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=workspace)
     tools = {tool.name: tool for tool in middleware.tools}
     for tool_name, pattern in (("glob", "*.txt"), ("grep", "needle")):
         options = {"output_mode": "content"} if tool_name == "grep" else {}

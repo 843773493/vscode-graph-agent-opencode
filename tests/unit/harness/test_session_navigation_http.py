@@ -8,8 +8,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from tests.support import session_navigation_http
-from tests.support.session_navigation_http import wait_for_navigation_operation
+from tests.support.session_navigation import http_operations as session_navigation_http
 
 
 class _ReceiptClient:
@@ -53,7 +52,7 @@ async def test_wait_for_delete_settlement_polls_past_pending_receipt() -> None:
         ]
     )
 
-    result = await wait_for_navigation_operation(
+    result = await session_navigation_http.wait_for_navigation_operation(
         client,  # type: ignore[arg-type]
         "op_delete",
         wait_for_settlement=True,
@@ -75,7 +74,7 @@ async def test_pending_settlement_does_not_delay_default_or_non_delete_operation
 ) -> None:
     client = _ReceiptClient([_receipt(kind=kind, settlement="pending")])
 
-    result = await wait_for_navigation_operation(
+    result = await session_navigation_http.wait_for_navigation_operation(
         client,  # type: ignore[arg-type]
         "op_delete",
         wait_for_settlement=wait_for_settlement,
@@ -156,7 +155,11 @@ async def test_wait_deadline_covers_requests_and_polling_sleep(
     # 外层只为错误实现兜底，不能把它的超时误认为 helper 的成功行为。
     async with asyncio.timeout(1):
         with pytest.raises(AssertionError, match="物理 settlement 未到终态: op_delete") as failure:
-            await wait_for_navigation_operation(client, "op_delete", wait_for_settlement=True)
+            await session_navigation_http.wait_for_navigation_operation(
+                client,
+                "op_delete",
+                wait_for_settlement=True,
+            )
 
     assert isinstance(failure.value.__cause__, TimeoutError)
     assert poll.reads == 1
@@ -172,7 +175,10 @@ async def test_wait_preserves_transport_failures(
     client, poll = navigation_poll
     poll.failure = failure
     with pytest.raises(type(failure)) as caught:
-        await wait_for_navigation_operation(client, "op_delete")
+        await session_navigation_http.wait_for_navigation_operation(
+            client,
+            "op_delete",
+        )
     assert caught.value is failure
     assert poll.reads == 1
 
@@ -181,7 +187,9 @@ async def test_wait_preserves_caller_cancellation(
     navigation_poll: tuple[httpx.AsyncClient, NavigationPoll],
 ) -> None:
     client, poll = navigation_poll
-    task = asyncio.create_task(wait_for_navigation_operation(client, "op_delete"))
+    task = asyncio.create_task(
+        session_navigation_http.wait_for_navigation_operation(client, "op_delete")
+    )
     try:
         async with asyncio.timeout(1):
             await poll.entered.wait()

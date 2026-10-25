@@ -65,9 +65,9 @@ def _visible_metadata(message_id: str, **extra: object) -> dict[str, object]:
     }
 
 
-def _create_saver(tmp_path, session_bundle_factory, session_id: str):
-    session_dir = session_bundle_factory(tmp_path, session_id)
-    return RolloutCheckpointSaver(sessions_dir=tmp_path), session_dir
+def _build_message_checkpoint_saver(tmp_path, session_bundle_factory, session_id: str):
+    session_bundle_factory(tmp_path, session_id)
+    return RolloutCheckpointSaver(sessions_dir=tmp_path)
 
 
 def _checkpoint_owner(sessions_root, session_id: str):
@@ -104,6 +104,9 @@ async def _put_checkpoint(
                 message=message.model_copy(update={"id": message_id}),
             )
         else:
+            payload = user_input_payload(
+                message.content, message.response_metadata.get("attachments")
+            )
             result = saver.accept_turn(
                 session_id,
                 thread_id=thread_id,
@@ -111,16 +114,9 @@ async def _put_checkpoint(
                 acceptance_idempotency_key=f"fixture:{message_id}",
                 job_id=job_id,
                 admission_idempotency_key=admission_key,
-                payload=user_input_payload(
-                    message.content, message.response_metadata.get("attachments")
-                ),
+                payload=payload,
                 payload_kind="text"
-                if isinstance(
-                    user_input_payload(
-                        message.content, message.response_metadata.get("attachments")
-                    ),
-                    str,
-                )
+                if isinstance(payload, str)
                 else "structured_content",
                 turn_id=codec.turn_id(message, None, message_id),
                 root_item_id=f"item-{message_id}",
@@ -249,7 +245,7 @@ async def test_message_service_loads_history_from_checkpoint(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019c1bb705d872778f7f2b8e56394a96"
     )
     config = {
@@ -314,7 +310,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019c6649fc527ba687eb47130ec99a94",
@@ -392,7 +388,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
     with pytest.raises(ValueError, match="limit 必须为正整数"):
         await service.list("ses_019c6649fc527ba687eb47130ec99a94", limit=True)
 
-    other_saver, _ = _create_saver(
+    other_saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019bd514077379d387c3d64d7d77aa5d"
     )
     with _checkpoint_owner(tmp_path, "ses_019bd514077379d387c3d64d7d77aa5d"):
@@ -427,7 +423,7 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019c3567da377a6f855e1bddac8f1f76",
@@ -542,7 +538,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019b7822fc117bb08dea7a0b82f4ae24",
@@ -629,7 +625,7 @@ async def test_message_service_returns_empty_when_no_checkpoint(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019b997eee867713a432d1906b0f2207"
     )
     service = build_message_service(tmp_path, checkpointer=saver)
@@ -644,7 +640,7 @@ async def test_message_service_restores_identity_from_rollout_index(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_00f90d52b18f77068e06ede2aa8f4135",
@@ -688,7 +684,7 @@ async def test_agent_context_state_applies_summarization_event(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019bab7eeedc7a5f83bddb61e54d8a28"
     )
     thread_id = get_session_path_resolver(tmp_path).main_thread_id(
@@ -756,7 +752,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019bd626995878aa855827ea5ee075e3",
@@ -831,7 +827,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019bc833e9ed76e589f8bfb74e0f1c45"
     )
     config = {
@@ -888,7 +884,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019bbce5408b787b82a9a5784a27a13b",
@@ -947,7 +943,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
     session_bundle_factory,
 ):
     """验证 Responses API 路径下产生的 reasoning 块被正确提取到 metadata。"""
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019c12dfdacd7e7d82be83372cbc0392"
     )
     config = {
@@ -1016,7 +1012,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
     session_bundle_factory,
 ):
     """工具调用前的 reasoning 应来自标准 content block。"""
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019c6e09448a736781904c34872e97fc",
@@ -1091,7 +1087,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
     tmp_path,
     session_bundle_factory,
 ):
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019b8cb2c7737f1f8d93ffaa04a00c94"
     )
     config = {
@@ -1164,7 +1160,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
     session_bundle_factory,
 ):
     """多模态用户消息应在 Agent State 中保留 image_url 块。"""
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019c060ad21373a6803a34c5f2a272fd"
     )
     config = {
@@ -1238,7 +1234,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
     session_bundle_factory,
 ):
     """用户消息列表只按 canonical block 提取正文，不读取 display_content。"""
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path,
         session_bundle_factory,
         "ses_019c673c9b157dfb8d2b3c46507d43f9",
@@ -1355,7 +1351,7 @@ def test_registered_hidden_system_reminder_stays_hidden():
 @pytest.mark.asyncio
 async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
     """验证 refusal 块被识别并标记。"""
-    saver, _ = _create_saver(
+    saver = _build_message_checkpoint_saver(
         tmp_path, session_bundle_factory, "ses_019bb43f7d9374e482e381580fa355ba"
     )
     config = {

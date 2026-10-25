@@ -58,7 +58,7 @@ def _job(job_id: str, session_id: str, status: JobStatus) -> JobState:
 
 
 @pytest.fixture()
-def service(session_lifecycle_guard) -> JobService:
+def job_service(session_lifecycle_guard) -> JobService:
     return JobService(
         job_event_bus=_RecordingBus(),
         job_executor=_NeverFinishExecutor(),
@@ -66,14 +66,14 @@ def service(session_lifecycle_guard) -> JobService:
     )
 
 
-def _client(service: JobService, workspace_root: Path) -> TestClient:
+def _client(job_service: JobService, workspace_root: Path) -> TestClient:
     workspace_id = "00000000-0000-4000-8000-000000000001"
 
     async def bind_workspace() -> AsyncIterator[None]:
         with workspace_context(workspace_id, workspace_root):
             yield
 
-    app.dependency_overrides[get_job_service] = lambda: service
+    app.dependency_overrides[get_job_service] = lambda: job_service
     app.dependency_overrides[verify_local_token] = lambda: "local"
     app.dependency_overrides[workspace_container_scope] = bind_workspace
     return TestClient(
@@ -83,11 +83,11 @@ def _client(service: JobService, workspace_root: Path) -> TestClient:
     )
 
 
-def test_pause_without_execution_task_maps_to_409(service: JobService, tmp_path: Path) -> None:
+def test_pause_without_execution_task_maps_to_409(job_service: JobService, tmp_path: Path) -> None:
     """running 但已无执行任务的 Job 被暂停 → 409 + 纯文本 detail（原 500 + 类名）。"""
     job_id = create_prefixed_id("job")
-    service._jobs[job_id] = _job(job_id, "ses_a", JobStatus.running)
-    client = _client(service, tmp_path)
+    job_service._jobs[job_id] = _job(job_id, "ses_a", JobStatus.running)
+    client = _client(job_service, tmp_path)
     try:
         response = client.post(
             f"/api/v1/jobs/{job_id}/control",
@@ -105,7 +105,7 @@ def test_pause_without_execution_task_maps_to_409(service: JobService, tmp_path:
     }
 
 
-def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService, tmp_path: Path) -> None:
+def test_cancel_queued_job_absent_from_queue_maps_to_409(job_service: JobService, tmp_path: Path) -> None:
     """queued 但不在 pending 队列的 Job 被取消 → 409 + 纯文本 detail。
 
     说明：``control_service`` 的 ``elif job.status == queued`` 分支写的是
@@ -115,8 +115,8 @@ def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService, tm
     真实可达路径（``ValueError`` 经 ``_job_control_http_error`` 落 409，不泄漏 repr）。
     """
     job_id = create_prefixed_id("job")
-    service._jobs[job_id] = _job(job_id, "ses_b", JobStatus.queued)
-    client = _client(service, tmp_path)
+    job_service._jobs[job_id] = _job(job_id, "ses_b", JobStatus.queued)
+    client = _client(job_service, tmp_path)
     try:
         response = client.post(
             f"/api/v1/jobs/{job_id}/control",
@@ -135,10 +135,10 @@ def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService, tm
     assert "JobControlRuntimeError" not in response.text
 
 
-def test_unknown_job_still_maps_to_404(service: JobService, tmp_path: Path) -> None:
+def test_unknown_job_still_maps_to_404(job_service: JobService, tmp_path: Path) -> None:
     """未知 Job 仍落 404：新增的 RuntimeError 归口不得吞掉既有分类。"""
     job_id = create_prefixed_id("job")
-    client = _client(service, tmp_path)
+    client = _client(job_service, tmp_path)
     try:
         response = client.post(
             f"/api/v1/jobs/{job_id}/control",

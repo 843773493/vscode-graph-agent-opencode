@@ -12,18 +12,18 @@ E2E_PORT_MAX_FILES = 100
 INTEGRATION_PORT_START = 8800
 INTEGRATION_PORT_MAX_FILES = 350
 INTEGRATION_PORT_END = (
-    INTEGRATION_PORT_START
-    + TEST_FILE_PORT_BLOCK_SIZE * INTEGRATION_PORT_MAX_FILES
-    - 1
+    INTEGRATION_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * INTEGRATION_PORT_MAX_FILES - 1
 )
 E2E_PORT_START = INTEGRATION_PORT_END + 1
 E2E_PORT_END = E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
 
 
 @lru_cache(maxsize=16)
-def _test_file_indexes_for_root(root: Path) -> tuple[int, Mapping[Path, int]]:
+def _test_file_indexes_for_tests_root(
+    tests_root: Path,
+) -> tuple[int, Mapping[Path, int]]:
     """缓存测试文件数量与首次排序序号，供重复端口查询使用。"""
-    test_files = tuple(sorted(path.resolve() for path in root.rglob("test_*.py")))
+    test_files = sorted(path.resolve() for path in tests_root.rglob("test_*.py"))
     first_index_by_path: dict[Path, int] = {}
     for index, test_file in enumerate(test_files):
         first_index_by_path.setdefault(test_file, index)
@@ -62,9 +62,11 @@ def port_block_for_file(
     max_files: int,
     tests_root: Path,
 ) -> TestFilePortBlock:
-    root = tests_root.resolve()
+    resolved_tests_root = tests_root.resolve()
     resolved_file = test_file_path.resolve()
-    test_file_count, first_index_by_path = _test_file_indexes_for_root(root)
+    test_file_count, first_index_by_path = _test_file_indexes_for_tests_root(
+        resolved_tests_root
+    )
     index = first_index_by_path.get(resolved_file)
     if index is None:
         raise ValueError(f"未能为 {test_layer} 测试文件分配端口块: {resolved_file}")

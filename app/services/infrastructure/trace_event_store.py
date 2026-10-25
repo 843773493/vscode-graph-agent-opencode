@@ -31,7 +31,10 @@ from app.services.infrastructure.turn_history.trace_page import (
     TraceEventPage,
     read_trace_event_page,
 )
-from app.services.infrastructure.turn_history.trace_stream import stream_trace_records
+from app.services.infrastructure.turn_history.trace_stream import (
+    parse_trace_event_lines,
+    stream_trace_records,
+)
 from app.services.infrastructure.turn_history.trace_writer import (
     MESSAGE_TRACE_TYPES,
     TraceEventWriter,
@@ -368,38 +371,13 @@ class TraceEventStore:
     ) -> list[Event]:
         if not file.exists():
             return []
-
-        raw_events: list[dict[str, object]] = []
-        lines = (
-            self._read_last_lines(file, tail_limit)
-            if tail_limit is not None
-            else file.read_text(encoding="utf-8").splitlines()
-        )
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                value = json.loads(line)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Trace 行无法解析: session_id={session_id} line={line[:200]!r}"
-                ) from exc
-            if not isinstance(value, dict):
-                raise TypeError(
-                    f"Trace 行必须是 JSON object: session_id={session_id} line={line[:200]!r}"
-                )
-            raw_events.append(value)
-
-        events: list[Event] = []
-        for raw_event in raw_events:
-            try:
-                events.append(_AnyEvent.model_validate(raw_event).root)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Trace 事件协议无效: session_id={session_id} event={raw_event!r}"
-                ) from exc
-        return events
+        if tail_limit is not None:
+            return parse_trace_event_lines(
+                session_id=session_id,
+                lines=self._read_last_lines(file, tail_limit),
+            )
+        with file.open(encoding="utf-8") as stream:
+            return parse_trace_event_lines(session_id=session_id, lines=stream)
 
     @staticmethod
     def _read_last_lines(file: Path, limit: int) -> list[str]:

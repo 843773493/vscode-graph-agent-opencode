@@ -9,7 +9,7 @@ from app.testing.model_stream.matcher import request_summary, safe_request_match
 
 
 @pytest.fixture
-def responses_request() -> Callable[[object], httpx.Request]:
+def responses_request_factory() -> Callable[[object], httpx.Request]:
     def create(body: object) -> httpx.Request:
         return httpx.Request(
             "POST",
@@ -21,9 +21,9 @@ def responses_request() -> Callable[[object], httpx.Request]:
 
 
 def test_omitted_message_type_is_summarized_without_exposing_content(
-    responses_request: Callable[[object], httpx.Request],
+    responses_request_factory: Callable[[object], httpx.Request],
 ) -> None:
-    request = responses_request(
+    request = responses_request_factory(
         {
             "model": "test-model",
             "stream": True,
@@ -51,9 +51,9 @@ def test_omitted_message_type_is_summarized_without_exposing_content(
 
 
 def test_explicit_types_and_malformed_omitted_type_items_keep_existing_summary(
-    responses_request: Callable[[object], httpx.Request],
+    responses_request_factory: Callable[[object], httpx.Request],
 ) -> None:
-    request = responses_request(
+    request = responses_request_factory(
         {
             "input": [
                 {"type": "function_call", "role": "user", "content": "text"},
@@ -85,9 +85,9 @@ def test_explicit_types_and_malformed_omitted_type_items_keep_existing_summary(
 
 
 def test_image_and_file_blocks_require_valid_detail_and_references(
-    responses_request: Callable[[object], httpx.Request],
+    responses_request_factory: Callable[[object], httpx.Request],
 ) -> None:
-    request = responses_request(
+    request = responses_request_factory(
         {
             "input": [
                 {

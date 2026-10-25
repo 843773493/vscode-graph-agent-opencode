@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from app.abstractions.terminal_resources import TerminalSnapshot
+from app.abstractions.terminal.resources import TerminalSnapshot
 from app.abstractions.workspace_resources import RetentionScope
 from app.services.business.workspace_resources.facts import (
     observe_resource,

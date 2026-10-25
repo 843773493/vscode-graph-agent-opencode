@@ -2,11 +2,12 @@
 
 ## 目录用途
 
-存放 `app/services/infrastructure/config/` 配置快照、存储与监听器的单元测试。
+存放 `app/services/infrastructure/config/` 的策略、路径差异、配置快照、存储与监听器单元测试。
 
 ## 可修改内容
 
 - 配置重载、修订快照和文件监听行为测试。
+- 配置策略注册表、schema 策略清单与 JSON 路径差异测试。
 - 临时配置文件与日志捕获 fixture。
 
 ## 不可修改内容

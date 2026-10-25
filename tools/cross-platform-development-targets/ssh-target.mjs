@@ -1,8 +1,54 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { runChecked, runCheckedWithInput, shellQuote } from "./process.mjs";
+
+function secureWindowsIdentityFile(target, identityFile) {
+  const encodedPath = Buffer.from(identityFile, "utf8").toString("base64");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "try {",
+    `  $identityPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+    "  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "  $acl = Get-Acl -LiteralPath $identityPath",
+    "  $acl.SetAccessRuleProtection($true, $false)",
+    "  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }",
+    "  $fullControl = [Security.AccessControl.FileSystemRights]::FullControl",
+    "  $allow = [Security.AccessControl.AccessControlType]::Allow",
+    "  $rule = [Security.AccessControl.FileSystemAccessRule]::new($currentSid, $fullControl, $allow)",
+    "  [void]$acl.AddAccessRule($rule)",
+    "  Set-Acl -LiteralPath $identityPath -AclObject $acl",
+    "  $verified = Get-Acl -LiteralPath $identityPath",
+    "  $rules = @($verified.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
+    "  if (-not $verified.AreAccessRulesProtected -or $rules.Count -ne 1 -or",
+    "      $rules[0].IdentityReference.Value -ne $currentSid.Value -or",
+    "      $rules[0].AccessControlType -ne $allow -or",
+    "      $rules[0].FileSystemRights -ne $fullControl) {",
+    "    throw 'SSH identity ACL 收紧后复核失败'",
+    "  }",
+    "} catch {",
+    "  [Console]::Error.WriteLine($_.ToString())",
+    "  exit 1",
+    "}",
+  ].join("\n");
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+
+  try {
+    execFileSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript],
+      { encoding: "utf8", timeout: 10_000, windowsHide: true },
+    );
+  } catch (error) {
+    const details = error?.stderr?.toString().trim() || error?.message || String(error);
+    throw new Error(
+      `目标 ${target.id} 的 SSH identity ACL 无法限制为当前用户: path=${identityFile}; ${details}`,
+      { cause: error },
+    );
+  }
+}
 
 function secureIdentityFile(target) {
   const identityFile = target.ssh.identityFile;
@@ -13,14 +59,17 @@ function secureIdentityFile(target) {
   if (!initial.isFile()) {
     throw new Error(`目标 ${target.id} 的 SSH identity 不是普通文件: ${identityFile}`);
   }
-  // TODO: Windows OpenSSH 需要使用 DACL 判断 identity 是否只对当前用户开放。
-  if (process.platform === "win32") return identityFile;
+  if (process.platform === "win32") {
+    secureWindowsIdentityFile(target, identityFile);
+    return identityFile;
+  }
 
   const initialMode = initial.mode & 0o777;
+  let securedMode = initialMode;
   if ((initialMode & 0o077) !== 0) {
     chmodSync(identityFile, initialMode & 0o700);
+    securedMode = statSync(identityFile).mode & 0o777;
   }
-  const securedMode = statSync(identityFile).mode & 0o777;
   if ((securedMode & 0o077) !== 0) {
     throw new Error(
       `目标 ${target.id} 的 SSH identity 权限无法收紧: ` +

@@ -17,10 +17,14 @@ import {
 
 import type { WorkspaceFileMutationIntent } from "../../types/backend";
 
+const FILESYSTEM_ROOT = "boxteam://gateway/gw-files/resources/files/root";
+const FILESYSTEM_HOME = `${FILESYSTEM_ROOT}/home/hyf`;
+const FILESYSTEM_HOME_FILE = `${FILESYSTEM_HOME}/torch_home`;
+
 const intent: WorkspaceFileMutationIntent = { client_operation_id: "op_00000000000040008000000000000002",
   client_sequence: 1, expected_directory_revision: 1, depends_on: [], created_by_operation_id: null,
   relative_child_path: "", directory_revision_from_operation_id: null, client_ref: "file-api-unit",
-  directory_key: { workspace_id: "backend_files", scope: "filesystem", root: "/", path: "/home/hyf" } };
+  directory_key: { workspace_id: "backend_files", scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME } };
 
 const originalFetch = globalThis.fetch;
 
@@ -48,20 +52,20 @@ function installFileManagementBackend(
       if (pathname.endsWith("/reveal")) {
         return Response.json({
           request_id: "req_file_reveal",
-          data: { path: "/home/hyf/torch_home" },
+          data: { path: FILESYSTEM_HOME_FILE },
         });
       }
       if (pathname.startsWith("/api/v1/workspace/files")) {
         return Response.json({
           request_id: "req_file_management",
           data: {
-            directory_key: { workspace_id: "backend_files", scope: "filesystem", root: "/", path: "/home/hyf" },
+            directory_key: { workspace_id: "backend_files", scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME },
             directory_revision: 7,
-            root_path: "/",
-            path: "/home/hyf",
+            root_path: FILESYSTEM_ROOT,
+            path: FILESYSTEM_HOME,
             items: [{
               name: "torch_home",
-              path: "/home/hyf/torch_home",
+              path: FILESYSTEM_HOME_FILE,
               kind: "directory",
               has_children: true,
               size: null,
@@ -85,14 +89,14 @@ describe("文件树管理 API", () => {
 
     const result = await createWorkspaceFileEntry(
       38_014,
-      "filesystem:/home/hyf",
+      FILESYSTEM_HOME,
       { name: "torch_home", kind: "directory", intent },
       "workspace-files",
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/entries");
     expect(request.url).toEndWith(
-      "/api/v1/workspace/files/entries?path=%2Fhome%2Fhyf&scope=filesystem",
+      `/api/v1/workspace/files/entries?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace`,
     );
     expect(request.init?.body).toBe(JSON.stringify({
       name: "torch_home",
@@ -110,14 +114,14 @@ describe("文件树管理 API", () => {
 
     await pasteWorkspaceFileEntries(
       38_015,
-      "filesystem:/home/hyf",
+      FILESYSTEM_HOME,
       { source_paths: ["/data/model.bin", "/clipboard/cache"], intent },
       "workspace-files",
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/paste");
     expect(request.url).toEndWith(
-      "/api/v1/workspace/files/paste?path=%2Fhome%2Fhyf&scope=filesystem",
+      `/api/v1/workspace/files/paste?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace`,
     );
     expect(request.init?.body).toBe(JSON.stringify({
       source_paths: ["/data/model.bin", "/clipboard/cache"],
@@ -205,16 +209,16 @@ describe("文件树管理 API", () => {
 
     const result = await revealWorkspaceFileEntry(
       38_016,
-      "filesystem:/home/hyf/torch_home",
+      FILESYSTEM_HOME_FILE,
       "workspace-files",
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/reveal");
     expect(request.url).toEndWith(
-      "/api/v1/workspace/files/reveal?path=%2Fhome%2Fhyf%2Ftorch_home&scope=filesystem",
+      `/api/v1/workspace/files/reveal?path=${encodeURIComponent(FILESYSTEM_HOME_FILE)}&scope=workspace`,
     );
     expect(request.init?.method).toBe("POST");
-    expect(result.path).toBe("/home/hyf/torch_home");
+    expect(result.path).toBe(FILESYSTEM_HOME_FILE);
   });
 
   test("目录下一页请求携带后端游标", async () => {
@@ -223,7 +227,7 @@ describe("文件树管理 API", () => {
 
     const result = await getWorkspaceFiles(
       38_017,
-      "filesystem:/home/hyf",
+      FILESYSTEM_HOME,
       "workspace-files",
       undefined,
       "opaque-cursor",
@@ -231,7 +235,7 @@ describe("文件树管理 API", () => {
 
     const request = businessRequest(requests, "/api/v1/workspace/files");
     expect(request.url).toEndWith(
-      "/api/v1/workspace/files?path=%2Fhome%2Fhyf&scope=filesystem&cursor=opaque-cursor",
+      `/api/v1/workspace/files?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace&cursor=opaque-cursor`,
     );
     expect(result.next_cursor).toBe("next-page");
   });

@@ -9,7 +9,7 @@ import {
 } from "../../state/composerState";
 import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
-import type { Agent } from "../../types/backend";
+import type { Agent, SessionGoal } from "../../types/backend";
 import Composer from "./Composer";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 
@@ -146,6 +146,32 @@ afterEach(() => {
 });
 
 describe("Composer 切换类动作失败必须可见", () => {
+  test("持续显示当前会话的权威 Goal 内容与状态", () => {
+    installComposerEnvironment();
+    const state = appState([agent("default")]);
+    state.currentGoal = {
+      goal_id: "goal_1",
+      session_id: SESSION_ID,
+      thread_id: "thread_1",
+      objective: "完成当前任务并验证结果",
+      status: "active",
+      token_budget: null,
+      tokens_used: 0,
+      time_used_seconds: 0,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    } satisfies SessionGoal;
+    state.currentGoalSessionId = SESSION_ID;
+    const renderer = mountComposer(state, baseActions());
+
+    const currentGoal = renderer.root.findByProps({
+      "data-testid": "composer-current-goal",
+    });
+    expect(currentGoal.props["aria-label"]).toContain("进行中");
+    expect(JSON.stringify(renderer.toJSON())).toContain("完成当前任务并验证结果");
+    act(() => renderer.unmount());
+  });
+
   test("switchAgent 失败后界面出现错误文本，且不再被空 catch 吞掉", async () => {
     installComposerEnvironment();
     const renderer = mountComposer(

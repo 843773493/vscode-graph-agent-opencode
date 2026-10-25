@@ -24,10 +24,10 @@ from app.services.infrastructure.mcp import (
     McpCatalogOwner,
     McpCatalogRelistError,
 )
-from tests.support.mcp_session_doubles import (
+from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory as _FakeSessionFactory,
 )
-from tests.support.mcp_session_doubles import (
+from tests.support.mcp.session_doubles import (
     drain_pending_relists as _drain_pending_relists,
 )
 

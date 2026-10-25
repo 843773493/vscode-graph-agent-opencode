@@ -2,16 +2,25 @@
 
 `packages/launcher/src/` 存放 Launcher 的可测试实现模块。
 
-运行资源按下列链路定位，平台包选择与宿主路径规则分别验证：
+Launcher 模块按职责组织如下；顶层 CLI、配置初始化、联邦凭证与进程生命周期模块由对应命令直接消费：
 
 ```text
-运行资源
-├── runtime-discovery.mjs  显式manifest优先，其次按目标平台选择包
-├── runtime-manifest.mjs   校验清单，并以清单目录解析资源位置
-└── cli.mjs                消费已定位的Node、Python、配置和Skill资源
-    ├── config-bootstrap.mjs  用manifest Python执行配置初始化
-    └── federation-token.mjs  用manifest Python签发配对令牌
+src/
+├── configuration/          发行 runtime 选择与 manifest 校验
+├── gateway/                Gateway 进程与控制通道生命周期
+├── logging/                Launcher 输出和服务日志
+├── cli.mjs                 命令分发与 runtime 消费
+├── config-bootstrap.mjs    用户级配置初始化
+├── detached-process.mjs    detached 子进程创建与终止
+├── doctor.mjs              安装和运行时诊断
+├── federation-token.mjs    配对凭证签发命令
+├── instance-lock.mjs       Launcher 实例锁 owner
+└── stop.mjs                Launcher 停止流程
 ```
+
+运行资源链路为 `configuration/runtime-discovery.mjs` 选择发行包 → `configuration/runtime-manifest.mjs` 校验清单并解析资源 → `cli.mjs` 将解析结果交给 `config-bootstrap.mjs` 或 `federation-token.mjs`。平台选择、资源事实和配置根目录各由单一模块持有。
+
+`cli.mjs`先解析命令再动态加载对应职责模块；`--version`只读取版本来源，不加载runtime discovery或服务生命周期实现。
 
 Gateway相关实现与测试集中在[Gateway生命周期](gateway/AGENTS.md)：
 
@@ -34,7 +43,7 @@ gateway/
 
 两个Python命令入口将子进程创建失败与命令非零退出分开：`spawnSync`返回的`error`作为包装异常的`cause`原样保留，供调用方定位错误码、路径和底层堆栈；原有文案及stderr处理保持。对应测试注入ENOENT、EACCES和ETIMEDOUT，断言异常身份和完整文案，不执行Python、不证明原生平台的权限或超时行为，也不为这些命令新增超时预算。
 
-两份`runtime-*.test.mjs`只做清单和路径计算；输入根位于各自`out/tests/packages/launcher/src/<测试名>/workspace/`下，包含中文和空格，路径使用宿主规则。目标平台仍由参数单独指定；这些测试不创建目录、不加载真实平台包或执行安装。
+`configuration/runtime-discovery.test.mjs`用宿主路径规则构造虚拟路径、注入resolver，验证显式manifest优先级和Linux/Windows目标包选择；`configuration/runtime-manifest.test.mjs`用内存manifest和虚拟路径核字段校验、相对路径解析与Node来源。两者不创建目录、不加载发行包或读写运行时资源。
 
 `detached-process.mjs`区分分离启动、终止请求和带升级的退出等待。Windows的`terminateDetachedProcess`通过`taskkill /T /F /PID`发出终止请求，工具调用最多等待5秒；启动或超时异常通过`cause`保留，非零退出或信号结束且目标仍存在时，明确报告PID、退出码、信号和stderr。目标已消失允许幂等返回，查询本身失败则原样抛出。成功返回只表示工具返回；该同步入口不等待执行根或后代全部退出，POSIX侧也仍只发送SIGTERM。
 

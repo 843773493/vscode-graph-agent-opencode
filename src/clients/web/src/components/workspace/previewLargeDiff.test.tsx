@@ -8,7 +8,9 @@ import WorkspaceFilePreviewArea, {
 const MAX_RENDERED_DIFF_LINES = 2000;
 const FILE_URI = "boxteam://workspace/preview-diff/resources/files/root/src/big.ts";
 
-function diffTab(lineCount: number): WorkspacePreviewTab {
+type SessionDiffTab = Extract<WorkspacePreviewTab, { previewType: "session-diff" }>;
+
+function diffTab(lineCount: number): SessionDiffTab {
   const diffText = Array.from(
     { length: lineCount },
     (_, index) => (index % 2 === 0 ? `+line ${index}` : `-line ${index}`),
@@ -115,6 +117,26 @@ describe("超大 diff 的渲染上限", () => {
         className: "workspace-preview-truncation-notice",
       }).length,
     ).toBe(0);
+    renderer.unmount();
+  });
+
+  test("混合换行和尾部空行仍按逻辑行计数", () => {
+    const tab = diffTab(0);
+    tab.change.diff_text = "+one\r-two\r\n+three\n-last\n";
+    const renderer = renderPreview(tab);
+    const rows = renderer.root.findAll(
+      (node) =>
+        typeof node.props.className === "string"
+        && node.props.className.includes("workspace-preview-diff-line"),
+    );
+
+    expect(rows.map((row) => row.findByType("code").children.join(""))).toEqual([
+      "+one",
+      "-two",
+      "+three",
+      "-last",
+      "\u00A0",
+    ]);
     renderer.unmount();
   });
 });

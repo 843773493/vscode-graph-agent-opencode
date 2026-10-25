@@ -5,9 +5,9 @@
 与相邻文件的边界：
 
 - `api/http.ts`（上级目录）：统一请求屏障（Gateway 凭据、用户会话、重试、超时）与 JSON 解包。本包所有 HTTP 入口都基于它，不自带传输层。`sessionTraceStream` 走 `requestJson`，SSE 入口走 `requestGatewayResponse`。
-- `api/session/`（上级目录）：会话域一次性 API（列表、消息、目标、资源、目录、上下文、Turn 历史分页），是请求-响应语义，不含 SSE 订阅。
+- `api/session/`（上级目录）：会话域 API。大多数模块提供一次性请求-响应操作；`sessionActivity.ts` 按会话领域拥有活动流 endpoint，并复用 `sse/` 的帧原语。这里负责共享观察流的编排和其他消息、Trace、工作区文件流客户端，不重复实现会话活动 endpoint。
 - `messageStreamSnapshot.ts`：本包内唯一负责**严格 DTO 校验**的模块——对快照帧逐字段校验（未知字段、非负整数、布尔、必填数组），与 `api/http.ts` 的统一请求屏障职责不同，不得把校验逻辑上移到 http。
-- `sessionMessageStream.ts`：依赖同目录 `messageStreamSnapshot` 做事件/快照校验；此为本包唯一的包内依赖边。
+- 包内依赖：`sessionMessageStream.ts` 使用 `messageStreamSnapshot.ts` 校验事件和快照；`sessionTraceStream.ts`、`workspaceFileEvents.ts` 使用 `workspaceObservation.ts` 共享 Gateway 观察连接。测试可以跨这些客户端做集成断言。
 - `types/`、`sseClient`、`sseRuntimeSchemas`：协议类型与 SSE 运行时原语的权威来源，本包只消费。
 
 # 可修改内容

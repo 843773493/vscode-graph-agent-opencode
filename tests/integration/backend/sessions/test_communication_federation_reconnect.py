@@ -25,7 +25,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_triad as communication_triad,  # noqa: PLC0414 - 跨文件复用正式进程 fixture
 )
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import CommunicationNode
+from tests.support.communication.federation import CommunicationNode
 from tests.support.e2e_control.harness import control_request
 
 

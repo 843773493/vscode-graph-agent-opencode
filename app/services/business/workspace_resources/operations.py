@@ -37,7 +37,7 @@ class ResourceOperations:
         await self._owner.recover((resource_id,))
         async with self._owner._resource_lock(resource_id):
             self._assert_open()
-            record = self._owner._require(resource_id)
+            record = self._owner._require_owned_resource_record(resource_id)
             self._owner._verified(record)
             if self._thread not in record.thread_associations:
                 raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")

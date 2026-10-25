@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyMessageStreamEvent,
+  applyMessageStreamSnapshot,
   createMessageStreamState,
   messageStreamToResponseParts,
   type MessageStreamEvent,
@@ -206,6 +207,7 @@ describe("message stream reducer", () => {
     }));
 
     expect(duplicated.lastEventSeq).toBe(6);
+    expect(duplicated).toBe(state);
     expect(duplicated.blocks.map((block) => block.text)).toEqual(["先思考", "回答"]);
     expect(messageStreamToResponseParts(duplicated).map((part) => part.text)).toEqual([
       "先思考",
@@ -328,7 +330,27 @@ describe("message stream reducer", () => {
     }));
 
     expect(stale.lastEventSeq).toBe(3);
+    expect(stale).toBe(state);
     expect(stale.blocks[0]?.text).toBe("新内容");
+
+    const staleSnapshotEvent = event(2, "stream.snapshot", {
+      snapshot_seq: 2,
+      stream_status: "open",
+      agent_loop_status: "model_running",
+      current_attempt: 1,
+      resumable: true,
+    });
+    if (staleSnapshotEvent.type !== "stream.snapshot") {
+      throw new Error("测试快照事件类型不匹配");
+    }
+    const staleSnapshot = applyMessageStreamSnapshot(state, {
+      ...staleSnapshotEvent.payload,
+      session_id: state.sessionId,
+      thread_id: state.threadId,
+      turn_id: state.turnId,
+      turn_stream_id: state.turnStreamId,
+    });
+    expect(staleSnapshot).toBe(state);
   });
 
   test("stream.failed 和 stream.interrupted 都是明确终态", () => {
@@ -382,6 +404,7 @@ describe("message stream reducer", () => {
     });
     expect(changed.connectionStatus).toBe("gap");
     expect(changed.blocks).toHaveLength(0);
+    expect(changed.blocks).toBe(state.blocks);
     expect(changed.protocolError).toContain("turn_stream_id");
   });
 
@@ -2805,16 +2828,20 @@ describe("终态准入与连接镜像收敛", () => {
       state.connectionStatus,
     ]).toEqual([1, "completed", "terminal"]);
 
-    state = applyMessageStreamEvent(state, event(2, "block.delta", {
+    const completed = state;
+    const ignoredBusinessEvent = applyMessageStreamEvent(state, event(2, "block.delta", {
       block_id: "b1",
       operation: "append",
       text: "终态后残留帧",
     }));
-    state = applyMessageStreamEvent(state, event(3, "stream.failed", {
+    expect(ignoredBusinessEvent).toBe(completed);
+    const ignoredSecondTerminal = applyMessageStreamEvent(ignoredBusinessEvent, event(3, "stream.failed", {
       code: "execution_lost",
       message: "后端重启导致执行丢失",
       resumable: false,
     }));
+    expect(ignoredSecondTerminal).toBe(completed);
+    state = ignoredSecondTerminal;
 
     expect([
       state.lastEventSeq,

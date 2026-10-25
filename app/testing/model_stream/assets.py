@@ -382,7 +382,7 @@ def chat_completion_frames(
     """共享手写上游响应资产；SDK 对象仍由真实协议解析器产生。"""
     common = {"id": response_id, "object": "chat.completion.chunk", "created": 1, "model": model}
     frames = [data_frame({**common, "choices": [{
-        "index": 0, "delta": copy.deepcopy(dict(delta)), "finish_reason": None,
+        "index": 0, "delta": dict(delta), "finish_reason": None,
     }]}) for delta in deltas]
     frames.append(data_frame({**common, "choices": [{
         "index": 0, "delta": {}, "finish_reason": finish_reason,

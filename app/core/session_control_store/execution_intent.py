@@ -156,6 +156,19 @@ def _fetch_execution_intent_row(
     ).fetchone()
 
 
+def _fetch_execution_intent_row_by_job_id(
+    connection: sqlite3.Connection,
+    job_id: str,
+) -> sqlite3.Row | None:
+    """通过 job_id 唯一索引定位 intent 行，不装载其它执行记录。"""
+    return connection.execute(
+        f"SELECT {_THREAD_EXECUTION_INTENT_COLUMNS} "
+        "FROM thread_execution_intents "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+
+
 
 @dataclass(frozen=True, slots=True)
 class ThreadExecutionIntent:
@@ -397,6 +410,21 @@ class ExecutionIntentMixin:
                 f"admission_key={admission_idempotency_key!r}"
             )
         return self._thread_execution_intent_from_row(row)
+
+    def find_initial_execution_intent_by_job_id(
+        self,
+        job_id: str,
+    ) -> ThreadExecutionIntent | None:
+        """按唯一 job_id 索引查 intent；不存在返回 None。"""
+        if not isinstance(job_id, str):
+            raise TypeError(f"job_id 必须是字符串: {job_id!r}")
+        self._ensure_open()
+        row = _fetch_execution_intent_row_by_job_id(self._connection, job_id)
+        return (
+            self._thread_execution_intent_from_row(row)
+            if row is not None
+            else None
+        )
 
     def list_pending_initial_execution_intents(
         self,

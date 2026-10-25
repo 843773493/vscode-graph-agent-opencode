@@ -14,7 +14,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.abstractions.terminal_resources import TerminalRequestError
+from app.abstractions.terminal.resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.resource_uri import resource_display_uri

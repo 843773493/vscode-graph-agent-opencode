@@ -84,7 +84,7 @@ def _jcs_input(value: object) -> object:
 
 
 def _has_mapping_adapter(value: object) -> bool:
-    """只探测库不支持的 Mapping，普通标量的合法性由 RFC 8785 校验。"""
+    """定位需按 Mapping.items() 语义适配的嵌套对象。"""
     if value is None or isinstance(value, (str, int, float)):
         return False
     if type(value) is dict:
@@ -101,11 +101,10 @@ def canonical_json_bytes(value: object) -> bytes:
         value = _jcs_input(value)
     try:
         try:
-            # RFC 8785 自身完整校验普通 JSON，不再预先递归遍历同一输入。
+            # RFC 8785 完整校验适配后的普通 JSON。
             return rfc8785.dumps(value)
         except (rfc8785.CanonicalizationError, UnicodeError, TypeError):
-            # Python Mapping 与大整数仍使用唯一适配器；失败时先保留既有
-            # 结构路径及错误先后，不能让前面的大整数掩盖后面的非法字段。
+            # 失败后完整验证，保留结构错误路径和既有错误先后。
             if not _validate_json_value(value, "value"):
                 raise
             return rfc8785.dumps(_jcs_input(value))

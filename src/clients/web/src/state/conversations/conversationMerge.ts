@@ -77,6 +77,30 @@ export function conversationsMatch(
   return Boolean(leftJobId && rightJobId && leftJobId === rightJobId);
 }
 
+export function conversationMatchKeys(conversation: ConversationView): string[] {
+  const keys: string[] = [];
+  const messageId = conversation.userMessage?.message_id ?? "";
+  if (messageId) {
+    keys.push(JSON.stringify([
+      conversation.sessionId,
+      conversation.threadId,
+      "message",
+      messageId,
+    ]));
+  }
+
+  const jobId = conversation.jobId ?? "";
+  if (jobId) {
+    keys.push(JSON.stringify([
+      conversation.sessionId,
+      conversation.threadId,
+      "job",
+      jobId,
+    ]));
+  }
+  return keys;
+}
+
 export function mergeConversation(
   persisted: ConversationView,
   pending: ConversationView,

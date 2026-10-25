@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   forwardGatewayOutput,
@@ -23,15 +25,22 @@ function fakeChild() {
   return child;
 }
 
+const runtimeRoot = join(tmpdir(), "boxteam launcher supervisor fixture");
+const pythonExecutable = process.platform === "win32"
+  ? join(runtimeRoot, ".venv", "Scripts", "python.exe")
+  : join(runtimeRoot, ".venv", "bin", "python");
 const runtime = {
   distribution: "source-development",
   version: "test-version",
-  manifestPath: "/runtime/runtime-manifest.json",
-  pythonExecutable: "/runtime/python",
-  applicationRoot: "/runtime/application",
-  nodeExecutable: "/usr/bin/node",
+  manifestPath: join(runtimeRoot, "runtime-manifest.json"),
+  pythonExecutable,
+  applicationRoot: join(runtimeRoot, "application"),
+  nodeExecutable: process.execPath,
   webAssets: null,
-  chromiumExecutable: "/runtime/chromium",
+  chromiumExecutable: join(
+    runtimeRoot,
+    process.platform === "win32" ? "chrome.exe" : "chromium",
+  ),
 };
 
 describe("gateway supervisor", () => {
@@ -67,14 +76,12 @@ describe("gateway supervisor", () => {
   });
 
   test("向 Gateway 传入 manifest 资源", () => {
-    const environment = gatewayEnvironment(runtime, {
-      BOXTEAM_HOME: "/tmp/boxteams",
-    });
+    const environment = gatewayEnvironment(runtime, {});
 
     expect(environment.BOXTEAM_RUNTIME_MANIFEST).toBe(runtime.manifestPath);
-    expect(environment.BOXTEAM_NODE_BIN).toBe("/usr/bin/node");
+    expect(environment.BOXTEAM_NODE_BIN).toBe(runtime.nodeExecutable);
     expect(environment.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH).toBe(
-      "/runtime/chromium",
+      runtime.chromiumExecutable,
     );
     expect(environment.BOXTEAM_GATEWAY_URL).toBe("http://127.0.0.1:8014");
   });
@@ -85,7 +92,7 @@ describe("gateway supervisor", () => {
     expect(active.candidateRef).toBeNull();
 
     const pendingEnvironment = buildGatewayPendingEnvironment(
-      { BOXTEAM_HOME: "/tmp/boxteams" },
+      {},
       {
         candidate_ref: "candidate-ref",
         target_generation: "generation-2",

@@ -6,7 +6,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.agents.tools.session_wait import create_wait_for_session_tool
-from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, TARGET_SESSION
+from tests.support.communication.probe import (
+    SOURCE_SESSION,
+    SOURCE_THREAD,
+    TARGET_SESSION,
+)
 
 
 @pytest.fixture

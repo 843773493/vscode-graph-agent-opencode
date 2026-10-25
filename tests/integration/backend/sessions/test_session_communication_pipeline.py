@@ -36,12 +36,12 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import (
+from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import control_request
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,

@@ -57,7 +57,11 @@ from app.services.orchestration.event_stream.tool_events import (
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
-pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
+
+@pytest.fixture
+def workspace_root(empty_workspace_scope: tuple[str, Path]) -> Path:
+    """返回注入了当前工作区上下文的空工作区根目录。"""
+    return empty_workspace_scope[1]
 
 
 @pytest.fixture
@@ -325,7 +329,7 @@ class RecordingSessionChangesService:
 
 @pytest.mark.asyncio
 async def test_agent_stream_fails_when_no_model_or_tool_event_arrives(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     with pytest.raises(AgentEventStreamTimeoutError, match="首个模型/工具事件"):
         await process_agent_event_stream(
@@ -339,14 +343,14 @@ async def test_agent_stream_fails_when_no_model_or_tool_event_arrives(
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=FakeSessionChangesService(),
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
             model_timeout_seconds=0.01,
         )
 
 
 @pytest.mark.asyncio
 async def test_lifecycle_events_extend_initial_model_event_watchdog(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     result = await process_agent_event_stream(
         agent=LifecycleEventsBeforeModelAgent(),
@@ -359,7 +363,7 @@ async def test_lifecycle_events_extend_initial_model_event_watchdog(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         model_timeout_seconds=0.03,
     )
 
@@ -368,7 +372,7 @@ async def test_lifecycle_events_extend_initial_model_event_watchdog(
 
 @pytest.mark.asyncio
 async def test_active_model_events_refresh_idle_watchdog_for_long_response(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     result = await process_agent_event_stream(
         agent=SlowlyStreamingModelAgent(),
@@ -381,7 +385,7 @@ async def test_active_model_events_refresh_idle_watchdog_for_long_response(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         model_timeout_seconds=0.04,
     )
 
@@ -390,7 +394,7 @@ async def test_active_model_events_refresh_idle_watchdog_for_long_response(
 
 @pytest.mark.asyncio
 async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
-    tmp_path: Path,
+    workspace_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ModelStartsThenWaitsAgent:
@@ -446,7 +450,7 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert result.final_text == "after-wait"
@@ -454,7 +458,7 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
 
 @pytest.mark.asyncio
 async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadline(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     class ActiveStreamingAgent:
         async def astream_events(
@@ -515,7 +519,7 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=FakeSessionChangesService(),
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
             execution_scope=execution_scope,
             model_timeout_seconds=0.05,
         )
@@ -528,7 +532,7 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
 @pytest.fixture
 async def dispatch_watchdog_case(
     request: pytest.FixtureRequest,
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ):
     count = getattr(request, "param", 3)
@@ -582,7 +586,7 @@ async def dispatch_watchdog_case(
                 turn_id="job_dispatch_progress", agent_id="default",
                 custom_tool_skill_sources={},
                 publish=publish or (lambda *_args, **_kwargs: _async_noop()),
-                session_changes_service=session_changes_service, workspace_root=tmp_path,
+                session_changes_service=session_changes_service, workspace_root=workspace_root,
                 message_stream_runtime=runtime, tool_dispatch_timeout_seconds=timeout,
                 cancellation_signal=cancellation_signal,
             )
@@ -806,7 +810,7 @@ async def test_user_cancellation_after_dispatch_progress_keeps_user_reason(
 
 @pytest.mark.asyncio
 async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_dispatch_timeout")
     runtime = MessageStreamRuntime(writer)
@@ -837,7 +841,7 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=FakeSessionChangesService(),
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
             message_stream_runtime=runtime,
             tool_dispatch_timeout_seconds=0.01,
             model_timeout_seconds=1,
@@ -870,7 +874,7 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
 
 @pytest.mark.asyncio
 async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loop(
-    tmp_path: Path,
+    workspace_root: Path,
     cancellation_signal: CancellationSignal,
 ) -> None:
     class CancelledAgent:
@@ -902,14 +906,14 @@ async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loo
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=FakeSessionChangesService(),
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
             cancellation_signal=cancellation_signal,
         )
 
 
 @pytest.mark.asyncio
 async def test_tool_start_event_contains_only_model_visible_arguments(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     @tool
     def runtime_aware(value: str, runtime: ToolRuntime) -> str:
@@ -960,7 +964,7 @@ async def test_tool_start_event_contains_only_model_visible_arguments(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     start_payload = published[0][1]
@@ -979,7 +983,7 @@ def schema_send_tool() -> BaseTool:
 
 @pytest.mark.asyncio
 async def test_parallel_schema_errors_keep_original_provider_arguments_and_claims(
-    tmp_path: Path,
+    workspace_root: Path,
     schema_send_tool: BaseTool,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock())
@@ -1040,7 +1044,7 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
         session_id="ses_schema_observer", thread_id="thr_stream", job_id="job_schema_observer",
         turn_id="turn_schema_observer", agent_id="default",
         custom_tool_skill_sources={}, publish=publish,
-        session_changes_service=FakeSessionChangesService(), workspace_root=tmp_path,
+        session_changes_service=FakeSessionChangesService(), workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
     scoped_ids = [f"model_schema_calls:tool-call:{call_id}" for call_id in call_ids]
@@ -1080,7 +1084,7 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
 
 @pytest.mark.asyncio
 async def test_custom_tool_execution_keeps_provider_tool_call_identity(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock())
     canonical_sink = AsyncMock()
@@ -1157,7 +1161,7 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
 
@@ -1263,7 +1267,7 @@ def test_last_model_token_usage_keeps_last_execution_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -> None:
+async def test_model_failed_custom_event_is_published_to_trace(workspace_root: Path) -> None:
     events = [
         {
             "event": "on_chat_model_start",
@@ -1301,7 +1305,7 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
 
@@ -1429,7 +1433,7 @@ def failing_event_source(request: pytest.FixtureRequest):
     indirect=True,
 )
 async def test_stream_cleanup_preserves_primary_error_and_reports_close_failure(
-    failing_event_source, tmp_path: Path, session_changes_service: FakeSessionChangesService,
+    failing_event_source, workspace_root: Path, session_changes_service: FakeSessionChangesService,
 ) -> None:
     case = failing_event_source
 
@@ -1443,7 +1447,7 @@ async def test_stream_cleanup_preserves_primary_error_and_reports_close_failure(
             session_id="ses_cleanup", thread_id="thr_stream", job_id="job_cleanup", turn_id="job_cleanup",
             agent_id="default", custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
-            session_changes_service=session_changes_service, workspace_root=tmp_path,
+            session_changes_service=session_changes_service, workspace_root=workspace_root,
             progress_reporter=report_progress if case.stage == "processor" else None,
         )
     assert raised.value is case.primary
@@ -1453,7 +1457,7 @@ async def test_stream_cleanup_preserves_primary_error_and_reports_close_failure(
 
 @pytest.mark.asyncio
 async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     agent = FakeAgent([])
@@ -1469,7 +1473,7 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert len(agent.received_configs) == 1
@@ -1485,7 +1489,7 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
 
 @pytest.mark.asyncio
 async def test_agent_stream_does_not_inherit_sender_callback_context(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     inherited_callback = object()
@@ -1505,7 +1509,7 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=session_changes_service,
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
         )
     finally:
         var_child_runnable_config.reset(context_token)
@@ -1520,7 +1524,7 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
 
 @pytest.mark.asyncio
 async def test_agent_stream_rejects_model_event_from_another_job(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     agent = FakeAgent(
@@ -1551,13 +1555,13 @@ async def test_agent_stream_rejects_model_event_from_another_job(
             custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=session_changes_service,
-            workspace_root=tmp_path,
+            workspace_root=workspace_root,
         )
 
 
 @pytest.mark.asyncio
 async def test_agent_stream_reports_model_and_tool_progress(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     @tool
@@ -1607,7 +1611,7 @@ async def test_agent_stream_reports_model_and_tool_progress(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         progress_reporter=progress.append,
     )
 
@@ -1616,7 +1620,7 @@ async def test_agent_stream_reports_model_and_tool_progress(
 
 @pytest.mark.asyncio
 async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
-    tmp_path: Path,
+    workspace_root: Path,
     parallel_tool_events: list[dict[str, Any]],
     session_changes_service: FakeSessionChangesService,
 ) -> None:
@@ -1646,7 +1650,7 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert observed_states == [
@@ -1662,7 +1666,7 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
 
 @pytest.mark.asyncio
 async def test_failed_tool_message_publishes_failed_tool_call_end(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -1713,7 +1717,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert [event_type for event_type, _payload in published] == [
@@ -1730,7 +1734,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
 
 @pytest.mark.asyncio
 async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     """工具函数返回 status=error 时，不应再尝试读取 apply_patch journal。"""
@@ -1785,7 +1789,7 @@ async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert published[1][1]["status"] == "error"
@@ -1795,7 +1799,7 @@ async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
 
 @pytest.mark.asyncio
 async def test_skill_load_event_does_not_expose_internal_source_metadata(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -1841,7 +1845,7 @@ async def test_skill_load_event_does_not_expose_internal_source_metadata(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     payload = published[1][1]
@@ -1852,7 +1856,7 @@ async def test_skill_load_event_does_not_expose_internal_source_metadata(
 
 @pytest.mark.asyncio
 async def test_command_tool_output_extracts_nested_tool_message(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -1900,7 +1904,7 @@ async def test_command_tool_output_extracts_nested_tool_message(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert [event_type for event_type, _payload in published] == [
@@ -1914,7 +1918,7 @@ async def test_command_tool_output_extracts_nested_tool_message(
 
 @pytest.mark.asyncio
 async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -1959,7 +1963,7 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert len(result.successful_tool_calls) == 1
@@ -1976,7 +1980,7 @@ def _file_mutation_receipt(root: Path, path: str) -> str:
 
 @pytest.mark.asyncio
 async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     changes = RecordingSessionChangesService()
     published: list[tuple[str, dict[str, Any]]] = []
@@ -1994,7 +1998,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
             "name": "write_file",
             "data": {
                 "output": ToolMessage(
-                    content=_file_mutation_receipt(tmp_path, "src/example.txt"),
+                    content=_file_mutation_receipt(workspace_root, "src/example.txt"),
                     tool_call_id="call_write",
                     name="write_file",
                 )
@@ -2017,7 +2021,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=changes,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert len(changes.recorded) == 1
@@ -2031,7 +2035,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
 
 @pytest.mark.asyncio
 async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     changes = RecordingSessionChangesService()
     events = [
@@ -2048,7 +2052,7 @@ async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
             "name": "write_file",
             "data": {
                 "output": ToolMessage(
-                    content=_file_mutation_receipt(tmp_path, "src/internal.txt"),
+                    content=_file_mutation_receipt(workspace_root, "src/internal.txt"),
                     tool_call_id="call_internal_write",
                     name="write_file",
                 )
@@ -2072,7 +2076,7 @@ async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=changes,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert len(changes.recorded) == 1
@@ -2085,7 +2089,7 @@ async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
 
 @pytest.mark.asyncio
 async def test_small_model_chunks_only_feed_final_text_aggregation(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -2124,7 +2128,7 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert result.final_text == "abc"
@@ -2133,7 +2137,7 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
 
 @pytest.mark.asyncio
 async def test_model_end_output_recovers_text_missing_from_stream_callback(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -2175,7 +2179,7 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
 
@@ -2200,7 +2204,7 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
 
 @pytest.mark.asyncio
 async def test_summary_candidate_completion_uses_public_outcome_and_hides_candidate_text(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     model_call_id = "model_summary_candidate"
@@ -2247,7 +2251,7 @@ async def test_summary_candidate_completion_uses_public_outcome_and_hides_candid
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
 
@@ -2289,7 +2293,7 @@ async def test_summary_candidate_completion_uses_public_outcome_and_hides_candid
 
 @pytest.mark.asyncio
 async def test_model_end_does_not_replay_text_already_committed_by_provider_hook(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_end_dedup")
@@ -2359,7 +2363,7 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
 
@@ -2379,7 +2383,7 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
 
 @pytest.mark.asyncio
 async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_realtime(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     def text_chunk(text: str, *, part_id: str, index: int) -> AIMessageChunk:
@@ -2441,7 +2445,7 @@ async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_rea
         custom_tool_skill_sources={},
         publish=publish,
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     shared_events = [
@@ -2455,7 +2459,7 @@ async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_rea
 
 @pytest.mark.asyncio
 async def test_model_stream_usage_keeps_only_last_call(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     events = [
@@ -2527,7 +2531,7 @@ async def test_model_stream_usage_keeps_only_last_call(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert result.final_text == "OK"
@@ -2543,7 +2547,7 @@ async def test_model_stream_usage_keeps_only_last_call(
 
 @pytest.mark.asyncio
 async def test_empty_reasoning_done_preserves_encrypted_response_item(
-    tmp_path: Path,
+    workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     response_item = {
@@ -2600,7 +2604,7 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=session_changes_service,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert result.final_text == "完成"
@@ -2611,7 +2615,7 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
 
 @pytest.mark.asyncio
 async def test_task_tool_is_projected_as_subagent_activity(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_subagent")
     message_stream_runtime = MessageStreamRuntime(writer)
@@ -2669,7 +2673,7 @@ async def test_task_tool_is_projected_as_subagent_activity(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=message_stream_runtime,
     )
 
@@ -2689,7 +2693,7 @@ async def test_task_tool_is_projected_as_subagent_activity(
 
 @pytest.mark.asyncio
 async def test_resource_tool_is_projected_as_resource_activity(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource")
     message_stream_runtime = MessageStreamRuntime(writer)
@@ -2745,7 +2749,7 @@ async def test_resource_tool_is_projected_as_resource_activity(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=message_stream_runtime,
     )
 
@@ -2792,7 +2796,7 @@ def test_retryable_resource_failure_projects_recovery_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_retryable_resource_failure_does_not_abort_event_stream(
-    tmp_path: Path,
+    workspace_root: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource_error")
     message_stream_runtime = MessageStreamRuntime(writer)
@@ -2857,7 +2861,7 @@ async def test_retryable_resource_failure_does_not_abort_event_stream(
         custom_tool_skill_sources={},
         publish=lambda *_args, **_kwargs: _async_noop(),
         session_changes_service=FakeSessionChangesService(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         message_stream_runtime=message_stream_runtime,
     )
 

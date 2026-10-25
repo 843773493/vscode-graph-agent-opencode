@@ -170,14 +170,14 @@ class InternalMessageFactory:
         if spec.codec == PromptContentCodec.text:
             if not isinstance(section.value, str):
                 raise TypeError(f"标签 {section.tag} 的内容必须是字符串")
-            rendered_value = escape(section.value, quote=False)
+            encoded_section_content = escape(section.value, quote=False)
         elif spec.codec == PromptContentCodec.json:
-            rendered_value = serialize_prompt_json(section.value)
+            encoded_section_content = serialize_prompt_json(section.value)
         else:
             raise ValueError(f"标签 {section.tag} 不能作为数据 section 渲染")
         return (
             f"<{section.tag}{rendered_attributes}>\n"
-            f"{rendered_value}\n"
+            f"{encoded_section_content}\n"
             f"</{section.tag}>"
         )
 

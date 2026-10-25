@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import SessionCreationRecord
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
@@ -95,8 +95,8 @@ class ContextPlanDetailStore:
         effective_protection = protection or ("protected" if sensitive else "public")
         created_at = datetime.now(UTC)
         expires_at = (created_at + timedelta(days=retention_days)).isoformat()
-        original_hash = sha256_jcs(detail)
-        original_length = len(canonical_json_bytes(detail))
+        canonical_detail_bytes, original_hash = canonical_json_bytes_and_hash(detail)
+        original_length = len(canonical_detail_bytes)
         # source_revision 的业务语义不随 typed identity 迁移改变。
         effective_revision = (
             original_hash if source_revision is None else source_revision

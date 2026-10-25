@@ -102,6 +102,21 @@ def test_windows_powershell_wrapper_preserves_command_and_markers(
     assert "__BOXTEAM_CMD_DONE_test__:" in script
 
 
+def test_posix_wrapper_quotes_working_directory() -> None:
+    terminal_input = _build_terminal_input(
+        command_text="printf hello",
+        working_directory="/workspace with spaces",
+        shell_executable="/bin/sh",
+        login=False,
+        start_marker="__BOXTEAM_CMD_START_test__",
+        done_marker="__BOXTEAM_CMD_DONE_test__",
+    )
+
+    assert terminal_input == (
+        "cd -- '/workspace with spaces' && /bin/sh -c 'printf hello'"
+    )
+
+
 def test_terminal_output_marks_port_conflict_as_retryable_environment_issue() -> None:
     result = tool_output(
         terminal_id="terminal_port_conflict",

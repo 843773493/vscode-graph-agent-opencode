@@ -8,18 +8,22 @@ import {
   NAVIGATION_BACKPRESSURE_STATUSES,
 } from "../../api/session/sessionCatalogOperations";
 import {
-  apiResponse,
-  explorerProps,
-  flushEffects,
+  apiSuccessResponse,
   installGatewayFetch,
-  installTestDocument,
-  installTestWindow,
-  restoreSessionHookGlobals,
-  withCatalogDefaults,
-  type SessionResourceExplorerHandle,
-} from "./sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+  withDefaultGatewayApiResponses,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import {
+  installVisibleTestDocument,
+  installGatewayTestWindow,
+} from "../../tests/fixtures/session/gatewayBrowserGlobals";
+import {
+  createSessionResourceExplorerProps,
+  type SessionResourceExplorerController,
+} from "../../tests/fixtures/session/sessionResourceExplorer";
+import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 /**
  * 目录分支读取的重试与迟到请求守卫（F3/F5 回归）。
@@ -29,13 +33,13 @@ afterEach(restoreSessionHookGlobals);
  */
 
 function mountExplorer(apiPort: number) {
-  installTestWindow(apiPort);
-  installTestDocument();
-  let explorer: SessionResourceExplorerHandle | null = null;
+  installGatewayTestWindow(apiPort);
+  installVisibleTestDocument();
+  let explorer: SessionResourceExplorerController | null = null;
   function Harness(): React.ReactNode {
     const generatorResources = useSessionGeneratorResources(apiPort);
     explorer = useSessionResourceExplorer({
-      ...explorerProps({ apiPort, activeWorkspaceId: "ws-test" }),
+      ...createSessionResourceExplorerProps({ apiPort, activeWorkspaceId: "ws-test" }),
       generatorResources,
     });
     return null;
@@ -53,10 +57,10 @@ describe("目录分支重试按错误类型判定", () => {
 
   test("503 背压重试到上限（3 次），不再因文案不匹配退化为 1 次", async () => {
     let calls = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         calls += 1;
-        return apiResponse({ message: "上游不可用" }, 503);
+        return apiSuccessResponse({ message: "上游不可用" }, 503);
       }
       return undefined;
     }));
@@ -64,9 +68,9 @@ describe("目录分支重试按错误类型判定", () => {
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(React.createElement(Harness));
-      await flushEffects();
+      await flushReactEffects();
       await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(calls).toBe(3);
     expect(explorer().branches.get("ws-test:root")?.error).toContain("503");
@@ -75,10 +79,10 @@ describe("目录分支重试按错误类型判定", () => {
 
   test("500 内部故障不是背压，只请求 1 次", async () => {
     let calls = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         calls += 1;
-        return apiResponse({ message: "后端内部错误" }, 500);
+        return apiSuccessResponse({ message: "后端内部错误" }, 500);
       }
       return undefined;
     }));
@@ -86,9 +90,9 @@ describe("目录分支重试按错误类型判定", () => {
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(React.createElement(Harness));
-      await flushEffects();
+      await flushReactEffects();
       await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(calls).toBe(1);
     act(() => renderer.unmount());
@@ -96,10 +100,10 @@ describe("目录分支重试按错误类型判定", () => {
 
   test("4xx 明确拒绝只请求 1 次", async () => {
     let calls = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         calls += 1;
-        return apiResponse({ message: "目标不存在" }, 404);
+        return apiSuccessResponse({ message: "目标不存在" }, 404);
       }
       return undefined;
     }));
@@ -107,9 +111,9 @@ describe("目录分支重试按错误类型判定", () => {
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(React.createElement(Harness));
-      await flushEffects();
+      await flushReactEffects();
       await new Promise<void>((resolve) => setTimeout(resolve, 1200));
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(calls).toBe(1);
     act(() => renderer.unmount());
@@ -120,19 +124,19 @@ describe("迟到定位请求的失败不得覆盖新分支终态", () => {
   test("被顶掉的定位分页失败后，已成功的新分支保持无错误", async () => {
     let pagingResolve: ((response: Response) => void) | null = null;
     let childrenCalls = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         childrenCalls += 1;
         if (childrenCalls === 1) {
-          return apiResponse({ revision: "mount", catalog_revision: 7, parent_node_id: null, items: [], cursor: null, total: 0 });
+          return apiSuccessResponse({ revision: "mount", catalog_revision: 7, parent_node_id: null, items: [], cursor: null, total: 0 });
         }
         if (childrenCalls === 2) {
-          return apiResponse({ revision: "refresh", catalog_revision: 7, parent_node_id: null, items: [], cursor: "c1", total: 0 });
+          return apiSuccessResponse({ revision: "refresh", catalog_revision: 7, parent_node_id: null, items: [], cursor: "c1", total: 0 });
         }
         if (childrenCalls === 3) {
           return new Promise<Response>((resolve) => { pagingResolve = resolve; });
         }
-        return apiResponse({ revision: "ok", catalog_revision: 8, parent_node_id: null, items: [], cursor: null, total: 0 });
+        return apiSuccessResponse({ revision: "ok", catalog_revision: 8, parent_node_id: null, items: [], cursor: null, total: 0 });
       }
       return undefined;
     }));
@@ -140,24 +144,24 @@ describe("迟到定位请求的失败不得覆盖新分支终态", () => {
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(React.createElement(Harness));
-      await flushEffects();
+      await flushReactEffects();
     });
 
     await act(async () => {
       void explorer().revealSearchResult("ws-test", ["folder-a"], "folder").catch(() => undefined);
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(pagingResolve).not.toBeNull();
 
     await act(async () => {
       await explorer().loadBranch("ws-test", null);
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(explorer().branches.get("ws-test:root")?.revision).toBe("ok");
 
     await act(async () => {
-      pagingResolve!(apiResponse({ message: "分页崩了" }, 503));
-      await flushEffects();
+      pagingResolve!(apiSuccessResponse({ message: "分页崩了" }, 503));
+      await flushReactEffects();
     });
     const after = explorer().branches.get("ws-test:root");
     expect(after?.error).toBeNull();

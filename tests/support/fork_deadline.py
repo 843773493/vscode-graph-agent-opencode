@@ -675,7 +675,7 @@ def _terminate_windows_process_tree(
     _, remaining = psutil.wait_procs(alive, timeout=3)
     if remaining:
         raise RuntimeError(
-            "Windows 看门狗未能回收 pytest 子进程: "
+            "Windows 看门狗未能回收受管进程树: "
             f"pids={[candidate.pid for candidate in remaining]}"
         )
 
@@ -743,5 +743,150 @@ def _has_matrix_runner_ancestor(process_id: int) -> bool:
     return False
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["--watchdog"]:
-    raise SystemExit(_watchdog_main(Path(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])))
+def _browser_driver_process_identity(
+    process_id: int,
+    watchdog_id: int | None = None,
+    *,
+    require_matrix_runner: bool = True,
+) -> dict[str, object]:
+    if process_id <= 1:
+        raise RuntimeError(f"fork watchdog 拒绝无效的浏览器驱动 PID: pid={process_id}")
+    if require_matrix_runner and not _has_matrix_runner_ancestor(process_id):
+        raise RuntimeError(
+            f"fork watchdog 拒绝不属于 matrix runner 的浏览器驱动: pid={process_id}"
+        )
+    if sys.platform == "win32":
+        identity = _windows_process_identity(process_id)
+        result: dict[str, object] = {
+            "pid": process_id,
+            "platform": "windows",
+            "process_start_marker": identity.process_start_marker,
+            "parent_process_id": identity.parent_process_id,
+            "parent_start_marker": identity.parent_start_marker,
+            "username": identity.username,
+            "executable_path": str(identity.executable_path),
+        }
+    elif os.name == "posix":
+        identity = _posix_process_identity(process_id)
+        if identity.process_group_id != process_id or identity.session_id != process_id:
+            raise RuntimeError(
+                "fork watchdog 拒绝未隔离的 browser driver: "
+                f"pid={process_id}, pgid={identity.process_group_id}, sid={identity.session_id}"
+            )
+        result = {
+            "pid": process_id,
+            "platform": "posix",
+            "process_start_marker": identity.process_start_marker,
+            "process_group_id": identity.process_group_id,
+            "session_id": identity.session_id,
+            "effective_user_id": identity.effective_user_id,
+            "executable_path": str(identity.executable_path),
+        }
+    else:
+        raise RuntimeError(f"fork watchdog 不支持当前平台: {sys.platform}")
+
+    if watchdog_id is not None:
+        if watchdog_id <= 1 or watchdog_id == process_id:
+            raise RuntimeError(f"fork watchdog 进程身份无效: pid={watchdog_id}")
+        watchdog = psutil.Process(watchdog_id)
+        if watchdog.ppid() != process_id:
+            raise RuntimeError(
+                f"fork watchdog 必须是 browser driver 的直接子进程: "
+                f"watchdog={watchdog_id}, parent={watchdog.ppid()}, driver={process_id}"
+            )
+        if os.name == "posix":
+            watchdog_identity = _posix_process_identity(watchdog_id)
+            if (
+                watchdog_identity.process_group_id != watchdog_id
+                or watchdog_identity.session_id != watchdog_id
+            ):
+                raise RuntimeError(
+                    "fork watchdog 必须运行在独立 POSIX session: "
+                    f"pid={watchdog_id}, pgid={watchdog_identity.process_group_id}, "
+                    f"sid={watchdog_identity.session_id}"
+                )
+    return result
+
+
+def _terminate_browser_driver(
+    process_id: int,
+    watchdog_id: int,
+    expected_identity: dict[str, object],
+) -> None:
+    current_identity = _browser_driver_process_identity(
+        process_id,
+        watchdog_id,
+        require_matrix_runner=False,
+    )
+    if sys.platform == "win32":
+        identity_matches = all(
+            current_identity[key] == expected_identity[key]
+            for key in (
+                "pid",
+                "platform",
+                "process_start_marker",
+                "username",
+                "executable_path",
+            )
+        )
+    else:
+        identity_matches = current_identity == expected_identity
+    if not identity_matches:
+        raise RuntimeError(f"拒绝终止身份已变化的 browser driver: pid={process_id}")
+    if sys.platform == "win32":
+        _terminate_windows_process_tree(
+            process_id,
+            expected_start_marker=str(expected_identity["process_start_marker"]),
+        )
+        return
+
+    try:
+        os.killpg(process_id, signal.SIGTERM)
+    except ProcessLookupError as error:
+        raise RuntimeError(
+            f"browser driver process group 已消失: pid={process_id}"
+        ) from error
+    time.sleep(0.5)
+    try:
+        os.killpg(process_id, 0)
+    except ProcessLookupError:
+        return
+    # POSIX 不会复用仍有成员的 process group ID；这里核实组仍存在后强制结束残余成员。
+    os.killpg(process_id, signal.SIGKILL)
+
+
+def _browser_driver_watchdog_helper(arguments: list[str]) -> int:
+    action = arguments[0]
+    process_id = int(arguments[1])
+    if action == "--browser-driver-identity":
+        result = _browser_driver_process_identity(process_id)
+    elif action == "--browser-driver-validate":
+        watchdog_id = int(arguments[2])
+        expected_identity = json.loads(arguments[3])
+        result = _browser_driver_process_identity(process_id, watchdog_id)
+        if result != expected_identity:
+            raise RuntimeError(f"browser driver 启动身份已变化: pid={process_id}")
+    elif action == "--browser-driver-terminate":
+        watchdog_id = int(arguments[2])
+        expected_identity = json.loads(arguments[3])
+        _terminate_browser_driver(process_id, watchdog_id, expected_identity)
+        return 0
+    else:
+        raise ValueError(f"未知 browser driver watchdog 操作: {action}")
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    arguments = sys.argv[1:]
+    if arguments[:1] == ["--watchdog"]:
+        raise SystemExit(
+            _watchdog_main(Path(arguments[1]), int(arguments[2]), int(arguments[3]))
+        )
+    if arguments[:1] in (
+        ["--browser-driver-identity"],
+        ["--browser-driver-validate"],
+        ["--browser-driver-terminate"],
+    ):
+        raise SystemExit(_browser_driver_watchdog_helper(arguments))
+    raise SystemExit(f"未知 fork deadline watchdog 模式: {arguments[:1]}")

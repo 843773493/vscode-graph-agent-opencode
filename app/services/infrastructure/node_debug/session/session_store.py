@@ -114,32 +114,45 @@ class NodeDebugSessionStore:
         self, session_id: str, thread_id: str
     ) -> list[NodeDebugConfigurationDTO]:
         directory = self._configurations_directory(session_id, thread_id)
-        reference = f"session_id={session_id}, thread_id={thread_id}, artifact=configurations"
+        list_reference = (
+            f"session_id={session_id}, thread_id={thread_id}, artifact=configurations"
+        )
         try:
             try:
                 mode = directory.lstat().st_mode
             except FileNotFoundError:
                 return []
             if stat.S_ISLNK(mode):
-                raise RuntimeError(f"调试方案目录不允许符号链接: {reference}")
-            paths = sorted(path for path in directory.iterdir() if path.suffix == ".json")
+                raise RuntimeError(f"调试方案目录不允许符号链接: {list_reference}")
+            configuration_paths = sorted(
+                path for path in directory.iterdir() if path.suffix == ".json"
+            )
         except OSError as error:
             raise type(error)(
                 error.errno,
-                f"调试存储 list 失败: {reference}, error={type(error).__name__}, errno={error.errno}"
+                f"调试存储 list 失败: {list_reference}, error={type(error).__name__}, errno={error.errno}",
             ) from error
         configurations: list[NodeDebugConfigurationDTO] = []
-        for path in paths:
-            reference = f"session_id={session_id}, thread_id={thread_id}, artifact=configuration"
-            payload = self._read_payload(path, reference)
+        configuration_reference = (
+            f"session_id={session_id}, thread_id={thread_id}, artifact=configuration"
+        )
+        for configuration_path in configuration_paths:
+            payload = self._read_payload(
+                configuration_path,
+                configuration_reference,
+            )
             if payload is None:
-                raise RuntimeError(f"调试方案枚举后文件缺失: {reference}")
-            configuration = self._read_model_bytes(payload, NodeDebugConfigurationDTO, reference)
+                raise RuntimeError(f"调试方案枚举后文件缺失: {configuration_reference}")
+            configuration = self._read_model_bytes(
+                payload,
+                NodeDebugConfigurationDTO,
+                configuration_reference,
+            )
             expected_name = f"{configuration.configuration_id}.json"
-            if path.name != expected_name:
+            if configuration_path.name != expected_name:
                 raise RuntimeError(
                     "调试方案文件名必须等于 configuration_id: "
-                    f"{reference}, expected={expected_name}"
+                    f"{configuration_reference}, expected={expected_name}"
                 )
             configurations.append(configuration)
         return configurations

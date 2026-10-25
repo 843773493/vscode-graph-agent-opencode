@@ -41,7 +41,7 @@ from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,

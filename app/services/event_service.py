@@ -59,8 +59,9 @@ class EventService:
         retained_events = await self._require_bus().list_events(
             job_id, limit=JOB_EVENT_HISTORY_SIZE
         )
-        for index, event in enumerate(retained_events):
-            if event.event_id == event_id:
+        # 重连游标通常靠近保留窗口尾部，从最新事件反向查找可更早命中。
+        for index in range(len(retained_events) - 1, -1, -1):
+            if retained_events[index].event_id == event_id:
                 return retained_events[index + 1 :]
         raise JobEventCursorGoneError(job_id=job_id, event_id=event_id)
 

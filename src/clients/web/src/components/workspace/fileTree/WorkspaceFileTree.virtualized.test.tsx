@@ -62,7 +62,12 @@ function apiResponse(data: unknown): Response {
   return Response.json({ code: 0, message: "ok", request_id: "req", data });
 }
 
-async function mount(port: number, activeFilePath: string | null, expanded: string[]): Promise<ReactTestRenderer> {
+async function mount(
+  port: number,
+  activeFilePath: string | null,
+  expanded: string[],
+  searchOpen = false,
+): Promise<ReactTestRenderer> {
   installWindow(port);
   const items = [
     fileTreeNodeFixture(`${ROOT}/big`, "directory"),
@@ -97,7 +102,7 @@ async function mount(port: number, activeFilePath: string | null, expanded: stri
           workspaceName="project"
           sessionId=""
           activeFilePath={activeFilePath}
-          searchOpen={false}
+          searchOpen={searchOpen}
           collapseVersion={0}
           expandedPaths={expanded}
           onExpandedPathsChange={() => {}}
@@ -168,5 +173,32 @@ describe("工作区文件树虚拟滚动扁平行", () => {
     expect(fileRow[0].findAll((n) => classOf(n) === "files-tree-meta").length).toBe(1);
     const dirRow = rowFor(renderer, `${ROOT}/big`);
     expect(dirRow[0].findAll((n) => classOf(n) === "files-tree-meta").length).toBe(0);
+  });
+
+  test("筛选状态固定在搜索栏内，不覆盖可操作的文件树行", async () => {
+    const port = 49_805;
+    const renderer = await mount(port, null, [ROOT], true);
+    const searchInput = renderer.root.findByProps({
+      type: "search",
+      "aria-label": "筛选文件",
+    });
+
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: "file-" } });
+    });
+
+    const searchStatus = renderer.root.findByProps({
+      className: "files-tree-search-status",
+    });
+    expect(searchStatus.parent?.props.className).toBe("files-tree-search");
+    expect(searchStatus.findByType("span").props.children).toBe("正在筛选：file-");
+
+    const notifications = renderer.root.findByProps({
+      className: "files-tree-notifications",
+    });
+    expect(notifications.findAll(
+      (node) => classOf(node).includes("files-tree-search-status"),
+    )).toHaveLength(0);
+    expect(rowFor(renderer, `${ROOT}/file-0.ts`)).toHaveLength(1);
   });
 });

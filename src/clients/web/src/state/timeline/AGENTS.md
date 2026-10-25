@@ -11,11 +11,12 @@
 
 ```text
 timeline/
-├── timelineTypes.ts       TimelineItem 共享展示合同
-├── timelineMessages.ts    用户消息及附件的展示归一
-├── chatTimeline.ts        Trace 事件到会话时间线的编排入口
-├── responseParts.ts       权威 Turn response parts 到时间线项的投影
-├── chatResponseGroups.ts  历史边界状态、最终正文补齐与连续工作项分组
+├── timelineTypes.ts        TimelineItem 共享展示合同
+├── timelineMessages.ts     用户消息及附件的展示归一
+├── timelineMessages.test.ts 用户消息附件预览归一合同
+├── chatTimeline.ts         Trace 事件到会话时间线的编排入口
+├── responseParts.ts        权威 Turn response parts 到时间线项的投影
+├── chatResponseGroups.ts   历史边界状态、最终正文补齐与连续工作项分组
 ├── responseParts.test.ts
 └── skillDisplayFlow.test.ts
 ```

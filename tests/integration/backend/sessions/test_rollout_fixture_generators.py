@@ -106,7 +106,9 @@ def real_generator_case(
             return {"providers": providers}
 
     monkeypatch.setattr(generator, "ConfigService", FixtureConfig)
-    monkeypatch.setattr(generator, "_load_running_provider_keys", lambda _names: None)
+    monkeypatch.setattr(
+        generator, "_inherit_running_provider_environment", lambda _names: None
+    )
     tool_every = request.param[2]
     if tool_every:
         http_state.output_tool_name = "inspect_fixture"

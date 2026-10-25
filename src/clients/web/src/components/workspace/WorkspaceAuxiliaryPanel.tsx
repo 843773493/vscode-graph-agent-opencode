@@ -8,7 +8,7 @@ import type {
 import SessionChangesTree from "./sessionChanges/SessionChangesTree";
 import WorkspaceFileTree from "./fileTree/WorkspaceFileTree";
 
-export type WorkspaceAuxiliaryTab = "changes" | "files" | "resources" | "debug";
+export type WorkspaceAuxiliaryTab = "changes" | "files" | "goal" | "resources" | "debug";
 
 interface WorkspaceAuxiliaryPanelProps {
   visible: boolean;
@@ -37,6 +37,7 @@ interface WorkspaceAuxiliaryPanelProps {
   attachmentPreview: ReactNode;
   runtimePreview: ReactNode;
   debugPanel: ReactNode;
+  goalPanel: ReactNode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onSelectSessionChangeset: (changesetId: string) => void;
@@ -77,6 +78,7 @@ export default function WorkspaceAuxiliaryPanel({
   attachmentPreview,
   runtimePreview,
   debugPanel,
+  goalPanel,
   onToggleSearch,
   onCollapseAll,
   onSelectSessionChangeset,
@@ -187,6 +189,21 @@ export default function WorkspaceAuxiliaryPanel({
       >
         {runtimePreview}
         {resourcePanel}
+      </div>
+      <div
+        className={`auxiliary-view-body${tab === "goal" ? "" : " preserve-mounted-hidden"}`}
+        hidden={tab !== "goal"}
+        data-bt-surface="layout"
+        role="tabpanel"
+        aria-label="Goal"
+      >
+        {sessionId ? (
+          <div className="auxiliary-scope-context" aria-label="Goal 范围">
+            <span>当前会话</span>
+            <strong title={sessionTitle}>{sessionTitle} · 主线程</strong>
+          </div>
+        ) : null}
+        {tab === "goal" ? goalPanel : null}
       </div>
       <div
         className={`auxiliary-view-body auxiliary-debug-body${tab === "debug" ? "" : " preserve-mounted-hidden"}`}

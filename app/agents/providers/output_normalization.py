@@ -11,10 +11,13 @@ from app.agents.providers.message_content_schema import validate_content_blocks
 MISSING = object()
 
 
-def as_block(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
+def as_block(block_data: Any) -> dict[str, Any] | None:
+    if not isinstance(block_data, Mapping):
         return None
-    return {str(key): copy.deepcopy(item) for key, item in value.items()}
+    return {
+        str(key): copy.deepcopy(field_value)
+        for key, field_value in block_data.items()
+    }
 
 
 def content_blocks(content: Any) -> list[dict[str, Any]]:
@@ -27,16 +30,16 @@ def content_blocks(content: Any) -> list[dict[str, Any]]:
         return [{"type": "text", "text": str(content)}]
 
     blocks: list[dict[str, Any]] = []
-    for value in content:
-        if isinstance(value, str):
-            if value:
-                blocks.append({"type": "text", "text": value})
+    for content_item in content:
+        if isinstance(content_item, str):
+            if content_item:
+                blocks.append({"type": "text", "text": content_item})
             continue
-        block = as_block(value)
+        block = as_block(content_item)
         if block is not None:
             blocks.append(block)
-        elif value is not None:
-            blocks.append({"type": "text", "text": str(value)})
+        elif content_item is not None:
+            blocks.append({"type": "text", "text": str(content_item)})
     return blocks
 
 
@@ -50,7 +53,8 @@ def reasoning_content_block(text: str) -> dict[str, Any]:
 
 
 def reasoning_items_block(items: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"type": "reasoning_items", "reasoning_items": copy.deepcopy(items)}
+    """构造临时 carrier；canonical 校验或流式合并 owner 在持有前复制。"""
+    return {"type": "reasoning_items", "reasoning_items": items}
 
 
 def build_ai_message_content(
@@ -83,8 +87,8 @@ def build_ai_message_content(
     if isinstance(thinking_blocks, list) and not (
         {"thinking", "redacted_thinking"} & direct_types
     ):
-        for value in thinking_blocks:
-            block = as_block(value)
+        for thinking_block_data in thinking_blocks:
+            block = as_block(thinking_block_data)
             if block is not None and block.get("type") in {
                 "thinking",
                 "redacted_thinking",
@@ -93,7 +97,9 @@ def build_ai_message_content(
 
     if isinstance(reasoning_items, list) and "reasoning_items" not in direct_types:
         items = [
-            block for value in reasoning_items if (block := as_block(value)) is not None
+            block
+            for reasoning_item_data in reasoning_items
+            if (block := as_block(reasoning_item_data)) is not None
         ]
         if items:
             blocks.append(reasoning_items_block(items))

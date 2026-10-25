@@ -1,15 +1,37 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import {
   discoverRuntimeManifestPath,
   runtimePackageName,
 } from "./runtime-discovery.mjs";
 
+const fixtureRoot = path.resolve(
+  "out/tests/packages/launcher/src/configuration/runtime-discovery/workspace/项目 清单",
+);
+const explicitManifestPath = path.join(
+  fixtureRoot,
+  "boxteam",
+  "runtime-manifest.json",
+);
+const linuxPackageManifestPath = path.join(
+  fixtureRoot,
+  "npm",
+  "runtime-linux-x64",
+  "runtime-manifest.json",
+);
+const windowsPackageManifestPath = path.join(
+  fixtureRoot,
+  "npm",
+  "runtime-windows-x64",
+  "runtime-manifest.json",
+);
+
 describe("runtime discovery", () => {
   test("显式 manifest 优先于平台包", () => {
     const resolved = discoverRuntimeManifestPath({
       environment: {
-        BOXTEAM_RUNTIME_MANIFEST: "/tmp/boxteam/runtime-manifest.json",
+        BOXTEAM_RUNTIME_MANIFEST: explicitManifestPath,
       },
       platform: "darwin",
       architecture: "arm64",
@@ -18,7 +40,7 @@ describe("runtime discovery", () => {
       },
     });
 
-    expect(resolved).toBe("/tmp/boxteam/runtime-manifest.json");
+    expect(resolved).toBe(explicitManifestPath);
   });
 
   test("Linux x64 选择组织平台包", () => {
@@ -41,14 +63,14 @@ describe("runtime discovery", () => {
       architecture: "x64",
       resolvePackage(specifier) {
         requested.push(specifier);
-        return "/npm/runtime-linux-x64/runtime-manifest.json";
+        return linuxPackageManifestPath;
       },
     });
 
     expect(requested).toEqual([
       "@boxteam/runtime-linux-x64/runtime-manifest.json",
     ]);
-    expect(resolved).toBe("/npm/runtime-linux-x64/runtime-manifest.json");
+    expect(resolved).toBe(linuxPackageManifestPath);
   });
 
   test("不支持平台不回退系统 Python", () => {
@@ -82,13 +104,13 @@ describe("runtime discovery", () => {
       architecture: "x64",
       resolvePackage(specifier) {
         requested.push(specifier);
-        return "C:/npm/runtime-windows-x64/runtime-manifest.json";
+        return windowsPackageManifestPath;
       },
     });
 
     expect(requested).toEqual([
       "@boxteam/runtime-windows-x64/runtime-manifest.json",
     ]);
-    expect(resolved).toBe("C:/npm/runtime-windows-x64/runtime-manifest.json");
+    expect(resolved).toBe(windowsPackageManifestPath);
   });
 });

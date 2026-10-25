@@ -58,8 +58,8 @@
       },
       {
         "id": "backup_3",
-        "endpoint": "https://www.cctq.ai/v1",
-        "model": "gpt-5.6-luna",
+        "endpoint": "https://newapi.hyf2333.top/v1",
+        "model": "gpt-6-luna",
         "custom_llm_provider": "openai",
         "api_mode": {
           "protocol": "responses",
@@ -78,7 +78,7 @@
         "request_options": {
           "overrides": {
             "reasoning": {
-              "effort": "high",
+              "effort": "max",
               "summary": "auto"
             }
           }
@@ -87,7 +87,7 @@
       {
         "id": "backup_4",
         "endpoint": "https://chatgpt.com/backend-api/codex",
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "custom_llm_provider": "chatgpt",
         "api_mode": {
           "protocol": "responses",
@@ -108,8 +108,31 @@
         "request_options": {
           "overrides": {
             "reasoning": {
-              "effort": "high",
+              "effort": "max",
               "summary": "auto"
+            }
+          }
+        }
+      },
+      {
+        "id": "newapi_deepseek",
+        "endpoint": "https://newapi.hyf2333.top/v1",
+        "model": "deepseek-v4.1-flash-1017",
+        "custom_llm_provider": "openai",
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_reasoning": true,
+            "max_input_tokens": 400000
+          },
+          "supports_reasoning": {"reasoning_content": true}
+        },
+        "api_key": "${CCTQ_API_KEY}",
+        "request_options": {
+          "overrides": {
+            "extra_body": {
+              "reasoning_effort": "xhigh"
             }
           }
         }
@@ -183,6 +206,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ]
       },
@@ -381,6 +405,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ]
       },
@@ -405,6 +430,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ]
       }
@@ -423,6 +449,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ]
       }

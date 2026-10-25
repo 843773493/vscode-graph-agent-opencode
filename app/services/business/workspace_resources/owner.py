@@ -42,6 +42,7 @@ from app.services.business.workspace_resources.records import (
 from app.services.business.workspace_resources.recovery import ResourceRecovery
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+    ResourceLease,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
@@ -149,7 +150,7 @@ class WorkspaceResourceOwner:
     ) -> bool:
         if receipt is None:
             return False
-        record = self._require(record.resource_id)
+        record = self._require_owned_resource_record(record.resource_id)
         # 正式拒绝必须绑定本次创建 intent；HTTP 状态或任意资源快照都不能替代它。
         if not isinstance(receipt, dict) or type(receipt.get("owner_revision")) is not int or (
             receipt.get("resource_id"), receipt.get("workspace_id"), receipt.get("owner_revision")
@@ -210,12 +211,12 @@ class WorkspaceResourceOwner:
         records = tuple(record for record in self._store.all() if matches(record))
         await self.recover(record.resource_id for record in records)
         # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
-        records = tuple(self._require(record.resource_id) for record in records)
+        records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
         observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
         result: list[ResourceSnapshot] = []
         for before in records:
             async with self._resource_lock(before.resource_id):
-                record = self._require(before.resource_id)
+                record = self._require_owned_resource_record(before.resource_id)
                 if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
                     continue
                 # 同版本外部状态观察、未知占用等也能改变记录，不能只比较owner_revision。
@@ -232,7 +233,7 @@ class WorkspaceResourceOwner:
     async def get_resource(self, resource_id: str) -> ResourceSnapshot:
         await self.recover((resource_id,))
         async with self._resource_lock(resource_id):
-            record = self._require(resource_id)
+            record = self._require_owned_resource_record(resource_id)
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
             runtime = observed.get(resource_id)
             observe_resource(record, runtime, self.kind)
@@ -297,7 +298,7 @@ class WorkspaceResourceOwner:
                 raise RuntimeError("fork attach 回执与原 operation lease 身份冲突")
             if lease.status in {"active", "reconcile_required"}:
                 # 只完成这一条已提交的操作；资源本身仍存活，不使用资源终态 settle。
-                self._leases.release(lease.lease_id, reason="fork_attach_committed")
+                self._leases.release(lease.lease_id)
 
     async def attach_for_fork(
         self, resource_id: str, *, creation_key: str, expected_revision: int, thread: ThreadRef,
@@ -311,7 +312,7 @@ class WorkspaceResourceOwner:
         if existing is not None:
             return await self.get_resource(resource_id), existing
         async with self.admit_thread(thread.session_id, thread.thread_id), self._resource_lock(resource_id):
-            record = self._require(resource_id)
+            record = self._require_owned_resource_record(resource_id)
             existing = self.fork_attach_receipt(
                 resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
             )
@@ -333,7 +334,7 @@ class WorkspaceResourceOwner:
                 )
             except Exception as error:
                 # 已派发的失败保持 dispatching/unknown；绝不因存活快照自动重发。
-                record = self._require(resource_id)
+                record = self._require_owned_resource_record(resource_id)
                 receipt = record.fork_attachments.get(creation_key) or ForkAttachReceipt(
                     creation_key, thread, expected_revision, "rejected",
                 )
@@ -354,7 +355,7 @@ class WorkspaceResourceOwner:
         operation_id: str,
     ) -> ResourceSnapshot:
         async with self._resource_lock(resource_id):
-            record = self._require(resource_id)
+            record = self._require_owned_resource_record(resource_id)
             return await self._command_record(
                 record, action, expected_revision, thread, holder_id, operation_id
             )
@@ -607,7 +608,7 @@ class WorkspaceResourceOwner:
                 for record in affected:
                     if record.reconciliation_status != "verified":
                         async with self._resource_lock(record.resource_id):
-                            current = self._require(record.resource_id)
+                            current = self._require_owned_resource_record(record.resource_id)
                             if current.reconciliation_status != "verified":
                                 runtime = await self._transport.get_resource(record.resource_id)
                                 self._reconcile_stopped_record(current, runtime)
@@ -615,7 +616,7 @@ class WorkspaceResourceOwner:
                     lock = self._resource_lock(resource_id)
                     await lock.acquire()
                     locked[resource_id] = lock
-                affected = [self._require(record.resource_id) for record in affected]
+                affected = [self._require_owned_resource_record(record.resource_id) for record in affected]
                 # 从全量preflight到任务接管之间不让出事件循环，避免新lease插入。
                 for record in affected:
                     self._verified(record)
@@ -658,7 +659,7 @@ class WorkspaceResourceOwner:
                 # 冷恢复与删除均按原资源锁推进，单项同步或回执等待不占住整批。
                 await self.recover((resource_id,))
                 async with self._resource_lock(resource_id):
-                    record = self._require(resource_id)
+                    record = self._require_owned_resource_record(resource_id)
                     if (
                         record.status == "deleted"
                         or record.retention_scope != "thread"
@@ -717,7 +718,7 @@ class WorkspaceResourceOwner:
     ) -> ResourceSnapshot:
         # 已核实的非运行资源不再请求外部服务，终态也不因晚到授权变成 unknown。
         async with self._resource_lock(resource_id):
-            record = self._require(resource_id)
+            record = self._require_owned_resource_record(resource_id)
             if record.reconciliation_status == "verified" and record.status != "running":
                 raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
         await self.recover((resource_id,))
@@ -739,7 +740,7 @@ class WorkspaceResourceOwner:
         operation_id: str,
     ) -> ResourceSnapshot:
         async with self._resource_lock(resource_id):
-            record = self._require(resource_id)
+            record = self._require_owned_resource_record(resource_id)
             self._verified(record)
             if record.status != "running":
                 raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
@@ -805,17 +806,25 @@ class WorkspaceResourceOwner:
         self._sync_ledger(record)
 
     def _reconcile_stopped_record(
-        self, record: OwnedResourceRecord, runtime: ResourceSnapshot | None,
-    ) -> None:
-        pending = self._leases.leases_for_resource(record.resource_id)
+        self,
+        record: OwnedResourceRecord,
+        runtime: ResourceSnapshot | None,
+        *,
+        pending_leases: list[ResourceLease] | None = None,
+    ) -> list[ResourceLease]:
+        pending = (
+            self._leases.leases_for_resource(record.resource_id)
+            if pending_leases is None
+            else pending_leases
+        )
         if any(lease.status != "reconcile_required" for lease in pending):
-            return
+            return pending
         # 只接受当前身份、非旧版本且已核实停止的外部事实；不声称旧操作成功。
         if runtime is None or runtime.get("reconciliation_status") != "verified" or runtime.get("status") not in STOPPED_STATUSES:
-            return
+            return pending
         revision = runtime.get("transport_owner_revision")
         if type(revision) is not int or revision < record.owner_revision:
-            return
+            return pending
         observe_resource(record, runtime, self.kind)
         record.reconciliation_status = "verified"
         record.owner_revision = revision
@@ -824,12 +833,13 @@ class WorkspaceResourceOwner:
         for lease in pending:
             self._leases.settle(lease.lease_id)
         self._sync_ledger(record)
+        return []
 
     def _resource_lock(self, resource_id: str) -> asyncio.Lock:
-        self._require(resource_id)
+        self._require_owned_resource_record(resource_id)
         return self._resource_locks[resource_id]
 
-    def _require(self, resource_id: str) -> OwnedResourceRecord:
+    def _require_owned_resource_record(self, resource_id: str) -> OwnedResourceRecord:
         record = self._store.get(resource_id)
         if record is None:
             raise KeyError(f"外部资源 owner 资源不存在: {resource_id}")
@@ -906,7 +916,7 @@ class WorkspaceResourceOwner:
 
     def _unknown(self, record: OwnedResourceRecord, error: BaseException, *, lease_id: str | None = None) -> None:
         # 丢弃未发布草稿，失败的关联、scope、版本与终态不能混入 unknown 回执。
-        record = self._require(record.resource_id)
+        record = self._require_owned_resource_record(record.resource_id)
         record.reconciliation_status = "unknown"
         logger.error(
             "外部资源 操作结果未核实: resource_id=%s",

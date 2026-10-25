@@ -30,45 +30,57 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
   const { createContext, SourceTextModule, SyntheticModule } = await import("node:vm");
   const fixtureRoot = process.cwd();
   const archivePath = path.join(fixtureRoot, "archive.tgz");
-  const payload = Buffer.alloc(1024 * 1024 + 37, "归档正文");
-  const sha256 = createHash("sha256").update(payload).digest("hex");
-  const original = { ...fs };
-  const originalOpen = mutableFsPromises.open;
-  const openError = new Error("injected archive open failure");
-  const writeError = new Error("injected archive write failure");
-  const handles = [], sockets = new Set(), requestSockets = new Set();
-  let activeResponse, timer;
-  original.writeFileSync(path.join(fixtureRoot, "package.json"), '{"version":"fixture"}\n');
-  const result = { requests: [], fullReads: 0, hashReads: 0, hashCloses: 0, maxHashChunkBytes: 0,
-    bodyWrites: 0, bodyCloses: 0, retryDelays: 0 };
+  // 超过摘要流默认的64KiB缓冲区1字节，验证跨块读取和尾块处理。
+  const archivePayload = Buffer.alloc(64 * 1024 + 1, "归档正文");
+  const expectedArchiveSha256 = createHash("sha256").update(archivePayload).digest("hex");
+  const originalFs = { ...fs };
+  const originalFileHandleOpen = mutableFsPromises.open;
+  const archiveOpenError = new Error("injected archive open failure");
+  const archiveWriteError = new Error("injected archive write failure");
+  const archiveFileHandles = [];
+  const serverSockets = new Set();
+  const activeRequestSockets = new Set();
+  let activeHttpResponse;
+  let fixtureDeadlineTimer;
+  originalFs.writeFileSync(path.join(fixtureRoot, "package.json"), '{"version":"fixture"}\n');
+  const observation = {
+    rangeRequestHeaders: [],
+    fullArchiveReadCount: 0,
+    archiveHashReadCount: 0,
+    archiveHashCloseCount: 0,
+    maximumArchiveHashChunkBytes: 0,
+    archiveBodyWriteCount: 0,
+    archiveBodyCloseCount: 0,
+    retryDelayCount: 0,
+  };
   if (scenario.startsWith("cache-")) {
-    original.writeFileSync(archivePath, scenario === "cache-invalid" || scenario === "cache-range-rejected"
-      ? payload.subarray(0, 97) : payload);
+    originalFs.writeFileSync(archivePath, scenario === "cache-invalid" || scenario === "cache-range-rejected"
+      ? archivePayload.subarray(0, 97) : archivePayload);
   }
   const server = createServer((request, response) => {
-    requestSockets.add(request.socket);
-    request.socket.once("close", () => requestSockets.delete(request.socket));
-    activeResponse = response;
-    result.requests.push(request.headers.range ?? null);
+    activeRequestSockets.add(request.socket);
+    request.socket.once("close", () => activeRequestSockets.delete(request.socket));
+    activeHttpResponse = response;
+    observation.rangeRequestHeaders.push(request.headers.range ?? null);
     if (scenario === "http-rejected") { response.writeHead(403); response.write("拒绝但保持正文未结束"); return; }
     if (scenario === "cache-range-rejected") { response.writeHead(416); response.end(); return; }
     let offset = 0;
     if (request.headers.range) {
       offset = Number(/^bytes=(\d+)-$/.exec(request.headers.range)[1]);
       response.statusCode = 206;
-      response.setHeader("content-range", `bytes ${offset}-${payload.length - 1}/${payload.length}`);
+      response.setHeader("content-range", `bytes ${offset}-${archivePayload.length - 1}/${archivePayload.length}`);
     }
     if (["open-failure", "write-failure", "body-disconnect"].includes(scenario)
-      || scenario === "resume-short-writes" && result.requests.length === 1) {
-      response.writeHead(request.headers.range ? 206 : 200, { "content-length": payload.length - offset });
-      response.write(payload.subarray(offset, offset + 8192));
+      || scenario === "resume-short-writes" && observation.rangeRequestHeaders.length === 1) {
+      response.writeHead(request.headers.range ? 206 : 200, { "content-length": archivePayload.length - offset });
+      response.write(archivePayload.subarray(offset, offset + 8192));
       return;
     }
-    response.end(scenario === "download-corrupt" ? Buffer.from("损坏归档") : payload.subarray(offset));
+    response.end(scenario === "download-corrupt" ? Buffer.from("损坏归档") : archivePayload.subarray(offset));
   });
-  server.on("connection", (socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
-  function afterWrite() {
-    if (scenario === "body-disconnect" || scenario === "resume-short-writes" && result.requests.length === 1) activeResponse.destroy();
+  server.on("connection", (socket) => { serverSockets.add(socket); socket.once("close", () => serverSockets.delete(socket)); });
+  function afterArchiveWrite() {
+    if (scenario === "body-disconnect" || scenario === "resume-short-writes" && observation.rangeRequestHeaders.length === 1) activeHttpResponse.destroy();
   }
   try {
     await new Promise((resolve, reject) => {
@@ -79,65 +91,68 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
     process.env.BOXTEAM_PROJECT_ROOT = fixtureRoot;
     mutableFs.readFileSync = (file, ...args) => {
       if (String(file) === archivePath) {
-        result.fullReads++;
+        observation.fullArchiveReadCount++;
         if (scenario !== "cache-reference") throw new Error("归档摘要不得整份读取正文");
       }
-      return original.readFileSync(file, ...args);
+      return originalFs.readFileSync(file, ...args);
     };
     mutableFs.createReadStream = (file, ...args) => {
-      const stream = original.createReadStream(file, ...args);
+      const stream = originalFs.createReadStream(file, ...args);
       if (String(file) === archivePath) {
-        result.hashReads++;
+        observation.archiveHashReadCount++;
         stream.on("data", (chunk) => {
-          result.maxHashChunkBytes = Math.max(result.maxHashChunkBytes, chunk.length);
+          observation.maximumArchiveHashChunkBytes = Math.max(
+            observation.maximumArchiveHashChunkBytes,
+            chunk.length,
+          );
         });
-        stream.on("close", () => { result.hashCloses++; });
+        stream.on("close", () => { observation.archiveHashCloseCount++; });
       }
       return stream;
     };
-    mutableFs.createWriteStream = (file, options) => original.createWriteStream(file, {
+    mutableFs.createWriteStream = (file, options) => originalFs.createWriteStream(file, {
       ...options,
       fs: {
         open(file, flags, mode, callback) {
-          if (scenario === "open-failure") { queueMicrotask(() => callback(openError)); return; }
-          original.open(file, flags, mode, callback);
+          if (scenario === "open-failure") { queueMicrotask(() => callback(archiveOpenError)); return; }
+          originalFs.open(file, flags, mode, callback);
         },
-        close(fd, callback) { result.bodyCloses++; original.close(fd, callback); },
+        close(fd, callback) { observation.archiveBodyCloseCount++; originalFs.close(fd, callback); },
         write(fd, buffer, offset, length, position, callback) {
-          result.bodyWrites++;
-          if (scenario === "write-failure") { queueMicrotask(() => callback(writeError)); return; }
-          original.write(fd, buffer, offset, scenario.includes("short-writes") ? Math.min(length, 4093) : length, position,
-            (error, bytes) => { callback(error, bytes, buffer); if (!error) afterWrite(); });
+          observation.archiveBodyWriteCount++;
+          if (scenario === "write-failure") { queueMicrotask(() => callback(archiveWriteError)); return; }
+          originalFs.write(fd, buffer, offset, scenario.includes("short-writes") ? Math.min(length, 4093) : length, position,
+            (error, bytes) => { callback(error, bytes, buffer); if (!error) afterArchiveWrite(); });
         },
       },
     });
     mutableFsPromises.open = async (file, ...args) => {
-      if (String(file) === archivePath && scenario === "open-failure") throw openError;
-      const handle = await originalOpen(file, ...args);
-      if (String(file) !== archivePath) return handle;
-      handles.push(handle);
-      const write = handle.write.bind(handle);
-      handle.write = async (buffer, offset = 0, length = buffer.length - offset, position) => {
-        result.bodyWrites++;
-        if (scenario === "write-failure") throw writeError;
+      if (String(file) === archivePath && scenario === "open-failure") throw archiveOpenError;
+      const fileHandle = await originalFileHandleOpen(file, ...args);
+      if (String(file) !== archivePath) return fileHandle;
+      archiveFileHandles.push(fileHandle);
+      const write = fileHandle.write.bind(fileHandle);
+      fileHandle.write = async (buffer, offset = 0, length = buffer.length - offset, position) => {
+        observation.archiveBodyWriteCount++;
+        if (scenario === "write-failure") throw archiveWriteError;
         const outcome = await write(buffer, offset, scenario.includes("short-writes") ? Math.min(length, 4093) : length, position);
-        afterWrite();
+        afterArchiveWrite();
         return outcome;
       };
-      return handle;
+      return fileHandle;
     };
     syncBuiltinESMExports();
-    const source = original.readFileSync(new URL(scriptUrl), "utf8");
+    const sourceModuleText = originalFs.readFileSync(new URL(scriptUrl), "utf8");
     const context = createContext({
       process, Buffer, console, AbortController, AbortSignal, clearTimeout,
       // 故障场景只压缩既有一秒退避；请求期限及fixture硬期限仍使用真实时钟。
       setTimeout(callback, milliseconds, ...args) {
-        if (milliseconds === 1000) { result.retryDelays++; milliseconds = 0; }
+        if (milliseconds === 1000) { observation.retryDelayCount++; milliseconds = 0; }
         return setTimeout(callback, milliseconds, ...args);
       },
       async fetch(url, options) {
         if (options?.headers?.Range) {
-          assert.equal(Number(/^bytes=(\d+)-$/.exec(options.headers.Range)[1]), original.statSync(archivePath).size,
+          assert.equal(Number(/^bytes=(\d+)-$/.exec(options.headers.Range)[1]), originalFs.statSync(archivePath).size,
             "续传偏移必须等于实际落盘长度");
         }
         const response = await fetch(url, options);
@@ -147,13 +162,18 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
         return response;
       },
     });
-    const module = new SourceTextModule(source, { identifier: scriptUrl, context });
+    const module = new SourceTextModule(sourceModuleText, { identifier: scriptUrl, context });
     await module.link(async (specifier) => {
       const imported = await import(specifier.startsWith(".") ? new URL(specifier, scriptUrl).href : specifier);
       const exports = { ...imported };
       if (specifier === "./versions.mjs") {
         for (const name of ["PYTHON_RUNTIME", "PYTHON_RUNTIME_WINDOWS_X64", "NODE_RUNTIME_WINDOWS_X64"]) {
-          exports[name] = { ...exports[name], archive: path.relative(fixtureRoot, archivePath), url, sha256 };
+          exports[name] = {
+            ...exports[name],
+            archive: path.relative(fixtureRoot, archivePath),
+            url,
+            sha256: expectedArchiveSha256,
+          };
         }
       }
       return new SyntheticModule(Object.keys(exports), function () {
@@ -162,72 +182,87 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
     });
     await module.evaluate();
     try {
-      result.archivePath = await Promise.race([
+      observation.returnedArchivePath = await Promise.race([
         module.namespace[{
           "linux-python": "downloadPinnedLinuxPython",
           "windows-python": "downloadPinnedWindowsPython",
           "windows-node": "downloadPinnedWindowsNode",
         }[archiveKind]](fixtureRoot),
-        new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("归档fixture超过1500ms")), 1500); }),
+        new Promise((_resolve, reject) => {
+          fixtureDeadlineTimer = setTimeout(
+            () => reject(new Error("归档fixture超过1500ms")),
+            1500,
+          );
+        }),
       ]);
-    } catch (error) { result.error = error.message; result.originalOpenError = error === openError; result.originalWriteError = error === writeError; }
-    finally { clearTimeout(timer); }
-    const lifecycleFailure = ["http-rejected", "open-failure", "write-failure", "body-disconnect"].includes(scenario);
-    const shouldReject = scenario === "download-corrupt" || scenario === "cache-range-rejected"
+    } catch (error) {
+      observation.operationErrorMessage = error.message;
+      observation.wasOriginalOpenError = error === archiveOpenError;
+      observation.wasOriginalWriteError = error === archiveWriteError;
+    } finally {
+      clearTimeout(fixtureDeadlineTimer);
+    }
+    const isResourceLifecycleFailure = ["http-rejected", "open-failure", "write-failure", "body-disconnect"].includes(scenario);
+    const shouldRejectAfterHashVerification = scenario === "download-corrupt" || scenario === "cache-range-rejected"
       || scenario === "cache-invalid" && archiveKind === "linux-python";
-    if (lifecycleFailure) {
-      if (scenario === "http-rejected") assert.match(result.error, /HTTP 403/);
-      else if (scenario === "open-failure") assert.equal(result.originalOpenError, true);
-      else if (scenario === "write-failure") assert.equal(result.originalWriteError, true);
-      else assert.match(result.error, /terminated|aborted|fetch failed/);
-      const expectedAttempts = archiveKind === "windows-python" && ["write-failure", "body-disconnect"].includes(scenario) ? 5 : 1;
-      assert.equal(result.requests.length, expectedAttempts);
-      assert.equal(result.retryDelays, expectedAttempts - 1);
-      assert(handles.every((handle) => handle.fd === -1));
-      if (archiveKind === "linux-python") assert.equal(original.existsSync(archivePath), false, "失败下载不能留下会被当作缓存的部分归档");
-      if (archiveKind !== "windows-python" && ["write-failure", "body-disconnect"].includes(scenario)) assert.equal(result.bodyCloses, 1);
+    if (isResourceLifecycleFailure) {
+      if (scenario === "http-rejected") assert.match(observation.operationErrorMessage, /HTTP 403/);
+      else if (scenario === "open-failure") assert.equal(observation.wasOriginalOpenError, true);
+      else if (scenario === "write-failure") assert.equal(observation.wasOriginalWriteError, true);
+      else assert.match(observation.operationErrorMessage, /terminated|aborted|fetch failed/);
+      const expectedRequestCount = archiveKind === "windows-python" && ["write-failure", "body-disconnect"].includes(scenario) ? 5 : 1;
+      assert.equal(observation.rangeRequestHeaders.length, expectedRequestCount);
+      assert.equal(observation.retryDelayCount, expectedRequestCount - 1);
+      assert(archiveFileHandles.every((fileHandle) => fileHandle.fd === -1));
+      if (archiveKind === "linux-python") assert.equal(originalFs.existsSync(archivePath), false, "失败下载不能留下会被当作缓存的部分归档");
+      if (archiveKind !== "windows-python" && ["write-failure", "body-disconnect"].includes(scenario)) assert.equal(observation.archiveBodyCloseCount, 1);
       await Promise.race([
-        (async () => { while (requestSockets.size > 0) await new Promise((resolve) => setTimeout(resolve, 5)); })(),
-        new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`下载请求连接未释放: requested=${requestSockets.size}, all=${sockets.size}`)), 500); }),
+        (async () => { while (activeRequestSockets.size > 0) await new Promise((resolve) => setTimeout(resolve, 5)); })(),
+        new Promise((_resolve, reject) => {
+          fixtureDeadlineTimer = setTimeout(
+            () => reject(new Error(`下载请求连接未释放: requested=${activeRequestSockets.size}, all=${serverSockets.size}`)),
+            500,
+          );
+        }),
       ]);
-      clearTimeout(timer);
-      return result;
+      clearTimeout(fixtureDeadlineTimer);
+      return observation;
     }
-    if (shouldReject) assert.match(result.error, /摘要不匹配/);
+    if (shouldRejectAfterHashVerification) assert.match(observation.operationErrorMessage, /摘要不匹配/);
     else {
-      assert.equal(result.error, undefined);
-      assert.equal(result.archivePath, archivePath);
-      assert.deepEqual(original.readFileSync(archivePath), payload);
+      assert.equal(observation.operationErrorMessage, undefined);
+      assert.equal(observation.returnedArchivePath, archivePath);
+      assert.deepEqual(originalFs.readFileSync(archivePath), archivePayload);
     }
-    const cacheHit = scenario === "cache-valid" || scenario === "cache-reference";
-    const linuxBadCache = scenario === "cache-invalid" && archiveKind === "linux-python";
+    const hasValidCache = scenario === "cache-valid" || scenario === "cache-reference";
+    const linuxInvalidCacheRejectedWithoutRequest = scenario === "cache-invalid" && archiveKind === "linux-python";
     if (scenario === "resume-short-writes") {
-      assert.equal(result.requests.length, 2);
-      assert.equal(result.requests[0], null);
-      assert.match(result.requests[1], /^bytes=\d+-$/);
-      assert.equal(result.retryDelays, 1);
+      assert.equal(observation.rangeRequestHeaders.length, 2);
+      assert.equal(observation.rangeRequestHeaders[0], null);
+      assert.match(observation.rangeRequestHeaders[1], /^bytes=\d+-$/);
+      assert.equal(observation.retryDelayCount, 1);
     } else {
-      assert.deepEqual(result.requests, cacheHit || linuxBadCache ? [] : [
+      assert.deepEqual(observation.rangeRequestHeaders, hasValidCache || linuxInvalidCacheRejectedWithoutRequest ? [] : [
         scenario.startsWith("cache-") && archiveKind === "windows-python" ? "bytes=97-" : null,
       ]);
     }
     if (scenario !== "cache-reference") {
-      assert.equal(result.fullReads, 0);
-      assert.equal(result.hashReads, scenario.startsWith("cache-") && !cacheHit && !linuxBadCache ? 2 : 1);
-      assert.equal(result.hashCloses, result.hashReads);
-      assert(result.maxHashChunkBytes > 0 && result.maxHashChunkBytes <= 64 * 1024);
+      assert.equal(observation.fullArchiveReadCount, 0);
+      assert.equal(observation.archiveHashReadCount, scenario.startsWith("cache-") && !hasValidCache && !linuxInvalidCacheRejectedWithoutRequest ? 2 : 1);
+      assert.equal(observation.archiveHashCloseCount, observation.archiveHashReadCount);
+      assert(observation.maximumArchiveHashChunkBytes > 0 && observation.maximumArchiveHashChunkBytes <= 64 * 1024);
     }
-    if (scenario === "short-writes") assert(result.bodyWrites > 1);
-    assert(handles.every((handle) => handle.fd === -1));
-    return result;
+    if (scenario === "short-writes") assert(observation.archiveBodyWriteCount > 1);
+    assert(archiveFileHandles.every((fileHandle) => fileHandle.fd === -1));
+    return observation;
   } finally {
     server.closeAllConnections();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    mutableFs.readFileSync = original.readFileSync;
-    mutableFs.createReadStream = original.createReadStream;
-    mutableFs.createWriteStream = original.createWriteStream;
-    mutableFsPromises.open = originalOpen;
-    clearTimeout(timer);
+    mutableFs.readFileSync = originalFs.readFileSync;
+    mutableFs.createReadStream = originalFs.createReadStream;
+    mutableFs.createWriteStream = originalFs.createWriteStream;
+    mutableFsPromises.open = originalFileHandleOpen;
+    clearTimeout(fixtureDeadlineTimer);
     syncBuiltinESMExports();
   }
 }
@@ -263,20 +298,20 @@ describe("固定版本构建归档下载", () => {
   for (const archiveKind of ["linux-python", "windows-python", "windows-node"]) {
     for (const scenario of ["cache-reference", "cache-valid", "cache-invalid", "download", "download-corrupt"]) {
       test(`${archiveKind}/${scenario}保持缓存、下载和摘要拒绝合同`, () => {
-        const result = runPinnedArchive(archiveKind, scenario);
-        expect(result.requests.length).toBeLessThanOrEqual(1);
+        const observation = runPinnedArchive(archiveKind, scenario);
+        expect(observation.rangeRequestHeaders.length).toBeLessThanOrEqual(1);
       });
     }
     for (const scenario of ["body-stream", "short-writes", "http-rejected", "open-failure", "write-failure", "body-disconnect"]) {
       test(`${archiveKind}/${scenario}流式写盘并释放失败资源`, () => {
-        expect(runPinnedArchive(archiveKind, scenario).requests.length).toBeLessThanOrEqual(5);
+        expect(runPinnedArchive(archiveKind, scenario).rangeRequestHeaders.length).toBeLessThanOrEqual(5);
       });
     }
   }
   test("Windows Python的416不能绕过最终摘要校验", () => {
-    expect(runPinnedArchive("windows-python", "cache-range-rejected").error).toContain("摘要不匹配");
+    expect(runPinnedArchive("windows-python", "cache-range-rejected").operationErrorMessage).toContain("摘要不匹配");
   });
   test("Windows Python短写后断流按实际落盘长度续传，最终归档字节完整", () => {
-    expect(runPinnedArchive("windows-python", "resume-short-writes").requests).toHaveLength(2);
+    expect(runPinnedArchive("windows-python", "resume-short-writes").rangeRequestHeaders).toHaveLength(2);
   });
 });

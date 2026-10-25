@@ -136,7 +136,7 @@ export async function renderFolderMenu(folderMenu: {
         onCreateSessionInFolder={async () => undefined}
         onSessionFolderDeleted={async () => undefined}
         onStatusChange={(message) => statuses.push(message)}
-        setActionError={() => undefined}
+        onClearError={() => undefined}
         handleError={(prefix, error) => {
           errors.push(prefix + ": " + String((error as Error)?.message ?? error));
         }}

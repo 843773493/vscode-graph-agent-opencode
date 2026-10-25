@@ -8,6 +8,42 @@ import {
   writePendingSnapshot,
 } from "./conversations";
 
+function pendingConversation(
+  conversationId: string,
+  jobId: string,
+  options: {
+    messageId?: string;
+    pending?: boolean;
+    turnStatus?: ConversationView["turnStatus"];
+  } = {},
+): ConversationView {
+  const sessionId = "ses_pending_identity";
+  const threadId = "thr_018f0000000070008000000000000001";
+  return {
+    conversationId,
+    displayMode: "live",
+    sessionId,
+    threadId,
+    userMessage: options.messageId ? {
+      message_id: options.messageId,
+      session_id: sessionId,
+      thread_id: threadId,
+      role: "user",
+      content: conversationId,
+      attachments: [],
+      metadata: {},
+      created_at: "2026-07-17T00:00:00Z",
+      updated_at: "2026-07-17T00:00:00Z",
+    } : null,
+    assistantMessages: [],
+    events: [],
+    status: options.pending ? "running" : "error",
+    ...(options.turnStatus === undefined ? {} : { turnStatus: options.turnStatus }),
+    jobId,
+    pending: options.pending ?? false,
+    source: "pending",
+  };
+}
 
 describe("待处理消息状态", () => {
   test("以后端 enqueue_sequence 排序，并始终放在历史轮次之后", () => {
@@ -87,6 +123,50 @@ describe("待处理消息状态", () => {
     expect(() => writePendingSnapshot(new Map(), new Map(), {
       session_id: "ses_pending", thread_id: null, requests: [], snapshot_version: 1,
     })).toThrow("缺少精确 thread 范围");
+  });
+
+  test("空快照按消息和 Job 两种身份去重，并保留活动 Job 与首个终态视图", () => {
+    const mapKey = "workspace::ses_pending_identity";
+    const pending = new Map<string, ConversationView[]>([[mapKey, [
+      pendingConversation("active", "job_active", { pending: true }),
+      pendingConversation("message_first", "job_message_first", {
+        messageId: "msg_shared",
+        turnStatus: "failed",
+      }),
+      pendingConversation("message_duplicate", "job_message_second", {
+        messageId: "msg_shared",
+        turnStatus: "failed",
+      }),
+      pendingConversation("job_first", "job_shared", {
+        messageId: "msg_job_first",
+        turnStatus: "failed",
+      }),
+      pendingConversation("job_duplicate", "job_shared", {
+        messageId: "msg_job_second",
+        turnStatus: "failed",
+      }),
+    ]]]);
+    const activeJobs = new Map<string, string>();
+
+    writePendingSnapshot(
+      pending,
+      activeJobs,
+      {
+        session_id: "ses_pending_identity",
+        thread_id: "thr_018f0000000070008000000000000001",
+        active_job_id: "job_active",
+        requests: [],
+        snapshot_version: 1,
+      },
+      mapKey,
+    );
+
+    expect(pending.get(mapKey)?.map((conversation) => conversation.conversationId)).toEqual([
+      "active",
+      "message_first",
+      "job_first",
+    ]);
+    expect(activeJobs.get(mapKey)).toBe("job_active");
   });
 
   test("待处理快照保留活动 Job 控制状态，但没有 Turn 时不生成聊天回合", () => {

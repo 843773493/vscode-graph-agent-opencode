@@ -16,7 +16,7 @@ import type { ConversationView, FrontendReceivedEvent } from "../types/frontend"
 const SESSION_ID = "session-live-bound";
 const JOB_ID = "job-live-bound";
 
-function trace(
+function createTraceEvent(
   index: number,
   type: TraceEvent["type"] = "text_delta",
 ): TraceEvent {
@@ -43,9 +43,9 @@ describe("Live Trace 有界保留", () => {
   test("全局镜像和事件视图队列均保持固定上限且保留终态", () => {
     const incoming = Array.from(
       { length: LIVE_TRACE_EVENT_LIMIT * 3 },
-      (_, index) => trace(index),
+      (_, index) => createTraceEvent(index),
     );
-    incoming.push(trace(incoming.length, "job_completed"));
+    incoming.push(createTraceEvent(incoming.length, "job_completed"));
     const live = appendBoundedLiveTraceEvents([], incoming);
     const eventQueues = new Map<string, FrontendReceivedEvent[]>();
     appendReceivedEvents(eventQueues, SESSION_ID, incoming, "sse");
@@ -60,6 +60,57 @@ describe("Live Trace 有界保留", () => {
         (event) => event.kind === "trace" && event.event.type === "job_completed",
       ),
     ).toBe(true);
+  });
+
+  test("连续追加时保留固定事件并按输入顺序淘汰旧记录", () => {
+    const ordinaryPrefix = Array.from(
+      { length: FRONTEND_EVENT_QUEUE_LIMIT * 2 },
+      (_, index) => createTraceEvent(index),
+    );
+    const pinnedEvents = Array.from(
+      { length: FRONTEND_EVENT_QUEUE_LIMIT - 50 },
+      (_, index) => createTraceEvent(ordinaryPrefix.length + index, "job_started"),
+    );
+    const ordinarySuffix = Array.from(
+      { length: FRONTEND_EVENT_QUEUE_LIMIT * 2 },
+      (_, index) => createTraceEvent(
+        ordinaryPrefix.length + pinnedEvents.length + index,
+      ),
+    );
+    const eventQueues = new Map<string, FrontendReceivedEvent[]>();
+
+    appendReceivedEvents(
+      eventQueues,
+      SESSION_ID,
+      [...ordinaryPrefix, ...pinnedEvents, ...ordinarySuffix],
+      "sse",
+    );
+
+    const queue = eventQueues.get(SESSION_ID) ?? [];
+    const retainedIds = queue.map((item) =>
+      item.kind === "trace" ? item.event.event_id : item.id,
+    );
+    expect(retainedIds).toEqual([
+      ...pinnedEvents.map((item) => item.event_id),
+      ...ordinarySuffix.slice(-50).map((item) => item.event_id),
+    ]);
+
+    const additionalPinnedEvents = Array.from(
+      { length: 100 },
+      (_, index) => createTraceEvent(
+        ordinaryPrefix.length + pinnedEvents.length + ordinarySuffix.length + index,
+        "message_created",
+      ),
+    );
+    appendReceivedEvents(eventQueues, SESSION_ID, additionalPinnedEvents, "sse");
+
+    const retainedAfterMorePinned = eventQueues.get(SESSION_ID)?.map((item) =>
+      item.kind === "trace" ? item.event.event_id : item.id,
+    );
+    expect(retainedAfterMorePinned).toEqual([
+      ...pinnedEvents.slice(50).map((item) => item.event_id),
+      ...additionalPinnedEvents.map((item) => item.event_id),
+    ]);
   });
 
   test("pending Job 压实 delta 对象但保持完整流式正文", () => {
@@ -81,7 +132,7 @@ describe("Live Trace 有界保留", () => {
     appendTraceEventsToPendingConversations(
       pending,
       SESSION_ID,
-      Array.from({ length: deltaCount }, (_, index) => trace(index)),
+      Array.from({ length: deltaCount }, (_, index) => createTraceEvent(index)),
     );
 
     const events = pending.get(SESSION_ID)?.[0]?.events ?? [];

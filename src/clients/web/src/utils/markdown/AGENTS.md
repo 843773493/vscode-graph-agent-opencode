@@ -1,17 +1,16 @@
 # 目录用途
 
-`src/clients/web/src/utils/markdown/` 存放浏览器前端的 Markdown 渲染与解析纯工具：一类把通用 Markdown 文本渲染为 HTML（含代码块、表格等装饰）；另一类解析工作区文件里的 Markdown 链接与图片引用目标（区分工作区相对路径与外部 URL）。
+`src/clients/web/src/utils/markdown/` 只存放工作区 Markdown 链接与图片引用目标解析工具，负责区分工作区相对路径与外部 URL。Markdown 展示由对应的 React renderer 负责：聊天消息使用 `components/chat/MarkdownContent.tsx`，工作区文件预览使用 `components/workspace/preview/WorkspaceMarkdownRenderer.tsx`。
 
 ## 职责树
 
 ```text
 markdown/
-├── markdown.ts                 通用 Markdown 文本 → HTML
 ├── workspaceMarkdown.ts        工作区 Markdown 链接/图片目标解析
 └── workspaceMarkdown.test.ts   相对路径、外部 URL 与路径边界合同
 ```
 
-按处理目标选择入口：需要展示 Markdown 正文时使用 `markdown.ts`；需要将工作区 Markdown 中的相对链接或图片引用解析到工作区资源时使用 `workspaceMarkdown.ts`。渲染与资源定位处于不同阶段，不相互承担对方职责。
+按处理目标选择入口：需要将工作区 Markdown 中的相对链接或图片引用解析到工作区资源时使用 `workspaceMarkdown.ts`。React 组件负责渲染与交互，本目录不提供第二套 HTML renderer。
 
 与相邻文件的边界：
 
@@ -22,7 +21,6 @@ markdown/
 
 # 可修改内容
 
-- Markdown 文本到 HTML 的渲染与装饰规则。
 - 工作区 Markdown 链接/图片目标的解析、相对路径归一与工作区归属判定。
 - 本包内部的模块拆分与符号导出调整。
 

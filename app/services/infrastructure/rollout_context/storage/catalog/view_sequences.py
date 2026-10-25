@@ -68,17 +68,15 @@ class RolloutViewSequenceMixin:
                 ).fetchall()
             )
         present = set(ordered)
-        missing = {
-            strict_non_negative_int(
+        missing: set[int] = set()
+        for row in rows:
+            if row[0] is None:
+                continue
+            assistant_sequence = strict_non_negative_int(
                 row[0], field="tool_calls.assistant_message_sequence"
             )
-            for row in rows
-            if row[0] is not None
-            and strict_non_negative_int(
-                row[0], field="tool_calls.assistant_message_sequence"
-            )
-            not in present
-        }
+            if assistant_sequence not in present:
+                missing.add(assistant_sequence)
         if not missing:
             return ordered
         return sorted((*present, *missing))

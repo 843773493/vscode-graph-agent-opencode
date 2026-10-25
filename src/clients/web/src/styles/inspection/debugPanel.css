@@ -1353,6 +1353,65 @@
   gap: 10px;
 }
 
+.node-debug-source-status {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  min-width: 0;
+}
+
+.node-debug-action-notice-slot {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  min-width: 0;
+}
+
+.node-debug-action-notice-slot .debug-error {
+  box-sizing: border-box;
+  width: 100%;
+  height: 24px;
+  overflow: hidden;
+  padding: 4px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-source-status > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.node-debug-source-status-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-debug-source-status button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-surface-raised);
+  color: var(--bt-text-primary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
 .node-debug-section {
   display: grid;
   min-width: 0;
@@ -1372,7 +1431,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 32px;
+  min-height: 36px;
   padding: 4px 6px 4px 10px;
   border-bottom: 1px solid var(--bt-panel-border);
 }
@@ -1394,11 +1453,27 @@
 }
 
 .node-debug-code {
+  height: min(280px, 42vh);
   min-height: 170px;
   max-height: 310px;
   overflow: auto;
   padding: 5px 0;
   font: 11px/1.55 var(--bt-font-mono, monospace);
+}
+
+.node-debug-source-state {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+  padding: 8px;
+  color: var(--bt-text-muted);
+  font: 10px/1.5 var(--bt-font-ui, sans-serif);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.node-debug-source-state.error {
+  color: var(--bt-status-danger);
 }
 
 .node-debug-code-line {
@@ -1713,6 +1788,7 @@
   }
 
   .node-debug-code {
+    height: 340px;
     min-height: 340px;
     max-height: 58vh;
   }

@@ -51,6 +51,26 @@ def validate_event_payload(event_type: str, payload: Mapping[str, Any]) -> None:
         )
 
 
+def _copy_state_for_block_delta(
+    state: dict[str, Any],
+    block_id: object,
+) -> dict[str, Any]:
+    """只复制 block.delta 会改写的状态分支。"""
+    blocks = state.get("blocks")
+    if "blocks" in state and not isinstance(blocks, list):
+        return _clone_json_tree(dict(state))
+
+    next_state = dict(state)
+    next_blocks = list(blocks) if isinstance(blocks, list) else []
+    if isinstance(block_id, str):
+        for index, block in enumerate(next_blocks):
+            if isinstance(block, dict) and block.get("block_id") == block_id:
+                next_blocks[index] = _clone_json_tree(block)
+                break
+    next_state["blocks"] = next_blocks
+    return next_state
+
+
 def apply_event(
     state: dict[str, Any],
     event: Mapping[str, Any],
@@ -68,7 +88,11 @@ def apply_event(
         else None
     )
     source_state = snapshot if isinstance(snapshot, Mapping) else state
-    next_state = _clone_json_tree(dict(source_state))
+    if event_type == "block.delta":
+        # Store 保留输入快照；只对目标 block 建立可写副本，未触及分支保持共享。
+        next_state = _copy_state_for_block_delta(state, payload.get("block_id"))
+    else:
+        next_state = _clone_json_tree(dict(source_state))
     if event_type == "stream.opened":
         next_state["stream_status"] = "open"
         next_state["active_state"] = None

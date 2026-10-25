@@ -7,7 +7,8 @@ import logging
 import os
 import threading
 import zlib
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections import deque
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -638,17 +639,16 @@ class MessageStreamStore:
                 )
         return event_id, session_id, turn_id, event_seq, turn_stream_id
 
-    def _read_records(
+    def _iter_records(
         self,
         path: Path,
         *,
         expected_session_id: str,
         expected_turn_stream_id: str,
-    ) -> list[MessageStreamRecord]:
+    ) -> Iterator[MessageStreamRecord]:
         context = f"session_id={expected_session_id} turn_stream_id={expected_turn_stream_id} artifact=events"
         if not path.is_file():
-            return []
-        records: list[MessageStreamRecord] = []
+            return
         seen_event_ids: set[str] = set()
         expected_turn_id: str | None = None
         expected_thread_id: str | None = None
@@ -702,11 +702,9 @@ class MessageStreamStore:
                         raise MessageStreamError(
                             f"消息流日志包含重复 event_id: {context}"
                         )
-                    records.append(
-                        MessageStreamRecord(
-                            event=event,
-                            checkpoint=checkpoint,
-                        )
+                    yield MessageStreamRecord(
+                        event=event,
+                        checkpoint=checkpoint,
                     )
                     seen_event_ids.add(event_id)
                     previous_event_seq = event_seq
@@ -719,7 +717,21 @@ class MessageStreamStore:
             raise MessageStreamError(
                 f"消息流事件日志读取失败: {context} error_type={type(error).__name__} errno={getattr(error, 'errno', None)}"
             ) from error
-        return records
+
+    def _read_records(
+        self,
+        path: Path,
+        *,
+        expected_session_id: str,
+        expected_turn_stream_id: str,
+    ) -> list[MessageStreamRecord]:
+        return list(
+            self._iter_records(
+                path,
+                expected_session_id=expected_session_id,
+                expected_turn_stream_id=expected_turn_stream_id,
+            )
+        )
 
     def _read_state_snapshot(
         self,
@@ -833,21 +845,23 @@ class MessageStreamStore:
         turn_id: str,
     ) -> None:
         """保留最近事件，使用最新 state snapshot 继续完整恢复。"""
-        records = self._read_records(
-            path, expected_session_id=session_id, expected_turn_stream_id=turn_stream_id,
-        )
-        retained: list[MessageStreamRecord] = []
+        retained: deque[tuple[MessageStreamRecord, int]] = deque()
         retained_bytes = 0
-        for record in reversed(records):
-            encoded = self._encode_event(record.event)
-            if retained and retained_bytes + len(encoded) > MESSAGE_STREAM_RETAINED_BYTES:
-                break
-            retained.append(record)
-            retained_bytes += len(encoded)
-        retained.reverse()
+        records_before = 0
+        for record in self._iter_records(
+            path, expected_session_id=session_id, expected_turn_stream_id=turn_stream_id,
+        ):
+            records_before += 1
+            encoded_size = len(self._encode_event(record.event))
+            retained.append((record, encoded_size))
+            retained_bytes += encoded_size
+            while len(retained) > 1 and retained_bytes > MESSAGE_STREAM_RETAINED_BYTES:
+                _, removed_size = retained.popleft()
+                retained_bytes -= removed_size
+        retained_records = [record for record, _ in retained]
         temp_path = path.with_name(f".{path.name}.compact.tmp")
         with temp_path.open("wb") as stream:
-            for record in retained:
+            for record in retained_records:
                 stream.write(self._encode_event(record.event))
             stream.flush()
             os.fsync(stream.fileno())
@@ -855,7 +869,7 @@ class MessageStreamStore:
         self._event_ids[turn_stream_id] = self._event_ids_from_records(
             session_id,
             turn_stream_id,
-            retained,
+            retained_records,
             thread_id=thread_id,
             turn_id=turn_id,
         )
@@ -864,8 +878,8 @@ class MessageStreamStore:
             "消息流超过保留上限，已保留尾部事件并依赖 snapshot 恢复: "
             "turn_stream_id=%s records_before=%d records_after=%d bytes_after=%d",
             turn_stream_id,
-            len(records),
-            len(retained),
+            records_before,
+            len(retained_records),
             retained_bytes,
         )
 

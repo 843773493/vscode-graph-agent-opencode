@@ -4,7 +4,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import {
@@ -19,10 +19,58 @@ function isExternalHref(href: string): boolean {
 
 const REMARK_PLUGINS = [remarkGfm, remarkWorkspaceFileReferences];
 const REHYPE_PLUGINS = [rehypeSanitize];
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ children, href }) => {
+    if (href && isExternalHref(href)) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      );
+    }
+    return href ? (
+      <WorkspaceFileReferenceLink target={href}>
+        {children}
+      </WorkspaceFileReferenceLink>
+    ) : (
+      <span>{children}</span>
+    );
+  },
+  code: ({ children, className }) => {
+    const codeValue = String(children).replace(/\n$/, "");
+    if (className || String(children).endsWith("\n")) {
+      return <code className={className}>{children}</code>;
+    }
+    if (!isLikelyWorkspaceFileReference(codeValue)) {
+      return <code>{children}</code>;
+    }
+    return (
+      <WorkspaceFileReferenceLink target={codeValue} inlineCode>
+        {children}
+      </WorkspaceFileReferenceLink>
+    );
+  },
+};
 const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 80;
 const MARKDOWN_ENHANCEMENT_QUIET_MS = 600;
 export const LARGE_MARKDOWN_DEFER_THRESHOLD = 6_000;
 export const LARGE_MARKDOWN_PREVIEW_LENGTH = 6_000;
+
+const MemoizedMarkdown = React.memo(function MemoizedMarkdown({
+  value,
+}: {
+  value: string;
+}): React.ReactNode {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {value}
+    </ReactMarkdown>
+  );
+});
 
 type MarkdownRenderMode = "progressive" | "plain";
 
@@ -185,46 +233,7 @@ function MarkdownContent({
   const markdownValue = boundedMarkdown
     ? renderedValue.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
     : renderedValue;
-  const markdown = (
-    <ReactMarkdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
-      components={{
-        a: ({ children, href }) => {
-          if (href && isExternalHref(href)) {
-            return (
-              <a href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            );
-          }
-          return href ? (
-            <WorkspaceFileReferenceLink target={href}>
-              {children}
-            </WorkspaceFileReferenceLink>
-          ) : (
-            <span>{children}</span>
-          );
-        },
-        code: ({ children, className }) => {
-          const codeValue = String(children).replace(/\n$/, "");
-          if (className || String(children).endsWith("\n")) {
-            return <code className={className}>{children}</code>;
-          }
-          if (!isLikelyWorkspaceFileReference(codeValue)) {
-            return <code>{children}</code>;
-          }
-          return (
-            <WorkspaceFileReferenceLink target={codeValue} inlineCode>
-              {children}
-            </WorkspaceFileReferenceLink>
-          );
-        },
-      }}
-    >
-      {markdownValue}
-    </ReactMarkdown>
-  );
+  const markdown = <MemoizedMarkdown value={markdownValue} />;
   return (
     <div
       className={`chat-markdown ${className}`.trim()}
@@ -256,5 +265,6 @@ export default React.memo(MarkdownContent, (previous, next) =>
   previous.value === next.value
   && previous.className === next.className
   && previous.streaming === next.streaming
-  && previous.renderMode === next.renderMode,
+  && previous.renderMode === next.renderMode
+  && previous.responseSources === next.responseSources,
 );

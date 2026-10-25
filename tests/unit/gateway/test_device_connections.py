@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Self
 
 import pytest
 from starlette.requests import Request
@@ -44,9 +45,12 @@ async def test_device_connection_can_be_created_listed_and_revoked(
     credential_store = FederationCredentialStore(
         storage_path=gateway_root / "credentials" / "federation.json"
     )
-    assert credential_store.verify(
-        created.connection_info.federation_token
-    ).peer_gateway_id == "device:测试手机"
+    assert (
+        credential_store.verify(
+            created.connection_info.federation_token
+        ).peer_gateway_id
+        == "device:测试手机"
+    )
 
     listed = await list_device_connections(
         _="local-token",
@@ -118,7 +122,7 @@ def test_route_selected_source_addresses_use_ipv4_and_ipv6_udp_routes(
         def __init__(self, family: int) -> None:
             self.family = family
 
-        def __enter__(self) -> RouteProbe:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_: object) -> None:
@@ -128,7 +132,11 @@ def test_route_selected_source_addresses_use_ipv4_and_ipv6_udp_routes(
             route_calls.append((self.family, destination))
 
         def getsockname(self) -> tuple[str, int]:
-            address = "192.0.2.42" if self.family == device_connections.socket.AF_INET else "2001:db8::42"
+            address = (
+                "192.0.2.42"
+                if self.family == device_connections.socket.AF_INET
+                else "2001:db8::42"
+            )
             return address, 0
 
     monkeypatch.setattr(

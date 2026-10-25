@@ -42,8 +42,8 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.support.api_helpers import checkpoint_fixture, create_session
 from tests.support.ports import integration_port_block_for_file
-from tests.support.rollout_output import commit_fixture_output
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.fixture_output import commit_fixture_output
+from tests.support.rollout.view_mutations import mutate_view_members
 
 
 @pytest.fixture(scope="module")

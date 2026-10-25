@@ -9,7 +9,7 @@ from typing import Literal
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import require_manifest_token
-from app.domain.itemized.resource_activation.common import (
+from app.domain.itemized.resource_activation.shared_contract import (
     _AVAILABILITIES,
     _BOUNDARIES,
     _CODE_HASH_MISMATCH,

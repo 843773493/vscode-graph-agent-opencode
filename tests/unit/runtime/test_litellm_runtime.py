@@ -26,7 +26,8 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
     from litellm import utils
 
     original = module.model_cost
-    monkeypatch.setattr(module, "model_cost", copy.deepcopy(original))
+    # 模型定义只读共享，测试另建顶层映射和 provider 名称集合隔离 SDK 写入。
+    monkeypatch.setattr(module, "model_cost", dict(original))
     monkeypatch.setattr(module, "open_ai_chat_completion_models", set(module.open_ai_chat_completion_models))
     monkeypatch.setattr(utils, "_runtime_registered_model_cost", {})
     monkeypatch.setattr(module, "model_cost_map_url", "https://metadata.example/catalog.json")
@@ -44,7 +45,7 @@ def pending_refresh(
 ) -> Iterator[tuple[ModelMetadataRuntime, threading.Event, dict[str, object]]]:
     runtime = ModelMetadataRuntime(cache_root=tmp_path / "cache", startup_wait_seconds=0)
     release = threading.Event()
-    catalog = copy.deepcopy(sdk.model_cost)
+    catalog = dict(sdk.model_cost)
     catalog["metadata-refresh-test"] = {"litellm_provider": "openai", "mode": "chat", "supports_vision": True}
 
     async def download() -> dict[str, object]:
@@ -66,7 +67,9 @@ def test_late_refresh_is_adopted_only_on_next_use_and_keeps_registrations(
 ) -> None:
     runtime, release, catalog = pending_refresh
     original_cost = sdk.get_model_info("gpt-4o")["input_cost_per_token"]
-    catalog["gpt-4o"]["input_cost_per_token"] = original_cost + 0.0001
+    gpt_4o_entry = dict(catalog["gpt-4o"])
+    catalog["gpt-4o"] = gpt_4o_entry
+    gpt_4o_entry["input_cost_per_token"] = original_cost + 0.0001
     sdk.register_model({"metadata-custom-test": {"litellm_provider": "openai", "mode": "chat", "supports_vision": True}})
     old_catalog = sdk.model_cost
     old_snapshot = copy.deepcopy(old_catalog)

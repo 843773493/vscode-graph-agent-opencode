@@ -4,11 +4,7 @@ import type { SessionContextSession } from "../../../api/session/sessionContext"
 import AssemblyContextInspector from "../../contextInspection/AssemblyContextInspector";
 import {
   agentStateInvalidLineNote,
-  type AgentStateJsonlLine,
-  agentStateRecordsFromLines,
-  buildAgentStateSummary,
-  formatAgentStateLinesForDisplay,
-  parseAgentStateJsonlLines,
+  buildAgentStatePanelProjection,
 } from "../../../state/display/agentStateDisplay";
 
 export default function AgentStatePanel({
@@ -34,19 +30,9 @@ export default function AgentStatePanel({
 }) {
   const [frozen, setFrozen] = useState(false);
   const loadedAtText = loadedAt ? formatDateTime(loadedAt) : "";
-  // 仅在快照变化时解析，切换冻结模式不重复处理整段 JSONL。
+  // 合并快照解析、错误行筛选与展示文本生成，切换冻结模式不重复遍历 JSONL。
   const { displayJsonl, invalidLines, summary } = useMemo(() => {
-    const trimmedJsonl = jsonl.trim();
-    const parsedLines = trimmedJsonl ? parseAgentStateJsonlLines(trimmedJsonl) : [];
-    const invalidLines = parsedLines.filter(
-      (line): line is Extract<AgentStateJsonlLine, { ok: false }> => !line.ok,
-    );
-    const records = agentStateRecordsFromLines(parsedLines);
-    return {
-      displayJsonl: formatAgentStateLinesForDisplay(parsedLines),
-      invalidLines,
-      summary: buildAgentStateSummary(records),
-    };
+    return buildAgentStatePanelProjection(jsonl);
   }, [jsonl]);
 
   return (

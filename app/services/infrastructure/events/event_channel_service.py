@@ -244,12 +244,12 @@ class EventChannelSubscription(Generic[EventT]):
             raise error
         assert self._subscriber.queue is not None
         queue = self._subscriber.queue
-        items: list[ChannelDelivery[EventT]] = []
+        pending_deliveries: list[ChannelDelivery[EventT]] = []
         while not queue.empty():
             delivery = queue.get_nowait()
             self._after_consume(delivery)
-            items.append(delivery)
-        return tuple(items)
+            pending_deliveries.append(delivery)
+        return tuple(pending_deliveries)
 
     def _after_consume(self, delivery: ChannelDelivery[EventT]) -> None:
         """gap 投递一被取走就恢复后续投递；对账范围由 consumer 决定。"""
@@ -463,15 +463,15 @@ class EventChannel(Generic[EventT]):
             not isinstance(after_sequence, int) or after_sequence < 0
         ):
             raise ValueError("EventChannel.replay after_sequence 必须是非负整数或 None")
-        recent: list[ChannelDelivery[EventT]] = []
+        recent_deliveries: list[ChannelDelivery[EventT]] = []
         for delivery in reversed(self._history):
             if after_sequence is not None and delivery.sequence <= after_sequence:
                 break
-            recent.append(delivery)
-            if len(recent) == limit:
+            recent_deliveries.append(delivery)
+            if len(recent_deliveries) == limit:
                 break
-        recent.reverse()
-        return tuple(recent)
+        recent_deliveries.reverse()
+        return tuple(recent_deliveries)
 
     def _offer_gap(
         self,

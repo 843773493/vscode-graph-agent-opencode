@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -14,8 +15,8 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
-def _store(tmp_path) -> WorkspaceStateStore:
-    return WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def _store(workspace_root: Path) -> WorkspaceStateStore:
+    return WorkspaceStateStore(workspace_root=workspace_root)
 
 
 def _append(
@@ -47,10 +48,12 @@ def _append(
     )
 
 
-def test_workspace_config_event_row_projection_preserves_every_column(tmp_path):
+def test_workspace_config_event_row_projection_preserves_every_column(
+    empty_workspace_scope: tuple[str, Path],
+):
     """24 列行投影必须逐列还原，含三处共用 SELECT 的每一列。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         created = store.append_config_event(
             event_id="cfg-full",
@@ -108,8 +111,10 @@ def test_workspace_config_event_row_projection_preserves_every_column(tmp_path):
         store.close()
 
 
-def test_workspace_config_event_outbox_relay_rejects_hijack_and_stale_finalize(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_outbox_relay_rejects_hijack_and_stale_finalize(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-hijack")
         claimed = store.claim_config_event_relay(
@@ -140,8 +145,10 @@ def test_workspace_config_event_outbox_relay_rejects_hijack_and_stale_finalize(t
         store.close()
 
 
-def test_workspace_config_event_relay_missing_event_and_argument_guards(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_relay_missing_event_and_argument_guards(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         with pytest.raises(KeyError, match="不存在"):
             store.mark_config_event_relay_delivered(
@@ -201,10 +208,12 @@ def test_workspace_config_event_relay_missing_event_and_argument_guards(tmp_path
         store.close()
 
 
-def test_workspace_config_events_cross_domain_bounds_and_prune(tmp_path):
+def test_workspace_config_events_cross_domain_bounds_and_prune(
+    empty_workspace_scope: tuple[str, Path],
+):
     """config_event_bounds / prune_config_events 按域隔离。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         assert store.config_event_bounds(config_domain="workspace") == (None, 0)
         _append(store, "ws-1", config_domain="workspace")
@@ -237,8 +246,10 @@ def test_workspace_config_events_cross_domain_bounds_and_prune(tmp_path):
         store.close()
 
 
-def test_workspace_config_events_reject_cursor_outside_retained_window(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_events_reject_cursor_outside_retained_window(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         for index in range(1, 5):
             _append(store, f"cfg-{index}")
@@ -259,14 +270,16 @@ def test_workspace_config_events_reject_cursor_outside_retained_window(tmp_path)
         store.close()
 
 
-def test_workspace_config_events_reject_cursor_after_full_domain_prune(tmp_path):
+def test_workspace_config_events_reject_cursor_after_full_domain_prune(
+    empty_workspace_scope: tuple[str, Path],
+):
     """整域事件被裁空后，越界游标必须报 CursorGone，不得静默返回空页。
 
     此时 first 为 None、sqlite_sequence 高水位仍在；若只看 first 会漏判，
     让调用方把「游标已失效」误当成「没有新事件」。
     """
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         for index in range(1, 6):
             _append(store, f"cfg-{index}")
@@ -288,8 +301,10 @@ def test_workspace_config_events_reject_cursor_after_full_domain_prune(tmp_path)
         store.close()
 
 
-def test_workspace_config_event_consumer_ledger_is_independent(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_consumer_ledger_is_independent(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-consumer")
         first = store.claim_config_events_for_consumer(
@@ -339,8 +354,10 @@ def test_workspace_config_event_consumer_ledger_is_independent(tmp_path):
         store.close()
 
 
-def test_workspace_config_event_row_projection_rejects_non_string_paths(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_row_projection_rejects_non_string_paths(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         _append(store, "cfg-corrupt")
         connection = sqlite3.connect(store.path)
@@ -358,8 +375,10 @@ def test_workspace_config_event_row_projection_rejects_non_string_paths(tmp_path
         store.close()
 
 
-def test_workspace_config_event_insert_is_idempotent_by_key_and_event_id(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_insert_is_idempotent_by_key_and_event_id(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         first = _append(store, "cfg-a", idempotency_key="reload-idem")
         same_key = _append(store, "cfg-b", idempotency_key="reload-idem")
@@ -420,8 +439,10 @@ def test_workspace_config_event_insert_is_idempotent_by_key_and_event_id(tmp_pat
         store.close()
 
 
-def test_workspace_config_event_relay_retry_backoff_reclaims_expired_claim(tmp_path):
-    store = _store(tmp_path)
+def test_workspace_config_event_relay_retry_backoff_reclaims_expired_claim(
+    empty_workspace_scope: tuple[str, Path],
+):
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-expired")
         claimed = store.claim_config_event_relay(
@@ -455,10 +476,12 @@ def test_workspace_config_event_relay_retry_backoff_reclaims_expired_claim(tmp_p
         store.close()
 
 
-def test_workspace_relay_claimed_with_null_lease_is_reclaimable(tmp_path):
+def test_workspace_relay_claimed_with_null_lease_is_reclaimable(
+    empty_workspace_scope: tuple[str, Path],
+):
     """claim 租约列为 NULL 时不能被永丢弃，必须可被恢复者接管。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-null-lease")
         connection = sqlite3.connect(store.path)
@@ -486,10 +509,12 @@ def test_workspace_relay_claimed_with_null_lease_is_reclaimable(tmp_path):
         store.close()
 
 
-def test_workspace_consumer_ledger_claimed_with_null_lease_is_reclaimable(tmp_path):
+def test_workspace_consumer_ledger_claimed_with_null_lease_is_reclaimable(
+    empty_workspace_scope: tuple[str, Path],
+):
     """consumer 账本 claim 租约为 NULL 时也必须可被同一 consumer 重新认领。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-ledger-null-lease")
         store.claim_config_events_for_consumer(
@@ -512,10 +537,12 @@ def test_workspace_consumer_ledger_claimed_with_null_lease_is_reclaimable(tmp_pa
         store.close()
 
 
-def test_workspace_expired_consumer_claims_are_swept_on_reconnect(tmp_path):
+def test_workspace_expired_consumer_claims_are_swept_on_reconnect(
+    empty_workspace_scope: tuple[str, Path],
+):
     """SSE 重连遗留的过期 consumer claim 账本行必须被回收，delivered 必须保留。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         event = _append(store, "cfg-sweep")
         store.claim_config_events_for_consumer(
@@ -549,10 +576,12 @@ def test_workspace_expired_consumer_claims_are_swept_on_reconnect(tmp_path):
         store.close()
 
 
-def test_workspace_config_event_bad_path_row_error_carries_locator(tmp_path):
+def test_workspace_config_event_bad_path_row_error_carries_locator(
+    empty_workspace_scope: tuple[str, Path],
+):
     """坏路径行的报错必须携带 event_seq/event_id，避免整页读取无从诊断。"""
 
-    store = _store(tmp_path)
+    store = _store(empty_workspace_scope[1])
     try:
         _append(store, "cfg-good")
         _append(store, "cfg-bad")

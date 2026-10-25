@@ -27,12 +27,15 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.frozen_provider import (
+from tests.support.custom_tool_test_workspace import (
+    custom_tool_workspace_template_copy_paths,
+)
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.frozen_provider import (
     create_frozen_provider_activation,
     create_frozen_provider_prepare,
     frozen_provider_wire,
 )
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -45,12 +48,12 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
-from tests.support.session_catalog_owner import fixture_catalog_scope
-from tests.support.web_boundary_seeding import (
+from tests.support.rollout.web_boundary_seeding import (
     boundary_item,
     tool_call_payload,
     tool_result_payload,
 )
+from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
@@ -259,7 +262,7 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     workspace_root = prepare_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=template,
-        template_items=tuple(sorted([item.name for item in template.iterdir() if item.name != ".boxteam"] + [".boxteam/AGENTS.md", ".boxteam/skills"])),
+        template_items=custom_tool_workspace_template_copy_paths(template),
         shared_skill_root=project_root / "resources" / "skills",
     )
     # 为长历史浏览器场景在副本上生成逐轮工具调用数据。

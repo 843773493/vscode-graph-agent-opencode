@@ -11,6 +11,7 @@ providers/
 ├── test_chat_provider_request_configuration.py  provider 配置到 Chat 请求参数的投影
 ├── test_chat_provider_stream_lifecycle.py       Chat 流式 delta、取消、重试与错误归属
 ├── test_responses_provider_lifecycle.py          Responses payload 与事件流生命周期
+├── test_responses_history_projection.py          Responses 历史工具调用归一化与回放
 ├── test_provider_format_check.py                LangChain 消息块与内容格式合同
 ├── test_provider_api_mode.py                     Provider API mode 能力合同
 ├── test_request_validation.py                    Provider 请求边界校验

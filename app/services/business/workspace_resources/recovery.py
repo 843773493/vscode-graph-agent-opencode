@@ -83,8 +83,13 @@ class ResourceRecovery:
             owner._leases.reconcile(statuses, kind=owner.lease_kind)
             for record in records:
                 owner._release_committed_fork_leases(record)
-                owner._reconcile_stopped_record(record, observed.get(record.resource_id))
-                if owner._leases.leases_for_resource(record.resource_id):
+            pending_by_resource = owner._leases.leases_for_resources(owner._store.ids())
+            for record in records:
+                outstanding_leases = owner._reconcile_stopped_record(
+                    record, observed.get(record.resource_id),
+                    pending_leases=pending_by_resource[record.resource_id],
+                )
+                if outstanding_leases:
                     record.reconciliation_status = "unknown" if record.resource_id in unknown_results else "reconcile_required"
                     record.error = record.error or "前次 operation 结果尚未核实；未自动重放或结清 lease"
                 runtime = observed.get(record.resource_id)
@@ -110,7 +115,7 @@ class ResourceRecovery:
             assert self._pending is not None
             if resource_id not in self._pending:
                 return None
-            record = owner._require(resource_id)
+            record = owner._require_owned_resource_record(resource_id)
             revision = self._pending[resource_id]
             failure = None
             try:
@@ -121,6 +126,6 @@ class ResourceRecovery:
                 if not isinstance(error, Exception):
                     raise
                 failure = error
-            owner._sync_ledger(owner._require(resource_id))
+            owner._sync_ledger(owner._require_owned_resource_record(resource_id))
             del self._pending[resource_id]
             return failure

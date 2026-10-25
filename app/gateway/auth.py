@@ -7,6 +7,10 @@ from typing import Literal
 
 from fastapi import Header, HTTPException
 
+from app.core.file_permissions import (
+    require_private_file_access,
+    restrict_private_path_access,
+)
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
 
@@ -23,11 +27,7 @@ def get_gateway_local_token() -> str:
     credential_path = get_gateway_root() / "credentials" / "local-token"
     try:
         with credential_path.open("r", encoding="utf-8") as file:
-            # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
-            if os.name != "nt" and os.fstat(file.fileno()).st_mode & 0o077:
-                raise PermissionError(
-                    f"Gateway 本地凭据权限必须为 0600: {credential_path}"
-                )
+            require_private_file_access(credential_path, descriptor=file.fileno())
             token = file.read().strip()
     except FileNotFoundError:
         credential_path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +38,7 @@ def get_gateway_local_token() -> str:
             0o600,
         )
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            restrict_private_path_access(credential_path, descriptor=file.fileno())
             file.write(f"{token}\n")
         return token
     if not token:

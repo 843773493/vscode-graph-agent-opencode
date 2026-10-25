@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
-from tests.support.model_stream_config import prepare_e2e_model_stream_config
+from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import reset_gateway_persistent_state

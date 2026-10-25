@@ -27,6 +27,9 @@ describe("ChatTurn memo 比较", () => {
       renderer = create(<ChatTurn {...chatTurnProps(value)} onForkConversation={onForkConversation} />);
     });
     expect(renderer!.root.findAllByProps({ className: "chat-user-row" })).toHaveLength(0);
+    const responseActions = renderer!.root.findByProps({ className: "chat-response-actions" });
+    expect(responseActions.findAllByType("button")[0]?.props["data-fork-item-id"])
+      .toBe("item-visible-final");
     act(() => {
       renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
     });

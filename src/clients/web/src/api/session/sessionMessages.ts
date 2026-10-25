@@ -28,6 +28,85 @@ const SESSION_HISTORY_TIMEOUT_MS = 10000;
 // 请求日志按会话整目录读取，文件多时比普通查询慢；沿用全局默认上限，
 // 避免后端卡死时前端 loading 永远不落地（面板无超时、无重试入口）。
 const LLM_REQUEST_LOG_TIMEOUT_MS = DEFAULT_API_REQUEST_TIMEOUT_MS;
+const ATTACHMENT_TEXT_DECODE_CHUNK_BYTES = 16 * 1024;
+
+interface SessionAttachmentTextPreview {
+  text: string;
+  truncated: boolean;
+}
+
+async function requestSessionAttachmentContent(
+  port: number,
+  sessionId: string,
+  fileId: string,
+  workspaceId: string | null | undefined,
+  options: {
+    variant?: "thumbnail" | "original";
+    signal?: AbortSignal;
+  },
+): Promise<Response> {
+  const query = new URLSearchParams({ file_id: fileId });
+  query.set("variant", options.variant ?? "original");
+  if (options.variant === "thumbnail") {
+    query.set("max_edge", "512");
+  }
+  // 附件内容只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
+  return await requestGatewayResponse(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
+    {
+      headers: workspaceHeader(workspaceId),
+      signal: options.signal,
+      skipGatewayUserSession: true,
+    },
+  );
+}
+
+async function readSessionAttachmentTextPreview(
+  response: Response,
+  maxCodeUnits: number,
+): Promise<SessionAttachmentTextPreview> {
+  const reader = response.body?.getReader();
+  if (!reader) return { text: "", truncated: false };
+
+  const decoder = new TextDecoder();
+  const textParts: string[] = [];
+  let codeUnitCount = 0;
+  const append = (decoded: string): boolean => {
+    const remainingCodeUnits = maxCodeUnits - codeUnitCount;
+    if (decoded.length > remainingCodeUnits) {
+      const visiblePart = decoded.slice(0, remainingCodeUnits);
+      if (visiblePart) textParts.push(visiblePart);
+      codeUnitCount += visiblePart.length;
+      return true;
+    }
+    if (decoded) textParts.push(decoded);
+    codeUnitCount += decoded.length;
+    return false;
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const truncated = append(decoder.decode());
+        return { text: textParts.join(""), truncated };
+      }
+      for (let offset = 0; offset < value.length; offset += ATTACHMENT_TEXT_DECODE_CHUNK_BYTES) {
+        const decoded = decoder.decode(
+          value.subarray(offset, offset + ATTACHMENT_TEXT_DECODE_CHUNK_BYTES),
+          { stream: true },
+        );
+        if (append(decoded)) {
+          await reader.cancel();
+          return { text: textParts.join(""), truncated: true };
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 export async function getSessionAttachmentBlob(
   port: number,
@@ -39,22 +118,37 @@ export async function getSessionAttachmentBlob(
     signal?: AbortSignal;
   } = {},
 ): Promise<Blob> {
-  const query = new URLSearchParams({ file_id: fileId });
-  query.set("variant", options.variant ?? "original");
-  if (options.variant === "thumbnail") {
-    query.set("max_edge", "512");
-  }
-  // 二进制附件只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
-  const response = await requestGatewayResponse(
+  const response = await requestSessionAttachmentContent(
     port,
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
-    {
-      headers: workspaceHeader(workspaceId),
-      signal: options.signal,
-      skipGatewayUserSession: true,
-    },
+    sessionId,
+    fileId,
+    workspaceId,
+    options,
   );
   return await response.blob();
+}
+
+export async function getSessionAttachmentTextPreview(
+  port: number,
+  sessionId: string,
+  fileId: string,
+  workspaceId: string | null | undefined,
+  options: {
+    maxCodeUnits: number;
+    signal?: AbortSignal;
+  },
+): Promise<SessionAttachmentTextPreview> {
+  if (!Number.isSafeInteger(options.maxCodeUnits) || options.maxCodeUnits < 0) {
+    throw new RangeError(`附件文本预览长度必须是非负安全整数: ${options.maxCodeUnits}`);
+  }
+  const response = await requestSessionAttachmentContent(
+    port,
+    sessionId,
+    fileId,
+    workspaceId,
+    { variant: "original", signal: options.signal },
+  );
+  return await readSessionAttachmentTextPreview(response, options.maxCodeUnits);
 }
 
 export async function listMessages(

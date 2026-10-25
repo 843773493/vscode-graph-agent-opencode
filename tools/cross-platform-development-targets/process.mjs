@@ -2,6 +2,13 @@ export function decodeOutput(value) {
   return value ? new TextDecoder().decode(value).trim() : "";
 }
 
+export function commandForCurrentPlatform(command, platform = process.platform) {
+  if (platform !== "win32") return command;
+  const executable = command[0];
+  const name = executable.slice(Math.max(executable.lastIndexOf("/"), executable.lastIndexOf("\\")) + 1);
+  return name.includes(".") ? command : [`${executable}.exe`, ...command.slice(1)];
+}
+
 export function runChecked(command, {
   cwd = process.cwd(),
   environment = process.env,
@@ -11,7 +18,7 @@ export function runChecked(command, {
 } = {}) {
   let result;
   try {
-    result = Bun.spawnSync(command, {
+    result = Bun.spawnSync(commandForCurrentPlatform(command), {
       cwd,
       env: environment,
       stdout,
@@ -48,7 +55,7 @@ export async function runCheckedWithInput(command, input, {
 } = {}) {
   let child;
   try {
-    child = Bun.spawn(command, {
+    child = Bun.spawn(commandForCurrentPlatform(command), {
       cwd,
       env: environment,
       stdin: Buffer.from(input, "utf8"),

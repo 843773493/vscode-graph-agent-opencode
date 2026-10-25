@@ -22,18 +22,22 @@ import type {
 import type { GatewayUserAccess, Session, SessionCatalogNode } from "../../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import {
-  apiResponse,
-  buildSessionHookState,
+  apiSuccessResponse,
   catalogChildrenResponse,
-  createStateMirror,
-  errorResponse,
-  flushEffects,
+  apiErrorResponse,
   installGatewayFetch,
-  mountResourceExplorer,
-  restoreSessionHookGlobals,
+  restoreGatewayTestEnvironment,
   testGatewayUserAccess,
-  withCatalogDefaults,
-} from "./sessionHookTestFixtures";
+  withDefaultGatewayApiResponses,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import {
+  createSessionHookState,
+  createAppStateMirror,
+} from "../../tests/fixtures/session/appState";
+import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
+import {
+  mountSessionResourceExplorerHarness,
+} from "../../tests/fixtures/session/sessionResourceExplorer";
 import {
   catalogOutboxWorkspaceScopeKey,
   createSessionCatalogOutboxRuntime,
@@ -61,7 +65,7 @@ function navigationEvent(sequence: number): SessionCatalogNavigationEvent {
     created_at: "2026-10-11T00:00:00Z" };
 }
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 function rejectedReceipt(): SessionCatalogOperationReceipt {
   return {
@@ -158,10 +162,10 @@ function repairDeleteFixture(refreshFails: boolean) {
       for (const id of ids) records.delete(id);
     },
   };
-  installGatewayFetch(withCatalogDefaults(({ path, url }) => {
-    if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
-    if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
-    if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+  installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+    if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+    if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+    if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
       workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: catalogRevision,
       event_seq_watermark: 0, generation: 1,
     });
@@ -256,9 +260,9 @@ describe("真实 runtime 的删除修复提示", () => {
   for (const refreshFails of [false, true]) {
     test(`Folder repair 回执与${refreshFails ? "失败" : "成功"}刷新均保留同操作的排空错误`, async () => {
       const fixture = repairDeleteFixture(refreshFails);
-      let mounted: Awaited<ReturnType<typeof mountResourceExplorer>> | undefined;
+      let mounted: Awaited<ReturnType<typeof mountSessionResourceExplorerHarness>> | undefined;
       try {
-        mounted = await mountResourceExplorer({ props: {
+        mounted = await mountSessionResourceExplorerHarness({ props: {
           apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET],
           gatewayUserAccess: testGatewayUserAccess(), sessionCatalogOutboxRuntime: fixture.runtime,
         } });
@@ -270,7 +274,7 @@ describe("真实 runtime 的删除修复提示", () => {
         await act(async () => {
           fixture.releaseRepair();
           await expect(result.completion).rejects.toThrow(fixture.detail);
-          await flushEffects();
+          await flushReactEffects();
         });
         expect(fixture.enqueued).toEqual([result.operationId]);
         expect(fixture.phases).toContain("accepted:queued:none");
@@ -299,7 +303,7 @@ describe("真实 runtime 的删除修复提示", () => {
 
   test("恢复的未跟踪 repair 操作在分支刷新失败时仍报告原身份与后端排空详情", async () => {
     const fixture = repairDeleteFixture(true);
-    let mounted: Awaited<ReturnType<typeof mountResourceExplorer>> | undefined;
+    let mounted: Awaited<ReturnType<typeof mountSessionResourceExplorerHarness>> | undefined;
     let recovered: ReturnType<typeof createSessionCatalogOutboxRuntime> | undefined;
     try {
       const initial = await fixture.runtime.openWorkspace(WORKSPACE_TARGET, testGatewayUserAccess());
@@ -320,7 +324,7 @@ describe("真实 runtime 的删除修复提示", () => {
         error_detail: fixture.detail, receipt_revision: 2,
       }]);
       const previousErrors = fixture.errors.length;
-      mounted = await mountResourceExplorer({ props: {
+      mounted = await mountSessionResourceExplorerHarness({ props: {
         apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET],
         gatewayUserAccess: testGatewayUserAccess(), sessionCatalogOutboxRuntime: recovered,
       } });
@@ -389,17 +393,17 @@ describe("会话目录 outbox runtime", () => {
     };
     installGatewayFetch(({ path }) => {
       if (path === "/api/gateway/health") {
-        return apiResponse({ gateway_id: GATEWAY_ID });
+        return apiSuccessResponse({ gateway_id: GATEWAY_ID });
       }
       if (path === "/api/v1/workspace") {
-        return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
       }
       if (path === "/api/v1/session-catalog/snapshot") {
-        return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID,
+        return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID,
           catalog_revision: 7, event_seq_watermark: 0, generation: 1 });
       }
       if (path === "/api/v1/session-catalog/navigation-events") {
-        return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID, event_seq_watermark: 0,
+        return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID, event_seq_watermark: 0,
           items: [], next_cursor: null, has_more: false, cursor_gone: false });
       }
       return undefined;
@@ -467,12 +471,12 @@ describe("失败 confirmed owner 的恢复边界", () => {
       const refreshGate = new Promise<void>((resolve) => { finishRefresh = resolve; });
       let queryCount = 0;
       installGatewayFetch(({ path }) => {
-        if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
-        if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
-        if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+        if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+        if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
           workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12, event_seq_watermark: 0, generation: 1,
         });
-        if (path === "/api/v1/session-catalog/navigation-events") return apiResponse({
+        if (path === "/api/v1/session-catalog/navigation-events") return apiSuccessResponse({
           workspace_id: BACKEND_WORKSPACE_ID, event_seq_watermark: 0, items: [],
           next_cursor: null, has_more: false, cursor_gone: false,
         });
@@ -569,9 +573,9 @@ describe("navigation 事件的真实 runtime 消费", () => {
       let afterRefresh!: () => void;
       const resumed = new Promise<void>((resolve) => { afterRefresh = resolve; });
       installGatewayFetch(({ path, url, init }) => {
-        if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
-        if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
-        if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+        if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+        if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
           workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 7 + watermark,
           event_seq_watermark: watermark, generation: 1,
         });
@@ -592,7 +596,7 @@ describe("navigation 事件的真实 runtime 消费", () => {
             else if (query.get("cursor") === "page-two") page.items = [navigationEvent(2)];
             else { page.items = [navigationEvent(1)]; page.has_more = true; page.next_cursor = "page-two"; }
           }
-          return apiResponse(page);
+          return apiSuccessResponse(page);
         }
         return undefined;
       });
@@ -661,9 +665,9 @@ describe("navigation 对账中的已打开会话 owner", () => {
 
   test("同 event watermark 的结算版本仍经过 owner GET；pending保留，200整替，404只关闭已删除owner", async () => {
     const key = sessionScopeKey(GATEWAY_WORKSPACE_ID, owner.session_id);
-    const mirror = createStateMirror({
-      ...buildSessionHookState({
-        workspaceId: GATEWAY_WORKSPACE_ID, current: owner, sessions: [owner, survivor], unreadSessionKeys: new Set([key]),
+    const mirror = createAppStateMirror({
+      ...createSessionHookState({
+        workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner, survivor], unreadSessionKeys: new Set([key]),
       }),
       apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
     });
@@ -679,19 +683,19 @@ describe("navigation 对账中的已打开会话 owner", () => {
     const errors: string[] = [];
     const fresh = { ...owner, title: "deleting owner 的完整 DTO", updated_at: "2026-10-13T01:00:00Z" };
     installGatewayFetch(({ path, init }) => {
-      if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
-      if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
-      if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+      if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+      if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
         workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: revision, event_seq_watermark: 0, generation: 1,
       });
-      if (path === "/api/v1/session-catalog/navigation-events") return apiResponse({
+      if (path === "/api/v1/session-catalog/navigation-events") return apiSuccessResponse({
         workspace_id: BACKEND_WORKSPACE_ID, event_seq_watermark: 0, items: [], next_cursor: null, has_more: false, cursor_gone: false,
       });
       if (path === "/api/v1/sessions") { listCalls += 1; throw new Error("owner失效不能重拉全量列表"); }
       if (path === `/api/v1/sessions/${owner.session_id}`) {
         expect(init?.signal?.aborted).toBe(false);
-        return status === 200 ? apiResponse(fresh)
-          : errorResponse(status, status === 409 ? "会话日期目录正在隔离" : "Session not found");
+        return status === 200 ? apiSuccessResponse(fresh)
+          : apiErrorResponse(status, status === 409 ? "会话日期目录正在隔离" : "Session not found");
       }
       return undefined;
     });
@@ -729,8 +733,8 @@ describe("navigation 对账中的已打开会话 owner", () => {
 
   for (const changedScope of ["会话", "工作区", "用户", "endpoint"] as const) {
     test(`owner GET 迟到404不能重置新${changedScope}scope`, async () => {
-      const mirror = createStateMirror({
-        ...buildSessionHookState({ workspaceId: GATEWAY_WORKSPACE_ID, current: owner, sessions: [owner, survivor] }),
+      const mirror = createAppStateMirror({
+        ...createSessionHookState({ workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner, survivor] }),
         apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
       });
       let started!: () => void;
@@ -740,9 +744,9 @@ describe("navigation 对账中的已打开会话 owner", () => {
       let finished!: () => void;
       const refreshed = new Promise<void>((resolve) => { finished = resolve; });
       installGatewayFetch(({ path }) => {
-        if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
-        if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
-        if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+        if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+        if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
           workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 7, event_seq_watermark: 0, generation: 1,
         });
         if (path === `/api/v1/sessions/${owner.session_id}`) { started(); return delayed; }
@@ -768,7 +772,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
           : changedScope === "用户" ? { ...state, gatewayUserAccess: { ...access, user_id: "another-user" } }
           : { ...state, apiPort: API_PORT + 1 });
         const switched = mirror.current();
-        reply(errorResponse(404, "Session not found"));
+        reply(apiErrorResponse(404, "Session not found"));
         await refreshed;
         expect(mirror.current()).toBe(switched);
         expect(errors).toEqual([]);

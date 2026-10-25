@@ -39,15 +39,16 @@ export function useSessionGoalController({
   const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
     new Map(),
   );
-  // 每条 Goal 请求键的写入代际：只有序列里最新的那次写（设置/清除）才有权把
-  // 结果写回 AppState。否则「先设置后清除」时，迟到的设置回包会把用户刚刚
-  // 清除的 Goal 复活。读取不参与这条序列：读取是对后端真值的采样，若读取也
-  // 抢占代际，一次并发的聚焦校准会把用户已完成的清除判定成过期结果。
+  // 每条 Goal 请求键的写入代际：写入开始时递增，读取只采样当前代际、不抢占
+  // 序列。写入前发出的读取若迟到，不能用旧快照覆盖新写入；读取在写入之后
+  // 发出时仍可校准后端真值。这样同时避免旧设置复活已清除 Goal 和旧空值隐藏
+  // 刚创建的 Goal。
   const goalWriteSeqRef = useRef<Map<string, number>>(new Map());
 
   const beginGoalWrite = useCallback((requestKey: string): number => {
     const next = (goalWriteSeqRef.current.get(requestKey) ?? 0) + 1;
     goalWriteSeqRef.current.set(requestKey, next);
+    inFlightGoalRequestsRef.current.delete(requestKey);
     return next;
   }, []);
 
@@ -56,6 +57,14 @@ export function useSessionGoalController({
       goalWriteSeqRef.current.get(requestKey) === writeSeq,
     [],
   );
+
+  const finishGoalWrite = useCallback((requestKey: string, writeSeq: number): number | null => {
+    if (!isLatestGoalWrite(requestKey, writeSeq)) return null;
+    const settledSeq = writeSeq + 1;
+    goalWriteSeqRef.current.set(requestKey, settledSeq);
+    inFlightGoalRequestsRef.current.delete(requestKey);
+    return settledSeq;
+  }, [isLatestGoalWrite]);
 
   const refreshGoal = useCallback(async (
     target: GoalTarget = {
@@ -83,6 +92,7 @@ export function useSessionGoalController({
       }));
     }
     const requestKey = goalRequestKey(apiPort, target);
+    const readWriteSeq = goalWriteSeqRef.current.get(requestKey) ?? 0;
     const inFlight = inFlightGoalRequestsRef.current.get(requestKey);
     if (inFlight) {
       return inFlight;
@@ -96,6 +106,9 @@ export function useSessionGoalController({
         );
         if (goal) assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
         setState((previous) => {
+          if ((goalWriteSeqRef.current.get(requestKey) ?? 0) !== readWriteSeq) {
+            return previous;
+          }
           if (previous.currentSession?.session_id !== target.sessionId) {
             return previous;
           }
@@ -112,6 +125,9 @@ export function useSessionGoalController({
       } catch (error) {
         const message = errorMessage(error);
         setState((previous) => {
+          if ((goalWriteSeqRef.current.get(requestKey) ?? 0) !== readWriteSeq) {
+            return previous;
+          }
           if (previous.currentSession?.session_id !== target.sessionId
             || previous.currentSessionWorkspaceId !== target.workspaceId) {
             return previous;
@@ -166,9 +182,11 @@ export function useSessionGoalController({
         target.workspaceId,
       );
       assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
+      const settledSeq = finishGoalWrite(requestKey, writeSeq);
       setState((previous) => {
         if (
-          !isLatestGoalWrite(requestKey, writeSeq)
+          settledSeq === null
+          || !isLatestGoalWrite(requestKey, settledSeq)
           || previous.currentSession?.session_id !== target.sessionId
           || previous.currentSessionWorkspaceId !== target.workspaceId
         ) {
@@ -184,6 +202,7 @@ export function useSessionGoalController({
       });
       return goal;
     } catch (error) {
+      if (finishGoalWrite(requestKey, writeSeq) === null) throw error;
       return reconcileAfterFailure(target, error);
     }
   }, [
@@ -192,6 +211,7 @@ export function useSessionGoalController({
     currentSessionId,
     currentMainThreadId,
     currentWorkspaceId,
+    finishGoalWrite,
     isLatestGoalWrite,
     reconcileAfterFailure,
     setState,
@@ -213,9 +233,11 @@ export function useSessionGoalController({
     try {
       const result = await apiClearSessionGoal(apiPort, target.sessionId, target.workspaceId);
       assertGoalOwner(result, { session_id: target.sessionId, thread_id: target.threadId });
+      const settledSeq = finishGoalWrite(requestKey, writeSeq);
       setState((previous) => {
         if (
-          !isLatestGoalWrite(requestKey, writeSeq)
+          settledSeq === null
+          || !isLatestGoalWrite(requestKey, settledSeq)
           || previous.currentSession?.session_id !== target.sessionId
           || previous.currentSessionWorkspaceId !== target.workspaceId
         ) {
@@ -230,6 +252,7 @@ export function useSessionGoalController({
         };
       });
     } catch (error) {
+      if (finishGoalWrite(requestKey, writeSeq) === null) throw error;
       await reconcileAfterFailure(target, error);
     }
   }, [
@@ -238,6 +261,7 @@ export function useSessionGoalController({
     currentSessionId,
     currentMainThreadId,
     currentWorkspaceId,
+    finishGoalWrite,
     isLatestGoalWrite,
     reconcileAfterFailure,
     setState,

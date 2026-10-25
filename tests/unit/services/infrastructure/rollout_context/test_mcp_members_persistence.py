@@ -108,7 +108,7 @@ async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
         candidates = target_saver._storage.assemblies.list_expired_context_plan_details(
             target_session_id, target_thread_id, expired_before=expired_before,
         )
-        assert candidates == ((record.detail_ref, record.detail_ref.assembly_id),)
+        assert candidates == (record.detail_ref,)
         assert target_saver.gc_context_plan_details(
             target_session_id, target_thread_id, expired_before=expired_before,
         ) == (record.detail_ref,)
@@ -267,7 +267,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             expired_before=datetime.now(UTC) + timedelta(days=31),
         )
         candidate_keys = {
-            canonical_json_bytes(ref.to_dict()).decode("utf-8") for ref, _assembly in candidates
+            canonical_json_bytes(ref.to_dict()).decode("utf-8") for ref in candidates
         }
         assert set(protected_keys) <= candidate_keys
         with pytest.raises(RuntimeError, match="detail-retention-protected"):

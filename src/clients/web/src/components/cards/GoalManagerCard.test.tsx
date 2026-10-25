@@ -5,14 +5,17 @@ import type { SessionGoal } from "../../types/backend";
 import GoalManagerCard from "./GoalManagerCard";
 import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 
-function renderGoalCard(goal: SessionGoal): string {
+function renderGoalCard(
+  goal: SessionGoal | null,
+  options: { sessionId?: string; loading?: boolean; error?: string } = {},
+): string {
   return renderToStaticMarkup(
     <WarmConfirmProvider>
       <GoalManagerCard
-        sessionId={goal.session_id}
+        sessionId={options.sessionId ?? goal?.session_id ?? "ses_test"}
         goal={goal}
-        loading={false}
-        error={null}
+        loading={options.loading ?? false}
+        error={options.error ?? null}
         onRefresh={async () => null}
         onUpdate={async () => {
           throw new Error("静态渲染不调用 onUpdate");
@@ -24,6 +27,25 @@ function renderGoalCard(goal: SessionGoal): string {
     </WarmConfirmProvider>,
   );
 }
+
+test("没有 Goal 的会话提供创建入口，未选会话时明确提示", () => {
+  const empty = renderGoalCard(null);
+  expect(empty).toContain("当前会话没有 Goal");
+  expect(empty).toContain("新建 Goal");
+  const unselected = renderGoalCard(null, { sessionId: "" });
+  expect(unselected).toContain("请先选择会话");
+  expect(unselected).not.toContain("新建 Goal");
+});
+
+test("读取中和读取失败均不得误报没有 Goal 或提供创建入口", () => {
+  const loading = renderGoalCard(null, { loading: true });
+  expect(loading).toContain("正在读取 Goal");
+  expect(loading).not.toContain("新建 Goal");
+  const failed = renderGoalCard(null, { error: "工作区连接已断开" });
+  expect(failed).toContain("Goal 同步失败：工作区连接已断开");
+  expect(failed).not.toContain("当前会话没有 Goal");
+  expect(failed).not.toContain("新建 Goal");
+});
 
 test("Goal 管理器在右侧区域提供完整操作且不重复展示斜杠命令", () => {
   const html = renderGoalCard({

@@ -151,7 +151,10 @@ export async function consumeSseResponse(response, options) {
         decoded += '\r';
         pendingCarriageReturn = false;
       }
-      buffer += decoded.replace(/\r\n|\r/g, '\n');
+      const normalizedChunk = decoded.includes('\r')
+        ? decoded.replace(/\r\n|\r/g, '\n')
+        : decoded;
+      buffer += normalizedChunk;
 
       let frameStart = 0;
       let boundaryIndex = buffer.indexOf('\n\n');

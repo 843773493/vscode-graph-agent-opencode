@@ -74,6 +74,48 @@ const RESOURCE_KIND_ICONS: Record<SessionResourceKind, string> = {
   background_task: "codicon-server-process",
 };
 
+const BACKGROUND_TASK_NAME_LABELS: Record<string, string> = {
+  emit_system_time_messages: "定时发送系统时间",
+};
+
+const RESOURCE_RUNNING_STATE_LABELS: Record<string, string> = {
+  active: "活跃",
+  background: "后台",
+  freezing: "冻结中",
+  frozen: "已冻结",
+  discarding: "释放中",
+  discarded: "可恢复",
+  restoring: "唤醒中",
+};
+
+const RESOURCE_STATUS_LABELS: Record<string, string> = {
+  // 终端 provider 会发 created/exited，浏览器 provider 会发 frozen/discarded，
+  // 记录缺失时两边都会回退 unknown；这些必须给出中文标签，不得把英文枚举漏给用户。
+  created: "已创建",
+  exited: "已退出",
+  frozen: "已冻结",
+  discarded: "已冷回收",
+  unknown: "状态未知",
+  running: "运行中",
+  terminated: "已终止",
+  deleted: "已删除",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  lost: "已断开 (lost)",
+  closed: "已关闭",
+  pending: "等待中",
+  paused: "已暂停",
+  queued: "排队中",
+  accepted: "已接收",
+};
+
+const LAST_INPUT_SOURCE_LABELS: Record<string, string> = {
+  user: "用户",
+  agent: "Agent",
+  interactive: "交互",
+};
+
 export function resourceKindIcon(kind: SessionResourceKind): string {
   return RESOURCE_KIND_ICONS[kind];
 }
@@ -89,10 +131,7 @@ export function resourceName(resource: SessionResource): string {
   if (resource.kind !== "background_task") {
     return resource.name;
   }
-  const labels: Record<string, string> = {
-    emit_system_time_messages: "定时发送系统时间",
-  };
-  return labels[resource.name] ?? resource.name;
+  return BACKGROUND_TASK_NAME_LABELS[resource.name] ?? resource.name;
 }
 
 export type ResourceAttentionGroup =
@@ -143,12 +182,12 @@ const RESOURCE_GROUP_DEFINITIONS: Omit<ResourceTreeGroup, "resources">[] = [
   },
 ];
 
-function metadataString(resource: SessionResource, key: string): string {
+function resourceMetadataString(resource: SessionResource, key: string): string {
   const value = resource.metadata[key];
   return typeof value === "string" ? value.trim() : "";
 }
 
-function metadataNumber(resource: SessionResource, key: string): number {
+function resourceMetadataNumber(resource: SessionResource, key: string): number {
   const value = resource.metadata[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -172,8 +211,8 @@ export function isPreviewedResource(
 
 export function isRecoverableBrowser(resource: SessionResource): boolean {
   return resource.kind === "browser"
-    && ["running", "lost"].includes(resource.status)
-    && metadataString(resource, "resource_state") === "discarded"
+    && (resource.status === "running" || resource.status === "lost")
+    && resourceMetadataString(resource, "resource_state") === "discarded"
     && resource.metadata.checkpoint_available === true;
 }
 
@@ -182,36 +221,52 @@ function resourceAttentionGroupFromSignals(
   isPreviewed: boolean,
   clientCount: number,
 ): ResourceAttentionGroup {
-  const resourceState = metadataString(resource, "resource_state");
-  const commandStatus = metadataString(resource, "command_status");
+  const resourceState = resourceMetadataString(resource, "resource_state");
+  const commandStatus = resourceMetadataString(resource, "command_status");
   const hasClients = clientCount > 0;
   const needsUserAction = Boolean(
     resource.metadata.pending_dialog || resource.metadata.pending_file_chooser,
   );
 
-  if (isRecoverableBrowser(resource)) {
+  if (
+    resource.kind === "browser"
+    && (resource.status === "running" || resource.status === "lost")
+    && resourceState === "discarded"
+    && resource.metadata.checkpoint_available === true
+  ) {
     return "sleeping";
   }
-  if (["failed", "lost"].includes(resource.status) || needsUserAction) {
+  if (resource.status === "failed" || resource.status === "lost" || needsUserAction) {
     return "attention";
   }
   if (
-    ["closed", "terminated", "deleted", "completed", "cancelled"].includes(
-      resource.status,
-    ) || resource.metadata.resource_source === "历史记录"
+    resource.status === "closed"
+    || resource.status === "terminated"
+    || resource.status === "deleted"
+    || resource.status === "completed"
+    || resource.status === "cancelled"
+    || resource.metadata.resource_source === "历史记录"
   ) {
     return "history";
   }
   if (isPreviewed || hasClients) {
     return resource.status === "running" ? "active" : "attention";
   }
-  if (["frozen", "discarded"].includes(resourceState) || resource.status === "paused") {
+  if (
+    resourceState === "frozen"
+    || resourceState === "discarded"
+    || resource.status === "paused"
+  ) {
     return "sleeping";
   }
   if (
-    (resource.kind === "background_task" && ["pending", "running"].includes(resource.status)) ||
+    (resource.kind === "background_task"
+      && (resource.status === "pending" || resource.status === "running")) ||
     commandStatus === "running" ||
-    ["active", "restoring", "freezing", "discarding"].includes(resourceState)
+    resourceState === "active"
+    || resourceState === "restoring"
+    || resourceState === "freezing"
+    || resourceState === "discarding"
   ) {
     return "active";
   }
@@ -225,14 +280,14 @@ export function resourceAttentionGroup(
   return resourceAttentionGroupFromSignals(
     resource,
     isPreviewedResource(resource, activePreviewPath),
-    metadataNumber(resource, "client_count"),
+    resourceMetadataNumber(resource, "client_count"),
   );
 }
 
 function resourceRecency(resource: SessionResource): number {
   const candidates = [
-    metadataString(resource, "last_input_at"),
-    metadataString(resource, "last_wake_at"),
+    resourceMetadataString(resource, "last_input_at"),
+    resourceMetadataString(resource, "last_wake_at"),
     resource.updated_at,
     resource.started_at ?? "",
     resource.created_at,
@@ -263,7 +318,7 @@ export function groupSessionResources(
   }
   for (const resource of resources) {
     const isPreviewed = isPreviewedResource(resource, activePreviewPath);
-    const clientCount = metadataNumber(resource, "client_count");
+    const clientCount = resourceMetadataNumber(resource, "client_count");
     const group = resourceAttentionGroupFromSignals(
       resource,
       isPreviewed,
@@ -289,7 +344,7 @@ export function groupSessionResources(
 }
 
 function resourceUrlSummary(resource: SessionResource): string {
-  const url = metadataString(resource, "url");
+  const url = resourceMetadataString(resource, "url");
   if (!url || url === "about:blank") {
     return "空白页";
   }
@@ -314,7 +369,7 @@ function pathBaseName(path: string): string {
 
 export function resourceTreeTitle(resource: SessionResource): string {
   if (resource.kind === "browser") {
-    const title = metadataString(resource, "title");
+    const title = resourceMetadataString(resource, "title");
     return title && title !== "无标题" ? title : resourceUrlSummary(resource);
   }
   if (resource.kind === "terminal") {
@@ -323,7 +378,7 @@ export function resourceTreeTitle(resource: SessionResource): string {
       return normalizedName;
     }
     // 只消费工作区内相对目录；"." / "" 表示工作区根，回退默认文案（裁定 D-A2/D-A3）。
-    const cwdRelative = metadataString(resource, "cwd_relative");
+    const cwdRelative = resourceMetadataString(resource, "cwd_relative");
     return cwdRelative && cwdRelative !== "."
       ? `终端 · ${pathBaseName(cwdRelative)}`
       : "用户终端";
@@ -336,13 +391,13 @@ export function resourceTreeDescription(resource: SessionResource): string {
     return resourceUrlSummary(resource);
   }
   if (resource.kind === "terminal") {
-    const command = metadataString(resource, "command") ||
-      metadataString(resource, "last_input") ||
-      metadataString(resource, "cwd_relative");
+    const command = resourceMetadataString(resource, "command") ||
+      resourceMetadataString(resource, "last_input") ||
+      resourceMetadataString(resource, "cwd_relative");
     return command || "等待命令";
   }
-  const error = metadataString(resource, "error_message");
-  const target = metadataString(resource, "target_session_id");
+  const error = resourceMetadataString(resource, "error_message");
+  const target = resourceMetadataString(resource, "target_session_id");
   return error || (target ? `目标 ${target}` : statusLabel(resource.status));
 }
 
@@ -353,51 +408,21 @@ export function resourceTreeStatus(resource: SessionResource): string {
   if (resource.status !== "running") {
     return statusLabel(resource.status);
   }
-  if (metadataNumber(resource, "client_count") > 0) {
-    return `${metadataNumber(resource, "client_count")} 个连接`;
+  const clientCount = resourceMetadataNumber(resource, "client_count");
+  if (clientCount > 0) {
+    return `${clientCount} 个连接`;
   }
-  const resourceState = metadataString(resource, "resource_state");
-  const labels: Record<string, string> = {
-    active: "活跃",
-    background: "后台",
-    freezing: "冻结中",
-    frozen: "已冻结",
-    discarding: "释放中",
-    discarded: "可恢复",
-    restoring: "唤醒中",
-  };
-  return labels[resourceState] ?? statusLabel(resource.status);
+  const resourceState = resourceMetadataString(resource, "resource_state");
+  return RESOURCE_RUNNING_STATE_LABELS[resourceState] ?? statusLabel(resource.status);
 }
 
 export function statusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    // 终端 provider 会发 created/exited，浏览器 provider 会发 frozen/discarded，
-    // 记录缺失时两边都会回退 unknown；这些必须给出中文标签，不得把英文枚举漏给用户。
-    created: "已创建",
-    exited: "已退出",
-    frozen: "已冻结",
-    discarded: "已冷回收",
-    unknown: "状态未知",
-    running: "运行中",
-    terminated: "已终止",
-    deleted: "已删除",
-    completed: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-    lost: "已断开 (lost)",
-    closed: "已关闭",
-    pending: "等待中",
-    paused: "已暂停",
-    queued: "排队中",
-    accepted: "已接收",
-  };
-  return labels[status] ?? status;
+  return RESOURCE_STATUS_LABELS[status] ?? status;
 }
 
-function metadataValueLabel(
+function resourceMetadataValueLabel(
   key: string,
   value: unknown,
-  resource?: SessionResource,
 ): string {
   if (value === null || value === undefined || value === "") {
     return "无";
@@ -413,12 +438,7 @@ function metadataValueLabel(
     return typeof value === "string" ? statusLabel(value) : JSON.stringify(value);
   }
   if (key === "last_input_source" && typeof value === "string") {
-    const labels: Record<string, string> = {
-      user: "用户",
-      agent: "Agent",
-      interactive: "交互",
-    };
-    return labels[value] ?? value;
+    return LAST_INPUT_SOURCE_LABELS[value] ?? value;
   }
   if (typeof value === "string") {
     return value;
@@ -426,63 +446,69 @@ function metadataValueLabel(
   return JSON.stringify(value);
 }
 
-export function metadataRows(resource: SessionResource): [string, string][] {
+const RESOURCE_METADATA_LABELS: Record<string, string> = {
+  cwd_relative: "工作目录",
+  command: "最近工具命令",
+  shell_command: "启动命令",
+  command_status: "命令状态",
+  command_exit_code: "退出码",
+  command_started_at: "命令开始",
+  command_completed_at: "命令完成",
+  last_input: "最近输入",
+  last_input_source: "输入来源",
+  last_input_at: "输入时间",
+  os_pid: "系统 PID",
+  process_group_id: "进程组",
+  process_session_id: "进程会话",
+  release_reason: "释放原因",
+  page_id: "页面 ID",
+  url: "URL",
+  title: "标题",
+  viewport: "视口",
+  device_profile: "设备模拟",
+  device_orientation: "设备方向",
+  device_scale_factor: "像素比",
+  touch_simulation_enabled: "触摸模拟",
+  pending_dialog: "待处理对话框",
+  pending_file_chooser: "待处理文件选择",
+  client_count: "连接数",
+  sequence: "输出序号",
+  resource_source: "资源来源",
+  status_note: "状态说明",
+  historical_status: "历史状态",
+  error_message: "错误信息",
+  resource_state: "资源状态",
+  resource_policy: "资源策略",
+  resource_protection_reasons: "回收保护原因",
+  resource_transition_reason: "状态切换原因",
+  resource_transition_error: "状态切换错误",
+  frozen_at: "冻结时间",
+  discarded_at: "冷回收时间",
+  last_wake_at: "最近唤醒",
+  runtime_generation: "运行时代次",
+  stream_metrics: "流性能",
+  checkpoint_available: "恢复检查点",
+  target_session_id: "目标会话",
+  timeout_seconds: "超时秒数",
+  poll_interval_seconds: "轮询间隔秒数",
+  max_events: "最多转发事件数",
+  source_id: "消息来源 ID",
+  submitted_at: "提交时间",
+  started_at: "启动时间",
+  message_count: "消息数量",
+  interval_seconds: "发送间隔秒数",
+  result: "完成结果",
+};
+
+export function resourceMetadataRows(resource: SessionResource): [string, string][] {
   const metadata = resource.metadata;
-  const labels: Record<string, string> = {
-    cwd_relative: "工作目录",
-    command: "最近工具命令",
-    shell_command: "启动命令",
-    command_status: "命令状态",
-    command_exit_code: "退出码",
-    command_started_at: "命令开始",
-    command_completed_at: "命令完成",
-    last_input: "最近输入",
-    last_input_source: "输入来源",
-    last_input_at: "输入时间",
-    os_pid: "系统 PID",
-    process_group_id: "进程组",
-    process_session_id: "进程会话",
-    release_reason: "释放原因",
-    page_id: "页面 ID",
-    url: "URL",
-    title: "标题",
-    viewport: "视口",
-    device_profile: "设备模拟",
-    device_orientation: "设备方向",
-    device_scale_factor: "像素比",
-    touch_simulation_enabled: "触摸模拟",
-    pending_dialog: "待处理对话框",
-    pending_file_chooser: "待处理文件选择",
-    client_count: "连接数",
-    sequence: "输出序号",
-    resource_source: "资源来源",
-    status_note: "状态说明",
-    historical_status: "历史状态",
-    error_message: "错误信息",
-    resource_state: "资源状态",
-    resource_policy: "资源策略",
-    resource_protection_reasons: "回收保护原因",
-    resource_transition_reason: "状态切换原因",
-    resource_transition_error: "状态切换错误",
-    frozen_at: "冻结时间",
-    discarded_at: "冷回收时间",
-    last_wake_at: "最近唤醒",
-    runtime_generation: "运行时代次",
-    stream_metrics: "流性能",
-    checkpoint_available: "恢复检查点",
-    target_session_id: "目标会话",
-    timeout_seconds: "超时秒数",
-    poll_interval_seconds: "轮询间隔秒数",
-    max_events: "最多转发事件数",
-    source_id: "消息来源 ID",
-    submitted_at: "提交时间",
-    started_at: "启动时间",
-    message_count: "消息数量",
-    interval_seconds: "发送间隔秒数",
-    result: "完成结果",
-  };
-  return Object.entries(metadata).filter(([key]) => key !== "attach_url").map(([key, value]) => [
-    labels[key] ?? key,
-    metadataValueLabel(key, value, resource),
-  ]);
+  const rows: [string, string][] = [];
+  for (const key of Object.keys(metadata)) {
+    if (key === "attach_url") continue;
+    rows.push([
+      RESOURCE_METADATA_LABELS[key] ?? key,
+      resourceMetadataValueLabel(key, metadata[key]),
+    ]);
+  }
+  return rows;
 }

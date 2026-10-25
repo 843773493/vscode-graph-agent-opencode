@@ -17,6 +17,18 @@ function node(name: string, path: string): WorkspaceFileNode {
 }
 
 describe("文件树搜索命中判定", () => {
+  test("节点名称或路径变化后重新计算缓存文本", () => {
+    const mutableNode = node("before.ts", `${workspaceRootUri}/before.ts`);
+
+    expect(fileTreeNodeTextMatchesQuery(mutableNode, "before")).toBe(true);
+    mutableNode.name = "after.ts";
+    expect(fileTreeNodeTextMatchesQuery(mutableNode, "after")).toBe(true);
+
+    mutableNode.path = `${workspaceRootUri}/after.ts`;
+    expect(fileTreeNodeTextMatchesQuery(mutableNode, "before")).toBe(false);
+    expect(fileTreeNodeTextMatchesQuery(mutableNode, "after")).toBe(true);
+  });
+
   test("名称与 URI 分别匹配，不跨分隔符拼出假命中", () => {
     expect(fileTreeNodeTextMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "b")).toBe(true);
     expect(fileTreeNodeTextMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "a/b")).toBe(true);

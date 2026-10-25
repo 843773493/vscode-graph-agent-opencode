@@ -29,16 +29,29 @@ export function requestToolNames(log: LLMRequestLogRecord): string[] {
   return names;
 }
 
-function toolCallsFromMessageLike(value: unknown): Record<string, unknown>[] {
+function appendToolCallsFromMessageLike(
+  value: unknown,
+  calls: Record<string, unknown>[],
+): void {
   if (!isRecord(value)) {
-    return [];
+    return;
   }
-  const directToolCalls = Array.isArray(value.tool_calls) ? value.tool_calls : [];
-  const additionalToolCalls =
-    isRecord(value.additional_kwargs) && Array.isArray(value.additional_kwargs.tool_calls)
-      ? value.additional_kwargs.tool_calls
-      : [];
-  return [...directToolCalls, ...additionalToolCalls].filter(isRecord);
+  for (const call of Array.isArray(value.tool_calls) ? value.tool_calls : []) {
+    if (isRecord(call)) {
+      calls.push(call);
+    }
+  }
+  if (isRecord(value.additional_kwargs)) {
+    for (
+      const call of Array.isArray(value.additional_kwargs.tool_calls)
+        ? value.additional_kwargs.tool_calls
+        : []
+    ) {
+      if (isRecord(call)) {
+        calls.push(call);
+      }
+    }
+  }
 }
 
 export function collectToolCallsFromLog(
@@ -46,7 +59,29 @@ export function collectToolCallsFromLog(
 ): Record<string, unknown>[] {
   const requestMessages = Array.isArray(log.request.messages) ? log.request.messages : [];
   const responseItems = Array.isArray(log.response.result) ? log.response.result : [];
-  return [...requestMessages, ...responseItems].flatMap(toolCallsFromMessageLike);
+  const calls: Record<string, unknown>[] = [];
+  for (const message of requestMessages) {
+    appendToolCallsFromMessageLike(message, calls);
+  }
+  for (const item of responseItems) {
+    appendToolCallsFromMessageLike(item, calls);
+  }
+  return calls;
+}
+
+function appendCalledToolNames(
+  calls: unknown[],
+  names: string[],
+  seen: Set<string>,
+): void {
+  for (const call of calls) {
+    const name = customToolDisplayCallName(call);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
 }
 
 export function responseCalledToolNames(log: LLMRequestLogRecord): string[] {
@@ -64,14 +99,8 @@ export function responseCalledToolNames(log: LLMRequestLogRecord): string[] {
         ? item.additional_kwargs.tool_calls
         : [];
 
-    for (const call of [...directToolCalls, ...additionalToolCalls]) {
-      const name = customToolDisplayCallName(call);
-      if (!name || seen.has(name)) {
-        continue;
-      }
-      seen.add(name);
-      names.push(name);
-    }
+    appendCalledToolNames(directToolCalls, names, seen);
+    appendCalledToolNames(additionalToolCalls, names, seen);
   }
 
   return names;

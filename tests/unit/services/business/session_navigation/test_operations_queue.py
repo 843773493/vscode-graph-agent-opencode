@@ -44,7 +44,7 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
-from tests.support.session_navigation_queue import (
+from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
 )

@@ -2,6 +2,19 @@
 
 存放 Agent 运行时使用的纯策略计算，例如工具可用性解析和工具依赖约束。
 
+## 职责树
+
+按工具声明到运行时能力的方向查找；本目录只计算策略，不执行工具。
+
+```text
+app/agents/policy/
+├── custom_tool_spec.py  校验和归一化内置/扩展工具声明
+├── tool_groups.py       维护工具分组及工具到分组的映射
+├── tool_policy.py       解析工具全集、allow/deny selector 与跨工具依赖
+├── tool_capability.py   合并 Workspace/Agent 规则和强制限制
+└── __init__.py          导出策略目录的公共类型与函数
+```
+
 # 可修改内容
 
 - 无 I/O 的 Agent 策略数据结构、集合运算和校验函数。
@@ -16,3 +29,4 @@
 
 - 策略函数必须保持纯粹、确定且可单独测试。
 - 无效策略必须抛出包含冲突工具名称的明确错误。
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -33,7 +33,7 @@ class _LogCandidate:
     source: str
     service: str
     label: str
-    path: Path | None
+    log_path: Path | None
     workspace_id: str | None = None
     workspace_name: str | None = None
 
@@ -52,7 +52,7 @@ def _launcher_log_candidate() -> _LogCandidate:
         source="gateway",
         service="launcher",
         label="Launcher 汇总日志",
-        path=_launcher_log_path(),
+        log_path=_launcher_log_path(),
     )
 
 
@@ -108,7 +108,7 @@ def _candidate_gateway_logs(known_workspace_files: set[str]) -> list[_LogCandida
                 source="gateway",
                 service="gateway_runtime",
                 label=f"Gateway 运行日志 · {log_path.name}",
-                path=log_path,
+                log_path=log_path,
             )
         )
     return candidates
@@ -135,7 +135,7 @@ def _workspace_candidates(
                 workspace_name=target.name,
                 service=service,
                 label=f"{target.name} · {_SERVICE_LABELS[service]}",
-                path=log_path,
+                log_path=log_path,
             )
         )
     return candidates
@@ -147,7 +147,7 @@ def _read_log(
     *,
     include_tail: bool,
 ) -> GatewayDiagnosticLogDTO:
-    if candidate.path is None:
+    if candidate.log_path is None:
         return GatewayDiagnosticLogDTO(
             log_id=candidate.log_id,
             source=candidate.source,
@@ -158,7 +158,7 @@ def _read_log(
             status="unavailable",
             error="该工作区不是当前 Gateway 托管进程，日志不在 Gateway 控制面中。",
         )
-    log_path = candidate.path
+    log_path = candidate.log_path
     try:
         file_stat = log_path.stat(follow_symlinks=False)
     except FileNotFoundError:
@@ -310,9 +310,9 @@ async def collect_gateway_diagnostics(
     ]
     if selected_workspace_id is None:
         known_workspace_files = {
-            candidate.path.name
+            candidate.log_path.name
             for candidate in workspace_candidates
-            if candidate.path is not None
+            if candidate.log_path is not None
         }
         gateway_candidates = _candidate_gateway_logs(known_workspace_files)
     else:
@@ -344,7 +344,7 @@ async def collect_gateway_diagnostics(
             (
                 candidate.log_id
                 for candidate in preferred_log_candidates
-                if candidate.path is not None and candidate.path.exists()
+                if candidate.log_path is not None and candidate.log_path.exists()
             ),
             preferred_log_candidates[0].log_id if preferred_log_candidates else None,
         )

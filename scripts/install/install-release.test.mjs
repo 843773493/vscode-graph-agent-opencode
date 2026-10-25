@@ -9,12 +9,12 @@ import {
 } from "./install-release.mjs";
 
 // 这里只组装路径与命令，不创建安装目录或执行npm；真实路径遵循运行主机的规则。
-const fixtureRoot = path.resolve(process.cwd(), "out/tests/scripts/install/install-release/workspace");
-const fixtureProjectRoot = path.join(fixtureRoot, "源码 工作区");
-const fixtureInstallPrefix = path.join(fixtureRoot, "隔离 安装");
+const fixtureWorkspaceRoot = path.resolve(process.cwd(), "out/tests/scripts/install/install-release/workspace");
+const fixtureProjectRoot = path.join(fixtureWorkspaceRoot, "源码 工作区");
+const fixtureInstallPrefix = path.join(fixtureWorkspaceRoot, "隔离 安装");
 
 describe("发布版安装入口", () => {
-  test("默认从当前源码的 Linux 本地 tarball 安装", () => {
+  test("Linux x64 从当前源码路径构建本地 tarball 安装命令", () => {
     const launcherTarball = path.join(fixtureProjectRoot, "out", "packaging", "linux-x64", "tarballs", `boxteam-${BOXTEAM_VERSION}.tgz`);
     const runtimeTarball = path.join(fixtureProjectRoot, "out", "packaging", "linux-x64", "release-assets", `boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`);
     const command = buildReleaseInstallCommand({

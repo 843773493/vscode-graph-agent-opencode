@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from app.core.background_task_registry import BackgroundTaskRegistry
+from app.abstractions.session_resources import BackgroundTaskRegistryProtocol
+from app.core.background_task_contracts import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
 from app.services.business.message_service import MessageService
 from app.services.business.session_resource_providers import (
@@ -130,14 +131,51 @@ class FakeJobService:
         return self.count
 
 
+class _EmptyBackgroundTaskRegistry:
+    def list_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
+        return []
+
+    def list_closed_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
+        return []
+
+    def get_handle(
+        self,
+        _session_id: str,
+        _task_id: str,
+    ) -> BackgroundTaskHandle | None:
+        return None
+
+    async def cancel(
+        self,
+        _session_id: str,
+        task_id: str,
+    ) -> BackgroundTaskHandle:
+        raise AssertionError(f"空后台任务 registry 不应取消任务: {task_id}")
+
+    async def delete(
+        self,
+        _session_id: str,
+        task_id: str,
+    ) -> BackgroundTaskHandle:
+        raise AssertionError(f"空后台任务 registry 不应删除任务: {task_id}")
+
+    async def delete_session(self, _session_id: str) -> int:
+        return 0
+
+
 @pytest.fixture
 def resource_mapper() -> SessionResourceMapper:
     return SessionResourceMapper()
 
 
+@pytest.fixture
+def empty_background_task_registry() -> BackgroundTaskRegistryProtocol:
+    return _EmptyBackgroundTaskRegistry()
+
+
 def _provider_registry(
     *,
-    task_registry: BackgroundTaskRegistry,
+    task_registry: BackgroundTaskRegistryProtocol,
     terminal_owner: FakeTerminalResourceOwner,
     browser_owner: FakeBrowserResourceOwner,
     message_service: FakeMessageService | MessageService,
@@ -409,14 +447,10 @@ async def test_browser_provider_resumes_cold_recycled_browser(
 
 @pytest.mark.asyncio
 async def test_browser_provider_excludes_deleted_records(
-    tmp_path,
-    session_bundle_factory,
+    empty_background_task_registry: BackgroundTaskRegistryProtocol,
     resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019bb7ec49017d8cac52d5b674fa1b7e"
-    sessions_dir = tmp_path / ".boxteam" / "sessions"
-    session_bundle_factory(sessions_dir, session_id)
-    registry = build_background_registry(sessions_dir)
     browser_owner = FakeBrowserResourceOwner(
         browsers=[
             {
@@ -432,7 +466,7 @@ async def test_browser_provider_excludes_deleted_records(
         session_service=FakeSessionService(),
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
-            task_registry=registry,
+            task_registry=empty_background_task_registry,
             terminal_owner=FakeTerminalResourceOwner(),
             browser_owner=browser_owner,
             message_service=FakeMessageService(),

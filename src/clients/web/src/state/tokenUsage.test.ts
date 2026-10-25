@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import type { TraceEvent } from "../types/backend";
 import type { ConversationView } from "../types/frontend";
 import {
@@ -130,6 +131,21 @@ const modelUsage = conversationModelUsage({
   events: modelEvents,
 });
 assert(modelUsage?.finalModelId === "openrouter/free", "应显示最终响应模型");
+test("较早的无效模型 ID 仍须报错，即使后续记录了有效模型", () => {
+  expect(() =>
+    conversationModelUsage({
+      ...traceConversation,
+      events: [
+        {
+          ...modelEvents[0],
+          payload: { model: " " },
+          raw: { payload: { model: " " } },
+        },
+        modelEvents[1],
+      ],
+    }),
+  ).toThrow(TypeError);
+});
 assert(
   conversationModelUsage({ ...traceConversation, events: [] }) === null,
   "没有模型调用记录时不应伪造模型 ID",

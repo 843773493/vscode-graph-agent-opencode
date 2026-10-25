@@ -14,10 +14,8 @@ from app.core.path_utils import (
     get_session_path_resolver,
     get_sessions_dir,
     initialize_directories,
-    workspace_context,
 )
 from app.core.resource_uri import resource_display_uri
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
@@ -26,80 +24,95 @@ from app.services.infrastructure.session_changes_store import SessionChangesStor
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
-def _uri(root: Path, path: str) -> str:
-    return resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files",
+def _uri(workspace_id: str, path: str) -> str:
+    return resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
                                 tail_segments=("root", *Path(path).parts))
 
 
 @pytest.fixture
-def session_service(tmp_path: Path):
-    workspace_id = load_or_create_workspace_id(tmp_path)
-    initialize_directories(workspace_id, tmp_path)
-    with workspace_context(workspace_id, tmp_path):
-        local_config_path = tmp_path / ".boxteam" / "workspace.jsonc"
-        local_config_path.write_text(
-            json.dumps(
-                {
-                    "llm": {
-                        "providers": [
-                            {
-                                "id": "test-local",
-                                "endpoint": "http://127.0.0.1:9/v1",
-                                "model": "offline-test-model",
-                                "api_key": "offline-test-key",
-                                "custom_llm_provider": "openai",
-                                "api_mode": {
-                                    "protocol": "chat_completions",
-                                    "model_info": {
-                                        "supports_function_calling": True,
-                                        "supports_reasoning": True,
-                                    },
-                                    "supports_reasoning": {"reasoning_content": True},
+def session_changes_workspace(
+    empty_workspace_scope: tuple[str, Path],
+) -> tuple[str, Path]:
+    workspace_id, workspace_root = empty_workspace_scope
+    initialize_directories(workspace_id, workspace_root)
+    local_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
+    local_config_path.write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "providers": [
+                        {
+                            "id": "test-local",
+                            "endpoint": "http://127.0.0.1:9/v1",
+                            "model": "offline-test-model",
+                            "api_key": "offline-test-key",
+                            "custom_llm_provider": "openai",
+                            "api_mode": {
+                                "protocol": "chat_completions",
+                                "model_info": {
+                                    "supports_function_calling": True,
+                                    "supports_reasoning": True,
                                 },
-                            }
-                        ]
-                    },
-                    "agents": {
-                        "default": {
-                            "model": {
-                                "primary_provider": "test-local",
-                                "fallback_providers": [],
-                            }
+                                "supports_reasoning": {"reasoning_content": True},
+                            },
                         }
-                    },
+                    ]
                 },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+                "agents": {
+                    "default": {
+                        "model": {
+                            "primary_provider": "test-local",
+                            "fallback_providers": [],
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
         )
-        # R17：workspace_id 与 resolver 同源（identity API）；catalog 模式下
-        # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
-        yield SessionService(
-            config_service=ConfigService(workspace_root=tmp_path),
-            trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
-            workspace_id=load_or_create_workspace_id(tmp_path),
-            path_resolver=get_session_path_resolver(get_sessions_dir()),
-            creation_service=get_session_creation_service(get_sessions_dir()),
+        + "\n",
+        encoding="utf-8",
+    )
+    return workspace_id, workspace_root
 
-        )
+
+@pytest.fixture
+def workspace_id(session_changes_workspace: tuple[str, Path]) -> str:
+    return session_changes_workspace[0]
+
+
+@pytest.fixture
+def workspace_root(session_changes_workspace: tuple[str, Path]) -> Path:
+    return session_changes_workspace[1]
+
+
+@pytest.fixture
+def session_service(session_changes_workspace: tuple[str, Path]) -> SessionService:
+    workspace_id, workspace_root = session_changes_workspace
+    return SessionService(
+        config_service=ConfigService(workspace_root=workspace_root),
+        trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
+        workspace_id=workspace_id,
+        path_resolver=get_session_path_resolver(get_sessions_dir()),
+        creation_service=get_session_creation_service(get_sessions_dir()),
+    )
 
 
 @pytest.mark.asyncio
 async def test_records_readable_changesets_for_file_tools(
-    tmp_path: Path,
+    workspace_root: Path,
+    workspace_id: str,
     session_service: SessionService,
 ) -> None:
     session = await session_service.create(SessionCreateRequest(title="changes"))
     service = SessionChangesService(
         session_service=session_service,
-        store=SessionChangesStore(workspace_root=tmp_path),
+        store=SessionChangesStore(workspace_root=workspace_root),
     )
-    target = tmp_path / "src" / "hello.txt"
+    target = workspace_root / "src" / "hello.txt"
     target.parent.mkdir(parents=True)
 
-    before = FileEditSnapshot(_uri(tmp_path, "src/hello.txt"), False, "", True, "hello\nworld\n")
+    before = FileEditSnapshot(_uri(workspace_id, "src/hello.txt"), False, "", True, "hello\nworld\n")
     target.write_text("hello\nworld\n", encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -111,14 +124,14 @@ async def test_records_readable_changesets_for_file_tools(
     )
 
     assert record is not None
-    assert record.file_path == _uri(tmp_path, "src/hello.txt")
+    assert record.file_path == _uri(workspace_id, "src/hello.txt")
     assert record.kind == "create"
 
     changes_dir = get_session_changes_dir(session.session_id)
     index_file = changes_dir / "index.jsonl"
     assert index_file.exists()
     index_record = json.loads(index_file.read_text(encoding="utf-8").strip())
-    assert index_record["file_path"] == _uri(tmp_path, "src/hello.txt")
+    assert index_record["file_path"] == _uri(workspace_id, "src/hello.txt")
     assert (changes_dir / "edits" / record.edit_id / "diff.patch").exists()
     metadata = json.loads((changes_dir / "edits" / record.edit_id / "metadata.json").read_text())
     assert metadata == index_record == asdict(record)
@@ -137,7 +150,7 @@ async def test_records_readable_changesets_for_file_tools(
     assert detail.summary.deletions == 0
     assert len(detail.files) == 1
     file_change = detail.files[0]
-    assert file_change.file_path == _uri(tmp_path, "src/hello.txt")
+    assert file_change.file_path == _uri(workspace_id, "src/hello.txt")
     assert "+hello" in file_change.diff_text
     assert file_change.after_preview == "hello\nworld\n"
     assert not {"before_file", "after_file", "diff_file"} & file_change.model_dump().keys()
@@ -150,17 +163,18 @@ async def test_records_readable_changesets_for_file_tools(
 
 @pytest.mark.asyncio
 async def test_marks_file_changes_reviewed(
-    tmp_path: Path,
+    workspace_root: Path,
+    workspace_id: str,
     session_service: SessionService,
 ) -> None:
     session = await session_service.create(SessionCreateRequest(title="review"))
     service = SessionChangesService(
         session_service=session_service,
-        store=SessionChangesStore(workspace_root=tmp_path),
+        store=SessionChangesStore(workspace_root=workspace_root),
     )
-    target = tmp_path / "notes.md"
+    target = workspace_root / "notes.md"
     target.write_text("before\n", encoding="utf-8")
-    before = FileEditSnapshot(_uri(tmp_path, "notes.md"), True, "before\n", True, "after\n")
+    before = FileEditSnapshot(_uri(workspace_id, "notes.md"), True, "before\n", True, "after\n")
     target.write_text("after\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -173,7 +187,7 @@ async def test_marks_file_changes_reviewed(
 
     result = await service.set_file_reviewed(
         session_id=session.session_id,
-        file_path=_uri(tmp_path, "notes.md"),
+        file_path=_uri(workspace_id, "notes.md"),
         reviewed=True,
     )
 
@@ -186,7 +200,7 @@ async def test_marks_file_changes_reviewed(
 
     await service.set_file_reviewed(
         session_id=session.session_id,
-        file_path=_uri(tmp_path, "notes.md"),
+        file_path=_uri(workspace_id, "notes.md"),
         reviewed=False,
     )
     refreshed = await service.get_changeset(
@@ -198,19 +212,20 @@ async def test_marks_file_changes_reviewed(
 
 @pytest.mark.asyncio
 async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
-    tmp_path: Path,
+    workspace_root: Path,
+    workspace_id: str,
     session_service: SessionService,
 ) -> None:
     session = await session_service.create(SessionCreateRequest(title="multi edit"))
     service = SessionChangesService(
         session_service=session_service,
-        store=SessionChangesStore(workspace_root=tmp_path),
+        store=SessionChangesStore(workspace_root=workspace_root),
     )
-    first_file = tmp_path / "src" / "first.txt"
-    second_file = tmp_path / "src" / "second.txt"
+    first_file = workspace_root / "src" / "first.txt"
+    second_file = workspace_root / "src" / "second.txt"
     first_file.parent.mkdir(parents=True)
 
-    before_first_create = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), False, "", True, "one\n")
+    before_first_create = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), False, "", True, "one\n")
     first_file.write_text("one\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -221,7 +236,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_first_create,
     )
 
-    before_first_edit = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), True, "one\n", True, "one\ntwo\n")
+    before_first_edit = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True, "one\n", True, "one\ntwo\n")
     first_file.write_text("one\ntwo\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -232,7 +247,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_first_edit,
     )
 
-    before_second_create = FileEditSnapshot(_uri(tmp_path, "src/second.txt"), False, "", True, "second\n")
+    before_second_create = FileEditSnapshot(_uri(workspace_id, "src/second.txt"), False, "", True, "second\n")
     second_file.write_text("second\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -243,7 +258,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_second_create,
     )
 
-    before_second_turn = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")
+    before_second_turn = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")
     first_file.write_text("one\ntwo\nthree\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -270,8 +285,8 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert all_changes.summary.additions == 4
     assert all_changes.summary.deletions == 0
     assert [file.file_path for file in all_changes.files] == [
-        _uri(tmp_path, "src/first.txt"),
-        _uri(tmp_path, "src/second.txt"),
+        _uri(workspace_id, "src/first.txt"),
+        _uri(workspace_id, "src/second.txt"),
     ]
     first_change = all_changes.files[0]
     assert first_change.tool_call_ids == [
@@ -294,8 +309,8 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert first_turn.summary.files == 2
     assert first_turn.summary.additions == 3
     assert [file.file_path for file in first_turn.files] == [
-        _uri(tmp_path, "src/first.txt"),
-        _uri(tmp_path, "src/second.txt"),
+        _uri(workspace_id, "src/first.txt"),
+        _uri(workspace_id, "src/second.txt"),
     ]
 
     second_turn = await service.get_changeset(
@@ -305,25 +320,26 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert second_turn.summary.files == 1
     assert second_turn.summary.additions == 1
     assert second_turn.summary.deletions == 0
-    assert second_turn.files[0].file_path == _uri(tmp_path, "src/first.txt")
+    assert second_turn.files[0].file_path == _uri(workspace_id, "src/first.txt")
     assert "+three" in second_turn.files[0].diff_text
 
 
 @pytest.mark.asyncio
 async def test_counts_changed_lines_that_start_with_diff_prefixes(
-    tmp_path: Path,
+    workspace_root: Path,
+    workspace_id: str,
     session_service: SessionService,
 ) -> None:
     """正文以 ++/-- 开头时仍是变更行，不能被当成 diff 文件头丢弃。"""
     session = await session_service.create(SessionCreateRequest(title="prefix lines"))
     service = SessionChangesService(
         session_service=session_service,
-        store=SessionChangesStore(workspace_root=tmp_path),
+        store=SessionChangesStore(workspace_root=workspace_root),
     )
-    target = tmp_path / "src" / "counter.txt"
+    target = workspace_root / "src" / "counter.txt"
     target.parent.mkdir(parents=True)
 
-    before = FileEditSnapshot(_uri(tmp_path, "src/counter.txt"), False, "", True, "++added\n--removed\n")
+    before = FileEditSnapshot(_uri(workspace_id, "src/counter.txt"), False, "", True, "++added\n--removed\n")
     target.write_text("++added\n--removed\n", encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -348,16 +364,17 @@ async def test_counts_changed_lines_that_start_with_diff_prefixes(
 
 @pytest.mark.asyncio
 async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changeset(
-    tmp_path: Path,
+    workspace_root: Path,
+    workspace_id: str,
     session_service: SessionService,
 ) -> None:
     session = await session_service.create(SessionCreateRequest(title="internal edit"))
     service = SessionChangesService(
         session_service=session_service,
-        store=SessionChangesStore(workspace_root=tmp_path),
+        store=SessionChangesStore(workspace_root=workspace_root),
     )
-    target = tmp_path / "internal.txt"
-    before = FileEditSnapshot(_uri(tmp_path, "internal.txt"), False, "", True, "internal output\n")
+    target = workspace_root / "internal.txt"
+    before = FileEditSnapshot(_uri(workspace_id, "internal.txt"), False, "", True, "internal output\n")
     target.write_text("internal output\n", encoding="utf-8")
 
     record = await service.record_tool_file_edit(
@@ -388,10 +405,10 @@ async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changese
 
 
 @pytest.mark.asyncio
-async def test_remote_observation_is_recorded_without_reading_source_decoy(tmp_path, session_service):
+async def test_remote_observation_is_recorded_without_reading_source_decoy(workspace_root, session_service):
     session = await session_service.create(SessionCreateRequest(title="固定目标变更"))
-    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
-    decoy = tmp_path / "same.txt"
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
+    decoy = workspace_root / "same.txt"
     decoy.write_text("SOURCE DECOY\n", encoding="utf-8")
     remote_uri = resource_display_uri(scope="workspace", scope_id="0191f2ab-1234-7abc-8def-0123456789ab",
         kind="files", tail_segments=("root", "same.txt"), gateway_authority="gateway_0123456789abcdef0123456789abcdef")
@@ -408,7 +425,7 @@ async def test_remote_observation_is_recorded_without_reading_source_decoy(tmp_p
     assert reviewed.file_path == remote_uri and reviewed.reviewed
     with pytest.raises(ValueError):
         await service.set_file_reviewed(session_id=session.session_id, file_path="/same.txt", reviewed=True)
-    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     changed, = (await reopened.get_changeset(session_id=session.session_id, changeset_id="all")).files
     assert changed.file_path == remote_uri and changed.reviewed
     assert changed.before_preview == "TARGET BEFORE\n" and changed.after_preview == "TARGET AFTER\n"
@@ -416,12 +433,12 @@ async def test_remote_observation_is_recorded_without_reading_source_decoy(tmp_p
 
 
 @pytest.fixture
-async def recorded_file_change(tmp_path, session_service):
+async def recorded_file_change(workspace_root, workspace_id, session_service):
     session = await session_service.create(SessionCreateRequest(title="冷读变更"))
-    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     record = await service.record_tool_file_edit(session_id=session.session_id, turn_id="turn_cold",
         tool_call_id="call_cold", execution_id="execution_cold", tool_name="edit_file",
-        before=FileEditSnapshot(_uri(tmp_path, "src/cold.txt"), True, "before\n", True, "after\n"))
+        before=FileEditSnapshot(_uri(workspace_id, "src/cold.txt"), True, "before\n", True, "after\n"))
     assert record is not None
     return session, record, get_session_changes_dir(session.session_id)
 
@@ -431,14 +448,14 @@ async def recorded_file_change(tmp_path, session_service):
     "boxteam://workspace/target/resources/files/root/../file.txt",
     "boxteam://workspace/target/resources/config/workspace", "boxteam://workspace/target/resources/files/root"])
 async def test_invalid_stored_change_reference_fails_cold_read_and_write_without_side_effects(
-    tmp_path, session_service, recorded_file_change, reference,
+    workspace_root, session_service, recorded_file_change, reference,
 ):
     session, record, changes = recorded_file_change
     index = changes / "index.jsonl"
     invalid = {**asdict(record), "file_path": reference}
     index.write_text(json.dumps(invalid) + "\n")
     originals = {path: path.read_bytes() for path in changes.rglob("*") if path.is_file()}
-    store = SessionChangesStore(workspace_root=tmp_path)
+    store = SessionChangesStore(workspace_root=workspace_root)
     reopened = SessionChangesService(session_service=session_service, store=store)
     for operation in (reopened.list_changesets(session.session_id),
                       reopened.get_changeset(session_id=session.session_id, changeset_id="all")):
@@ -461,13 +478,13 @@ async def test_invalid_stored_change_reference_fails_cold_read_and_write_without
      "boxteam://workspace/target/resources/files/root/%E4%B8%AD.txt": False},
 ])
 async def test_invalid_reviewed_reference_fails_read_and_update_without_rewriting(
-    tmp_path, session_service, recorded_file_change, reviewed,
+    workspace_root, session_service, recorded_file_change, reviewed,
 ):
     session, record, changes = recorded_file_change
     path = changes / "reviewed.json"
     original = json.dumps(reviewed).encode()
     path.write_bytes(original)
-    store = SessionChangesStore(workspace_root=tmp_path)
+    store = SessionChangesStore(workspace_root=workspace_root)
     reopened = SessionChangesService(session_service=session_service, store=store)
     with pytest.raises((ValueError, TypeError)):
         await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
@@ -481,13 +498,13 @@ async def test_invalid_reviewed_reference_fails_read_and_update_without_rewritin
 @pytest.mark.asyncio
 @pytest.mark.parametrize("obsolete_field", ["before_file", "after_file", "diff_file"])
 async def test_legacy_snapshot_locations_are_not_accepted_as_cold_read_targets(
-    tmp_path, session_service, recorded_file_change, obsolete_field,
+    workspace_root, session_service, recorded_file_change, obsolete_field,
 ):
     session, record, changes = recorded_file_change
     index = changes / "index.jsonl"
     original = json.dumps({**asdict(record), obsolete_field: "/private/decoy.txt"}).encode() + b"\n"
     index.write_bytes(original)
-    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     with pytest.raises(TypeError, match=obsolete_field):
         await reopened.list_changesets(session.session_id)
     assert index.read_bytes() == original
@@ -496,14 +513,14 @@ async def test_legacy_snapshot_locations_are_not_accepted_as_cold_read_targets(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reference", [
     "boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
-    "boxteam://workspace/target/resources/attachments/att_0123456789abcdef0123456789abcdef/derived/%e4%b8%ad.txt",
     "boxteam://gateway_0123456789abcdef0123456789abcdef/gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001/%e4%b8%ad.txt",
+    "boxteam://workspace/target/resources/attachments/att_0123456789abcdef0123456789abcdef/derived/%e4%b8%ad.txt",
 ])
 async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after_cold_read(
-    tmp_path, session_service, reference,
+    workspace_root, session_service, reference,
 ):
     session = await session_service.create(SessionCreateRequest(title="悬空引用"))
-    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     record = await service.record_tool_file_edit(session_id=session.session_id, turn_id=None,
         tool_call_id="call_dangling", execution_id="execution_dangling", tool_name="edit_file",
         before=FileEditSnapshot(reference, True, "before /etc/hosts\n", False, ""))
@@ -511,7 +528,7 @@ async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after
     await service.set_file_reviewed(session_id=session.session_id, file_path=reference, reviewed=True)
     index = get_session_changes_dir(session.session_id) / "index.jsonl"
     original = index.read_bytes()
-    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     changed, = (await reopened.get_changeset(session_id=session.session_id, changeset_id="all")).files
     assert changed.file_path == record.file_path == reference.replace("%e4%b8%ad", "%E4%B8%AD")
     assert changed.reviewed and changed.kind == "delete"
@@ -522,24 +539,24 @@ async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("alias", ["edit_directory", "before_snapshot"])
-async def test_derived_snapshot_lookup_keeps_containment(tmp_path, session_service, recorded_file_change, alias):
+async def test_derived_snapshot_lookup_keeps_containment(workspace_root, session_service, recorded_file_change, alias):
     session, record, changes = recorded_file_change
     edit = changes / "edits" / record.edit_id
     if alias == "edit_directory":
         for path in edit.iterdir():
             path.unlink()
         edit.rmdir()
-        external = tmp_path / "external-snapshots"
+        external = workspace_root / "external-snapshots"
         external.mkdir()
         (external / "before.txt").write_text("SOURCE DECOY\n")
         (external / "after.txt").write_text("SOURCE DECOY AFTER\n")
         edit.symlink_to(external, target_is_directory=True)
     else:
-        external = tmp_path / "external-snapshot.txt"
+        external = workspace_root / "external-snapshot.txt"
         external.write_text("SOURCE DECOY\n")
         (edit / "before.txt").unlink()
         (edit / "before.txt").symlink_to(external)
-    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     with pytest.raises(ForbiddenError):
         await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
     assert not (changes / "changesets/all/summary.json").exists()

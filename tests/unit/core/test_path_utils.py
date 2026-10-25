@@ -5,7 +5,6 @@ import pytest
 
 from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id, create_uuid_hex
-from app.core.path_segments import physical_segment
 from app.core.path_utils import (
     get_boxteam_home,
     get_gateway_root,
@@ -228,11 +227,6 @@ class TestPathUtils:
         special_path = "test with spaces and_safe-special.chars"
         result = safe_join(self.base_path, special_path)
         assert result.name == special_path
-
-    def test_physical_segment_is_windows_safe_and_stable(self):
-        assert physical_segment("CON", "fld_12345678") == "fld_12345678"
-        assert physical_segment('日报<>:"/\\|?*', "ses_abcdefgh") == "ses_abcdefgh"
-        assert physical_segment("名称. ", "ses_12345678") == "ses_12345678"
 
     def test_get_user_workspace_root_uses_hidden_directory_under_home(
         self,

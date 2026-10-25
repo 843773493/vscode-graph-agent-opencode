@@ -1,5 +1,8 @@
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+const PROCESS_RUN_ID = `pid-${process.pid}-${randomUUID()}`;
 
 export const TEST_RESULT_STATUSES = Object.freeze([
   "passed",
@@ -24,6 +27,31 @@ function withoutFinalExtension(filePath) {
   return extension ? filePath.slice(0, -extension.length) : filePath;
 }
 
+function runDirectoryName() {
+  const runIdentity = process.env.BOXTEAM_TEST_RUN_ID ||
+    process.env.PYTEST_XDIST_TESTRUNUID || PROCESS_RUN_ID;
+  const workerId = process.env.PYTEST_XDIST_WORKER;
+  const scopedIdentity = workerId ? `${runIdentity}-${workerId}` : runIdentity;
+  const runKey = createHash("sha1").update(scopedIdentity).digest("hex").slice(0, 12);
+  return `run-${runKey}`;
+}
+
+function pytestNodeDirectoryName() {
+  const currentTest = process.env.PYTEST_CURRENT_TEST;
+  if (currentTest === undefined) return null;
+  const separator = currentTest.lastIndexOf(" (");
+  const phase = currentTest.slice(separator + 2, -1);
+  if (
+    separator < 0 || !currentTest.endsWith(")") ||
+    !["setup", "call", "teardown"].includes(phase)
+  ) {
+    throw new Error(`PYTEST_CURRENT_TEST 格式无效: ${currentTest}`);
+  }
+  const nodeId = currentTest.slice(0, separator);
+  const nodeKey = createHash("sha1").update(nodeId).digest("hex").slice(0, 12);
+  return `node-${nodeKey}`;
+}
+
 export class TestRunContext {
   #cleanups = [];
   #cleanupStarted = false;
@@ -41,8 +69,12 @@ export class TestRunContext {
       "tests",
       withoutFinalExtension(relativeTestFile),
     );
+    this.runRoot = path.join(this.outputRoot, "runs", runDirectoryName());
     this.workspaceRoot = path.join(this.outputRoot, "workspace");
-    this.artifactsDir = path.join(this.outputRoot, "artifacts");
+    const pytestNodeDirectory = pytestNodeDirectoryName();
+    this.artifactsDir = pytestNodeDirectory
+      ? path.join(this.runRoot, "nodes", pytestNodeDirectory, "artifacts")
+      : path.join(this.runRoot, "artifacts");
     this.boxteamHome = path.join(this.outputRoot, "boxteam-home");
   }
 

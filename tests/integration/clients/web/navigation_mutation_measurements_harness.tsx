@@ -5,16 +5,17 @@ import { useSessionResourceExplorer } from "../../../../src/clients/web/src/hook
 import { useSessionGeneratorResources } from "../../../../src/clients/web/src/hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type { WorkspaceFileOperationReceipt } from "../../../../src/clients/web/src/types/backend";
 import "../../../../src/clients/web/src/index.css";
-import "../../../../src/clients/web/src/styles/theme.css";
-import "../../../../src/clients/web/src/styles/panelShared.css";
-import "../../../../src/clients/web/src/styles/agentSessionsPanel.css";
-import "../../../../src/clients/web/src/styles/workbenchLayout.css";
+import "../../../../src/clients/web/src/styles/foundation/theme.css";
+import "../../../../src/clients/web/src/styles/foundation/panelShared.css";
+import "../../../../src/clients/web/src/styles/session/agentSessionsPanel.css";
+import "../../../../src/clients/web/src/styles/foundation/workbenchLayout.css";
 
 interface MeasurementConfig {
   gatewayPort: number;
   workspaceId: string;
   backendWorkspaceId: string;
   workspaceRoot: string;
+  workspaceUri: string;
   sessionId: string;
   workspaceNodeId: string;
   gatewayFolderIds: string[];
@@ -108,9 +109,9 @@ window.fetch = new Proxy(window.fetch, { async apply(target, _this, args) {
       let targetPathTitle: string | null = null;
       for (const snapshot of receipt.snapshots) {
         const item = snapshot.items.find((entry) => publishedItems.some((published) =>
-          entry.kind === published.kind && entry.path.endsWith(`/${published.path}`)));
+          entry.kind === published.kind && entry.path === published.path));
         if (item) {
-          targetPathTitle = `${snapshot.root_path.replace(/[\\/]+$/g, "")}/${item.path.replaceAll("\\", "/")}`;
+          targetPathTitle = item.path;
           break;
         }
       }
@@ -323,7 +324,10 @@ function MeasurementHarness() {
   const [name, setName] = useState("");
   const [folder, setFolder] = useState(config.gatewayFolderIds[0]);
   const [expanded, setExpanded] = useState([
-    "", ...Array.from({ length: config.expandedCount }, (_, index) => `d${String(index).padStart(3, "0")}`),
+    config.workspaceUri,
+    ...Array.from({ length: config.expandedCount }, (_, index) => (
+      `${config.workspaceUri}/d${String(index).padStart(3, "0")}`
+    )),
   ]);
   const generatorResources = useSessionGeneratorResources(config.gatewayPort);
   const explorer = useSessionResourceExplorer({

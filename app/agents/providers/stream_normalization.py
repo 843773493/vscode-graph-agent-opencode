@@ -34,20 +34,26 @@ def append_stream_block(blocks: list[dict[str, Any]], block: dict[str, Any]) -> 
             previous_items = previous.get("reasoning_items")
             current_items = block.get("reasoning_items")
             if isinstance(previous_items, list) and isinstance(current_items, list):
+                previous_item_indexes: dict[str, int] = {}
+                for item_position, previous_item in enumerate(previous_items):
+                    previous_id = (
+                        previous_item.get("id")
+                        if isinstance(previous_item, Mapping)
+                        else None
+                    )
+                    if isinstance(previous_id, str):
+                        previous_item_indexes.setdefault(previous_id, item_position)
                 for item in current_items:
                     item_id = item.get("id") if isinstance(item, Mapping) else None
                     if isinstance(item_id, str):
-                        replaced = False
-                        for index, previous_item in enumerate(previous_items):
-                            if (
-                                isinstance(previous_item, Mapping)
-                                and previous_item.get("id") == item_id
-                            ):
-                                previous_items[index] = copy.deepcopy(item)
-                                replaced = True
-                                break
-                        if replaced:
-                            continue
+                        item_position = previous_item_indexes.get(item_id)
+                        if item_position is not None:
+                            previous_items[item_position] = copy.deepcopy(item)
+                        else:
+                            item_position = len(previous_items)
+                            previous_items.append(copy.deepcopy(item))
+                            previous_item_indexes[item_id] = item_position
+                        continue
                     if item not in previous_items:
                         previous_items.append(copy.deepcopy(item))
                 return

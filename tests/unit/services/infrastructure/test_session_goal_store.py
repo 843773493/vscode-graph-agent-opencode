@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from app.services.infrastructure.session_goal_store import SessionGoalStore
 class _SessionCatalogPathResolverStub:
     def __init__(self, path):
         self.path = path
+        self.main_thread_id_calls = 0
 
     def resolve_session_node(self, session_id: str):
         assert session_id == "sess_goal"
@@ -16,10 +18,15 @@ class _SessionCatalogPathResolverStub:
 
     def main_thread_id(self, session_id: str):
         assert session_id == "sess_goal"
+        self.main_thread_id_calls += 1
         return "thr_019bf0c16c1c736783165d8b623efb7c"
 
     def list_nodes(self):
-        return [SimpleNamespace(kind="session", node_id="sess_goal")]
+        return [SimpleNamespace(
+            kind="session",
+            node_id="sess_goal",
+            main_thread_id="thr_019bf0c16c1c736783165d8b623efb7c",
+        )]
 
 
 @pytest.fixture
@@ -45,10 +52,31 @@ def test_goal_store_atomic_round_trip(goal_store_and_session_path):
     store.write(goal)
 
     assert store.read("sess_goal") == goal
+    main_thread_id_calls = store._path_resolver.main_thread_id_calls
     assert store.list_existing() == [goal]
+    assert store._path_resolver.main_thread_id_calls == main_thread_id_calls
     assert not list(session_path.glob("*.tmp"))
     assert store.clear("sess_goal") is True
     assert store.read("sess_goal") is None
+    assert store.clear("sess_goal") is False
+
+
+def test_missing_goal_read_and_clear_do_not_preflight_with_exists(
+    goal_store_and_session_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, session_path = goal_store_and_session_path
+    assert not (session_path / "goal.json").exists()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            Path,
+            "exists",
+            lambda _path: pytest.fail("缺失目标应由文件操作直接确认"),
+        )
+        main_thread_id_calls = store._path_resolver.main_thread_id_calls
+        assert store.read("sess_goal") is None
+        assert store._path_resolver.main_thread_id_calls == main_thread_id_calls
+        assert store.clear("sess_goal") is False
 
 
 def test_goal_store_does_not_persist_derived_thread_identity(

@@ -10,40 +10,50 @@ RESTART_DELAY_MS = 1_000
 
 @dataclass(frozen=True, slots=True)
 class DevelopmentRestartCommand:
-    runner: Path
-    script: Path
-    cwd: Path
+    runner_path: Path
+    script_path: Path
+    working_directory: Path
 
     @property
     def argv(self) -> list[str]:
         return [
-            str(self.runner),
-            str(self.script),
+            str(self.runner_path),
+            str(self.script_path),
             "--only-launch",
             f"--restart-delay-ms={RESTART_DELAY_MS}",
         ]
 
 
 def resolve_development_restart_command() -> DevelopmentRestartCommand | None:
-    runner_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_RUNNER")
-    script_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_SCRIPT")
-    cwd_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_CWD")
-    configured_values = (runner_value, script_value, cwd_value)
+    runner_path_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_RUNNER")
+    script_path_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_SCRIPT")
+    working_directory_value = os.environ.get("BOXTEAM_DEVELOPMENT_RESTART_CWD")
+    configured_values = (
+        runner_path_value,
+        script_path_value,
+        working_directory_value,
+    )
     if all(value is None for value in configured_values):
         return None
     if any(not value or not value.strip() for value in configured_values):
         raise RuntimeError("源码开发服务重启配置不完整")
 
-    runner = Path(runner_value).resolve()
-    script = Path(script_value).resolve()
-    cwd = Path(cwd_value).resolve()
-    if not runner.is_file():
-        raise FileNotFoundError(f"源码开发服务重启运行器不存在: {runner}")
-    if not script.is_file():
-        raise FileNotFoundError(f"源码开发服务重启脚本不存在: {script}")
-    if not cwd.is_dir():
-        raise NotADirectoryError(f"源码开发服务重启工作目录不存在: {cwd}")
-    return DevelopmentRestartCommand(runner=runner, script=script, cwd=cwd)
+    runner_path = Path(runner_path_value).resolve()
+    script_path = Path(script_path_value).resolve()
+    working_directory = Path(working_directory_value).resolve()
+    if not runner_path.is_file():
+        raise FileNotFoundError(f"源码开发服务重启运行器不存在: {runner_path}")
+    if not script_path.is_file():
+        raise FileNotFoundError(f"源码开发服务重启脚本不存在: {script_path}")
+    if not working_directory.is_dir():
+        raise NotADirectoryError(
+            f"源码开发服务重启工作目录不存在: {working_directory}"
+        )
+    return DevelopmentRestartCommand(
+        runner_path=runner_path,
+        script_path=script_path,
+        working_directory=working_directory,
+    )
 
 
 def start_development_restart(
@@ -64,7 +74,7 @@ def start_development_restart(
             popen_platform_options = {"start_new_session": True}
         process = subprocess.Popen(
             command.argv,
-            cwd=command.cwd,
+            cwd=command.working_directory,
             env={**os.environ, **(environment or {})},
             stdin=subprocess.DEVNULL,
             stdout=log_file,

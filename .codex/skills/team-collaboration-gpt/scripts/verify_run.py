@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from run_task import group_members, write_json
+from run_task import process_group_members, write_json
 
 
 def file_identity(path: Path) -> dict[str, object]:
@@ -74,18 +74,61 @@ def verify_run(run: Path, runner: Path) -> dict[str, object]:
         command_exit_path = run / "command-exit.json"
         recorded_exit = json.loads(command_exit_path.read_text(encoding="utf-8"))
         checks["command_exited"] = recorded_exit["stage"] == "command_exited"
+        exit_keys = ["pid", "pgid", "exit_code"]
+        if "process_guard" in result:
+            exit_keys.append("process_guard")
         checks["exit_records_match"] = all(
-            recorded_exit[key] == result[key] for key in ("pid", "pgid", "exit_code")
+            recorded_exit[key] == result[key] for key in exit_keys
         )
         command_exit = {"path": str(command_exit_path), **file_identity(command_exit_path)}
         actual_exit_code = result["exit_code"]
-        current_members = group_members(result["pgid"])
-        recorded_members = result["remaining_group_members"]
-        checks["recorded_group_empty"] = not recorded_members
-        checks["current_group_empty"] = not current_members
+        currently_observed_process_ids = process_group_members(result["pgid"])
+        recorded_process_group_members = result["remaining_process_group_members"]
+        checks["recorded_group_empty"] = not recorded_process_group_members
+        checks["current_group_empty"] = not currently_observed_process_ids
+    elif result.get("process_guard") == "windows_job_object":
+        command_exit_path = run / "command-exit.json"
+        recorded_exit = json.loads(command_exit_path.read_text(encoding="utf-8"))
+        checks["command_exited"] = recorded_exit["stage"] == "command_exited"
+        checks["exit_records_match"] = all(
+            recorded_exit[key] == result[key]
+            for key in ("pid", "process_guard", "exit_code")
+        )
+        command_exit = {"path": str(command_exit_path), **file_identity(command_exit_path)}
+        actual_exit_code = result["exit_code"]
+
+        process_tree_runner = Path(result["process_tree_runner"])
+        checks["process_tree_runner_matches"] = (
+            file_identity(process_tree_runner)["sha256"]
+            == result["process_tree_runner_sha256"]
+        )
+        recorded_receipt = result.get("process_tree_receipt")
+        if isinstance(recorded_receipt, dict):
+            receipt_path = Path(recorded_receipt["path"]).resolve()
+            expected_receipt_path = (run / "windows-job-receipt.json").resolve()
+            if receipt_path != expected_receipt_path:
+                raise ValueError(f"Windows Job receipt 路径与 attempt 不一致：{receipt_path}")
+            receipt_identity = file_identity(receipt_path)
+            receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+            checks["process_tree_receipt_matches"] = receipt_identity == {
+                "sha256": recorded_receipt["sha256"],
+                "bytes": recorded_receipt["bytes"],
+            }
+            checks["windows_job_empty"] = (
+                receipt_payload
+                == {"exit_code": result["exit_code"], "process_tree_empty": True}
+            )
+            windows_job_receipt = {
+                "path": str(receipt_path), **receipt_identity,
+                "process_tree_empty": receipt_payload.get("process_tree_empty"),
+            }
+        else:
+            checks["process_tree_receipt_matches"] = False
+            checks["windows_job_empty"] = False
+            windows_job_receipt = None
     elif result.get("child_started") is False:
         checks["no_command_exit_before_launch"] = not (run / "command-exit.json").exists()
-        current_members = recorded_members = []
+        actual_exit_code = None
     else:
         raise ValueError(f"终态缺少进程启动或回收事实：{result_path}")
     failures = [name for name, passed in checks.items() if not passed]
@@ -99,10 +142,13 @@ def verify_run(run: Path, runner: Path) -> dict[str, object]:
         "exit_code_source": "runner_records",
         "duration_seconds": result["duration_seconds"],
         "source_count": len(before), "checks": checks, "logs": logs,
-        "recorded_group_members": recorded_members,
-        "currently_observed_group_members": current_members,
         "business_verified": False,
     }
+    if "pgid" in result:
+        receipt["recorded_process_group_members"] = recorded_process_group_members
+        receipt["currently_observed_process_group_members"] = currently_observed_process_ids
+    elif result.get("process_guard") == "windows_job_object":
+        receipt["windows_job_receipt"] = windows_job_receipt
     product = sealed_product_summary(run)
     if product is not None:
         receipt["sealed_product_summary"] = product

@@ -19,6 +19,7 @@ import type { ExtensionWindowRequest } from "../../utils/extensionResourceWindow
 const DEFAULT_AUXILIARY_TAB_ORDER: WorkspaceAuxiliaryTab[] = [
   "files",
   "changes",
+  "goal",
   "debug",
   "resources",
 ];
@@ -153,17 +154,15 @@ export function useWorkbenchLayoutPreferences({
 
   const updateBottomPanelState = useCallback(
     (patch: Partial<WorkspaceBottomPanelState>) => {
-      if (!bottomPanelWorkspaceId) {
-        return;
-      }
       const nextState: WorkspaceBottomPanelState = {
         ...bottomPanelState,
         ...patch,
       };
       setWorkspaceBottomPanelStates((previous) => ({
         ...previous,
-        [bottomPanelWorkspaceId]: nextState,
+        [bottomPanelWorkspaceId ?? ""]: nextState,
       }));
+      if (!bottomPanelWorkspaceId) return;
       persistUiSettings((current) => ({
         layout: {
           bottom_panel_by_workspace: {

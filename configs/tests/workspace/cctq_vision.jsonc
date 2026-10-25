@@ -4,8 +4,8 @@
     "providers": [
       {
         "id": "backup_3",
-        "endpoint": "https://www.cctq.ai/v1",
-        "model": "gpt-5.6-luna",
+        "endpoint": "https://newapi.hyf2333.top/v1",
+        "model": "gpt-6-luna",
         "api_key": "${CCTQ_API_KEY}",
         "custom_llm_provider": "openai",
         "api_mode": {
@@ -13,6 +13,13 @@
           "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
           "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
           "replay_policy": {"encrypted_content": "same_source"}
+        },
+        "request_options": {
+          "overrides": {
+            "reasoning": {
+              "effort": "max"
+            }
+          }
         }
       }
     ]

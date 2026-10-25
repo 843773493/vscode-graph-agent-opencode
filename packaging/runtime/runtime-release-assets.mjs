@@ -19,6 +19,7 @@ import {
 } from "./versions.mjs";
 
 const POSTINSTALL_SCRIPT = "runtime-postinstall.mjs";
+const NODE_MODULES_DIRECTORY_PATH = `${path.sep}node_modules${path.sep}`;
 
 export function runtimeAssetFilename(platform) {
   return `boxteam-runtime-${platform}-${BOXTEAM_VERSION}.tgz`;
@@ -56,7 +57,9 @@ export function stageRuntimeAndLauncherPackages({ projectRoot, platform, runtime
   cpSync(path.join(projectRoot, "packages", "launcher"), launcherPackageRoot, {
     recursive: true,
     filter(source) {
-      if (source.split(path.sep).includes("node_modules")) return false;
+      if (`${path.sep}${source}${path.sep}`.includes(NODE_MODULES_DIRECTORY_PATH)) {
+        return false;
+      }
       const name = path.basename(source);
       // 只排除普通开发文件；同名目录和链接仍保持原复制语义。
       return !(name === "AGENTS.md" || name.endsWith(".test.mjs")) || !lstatSync(source).isFile();

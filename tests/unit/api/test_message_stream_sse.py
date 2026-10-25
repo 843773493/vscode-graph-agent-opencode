@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from pathlib import Path
+from collections.abc import AsyncIterator, Mapping
 
 import pytest
 
+from app.api import message_stream as message_stream_api
 from app.api.message_stream import _stream_message_sse
-from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.message_stream_store import MessageStreamStore
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+THREAD_ID = "thr_019bef80066f7038ae8e88ccb2e5e2ea"
 
 
 class _Request:
@@ -41,13 +39,63 @@ class _IdleRecords:
         self.closed = True
 
 
-@pytest.fixture
-def message_stream_store(tmp_path: Path) -> tuple[MessageStreamStore, str]:
-    sessions_root = tmp_path / "workspace" / ".boxteam" / "sessions"
-    resolver = get_session_path_resolver(sessions_root)
-    resolver.initialize()
-    seed_catalog_session_bundle(sessions_root, SESSION_ID)
-    return MessageStreamStore(path_resolver=resolver), SESSION_ID
+def test_public_snapshot_event_reuses_protobuf_json_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = {
+        "event_id": "evt_snapshot",
+        "session_id": SESSION_ID,
+        "thread_id": "thr_019bef80066f7038ae8e88ccb2e5e2ea",
+        "turn_id": "job_snapshot",
+        "turn_stream_id": "str_snapshot",
+        "event_seq": 7,
+        "type": "stream.snapshot",
+        "payload": {
+            "snapshot_seq": 7,
+            "current_attempt": 0,
+            "resumable": True,
+            "stream_status": "open",
+            "agent_loop_status": "running",
+        },
+    }
+    serialized = {
+        "type": "stream.snapshot",
+        "payload": {"stream_status": "open", "agent_loop_status": "running"},
+    }
+    json_projection_calls = 0
+
+    monkeypatch.setattr(
+        message_stream_api,
+        "message_stream_to_proto",
+        lambda _event: object(),
+    )
+
+    def serialize_event(_proto: object) -> dict[str, object]:
+        nonlocal json_projection_calls
+        json_projection_calls += 1
+        return serialized
+
+    monkeypatch.setattr(message_stream_api, "message_stream_to_json", serialize_event)
+
+    result = message_stream_api._public_event_json(event)
+
+    assert json_projection_calls == 1
+    assert result == {
+        "type": "stream.snapshot",
+        "payload": {
+            "snapshot_seq": 7,
+            "stream_status": "open",
+            "agent_loop_status": "running",
+            "current_attempt": 0,
+            "resumable": True,
+            "blocks": [],
+            "tool_executions": [],
+            "tool_calls": [],
+            "model_calls": [],
+            "activities": [],
+            "resource_refs": [],
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -71,24 +119,41 @@ async def test_message_stream_sse_emits_heartbeat_while_idle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_message_stream_sse_emits_event_block_without_heartbeat(
-    message_stream_store: tuple[MessageStreamStore, str],
-) -> None:
+async def test_message_stream_sse_emits_event_block_without_heartbeat() -> None:
     """有事件时输出完整事件帧，且不掺入心跳。"""
-    store, session_id = message_stream_store
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_sse_event")
-    await writer.commit(
-        "block.started",
-        {"block_id": "block_1", "block_index": 0, "carrier_type": "reasoning"},
-    )
+    identity = {
+        "session_id": SESSION_ID,
+        "thread_id": THREAD_ID,
+        "turn_id": "job_sse_event",
+        "turn_stream_id": "str_sse_event",
+    }
+    events = [
+        {
+            **identity,
+            "event_id": "evt_sse_opened",
+            "event_seq": 1,
+            "type": "stream.opened",
+            "payload": {"status": "open"},
+        },
+        {
+            **identity,
+            "event_id": "evt_sse_block_started",
+            "event_seq": 2,
+            "type": "block.started",
+            "payload": {
+                "block_id": "block_1",
+                "block_index": 0,
+                "carrier_type": "reasoning",
+            },
+        },
+    ]
+
+    async def event_records() -> AsyncIterator[Mapping[str, object]]:
+        for event in events:
+            yield event
+
     stream = _stream_message_sse(
-        store.stream_records(
-            session_id=session_id,
-            turn_stream_id=writer.turn_stream_id,
-            after_seq=0,
-        ),
-        request=_Request(),
-        heartbeat_interval_seconds=1,
+        event_records(), request=_Request(), heartbeat_interval_seconds=1
     )
 
     frames: list[str] = []

@@ -76,17 +76,17 @@ export function conversationTokenUsage(
 export function conversationModelUsage(
   conversation: ConversationView,
 ): ConversationModelUsage | null {
-  const modelIds = conversation.events.flatMap((event) => {
+  let finalModelId: string | null = null;
+  for (const event of conversation.events) {
     if (event.type !== "llm_request") {
-      return [];
+      continue;
     }
     const modelId = rawTracePayload(event).model;
     if (typeof modelId !== "string" || modelId.trim().length === 0) {
       throw new TypeError("llm_request.model 必须是非空字符串");
     }
-    return [modelId.trim()];
-  });
-  const finalModelId = modelIds[modelIds.length - 1];
+    finalModelId = modelId.trim();
+  }
   if (!finalModelId) {
     return null;
   }

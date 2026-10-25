@@ -27,9 +27,7 @@ class StreamTerminalStateMixin:
         model_call_id = self.current_model_call_id
         if model_call_id is not None:
             self._completed_model_call_ids.add(model_call_id)
-        for block_id in tuple(self._active_block_order):
-            if block_id not in self._active_blocks:
-                continue
+        for block_id in tuple(self._active_block_ids):
             block_model_call_id = self._block_model_call_ids.get(block_id)
             if (
                 model_call_id is not None
@@ -79,7 +77,7 @@ class StreamTerminalStateMixin:
             ):
                 retained_block_order.append(block_id)
                 continue
-            self._active_blocks.discard(block_id)
+            self._active_block_ids.pop(block_id, None)
             self._closing_blocks.discard(block_id)
             self._block_metadata.pop(block_id, None)
             self._block_local_seq.pop(block_id, None)

@@ -23,6 +23,21 @@ CANONICAL_SESSION_IDS = frozenset(
 )
 
 
+def custom_tool_workspace_template_copy_paths(template_root: Path) -> tuple[str, ...]:
+    """返回需复制的模板路径；fixture/由 canonical 生成器重建。"""
+
+    return tuple(
+        sorted(
+            [
+                item.name
+                for item in template_root.iterdir()
+                if item.name not in {".boxteam", "fixture"}
+            ]
+            + [".boxteam/AGENTS.md", ".boxteam/skills"]
+        )
+    )
+
+
 class FixtureStageObserver:
     """仅供显式 profile 使用的标量 JSONL 计时记录器。"""
 
@@ -137,17 +152,12 @@ def prepare_custom_tool_test_workspace(
 ) -> Path:
     """复制只读模板，并在测试副本重建完整 canonical rollout 历史。"""
 
-    template_items = tuple(
-        sorted(
-            [item.name for item in template_root.iterdir() if item.name != ".boxteam"]
-            + [".boxteam/AGENTS.md", ".boxteam/skills"]
-        )
-    )
+    template_paths_to_copy = custom_tool_workspace_template_copy_paths(template_root)
     with timed_fixture_stage(observer, "workspace.template_copy"):
         workspace_root = prepare_test_workspace(
             workspace_root=workspace_root,
             template_root=template_root,
-            template_items=template_items,
+            template_items=template_paths_to_copy,
             shared_skill_root=shared_skill_root,
         )
     manifest_path = workspace_root / "rollout-fixture.json"
@@ -194,7 +204,7 @@ def prepare_custom_tool_test_workspace(
                 seed_catalog_session_bundle(sessions_root, session_id, title=title)
                 boundary_session_ids.append(session_id)
 
-        from tests.support.web_boundary_seeding import seed_boundary_cases
+        from tests.support.rollout.web_boundary_seeding import seed_boundary_cases
 
         with timed_fixture_stage(observer, "workspace.boundary_web_seed", count=len(boundary_session_ids)):
             seed_boundary_cases(workspace_root, session_ids=boundary_session_ids)

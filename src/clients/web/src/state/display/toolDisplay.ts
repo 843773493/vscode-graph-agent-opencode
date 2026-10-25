@@ -95,13 +95,15 @@ function compactInline(value: string, maxLength = 120): string {
   return `${text.slice(0, maxLength)}...`;
 }
 
-function formatTerminalToolContent(item: AggregatedToolItem): string | null {
-  if (item.toolName !== "exec_command" && item.toolName !== "write_stdin") {
-    return null;
-  }
+function isTerminalToolItem(item: AggregatedToolItem): boolean {
+  return item.toolName === "exec_command" || item.toolName === "write_stdin";
+}
 
-  const inputRecord = toolInputRecord(item);
-  const resultRecord = toolResultRecord(item);
+function formatTerminalToolContent(
+  item: AggregatedToolItem,
+  inputRecord: Record<string, unknown>,
+  resultRecord: Record<string, unknown>,
+): string {
   const terminalId = fieldText(resultRecord, "chunk_id") ||
     fieldText(resultRecord, "session_id") ||
     fieldText(inputRecord, "session_id");
@@ -141,14 +143,13 @@ function formatTerminalToolContent(item: AggregatedToolItem): string | null {
     output ? `\n输出：\n\`\`\`text\n${output}\n\`\`\`` : "",
   ].filter((part) => part.trim().length > 0);
 
-  return sections.join("\n\n") || null;
+  return sections.join("\n\n");
 }
 
-function terminalToolCollapsedText(item: AggregatedToolItem): string | null {
-  if (item.toolName !== "exec_command" && item.toolName !== "write_stdin") {
-    return null;
-  }
-  const resultRecord = toolResultRecord(item);
+function terminalToolCollapsedText(
+  item: AggregatedToolItem,
+  resultRecord: Record<string, unknown>,
+): string {
   if (fieldText(resultRecord, "session_id")) {
     return item.toolName === "write_stdin"
       ? "已写入，命令仍在运行"
@@ -214,19 +215,36 @@ function formatCustomInvocationToolContent(item: AggregatedToolItem): string | n
   ].filter((part) => part.trim().length > 0).join("\n\n");
 }
 
-export function formatToolCardContent(item: AggregatedToolItem): string | null {
-  return formatTerminalToolContent(item) ??
-    formatCustomToolSkillContent(item) ??
-    formatCustomInvocationToolContent(item);
+function formatCustomToolCardContent(item: AggregatedToolItem): string | null {
+  return formatCustomToolSkillContent(item) ?? formatCustomInvocationToolContent(item);
 }
 
-export function toolCollapsedText(item: AggregatedToolItem): string {
-  const terminalText = terminalToolCollapsedText(item);
-  if (terminalText) {
-    return terminalText;
+export interface ToolRowDisplay {
+  previewText: string;
+  detailsContent: string | null;
+}
+
+export function deriveToolRowDisplay(
+  item: AggregatedToolItem,
+  includeExpandedContent: boolean,
+): ToolRowDisplay {
+  if (isTerminalToolItem(item)) {
+    const resultRecord = toolResultRecord(item);
+    const previewText = terminalToolCollapsedText(item, resultRecord);
+    return {
+      previewText,
+      detailsContent: includeExpandedContent
+        ? formatTerminalToolContent(item, toolInputRecord(item), resultRecord)
+        : null,
+    };
   }
   if (item.outcomeUnknown) {
-    return "未确认返回结果";
+    return {
+      previewText: "未确认返回结果",
+      detailsContent: includeExpandedContent
+        ? formatCustomToolCardContent(item)
+        : null,
+    };
   }
 
   const inputRecord = toolInputRecord(item);
@@ -237,16 +255,18 @@ export function toolCollapsedText(item: AggregatedToolItem): string {
     ? `${names.join("、")} 记录的 ${invocationLabel(item)}`
     : invocationLabel(item);
   const result =
-    fieldText(resultRecord ?? {}, "stdout") ||
-    fieldText(resultRecord ?? {}, "result") ||
-    fieldText(resultRecord ?? {}, "content") ||
+    fieldText(resultRecord, "stdout") ||
+    fieldText(resultRecord, "result") ||
+    fieldText(resultRecord, "content") ||
     item.resultText;
-  if (result.trim()) {
-    return `${prefix} 返回：${compactInline(result, 80)}`;
-  }
-
-  if (path.trim()) {
-    return `${prefix} 处理：${compactInline(path, 80)}`;
-  }
-  return `${prefix} 执行完成`;
+  return {
+    previewText: result.trim()
+      ? `${prefix} 返回：${compactInline(result, 80)}`
+      : path.trim()
+        ? `${prefix} 处理：${compactInline(path, 80)}`
+        : `${prefix} 执行完成`,
+    detailsContent: includeExpandedContent
+      ? formatCustomToolCardContent(item)
+      : null,
+  };
 }

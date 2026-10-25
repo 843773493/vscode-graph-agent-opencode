@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.testing.model_stream import load_model_stream_config
-from tests.support.model_stream_config import prepare_e2e_model_stream_config
+from tests.support.model_stream.config import prepare_e2e_model_stream_config
 
 CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream.jsonc"
 

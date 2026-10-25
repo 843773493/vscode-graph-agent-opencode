@@ -32,23 +32,6 @@ function turnOrdinal(value: number | undefined): number {
   return value;
 }
 
-function internalExecutionTranscriptItems(
-  executions: readonly InternalExecutionHistory[],
-): Extract<ChatTranscriptItem, { kind: "internal_execution" }>[] {
-  const items: Extract<ChatTranscriptItem, { kind: "internal_execution" }>[] = [];
-  for (const execution of executions) {
-    for (const displayPart of execution.display_parts) {
-      items.push({
-        kind: "internal_execution",
-        key: `internal:${displayPart.item_id}`,
-        executionId: execution.execution_id,
-        displayPart,
-      });
-    }
-  }
-  return items;
-}
-
 export function chatTranscriptItems(
   conversations: readonly ConversationView[],
   executions: readonly InternalExecutionHistory[],
@@ -72,11 +55,13 @@ export function chatTranscriptItems(
     .map((item) => ({
       item,
       ordinal: turnOrdinal(item.conversation.turnOrdinal),
+      rootOrdinal: null as number | null,
     }))
     .sort((left, right) => left.ordinal - right.ordinal);
   let previousTurnOrdinal = 0;
   let previousRootOrdinal = -1;
-  for (const { item, ordinal: currentTurnOrdinal } of turnsByOrdinal) {
+  for (const turn of turnsByOrdinal) {
+    const { item, ordinal: currentTurnOrdinal } = turn;
     const rootOrdinal = logicalItemOrdinal(
       item.conversation.rootLogicalItemOrdinal,
       "root_logical_item_ordinal",
@@ -95,9 +80,12 @@ export function chatTranscriptItems(
       );
     }
     sharedOrdinals.set(rootOrdinal, `Turn ${item.conversation.turnId ?? item.key}`);
+    turn.rootOrdinal = rootOrdinal;
     previousTurnOrdinal = currentTurnOrdinal;
     previousRootOrdinal = rootOrdinal;
   }
+  const orderedHistory: Array<{ item: ChatTranscriptItem; ordinal: number }> =
+    turnsByOrdinal.map(({ item, rootOrdinal }) => ({ item, ordinal: rootOrdinal! }));
   const displayItemIds = new Set<string>();
   const displayItemSequences = new Set<number>();
   for (const execution of executions) {
@@ -129,35 +117,20 @@ export function chatTranscriptItems(
         );
       }
       sharedOrdinals.set(ordinal, `display item ${displayPart.item_id}`);
+      orderedHistory.push({
+        item: {
+          kind: "internal_execution",
+          key: `internal:${displayPart.item_id}`,
+          executionId: execution.execution_id,
+          displayPart,
+        },
+        ordinal,
+      });
     }
   }
-  const orderedHistory: ChatTranscriptItem[] = [
-    ...historyTurns,
-    ...internalExecutionTranscriptItems(executions),
-  ];
-  orderedHistory.sort((left, right) => {
-    const leftOrdinal = left.kind === "turn"
-      ? logicalItemOrdinal(
-        left.conversation.rootLogicalItemOrdinal,
-        "root_logical_item_ordinal",
-      )
-      : logicalItemOrdinal(
-        left.displayPart.logical_item_ordinal,
-        "logical_item_ordinal",
-      );
-    const rightOrdinal = right.kind === "turn"
-      ? logicalItemOrdinal(
-        right.conversation.rootLogicalItemOrdinal,
-        "root_logical_item_ordinal",
-      )
-      : logicalItemOrdinal(
-        right.displayPart.logical_item_ordinal,
-        "logical_item_ordinal",
-      );
-    return leftOrdinal - rightOrdinal;
-  });
+  orderedHistory.sort((left, right) => left.ordinal - right.ordinal);
   return [
-    ...orderedHistory,
+    ...orderedHistory.map(({ item }) => item),
     ...otherTurns,
   ];
 }

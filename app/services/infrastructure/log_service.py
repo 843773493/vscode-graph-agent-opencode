@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_lifecycle_gate import SessionLifecycleGate
@@ -22,6 +23,7 @@ def _write_snapshot_files(
     html: str,
     raw_metadata: str,
 ) -> None:
+    directory = native_io_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{snapshot_id}.html").write_text(html, encoding="utf-8")
     # metadata 是快照发布标记；读取端必须先确认它存在。
@@ -35,6 +37,7 @@ def _read_snapshot_payload(
     session_id: str | None,
     metadata: bool,
 ) -> str:
+    directory = native_io_path(directory)
     meta_path = directory / f"{snapshot_id}.json"
     try:
         raw_metadata = meta_path.read_text(encoding="utf-8")

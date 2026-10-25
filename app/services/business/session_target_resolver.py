@@ -68,7 +68,9 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
             try:
                 await self._session_service.get(normalized_session_id)
             except NotFoundError:
-                return await self._resolve_from_gateway(normalized_session_id)
+                return await self._resolve_remote_session_target(
+                    normalized_session_id
+                )
             return SessionTarget(session_id=normalized_session_id)
 
         try:
@@ -102,11 +104,11 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
             normalized_backend_workspace_id,
         )
 
-    async def _resolve_from_gateway(self, session_id: str) -> SessionTarget:
-        gateway_id = require_current_gateway_id("SessionTargetResolver")
+    async def _resolve_remote_session_target(self, session_id: str) -> SessionTarget:
+        local_gateway_id = require_current_gateway_id("SessionTargetResolver")
         request = SessionContextSearchRequest(
-            resource_identity=gateway_session_inventory_identity(gateway_id),
-            uri=gateway_session_inventory_uri(gateway_id),
+            resource_identity=gateway_session_inventory_identity(local_gateway_id),
+            uri=gateway_session_inventory_uri(local_gateway_id),
             scope="gateway",
             query=session_id,
             sources=["session_catalog"],

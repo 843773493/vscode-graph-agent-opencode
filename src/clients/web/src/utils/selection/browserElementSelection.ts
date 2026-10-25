@@ -38,15 +38,6 @@ export interface BrowserElementSelection {
   document_revision?: number;
 }
 
-interface BrowserElementSelectedMessage {
-  type: "boxteam:browser-element-selected";
-  browserId: string;
-  workspaceId: string;
-  element: Omit<BrowserElementSelection, "browserId" | "workspaceId">;
-  elements?: Array<Omit<BrowserElementSelection, "browserId" | "workspaceId">>;
-  mode?: "basic" | "rich";
-}
-
 type BrowserElementRequiredStringField =
   | "ref"
   | "selector"
@@ -58,6 +49,19 @@ type BrowserElementRequiredStringField =
   | "url"
   | "outerHTML"
   | "computedStyle";
+
+const BROWSER_ELEMENT_REQUIRED_STRING_FIELDS: BrowserElementRequiredStringField[] = [
+  "ref",
+  "selector",
+  "tag",
+  "role",
+  "type",
+  "text",
+  "title",
+  "url",
+  "outerHTML",
+  "computedStyle",
+];
 
 type BrowserElementWithRequiredStrings = Record<string, unknown>
   & Record<BrowserElementRequiredStringField, string>;
@@ -73,21 +77,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
+function isStringValueRecord(value: unknown): value is Record<string, string> {
+  if (!isRecord(value)) return false;
+  for (const key in value) {
+    if (
+      Object.prototype.hasOwnProperty.call(value, key)
+      && typeof value[key] !== "string"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
-function isBounds(value: unknown): value is BrowserElementSelection["bounds"] {
+function isBrowserElementBounds(
+  value: unknown,
+): value is BrowserElementSelection["bounds"] {
   return isRecord(value)
-    && ["x", "y", "width", "height"].every((field) => typeof value[field] === "number");
+    && typeof value.x === "number"
+    && typeof value.y === "number"
+    && typeof value.width === "number"
+    && typeof value.height === "number";
 }
 
-function isDimensions(value: unknown): value is NonNullable<BrowserElementSelection["dimensions"]> {
+function isBrowserElementDimensions(
+  value: unknown,
+): value is NonNullable<BrowserElementSelection["dimensions"]> {
   return isRecord(value)
-    && ["top", "left", "width", "height"].every((field) => typeof value[field] === "number");
+    && typeof value.top === "number"
+    && typeof value.left === "number"
+    && typeof value.width === "number"
+    && typeof value.height === "number";
 }
 
-function isAncestors(value: unknown): value is BrowserElementAncestor[] {
+function isBrowserElementAncestorArray(
+  value: unknown,
+): value is BrowserElementAncestor[] {
   return Array.isArray(value) && value.every((ancestor) => isRecord(ancestor)
     && typeof ancestor.tagName === "string"
     && (ancestor.id === undefined || typeof ancestor.id === "string")
@@ -96,25 +121,15 @@ function isAncestors(value: unknown): value is BrowserElementAncestor[] {
         && ancestor.classNames.every((className) => typeof className === "string"))));
 }
 
-function hasRequiredStringFields(
+function hasBrowserElementRequiredStrings(
   value: Record<string, unknown>,
 ): value is BrowserElementWithRequiredStrings {
-  const requiredStringFields: BrowserElementRequiredStringField[] = [
-    "ref",
-    "selector",
-    "tag",
-    "role",
-    "type",
-    "text",
-    "title",
-    "url",
-    "outerHTML",
-    "computedStyle",
-  ];
-  return requiredStringFields.every((field) => typeof value[field] === "string");
+  return BROWSER_ELEMENT_REQUIRED_STRING_FIELDS.every(
+    (field) => typeof value[field] === "string",
+  );
 }
 
-function parseElement(
+function parseBrowserElement(
   rawElement: unknown,
   browserId: string,
   workspaceId: string,
@@ -122,28 +137,28 @@ function parseElement(
   if (!isRecord(rawElement)) {
     return null;
   }
-  if (!hasRequiredStringFields(rawElement)) {
+  if (!hasBrowserElementRequiredStrings(rawElement)) {
     return null;
   }
   const bounds = rawElement.bounds;
-  if (!isBounds(bounds)) {
+  if (!isBrowserElementBounds(bounds)) {
     return null;
   }
 
   const ancestors = rawElement.ancestors;
-  if (ancestors !== undefined && !isAncestors(ancestors)) {
+  if (ancestors !== undefined && !isBrowserElementAncestorArray(ancestors)) {
     return null;
   }
   const attributes = rawElement.attributes;
-  if (attributes !== undefined && !isStringRecord(attributes)) {
+  if (attributes !== undefined && !isStringValueRecord(attributes)) {
     return null;
   }
   const computedStyles = rawElement.computedStyles;
-  if (computedStyles !== undefined && !isStringRecord(computedStyles)) {
+  if (computedStyles !== undefined && !isStringValueRecord(computedStyles)) {
     return null;
   }
   const dimensions = rawElement.dimensions;
-  if (dimensions !== undefined && !isDimensions(dimensions)) {
+  if (dimensions !== undefined && !isBrowserElementDimensions(dimensions)) {
     return null;
   }
   const id = rawElement.id;
@@ -197,26 +212,35 @@ export function parseBrowserElementSelectedMessage(
 export function parseBrowserElementSelectionBundle(
   value: unknown,
 ): BrowserElementSelectionBundle | null {
-  if (!isRecord(value) || value.type !== "boxteam:browser-element-selected"
-    || typeof value.browserId !== "string"
-    || typeof value.workspaceId !== "string"
-    || !isRecord(value.element)) {
+  if (!isRecord(value)) {
     return null;
   }
 
-  const rawElements = Array.isArray(value.elements) ? value.elements : [value.element];
-  const elements = rawElements.map((element) =>
-    parseElement(element, value.browserId as string, value.workspaceId as string));
-  if (elements.some((element) => element === null)) {
+  const browserId = value.browserId;
+  const workspaceId = value.workspaceId;
+  const primaryElement = value.element;
+  if (value.type !== "boxteam:browser-element-selected"
+    || typeof browserId !== "string"
+    || typeof workspaceId !== "string"
+    || !isRecord(primaryElement)) {
     return null;
   }
 
-  const message = value as unknown as BrowserElementSelectedMessage;
+  const rawElements = Array.isArray(value.elements) ? value.elements : [primaryElement];
+  const elements: BrowserElementSelection[] = [];
+  for (const rawElement of rawElements) {
+    const element = parseBrowserElement(rawElement, browserId, workspaceId);
+    if (element === null) {
+      return null;
+    }
+    elements.push(element);
+  }
+
   return {
-    browserId: message.browserId,
-    workspaceId: message.workspaceId,
-    elements: elements as BrowserElementSelection[],
-    mode: message.mode === "rich" ? "rich" : "basic",
+    browserId,
+    workspaceId,
+    elements,
+    mode: value.mode === "rich" ? "rich" : "basic",
   };
 }
 

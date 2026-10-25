@@ -27,6 +27,38 @@ function createLinuxMemoryMonitor(reading) {
 }
 
 describe("浏览器内存压力", () => {
+  test("并行启动主机与 cgroup 内存采样", async () => {
+    let hostReadStarted = false;
+    let cgroupReadStarted = false;
+    let resolveHost;
+    let resolveCgroup;
+    const hostSample = new Promise((resolve) => { resolveHost = resolve; });
+    const cgroupSample = new Promise((resolve) => { resolveCgroup = resolve; });
+    const monitor = new BrowserMemoryPressureMonitor({
+      now: () => 1_000,
+      monotonicNow: () => 500,
+    });
+    monitor.hostMemory = () => {
+      hostReadStarted = true;
+      return hostSample;
+    };
+    monitor.cgroupMemory = () => {
+      cgroupReadStarted = true;
+      return cgroupSample;
+    };
+
+    const sampling = monitor.sample();
+
+    expect(hostReadStarted).toBe(true);
+    expect(cgroupReadStarted).toBe(true);
+    resolveHost({ totalBytes: 1_000, availableBytes: 500 });
+    resolveCgroup(null);
+    const sample = await sampling;
+
+    expect(sample.effective_used_ratio).toBe(0.5);
+    expect(sample.cgroup).toBeNull();
+  });
+
   test("使用 MemAvailable 判定主机压力", async () => {
     const monitor = new BrowserMemoryPressureMonitor({
       platform: "linux",
@@ -43,6 +75,35 @@ describe("浏览器内存压力", () => {
     expect(sample.level).toBe("critical");
     expect(sample.effective_used_ratio).toBeCloseTo(0.9);
     expect(sample.cgroup).toBeNull();
+  });
+
+  test.each(["win32", "darwin"])("%s 使用 Node 主机内存接口且不探测 Linux 文件", async platform => {
+    let linuxFileProbeCount = 0;
+    const monitor = new BrowserMemoryPressureMonitor({
+      platform,
+      totalMemory: () => 1_000_000,
+      freeMemory: () => 200_000,
+      pathExists: () => {
+        linuxFileProbeCount += 1;
+        return true;
+      },
+      readText: async () => {
+        linuxFileProbeCount += 1;
+        throw new Error("非 Linux 平台不应读取 Linux 内存文件");
+      },
+      now: () => 1_000,
+    });
+
+    const sample = await monitor.sample();
+
+    expect(sample.host).toEqual({
+      totalBytes: 1_000_000,
+      availableBytes: 200_000,
+      usedRatio: 0.8,
+    });
+    expect(sample.level).toBe("warning");
+    expect(sample.cgroup).toBeNull();
+    expect(linuxFileProbeCount).toBe(0);
   });
 
   test("OOM 事件立即升级为 emergency", () => {

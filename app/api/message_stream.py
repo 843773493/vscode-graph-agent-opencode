@@ -85,22 +85,29 @@ def _sse_frame(event: MessageStreamEventRecord) -> str:
 
 def _public_event_json(event: MessageStreamEventRecord) -> dict[str, object]:
     """SSE 与 HTTP 共用的公共线格式投影。"""
-    value = message_stream_to_json(message_stream_to_proto(event))
-    if value["type"] != "stream.snapshot":
-        return value
-    snapshot = _snapshot_projection(event).model_dump(mode="json", exclude_none=True)
+    event_json = message_stream_to_json(message_stream_to_proto(event))
+    if event_json["type"] != "stream.snapshot":
+        return event_json
+    snapshot = _snapshot_projection(event, event_json=event_json).model_dump(
+        mode="json", exclude_none=True
+    )
     for field_name in _SNAPSHOT_ENVELOPE_FIELDS:
         snapshot.pop(field_name, None)
-    return {**value, "payload": snapshot}
+    return {**event_json, "payload": snapshot}
 
 
-def _snapshot_projection(event: MessageStreamEventRecord) -> MessageStreamSnapshotDTO:
+def _snapshot_projection(
+    event: MessageStreamEventRecord,
+    *,
+    event_json: Mapping[str, object] | None = None,
+) -> MessageStreamSnapshotDTO:
     """stream.snapshot 的唯一公共投影：SSE 控制帧与 HTTP 快照共用同一份实现。"""
     try:
-        value = message_stream_to_json(message_stream_to_proto(event))
+        if event_json is None:
+            event_json = message_stream_to_json(message_stream_to_proto(event))
     except (TypeError, ValueError, json_format.ParseError) as error:
         raise MessageStreamError("消息流快照编解码失败") from error
-    payload = value["payload"]
+    payload = event_json["payload"]
     if not isinstance(payload, Mapping):
         raise MessageStreamError("消息流快照编解码结果不是对象")
     source = event.get("payload")

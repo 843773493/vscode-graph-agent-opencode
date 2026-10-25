@@ -34,7 +34,7 @@ def encode_version(version: str) -> str:
 
     因 version 字符集已排除 ``_``（见 _VERSION_PATTERN），``_`` 只可能来自原点号，
     故本映射在合法输入上是单射：不同的 version 必得不同编码，且可由编码唯一还原
-    （单射性由 tests/unit/core/test_distribution_identity.py 的穷举断言证明）。
+    （单射性由 tests/unit/core/identity/test_distribution_identity.py 的穷举断言证明）。
 
     直接拼接带点号的 version（如 ``source-development-0.0.2``）会被 grammar 以
     invalid_character 结构化拒绝，故必须走本编码。

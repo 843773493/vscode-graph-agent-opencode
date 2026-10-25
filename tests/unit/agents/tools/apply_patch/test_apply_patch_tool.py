@@ -51,8 +51,8 @@ def _apply(patch: str, *, explanation: str = "单元测试补丁", expected_vers
     return owner.execute(PatchText(input=patch, explanation=explanation, expected_versions=versions, target="."))
 
 
-def test_apply_patch_schema_matches_vscode_required_parameters(text_mutations_factory, workspace_scope) -> None:
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+def test_apply_patch_schema_matches_vscode_required_parameters(text_mutations_factory, empty_workspace_scope) -> None:
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
     schema = tool.args_schema.model_json_schema()
 
     assert schema["required"] == ["input", "explanation", "expected_versions"]
@@ -65,9 +65,9 @@ def test_apply_patch_schema_matches_vscode_required_parameters(text_mutations_fa
 @pytest.mark.parametrize("input_form", ["absolute", "windows_drive", "windows_unc", "traversal", "uri", "root", "empty", "nul"])
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_patch_filename_failure_does_not_echo_native_path(
-    text_mutations_factory, workspace_scope, input_form: str, asynchronous: bool,
+    text_mutations_factory, empty_workspace_scope, input_form: str, asynchronous: bool,
 ) -> None:
-    root = workspace_scope[1]
+    root = empty_workspace_scope[1]
     filename = {
         "absolute": str(root / "patch-path-marker.txt"),
         "windows_drive": r"C:\Users\patch-path-marker\private.txt",
@@ -116,9 +116,9 @@ async def patch_lifecycle():
     return loop, starts, AgentRunLifecycleCallbackHandler(Sink())
 
 
-async def test_async_patch_lifecycle_stays_on_owning_loop(text_mutations_factory, workspace_scope, patch_lifecycle):
+async def test_async_patch_lifecycle_stays_on_owning_loop(text_mutations_factory, empty_workspace_scope, patch_lifecycle):
     loop, starts, callback = patch_lifecycle
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
     with model_tool_invocation_scope("model_patch", "call_patch"):
         result = await tool.ainvoke({"type": "tool_call", "id": "call_patch", "name": "apply_patch", "args": {
             "input": "*** Begin Patch\n*** Add File: async.txt\n+async\n*** End Patch",
@@ -128,12 +128,12 @@ async def test_async_patch_lifecycle_stays_on_owning_loop(text_mutations_factory
     actual_loop, model_call_id, tool_call_id, run_id = starts[0]
     assert actual_loop is loop and model_call_id == "model_patch" and tool_call_id == "call_patch"
     assert len(starts) == 1 and run_id
-    assert (workspace_scope[1] / "async.txt").read_bytes() == b"async"
+    assert (empty_workspace_scope[1] / "async.txt").read_bytes() == b"async"
 
 
 @pytest.mark.parametrize("blocked", ["ancestor", "existing_parent_file"])
-def test_invalid_parent_is_rejected_before_any_publication(workspace_scope, blocked):
-    root = workspace_scope[1]
+def test_invalid_parent_is_rejected_before_any_publication(empty_workspace_scope, blocked):
+    root = empty_workspace_scope[1]
     if blocked == "existing_parent_file":
         (root / "parent").write_bytes(b"existing parent")
         patch = "*** Begin Patch\n*** Add File: first.txt\n+first\n*** Add File: parent/child.txt\n+child\n*** End Patch"
@@ -147,9 +147,10 @@ def test_invalid_parent_is_rejected_before_any_publication(workspace_scope, bloc
 
 
 def test_apply_patch_add_update_delete_and_records_paths(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
+    (workspace_root / "src").mkdir()
 
     result = _apply(
         """*** Begin Patch
@@ -181,9 +182,9 @@ def test_apply_patch_add_update_delete_and_records_paths(
 
 
 def test_apply_patch_uses_multiple_hints_to_target_repeated_code(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "service.py"
     target.write_text(
         """class First:
@@ -214,9 +215,9 @@ class Second:
 
 
 def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "copy.txt"
     target.write_text("title — old   \nnext\n", encoding="utf-8")
 
@@ -235,9 +236,9 @@ def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
 
 
 def test_apply_patch_uses_edit_distance_for_conservative_context_match(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "fuzzy.txt"
     target.write_text("first\nsecond\nthird\n", encoding="utf-8")
 
@@ -257,9 +258,9 @@ def test_apply_patch_uses_edit_distance_for_conservative_context_match(
 
 
 def test_apply_patch_normalizes_explicit_tab_prefixes(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "tabs.py"
     target.write_text("def value():\n\treturn 1\n", encoding="utf-8")
 
@@ -278,9 +279,9 @@ def test_apply_patch_normalizes_explicit_tab_prefixes(
 
 
 def test_apply_patch_end_of_file_prefers_last_matching_context(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "values.txt"
     target.write_text("item\nitem", encoding="utf-8")
 
@@ -298,9 +299,9 @@ def test_apply_patch_end_of_file_prefers_last_matching_context(
 
 
 def test_apply_patch_multi_file_move_overwrites_target(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "old.txt").write_text("old\n", encoding="utf-8")
     (workspace_root / "target.txt").write_text("replace me\n", encoding="utf-8")
     (workspace_root / "delete.txt").write_text("delete\n", encoding="utf-8")
@@ -329,9 +330,9 @@ def test_apply_patch_multi_file_move_overwrites_target(
 
 
 def test_apply_patch_invalid_later_file_leaves_all_files_unchanged(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     first = workspace_root / "first.txt"
     second = workspace_root / "second.txt"
     first.write_text("first\n", encoding="utf-8")
@@ -355,8 +356,8 @@ def test_apply_patch_invalid_later_file_leaves_all_files_unchanged(
     assert second.read_text(encoding="utf-8") == "second\n"
 
 
-def test_apply_patch_stops_after_partial_publication_without_rollback(workspace_scope, monkeypatch) -> None:
-    root = workspace_scope[1]
+def test_apply_patch_stops_after_partial_publication_without_rollback(empty_workspace_scope, monkeypatch) -> None:
+    root = empty_workspace_scope[1]
     original = text_publication.rename_entry_exclusive
     calls = []
 
@@ -383,9 +384,9 @@ def test_apply_patch_stops_after_partial_publication_without_rollback(workspace_
 
 
 def test_apply_patch_accepts_missing_end_marker_like_vscode(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "value.txt"
     target.write_text("before\n", encoding="utf-8")
 
@@ -399,9 +400,9 @@ def test_apply_patch_accepts_missing_end_marker_like_vscode(
 
 
 def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
 
     with pytest.raises(DiffError, match="Duplicate Path"):
@@ -438,9 +439,9 @@ def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
 
 
 def test_apply_patch_rejects_absolute_internal_filename_even_inside_workspace(
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     absolute_inside = (workspace_root / "src" / "abs.txt").resolve()
 
     with pytest.raises(ValueError, match="补丁内文件名必须相对固定根"):
@@ -454,10 +455,10 @@ def test_apply_patch_rejects_absolute_internal_filename_even_inside_workspace(
 
 
 def test_apply_patch_tool_returns_json_result(text_mutations_factory,
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+    workspace_root = empty_workspace_scope[1]
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -489,11 +490,11 @@ def test_apply_patch_tool_returns_json_result(text_mutations_factory,
 
 
 def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(text_mutations_factory,
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -515,10 +516,10 @@ def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(text_
 
 
 def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(text_mutations_factory,
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     target = workspace_root / "target.txt"
     target.write_text("before\n", encoding="utf-8")
 
@@ -529,7 +530,7 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(te
         target.write_bytes(b"wrong\n")
 
     monkeypatch.setattr(text_publication.os, "replace", write_wrong_content)
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
 
     result = json.loads(
         tool.invoke(
@@ -556,9 +557,9 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(te
 
 
 def test_apply_patch_uses_explicit_workspace_for_write_and_journal(text_mutations_factory,
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    context_root = workspace_scope[1]
+    context_root = empty_workspace_scope[1]
     explicit_root = context_root / "explicit"
     explicit_root.mkdir()
     load_or_create_workspace_id(explicit_root)
@@ -601,11 +602,11 @@ def test_apply_patch_uses_explicit_workspace_for_write_and_journal(text_mutation
 
 
 def test_apply_patch_tool_rejects_automatic_retry_for_invalid_patch(text_mutations_factory,
-    workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
-    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(empty_workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -633,8 +634,8 @@ def test_apply_patch_tool_rejects_automatic_retry_for_invalid_patch(text_mutatio
 
 
 @pytest.mark.parametrize("operation", ["delete", "move"])
-def test_stale_source_version_rejects_entire_patch(workspace_scope, operation):
-    root = workspace_scope[1]
+def test_stale_source_version_rejects_entire_patch(empty_workspace_scope, operation):
+    root = empty_workspace_scope[1]
     source = root / "source.txt"
     original = b"\xef\xbb\xbfold\r\n"
     source.write_bytes(original)
@@ -649,8 +650,8 @@ def test_stale_source_version_rejects_entire_patch(workspace_scope, operation):
     assert not list((root / ".boxteam/cache/text_mutations").glob("*.json"))
 
 
-def test_move_destination_absence_is_checked_before_any_publication(workspace_scope):
-    root = workspace_scope[1]
+def test_move_destination_absence_is_checked_before_any_publication(empty_workspace_scope):
+    root = empty_workspace_scope[1]
     (root / "source.txt").write_bytes(b"old\n")
     (root / "destination.txt").write_bytes(b"do not overwrite\n")
     patch = "*** Begin Patch\n*** Update File: source.txt\n*** Move to: destination.txt\n@@\n-old\n+new\n*** End Patch"
@@ -662,8 +663,8 @@ def test_move_destination_absence_is_checked_before_any_publication(workspace_sc
     assert (root / "destination.txt").read_bytes() == b"do not overwrite\n"
 
 
-def test_move_source_delete_failure_preserves_published_destination(workspace_scope, monkeypatch):
-    root = workspace_scope[1]
+def test_move_source_delete_failure_preserves_published_destination(empty_workspace_scope, monkeypatch):
+    root = empty_workspace_scope[1]
     source = root / "source.txt"
     source.write_bytes(b"old\n")
     original = Path.unlink
@@ -681,8 +682,8 @@ def test_move_source_delete_failure_preserves_published_destination(workspace_sc
     assert not (root / "untouched.txt").exists()
 
 
-def test_expected_absent_race_uses_exclusive_publish_without_overwrite(workspace_scope, monkeypatch):
-    root = workspace_scope[1]
+def test_expected_absent_race_uses_exclusive_publish_without_overwrite(empty_workspace_scope, monkeypatch):
+    root = empty_workspace_scope[1]
     original = text_publication.rename_entry_exclusive
 
     def race(source, destination):
@@ -697,7 +698,7 @@ def test_expected_absent_race_uses_exclusive_publish_without_overwrite(workspace
     assert not list(root.glob(".race.txt.*.tmp"))
 
 
-def test_exclusive_create_race_with_identical_bytes_does_not_claim_publication(workspace_scope, monkeypatch):
+def test_exclusive_create_race_with_identical_bytes_does_not_claim_publication(empty_workspace_scope, monkeypatch):
     original = text_publication.rename_entry_exclusive
 
     def race(source, destination):
@@ -708,12 +709,12 @@ def test_exclusive_create_race_with_identical_bytes_does_not_claim_publication(w
     result = _apply("*** Begin Patch\n*** Add File: race.txt\n+draft\n*** End Patch")
     assert result["status"] == "error" and result["effect"] == "unknown"
     assert result["files"][0]["state"] == "unknown"
-    assert (workspace_scope[1] / "race.txt").read_bytes() == b"draft"
+    assert (empty_workspace_scope[1] / "race.txt").read_bytes() == b"draft"
 
 
 @pytest.mark.parametrize("after_verification", [False, True])
-def test_external_restore_after_publication_is_unknown_not_unexecuted(workspace_scope, monkeypatch, after_verification):
-    target = workspace_scope[1] / "restored.txt"
+def test_external_restore_after_publication_is_unknown_not_unexecuted(empty_workspace_scope, monkeypatch, after_verification):
+    target = empty_workspace_scope[1] / "restored.txt"
     target.write_bytes(b"old\n")
     if after_verification:
         publish = text_mutation.publish_file_content
@@ -739,8 +740,8 @@ def test_external_restore_after_publication_is_unknown_not_unexecuted(workspace_
 
 
 @pytest.mark.parametrize("input_form", ["relative", "absolute", "uri"])
-def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(text_mutations_factory, workspace_scope, input_form):
-    root = workspace_scope[1]
+def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(text_mutations_factory, empty_workspace_scope, input_form):
+    root = empty_workspace_scope[1]
     directory = root / "nested"
     directory.mkdir()
     raw = b"\xef\xbb\xbfalpha\r\nbeta\r\n"
@@ -764,8 +765,8 @@ def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(text_mutati
     assert str(root) not in json.dumps(result)
 
 
-def test_patch_rejects_missing_move_destination_precondition(workspace_scope):
-    root = workspace_scope[1]
+def test_patch_rejects_missing_move_destination_precondition(empty_workspace_scope):
+    root = empty_workspace_scope[1]
     (root / "source.txt").write_bytes(b"old\n")
     with pytest.raises(DiffError, match="覆盖全部"):
         _apply("*** Begin Patch\n*** Update File: source.txt\n*** Move to: target.txt\n@@\n-old\n+new\n*** End Patch",
@@ -773,7 +774,7 @@ def test_patch_rejects_missing_move_destination_precondition(workspace_scope):
     assert (root / "source.txt").read_bytes() == b"old\n" and not (root / "target.txt").exists()
 
 
-def test_lock_release_failure_does_not_erase_confirmed_publication(workspace_scope, monkeypatch):
+def test_lock_release_failure_does_not_erase_confirmed_publication(empty_workspace_scope, monkeypatch):
     from contextlib import contextmanager
 
     original = text_mutation.workspace_file_mutation_lock
@@ -789,12 +790,12 @@ def test_lock_release_failure_does_not_erase_confirmed_publication(workspace_sco
     assert result["status"] == "error" and result["effect"] == "completed"
     assert result["files"][0]["state"] == "published"
     assert "lock release failed" in result["lock_release_error"]
-    assert (workspace_scope[1] / "confirmed.txt").read_bytes() == b"published"
+    assert (empty_workspace_scope[1] / "confirmed.txt").read_bytes() == b"published"
 
 
 @pytest.mark.parametrize("target", [".boxteam", "boxteam://workspace/bad/resources/files/root", "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/skills/demo"])
-def test_patch_invalid_or_private_root_fails_before_publication(text_mutations_factory, workspace_scope, target):
-    root = workspace_scope[1]
+def test_patch_invalid_or_private_root_fails_before_publication(text_mutations_factory, empty_workspace_scope, target):
+    root = empty_workspace_scope[1]
     tool = create_apply_patch_tool(text_mutations=text_mutations_factory(root))
     result = json.loads(tool.invoke({"input": "*** Begin Patch\n*** Add File: forbidden.txt\n+private\n*** End Patch", "explanation": "边界拒绝",
                                     "target": target, "expected_versions": {"forbidden.txt": "absent"}}))

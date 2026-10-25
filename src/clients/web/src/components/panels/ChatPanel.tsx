@@ -282,7 +282,13 @@ export default function ChatPanel({
     () => chatTranscriptItems(transcriptConversations, internalExecutions),
     [transcriptConversations, internalExecutions],
   );
-  const lastTurnKey = [...transcriptItems].reverse().find((item) => item.kind === "turn")?.key ?? null;
+  const lastTurnKey = React.useMemo(() => {
+    for (let index = transcriptItems.length - 1; index >= 0; index -= 1) {
+      const item = transcriptItems[index];
+      if (item.kind === "turn") return item.key;
+    }
+    return null;
+  }, [transcriptItems]);
   const scopeKey = JSON.stringify([workspaceId ?? null, sessionId, threadId]);
   const {
     bindScroller,

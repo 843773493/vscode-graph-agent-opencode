@@ -141,7 +141,7 @@ def test_failed_observation_references_uri_and_retains_previous_revision(
     assert str(tmp_path) not in json.dumps(asdict(failed), ensure_ascii=False)
 
 
-@pytest.mark.parametrize("stage", ["open", "pread"])
+@pytest.mark.parametrize("stage", ["open", "read"])
 def test_source_io_failure_preserves_reason_without_publishing_locator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,16 +198,18 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     assert first.available is True
 
     payload = [b"v2\n", b"v3\n"]
-    calls = {"count": 0}
+    read_state = {"count": 0, "at_eof": False}
 
-    def fake_pread(fd: int, size: int, offset: int) -> bytes:
-        if offset != 0:
+    def fake_read(_fd: int, _size: int) -> bytes:
+        if read_state["at_eof"]:
+            read_state["at_eof"] = False
             return b""
-        data = payload[calls["count"] % 2]
-        calls["count"] += 1
+        data = payload[read_state["count"] % len(payload)]
+        read_state["count"] += 1
+        read_state["at_eof"] = True
         return data
 
-    monkeypatch.setattr("os.pread", fake_pread)
+    monkeypatch.setattr("os.read", fake_read)
     unavailable = reconciler.reconcile("src-1")
     assert unavailable.available is False
     assert unavailable.error_code == "unstable_read"

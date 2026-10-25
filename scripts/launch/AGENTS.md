@@ -6,13 +6,16 @@
 launch/
 ├── dev-environment.mjs   开发路径、端口布局及工作区身份 CLI 接线
 ├── dev-readiness.mjs     各服务HTTP和detached manager记录的就绪等待
-├── dev-systemd.mjs       transient unit 生命周期与外层 Gateway 就绪等待
+├── dev-manager.mjs       统一开发栈 start/status/stop 入口，按平台选择生命周期实现
+├── dev-systemd.mjs       Linux transient unit 生命周期与外层 Gateway 就绪等待
 ├── dev.mjs               开发栈进程编排、各服务探针和 manager 就绪发布
 ├── debug-fixtures/       启动器安装的只读调试模板
 └── cross-platform-development-target.mjs  跨平台开发目标入口
 ```
 
-环境布局决定启动目标，systemd 入口等待该 manager 发布就绪后再探测 Gateway；健康响应成功后仍核对 manager PID。外层 Gateway 等待的 HTTP 请求、未消费正文的取消和轮询共用单调时钟的总预算，不因重试重新计时；每次请求在`finally`中清理计时器并主动中止控制器。健康响应只有在预算内释放正文并复核manager PID及ready marker后才算就绪。该预算不将同步 `systemctl` 调用变成可取消操作，也不替代 `dev.mjs` 内各服务的就绪检查。
+环境布局决定启动目标。`dev-manager.mjs` 在 Linux 委托 systemd，在 Windows/macOS 使用 `dev.mjs --only-launch` 管理 detached 服务组；两个入口共用相同的服务探针和就绪记录。systemd 入口等待该 manager 发布就绪后再探测 Gateway；健康响应成功后仍核对 manager PID。外层 Gateway 等待的 HTTP 请求、未消费正文的取消和轮询共用单调时钟的总预算，不因重试重新计时；每次请求在`finally`中清理计时器并主动中止控制器。健康响应只有在预算内释放正文并复核manager PID及ready marker后才算就绪。该预算不将同步 `systemctl` 调用变成可取消操作，也不替代 `dev.mjs` 内各服务的就绪检查。
+
+Windows/macOS 的 detached manager 在 `out/development-runtime/detached-ready.json` 发布 PID、ready 时间和项目路径；start/stop 用同目录的操作锁串行化。锁 owner 已退出或锁内容损坏时明确报出锁路径，不猜测删除。macOS 对独立进程组先发 SIGTERM、等待15秒后才发 SIGKILL；Windows 先用 `taskkill /T` 请求进程树退出，等待15秒后仍存活才调用 `/T /F`，并确认 manager PID 退出。状态命令只确认 manager 存活与 Gateway 健康，不替代完整 Web 页面初始化检查。
 
 外层等待已经观察到健康请求失败或manager替换后，后续“manager尚未就绪”的占位诊断不能覆盖该具体原因；新的HTTP观察仍可更新错误，终态进程退出仍立即抛出。
 

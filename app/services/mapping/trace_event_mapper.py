@@ -31,12 +31,14 @@ class TraceEventMapper:
         "goal_cleared",
     })
 
-    def map_one(self, event: dict[str, Any], session_id: str = "", *, thread_id: str) -> TraceEventDTO | None:
-        event_type = event.get("type")
+    def map_one(
+        self, trace_event: dict[str, Any], session_id: str = "", *, thread_id: str
+    ) -> TraceEventDTO | None:
+        event_type = trace_event.get("type")
         if event_type not in self._SUPPORTED_TYPES:
             return None
 
-        payload = event.get("payload")
+        payload = trace_event.get("payload")
         if not isinstance(payload, dict):
             raise TypeError(
                 f"Trace 事件 payload 必须是 dict: event_type={event_type}"
@@ -48,23 +50,25 @@ class TraceEventMapper:
             raise ValueError("Trace 事件的 Session 与存储归属不一致")
         if payload.get("thread_id") not in {None, thread_id}:
             raise ValueError("Trace 事件的 Thread 与持久归属不一致")
-        event_id = event.get("event_id")
+        event_id = trace_event.get("event_id")
         if not isinstance(event_id, str) or not event_id:
             raise ValueError(f"Trace 事件缺少 event_id: event_type={event_type}")
-        job_id = event.get("job_id")
+        job_id = trace_event.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise ValueError(
                 f"Trace 事件缺少 job_id: event_id={event_id} event_type={event_type}"
             )
-        step_id = event.get("step_id")
-        timestamp = self._parse_timestamp(event.get("timestamp"), event_id=event_id)
+        step_id = trace_event.get("step_id")
+        timestamp = self._parse_timestamp(
+            trace_event.get("timestamp"), event_id=event_id
+        )
 
         phase, title, content, status, tool_name = self._build_view_model(event_type, payload)
         skill_names = self._skill_names(payload)
 
         return TraceEventDTO(
             event_id=event_id,
-            part_id=event.get("part_id"),
+            part_id=trace_event.get("part_id"),
             session_id=session_id,
             thread_id=thread_id,
             job_id=job_id,
@@ -77,7 +81,7 @@ class TraceEventMapper:
             skill_names=skill_names,
             step_id=step_id,
             timestamp=timestamp,
-            raw=event,
+            raw=trace_event,
         )
 
     def _skill_names(self, payload: dict[str, Any]) -> list[str]:

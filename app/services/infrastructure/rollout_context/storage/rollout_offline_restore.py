@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.file_permissions import restrict_private_path_access
 from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
@@ -92,7 +93,7 @@ class RolloutOfflineRestoreMixin:
             raise RuntimeError(
                 f"SQLite offline restore source 在验证期间发生变化: {source_path}"
             )
-        os.chmod(candidate_path, 0o600)
+        restrict_private_path_access(candidate_path)
         fsync_file(candidate_path)
         with closing(
             sqlite3.connect(
@@ -284,7 +285,9 @@ class RolloutOfflineRestoreMixin:
                     field="SQLite offline restore quarantine root",
                 )
                 quarantine_root.mkdir(mode=0o700, exist_ok=True)
+                restrict_private_path_access(quarantine_root, is_directory=True)
                 quarantine_path.mkdir(mode=0o700)
+                restrict_private_path_access(quarantine_path, is_directory=True)
                 for original in (
                     target_path,
                     Path(f"{target_path}-wal"),
@@ -298,6 +301,7 @@ class RolloutOfflineRestoreMixin:
                         quarantined = quarantine_path / original.name
                         os.replace(original, quarantined)
                         moved.append((original, quarantined))
+                        restrict_private_path_access(quarantined)
                 fsync_directory(quarantine_path)
                 os.replace(candidate_path, target_path)
                 installed = True

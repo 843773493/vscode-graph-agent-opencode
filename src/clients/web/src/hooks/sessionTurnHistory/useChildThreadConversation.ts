@@ -24,6 +24,22 @@ const EMPTY: ChildThreadConversationSnapshot = {
 };
 const INCLUDE = ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
 
+function sameHistoryRevision(previous: TurnHistoryPage | null, next: TurnHistoryPage): boolean {
+  return previous !== null
+    && typeof previous.source_view_id === "string"
+    && previous.source_view_id === next.source_view_id
+    && typeof previous.source_view_revision === "number"
+    && previous.source_view_revision === next.source_view_revision
+    && previous.thread_id === next.thread_id
+    && previous.projection_epoch === next.projection_epoch
+    && previous.next_cursor === next.next_cursor
+    && previous.before_cursor === next.before_cursor
+    && previous.after_cursor === next.after_cursor
+    && previous.has_more === next.has_more
+    && previous.has_before === next.has_before
+    && previous.has_after === next.has_after;
+}
+
 export interface ChildThreadSelectionIntent {
   workspaceId: string;
   sessionId: string;
@@ -103,7 +119,10 @@ export function useChildThreadConversation({
     readRef.current?.abort();
     const controller = new AbortController();
     readRef.current = controller;
-    update(key, (prior) => ({ ...prior, view, loading: !silent, error: null }));
+    const current = latestRef.current;
+    if (!silent || current.view !== view || current.loading || current.error !== null) {
+      update(key, (prior) => ({ ...prior, view, loading: !silent, error: null }));
+    }
     try {
       const page = await loadSessionHistory(apiPort, sessionId, {
         direction: older ? "before" : "tail",
@@ -119,10 +138,20 @@ export function useChildThreadConversation({
       if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === reportExecutionId)) {
         throw new Error("该报告尚未提交或已不在当前历史视图中");
       }
-      update(key, (prior) => ({
-        ...prior, [view]: older ? mergeChildThreadHistory(prior[view], page) : page,
-        view, loading: false, error: null, paged: view === "history" && older,
-      }));
+      const current = latestRef.current;
+      if (
+        older
+        || current.loading
+        || current.error !== null
+        || current.view !== view
+        || current.paged
+        || !sameHistoryRevision(current[view], page)
+      ) {
+        update(key, (prior) => ({
+          ...prior, [view]: older ? mergeChildThreadHistory(prior[view], page) : page,
+          view, loading: false, error: null, paged: view === "history" && older,
+        }));
+      }
       if (view === "report" && reportExecutionId === selectedThread?.report_execution_id && selectedThread?.report_status) {
         setSeen((prior) => ({ ...prior, [key]: `${selectedThread.report_execution_id}:${selectedThread.report_status}` }));
       }

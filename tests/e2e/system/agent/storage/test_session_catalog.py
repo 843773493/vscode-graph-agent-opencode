@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 @pytest.fixture(autouse=True)

@@ -5,14 +5,14 @@ import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 import { createDefaultWebUiSettings } from "../../../state/uiSettings/preferences";
 import {
   installGatewayFetch,
-  restoreSessionHookGlobals,
-} from "../../../hooks/session/sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../../tests/fixtures/session/gatewayEnvironment";
 import GatewayThemeSettings from "./GatewayThemeSettings";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 afterEach(() => {
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 

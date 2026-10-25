@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.core.file_permissions import (
+    require_private_file_access,
+    restrict_private_path_access,
+)
 from app.core.identifier import validate_gateway_id
 
 
@@ -91,11 +95,10 @@ class FederationCredentialStore:
         try:
             with self._storage_path.open("r", encoding="utf-8") as file:
                 # 校验与解析使用同一文件句柄，避免重复路径查询和替换竞态。
-                # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
-                if os.name != "nt" and os.fstat(file.fileno()).st_mode & 0o077:
-                    raise PermissionError(
-                        f"联邦凭据文件权限必须为 0600: {self._storage_path}"
-                    )
+                require_private_file_access(
+                    self._storage_path,
+                    descriptor=file.fileno(),
+                )
                 payload = json.load(file)
         except FileNotFoundError:
             return {}
@@ -133,13 +136,14 @@ class FederationCredentialStore:
         temporary_path = Path(temporary_name)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                restrict_private_path_access(
+                    temporary_path,
+                    descriptor=file.fileno(),
+                )
                 json.dump(payload, file, ensure_ascii=False, indent=2)
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
-            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-            if os.name != "nt":
-                temporary_path.chmod(0o600)
             os.replace(temporary_path, self._storage_path)
         finally:
             temporary_path.unlink(missing_ok=True)

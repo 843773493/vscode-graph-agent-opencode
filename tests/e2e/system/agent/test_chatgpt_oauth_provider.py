@@ -12,8 +12,12 @@ import pytest
 
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import output_root_for_test
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
 from tests.support.trace import get_trace_payload
+from tests.support.workspaces import prepare_test_workspace
 
 
 def _chatgpt_auth_sources() -> tuple[Path, Path]:
@@ -81,6 +85,24 @@ def _cache_read_tokens(log: dict) -> int | None:
     cached_tokens = details.get("cache_read", 0)
     assert isinstance(cached_tokens, int) and cached_tokens >= 0
     return cached_tokens
+
+
+@pytest.fixture(scope="module")
+def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
+    """只复制该用例读取的 README 和稳定工作区身份。"""
+    project_root = Path.cwd().resolve()
+    output_root = output_root_for_test(
+        Path(request.node.fspath),
+        test_layer="e2e",
+        project_root=project_root,
+    )
+    # 这个场景只要求 Agent 读取 README，不需要默认工作区中的资产、会话和 Skills。
+    workspace = prepare_test_workspace(
+        workspace_root=output_root / "workspace",
+        template_root=project_root / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(".boxteam/workspace-identity.json", "README.md"),
+    )
+    return str(workspace)
 
 
 @pytest.fixture(scope="module")

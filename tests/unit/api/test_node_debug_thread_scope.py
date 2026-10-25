@@ -171,14 +171,13 @@ async def test_explicit_main_thread_reads_main_owner(
 
 @pytest.mark.asyncio
 async def test_session_only_api_resolves_catalog_main_thread(
-    tmp_path: Path,
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "entry.mjs").write_text(
         "console.log('entry');\n", encoding="utf-8"
     )
-    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
+    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
@@ -250,14 +249,13 @@ async def test_explicit_thread_parameter_locates_child_thread(
 
 @pytest.mark.asyncio
 async def test_mutation_requires_existing_session(
-    tmp_path: Path,
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "entry.mjs").write_text(
         "console.log('entry');\n", encoding="utf-8"
     )
-    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
+    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
@@ -345,15 +343,14 @@ async def test_mutation_requires_existing_session(
 
 @pytest.mark.asyncio
 async def test_session_only_addresses_resolve_distinct_session_owners(
-    tmp_path: Path,
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
     """父、子 Session 的 Session-only 地址各自解析 catalog main owner。"""
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
+    workspace_root = empty_workspace_scope[1]
     (workspace_root / "child.mjs").write_text(
         "console.log('child');\n", encoding="utf-8"
     )
-    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
+    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
     _create_session(resolver, _CHILD_SESSION_ID, parent_session_id=_SESSION_ID)
     service = NodeDebugService(

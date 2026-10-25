@@ -4,8 +4,10 @@ import path from "node:path";
 export const DEVELOPMENT_BASE_PORTS = Object.freeze({
   backend: 8010,
   frontend: 8011,
+  terminalBackend: 8012,
   terminalFrontend: 8013,
   gateway: 8014,
+  browserBackend: 8015,
   browserFrontend: 8016,
   backendDebug: 8002,
 });

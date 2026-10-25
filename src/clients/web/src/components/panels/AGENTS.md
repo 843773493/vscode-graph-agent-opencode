@@ -12,7 +12,7 @@
 - `components/panels/bottomPanel/`：主窗口底部面板族的终端、输出、端口与自动化标签页容器。
 - `components/panels/sessionPanels/`：左侧侧边栏会话面板与右侧侧边栏子会话线程面板。
 - `components/panels/inspectionPanels/`：事件视图、请求视图与 Agent State 只读诊断面板。
-- `components/overlays/`（待建）：AnchoredOverlay / WarmActionDialog / SessionNameDialog / GatewayUserAccessMenu 等覆盖层与对话框，术语上不属于面板。
+- `components/overlays/`：AnchoredOverlay、WarmActionDialog、SessionNameDialog、SessionContextForkDialog 与 GatewayUserAccessMenu 等覆盖层和对话框；锚定定位实现按需加载。
 
 # 可修改内容
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -112,6 +113,16 @@ class ProcessBoundary:
         return result
 
 
+@dataclass
+class WorkspaceRuntimeControllerCase:
+    registry: GatewayWorkspaceRegistry
+    graph: ManagedBackendGraph
+    controller: GatewayWorkspaceRuntimeController
+    runtime_actions: list[tuple[str, str]]
+    lifecycle_states: dict[str, str]
+    blockers_by_workspace: dict[str, list[dict[str, object]]]
+
+
 @pytest.fixture
 def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
     boundary = ProcessBoundary()
@@ -169,7 +180,7 @@ def controller_registry_store(tmp_path: Path, request: pytest.FixtureRequest):
 
 
 @pytest.fixture
-def controller_case(tmp_path: Path, managed_backend_factory, process_boundary: ProcessBoundary, monkeypatch: pytest.MonkeyPatch, controller_registry_store):
+def workspace_runtime_controller_case(tmp_path: Path, managed_backend_factory, process_boundary: ProcessBoundary, monkeypatch: pytest.MonkeyPatch, controller_registry_store) -> Iterator[WorkspaceRuntimeControllerCase]:
     targets = []
     for name, identity in (("a", UUID_A), ("b", UUID_B)):
         root = tmp_path / name
@@ -215,7 +226,14 @@ def controller_case(tmp_path: Path, managed_backend_factory, process_boundary: P
     monkeypatch.setattr(controller, "_runtime_status", runtime_status)
     monkeypatch.setattr(controller, "_pending_startup_contract", pending)
     monkeypatch.setattr(registry, "list_dtos", listed)
-    yield registry, graph, controller, calls, states, blockers
+    yield WorkspaceRuntimeControllerCase(
+        registry=registry,
+        graph=graph,
+        controller=controller,
+        runtime_actions=calls,
+        lifecycle_states=states,
+        blockers_by_workspace=blockers,
+    )
     registry.close()
 
 
@@ -277,12 +295,13 @@ async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path,
     ids=["secondary-error", "reconcile-cancelled"],
 )
 async def test_reconnect_http_keeps_published_projection_and_reports_both_errors(
-    controller_case,
+    workspace_runtime_controller_case,
     deletion_http_application,
     monkeypatch: pytest.MonkeyPatch,
     cancel_reconcile: bool,
 ) -> None:
-    registry, _, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    controller = workspace_runtime_controller_case.controller
 
     class _TrackingRuntime(WorkspaceRuntime):
         def __init__(self, url: str) -> None:
@@ -420,11 +439,12 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 async def test_reconnect_http_preserves_primary_error_when_connection_error_recording_fails(
-    controller_case,
+    workspace_runtime_controller_case,
     deletion_http_application,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry, _, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    controller = workspace_runtime_controller_case.controller
     target = WorkspaceTarget(
         workspace_id="external-reconnect-error",
         name="External workspace",
@@ -513,8 +533,10 @@ def test_runtime_controller_updates_health_controller_config(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_controller_starts_and_stops_optional_workspace(controller_case, process_boundary) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+async def test_runtime_controller_starts_and_stops_optional_workspace(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     stopped = await controller.stop_managed_backend("member-a", request_id="stop", group_request=graph.group_request)
     assert stopped.status == "stopped"
     assert not any(registry.has_runtime(member_id) for member_id in graph.owner.contract.workspace_ids)
@@ -529,37 +551,47 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(controller
 
 
 @pytest.mark.asyncio
-async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(controller_case) -> None:
-    registry, graph, controller, calls, states, _ = controller_case
+async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(workspace_runtime_controller_case) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    lifecycle_states = workspace_runtime_controller_case.lifecycle_states
     registry.acquire_route_reference("member-b", streaming=True)
     try:
         blocked = await controller.stop_managed_backend("member-a", request_id="stream", group_request=graph.group_request)
         assert blocked.status == "blocked"
         assert [(item.workspace_id, item.kind) for item in blocked.blockers] == [("member-b", "proxy_stream")]
-        assert all(state == "ready" for state in states.values())
-        assert sum(path.endswith("/cancel") for _, path in calls) == 2
+        assert all(state == "ready" for state in lifecycle_states.values())
+        assert sum(path.endswith("/cancel") for _, path in runtime_actions) == 2
         assert graph.owner.process is not None
     finally:
         registry.release_route_reference("member-b", streaming=True)
 
 
 @pytest.mark.asyncio
-async def test_shared_safe_restart_blocks_and_force_interrupts_every_member(controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, states, blockers = controller_case
-    blockers["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+async def test_shared_safe_restart_blocks_and_force_interrupts_every_member(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    lifecycle_states = workspace_runtime_controller_case.lifecycle_states
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
+    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     blocked = await controller.safe_restart_managed_backend("member-a", request_id="safe", group_request=graph.group_request)
     assert blocked.status == "blocked" and blocked.blockers[0].workspace_id == "member-b"
     assert not process_boundary.starts
     forced = await controller.force_restart_managed_backend("member-a", request_id="force", group_request=graph.group_request)
     assert forced.status == "restarted" and forced.forced
-    assert {member_id for member_id, path in calls if path.endswith("/force")} == {"member-a", "member-b"}
+    assert {member_id for member_id, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
     assert len(process_boundary.starts) == 1
-    assert all(registry.managed_runtime(member_id).backend_owner is graph.owner for member_id in states)
+    assert all(registry.managed_runtime(member_id).backend_owner is graph.owner for member_id in lifecycle_states)
 
 
 @pytest.mark.asyncio
-async def test_runtime_controller_serializes_managed_restarts(controller_case, process_boundary, monkeypatch) -> None:
-    _, graph, controller, _, _, _ = controller_case
+async def test_runtime_controller_serializes_managed_restarts(workspace_runtime_controller_case, process_boundary, monkeypatch) -> None:
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     active = peak = 0
     rebuild = rebuild_managed_backend_runtime
 
@@ -588,9 +620,11 @@ async def test_runtime_controller_serializes_managed_restarts(controller_case, p
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recovery_fails", [False, True])
 async def test_runtime_controller_records_restart_failure_after_old_runtime_recovery(
-    controller_case, process_boundary, monkeypatch, recovery_fails: bool,
+    workspace_runtime_controller_case, process_boundary, monkeypatch, recovery_fails: bool,
 ) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     recorded = {}
     startup = {"candidate_ref": "candidate", "target_generation": "config-new", "fencing_token": "secret"}
     async def pending(*_, **__):
@@ -762,8 +796,9 @@ async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_ht
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [None, "generation", "manifest", "pid"])
-async def test_gateway_adopts_matching_workspace_backend(controller_case, local_http, mismatch) -> None:
-    registry, graph, _, _, _, _ = controller_case
+async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
     contract = graph.owner.contract
     requests = []
     def response(request):
@@ -841,23 +876,27 @@ async def test_managed_runtime_reuses_browser_without_starting_replacement(singl
 
 @pytest.mark.asyncio
 async def test_full_health_proof_requires_all_mounts_same_process(
-    controller_case,
+    workspace_runtime_controller_case,
 ) -> None:
-    registry, graph, _, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
     assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7000
 
 
 @pytest.mark.asyncio
 async def test_force_restart_invalidates_all_leases_after_durable_interrupt_and_waits_for_release(
-    controller_case, process_boundary,
+    workspace_runtime_controller_case, process_boundary,
 ) -> None:
-    registry, graph, controller, calls, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     old_process = graph.owner.process
     leases = {member_id: registry.acquire_route_reference(member_id, streaming=True) for member_id in graph.owner.contract.workspace_ids}
 
     async def finish_old_streams() -> None:
         await asyncio.gather(*(lease.invalidated.wait() for lease in leases.values()))
-        assert {member_id for member_id, path in calls if path.endswith("/force")} == set(leases)
+        assert {member_id for member_id, path in runtime_actions if path.endswith("/force")} == set(leases)
         assert old_process is graph.owner.process and not old_process.closed
         for member_id in leases:
             with pytest.raises(LookupError, match="切换路由"):
@@ -885,9 +924,11 @@ async def test_force_restart_invalidates_all_leases_after_durable_interrupt_and_
 
 @pytest.mark.asyncio
 async def test_force_restart_unreleased_reference_fails_closed_then_full_start_recovers(
-    controller_case, process_boundary,
+    workspace_runtime_controller_case, process_boundary,
 ) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     controller._connection_drain_timeout_seconds = 0.005
     old_process = graph.owner.process
     lease = registry.acquire_route_reference("member-b", streaming=True)
@@ -916,9 +957,11 @@ async def test_force_restart_unreleased_reference_fails_closed_then_full_start_r
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["start", "restart-safe"])
 async def test_commit_observer_error_keeps_published_contract_and_running_unique_owner(
-    controller_case, process_boundary, action,
+    workspace_runtime_controller_case, process_boundary, action,
 ) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     if action == "start":
         registry.stop_backend_owner(graph.owner)
     old_contract = graph.owner.contract
@@ -946,9 +989,11 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
 
 @pytest.mark.asyncio
 async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent_then_start_repairs(
-    controller_case, process_boundary,
+    workspace_runtime_controller_case, process_boundary,
 ) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     runtime = graph.runtimes["member-b"]
     failed = runtime.processes["browser_manager"]
     failed.failure = RuntimeError("browser 清理失败")
@@ -970,12 +1015,16 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forced", [False, True])
-async def test_empty_desired_releases_owner_once_without_empty_backend(controller_case, process_boundary, forced) -> None:
-    registry, graph, controller, calls, _, blockers = controller_case
+async def test_empty_desired_releases_owner_once_without_empty_backend(workspace_runtime_controller_case, process_boundary, forced) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
     old = graph.owner.process
     auxiliaries = [handle for runtime in graph.runtimes.values() for handle in runtime.processes.values()]
     if forced:
-        blockers["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+        blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     request = graph.group_request.model_copy(update={"desired_workspace_ids": []})
     method = controller.force_restart_managed_backend if forced else controller.safe_restart_managed_backend
     result = await method("member-a", request_id="empty", group_request=request)
@@ -992,12 +1041,14 @@ async def test_empty_desired_releases_owner_once_without_empty_backend(controlle
     persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path)
     assert not persisted.backend_owners()
     if forced:
-        assert {identity for identity, path in calls if path.endswith("/force")} == {"member-a", "member-b"}
+        assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
 
 
 @pytest.mark.asyncio
-async def test_initiator_can_exit_while_sibling_keeps_unique_owner(controller_case, process_boundary) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+async def test_initiator_can_exit_while_sibling_keeps_unique_owner(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     old = graph.owner.process
     exiting = list(graph.runtimes["member-a"].processes.values())
     kept = dict(graph.runtimes["member-b"].processes)
@@ -1013,13 +1064,18 @@ async def test_initiator_can_exit_while_sibling_keeps_unique_owner(controller_ca
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["job", "tool", "background_task"])
-async def test_safe_exit_blockers_preserve_complete_contract_intents_and_auxiliary_services(controller_case, process_boundary, kind) -> None:
-    registry, graph, controller, calls, states, blockers = controller_case
+async def test_safe_exit_blockers_preserve_complete_contract_intents_and_auxiliary_services(workspace_runtime_controller_case, process_boundary, kind) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    lifecycle_states = workspace_runtime_controller_case.lifecycle_states
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
     contract = graph.owner.contract
     process = graph.owner.process
     runtimes = dict(graph.runtimes)
     auxiliaries = [handle for runtime in runtimes.values() for handle in runtime.processes.values()]
-    blockers["member-b"] = [{"kind": kind, "resource_id": "active", "session_id": "session-b", "status": "running"}]
+    blockers_by_workspace["member-b"] = [{"kind": kind, "resource_id": "active", "session_id": "session-b", "status": "running"}]
     result = await controller.safe_restart_managed_backend(
         "member-a", request_id="blocked-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
     )
@@ -1028,13 +1084,16 @@ async def test_safe_exit_blockers_preserve_complete_contract_intents_and_auxilia
     assert not process.closed and not process_boundary.starts
     assert all(not handle.closed for handle in auxiliaries)
     assert all(registry.resolve(identity).desired_running and registry.managed_runtime(identity) is runtime for identity, runtime in runtimes.items())
-    assert set(states.values()) == {"ready"}
-    assert {identity for identity, path in calls if path.endswith("/cancel")} == {"member-a", "member-b"}
+    assert set(lifecycle_states.values()) == {"ready"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/cancel")} == {"member-a", "member-b"}
 
 
 @pytest.mark.asyncio
-async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, _, _ = controller_case
+async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     registry.resolve("member-b").system_default = True
     with pytest.raises(PermissionError, match="默认工作区"):
         await controller.safe_restart_managed_backend(
@@ -1051,20 +1110,24 @@ async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(con
         await controller.safe_restart_managed_backend(
             "member-a", request_id="duplicate", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-a", "duplicate"]}),
         )
-    assert not calls and not process_boundary.starts and not graph.owner.process.closed
+    assert not runtime_actions and not process_boundary.starts and not graph.owner.process.closed
 
 
 @pytest.mark.asyncio
-async def test_controlled_delete_requires_group_confirmation_and_preserves_blocked_member(controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, _, blockers = controller_case
+async def test_controlled_delete_requires_group_confirmation_and_preserves_blocked_member(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
     blocked = await controller.remove_managed_workspace("member-a", request_id="missing-contract")
     assert blocked.status == "blocked" and blocked.blockers[0].kind == "backend_group"
-    assert not calls and not graph.owner.process.closed
-    blockers["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+    assert not runtime_actions and not graph.owner.process.closed
+    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
     blocked = await controller.remove_managed_workspace("member-a", request_id="safe-delete", group_request=request)
     assert blocked.status == "blocked" and registry.resolve("member-a").desired_running
-    blockers["member-b"] = []
+    blockers_by_workspace["member-b"] = []
     result = await controller.remove_managed_workspace("member-a", request_id="delete", group_request=request)
     assert result.status == "restarted" and graph.owner.contract.workspace_ids == ("member-b",)
     with pytest.raises(LookupError):
@@ -1073,13 +1136,15 @@ async def test_controlled_delete_requires_group_confirmation_and_preserves_block
 
 
 @pytest.mark.asyncio
-async def test_force_exit_failed_durable_ack_never_closes_owner(controller_case, process_boundary, monkeypatch) -> None:
-    _, graph, controller, calls, _, _ = controller_case
+async def test_force_exit_failed_durable_ack_never_closes_owner(workspace_runtime_controller_case, process_boundary, monkeypatch) -> None:
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     old = graph.owner.process
     action = controller._runtime_action
     async def fail_second(target, path, **kwargs):
         if target.workspace_id == "member-b" and path.endswith("/force"):
-            calls.append((target.workspace_id, path))
+            runtime_actions.append((target.workspace_id, path))
             raise RuntimeError("member-b durable interrupted 提交失败")
         return await action(target, path, **kwargs)
     monkeypatch.setattr(controller, "_runtime_action", fail_second)
@@ -1088,13 +1153,15 @@ async def test_force_exit_failed_durable_ack_never_closes_owner(controller_case,
             "member-a", request_id="failed-ack", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
         )
     assert graph.owner.process is old and not old.closed and not process_boundary.starts
-    assert {identity for identity, path in calls if path.endswith("/force")} == {"member-a", "member-b"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["auxiliary", "publication"])
-async def test_exit_failure_recovers_complete_old_group(controller_case, process_boundary, monkeypatch, failure) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+async def test_exit_failure_recovers_complete_old_group(workspace_runtime_controller_case, process_boundary, monkeypatch, failure) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     old_contract = graph.owner.contract
     if failure == "auxiliary":
         handle = graph.runtimes["member-b"].processes["browser_manager"]
@@ -1126,8 +1193,10 @@ async def test_exit_failure_recovers_complete_old_group(controller_case, process
 
 
 @pytest.mark.asyncio
-async def test_exit_after_stop_releases_contract_without_backend_start(controller_case, process_boundary) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+async def test_exit_after_stop_releases_contract_without_backend_start(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     await controller.stop_managed_backend("member-a", request_id="stop", group_request=graph.group_request)
     result = await controller.safe_restart_managed_backend(
         "member-a", request_id="exit-stopped", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
@@ -1136,8 +1205,10 @@ async def test_exit_after_stop_releases_contract_without_backend_start(controlle
 
 
 @pytest.mark.asyncio
-async def test_exit_commit_observer_error_cannot_restore_released_owner(controller_case, process_boundary) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+async def test_exit_commit_observer_error_cannot_restore_released_owner(workspace_runtime_controller_case, process_boundary) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     failure = RuntimeError("exit observer 失败")
     def observer():
         raise failure
@@ -1154,8 +1225,9 @@ async def test_exit_commit_observer_error_cannot_restore_released_owner(controll
         registry.remove_commit_observer(observer)
 
 
-def test_registry_cannot_bypass_controlled_managed_exit(controller_case) -> None:
-    registry, graph, _, _, _, _ = controller_case
+def test_registry_cannot_bypass_controlled_managed_exit(workspace_runtime_controller_case) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
     with pytest.raises(ValueError, match="受控退出"):
         registry.remove("member-a")
     with pytest.raises(ValueError, match="完整组"):
@@ -1164,8 +1236,9 @@ def test_registry_cannot_bypass_controlled_managed_exit(controller_case) -> None
 
 
 @pytest.fixture
-def deletion_http_application(controller_case, tmp_path, monkeypatch):
-    registry, _, controller, _, _, _ = controller_case
+def deletion_http_application(workspace_runtime_controller_case, tmp_path, monkeypatch):
+    registry = workspace_runtime_controller_case.registry
+    controller = workspace_runtime_controller_case.controller
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
@@ -1198,11 +1271,14 @@ def deletion_http_application(controller_case, tmp_path, monkeypatch):
     "/api/gateway/federation/managed-workspaces",
 ])
 async def test_all_delete_http_callers_preserve_typed_blockers_and_consume_force_result(
-    controller_case, deletion_http_application, process_boundary, prefix,
+    workspace_runtime_controller_case, deletion_http_application, process_boundary, prefix,
 ) -> None:
-    registry, graph, _, calls, _, blockers = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
     request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
-    blockers["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     before = graph.owner.contract
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.request("DELETE", f"{prefix}/member-a", json=request, headers={"X-Request-ID": "delete-blocked"})
@@ -1222,7 +1298,7 @@ async def test_all_delete_http_callers_preserve_typed_blockers_and_consume_force
         assert response.headers["X-Request-ID"] == result["request_id"] == "delete-forced"
         assert [item["workspace_id"] for item in result["data"]["items"]] == ["member-b"]
     assert graph.owner.contract.workspace_ids == ("member-b",) and len(process_boundary.starts) == 1
-    assert {identity for identity, path in calls if path.endswith("/force")} == {"member-a", "member-b"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
     reopened = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
     assert reopened.active_workspace_id == "member-b" and reopened.backend_owner("member-b").contract == graph.owner.contract
     assert {item["workspace_id"] for item in registry._state_store.load_workspace_registry()["targets"]} == {"member-b"}
@@ -1233,13 +1309,15 @@ async def test_all_delete_http_callers_preserve_typed_blockers_and_consume_force
 
 
 @pytest.mark.asyncio
-async def test_delete_rejects_unrelated_desired_set_before_any_drain(controller_case, deletion_http_application) -> None:
-    registry, graph, _, calls, _, _ = controller_case
+async def test_delete_rejects_unrelated_desired_set_before_any_drain(workspace_runtime_controller_case, deletion_http_application) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     request = graph.group_request.model_copy(update={"desired_workspace_ids": []}).model_dump(mode="json")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.request("DELETE", "/api/gateway/workspaces/member-a", json=request)
     assert response.status_code == 409 and "其余完整成员" in response.json()["detail"]
-    assert not calls and not graph.owner.process.closed and registry.resolve("member-a").desired_running
+    assert not runtime_actions and not graph.owner.process.closed and registry.resolve("member-a").desired_running
 
 
 @pytest.mark.asyncio
@@ -1249,9 +1327,11 @@ async def test_delete_rejects_unrelated_desired_set_before_any_drain(controller_
     "/api/gateway/federation/managed-workspaces",
 ])
 async def test_delete_force_failed_backend_ack_reports_detail_and_keeps_unique_process(
-    controller_case, deletion_http_application, process_boundary, monkeypatch, prefix,
+    workspace_runtime_controller_case, deletion_http_application, process_boundary, monkeypatch, prefix,
 ) -> None:
-    registry, graph, controller, _, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
     old = graph.owner.process
     request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
     action = controller._runtime_action
@@ -1269,14 +1349,16 @@ async def test_delete_force_failed_backend_ack_reports_detail_and_keeps_unique_p
 
 
 @pytest.fixture
-async def stopped_controller_case(controller_case, process_boundary):
-    _, graph, controller, calls, _, _ = controller_case
+async def stopped_workspace_runtime_controller_case(workspace_runtime_controller_case, process_boundary):
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     await controller.stop_managed_backend("member-a", request_id="stopped-fixture", group_request=graph.group_request)
     assert graph.owner.contract is previous and graph.owner.process is None
     assert not process_boundary.starts
-    calls.clear()
-    return controller_case
+    runtime_actions.clear()
+    return workspace_runtime_controller_case
 
 
 @pytest.mark.asyncio
@@ -1288,9 +1370,12 @@ async def stopped_controller_case(controller_case, process_boundary):
     "/api/gateway/federation/managed-workspaces",
 ])
 async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_remaining_mount(
-    stopped_controller_case, deletion_http_application, process_boundary, prefix, forced,
+    stopped_workspace_runtime_controller_case, deletion_http_application, process_boundary, prefix, forced,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     stale = graph.group_request
     request = stale.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
@@ -1311,7 +1396,7 @@ async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_r
     contract = graph.owner.contract
     assert contract.owner_id == previous.owner_id and contract.generation != previous.generation
     assert contract.members == (previous.members[1],) and remaining["backend_generation"] == contract.generation
-    assert graph.owner.process is None and not process_boundary.starts and not calls
+    assert graph.owner.process is None and not process_boundary.starts and not runtime_actions
     assert not registry.has_runtime("member-b") and not registry.resolve("member-b").desired_running
     assert registry.resolve("member-b").runtime_lease_id is None
     restored = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
@@ -1331,8 +1416,11 @@ async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
-async def test_stopped_member_exit_keeps_registration_without_restarting_backend(stopped_controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+async def test_stopped_member_exit_keeps_registration_without_restarting_backend(stopped_workspace_runtime_controller_case, process_boundary) -> None:
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     result = await controller.safe_restart_managed_backend(
         "member-a", request_id="offline-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
@@ -1343,29 +1431,34 @@ async def test_stopped_member_exit_keeps_registration_without_restarting_backend
     assert registry.resolve("member-a").backend_url == "" and not registry.resolve("member-a").local_service_urls
     assert all(not registry.resolve(identity).desired_running and registry.resolve(identity).runtime_lease_id is None for identity in previous.workspace_ids)
     assert all(item.status == "offline" for item in await GatewayWorkspaceRegistry.list_dtos(registry, check_health=False))
-    assert not process_boundary.starts and not calls
+    assert not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
-async def test_stopped_same_member_set_preserves_generation(stopped_controller_case, process_boundary) -> None:
-    _, graph, controller, calls, _, _ = stopped_controller_case
+async def test_stopped_same_member_set_preserves_generation(stopped_workspace_runtime_controller_case, process_boundary) -> None:
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     result = await controller.safe_restart_managed_backend(
         "member-a", request_id="same-offline-set", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b", "member-a"]}),
     )
     assert result.status == "stopped" and graph.owner.contract == previous
     assert graph.owner.contract.generation == previous.generation and graph.owner.process is None
-    assert not process_boundary.starts and not calls
+    assert not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 @pytest.mark.parametrize("invalid", ["generation", "current", "desired", "default", "attached", "uuid", "root"])
 async def test_stopped_delete_preflight_keeps_complete_old_contract(
-    stopped_controller_case, process_boundary, monkeypatch, invalid,
+    stopped_workspace_runtime_controller_case, process_boundary, monkeypatch, invalid,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     target = registry.resolve("member-a")
     request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
@@ -1393,23 +1486,26 @@ async def test_stopped_delete_preflight_keeps_complete_old_contract(
     with pytest.raises(exception, match=message):
         await controller.remove_managed_workspace("member-a", request_id="offline-invalid", group_request=request)
     assert graph.owner.contract is previous and registry.resolve("member-a") is target
-    assert graph.owner.process is None and not calls and not process_boundary.starts
+    assert graph.owner.process is None and not runtime_actions and not process_boundary.starts
     assert not target.desired_running
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 async def test_stopped_delete_safe_blocks_route_references_and_force_waits_for_full_union(
-    stopped_controller_case, process_boundary,
+    stopped_workspace_runtime_controller_case, process_boundary,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
     streams = {"member-a": False, "member-b": True}
     leases = {identity: registry.acquire_route_reference(identity, streaming=streaming) for identity, streaming in streams.items()}
     async def release_invalidated() -> None:
         await asyncio.gather(*(lease.invalidated.wait() for lease in leases.values()))
-        assert graph.owner.contract is previous and not calls and not process_boundary.starts
+        assert graph.owner.contract is previous and not runtime_actions and not process_boundary.starts
         for identity, streaming in streams.items():
             registry.release_route_reference(identity, streaming=streaming)
     release = None
@@ -1423,7 +1519,7 @@ async def test_stopped_delete_safe_blocks_route_references_and_force_waits_for_f
         assert result.status == "stopped" and result.forced
         assert {item.workspace_id for item in result.blockers} == set(streams)
         assert graph.owner.contract.workspace_ids == ("member-b",) and graph.owner.process is None
-        assert not process_boundary.starts and not calls
+        assert not process_boundary.starts and not runtime_actions
     finally:
         if release is not None and not release.done():
             release.cancel()
@@ -1435,8 +1531,11 @@ async def test_stopped_delete_safe_blocks_route_references_and_force_waits_for_f
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
-async def test_stopped_force_unreleased_route_keeps_old_generation_and_registration(stopped_controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+async def test_stopped_force_unreleased_route_keeps_old_generation_and_registration(stopped_workspace_runtime_controller_case, process_boundary) -> None:
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     controller._connection_drain_timeout_seconds = 0.005
     previous = graph.owner.contract
     lease = registry.acquire_route_reference("member-b", streaming=True)
@@ -1448,7 +1547,7 @@ async def test_stopped_force_unreleased_route_keeps_old_generation_and_registrat
             )
         assert lease.invalidated.is_set() and graph.owner.contract is previous
         assert registry.resolve("member-a").connection_error and not registry.resolve("member-a").desired_running
-        assert not calls and not process_boundary.starts and graph.owner.process is None
+        assert not runtime_actions and not process_boundary.starts and graph.owner.process is None
         assert GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("member-a").contract == previous
     finally:
         registry.release_route_reference("member-b", streaming=True)
@@ -1458,9 +1557,12 @@ async def test_stopped_force_unreleased_route_keeps_old_generation_and_registrat
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 @pytest.mark.parametrize("failure_kind", ["remaining_auxiliary", "unpublished", "cas"])
 async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then_retries(
-    controller_case, process_boundary, monkeypatch, failure_kind,
+    workspace_runtime_controller_case, process_boundary, monkeypatch, failure_kind,
 ) -> None:
-    registry, graph, controller, calls, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     failure = RuntimeError(f"offline-{failure_kind}-failure")
     failed_handle = None
@@ -1471,7 +1573,7 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
             await controller.stop_managed_backend("member-a", request_id="partial-stop", group_request=graph.group_request)
     else:
         await controller.stop_managed_backend("member-a", request_id="full-stop", group_request=graph.group_request)
-    calls.clear()
+    runtime_actions.clear()
     if failure_kind == "unpublished":
         failed_handle = ProcessProbe("unpublished", failure=failure)
         graph.owner.unpublished_runtimes["member-a"] = WorkspaceRuntime(service_urls={}, processes={"browser_manager": failed_handle})
@@ -1496,7 +1598,7 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
             assert registry.managed_runtime("member-b") is graph.runtimes["member-b"] and not failed_handle.closed
         if failure_kind == "unpublished":
             assert graph.owner.unpublished_runtimes["member-a"].processes["browser_manager"] is failed_handle
-        assert not process_boundary.starts and not calls
+        assert not process_boundary.starts and not runtime_actions
     finally:
         if failed_handle is not None:
             failed_handle.failure = None
@@ -1509,8 +1611,11 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
-async def test_stopped_delete_commit_observer_error_keeps_new_offline_authority(stopped_controller_case, process_boundary) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+async def test_stopped_delete_commit_observer_error_keeps_new_offline_authority(stopped_workspace_runtime_controller_case, process_boundary) -> None:
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     failure = RuntimeError("offline commit observer failed")
     def observer():
@@ -1531,7 +1636,7 @@ async def test_stopped_delete_commit_observer_error_keeps_new_offline_authority(
         assert restored.backend_owner("member-b").contract == graph.owner.contract
         with pytest.raises(LookupError):
             restored.resolve("member-a")
-        assert not calls and not process_boundary.starts
+        assert not runtime_actions and not process_boundary.starts
     finally:
         registry.remove_commit_observer(observer)
 
@@ -1539,8 +1644,9 @@ async def test_stopped_delete_commit_observer_error_keeps_new_offline_authority(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 @pytest.mark.parametrize("boundary", ["no_locks", "owner_only", "topology_only", "process", "unpublished", "online_incomplete"])
-async def test_stopped_publication_requires_closed_owner_and_both_locks(stopped_controller_case, boundary) -> None:
-    registry, graph, _, _, _, _ = stopped_controller_case
+async def test_stopped_publication_requires_closed_owner_and_both_locks(stopped_workspace_runtime_controller_case, boundary) -> None:
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
     previous = graph.owner.contract
     owner_locked = boundary in {"owner_only", "process", "unpublished"}
     topology_locked = boundary in {"topology_only", "process", "unpublished"}
@@ -1569,9 +1675,12 @@ async def test_stopped_publication_requires_closed_owner_and_both_locks(stopped_
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 @pytest.mark.parametrize("action", ["stop", "restart-safe", "restart-force"])
 async def test_stopped_ordinary_action_without_desired_set_keeps_existing_rejection(
-    stopped_controller_case, process_boundary, action, monkeypatch,
+    stopped_workspace_runtime_controller_case, process_boundary, action, monkeypatch,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     async def unexpected_pending(*_, **__):
         raise AssertionError("普通停机动作不能进入配置 pending 启动入口")
@@ -1584,15 +1693,18 @@ async def test_stopped_ordinary_action_without_desired_set_keeps_existing_reject
     with pytest.raises(ValueError, match="尚未启动"):
         await invoke("member-a", request_id="ordinary-stopped", group_request=graph.group_request)
     assert graph.owner.contract is previous and graph.owner.error is None and graph.owner.process is None
-    assert registry.backend_owner("member-a") is graph.owner and not process_boundary.starts and not calls
+    assert registry.backend_owner("member-a") is graph.owner and not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 async def test_stopped_delete_sqlite_atomically_detaches_other_owner_child_without_touching_its_backend(
-    stopped_controller_case, managed_backend_factory, process_boundary, tmp_path,
+    stopped_workspace_runtime_controller_case, managed_backend_factory, process_boundary, tmp_path,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     other_root = tmp_path / "other-owner"
     other_root.mkdir()
     other = WorkspaceTarget(
@@ -1623,15 +1735,18 @@ async def test_stopped_delete_sqlite_atomically_detaches_other_owner_child_witho
     assert reopened.backend_owner("member-b").contract == graph.owner.contract
     with pytest.raises(LookupError):
         reopened.resolve("member-a")
-    assert not process_boundary.starts and not calls
+    assert not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 async def test_stopped_delete_sqlite_real_cas_failure_preserves_complete_old_authority(
-    stopped_controller_case, process_boundary,
+    stopped_workspace_runtime_controller_case, process_boundary,
 ) -> None:
-    registry, graph, controller, calls, _, _ = stopped_controller_case
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
+    controller = stopped_workspace_runtime_controller_case.controller
+    runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     held_targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
     writer = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
@@ -1646,13 +1761,14 @@ async def test_stopped_delete_sqlite_real_cas_failure_preserves_complete_old_aut
     assert registry._state_store.load_workspace_registry() == committed
     assert any("记录停机成员退出失败状态" in note and "CAS" in note for note in raised.value.__notes__)
     assert all(registry.resolve(identity) is target and not target.desired_running for identity, target in held_targets.items())
-    assert not process_boundary.starts and not calls
+    assert not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
-async def test_stopped_publication_online_null_member_runtime_fails_before_commit(stopped_controller_case) -> None:
-    registry, graph, _, _, _, _ = stopped_controller_case
+async def test_stopped_publication_online_null_member_runtime_fails_before_commit(stopped_workspace_runtime_controller_case) -> None:
+    registry = stopped_workspace_runtime_controller_case.registry
+    graph = stopped_workspace_runtime_controller_case.graph
     previous = graph.owner.contract
     held_targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
     committed = registry._state_store.load_workspace_registry()
@@ -1684,9 +1800,11 @@ def paired_deletion_http_application(deletion_http_application, tmp_path, monkey
 ])
 @pytest.mark.parametrize("method", ["POST", "DELETE"])
 async def test_paired_peer_without_explicit_admin_has_zero_side_effects(
-    controller_case, process_boundary, paired_deletion_http_application, tmp_path, rules, method,
+    workspace_runtime_controller_case, process_boundary, paired_deletion_http_application, tmp_path, rules, method,
 ) -> None:
-    registry, graph, _, calls, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     app, headers = paired_deletion_http_application
     app.state.federation_policy_store.publish({"default_effect": "allow", "rules": rules})
     before = registry._storage_path.read_bytes()
@@ -1705,15 +1823,17 @@ async def test_paired_peer_without_explicit_admin_has_zero_side_effects(
     assert response.json()["request_id"] == headers["X-Request-ID"]
     assert registry._storage_path.read_bytes() == before and registry.registry_revision == revision
     assert graph.owner.contract is contract and graph.owner.process is process and not process.closed
-    assert not calls and not process_boundary.starts and not process_boundary.nodes and not root.exists()
+    assert not runtime_actions and not process_boundary.starts and not process_boundary.nodes and not root.exists()
     assert all(registry.managed_runtime(identity) is runtime and all(not handle.closed for handle in runtime.processes.values()) for identity, runtime in runtimes.items())
 
 
 @pytest.mark.asyncio
 async def test_admin_revocation_is_checked_before_delete_side_effects(
-    controller_case, process_boundary, paired_deletion_http_application,
+    workspace_runtime_controller_case, process_boundary, paired_deletion_http_application,
 ) -> None:
-    registry, graph, _, calls, _, _ = controller_case
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
     app, headers = paired_deletion_http_application
     policy = app.state.federation_policy_store
     policy.publish({"rules": [{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")}]})
@@ -1724,4 +1844,4 @@ async def test_admin_revocation_is_checked_before_delete_side_effects(
         policy.publish({"rules": []})
         denied = await client.delete("/api/gateway/federation/managed-workspaces/member-a", headers=headers)
     assert denied.status_code == 403 and registry._storage_path.read_bytes() == before
-    assert not calls and not graph.owner.process.closed and not process_boundary.starts
+    assert not runtime_actions and not graph.owner.process.closed and not process_boundary.starts

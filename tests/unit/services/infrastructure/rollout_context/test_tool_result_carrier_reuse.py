@@ -80,7 +80,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
 TURN_ID = "turn-delegated-turn2"

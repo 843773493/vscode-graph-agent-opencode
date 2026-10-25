@@ -9,11 +9,11 @@ import {
 import type { GatewayWorkspace, WorkspaceNavigationNode } from "../../types/backend";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import {
-  apiResponse,
+  apiSuccessResponse,
   installGatewayFetch,
-  installTestWindow,
-  restoreSessionHookGlobals,
-} from "../../hooks/session/sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import SessionResourceExplorer from "./SessionResourceExplorer";
 
 // 工作区删除期间（removingGatewayWorkspaceIds 已写入、删除请求在途）这一行的契约：
@@ -21,7 +21,7 @@ import SessionResourceExplorer from "./SessionResourceExplorer";
 // 否则用户可以对一个正在消失的工作区继续发起操作。
 // 用真实 useSessionResourceExplorer + fetch 桩，不替换 hook 模块。
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 const generatorResources = {
   generators: null,
@@ -67,16 +67,16 @@ async function mountExplorer(options: {
   removingWorkspaceIds: ReadonlySet<string>;
   onOpenWorkspaceMenu: (workspace: GatewayWorkspace, x: number, y: number) => void;
 }): Promise<ReactTestRenderer> {
-  installTestWindow(8014);
+  installGatewayTestWindow(8014);
   installGatewayFetch((request) => {
     if (request.path.includes("/api/gateway/workspace-navigation")) {
-      return apiResponse({
+      return apiSuccessResponse({
         revision: "navigation",
         nodes: [navigationNode(options.workspaceId, "目标工作区")],
       });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
-      return apiResponse({
+      return apiSuccessResponse({
         revision: "catalog",
         parent_node_id: null,
         items: [],
@@ -85,7 +85,7 @@ async function mountExplorer(options: {
       });
     }
     if (request.path.includes("/api/gateway/session-generators")) {
-      return apiResponse({ revision: "generators", items: [] });
+      return apiSuccessResponse({ revision: "generators", items: [] });
     }
     return undefined;
   });
@@ -112,6 +112,7 @@ async function mountExplorer(options: {
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onStatusChange={() => undefined}
+        onOpenDiagnostic={() => undefined}
         onOpenWorkspaceMenu={options.onOpenWorkspaceMenu}
         onOpenSessionMenu={() => undefined}
         activeJobIdsBySession={new Map()}

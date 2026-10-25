@@ -82,9 +82,16 @@ function isSessionMessageRequest(request) {
     && /\/api\/v1\/sessions\/[^/]+\/messages$/.test(new URL(request.url()).pathname);
 }
 
-function streamKind(url) {
+function streamKind(request) {
+  const url = request.url();
   if (url.includes("/traces/stream")) return "trace";
   if (url.includes("/message-stream?")) return "message";
+  if (new URL(url).pathname === "/api/v1/workspace/observations/stream") {
+    const body = request.postDataJSON();
+    if (body?.subscriptions?.some((subscription) => subscription.kind === "session_trace")) {
+      return "trace";
+    }
+  }
   return null;
 }
 
@@ -95,7 +102,7 @@ function isExpectedBrowserAbort(request) {
 
 async function waitForStreamCount(streamResponses, kind, expectedCount) {
   await waitUntil(
-    async () => streamResponses.filter((url) => streamKind(url) === kind).length >= expectedCount,
+    async () => streamResponses.filter((request) => streamKind(request) === kind).length >= expectedCount,
     `${kind} SSE 第 ${expectedCount} 次连接`,
     60_000,
   );
@@ -279,7 +286,9 @@ page.on("response", (response) => {
   ) {
     expectedUnauthorizedProbeCount -= 1;
   }
-  if (response.status() === 200 && streamKind(response.url())) page.streamResponses.push(response.url());
+  if (response.status() === 200 && streamKind(response.request())) {
+    page.streamResponses.push(response.request());
+  }
 });
 
 const result = {
@@ -363,14 +372,14 @@ try {
   const title = (await item.locator(".child-thread-copy strong").innerText()).trim();
   const statusText = (await item.locator(".child-thread-status").innerText()).trim();
   const metaText = (await item.locator(".child-thread-copy small").innerText()).trim();
-  const copyIdLabel = await item
-    .locator(".child-thread-copy-id")
+  const childThreadIdCopyLabel = await item
+    .locator('button[aria-label^="复制 child thread ID:"]')
     .getAttribute("aria-label");
-  assert.match(copyIdLabel ?? "", /^复制 child thread ID: /, "复制按钮缺少 child thread ID 标注");
-  const childThreadId = (copyIdLabel ?? "").replace(/^复制 child thread ID: /, "").trim();
+  assert.match(childThreadIdCopyLabel ?? "", /^复制 child thread ID: /, "复制按钮缺少 child thread ID 标注");
+  const childThreadId = (childThreadIdCopyLabel ?? "").replace(/^复制 child thread ID: /, "").trim();
   assert.match(title, /^委派：/, "child 项标题必须以「委派：」开头");
   assert.ok(title.includes(delegateDescription), `child 项标题缺少委派描述: ${title}`);
-  assert.equal(statusText, "等待启动", "pending admission 的 child 项必须显示「等待启动」");
+  assert.equal(statusText, "运行中", "已启动的 child 项必须显示「运行中」");
   assert.ok(metaText.includes("general-purpose"), `child 项元信息缺少 subagent_type: ${metaText}`);
   result.childThread = {
     childThreadId,
@@ -386,7 +395,7 @@ try {
       && url.searchParams.get("session_id") === result.sessionId
       && url.searchParams.get("thread_id") === childThreadId;
   }, { timeout: 30_000 });
-  await item.locator(".child-thread-main").click();
+  await item.locator('button[aria-label^="调试子线程："]').click();
   const request = await debugStateRequest;
   const debugOwner = page.locator(".debug-workbench-header").filter({ hasText: `调试 owner: ${childThreadId}` });
   await debugOwner.waitFor({ state: "visible", timeout: 30_000 });
@@ -396,7 +405,7 @@ try {
   };
 
   // 持久化证据：父子两端的 LLM 请求日志与后端 child-threads 列表。
-  const parentLogs = await api(
+  const sessionLogs = await api(
     page,
     `/api/v1/sessions/${result.sessionId}/llm-request-logs`,
     { headers: workspaceHeaders },
@@ -406,7 +415,9 @@ try {
     `/api/v1/sessions/${result.sessionId}/child-threads`,
     { headers: workspaceHeaders },
   );
-  const parentLogItems = Array.isArray(parentLogs?.data) ? parentLogs.data : parentLogs?.data?.items ?? [];
+  const sessionLogItems = Array.isArray(sessionLogs?.data) ? sessionLogs.data : sessionLogs?.data?.items ?? [];
+  const parentJobIds = new Set([confirmSend.jobId, delegateSend.jobId]);
+  const parentLogItems = sessionLogItems.filter((item) => parentJobIds.has(item?.job_id));
   const rolesOf = (item) => {
     const attempt = item?.upstream?.attempts?.[0];
     return (attempt?.request?.messages ?? []).map((message) => message.role);
@@ -415,7 +426,9 @@ try {
   assert.equal(threadItems.length, 1, "后端 child-threads 必须返回 1 条委派子会话");
   assert.equal(threadItems[0]?.thread_id, childThreadId, "child-threads 的 thread_id 与面板不一致");
   result.persisted = {
+    sessionLlmRequestCount: sessionLogItems.length,
     parentLlmRequestCount: parentLogItems.length,
+    childLlmRequestCount: sessionLogItems.length - parentLogItems.length,
     parentUpstreamMessageRoles: parentLogItems.map(rolesOf),
     childThreads: threadItems.map((thread) => ({
       thread_id: thread.thread_id,
@@ -426,24 +439,27 @@ try {
     })),
   };
   result.streams = {
-    trace: page.streamResponses.filter((url) => streamKind(url) === "trace").length,
-    message: page.streamResponses.filter((url) => streamKind(url) === "message").length,
+    trace: page.streamResponses.filter((request) => streamKind(request) === "trace").length,
+    message: page.streamResponses.filter((request) => streamKind(request) === "message").length,
   };
 
-  assert.equal(result.persisted.parentLlmRequestCount, 3, "parent 必须产生 3 次上游模型请求");
-  // 前两次请求形态固定；第三次请求存在产品侧非确定性（见 R7 报告）：
-  // 消息列表可能带或不带尾部 tool 结果消息，两种形态都由 cassette 覆盖。
-  assert.deepEqual(result.persisted.parentUpstreamMessageRoles[0], ["system", "user"]);
+  await writeFile(resultPath, JSON.stringify(result, null, 2));
+  assert.equal(result.persisted.sessionLlmRequestCount, 4, "父子线程合计必须产生 4 次上游模型请求");
+  assert.equal(result.persisted.parentLlmRequestCount, 3, "两个父会话 Job 必须产生 3 次上游模型请求");
+  assert.equal(result.persisted.childLlmRequestCount, 1, "委派子线程必须产生 1 次上游模型请求");
+  // 每次请求会附带四条已登记上下文消息；第三次可能包含尾部 tool 结果消息。
+  const registeredContextRoles = ["user", "user", "user", "user"];
+  const requestRolePrefix = ["system", "user", ...registeredContextRoles];
+  assert.deepEqual(result.persisted.parentUpstreamMessageRoles[0], requestRolePrefix);
   assert.deepEqual(result.persisted.parentUpstreamMessageRoles[1], [
-    "system",
-    "user",
+    ...requestRolePrefix,
     "assistant",
     "user",
   ]);
   assert.ok(
     [
-      ["system", "user", "assistant", "user", "assistant", "tool"],
-      ["system", "user", "assistant", "user", "assistant"],
+      [...requestRolePrefix, "assistant", "user", "assistant", "tool"],
+      [...requestRolePrefix, "assistant", "user", "assistant"],
     ].some(
       (shape) =>
         JSON.stringify(shape) === JSON.stringify(result.persisted.parentUpstreamMessageRoles[2]),
@@ -454,7 +470,6 @@ try {
   assert.deepEqual(pageErrors, [], "浏览器 pageerror 出现");
   assert.deepEqual(consoleErrors, [], "浏览器 console error 出现");
   assert.deepEqual(failedRequests, [], "浏览器请求失败");
-  await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
   await dumpFailureDiagnostics();
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);

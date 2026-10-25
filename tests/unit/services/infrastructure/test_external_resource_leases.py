@@ -183,7 +183,7 @@ async def test_holder_settle_publishes_released_but_turn_release_does_not(
         lease_id="lease_2",
         operation_id="op_2",
     )
-    ledger.release("lease_1", reason="turn_cancelled")
+    ledger.release("lease_1")
     assert subscription.pending() == ()
     settled = ledger.settle("lease_2")
     assert settled.status == "settled"
@@ -420,7 +420,7 @@ def test_two_holders_share_resource_without_interference(tmp_path: Path) -> None
     assert lease_a.status == "active"
     assert lease_b.status == "active"
 
-    ledger.release("lease_a", reason="holder_a_finished")
+    ledger.release("lease_a")
     still_active = ledger.get_lease("lease_b")
     assert still_active is not None
     assert still_active.status == "active"

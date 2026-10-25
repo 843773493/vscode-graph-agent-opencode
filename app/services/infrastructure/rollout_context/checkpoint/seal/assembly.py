@@ -16,7 +16,11 @@ from app.agents.providers.wire_finalize import (
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.identity.refs import ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -260,11 +264,14 @@ def seal_snapshot(
                     checkpoint_ns=checkpoint_ns,
                 )
             )
+            if record.required != required_detail or record.sensitive != sensitive_detail:
+                raise ValueError(
+                    "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
+                )
+            canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(detail)
             if (
-                record.required != required_detail
-                or record.sensitive != sensitive_detail
-                or record.source_revision != sha256_jcs(detail)
-                or record.length != len(canonical_json_bytes(detail))
+                record.source_revision != detail_hash
+                or record.length != len(canonical_detail_bytes)
             ):
                 raise ValueError(
                     "assembly-idempotency-conflict: 重试 header detail manifest 不一致"

@@ -90,7 +90,7 @@ def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
     ).seal_for_assembly(scenario["assembly_id"], selection=selection)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def user_item() -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
@@ -113,7 +113,7 @@ def user_item() -> CanonicalItemRecord:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def omitted_snapshot(user_item: CanonicalItemRecord) -> ContextAssemblySnapshot:
     item_ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
     omitted = ContextSelectionEntry(

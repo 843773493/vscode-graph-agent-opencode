@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +21,17 @@ def _as_dict(value: Any) -> dict[str, Any]:
         dumped = value.model_dump()
         if isinstance(dumped, dict):
             return copy.deepcopy(dumped)
+    return {}
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """读取响应 mapping；调用方需要修改时应自行复制。"""
+    if isinstance(value, Mapping):
+        return value
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump()
+        if isinstance(dumped, Mapping):
+            return dumped
     return {}
 
 
@@ -88,33 +99,34 @@ def _message_chunk_token(message: AIMessageChunk) -> str:
     return ""
 
 
-def _streamed_response_payload(
-    chunks: Sequence[AIMessageChunk],
-) -> dict[str, object]:
-    """从已解析的 Chat SDK chunks 构造可审查的 upstream response 摘要。"""
+@dataclass(slots=True)
+class _StreamedResponsePayloadBuilder:
+    """边消费消息块边保留日志响应需要的最小字段。"""
 
-    reasoning_parts: list[str] = []
-    text_parts: list[str] = []
-    tool_calls: dict[int, dict[str, str]] = {}
-    tool_argument_parts: dict[int, list[str]] = {}
-    for message in chunks:
+    _reasoning_parts: list[str] = field(default_factory=list)
+    _text_parts: list[str] = field(default_factory=list)
+    _tool_calls: dict[int, dict[str, str]] = field(default_factory=dict)
+    _tool_argument_parts: dict[int, list[str]] = field(default_factory=dict)
+
+    def add(self, message: AIMessageChunk) -> None:
         content = getattr(message, "content", "")
         blocks = content if isinstance(content, list) else [content]
         for block in blocks:
             if isinstance(block, str):
-                text_parts.append(block)
+                if block:
+                    self._text_parts.append(block)
                 continue
             if not isinstance(block, Mapping):
                 continue
             block_type = block.get("type")
             if block_type == "reasoning_content":
                 reasoning = block.get("reasoning_content")
-                if isinstance(reasoning, str):
-                    reasoning_parts.append(reasoning)
+                if isinstance(reasoning, str) and reasoning:
+                    self._reasoning_parts.append(reasoning)
             elif block_type in {"text", "output_text"}:
                 text = block.get("text")
-                if isinstance(text, str):
-                    text_parts.append(text)
+                if isinstance(text, str) and text:
+                    self._text_parts.append(text)
 
         for fallback_index, raw_tool_call in enumerate(
             getattr(message, "tool_call_chunks", []) or []
@@ -125,43 +137,44 @@ def _streamed_response_payload(
             tool_call_index = (
                 provider_index if isinstance(provider_index, int) else fallback_index
             )
-            call_metadata = tool_calls.setdefault(tool_call_index, {})
-            argument_parts = tool_argument_parts.setdefault(tool_call_index, [])
+            call_metadata = self._tool_calls.setdefault(tool_call_index, {})
+            argument_parts = self._tool_argument_parts.setdefault(tool_call_index, [])
             for key in ("id", "name"):
                 value = raw_tool_call.get(key)
                 if isinstance(value, str) and value:
                     call_metadata[key] = value
             arguments = raw_tool_call.get("args")
-            if isinstance(arguments, str):
+            if isinstance(arguments, str) and arguments:
                 argument_parts.append(arguments)
 
-    message_payload: dict[str, object] = {
-        "role": "assistant",
-        "content": "".join(text_parts) or None,
-    }
-    reasoning = "".join(reasoning_parts)
-    if reasoning:
-        message_payload["reasoning_content"] = reasoning
-    if tool_calls:
-        message_payload["tool_calls"] = [
-            {
-                "id": call.get("id"),
-                "type": "function",
-                "function": {
-                    "name": call.get("name"),
-                    "arguments": "".join(tool_argument_parts[call_index]),
-                },
-            }
-            for call_index, call in sorted(tool_calls.items())
-        ]
-    return {
-        "choices": [
-            {
-                "index": 0,
-                "message": message_payload,
-            }
-        ]
-    }
+    def build(self) -> dict[str, object]:
+        message_payload: dict[str, object] = {
+            "role": "assistant",
+            "content": "".join(self._text_parts) or None,
+        }
+        reasoning = "".join(self._reasoning_parts)
+        if reasoning:
+            message_payload["reasoning_content"] = reasoning
+        if self._tool_calls:
+            message_payload["tool_calls"] = [
+                {
+                    "id": call.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": call.get("name"),
+                        "arguments": "".join(self._tool_argument_parts[call_index]),
+                    },
+                }
+                for call_index, call in sorted(self._tool_calls.items())
+            ]
+        return {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message_payload,
+                }
+            ]
+        }
 
 
 def _close_sync_stream(raw_stream: Any) -> None:

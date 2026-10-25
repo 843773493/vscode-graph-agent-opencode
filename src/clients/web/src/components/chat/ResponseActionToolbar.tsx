@@ -16,10 +16,12 @@ export default function ResponseActionToolbar({
   responseText,
   tokenUsage,
   modelUsage,
+  forkActions,
 }: {
   responseText: string;
   tokenUsage: ConversationTokenUsage | null;
   modelUsage: ConversationModelUsage | null;
+  forkActions?: React.ReactNode;
 }): React.ReactNode {
   const [copyState, setCopyState] = React.useState<"idle" | "copied" | "error">("idle");
   const resetTimerRef = React.useRef<number | null>(null);
@@ -79,6 +81,7 @@ export default function ResponseActionToolbar({
 
   return (
     <div className="chat-response-actions" role="toolbar" aria-label="回复操作">
+      {forkActions}
       {/* TODO: 后续接入浏览器语音能力，并补齐播放、暂停和朗读进度状态。 */}
       <button
         type="button"

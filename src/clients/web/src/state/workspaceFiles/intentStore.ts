@@ -99,6 +99,24 @@ function conflictsWith(value: StoredFileIntent, input: NewFileIntent): boolean {
     || sources(value.command).some((path) => overlappingPath(after, path));
 }
 
+type RelatedFileIntent = {
+  intent: Pick<WorkspaceFileMutationIntent, "client_operation_id" | "depends_on">;
+};
+
+export function operationDependencyFrontier(
+  related: readonly RelatedFileIntent[],
+): string[] {
+  const dependedOnIds = new Set<string>();
+  for (const value of related) {
+    for (const operationId of value.intent.depends_on) {
+      dependedOnIds.add(operationId);
+    }
+  }
+  return related
+    .filter((value) => !dependedOnIds.has(value.intent.client_operation_id))
+    .map((value) => value.intent.client_operation_id);
+}
+
 /** 只保存未确认意图；分区序号、依赖与上传 Blob 在一个事务内冻结。 */
 export class WorkspaceFileIntentStore {
   constructor(private readonly database: IDBDatabase) {}
@@ -157,9 +175,7 @@ export class WorkspaceFileIntentStore {
         const same = previous.find((value) => sameDirectory(value.intent.directory_key, input.directoryKey));
         const related = previous.filter((value) => conflictsWith(value, input));
         // 已有依赖链只保留最前沿，不能在同目录连续写时无界堆积全部历史 ID。
-        const dependencies = related.filter((value) => !related.some((other) => (
-          other.intent.depends_on.includes(value.intent.client_operation_id)
-        ))).map((value) => value.intent.client_operation_id);
+        const dependencies = operationDependencyFrontier(related);
         if (input.createdByOperationId) dependencies.push(input.createdByOperationId);
         const revisionFrom = input.createdByOperationId ?? same?.intent.client_operation_id ?? null;
         if (revisionFrom) dependencies.push(revisionFrom);

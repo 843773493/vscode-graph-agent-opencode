@@ -414,14 +414,16 @@ function ResourcePanelForOwner({
 
       {/* 这里只承载可重新 attach 的持久资源；一次性 Agent job 仍属于对话或事件视图。 */}
       {notice ? (
-        <div className="resource-notice" role="status">
-          <span>{notice}</span>
-          {noticeTechnicalDetails ? (
-            <details>
-              <summary>技术详情</summary>
-              <code>{noticeTechnicalDetails}</code>
-            </details>
-          ) : null}
+        <div className="resource-panel-notifications">
+          <div className="resource-notice" role="status">
+            <span>{notice}</span>
+            {noticeTechnicalDetails ? (
+              <details>
+                <summary>技术详情</summary>
+                <code>{noticeTechnicalDetails}</code>
+              </details>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {loading ? <div className="empty-state">正在读取后台连接...</div> : null}

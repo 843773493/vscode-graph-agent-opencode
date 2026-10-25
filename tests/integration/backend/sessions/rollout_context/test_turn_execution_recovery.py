@@ -61,7 +61,7 @@ from app.services.orchestration.execution_step.model_call import StepModelCallAd
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.harness.python.run_context import TestRunContext
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.view_mutations import mutate_view_members
 from tests.support.workspaces import prepare_test_workspace
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"

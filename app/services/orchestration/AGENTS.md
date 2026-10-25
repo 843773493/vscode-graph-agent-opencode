@@ -30,7 +30,8 @@ orchestration/
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
 ├── owner_thread_creation_factory.py      owner Session 的 Thread 创建依赖装配
 ├── runtime_source_dispatcher.py           内部 runtime source/wakeup 的准入与恢复派发
-├── thread_residency.py                    Thread Agent runtime 的驻留 lease 与回收
+├── thread_residency.py                    runtime admission、generation、blocker 与 idle 回收流程
+├── thread_residency_state.py               驻留状态、runtime slot、lease 和快照的数据形状
 ├── session_subagent_service.py            Session subagent 委派
 ├── session_title_service.py               首条用户消息的标题生成与规范化
 ├── terminal_steering_service.py            Terminal 完成后的执行引导

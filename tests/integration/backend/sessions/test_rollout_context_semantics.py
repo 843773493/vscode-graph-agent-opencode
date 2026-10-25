@@ -21,7 +21,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 

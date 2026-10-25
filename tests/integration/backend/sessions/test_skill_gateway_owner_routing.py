@@ -26,11 +26,11 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 )
 from tests.support import communication_federation
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import (
+from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import start_backend_process
 

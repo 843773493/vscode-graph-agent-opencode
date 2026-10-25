@@ -8,11 +8,15 @@ import pytest
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 
-def write_log(session_dir: Path, filename_timestamp_ns: int, payload: dict) -> Path:
-    log_dir = session_dir / "logs" / "llm_requests"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{filename_timestamp_ns}.json"
-    log_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def write_llm_request_log(
+    session_directory: Path,
+    filename_timestamp_ns: int,
+    log_payload: dict[str, object],
+) -> Path:
+    request_log_directory = session_directory / "logs" / "llm_requests"
+    request_log_directory.mkdir(parents=True, exist_ok=True)
+    log_file = request_log_directory / f"{filename_timestamp_ns}.json"
+    log_file.write_text(json.dumps(log_payload, ensure_ascii=False), encoding="utf-8")
     return log_file
 
 
@@ -22,9 +26,9 @@ def test_list_session_logs_reads_request_and_response(
 ):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019b9a5623b97db291238e0644b0b4ae"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    second = write_log(
-        session_dir,
+    session_directory = session_bundle_factory(sessions_dir, session_id)
+    second = write_llm_request_log(
+        session_directory,
         2_000_000_002,
         {
             "timestamp": 2000,
@@ -34,8 +38,8 @@ def test_list_session_logs_reads_request_and_response(
             "response": {"result": [{"type": "ai", "content": "响应二"}]},
         },
     )
-    first = write_log(
-        session_dir,
+    first = write_llm_request_log(
+        session_directory,
         1_000_000_001,
         {
             "timestamp": 1000,
@@ -76,10 +80,10 @@ def test_list_session_logs_exposes_invalid_log_file(
 ):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019c47ed3c2570fe8cfaaba65b26f15f"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    log_dir = session_dir / "logs" / "llm_requests"
-    log_dir.mkdir(parents=True)
-    (log_dir / "1000.json").write_text("[]", encoding="utf-8")
+    session_directory = session_bundle_factory(sessions_dir, session_id)
+    request_log_directory = session_directory / "logs" / "llm_requests"
+    request_log_directory.mkdir(parents=True)
+    (request_log_directory / "1000.json").write_text("[]", encoding="utf-8")
 
     with pytest.raises(TypeError, match="不是 JSON object"):
         LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
@@ -91,9 +95,9 @@ def test_list_session_logs_exposes_missing_response(
 ):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    write_log(
-        session_dir,
+    session_directory = session_bundle_factory(sessions_dir, session_id)
+    write_llm_request_log(
+        session_directory,
         1_000_000_001,
         {
             "timestamp": 1000,
@@ -114,11 +118,11 @@ def test_log_body_requires_epoch_milliseconds_without_filename_fallback(
 ):
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
-    session_dir = session_bundle_factory(sessions_dir, session_id)
-    payload: dict[str, object] = {"request": {"messages": []}, "response": {"result": []}}
+    session_directory = session_bundle_factory(sessions_dir, session_id)
+    log_payload: dict[str, object] = {"request": {"messages": []}, "response": {"result": []}}
     if timestamp is not None:
-        payload["timestamp"] = timestamp
-    write_log(session_dir, 1_000_000_001, payload)
+        log_payload["timestamp"] = timestamp
+    write_llm_request_log(session_directory, 1_000_000_001, log_payload)
 
     with pytest.raises(TypeError, match="timestamp 必须是 epoch 毫秒整数"):
         LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)

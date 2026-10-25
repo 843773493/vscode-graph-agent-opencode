@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -39,12 +38,6 @@ class BackgroundWorkStoreProtocol(Protocol):
     def admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
 
 
-@dataclass(slots=True)
-class _BackgroundTaskRecord:
-    handle: BackgroundTaskHandle
-    task: asyncio.Task[None]
-
-
 class BackgroundTaskRegistry:
     def __init__(
         self, *, store: BackgroundWorkStoreProtocol,
@@ -57,7 +50,7 @@ class BackgroundTaskRegistry:
         if len(self._handlers) != len(handlers):
             raise ValueError("后台恢复 handler kind/version 重复")
         self._holders = OperationHolderGate(store.sessions_dir, namespace="background_tasks")
-        self._tasks: dict[tuple[str, str], _BackgroundTaskRecord] = {}
+        self._running_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._stopping = False
         residency_tracker.add_blocker_source(self)
 
@@ -96,15 +89,16 @@ class BackgroundTaskRegistry:
 
     def _launch(self, handle: BackgroundTaskHandle) -> None:
         key = (handle.session_id, handle.task_id)
-        existing = self._tasks.get(key)
-        if existing is not None and not existing.task.done():
+        existing = self._running_tasks.get(key)
+        if existing is not None and not existing.done():
             return
         task = asyncio.create_task(self._run(handle), name=f"{handle.task_name}:{handle.task_id}")
-        self._tasks[key] = _BackgroundTaskRecord(handle, task)
-        task.add_done_callback(self._observe_failure)
+        self._running_tasks[key] = task
+        task.add_done_callback(lambda completed: self._observe_completion(key, completed))
 
-    @staticmethod
-    def _observe_failure(task: asyncio.Task[None]) -> None:
+    def _observe_completion(self, key: tuple[str, str], task: asyncio.Task[None]) -> None:
+        if self._running_tasks.get(key) is task:
+            del self._running_tasks[key]
         if not task.cancelled() and (error := task.exception()) is not None:
             asyncio.get_running_loop().call_exception_handler({
                 "message": "后台任务执行失败，详细错误已持久化", "exception": error, "task": task,
@@ -135,7 +129,6 @@ class BackgroundTaskRegistry:
                         handle = control.claim_background_task(
                             handle.task_id, expected_token=current.fencing_token, runtime_generation=generation,
                         )
-                    self._tasks[(handle.session_id, handle.task_id)].handle = handle
                     acquired = True
                 while handle.status == "running":
                     self._assert_generation(handle)
@@ -151,7 +144,6 @@ class BackgroundTaskRegistry:
                         self._assert_generation(handle)
                         with self._store.control(handle.session_id) as control:
                             handle = control.commit_background_step(handle.task_id, token=handle.fencing_token, step=step)
-                        self._tasks[(handle.session_id, handle.task_id)].handle = handle
                 self._settle_lease(handle)
         except asyncio.CancelledError:
             if acquired:
@@ -187,9 +179,6 @@ class BackgroundTaskRegistry:
     def _finish(self, handle: BackgroundTaskHandle, status: BackgroundTaskStatus, note: str) -> BackgroundTaskHandle:
         with self._store.control(handle.session_id) as control:
             handle = control.finish_background_task(handle.task_id, token=handle.fencing_token, status=status, note=note)
-        record = self._tasks.get((handle.session_id, handle.task_id))
-        if record is not None:
-            record.handle = handle
         self._settle_lease(handle)
         return handle
 
@@ -206,7 +195,7 @@ class BackgroundTaskRegistry:
 
     async def stop(self) -> None:
         self._stopping = True
-        tasks = [record.task for record in self._tasks.values() if not record.task.done()]
+        tasks = [task for task in self._running_tasks.values() if not task.done()]
         for task in tasks:
             task.cancel()
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -219,12 +208,13 @@ class BackgroundTaskRegistry:
             return control.get_background_task(task_id)
 
     def get_task(self, session_id: str, task_id: str) -> asyncio.Task[None] | None:
-        record = self._tasks.get((session_id, task_id))
-        return record.task if record is not None else None
+        """返回当前仍运行的本地 Task；持久终态通过 get_handle 查询。"""
+        task = self._running_tasks.get((session_id, task_id))
+        return task if task is not None and not task.done() else None
 
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
         with self._store.control(session_id, read_only=True) as control:
-            return [handle for handle in control.list_background_tasks(active_only=True) if handle.status in ACTIVE_TASK_STATUSES]
+            return control.list_background_tasks(active_only=True)
 
     def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
         with self._store.control(session_id, read_only=True) as control:
@@ -235,17 +225,19 @@ class BackgroundTaskRegistry:
 
     def residency_blockers(self, session_id: str, thread_id: str) -> tuple[ResidencyBlocker, ...]:
         with self._store.control(session_id, read_only=True) as control:
-            active = any(handle.status in ACTIVE_TASK_STATUSES for handle in control.list_background_tasks(thread_id=thread_id, active_only=True))
+            active = bool(
+                control.list_background_tasks(thread_id=thread_id, active_only=True)
+            )
         return (ResidencyBlocker("background_task", "后台任务仍在运行或等待恢复对账"),) if active else ()
 
     async def cancel(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
         handle = self.get_handle(session_id, task_id)
         if handle is None:
             raise ValueError(f"后台任务不存在: session_id={session_id}, task_id={task_id}")
-        record = self._tasks.get((session_id, task_id))
-        if record is not None and not record.task.done():
-            record.task.cancel()
-            await asyncio.gather(record.task, return_exceptions=True)
+        task = self._running_tasks.get((session_id, task_id))
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             handle = self.get_handle(session_id, task_id)
         if handle is None:
             raise RuntimeError("后台任务在取消期间丢失")

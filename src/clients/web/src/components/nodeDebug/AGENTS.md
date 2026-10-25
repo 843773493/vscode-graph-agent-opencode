@@ -2,6 +2,21 @@
 
 `components/nodeDebug/` 存放当前会话与线程的 Node.js 源码调试工作台，包括运行控制、断点编辑、源码定位和调试状态展示。
 
+## 代码树
+
+```text
+NodeDebugWorkbench
+└─ NodeDebugPanel                       调试状态和视图切换
+   ├─ NodeDebugSourceView               源码定位、断点列表
+   │  └─ NodeDebugSourcePreview         拉取源码并显示焦点窗口
+   │     └─ nodeDebugSourceLines        行起点索引与窗口投影（纯函数）
+   ├─ NodeDebugContextView              调用栈和变量
+   ├─ NodeDebugConsoleView              程序输出和表达式求值
+   └─ NodeDebugConfigurationView        启动配置
+```
+
+同层 `*.test.ts` 文件验证各自纯状态逻辑与边界，不复制产品协议数据。
+
 # 可修改内容
 
 - Node Debug 工作台与其专用展示组件。

@@ -95,7 +95,7 @@ from tests.support.e2e_control.runtime_ports import (
 )
 from tests.support.e2e_control.tool_observations import ObservedCanonicalItemSink
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     BackendProcess,

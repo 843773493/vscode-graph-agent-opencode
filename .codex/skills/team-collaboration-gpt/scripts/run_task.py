@@ -9,9 +9,46 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+
+POSIX_PROCESS_GROUP = "posix_process_group"
+WINDOWS_JOB_OBJECT = "windows_job_object"
+POSIX_DATA_LIMIT_BYTES = 4 * 1024 * 1024 * 1024
+WINDOWS_JOB_MEMORY_LIMIT_BYTES = 4 * 1024 * 1024 * 1024
+WINDOWS_MATRIX_JOB_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024 * 1024
+
+
+_WINDOWS_JOB_WRAPPER = """import json
+import sys
+from pathlib import Path
+
+repository_root = Path(sys.argv[1])
+sys.path.insert(0, str(repository_root))
+from tests.support.processes.windows_job import run_windows_job
+
+command = json.loads(sys.argv[2])
+memory_bytes = int(sys.argv[3])
+timeout_seconds = int(sys.argv[4])
+receipt_path = Path(sys.argv[5])
+exit_code = run_windows_job(
+    command,
+    memory_bytes=memory_bytes,
+    timeout_seconds=timeout_seconds,
+)
+with receipt_path.open("x", encoding="utf-8") as stream:
+    json.dump(
+        {"exit_code": exit_code, "process_tree_empty": True},
+        stream,
+        ensure_ascii=False,
+        indent=2,
+    )
+    stream.write("\\n")
+raise SystemExit(exit_code)
+"""
 
 
 def utc_now() -> str:
@@ -159,18 +196,157 @@ def enforce_pytest_node_selection(
     return None
 
 
-def group_members(pgid: int) -> list[int]:
+def process_group_members(pgid: int) -> list[int]:
+    if os.name != "posix":
+        raise RuntimeError(f"POSIX process group 不适用于当前平台: {sys.platform}")
+    if sys.platform == "linux":
+        members = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            if int(fields[2]) == pgid and fields[0] not in {"Z", "X"}:
+                members.append(int(entry.name))
+        return members
+
+    process_listing = subprocess.run(
+        ["ps", "-A", "-o", "pid=,pgid=,stat="],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
     members = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdecimal():
-            continue
-        try:
-            fields = (entry / "stat").read_text().rsplit(") ", 1)[1].split()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        if int(fields[2]) == pgid and fields[0] != "Z":
-            members.append(int(entry.name))
+    for line in process_listing.splitlines():
+        pid_text, group_text, state = line.split(None, 2)
+        if int(group_text) == pgid and not state.startswith(("Z", "X")):
+            members.append(int(pid_text))
     return members
+
+
+def _set_posix_data_limit() -> None:
+    import resource
+
+    _, hard_limit = resource.getrlimit(resource.RLIMIT_DATA)
+    if hard_limit == resource.RLIM_INFINITY:
+        hard_limit = POSIX_DATA_LIMIT_BYTES
+    else:
+        hard_limit = min(hard_limit, POSIX_DATA_LIMIT_BYTES)
+    resource.setrlimit(resource.RLIMIT_DATA, (hard_limit, hard_limit))
+
+
+def _windows_job_command(
+    command: list[str], *, receipt_path: Path, memory_limit_bytes: int,
+    timeout_seconds: int, repository_root: Path,
+) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        _WINDOWS_JOB_WRAPPER,
+        str(repository_root),
+        json.dumps(command, ensure_ascii=False),
+        str(memory_limit_bytes),
+        str(timeout_seconds),
+        str(receipt_path),
+    ]
+
+
+def _request_process_termination(
+    child: subprocess.Popen[bytes], process_guard: str,
+) -> None:
+    if child.poll() is not None:
+        return
+    if process_guard == POSIX_PROCESS_GROUP:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    else:
+        child.terminate()
+
+
+def _force_process_termination(
+    child: subprocess.Popen[bytes], process_guard: str,
+) -> None:
+    if child.poll() is not None:
+        return
+    if process_guard == POSIX_PROCESS_GROUP:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        child.kill()
+
+
+def _wait_for_runner_process(
+    child: subprocess.Popen[bytes], *, seconds: int, process_guard: str,
+    interrupted_signal: Callable[[], int | None],
+) -> int:
+    started = time.monotonic()
+    command_deadline = started + seconds
+    # Windows Job Object runner 负责命令期限和整树回收；外层期限用于发现监督器挂起。
+    outer_deadline = command_deadline + (20 if process_guard == WINDOWS_JOB_OBJECT else 0)
+    termination_started: float | None = None
+    while child.poll() is None:
+        now = time.monotonic()
+        signum = interrupted_signal()
+        if termination_started is None and (
+            signum is not None or now >= outer_deadline
+        ):
+            _request_process_termination(child, process_guard)
+            termination_started = now
+        elif termination_started is not None and now - termination_started >= 10:
+            _force_process_termination(child, process_guard)
+            termination_started = now
+        try:
+            child.wait(timeout=0.05)
+        except subprocess.TimeoutExpired:
+            continue
+
+    if termination_started is not None and interrupted_signal() is None:
+        return 124
+    if interrupted_signal() is not None:
+        return 128 + int(interrupted_signal())
+    return int(child.returncode)
+
+
+def _cleanup_posix_process_group(pgid: int) -> list[int]:
+    remaining_process_ids = process_group_members(pgid)
+    if not remaining_process_ids:
+        return []
+    killed_process_ids = remaining_process_ids.copy()
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while remaining_process_ids and time.monotonic() < deadline:
+        time.sleep(0.05)
+        remaining_process_ids = process_group_members(pgid)
+    if remaining_process_ids:
+        raise RuntimeError(
+            "POSIX 进程组强制回收后仍有成员: "
+            f"pgid={pgid}, pids={remaining_process_ids}"
+        )
+    return killed_process_ids
+
+
+def _windows_job_receipt(path: Path, exit_code: int) -> dict[str, object] | None:
+    if not path.is_file():
+        return None
+    raw = path.read_bytes()
+    receipt = json.loads(raw)
+    if receipt != {"exit_code": exit_code, "process_tree_empty": True}:
+        return None
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "bytes": len(raw),
+    }
 
 
 def main() -> int:
@@ -287,67 +463,115 @@ def main() -> int:
             "result": str(result_path), "exit_code": 2, "launch_blocked": True,
         }), flush=True)
         return 2
-    argv = ["timeout", "--kill-after=10", str(args.seconds)]
-    if matrix_runner_owns_memory_limit(command):
-        # 正式 suite runner 按矩阵配置设硬上限，外层不能提前压低 hard limit。
-        argv.extend(command)
+    matrix_manages_memory = matrix_runner_owns_memory_limit(command)
+    process_guard = WINDOWS_JOB_OBJECT if os.name == "nt" else POSIX_PROCESS_GROUP
+    windows_job_runner: Path | None = None
+    windows_job_runner_sha256: str | None = None
+    windows_job_receipt_path: Path | None = None
+    if process_guard == WINDOWS_JOB_OBJECT:
+        repository_root = Path.cwd().resolve()
+        windows_job_runner = repository_root / "tests/support/processes/windows_job.py"
+        if not windows_job_runner.is_file():
+            raise FileNotFoundError(f"Windows Job Object runner 不存在: {windows_job_runner}")
+        windows_job_runner_sha256 = hashlib.sha256(
+            windows_job_runner.read_bytes()
+        ).hexdigest()
+        windows_job_receipt_path = result_dir / "windows-job-receipt.json"
+        # Matrix suite 单独限制测试树；16GiB 外层留出 runner 与回收开销。
+        memory_limit = (
+            WINDOWS_MATRIX_JOB_MEMORY_LIMIT_BYTES
+            if matrix_manages_memory
+            else WINDOWS_JOB_MEMORY_LIMIT_BYTES
+        )
+        argv = _windows_job_command(
+            command,
+            receipt_path=windows_job_receipt_path,
+            memory_limit_bytes=memory_limit,
+            timeout_seconds=args.seconds,
+            repository_root=repository_root,
+        )
+        popen_options: dict[str, object] = {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
+        }
     else:
-        argv.extend([
-            "bash", "-c",
-            'ulimit -d 4194304 || { printf "run_task: 无法设置数据段内存上限，未启动命令\\n" >&2; exit 97; }; exec "$@"',
-            "bash", *command,
-        ])
+        argv = command
+        popen_options = {"start_new_session": True}
+        if not matrix_manages_memory:
+            # 限额在进程创建前由 Python 设置，保留可执行命令的原始 argv。
+            popen_options["preexec_fn"] = _set_posix_data_limit
     start = {"started_utc": utc_now(), "runner_pid": os.getpid(),
              "cwd": str(workdir), "profile": str(profile_path),
              "profile_sha256": profile_sha256,
              "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-             "argv": argv, "options": overrides}
+             "argv": argv, "options": overrides, "process_guard": process_guard}
+    if windows_job_runner is not None:
+        start["process_tree_runner"] = str(windows_job_runner)
+        start["process_tree_runner_sha256"] = windows_job_runner_sha256
     interrupted_signal: int | None = None
     child: subprocess.Popen[bytes] | None = None
 
     def interrupt_run(signum: int, _frame: object) -> None:
         nonlocal interrupted_signal
         interrupted_signal = signum
-        if child is not None:
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
 
     signal.signal(signal.SIGTERM, interrupt_run)
     signal.signal(signal.SIGINT, interrupt_run)
     with (result_dir / "stdout.raw").open("xb") as stdout, (result_dir / "stderr.raw").open("xb") as stderr:
         command_started = time.monotonic()
         child = subprocess.Popen(argv, cwd=workdir, env=environment,
-                                 stdout=stdout, stderr=stderr, start_new_session=True)
+                                 stdout=stdout, stderr=stderr, **popen_options)
         try:
             start["pid"] = child.pid
-            start["pgid"] = child.pid
-            try:
-                start["start_time_ticks"] = Path(f"/proc/{child.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
-            except FileNotFoundError:
-                start["start_time_ticks"] = None
+            if process_guard == POSIX_PROCESS_GROUP:
+                start["pgid"] = child.pid
+                if sys.platform == "linux":
+                    try:
+                        start["start_time_ticks"] = (
+                            Path(f"/proc/{child.pid}/stat")
+                            .read_text()
+                            .rsplit(")", 1)[1]
+                            .split()[19]
+                        )
+                    except FileNotFoundError:
+                        start["start_time_ticks"] = None
+                else:
+                    start["start_time_ticks"] = None
+            else:
+                start["process_tree_receipt_path"] = str(windows_job_receipt_path)
             write_json(result_dir / "started.json", start)
             print(json.dumps({"result_dir": str(result_dir), "pid": child.pid}), flush=True)
-            if interrupted_signal is not None:
-                interrupt_run(interrupted_signal, None)
-            actual = child.wait()
+            command_exit_code = _wait_for_runner_process(
+                child,
+                seconds=args.seconds,
+                process_guard=process_guard,
+                interrupted_signal=lambda: interrupted_signal,
+            )
             command_seconds = time.monotonic() - command_started
-            # 命令终态先落盘，后续清理和指纹采集不能伪装成仍在执行。
-            write_json(result_dir / "command-exit.json", {
+            command_exit = {
                 "stage": "command_exited", "ended_utc": utc_now(),
-                "pid": child.pid, "pgid": child.pid, "exit_code": actual,
-                "command_seconds": command_seconds,
-            })
+                "pid": child.pid, "exit_code": command_exit_code,
+                "command_seconds": command_seconds, "process_guard": process_guard,
+            }
+            if process_guard == POSIX_PROCESS_GROUP:
+                command_exit["pgid"] = child.pid
+            write_json(result_dir / "command-exit.json", command_exit)
         finally:
             cleanup_started = time.monotonic()
-            remaining = group_members(child.pid)
-            if remaining:
-                os.killpg(child.pid, signal.SIGKILL)
             child.wait()
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             cleanup_seconds = time.monotonic() - cleanup_started
+    cleanup_killed_process_ids: list[int] = []
+    windows_job_receipt: dict[str, object] | None = None
+    if process_guard == POSIX_PROCESS_GROUP:
+        cleanup_started = time.monotonic()
+        cleanup_killed_process_ids = _cleanup_posix_process_group(child.pid)
+        cleanup_seconds += time.monotonic() - cleanup_started
+    else:
+        assert windows_job_receipt_path is not None
+        windows_job_receipt = _windows_job_receipt(
+            windows_job_receipt_path, command_exit_code
+        )
     log_hash_started = time.monotonic()
     logs = {}
     for name in ("stdout", "stderr"):
@@ -359,20 +583,32 @@ def main() -> int:
     source_after_started = time.monotonic()
     write_json(result_dir / "source-after.json", source_fingerprints(workdir, paths))
     source_after_seconds = time.monotonic() - source_after_started
-    final_group_check_started = time.monotonic()
-    final_group_members = group_members(child.pid)
-    final_group_check_seconds = time.monotonic() - final_group_check_started
     result = {**start, "ended_utc": utc_now(), "duration_seconds": time.monotonic() - started,
-              "exit_code": actual, "interrupted_signal": interrupted_signal, "logs": logs,
-              "cleanup_killed_members": remaining, "remaining_group_members": final_group_members,
+              "exit_code": command_exit_code, "interrupted_signal": interrupted_signal,
+              "logs": logs,
               "phase_seconds": {
                   "source_before": source_before_seconds, "command": command_seconds,
                   "cleanup": cleanup_seconds, "log_hash": log_hash_seconds,
-                  "source_after": source_after_seconds, "final_group_check": final_group_check_seconds,
+                  "source_after": source_after_seconds,
               }}
+    if process_guard == POSIX_PROCESS_GROUP:
+        result["cleanup_killed_process_ids"] = cleanup_killed_process_ids
+        # 清理函数只会在最后一次进程组扫描为空后返回。
+        result["remaining_process_group_members"] = []
+    else:
+        result["process_tree_receipt"] = windows_job_receipt
+        result["process_tree_cleanup_verified"] = windows_job_receipt is not None
     write_json(result_dir / "result.json", result)
-    print(json.dumps({"result": str(result_dir / "result.json"), "exit_code": actual}), flush=True)
-    return actual if actual >= 0 else 128 - actual
+    print(json.dumps({"result": str(result_dir / "result.json"), "exit_code": command_exit_code}), flush=True)
+    if (
+        process_guard == WINDOWS_JOB_OBJECT
+        and windows_job_receipt is None
+        and command_exit_code == 0
+    ):
+        return 1
+    if interrupted_signal is not None:
+        return 128 + interrupted_signal
+    return command_exit_code if command_exit_code >= 0 else 128 - command_exit_code
 
 
 if __name__ == "__main__":

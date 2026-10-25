@@ -17,6 +17,7 @@ from app.domain.itemized.selection import ContextSelectionEntry
 
 
 @pytest.fixture(
+    scope="module",
     params=[
         "canonical_history",
         "request_only",
@@ -30,10 +31,13 @@ def owned_omitted_snapshot(
     omitted_snapshot: ContextAssemblySnapshot,
 ) -> ContextAssemblySnapshot:
     session_id, plan_id = omitted_snapshot.session_id, omitted_snapshot.plan_id
-    kind = request.param
-    role = {"overlay_base": "base", "overlay_delta": "delta"}.get(kind, "none")
-    if kind == "tool_set":
-        ref = ToolSetRef.from_tool_snapshot(
+    selection_kind = request.param
+    base_delta_role = {
+        "overlay_base": "base",
+        "overlay_delta": "delta",
+    }.get(selection_kind, "none")
+    if selection_kind == "tool_set":
+        selection_ref = ToolSetRef.from_tool_snapshot(
             session_id=session_id,
             thread_id=omitted_snapshot.thread_id,
             plan_id=plan_id,
@@ -43,43 +47,43 @@ def owned_omitted_snapshot(
             assembly_id=omitted_snapshot.assembly_id,
         )
     else:
-        ref = ContextRef(
+        selection_ref = ContextRef(
             session_id=session_id, thread_id="thread-1",
-            plan_id=None if kind == "canonical_history" else plan_id,
+            plan_id=None if selection_kind == "canonical_history" else plan_id,
             ref_type="canonical_item"
-            if kind == "canonical_history"
+            if selection_kind == "canonical_history"
             else "request_only",
             ref_id="owner-ref",
             availability="unavailable",
-            base_delta_role=role,
+            base_delta_role=base_delta_role,
         )
     entry = ContextSelectionEntry(
         assembly_id=omitted_snapshot.assembly_id,
         plan_ordinal=0,
-        ref=ref,
-        selection_kind=kind,
+        ref=selection_ref,
+        selection_kind=selection_kind,
         included=False,
         omission_reason="optional-unavailable",
         loss=("optional-unavailable",),
-        availability=ref.availability,
-        base_delta_role=role,
+        availability=selection_ref.availability,
+        base_delta_role=base_delta_role,
     )
-    refs = (ref,) if isinstance(ref, ContextRef) else ()
-    tools = (ref,) if isinstance(ref, ToolSetRef) else ()
+    context_refs = (selection_ref,) if isinstance(selection_ref, ContextRef) else ()
+    tool_set_refs = (selection_ref,) if isinstance(selection_ref, ToolSetRef) else ()
     plan = ContextRequestPlan(
         session_id=session_id,
         thread_id="thread-1",
         plan_id=plan_id,
-        refs=refs,
-        tool_set_refs=tools,
+        refs=context_refs,
+        tool_set_refs=tool_set_refs,
         assembly_id=omitted_snapshot.assembly_id,
         plan_state="sealed",
         selection=(entry,),
     )
     return replace(
         omitted_snapshot,
-        refs=refs,
-        tool_set_refs=tools,
+        refs=context_refs,
+        tool_set_refs=tool_set_refs,
         selection=(entry,),
         plan_hash=plan.plan_hash(),
         request_hash=context_request_hash(plan, "provider-1", target_format="native"),

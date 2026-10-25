@@ -244,30 +244,38 @@ def build_model_from_provider(
     if api_mode.protocol == "responses":
         from app.agents.providers.openai_responses import build_openai_responses_model
 
-        return build_openai_responses_model(
+        model = build_openai_responses_model(
             provider=provider,
             runtime_config=runtime_config,
             request_options=request_options,
             prompt_cache_key=prompt_cache_key,
             invocation_purpose=invocation_purpose,
         )
-    if api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
-        raise ValueError(
-            "Anthropic Messages provider 必须配置 "
-            "custom_llm_provider='anthropic'"
+    else:
+        if api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
+            raise ValueError(
+                "Anthropic Messages provider 必须配置 "
+                "custom_llm_provider='anthropic'"
+            )
+        if api_mode.protocol not in {"chat_completions", "anthropic_messages"}:
+            raise ValueError(f"provider.api_mode.protocol 不受支持: {api_mode.protocol!r}")
+
+        from app.agents.providers.litellm_chat import build_litellm_chat_model
+
+        model = build_litellm_chat_model(
+            provider=provider,
+            runtime_config=runtime_config,
+            request_options=request_options,
+            prompt_cache_key=prompt_cache_key,
+            invocation_purpose=invocation_purpose,
         )
-    if api_mode.protocol not in {"chat_completions", "anthropic_messages"}:
-        raise ValueError(f"provider.api_mode.protocol 不受支持: {api_mode.protocol!r}")
-
-    from app.agents.providers.litellm_chat import build_litellm_chat_model
-
-    return build_litellm_chat_model(
-        provider=provider,
-        runtime_config=runtime_config,
-        request_options=request_options,
-        prompt_cache_key=prompt_cache_key,
-        invocation_purpose=invocation_purpose,
-    )
+    if api_mode.model_info.max_input_tokens is not None:
+        # 容量属于模型元数据，不向上游发送，也不据此设置输出上限。
+        model.profile = {
+            **(model.profile or {}),
+            "max_input_tokens": api_mode.model_info.max_input_tokens,
+        }
+    return model
 
 
 def provider_configuration_error(

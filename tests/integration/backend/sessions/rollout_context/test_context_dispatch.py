@@ -475,8 +475,8 @@ def test_gc_protects_sealed_selection_detail_even_with_stale_candidate( frozen_p
     # 模拟 GC 候选检查后发生 seal：即便候选已过时，tombstone 写锁内仍须保护引用。
     monkeypatch.setattr(
         saver._storage.assemblies,
-        "context_assembly_references_detail",
-        lambda *args, **kwargs: False,
+        "find_referenced_context_details",
+        lambda *args, **kwargs: frozenset(),
     )
     with pytest.raises(RuntimeError, match="detail-retention-protected"):
         saver.gc_context_plan_details(session_id, saver._storage.storage.main_thread_id(session_id), expired_before=expired)

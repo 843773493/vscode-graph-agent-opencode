@@ -6,38 +6,44 @@
 
 ## 按职责查找
 
-下面是职责索引，不代表当前磁盘子目录；现有测试多数仍位于本目录根部。先按行为归属查找，再决定新测试是否应下沉到对应模块目录：
+下面先列出已物理归组的测试目录，再列出仍在根目录的测试职责。新增测试先按行为归属查找，已有稳定测试组优先放入对应目录：
 
 ```text
 tests/unit/core/
-├── 身份与标识
+├── identity/
 │   ├── test_identifier*.py、test_canonical_identifier_matrix.py
 │   ├── test_distribution_identity.py、test_user_identity.py、test_workspace_identity.py
 │   ├── test_non_canonical_exemptions.py、test_hashing.py
 │   └── test_canonical_creation_id_allocation.py
-├── Session 目录与生命周期
-│   ├── catalog_workspace_helper.py、test_catalog_workspace_helper.py
-│   ├── test_session_catalog*.py
-│   ├── test_session_creation*.py、test_thread_creation.py
-│   ├── test_session_subtree_delete.py、test_fork_retention_release.py
-│   ├── test_session_control*.py、test_session_lifecycle_gate.py
-│   └── test_session_interrupt_state.py、test_session_thread_context.py
-├── 异步执行与事件
-│   ├── test_background_message_bus.py、test_job_event_bus*.py
-│   ├── test_execution_admission_context.py、test_cancelable_stream.py
-│   ├── test_lifetime_*.py、test_turn_execution_scope.py
-│   └── test_key_lock_pool.py、test_checkpoint_config.py
-├── 文件、存储与环境
-│   ├── test_atomic_fs.py、test_sql_assets.py、test_sqlite_state.py
-│   ├── test_path_utils*.py、test_mounted_workspaces.py
-│   ├── test_boxteam_env.py、test_user_storage_migration.py
-│   └── test_bounded_json.py、test_backend_activation.py
-└── 配置、追踪与领域合同
-    ├── test_config_sources.py、test_logging_config.py、test_trace_middleware.py
-    └── test_itemized_contract.py
+├── storage/
+│   ├── test_atomic_fs.py、test_file_permissions.py
+│   ├── test_sql_assets.py、test_sqlite_state.py
+│   └── test_sqlite_vfs.py
+├── environment/
+│   ├── test_boxteam_env.py、test_mounted_workspaces.py
+│   └── test_user_storage_migration.py、test_backend_activation.py
+├── configuration/
+│   ├── test_config_sources.py、test_checkpoint_config.py
+│   └── test_logging_config.py
+├── events/
+│   ├── test_background_message_bus.py、test_job_event_bus.py
+│   └── test_job_event_bus_channel_adapter.py
+├── execution/
+│   ├── test_cancelable_stream.py、test_execution_admission_context.py
+│   ├── test_key_lock_pool.py、test_lifetime_handle.py
+│   └── test_lifetime_scope.py、test_turn_execution_scope.py
+└── 根目录测试（按职责分组）
+    ├── Session 目录与生命周期
+    │   ├── catalog_workspace_helper.py、test_catalog_workspace_helper.py
+    │   ├── test_session_catalog*.py、test_session_creation*.py
+    │   ├── test_thread_creation.py、test_session_subtree_delete.py
+    │   ├── test_fork_retention_release.py、test_session_control*.py
+    │   └── test_session_lifecycle_gate.py、test_session_interrupt_state.py、test_session_thread_context.py
+    ├── 路径与数据：test_path_utils*.py、test_bounded_json.py
+    └── 追踪与领域合同：test_trace_middleware.py、test_itemized_contract.py
 ```
 
-本目录有 46 个直接测试模块，已超过 20 个的结构审查阈值。物理迁移应按单一职责成组进行，并先迁齐测试矩阵选择、`out/tests/` 镜像路径和仍有效的文档引用；不要只移动文件留下悬空路径。
+身份、存储、运行环境与工作区边界、运行配置、事件通道、执行生命周期测试已分别集中在 `identity/`、`storage/`、`environment/`、`configuration/`、`events/`、`execution/`。核心目录根部保留 Session 生命周期与少数未成组测试；迁移时同步核对测试矩阵选择、`out/tests/` 镜像路径和仍有效的文档引用，不要只移动文件留下悬空路径。
 
 ## 可修改内容
 

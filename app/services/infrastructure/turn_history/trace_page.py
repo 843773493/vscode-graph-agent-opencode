@@ -33,15 +33,18 @@ class TraceEventPage:
 
 @dataclass(frozen=True, slots=True)
 class _PageCursorPosition:
-    start: int
-    end: int
-    digest: str
+    line_start: int
+    line_end: int
+    line_digest: str
 
 
-def _encode_page_cursor(*, start: int, end: int, line: bytes) -> str:
+def _encode_page_cursor(*, line_start: int, line_end: int, line: bytes) -> str:
     raw = json.dumps(
-        {"s": start, "n": end,
-         "h": event_line_digest(len(line), event_line_sample(line))},
+        {
+            "s": line_start,
+            "n": line_end,
+            "h": event_line_digest(len(line), event_line_sample(line)),
+        },
         separators=(",", ":"),
     ).encode("utf-8")
     return _TRACE_PAGE_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode(
@@ -58,16 +61,16 @@ def _decode_page_cursor(cursor: str) -> _PageCursorPosition:
             base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         )
         position = _PageCursorPosition(
-            start=value["s"],
-            end=value["n"],
-            digest=value["h"],
+            line_start=value["s"],
+            line_end=value["n"],
+            line_digest=value["h"],
         )
     except Exception as error:
         raise ValueError("Trace page cursor 格式无效") from error
     if (
-        position.start < 0
-        or position.end <= position.start
-        or len(position.digest) != 32
+        position.line_start < 0
+        or position.line_end <= position.line_start
+        or len(position.line_digest) != 32
     ):
         raise ValueError("Trace page cursor 字段无效")
     return position
@@ -75,16 +78,16 @@ def _decode_page_cursor(cursor: str) -> _PageCursorPosition:
 
 def _validate_page_cursor(file: Path, cursor: str) -> int:
     position = _decode_page_cursor(cursor)
-    if not file.is_file() or file.stat().st_size < position.end:
+    if not file.is_file() or file.stat().st_size < position.line_end:
         raise ValueError("Trace page cursor 越过文件末尾")
     _read_and_verify_line(
         file,
-        start=position.start,
-        end=position.end,
-        digest=position.digest,
+        start=position.line_start,
+        end=position.line_end,
+        digest=position.line_digest,
         label="Trace page cursor",
     )
-    return position.start
+    return position.line_start
 
 
 def read_trace_event_page(
@@ -131,19 +134,32 @@ def read_trace_event_page(
         read_start += first_newline + 1
         payload = payload[first_newline + 1 :]
 
-    lines = payload.splitlines(keepends=True)
-    if not lines and read_start > 0:
+    if not payload and read_start > 0:
         raise TracePageBudgetExceededError(
             f"Trace 单事件超过诊断页读取预算: max_bytes={max_bytes}"
         )
-    offsets: list[tuple[int, int, bytes]] = []
-    offset = read_start
-    for line in lines:
-        line_end = offset + len(line)
+    selected_reversed: list[tuple[int, int, bytes]] = []
+    line_end_offset = len(payload)
+    while line_end_offset:
+        line_content_end_offset = (
+            line_end_offset - 1
+            if payload[line_end_offset - 1] == ord("\n")
+            else line_end_offset
+        )
+        line_start_offset = payload.rfind(b"\n", 0, line_content_end_offset) + 1
+        line = payload[line_start_offset:line_end_offset]
         if line.strip():
-            offsets.append((offset, line_end, line))
-        offset = line_end
-    selected = offsets[-limit:]
+            selected_reversed.append(
+                (
+                    read_start + line_start_offset,
+                    read_start + line_end_offset,
+                    line,
+                )
+            )
+            if len(selected_reversed) == limit:
+                break
+        line_end_offset = line_start_offset
+    selected = list(reversed(selected_reversed))
     events: list[Event] = []
     for line_start, _, line in selected:
         try:
@@ -157,14 +173,14 @@ def read_trace_event_page(
         return TraceEventPage(
             events=[], next_cursor=None, has_more=False, bytes_read=bytes_read
         )
-    oldest_start, oldest_end, oldest_line = selected[0]
-    has_more = oldest_start > 0
+    oldest_line_start, oldest_line_end, oldest_line = selected[0]
+    has_more = oldest_line_start > 0
     return TraceEventPage(
         events=events,
         next_cursor=(
             _encode_page_cursor(
-                start=oldest_start,
-                end=oldest_end,
+                line_start=oldest_line_start,
+                line_end=oldest_line_end,
                 line=oldest_line,
             )
             if has_more

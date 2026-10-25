@@ -68,8 +68,16 @@ export function useSessionJobTurnLoader({
       const state = latestStateRef.current;
       const pending = state.pendingConversations.get(sessionCacheKey)?.find((conversation) => conversation.jobId === jobId);
       const timeline = state.turnTimelinesBySession.get(sessionCacheKey);
-      const turn = Object.values(timeline?.turnsById ?? {}).find((candidate) => candidate.job_id === jobId);
-      const turnId = pending?.turnId ?? turn?.turn_id;
+      let turnId = pending?.turnId;
+      if (!turnId && timeline) {
+        for (const candidateTurnId in timeline.turnsById) {
+          if (!Object.prototype.hasOwnProperty.call(timeline.turnsById, candidateTurnId)) continue;
+          if (timeline.turnsById[candidateTurnId].job_id === jobId) {
+            turnId = timeline.turnsById[candidateTurnId].turn_id;
+            break;
+          }
+        }
+      }
       if (!turnId) {
         refreshTurnHistory();
         return;

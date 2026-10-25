@@ -10,4 +10,7 @@ export type {
 export { buildRequestLogDisplay, buildUpstreamAttemptDisplay } from "./overview";
 export { buildRequestReplayDisplay, requestPromptComponentText } from "./replay";
 export { normalizeRequestLogJsonForDisplay } from "./jsonNormalize";
-export { buildRequestLogKeyFlow } from "./keyFlow";
+export {
+  buildRequestLogKeyFlow,
+  buildRequestLogKeyFlowFromOrderedLogs,
+} from "./keyFlow";

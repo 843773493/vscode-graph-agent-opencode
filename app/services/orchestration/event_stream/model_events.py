@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.mapping.agent_content_mapper import AgentStreamContentPart
+
+_TEXT_FIELD_BY_BLOCK_TYPE = {
+    "reasoning_content": "reasoning_content",
+    "thinking": "thinking",
+    "reasoning": "reasoning",
+    "refusal": "refusal",
+}
+_TEXT_CHUNKS_KEY = "_stream_text_chunks"
 
 
 def _usage_token_count(
@@ -76,17 +85,7 @@ def merge_model_content_part(
 ) -> None:
     """把规范化 model block/delta 合并到本次请求的有序内存视图。"""
     existing = parts_by_id.get(part.part_id)
-    text_key = (
-        "reasoning_content"
-        if part.block_type == "reasoning_content"
-        else "thinking"
-        if part.block_type == "thinking"
-        else "reasoning"
-        if part.block_type == "reasoning"
-        else "refusal"
-        if part.block_type == "refusal"
-        else "text"
-    )
+    text_key = _TEXT_FIELD_BY_BLOCK_TYPE.get(part.block_type, "text")
     if existing is None:
         part_ids_in_order.append(part.part_id)
         initial: dict[str, object] = {
@@ -105,6 +104,7 @@ def merge_model_content_part(
                 initial["data"] = data
         else:
             initial[text_key] = part.text
+            initial[_TEXT_CHUNKS_KEY] = [part.text]
         parts_by_id[part.part_id] = initial
         if part.extras:
             parts_by_id[part.part_id]["extras"] = dict(part.extras)
@@ -119,28 +119,32 @@ def merge_model_content_part(
         incoming_items = part.reasoning_items
         if not isinstance(current_items, list) or not isinstance(incoming_items, list):
             raise TypeError(f"模型流 part 缺少 reasoning_items: part_id={part.part_id}")
+        current_item_indexes: dict[str, int] = {}
+        for item_position, current in enumerate(current_items):
+            current_id = current.get("id") if isinstance(current, dict) else None
+            if isinstance(current_id, str):
+                current_item_indexes.setdefault(current_id, item_position)
         for incoming in incoming_items:
             incoming_id = incoming.get("id") if isinstance(incoming, dict) else None
             if isinstance(incoming_id, str):
-                replaced = False
-                for index, current in enumerate(current_items):
-                    if isinstance(current, dict) and current.get("id") == incoming_id:
-                        current_items[index] = copy.deepcopy(incoming)
-                        replaced = True
-                        break
-                if replaced:
-                    continue
-            if incoming not in current_items:
+                item_position = current_item_indexes.get(incoming_id)
+                if item_position is not None:
+                    current_items[item_position] = copy.deepcopy(incoming)
+                else:
+                    item_position = len(current_items)
+                    current_items.append(copy.deepcopy(incoming))
+                    current_item_indexes[incoming_id] = item_position
+            elif incoming not in current_items:
                 current_items.append(copy.deepcopy(incoming))
     elif part.block_type == "redacted_thinking":
         data = part.redacted_thinking_data
         if isinstance(data, str):
             existing["data"] = data
     else:
-        current_text = existing.get(text_key)
-        if not isinstance(current_text, str):
-            raise TypeError(f"模型流 part 缺少 {text_key}: part_id={part.part_id}")
-        existing[text_key] = current_text + part.text
+        text_chunks = existing.get(_TEXT_CHUNKS_KEY)
+        if not isinstance(text_chunks, list):
+            raise TypeError(f"模型流 part 缺少 {_TEXT_CHUNKS_KEY}: part_id={part.part_id}")
+        text_chunks.append(part.text)
     if part.extras:
         existing_extras = existing.get("extras")
         merged_extras = (
@@ -148,3 +152,26 @@ def merge_model_content_part(
         )
         merged_extras.update(part.extras)
         existing["extras"] = merged_extras
+
+
+def materialize_model_content_parts(
+    part_ids_in_order: list[str],
+    parts_by_id: dict[str, dict[str, object]],
+) -> tuple[dict[str, object], ...]:
+    """将流式文本片段一次拼接为最终模型内容块。"""
+    result: list[dict[str, object]] = []
+    for part_id in part_ids_in_order:
+        part = parts_by_id.get(part_id)
+        if part is None:
+            continue
+        text_chunks = part.pop(_TEXT_CHUNKS_KEY, None)
+        if text_chunks is not None:
+            block_type = part.get("type")
+            text_key = (
+                _TEXT_FIELD_BY_BLOCK_TYPE.get(block_type, "text")
+                if isinstance(block_type, str)
+                else "text"
+            )
+            part[text_key] = "".join(cast(list[str], text_chunks))
+        result.append(part)
+    return tuple(result)

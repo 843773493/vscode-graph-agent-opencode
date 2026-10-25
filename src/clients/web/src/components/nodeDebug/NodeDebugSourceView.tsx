@@ -63,6 +63,20 @@ export default function NodeDebugSourceView({
   const localVariableCount = (activeFrame?.variables ?? []).filter(
     (variable) => variable.scope !== "global",
   ).length;
+  const outputLineCount = state?.output?.length ?? 0;
+  const sourceNotice = status === "paused" && activeFrame
+    ? {
+      message: `已暂停在 ${activeFrame.path ?? activeFrame.url}:${activeFrame.line}，${localVariableCount} 个局部变量。`,
+      actionLabel: "查看调用栈与变量",
+      onAction: onShowContext,
+    }
+    : status === "exited" && outputLineCount > 0
+      ? {
+        message: `调试已结束，保留 ${outputLineCount} 行程序输出。`,
+        actionLabel: "查看控制台",
+        onAction: onShowConsole,
+      }
+      : null;
 
   return (
     <div className="node-debug-view node-debug-source-view" role="tabpanel">
@@ -83,18 +97,16 @@ export default function NodeDebugSourceView({
         onChangeBreakpoint={onChangeBreakpoint}
         onOpenWorkspacePath={onOpenWorkspacePath}
       />
-      {status === "paused" && activeFrame ? (
-        <div className="debug-empty-state compact" role="status">
-          <span>已暂停在 {activeFrame.path ?? activeFrame.url}:{activeFrame.line}，{localVariableCount} 个局部变量。</span>
-          <button type="button" onClick={onShowContext}>查看调用栈与变量</button>
-        </div>
-      ) : null}
-      {status === "exited" && (state?.output?.length ?? 0) > 0 ? (
-        <div className="debug-empty-state compact" role="status">
-          <span>调试已结束，保留 {state?.output?.length ?? 0} 行程序输出。</span>
-          <button type="button" onClick={onShowConsole}>查看控制台</button>
-        </div>
-      ) : null}
+      <div className="node-debug-source-status" aria-live="polite">
+        {sourceNotice ? (
+          <div role="status">
+            <span className="node-debug-source-status-message" title={sourceNotice.message}>
+              {sourceNotice.message}
+            </span>
+            <button type="button" onClick={sourceNotice.onAction}>{sourceNotice.actionLabel}</button>
+          </div>
+        ) : null}
+      </div>
       <details className="node-debug-secondary" open={extensionWindow}>
         <summary>断点列表与高级设置 <span>{breakpoints.length}</span></summary>
         <div className="node-debug-breakpoint-form">

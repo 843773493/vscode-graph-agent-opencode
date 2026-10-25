@@ -302,9 +302,9 @@ function Composer() {
     successMessage: string,
   ) => {
     setAttachmentError("");
+    setComposerNotice("");
     try {
       await operation();
-      setComposerNotice(successMessage);
       setStatus(successMessage);
     } catch (error) {
       const message = errorMessage(error);
@@ -779,6 +779,32 @@ function Composer() {
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
               />
+              {visibleGoal ? (
+                <div
+                  className="composer-goal-status"
+                  role="status"
+                  aria-label={`当前 Goal：${GOAL_STATUS_LABELS[visibleGoal.status]} · ${visibleGoal.objective}`}
+                  title={visibleGoal.objective}
+                  data-testid="composer-current-goal"
+                >
+                  <span className="codicon codicon-target" aria-hidden="true" />
+                  <span className="composer-goal-status-label">
+                    Goal · {GOAL_STATUS_LABELS[visibleGoal.status]}
+                  </span>
+                  <span className="composer-goal-status-objective">
+                    {visibleGoal.objective}
+                  </span>
+                </div>
+              ) : state.goalLoading && currentSessionId ? (
+                <div className="composer-goal-status" role="status">
+                  正在读取当前会话 Goal…
+                </div>
+              ) : null}
+              {state.goalError && currentSessionId ? (
+                <div className="composer-attachment-error" role="alert">
+                  Goal 同步失败：{state.goalError}
+                </div>
+              ) : null}
               {selectedBrowserElements.length > 0 ? (
                 <div className="composer-browser-elements" aria-label="已选择的浏览器元素">
                   {selectedBrowserElements.map((element) => (

@@ -53,7 +53,7 @@ session/thread）与 captured_at 只作 typed relation，不进入任一内容 h
 
 from __future__ import annotations
 
-from app.domain.itemized.resource_activation.common import (
+from app.domain.itemized.resource_activation.shared_contract import (
     ABSOLUTE_PATH_FIELDS,
     BOUNDARY_SINGULARITY_FIELDS,
     CREDENTIAL_FIELDS,

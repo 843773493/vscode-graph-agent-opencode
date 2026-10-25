@@ -4,7 +4,7 @@
 
 ## 职责树
 
-下面按协议面归类；所有叶子文件当前都直接位于 `app/abstractions/`，树用于说明边界，不代表已经创建了子目录。
+下面按协议面归类；Terminal 协议已按资源能力和执行观察职责放入子目录，其余协议仍位于根层。
 
 ```text
 app/abstractions/
@@ -35,9 +35,10 @@ app/abstractions/
 ├── 资源边界
 │   ├── browser_resources.py        Browser 动作与传输
 │   ├── resource_file_content.py    原字节/MIME 读取端口
-│   ├── terminal_execution_monitor.py Terminal 执行状态观察
-│   ├── terminal_resources.py       Terminal 资源读取
 │   └── workspace_resources.py      工作区资源快照与授权
+├── terminal/                       Terminal 资源与执行观察协议
+│   ├── execution_monitor.py        持久终端执行状态观察端口
+│   └── resources.py                Terminal owner 与 PTY 传输协议
 ├── state_conflict.py               客户端状态冲突类型
 └── __init__.py                     稳定的包级协议导出
 ```

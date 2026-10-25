@@ -4,17 +4,21 @@ import { act } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
 import {
-  apiResponse,
+  apiSuccessResponse,
   installGatewayFetch,
-  installTestDocument,
-  installTestWindow,
-  mountHarness,
-  mountSessionGoalController,
-  restoreSessionHookGlobals,
-  useGoalControllerHarness,
-} from "./sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import {
+  installVisibleTestDocument,
+  installGatewayTestWindow,
+} from "../../tests/fixtures/session/gatewayBrowserGlobals";
+import { mountReactTestHarness } from "../../tests/fixtures/session/reactHarness";
+import {
+  mountSessionGoalControllerHarness,
+  createSessionGoalControllerHarness,
+} from "../../tests/fixtures/session/sessionGoalController";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 const GOAL_PORT = 49_406;
 
@@ -39,15 +43,15 @@ function state(): AppState {
 
 /** 安装会话 Goal 控制器需要的 Gateway window 与可见性 document 桩。 */
 function installSessionGoalControllerGlobals(): void {
-  installTestWindow(GOAL_PORT);
-  installTestDocument();
+  installGatewayTestWindow(GOAL_PORT);
+  installVisibleTestDocument();
 }
 
 beforeEach(installSessionGoalControllerGlobals);
 
 /** 标准 Goal 响应体，用例只覆盖自己关心的字段。 */
 function goalResponse(overrides: Record<string, unknown> = {}): Response {
-  return apiResponse({
+  return apiSuccessResponse({
     goal_id: "goal-test",
     session_id: "session-test",
     thread_id: "thr_goal_main",
@@ -67,11 +71,11 @@ async function mountGoalHarness(options: {
   initial: AppState;
   flushes?: number;
 }) {
-  const harness = useGoalControllerHarness({
+  const harness = createSessionGoalControllerHarness({
     apiPort: GOAL_PORT,
     initial: options.initial,
   });
-  const unmount = await mountHarness(harness.Harness, options.flushes ?? 2);
+  const unmount = await mountReactTestHarness(harness.Harness, options.flushes ?? 2);
   return { ...harness, unmount };
 }
 
@@ -104,7 +108,7 @@ describe("useSessionGoalController 请求合并", () => {
   test("后端返回 child Goal 时拒绝写入 main 镜像并显示错误", async () => {
     installGatewayFetch(({ path }) => path.endsWith("/goal")
       ? goalResponse({ thread_id: "thr_child" }) : undefined);
-    const mounted = await mountSessionGoalController({ initial: state() });
+    const mounted = await mountSessionGoalControllerHarness({ initial: state() });
     let failure: unknown;
     await act(async () => {
       failure = await mounted.controller().refreshGoal().catch((error: unknown) => error);
@@ -127,7 +131,7 @@ describe("useSessionGoalController 请求合并", () => {
       return undefined;
     }, { token: "local-test-token" });
 
-    const { controller, unmount } = await mountSessionGoalController({
+    const { controller, unmount } = await mountSessionGoalControllerHarness({
       initial: state(),
     });
 
@@ -155,7 +159,7 @@ describe("useSessionGoalController 请求合并", () => {
       return undefined;
     }, { token: "local-test-token" });
 
-    const mounted = await mountSessionGoalController({ initial: state() });
+    const mounted = await mountSessionGoalControllerHarness({ initial: state() });
 
     let failure: unknown;
     await act(async () => {
@@ -178,7 +182,7 @@ describe("useSessionGoalController 请求合并", () => {
       return undefined;
     }, { token: "local-test-token" });
 
-    const { controller, unmount } = await mountSessionGoalController({
+    const { controller, unmount } = await mountSessionGoalControllerHarness({
       initial: state(),
     });
 
@@ -193,6 +197,88 @@ describe("useSessionGoalController 请求合并", () => {
 
     expect(failure?.message).toBe("首次写 Goal 失败；重新读取 Goal 也失败：二次重取失败");
     unmount();
+  });
+});
+
+describe("useSessionGoalController 读写顺序", () => {
+  test("创建 Goal 后忽略创建前发出的迟到空读取", async () => {
+    let releaseRead!: (response: Response) => void;
+    installGatewayFetch(({ path, method }) => {
+      if (!path.includes("/api/v1/sessions/session-test/goal")) return undefined;
+      if (method === "GET") {
+        return new Promise<Response>((resolve) => { releaseRead = resolve; });
+      }
+      if (method === "PUT") return goalResponse({ objective: "新创建的目标" });
+      return undefined;
+    }, { token: "goal-read-write-order-token" });
+
+    const mounted = await mountSessionGoalControllerHarness({ initial: state() });
+    let pendingRead!: Promise<unknown>;
+    await act(async () => {
+      pendingRead = mounted.controller().refreshGoal();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await mounted.controller().updateGoal({
+        objective: "新创建的目标",
+        status: "active",
+        replace: true,
+      });
+    });
+    expect(mounted.state().currentGoal?.objective).toBe("新创建的目标");
+
+    await act(async () => {
+      releaseRead(apiSuccessResponse(null));
+      await pendingRead;
+    });
+
+    expect(mounted.state().currentGoal?.objective).toBe("新创建的目标");
+    mounted.unmount();
+  });
+
+  test("写入进行中启动的读取不能覆盖写入响应", async () => {
+    let releaseRead!: (response: Response) => void;
+    let releaseUpdate!: () => void;
+    installGatewayFetch(({ path, method }) => {
+      if (!path.includes("/api/v1/sessions/session-test/goal")) return undefined;
+      if (method === "GET") {
+        return new Promise<Response>((resolve) => { releaseRead = resolve; });
+      }
+      if (method === "PUT") {
+        return new Promise<Response>((resolve) => {
+          releaseUpdate = () => resolve(goalResponse({ objective: "写入中的目标" }));
+        });
+      }
+      return undefined;
+    }, { token: "goal-overlapping-read-token" });
+
+    const mounted = await mountSessionGoalControllerHarness({ initial: state() });
+    let pendingUpdate!: Promise<unknown>;
+    let pendingRead!: Promise<unknown>;
+    await act(async () => {
+      pendingUpdate = mounted.controller().updateGoal({
+        objective: "写入中的目标",
+        status: "active",
+        replace: true,
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      pendingRead = mounted.controller().refreshGoal();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      releaseUpdate();
+      await pendingUpdate;
+    });
+    await act(async () => {
+      releaseRead(apiSuccessResponse(null));
+      await pendingRead;
+    });
+
+    expect(mounted.state().currentGoal?.objective).toBe("写入中的目标");
+    mounted.unmount();
   });
 });
 
@@ -268,7 +354,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
     installGatewayFetch(({ path, method }) => {
       if (path.includes("/api/v1/sessions/session-test/goal")) {
         if (method === "DELETE") {
-          return apiResponse({ session_id: "session-test", thread_id: "thr_goal_main", cleared: true });
+          return apiSuccessResponse({ session_id: "session-test", thread_id: "thr_goal_main", cleared: true });
         }
         if (method === "POST" || method === "PATCH" || method === "PUT") {
           return new Promise<Response>((resolve) => {
@@ -281,7 +367,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
       return undefined;
     }, { token: "goal-order-token" });
 
-    const { controller, state: readState, unmount } = await mountSessionGoalController({
+    const { controller, state: readState, unmount } = await mountSessionGoalControllerHarness({
       initial: state(),
     });
 
@@ -311,7 +397,7 @@ describe("useSessionGoalController 会话身份守卫", () => {
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/")) {
         goalRequests += 1;
-        return apiResponse({});
+        return apiSuccessResponse({});
       }
       return undefined;
     }, { token: "gc-empty-target-token" });

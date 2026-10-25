@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.core.atomic_fs import atomic_write_bytes
+from app.core.atomic_fs import atomic_write_bytes, native_io_path
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import SessionGoalDTO
@@ -31,10 +31,23 @@ class SessionGoalStore:
 
     def read(self, session_id: str, *, creation: SessionCreationRecord | None = None) -> SessionGoalDTO | None:
         goal_file_path = self._goal_file_path(session_id, creation)
-        if not goal_file_path.exists():
+        thread_id = creation.main_thread_id if creation is not None else None
+        return self._read_goal_file(session_id, goal_file_path, thread_id)
+
+    def _read_goal_file(
+        self,
+        session_id: str,
+        goal_file_path: Path,
+        thread_id: str | None,
+    ) -> SessionGoalDTO | None:
+        try:
+            raw = json.loads(
+                native_io_path(goal_file_path).read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
             return None
-        raw = json.loads(goal_file_path.read_text(encoding="utf-8"))
-        thread_id = creation.main_thread_id if creation is not None else self._path_resolver.main_thread_id(session_id)
+        if thread_id is None:
+            thread_id = self._path_resolver.main_thread_id(session_id)
         return SessionGoalDTO.model_validate({**raw, "thread_id": thread_id})
 
     def write(self, goal: SessionGoalDTO, *, creation: SessionCreationRecord | None = None) -> None:
@@ -53,9 +66,10 @@ class SessionGoalStore:
 
     def clear(self, session_id: str) -> bool:
         goal_file_path = self._goal_file_path(session_id)
-        if not goal_file_path.exists():
+        try:
+            native_io_path(goal_file_path).unlink()
+        except FileNotFoundError:
             return False
-        goal_file_path.unlink()
         return True
 
     def list_existing(self) -> list[SessionGoalDTO]:
@@ -63,7 +77,8 @@ class SessionGoalStore:
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            goal = self.read(node.node_id)
+            goal_path = self._goal_file_path(node.node_id)
+            goal = self._read_goal_file(node.node_id, goal_path, node.main_thread_id)
             if goal is not None:
                 goals.append(goal)
         return goals

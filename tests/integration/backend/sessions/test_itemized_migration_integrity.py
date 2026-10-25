@@ -34,7 +34,7 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     migration_audits,
     prepare_migration_workspace,
 )
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.view_mutations import mutate_view_members
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"

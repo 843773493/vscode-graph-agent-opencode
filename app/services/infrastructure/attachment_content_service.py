@@ -18,6 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from app.core.atomic_fs import native_io_path
 from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import (
     parse_resource_uri,
@@ -86,7 +87,7 @@ def _file_suffix_for_content_type(content_type: str) -> str:
 
 
 def _frame_data_url(frame_path: Path) -> str:
-    encoded = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+    encoded = base64.b64encode(native_io_path(frame_path).read_bytes()).decode("ascii")
     return f"data:{VIDEO_FRAME_MIME_TYPE};base64,{encoded}"
 
 
@@ -106,24 +107,38 @@ class AttachmentContentService:
 
     def resolve_reference(self, attachment: AttachmentRef) -> AttachmentRef:
         """新输入在进入 DTO、Job 和 canonical 前冻结为同一逻辑引用。"""
+        if _is_managed_attachment(attachment.file_id):
+            self._reject_data_url(attachment)
+            session_id = _session_id_from_file_id(attachment.file_id)
+            return self._attachment_store.describe_reference(attachment, session_id=session_id)
+        resolved, _file_path = self._resolve_workspace_attachment(attachment)
+        return resolved
+
+    @staticmethod
+    def _reject_data_url(attachment: AttachmentRef) -> None:
         if attachment.data_url:
             raise ValueError(
                 "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
                 "资源 URI"
             )
-        if _is_managed_attachment(attachment.file_id):
-            session_id = _session_id_from_file_id(attachment.file_id)
-            return self._attachment_store.describe_reference(attachment, session_id=session_id)
-        else:
-            if attachment.directory_uri is not None:
-                raise ValueError("普通文件附件不能伪造受管附件目录身份")
-            directory_uri = None
-            file_path, uri = self._workspace_file(attachment.file_id)
-            content_type = _attachment_content_type(attachment, file_path, uri)
-            name = attachment.name or file_path.name
-        return attachment.model_copy(
-            update={"file_id": uri, "directory_uri": directory_uri, "name": name, "content_type": content_type}
+
+    def _resolve_workspace_attachment(
+        self,
+        attachment: AttachmentRef,
+    ) -> tuple[AttachmentRef, Path]:
+        self._reject_data_url(attachment)
+        if attachment.directory_uri is not None:
+            raise ValueError("普通文件附件不能伪造受管附件目录身份")
+        file_path, uri = self._workspace_file(attachment.file_id)
+        resolved = attachment.model_copy(
+            update={
+                "file_id": uri,
+                "directory_uri": None,
+                "name": attachment.name or file_path.name,
+                "content_type": _attachment_content_type(attachment, file_path, uri),
+            }
         )
+        return resolved, file_path
 
     def _workspace_file(self, file_id: str) -> tuple[Path, str]:
         paths = WorkspaceFilePaths(
@@ -132,7 +147,7 @@ class AttachmentContentService:
             bindings=None,
         )
         file_path, uri = paths.resolve(file_id, allow_empty=False, allow_external=False)
-        if not file_path.is_file():
+        if not native_io_path(file_path).is_file():
             raise FileNotFoundError(f"附件不存在或不是文件: {uri}")
         parsed = parse_resource_uri(uri)
         return file_path, resource_display_uri(
@@ -144,7 +159,7 @@ class AttachmentContentService:
     def _read_workspace_attachment(self, attachment: AttachmentRef) -> bytes:
         file_path, uri = self._workspace_file(attachment.file_id)
         try:
-            return file_path.read_bytes()
+            return native_io_path(file_path).read_bytes()
         except OSError as error:
             # 对外用精确资源身份和 errno 报错；原异常保留在服务端因果链中。
             raise OSError(error.errno, error.strerror, uri) from error
@@ -160,8 +175,12 @@ class AttachmentContentService:
             preview_type = preview.content_type
             preview_data = preview.data
         else:
-            raw = self._read_workspace_attachment(attachment)
-            with Image.open(BytesIO(raw)) as image:
+            file_path, uri = self._workspace_file(attachment.file_id)
+            try:
+                image_stream = native_io_path(file_path).open("rb")
+            except OSError as error:
+                raise OSError(error.errno, error.strerror, uri) from error
+            with image_stream, Image.open(image_stream) as image:
                 normalized = ImageOps.exif_transpose(image)
                 normalized.thumbnail(
                     (ATTACHMENT_PREVIEW_MAX_EDGE, ATTACHMENT_PREVIEW_MAX_EDGE),
@@ -179,16 +198,24 @@ class AttachmentContentService:
         return f"data:{preview_type};base64,{encoded}"
 
     def video_preview_data_urls(self, attachment: AttachmentRef) -> list[str]:
-        content_type, video_bytes = self._read_attachment(attachment)
+        if _is_managed_attachment(attachment.file_id):
+            content_type, video_source = self._read_attachment(attachment)
+            attachment_uri = attachment.file_id
+        else:
+            resolved, video_source = self._resolve_workspace_attachment(attachment)
+            assert resolved.content_type is not None
+            content_type = resolved.content_type
+            attachment_uri = resolved.file_id
         if content_type not in SUPPORTED_VIDEO_MIME_TYPES:
             raise ValueError(
                 "不支持的视频附件类型: "
                 f"{content_type!r}，file_id={attachment.file_id!r}"
             )
         return _extract_video_frame_data_urls(
-            video_bytes=video_bytes,
+            video_source=video_source,
             content_type=content_type,
             attachment_name=attachment.name or attachment.file_id,
+            attachment_uri=attachment_uri,
         )
 
     def _read_session_attachment(self, attachment: AttachmentRef):
@@ -206,9 +233,10 @@ class AttachmentContentService:
 
 def _extract_video_frame_data_urls(
     *,
-    video_bytes: bytes,
+    video_source: bytes | Path,
     content_type: str,
     attachment_name: str,
+    attachment_uri: str,
 ) -> list[str]:
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
@@ -217,7 +245,22 @@ def _extract_video_frame_data_urls(
     with tempfile.TemporaryDirectory(prefix="boxteam-video-") as temp_dir:
         temp_path = Path(temp_dir)
         input_path = temp_path / f"input{_file_suffix_for_content_type(content_type)}"
-        input_path.write_bytes(video_bytes)
+        if isinstance(video_source, Path):
+            try:
+                shutil.copyfile(
+                    native_io_path(video_source),
+                    native_io_path(input_path),
+                )
+            except OSError as error:
+                detail = error.strerror or type(error).__name__
+                raise OSError(
+                    error.errno,
+                    f"视频附件暂存失败: uri={attachment_uri}, "
+                    f"error={type(error).__name__}, detail={detail}",
+                    attachment_uri,
+                ) from error
+        else:
+            native_io_path(input_path).write_bytes(video_source)
         frame_pattern = temp_path / "frame-%03d.jpg"
         command = [
             ffmpeg_path,

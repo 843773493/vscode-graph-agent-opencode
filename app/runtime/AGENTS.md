@@ -2,13 +2,25 @@
 
 `app/runtime/` 是工作区后端的运行时组装层，负责把服务层与基础设施实例装配成 Agent 运行上下文，并提供在导入期会拉起重依赖的懒加载能力。它位于 `app/services/`（业务行为）与 `app/agents/`（Agent 构建）之间，不实现业务规则。
 
-主要模块的职责：
+## 职责树
 
-- `agent_runtime.py`：声明 `AgentRuntimeDependencyProvider` 依赖提供协议，并提供 `build_session_agent_runtime` 与工具定义装配函数，把外部依赖收敛后交给 `app/agents/agent_factory`。
-- `session_orchestrator.py`：`SessionOrchestrator`，把用户消息的创建与调度编排放到一条 `create_and_run` 链路上。
-- `embeddings.py`：`LiteLLMEmbeddingComputer`，按 provider 配置构造远程 Embedding 调用。
-- `chatgpt_auth.py`：ChatGPT OAuth provider 的凭据目录解析与从 Codex 原生凭据迁移。
-- `litellm_runtime.py`：唯一模型 SDK 懒加载入口，以及公共模型目录的本地缓存、有界等待和后台刷新。
+以下是逻辑导航；文件仍位于当前扁平目录中，按“组装 Agent → 调用模型 → 处理凭据与可替换运行时端口”查找：
+
+```text
+app/runtime/
+├── Agent 装配与调度
+│   ├── agent_runtime.py       依赖提供协议、Agent runtime 与工具定义装配
+│   └── session_orchestrator.py 用户消息创建与执行调度入口
+├── 模型 Provider 运行时
+│   ├── litellm_runtime.py     SDK 懒加载、模型目录缓存与后台刷新
+│   ├── model_stream.py        显式配置的模型流传输装配
+│   ├── provider_errors.py    Provider 错误分类，使用时才加载 SDK 类型
+│   └── embeddings.py         按 provider 配置执行 Embedding 调用
+├── ChatGPT 凭据
+│   └── chatgpt_auth.py       OAuth 凭据目录、Codex 凭据迁移与模型能力
+└── 可替换运行时端口
+    └── runtime_ports.py      后端启动时注入的时钟端口
+```
 
 # 可修改内容
 
@@ -29,3 +41,4 @@
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
 - 失败必须显式抛出包含上下文的异常，禁止静默降级。
 - 本目录的单元测试放在 `tests/unit/runtime/`，外部边界（模型、认证服务）必须显式替换。
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

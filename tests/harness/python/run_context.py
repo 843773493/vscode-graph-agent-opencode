@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from hashlib import sha1
 from pathlib import Path
 from typing import ClassVar, Literal, Self
+from uuid import uuid4
 
 TestResultStatus = Literal[
     "passed",
@@ -15,6 +16,45 @@ TestResultStatus = Literal[
     "skipped",
     "UNMET_PREREQUISITE",
 ]
+
+_PROCESS_RUN_ID = f"pid-{os.getpid()}-{uuid4().hex}"
+
+
+def _run_directory_name() -> str:
+    run_identity = (
+        os.getenv("BOXTEAM_TEST_RUN_ID")
+        or os.getenv("PYTEST_XDIST_TESTRUNUID")
+        or _PROCESS_RUN_ID
+    )
+    worker_id = os.getenv("PYTEST_XDIST_WORKER")
+    if worker_id:
+        run_identity = f"{run_identity}-{worker_id}"
+    return f"run-{sha1(run_identity.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _node_directory_name(node_id: str) -> str:
+    if not node_id.strip():
+        raise ValueError("pytest 节点 ID 不能为空")
+    return f"node-{sha1(node_id.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _pytest_node_directory_name() -> str | None:
+    current_test = os.getenv("PYTEST_CURRENT_TEST")
+    if current_test is None:
+        return None
+    node_id, separator, phase = current_test.rpartition(" (")
+    if (
+        not separator
+        or not phase.endswith(")")
+        or phase[:-1]
+        not in {
+            "setup",
+            "call",
+            "teardown",
+        }
+    ):
+        raise ValueError(f"PYTEST_CURRENT_TEST 格式无效: {current_test!r}")
+    return _node_directory_name(node_id)
 
 
 @dataclass(slots=True)
@@ -24,8 +64,8 @@ class TestRunContext:
     project_root: Path
     test_file: Path
     output_root: Path
+    run_root: Path
     workspace_root: Path
-    artifacts_dir: Path
     boxteam_home: Path
     _cleanups: list[tuple[str, Callable[[], None]]] = field(default_factory=list)
     _closed: bool = False
@@ -48,14 +88,22 @@ class TestRunContext:
             ) from exc
         relative_output = relative_test_file.with_suffix("")
         output_root = root / "out" / "tests" / relative_output
+        run_root = output_root / "runs" / _run_directory_name()
         return cls(
             project_root=root,
             test_file=resolved_test_file,
             output_root=output_root,
+            run_root=run_root,
             workspace_root=output_root / "workspace",
-            artifacts_dir=output_root / "artifacts",
             boxteam_home=output_root / "boxteam-home",
         )
+
+    @property
+    def artifacts_dir(self) -> Path:
+        node_directory = _pytest_node_directory_name()
+        if node_directory is None:
+            return self.run_root / "artifacts"
+        return self.run_root / "nodes" / node_directory / "artifacts"
 
     def prepare(self) -> TestRunContext:
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -65,16 +113,12 @@ class TestRunContext:
 
     def runtime_root_for_node(self, node_id: str) -> Path:
         """返回同一测试文件内按 pytest 节点隔离的运行目录。"""
-        if not node_id.strip():
-            raise ValueError("pytest 节点 ID 不能为空")
-        run_identity = (
-            os.getenv("BOXTEAM_TEST_RUN_ID")
-            or os.getenv("PYTEST_XDIST_TESTRUNUID")
-            or f"pid-{os.getpid()}"
+        return (
+            self.output_root
+            / "runtime"
+            / self.run_root.name
+            / _node_directory_name(node_id)
         )
-        run_key = sha1(run_identity.encode("utf-8")).hexdigest()[:12]
-        node_key = sha1(node_id.encode("utf-8")).hexdigest()[:12]
-        return self.output_root / "runtime" / f"run-{run_key}" / f"node-{node_key}"
 
     def boxteam_home_for_node(self, node_id: str) -> Path:
         """返回同一测试文件内按 pytest 节点隔离的全局配置目录。"""
@@ -90,17 +134,18 @@ class TestRunContext:
         status: TestResultStatus,
         details: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = self.artifacts_dir
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
         result: dict[str, object] = {
             "schema_version": 1,
-            "test_id": self.test_file.relative_to(
-                self.project_root / "tests"
-            ).with_suffix("").as_posix(),
+            "test_id": self.test_file.relative_to(self.project_root / "tests")
+            .with_suffix("")
+            .as_posix(),
             "status": status,
             "recorded_at": datetime.now(UTC).isoformat(),
             "details": details or {},
         }
-        (self.artifacts_dir / "result.json").write_text(
+        (artifacts_dir / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )

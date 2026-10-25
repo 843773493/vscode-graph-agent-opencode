@@ -17,17 +17,17 @@ from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.services.infrastructure.node_debug.service import NodeDebugService
 
 _SESSION_ID = "ses_00000000400070008000000000000001"
-_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 
 @pytest.fixture
 def node_debug_asgi_client(
-    tmp_path: Path,
+    empty_workspace_scope: tuple[str, Path],
 ) -> Generator[tuple[TestClient, MagicMock], None, None]:
+    workspace_id, workspace_root = empty_workspace_scope
     node_debug_service = MagicMock(spec=NodeDebugService)
 
     async def bind_workspace() -> AsyncIterator[None]:
-        with workspace_context(_WORKSPACE_ID, tmp_path):
+        with workspace_context(workspace_id, workspace_root):
             yield
 
     app.dependency_overrides[get_node_debug_service] = lambda: node_debug_service
@@ -37,7 +37,7 @@ def node_debug_asgi_client(
             TestClient(
                 app,
                 raise_server_exceptions=False,
-                headers={"X-BoxTeam-Workspace-Id": _WORKSPACE_ID},
+                headers={"X-BoxTeam-Workspace-Id": workspace_id},
             ),
             node_debug_service,
         )

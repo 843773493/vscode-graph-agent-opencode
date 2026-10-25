@@ -6,6 +6,7 @@ import json
 import subprocess
 from collections.abc import Iterator
 from contextlib import ExitStack
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from unittest.mock import Mock
@@ -17,18 +18,24 @@ from tests.support.processes.workspace import wait_for_backend_ready
 EXPECTED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 
-@pytest.fixture
-def health_endpoint(
-    request: pytest.FixtureRequest,
-) -> Iterator[tuple[int, list[tuple[str, str | None]]]]:
-    status, payload = request.param
-    body = json.dumps(payload).encode()
-    observed: list[tuple[str, str | None]] = []
+@dataclass(slots=True)
+class _HealthResponse:
+    status: int = 200
+    payload: dict[str, object] = field(default_factory=dict)
+    observed_requests: list[tuple[str, str | None]] = field(default_factory=list)
+
+
+@pytest.fixture(scope="module")
+def health_server() -> Iterator[tuple[int, _HealthResponse]]:
+    response = _HealthResponse()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            observed.append((self.path, self.headers.get("X-BoxTeam-Workspace-Id")))
-            self.send_response(status)
+            response.observed_requests.append(
+                (self.path, self.headers.get("X-BoxTeam-Workspace-Id"))
+            )
+            body = json.dumps(response.payload).encode()
+            self.send_response(response.status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -46,7 +53,20 @@ def health_endpoint(
 
         lifetime.callback(join_server_thread)
         lifetime.callback(server.shutdown)
-        yield server.server_port, observed
+        yield server.server_port, response
+
+
+@pytest.fixture
+def health_endpoint(
+    request: pytest.FixtureRequest,
+    health_server: tuple[int, _HealthResponse],
+) -> tuple[int, list[tuple[str, str | None]]]:
+    response_status, response_payload = request.param
+    port, response = health_server
+    response.status = response_status
+    response.payload = response_payload
+    response.observed_requests.clear()
+    return port, response.observed_requests
 
 
 @pytest.fixture

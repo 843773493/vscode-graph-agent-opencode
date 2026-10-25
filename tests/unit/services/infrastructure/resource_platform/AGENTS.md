@@ -10,7 +10,9 @@
 resource_platform/
 ├── conftest.py                         # ResourceRegistry；EventChannelService 继承自父目录
 ├── derivation/                         # 无环派生、依赖代际与语义发布
-├── registry/                           # descriptor、快照 identity、CAS 与捕获一致性
+├── observation/                        # 资源观察通道与事件游标
+├── registry/                           # descriptor、快照 identity、CAS 与来源观察协调
+├── sources/                            # 工作区、Gateway 资源来源与导航
 ├── virtual_resources/                  # URI grammar、resolver 与冻结绑定合同
 ├── test_resource_platform_architecture.py  # 跨模块静态边界审计
 └── test_bootstrap.py                   # 资源平台初始化入口

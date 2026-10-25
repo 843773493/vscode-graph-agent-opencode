@@ -213,9 +213,11 @@ export class BrowserMemoryPressureMonitor {
   async sample() {
     const sampledAtUnixMs = this.now();
     const sampledAtMonotonicMs = this.monotonicNow();
-    const host = await this.hostMemory();
+    const [host, cgroup] = await Promise.all([
+      this.hostMemory(),
+      this.cgroupMemory(),
+    ]);
     const hostUsedRatio = Math.min(1, Math.max(0, 1 - host.availableBytes / host.totalBytes));
-    const cgroup = await this.cgroupMemory();
     const effectiveUsedRatio = Math.max(hostUsedRatio, cgroup?.usedRatio ?? 0);
     const currentEvents = cgroup?.events ?? {};
     const eventDelta = {};

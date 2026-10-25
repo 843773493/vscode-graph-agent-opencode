@@ -16,6 +16,7 @@ state/
 │   ├── composerDrafts/          按会话保存的草稿存储
 │   ├── attachments.ts           消息附件展示数据
 │   ├── childThreadDisplay.ts    子 Thread 展示投影
+│   │   └── childThreadDisplay.test.ts
 │   ├── creatableSessionConnectionOptions.ts 创建终端/浏览器等会话连接的菜单选项
 │   └── sessionGoal.ts           会话目标与相关命令状态
 ├── 实时输出与诊断展示
@@ -43,6 +44,7 @@ state/
 │   └── storage.ts               浏览器本地状态持久化边界
 ├── appStateMaps.ts              Provider 状态 Map 的浅层复制
 ├── pendingRequests.ts           待处理请求的列表状态
+│   └── pendingRequests.test.ts
 ├── tokenUsage.ts                对话级 Token 与模型用量汇总
 └── tests/                       跨模块状态合同测试
 ```

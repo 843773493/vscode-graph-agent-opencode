@@ -40,18 +40,10 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _tool,
 )
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import open_communication_triad
-from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.test_session_communication_pipeline import (
-    _prepare_workspace,
-    _tool,
-)
-from tests.support.api_helpers import create_session
-from tests.support.communication_federation import open_communication_triad
-from tests.support.model_stream_config import model_stream_replay
-from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
+from tests.support.communication.federation import open_communication_triad
+from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.processes.workspace import close_backend_process
 
 

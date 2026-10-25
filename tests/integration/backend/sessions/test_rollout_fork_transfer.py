@@ -38,15 +38,15 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _prepare_workspace,
 )
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import (
+from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.processes.gateway import close_gateway_process
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 @pytest.fixture

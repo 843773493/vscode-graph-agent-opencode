@@ -2,18 +2,31 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.core import bounded_json
 from app.core.bounded_json import bound_json_value
 
 
-def test_bound_json_value_preserves_shape_and_marks_large_strings() -> None:
+def test_bound_json_value_preserves_shape_and_marks_large_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     value = {"result": "x" * 1024 * 1024, "status": "completed"}
+    source_text = value["result"]
+    original_encoded = bounded_json._encoded
+    encoded_values: list[object] = []
 
+    def record_encoded_value(item: object) -> bytes:
+        encoded_values.append(item)
+        return original_encoded(item)
+
+    monkeypatch.setattr(bounded_json, "_encoded", record_encoded_value)
     bounded = bound_json_value(value, max_bytes=4096)
 
     assert isinstance(bounded, dict)
     assert bounded["status"] == "completed"
     assert "BoxTeam 已截断" in bounded["result"]
+    assert all(item is not source_text for item in encoded_values)
     assert (
         len(
             json.dumps(bounded, ensure_ascii=False, separators=(",", ":")).encode(
@@ -22,6 +35,27 @@ def test_bound_json_value_preserves_shape_and_marks_large_strings() -> None:
         )
         <= 4096
     )
+
+
+def test_bound_json_value_skips_serializing_oversized_top_level_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_text = "x" * (1024 * 1024)
+    original_encoded = bounded_json._encoded
+    encoded_values: list[object] = []
+
+    def record_encoded_value(item: object) -> bytes:
+        encoded_values.append(item)
+        return original_encoded(item)
+
+    monkeypatch.setattr(bounded_json, "_encoded", record_encoded_value)
+
+    bounded = bound_json_value(source_text, max_bytes=4096)
+
+    assert isinstance(bounded, str)
+    assert "BoxTeam 已截断" in bounded
+    assert all(item is not source_text for item in encoded_values)
+    assert len(original_encoded(bounded)) <= 4096
 
 
 def test_bound_json_value_marks_large_structures_without_invalid_json() -> None:

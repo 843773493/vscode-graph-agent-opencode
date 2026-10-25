@@ -1183,9 +1183,10 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
         )
     )
 
-    class _Client:
-        def __init__(self, *, timeout: int) -> None:
+    class WorkspaceHealthClient:
+        def __init__(self, *, timeout: int, trust_env: bool) -> None:
             assert timeout == 2
+            assert trust_env is False
 
         async def __aenter__(self) -> Self:
             return self
@@ -1216,7 +1217,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
                 request=httpx.Request("GET", url),
             )
 
-    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", _Client)
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", WorkspaceHealthClient)
     [workspace] = await registry.list_dtos()
 
     assert workspace.status == expected_status
@@ -1508,9 +1509,12 @@ async def test_remote_restart_is_delegated_with_request_id(
             "services": ["workspace_api"],
         })
     captured: dict[str, object] = {}
-    class _Client:
-        def __init__(self, *, timeout: int) -> None:
+    client_options: list[tuple[int, bool | None]] = []
+
+    class RemoteRestartClient:
+        def __init__(self, *, timeout: int, trust_env: bool | None = None) -> None:
             assert timeout in {2, 40}
+            client_options.append((timeout, trust_env))
 
         async def __aenter__(self) -> Self:
             return self
@@ -1548,7 +1552,7 @@ async def test_remote_restart_is_delegated_with_request_id(
     async def unchecked_dtos(registry: GatewayWorkspaceRegistry):
         return await original_list(registry, check_health=False)
 
-    monkeypatch.setattr("app.gateway.runtime.controller.httpx.AsyncClient", _Client)
+    monkeypatch.setattr("app.gateway.runtime.controller.httpx.AsyncClient", RemoteRestartClient)
     monkeypatch.setattr(remote_gateway_module, "discover_remote_gateway", discover_after_action)
     monkeypatch.setattr(GatewayWorkspaceRegistry, "list_dtos", unchecked_dtos)
     controller = GatewayWorkspaceRuntimeController(
@@ -1562,6 +1566,7 @@ async def test_remote_restart_is_delegated_with_request_id(
                 expected_workspace_ids=local_ids, desired_workspace_ids=local_ids,
             ),
         )
+        assert (2, False) in client_options
         assert result.status == status
         assert result.backend_generation == generation
         assert result.affected_workspace_ids == local_ids

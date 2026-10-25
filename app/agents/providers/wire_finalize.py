@@ -449,16 +449,12 @@ def _apply_reasoning_content_replay(
     *,
     content: Any,
     profile: ChatWireProfile,
+    target_capabilities: set[str],
 ) -> None:
-    if not profile.reasoning_content_replay and not profile.thinking_blocks_replay:
+    if not target_capabilities:
         message_dict.pop("reasoning_content", None)
         message_dict.pop("thinking_blocks", None)
         return
-    target_capabilities: set[str] = set()
-    if profile.reasoning_content_replay:
-        target_capabilities.add("reasoning_content_replay")
-    if profile.thinking_blocks_replay:
-        target_capabilities.add("thinking_blocks")
     projection = project_ai_message_content(
         content,
         target_provider=profile.provider_id,
@@ -648,6 +644,12 @@ def finalize_chat_messages(
     profile: ChatWireProfile,
 ) -> list[dict[str, Any]]:
     """Chat Completions 真实消息编码；封存与发送共用这一份实现。"""
+    target_capabilities: set[str] = set()
+    if profile.reasoning_content_replay:
+        target_capabilities.add("reasoning_content_replay")
+    if profile.thinking_blocks_replay:
+        target_capabilities.add("thinking_blocks")
+
     result: list[dict[str, Any]] = []
     for message in messages:
         if isinstance(message, dict):
@@ -672,25 +674,15 @@ def finalize_chat_messages(
             projection = project_ai_message_content(
                 original_content,
                 target_provider=profile.provider_id,
-                target_capabilities=(
-                    {
-                        *(
-                            {"reasoning_content_replay"}
-                            if profile.reasoning_content_replay
-                            else set()
-                        ),
-                        *(
-                            {"thinking_blocks"}
-                            if profile.thinking_blocks_replay
-                            else set()
-                        ),
-                    }
-                ),
+                target_capabilities=target_capabilities,
             )
             item["content"] = normalize_chat_history_content(projection["content"])
             if item.get("role") == "assistant":
                 _apply_reasoning_content_replay(
-                    item, content=original_content, profile=profile,
+                    item,
+                    content=original_content,
+                    profile=profile,
+                    target_capabilities=target_capabilities,
                 )
             result.append(item)
             continue
@@ -713,20 +705,7 @@ def finalize_chat_messages(
         projection = project_ai_message_content(
             message.content,
             target_provider=profile.provider_id,
-            target_capabilities=(
-                {
-                    *(
-                        {"reasoning_content_replay"}
-                        if profile.reasoning_content_replay
-                        else set()
-                    ),
-                    *(
-                        {"thinking_blocks"}
-                        if profile.thinking_blocks_replay
-                        else set()
-                    ),
-                }
-            ),
+            target_capabilities=target_capabilities,
             response_metadata=message.response_metadata,
         )
         message_dict: dict[str, Any] = {
@@ -749,7 +728,10 @@ def finalize_chat_messages(
                     "function_call"
                 ]
             _apply_reasoning_content_replay(
-                message_dict, content=message.content, profile=profile,
+                message_dict,
+                content=message.content,
+                profile=profile,
+                target_capabilities=target_capabilities,
             )
         elif isinstance(message, SystemMessage):
             message_dict["role"] = "system"

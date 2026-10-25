@@ -76,7 +76,8 @@ class MessageStreamRuntime(
         self._pending_canonical_blocks: list[dict[str, object]] = []
         self.current_model_call_id: str | None = None
         self.current_attempt = 0
-        self._active_blocks: set[str] = set()
+        # dict 保留插入顺序，关闭事件可按激活顺序发出且只遍历当前活动项。
+        self._active_block_ids: dict[str, None] = {}
         self._closing_blocks: set[str] = set()
         self._active_block_order: list[str] = []
         self._block_metadata: dict[str, tuple[int, str]] = {}
@@ -133,7 +134,7 @@ class MessageStreamRuntime(
                 self._block_metadata[block_id] = (block["block_index"], block["carrier_type"])
                 self._block_model_call_ids[block_id] = block.get("model_call_id")
                 if block["status"] == "running":
-                    self._active_blocks.add(block_id)
+                    self._active_block_ids[block_id] = None
         self.current_model_call_id = model_call_id
         self.current_attempt = model_call.attempt
         self._model_execution_ids[model_call_id] = model_call.execution_id

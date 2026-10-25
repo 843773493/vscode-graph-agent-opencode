@@ -1464,7 +1464,7 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
             *[
                 sys.executable,
                 "-m",
-                "tests.support.model_stream_crash_worker",
+                "tests.support.model_stream.crash_worker",
                 "--provider",
                 provider,
                 "--endpoint",

@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,8 +24,13 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ToolResultEvidence,
+)
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.background_work_handlers import (
     SystemTimeEmitterHandler,
 )
@@ -237,6 +243,87 @@ async def test_process_exit_after_canonical_commit_before_ack_reconciles_exact_b
         assert control.unacknowledged_background_consumptions() == []
     assert await cold.collect(case.session_id, case.thread_id, "agent", consumption_id=consumption_id,
         timeout_seconds=1, tool_result_identity=identity) == batch
+
+
+async def test_canonical_batch_ack_reuses_one_control_store_connection(
+    process_case: BackgroundCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = process_case
+    bus = BackgroundMessageBus(store=case.store)
+    identities = (
+        BackgroundToolResultIdentity(
+            model_call_id="model-first", tool_call_id="call-first"
+        ),
+        BackgroundToolResultIdentity(
+            model_call_id="model-second", tool_call_id="call-second"
+        ),
+    )
+    items = []
+    for index, identity in enumerate(identities):
+        consumption_id = software_tool_operation_id(
+            "background_collect",
+            case.session_id,
+            case.thread_id,
+            identity.model_call_id,
+            identity.tool_call_id,
+        )
+        await bus.emit(
+            case.session_id,
+            case.thread_id,
+            "agent",
+            "已停止",
+            message_id=f"batch-stop-{index}",
+            kind="interrupt",
+        )
+        await bus.collect(
+            case.session_id,
+            case.thread_id,
+            "agent",
+            consumption_id=consumption_id,
+            timeout_seconds=1,
+            tool_result_identity=identity,
+        )
+        scoped_tool_call_id = (
+            f"{identity.model_call_id}:tool-call:{identity.tool_call_id}"
+        )
+        items.append(
+            CanonicalItemRecord.create(
+                item_sequence=index + 1,
+                item_id=f"batch-result-{index}",
+                semantic_kind="tool_result",
+                payload_kind="text",
+                status="completed",
+                producer_ref={
+                    "producer_kind": "tool",
+                    "producer_id": "collect_background_messages",
+                    "invocation_id": f"execution-{index}",
+                },
+                payload="已提交的后台消息",
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id=identity.model_call_id
+                ),
+                tool_result_evidence=ToolResultEvidence(
+                    scoped_tool_call_id, f"result-{index}", True
+                ),
+            ),
+        )
+
+    original_control = case.store.control
+    opened_controls = 0
+
+    @contextmanager
+    def count_control_opens(session_id: str, *, read_only: bool = False):
+        nonlocal opened_controls
+        opened_controls += 1
+        with original_control(session_id, read_only=read_only) as control:
+            yield control
+
+    monkeypatch.setattr(case.store, "control", count_control_opens)
+    bus.acknowledge_tool_results(case.session_id, case.thread_id, items)
+
+    assert opened_controls == 1
+    with original_control(case.session_id, read_only=True) as control:
+        assert control.unacknowledged_background_consumptions() == []
 
 
 @pytest.fixture

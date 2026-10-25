@@ -262,6 +262,26 @@
   cursor: default;
 }
 
+.terminal-panel-error-slot {
+  display: flex;
+  flex: 0 0 22px;
+  align-items: center;
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--bt-panel-border);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.terminal-panel-error-slot [role="alert"] {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bt-status-danger);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .terminal-panel-association {
   display: inline-flex;
   align-items: center;

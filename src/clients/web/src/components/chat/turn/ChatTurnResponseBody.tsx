@@ -63,12 +63,21 @@ export default function ChatTurnResponseBody({
         sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision, itemId,
       });
     } : undefined;
+  const forkActions = onForkItem
+    ? renderGroups.flatMap((group) => group.kind === "response"
+      ? [<ForkItemButtons key={group.id} item={group.item} onForkItem={onForkItem} />]
+      : [])
+    : undefined;
   const showConversationWorkSummary = !historyTurn
     && (activityItems.length > 0 || (!running && Boolean(conversation.activityStats)));
-  const responseTextPart = [...visibleParts].reverse().find(
-    (item): item is Extract<TimelineItem, { kind: "aggregated_text" }> =>
-      item.kind === "aggregated_text" && item.partKind === "markdown",
-  );
+  let responseTextPart: Extract<TimelineItem, { kind: "aggregated_text" }> | undefined;
+  for (let index = visibleParts.length - 1; index >= 0; index -= 1) {
+    const item = visibleParts[index];
+    if (item?.kind === "aggregated_text" && item.partKind === "markdown") {
+      responseTextPart = item;
+      break;
+    }
+  }
   const hasActiveWork = visibleParts.some((item) =>
     (item.kind === "aggregated_tool"
       || (item.kind === "aggregated_text" && item.partKind === "reasoning"))
@@ -106,10 +115,7 @@ export default function ChatTurnResponseBody({
         />
       ) : null}
       {!historyTurn ? renderGroups.map((group) => group.kind === "response" ? (
-        <div key={group.id}>
-          <ResponsePart item={group.item} />
-          <ForkItemButtons item={group.item} onForkItem={onForkItem} />
-        </div>
+        <ResponsePart key={group.id} item={group.item} />
       ) : null) : null}
       {summaryOnly && !historyTurn ? (
         <div className="chat-turn-detail-loading" role="status">
@@ -136,6 +142,7 @@ export default function ChatTurnResponseBody({
           responseText={responseTextPart?.text ?? ""}
           tokenUsage={conversationTokenUsage(conversation)}
           modelUsage={conversationModelUsage(conversation)}
+          forkActions={forkActions}
         />
       ) : null}
       {actions.confirmAction ? (

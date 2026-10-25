@@ -11,8 +11,8 @@ from tests.support.resource_owners.sessions import (
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 
 
-def _create_terminal_resource(resource_api_client: TestClient, *, scope: str = "thread") -> dict[str, object]:
-    response = resource_api_client.post("/api/v1/resources/terminals", json={
+def _create_terminal_resource(terminal_resource_api_client: TestClient, *, scope: str = "thread") -> dict[str, object]:
+    response = terminal_resource_api_client.post("/api/v1/resources/terminals", json={
         "session_id": SESSION_A, "thread_id": THREAD_A,
         "retention_scope": scope, "title": "真实管理请求",
     })
@@ -22,7 +22,7 @@ def _create_terminal_resource(resource_api_client: TestClient, *, scope: str = "
 
 
 def test_create_and_control_use_trace_request_identity_for_actual_lease(
-    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    terminal_resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[tuple[str, str]] = []
     create = terminal_owner_bundle.transport.create_terminal
@@ -42,10 +42,10 @@ def test_create_and_control_use_trace_request_identity_for_actual_lease(
 
     monkeypatch.setattr(terminal_owner_bundle.transport, "create_terminal", create_checked)
     monkeypatch.setattr(terminal_owner_bundle.transport, "sync_owner_revision", sync_checked)
-    response = resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
+    response = terminal_resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
     resource = response.json()["data"]
     resource_id = resource["resource_id"]
-    promoted = resource_api_client.post(f"/api/v1/resources/{resource_id}/promote", json={"expected_revision": 1})
+    promoted = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/promote", json={"expected_revision": 1})
     assert promoted.status_code == 200
     assert promoted.json()["data"]["retention_scope"] == "workspace"
     for receipt, lease in zip([response, promoted], observed, strict=True):
@@ -55,31 +55,31 @@ def test_create_and_control_use_trace_request_identity_for_actual_lease(
     assert terminal_owner_bundle.leases.leases_for_resource(resource_id) == []
 
 
-def test_api_conflict_keeps_owner_record_and_exact_associations(resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture) -> None:
-    resource = _create_terminal_resource(resource_api_client)
+def test_api_conflict_keeps_owner_record_and_exact_associations(terminal_resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture) -> None:
+    resource = _create_terminal_resource(terminal_resource_api_client)
     resource_id = resource["resource_id"]
-    conflict = resource_api_client.post(f"/api/v1/resources/{resource_id}/promote", json={"expected_revision": 99})
+    conflict = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/promote", json={"expected_revision": 99})
     assert conflict.status_code == 409
     lease = terminal_owner_bundle.leases.acquire_operation(
         resource_id=resource_id, turn_stream_id="actual-tool", operation_id="pending-read",
         holder_session_id=SESSION_A, holder_thread_id=THREAD_A,
     )
-    blocked = resource_api_client.post(f"/api/v1/resources/{resource_id}/detach", json={
+    blocked = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/detach", json={
         "expected_revision": 1, "thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
     })
     assert blocked.status_code == 409
-    unchanged = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
+    unchanged = terminal_resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
     assert unchanged["thread_associations"] == resource["thread_associations"]
     assert unchanged["owner_revision"] == 1
     terminal_owner_bundle.leases.release(lease.lease_id)
 
 
 def test_api_unknown_delete_reports_503_without_leaking_path_or_disappearing(
-    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    terminal_resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    resource = _create_terminal_resource(resource_api_client)
+    resource = _create_terminal_resource(terminal_resource_api_client)
     resource_id = resource["resource_id"]
-    detached = resource_api_client.post(f"/api/v1/resources/{resource_id}/detach", json={
+    detached = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/detach", json={
         "expected_revision": 1, "thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
     })
     assert detached.status_code == 200
@@ -88,21 +88,21 @@ def test_api_unknown_delete_reports_503_without_leaking_path_or_disappearing(
         raise ConnectionError(f"PTY 回执丢失: {terminal_owner_bundle.root}/private/key")
 
     monkeypatch.setattr(terminal_owner_bundle.transport, "delete_resource", lose_receipt)
-    failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/delete", json={"expected_revision": 2})
+    failed = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/delete", json={"expected_revision": 2})
     assert failed.status_code == 503
     assert str(terminal_owner_bundle.root) not in failed.text
-    listed = resource_api_client.get("/api/v1/resources").json()["data"]["items"]
+    listed = terminal_resource_api_client.get("/api/v1/resources").json()["data"]["items"]
     assert listed[0]["resource_id"] == resource_id
     assert listed[0]["reconciliation_status"] == "unknown"
     assert listed[0]["status"] != "deleted"
 
 
 def test_terminal_api_delete_rejects_thread_association_without_side_effects(
-    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    terminal_resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = _create_terminal_resource(resource_api_client)
+    created = _create_terminal_resource(terminal_resource_api_client)
     resource_id = created["resource_id"]
-    response = resource_api_client.get(f"/api/v1/resources/{resource_id}")
+    response = terminal_resource_api_client.get(f"/api/v1/resources/{resource_id}")
     assert response.status_code == 200, response.text
     associated = response.json()["data"]
     assert associated["workspace_id"] == WORKSPACE_ID
@@ -124,13 +124,13 @@ def test_terminal_api_delete_rejects_thread_association_without_side_effects(
         return await delete_resource(terminal_id)
 
     monkeypatch.setattr(terminal_owner_bundle.transport, "delete_resource", record_delete)
-    rejected = resource_api_client.post(
+    rejected = terminal_resource_api_client.post(
         f"/api/v1/resources/{resource_id}/delete",
         json={"expected_revision": associated["owner_revision"]},
     )
     assert rejected.status_code == 409, rejected.text
 
-    unchanged_response = resource_api_client.get(f"/api/v1/resources/{resource_id}")
+    unchanged_response = terminal_resource_api_client.get(f"/api/v1/resources/{resource_id}")
     assert unchanged_response.status_code == 200, unchanged_response.text
     unchanged = unchanged_response.json()["data"]
     assert unchanged == associated
@@ -142,7 +142,7 @@ def test_terminal_api_delete_rejects_thread_association_without_side_effects(
     assert terminal_owner_bundle.leases.leases_for_resource(resource_id) == []
 
     association = associated["thread_associations"][0]
-    detached_response = resource_api_client.post(
+    detached_response = terminal_resource_api_client.post(
         f"/api/v1/resources/{resource_id}/detach",
         json={"expected_revision": associated["owner_revision"], "thread": association},
     )
@@ -152,7 +152,7 @@ def test_terminal_api_delete_rejects_thread_association_without_side_effects(
     assert "delete" in detached["available_actions"]
     assert detached["owner_revision"] == associated["owner_revision"] + 1
 
-    deleted_response = resource_api_client.post(
+    deleted_response = terminal_resource_api_client.post(
         f"/api/v1/resources/{resource_id}/delete",
         json={"expected_revision": detached["owner_revision"]},
     )
@@ -166,17 +166,17 @@ def test_terminal_api_delete_rejects_thread_association_without_side_effects(
     assert delete_calls == [resource_id]
     assert terminal_owner_bundle.transport.deleted == [resource_id]
     assert terminal_owner_bundle.leases.leases_for_resource(resource_id) == []
-    listed = resource_api_client.get("/api/v1/resources", params={"kind": "terminal"})
+    listed = terminal_resource_api_client.get("/api/v1/resources", params={"kind": "terminal"})
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == []
 
 
-def test_grant_requires_real_association_and_cannot_create_one(resource_api_client: TestClient) -> None:
-    resource = _create_terminal_resource(resource_api_client)
+def test_grant_requires_real_association_and_cannot_create_one(terminal_resource_api_client: TestClient) -> None:
+    resource = _create_terminal_resource(terminal_resource_api_client)
     resource_id = resource["resource_id"]
-    missing_thread = resource_api_client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={"expected_revision": 1})
+    missing_thread = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={"expected_revision": 1})
     assert missing_thread.status_code == 409
-    granted = resource_api_client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={
+    granted = terminal_resource_api_client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={
         "expected_revision": 1, "thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
     })
     assert granted.status_code == 200

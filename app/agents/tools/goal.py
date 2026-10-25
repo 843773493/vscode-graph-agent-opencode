@@ -18,7 +18,11 @@ def create_goal_tools(
 
     @tool
     async def get_goal() -> dict[str, object] | None:
-        """读取当前会话的持久化 Goal，包括状态、预算、token 与耗时用量。"""
+        """读取当前会话的持久化 Goal，包括状态、预算、token 与耗时用量。
+
+        用户询问、要求停止或控制 Goal 时必须先调用；只有本工具返回 None 时，
+        才能说当前会话没有 Goal。
+        """
         await assert_main_thread()
         goal = await goal_service.get(session_id)
         return None if goal is None else goal.model_dump(mode="json")
@@ -34,11 +38,18 @@ def create_goal_tools(
 
     @tool
     async def update_goal(status: str) -> dict[str, object]:
-        """仅用于把现有 Goal 标记为 complete 或 blocked。只有目标实际完成且没有遗留工作时才能标记 complete。只有相同阻塞连续至少三个 Goal 轮次出现、且没有用户输入或外部状态变化就无法取得有意义进展时才能标记 blocked；恢复已阻塞 Goal 后应重新计算轮次。困难、缓慢、不确定、尚未完成或希望澄清都不构成 blocked。不得仅因预算即将耗尽或准备停止工作而标记 complete。暂停、恢复和预算限制由用户或系统控制。"""
+        """用户明确要求暂停或停止当前 Goal 时可将状态设为 paused；先调用 get_goal。
+
+        只有目标实际完成且没有遗留工作时才能标记 complete。只有相同阻塞连续
+        至少三个 Goal 轮次出现、且没有用户输入或外部状态变化就无法取得有意义
+        进展时才能标记 blocked；恢复已阻塞 Goal 后应重新计算轮次。困难、缓慢、
+        不确定、尚未完成或希望澄清都不构成 blocked。不得仅因预算即将耗尽或
+        准备停止工作而标记 complete。不得自行恢复或清除 Goal。
+        """
         try:
             parsed = GoalStatus(status)
         except ValueError as exc:
-            raise ValueError("status 只能是 complete 或 blocked") from exc
+            raise ValueError("status 只能是 paused、complete 或 blocked") from exc
         await assert_main_thread()
         goal = await goal_service.update_for_agent(session_id, parsed)
         return goal.model_dump(mode="json")

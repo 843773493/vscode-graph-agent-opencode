@@ -40,5 +40,6 @@ clients/web/
 - 性能测试必须输出机器可读 JSON，并在断言失败时保留截图
 - 指标必须同时覆盖响应时间、数据传输量和页面节点规模，不能只依赖固定等待时间
 - 浏览器必须连接本测试启动的隔离 Gateway，不得复用开发环境端口
+- 使用 fork deadline watchdog 的 browser driver 在 POSIX 由 owner 设置 `start_new_session=True`；Windows 由外置 Python watchdog 校验 matrix runner 祖先并按进程树回收
 - 纯 Web 是当前唯一实现的客户端 E2E；不得据此宣称 Electron、VS Code 或 React Native 已通过
 - 缺少 Chromium 或真实服务时明确报告未满足前置条件，不得切换到替身

@@ -347,7 +347,7 @@ class FederationRpcService:
             pass
         elif self.local_role == "hub":
             # 本地即 hub：直接向其它 active spoke fan-out 一次。
-            remaining = remaining_deadline(deadline_at)
+            remaining_deadline(deadline_at)
             matches.extend(
                 await self._fan_out_discovery(
                     session_id=session_id,
@@ -356,7 +356,6 @@ class FederationRpcService:
                     origin=self.gateway_id,
                     origin_channel=None,
                     path=visited,
-                    remaining=remaining,
                     deadline_at=deadline_at,
                 )
             )
@@ -511,7 +510,7 @@ class FederationRpcService:
             raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "origin discovery visited 与认证 channel 不一致")
         path = (*visited, self.gateway_id)
         assert_hop_budget(path)
-        remaining = remaining_deadline(deadline_at)
+        remaining_deadline(deadline_at)
         self._authorize(capability="discovery", origin=origin, session=session)
         gateway_id = request.get("gateway_id")
         workspace_id = request.get("workspace_id")
@@ -532,7 +531,6 @@ class FederationRpcService:
                     origin=origin,
                     origin_channel=session,
                     path=path,
-                    remaining=remaining,
                     deadline_at=deadline_at,
                 )
             )
@@ -619,7 +617,6 @@ class FederationRpcService:
         origin: str,
         origin_channel: FederationChannelSession | None,
         path: tuple[str, ...],
-        remaining: float,
         deadline_at: float | None,
     ) -> list[dict[str, object]]:
         directory = self.spoke_directory
@@ -629,12 +626,16 @@ class FederationRpcService:
             if not spokes:
                 raise FederationError(FEDERATION_UNKNOWN_PEER, "authority 指向未登记的直接 spoke")
         principal = principal_ref_for_gateway(origin)
-        matches: list[dict[str, object]] = []
+        eligible_spokes: list[FederationSpoke] = []
         for spoke in spokes:
             if spoke.gateway_id in path:
                 if gateway_id is not None:
                     raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "discovery authority 指向已访问 Gateway")
                 continue
+
+            eligible_spokes.append(spoke)
+
+        async def query_spoke(spoke: FederationSpoke) -> list[dict[str, object]]:
             self._authorize(capability="discovery", origin=origin, session=origin_channel)
             if origin != self.gateway_id:
                 self._authorize(capability="transit", origin=origin, session=origin_channel)
@@ -673,6 +674,7 @@ class FederationRpcService:
                     FEDERATION_TARGET_NOT_RESOLVABLE,
                     "spoke discovery 响应缺少 matches 数组",
                 )
+            matches: list[dict[str, object]] = []
             for item in raw_matches:
                 if not isinstance(item, dict):
                     raise FederationError(
@@ -680,7 +682,21 @@ class FederationRpcService:
                         "spoke discovery 候选项必须是对象",
                     )
                 matches.append(item)
-        return matches
+            return matches
+
+        tasks: list[asyncio.Task[list[dict[str, object]]]] = []
+        try:
+            tasks.extend(
+                asyncio.create_task(query_spoke(spoke)) for spoke in eligible_spokes
+            )
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return [match for spoke_matches in results for match in spoke_matches]
 
     # --- spoke 侧：来自受信 hub 的 granted 请求 ----------------------------
 

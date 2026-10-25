@@ -87,8 +87,6 @@ export default function GatewayDiagnosticsPanel({
         setSelectedLogId(next.selected_log_id);
       } catch (loadError) {
         if (requestRevisionRef.current !== revision) return;
-        setDiagnostics(null);
-        setSelectedLogId(null);
         setError(errorMessage(loadError));
       } finally {
         if (requestRevisionRef.current === revision) setLoading(false);
@@ -192,13 +190,25 @@ export default function GatewayDiagnosticsPanel({
         </div>
       </section>
 
-      {error ? (
-        <div className="gateway-console-alert" role="alert">
-          <span className="codicon codicon-error" aria-hidden="true" />
-          <div><strong>日志读取失败</strong><span>{error}</span></div>
-        </div>
-      ) : null}
-      {copyNotice ? <div className="gateway-console-notice" role="status"><span className="codicon codicon-pass-filled" aria-hidden="true" />{copyNotice}</div> : null}
+      <div className="gateway-console-feedback-slot">
+        {error ? (
+          <div
+            className="gateway-console-feedback error"
+            role="alert"
+            title={`${diagnostics ? "刷新失败，仍展示上次成功读取的数据" : "日志读取失败"}：${error}`}
+          >
+            <span className="codicon codicon-error" aria-hidden="true" />
+            <strong>{diagnostics ? "刷新失败" : "日志读取失败"}</strong>
+            <span className="gateway-console-feedback-message">{error}</span>
+          </div>
+        ) : null}
+        {copyNotice ? (
+          <div className="gateway-console-feedback notice" role="status" title={copyNotice}>
+            <span className="codicon codicon-pass-filled" aria-hidden="true" />
+            <span className="gateway-console-feedback-message">{copyNotice}</span>
+          </div>
+        ) : null}
+      </div>
 
       {diagnostics ? (
         <>
@@ -279,7 +289,18 @@ export default function GatewayDiagnosticsPanel({
           </section>
         </>
       ) : (
-        <div className="gateway-diagnostics-loading"><span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />正在读取 Gateway 诊断信息…</div>
+        error ? (
+          <div className="gateway-diagnostics-viewer-empty" role="status">
+            <span className="codicon codicon-warning" aria-hidden="true" />
+            <strong>当前范围没有可用的诊断快照</strong>
+            <p>请点击“刷新日志”重新读取。</p>
+          </div>
+        ) : (
+          <div className="gateway-diagnostics-loading" role="status">
+            <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+            正在读取 Gateway 诊断信息…
+          </div>
+        )
       )}
     </div>
   );

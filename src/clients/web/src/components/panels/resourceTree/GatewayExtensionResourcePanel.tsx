@@ -166,24 +166,28 @@ export default function GatewayExtensionResourcePanel({
       <div className="gateway-extension-scope-hint">
         按工作区查看浏览器和终端，包括持久资源与待回收的临时资源。
       </div>
-      {notice ? (
-        <div
-          className={`resource-notice${noticeIsError ? " is-error" : ""}`}
-          role={noticeIsError ? "alert" : "status"}
-        >
-          {notice}
+      {notice || groupedErrors.length > 0 ? (
+        <div className="resource-panel-notifications">
+          {notice ? (
+            <div
+              className={`resource-notice${noticeIsError ? " is-error" : ""}`}
+              role={noticeIsError ? "alert" : "status"}
+            >
+              {notice}
+            </div>
+          ) : null}
+          {groupedErrors.map((error) => (
+            <div className="resource-notice gateway-extension-error" key={error.message}>
+              <strong>{error.labels.length} 个资源范围暂不可用</strong>
+              <details>
+                <summary>查看范围与技术详情</summary>
+                <span>{error.labels.join("、")}</span>
+                <code>{error.message}</code>
+              </details>
+            </div>
+          ))}
         </div>
       ) : null}
-      {groupedErrors.map((error) => (
-        <div className="resource-notice gateway-extension-error" key={error.message}>
-          <strong>{error.labels.length} 个资源范围暂不可用</strong>
-          <details>
-            <summary>查看范围与技术详情</summary>
-            <span>{error.labels.join("、")}</span>
-            <code>{error.message}</code>
-          </details>
-        </div>
-      ))}
       {loading && entries.length === 0 ? (
         <div className="empty-state">正在读取所有 Gateway 连接...</div>
       ) : null}

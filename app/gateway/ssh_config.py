@@ -4,8 +4,11 @@ import glob
 import os
 import shlex
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+
+_MAX_SSH_CONFIG_RESOLUTION_WORKERS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +80,9 @@ def _effective_ssh_options(alias: str) -> dict[str, list[str]]:
     for option_line in ssh_config_result.stdout.splitlines():
         option_name, separator, option_value = option_line.partition(" ")
         if separator and option_value:
-            options_by_name.setdefault(option_name.lower(), []).append(option_value.strip())
+            options_by_name.setdefault(option_name.lower(), []).append(
+                option_value.strip()
+            )
     return options_by_name
 
 
@@ -91,9 +96,7 @@ def _resolve_effective_host(alias: str) -> UserSshHost:
     try:
         port = int(port_text)
     except ValueError as error:
-        raise ValueError(
-            f"SSH Host {alias} 的 Port 不是整数: {port_text}"
-        ) from error
+        raise ValueError(f"SSH Host {alias} 的 Port 不是整数: {port_text}") from error
     if port < 1 or port > 65535:
         raise ValueError(f"SSH Host {alias} 的 Port 超出范围: {port}")
     return UserSshHost(
@@ -123,9 +126,15 @@ def resolve_user_ssh_host(
 
 
 def list_user_ssh_hosts(config_path: Path | None = None) -> list[UserSshHost]:
+    """按用户配置顺序解析 Host，并有界并行读取 OpenSSH 生效配置。"""
     aliases = _collect_host_aliases(
         config_path or Path.home() / ".ssh" / "config",
         set(),
     )
     unique_aliases = list(dict.fromkeys(aliases))
-    return [_resolve_effective_host(alias) for alias in unique_aliases]
+    if len(unique_aliases) < 2:
+        return [_resolve_effective_host(alias) for alias in unique_aliases]
+    with ThreadPoolExecutor(
+        max_workers=min(_MAX_SSH_CONFIG_RESOLUTION_WORKERS, len(unique_aliases))
+    ) as executor:
+        return list(executor.map(_resolve_effective_host, unique_aliases))

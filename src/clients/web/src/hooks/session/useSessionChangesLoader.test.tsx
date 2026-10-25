@@ -6,14 +6,14 @@ import type { Session } from "../../types/backend";
 import { useSessionChangesLoader } from "./useSessionChangesLoader";
 import { useSessionResourceLoader } from "./useSessionResourceLoader";
 import {
-  apiResponse,
-  errorResponse,
-  hangUntilReleased,
+  apiSuccessResponse,
+  apiErrorResponse,
   installGatewayFetch,
-  restoreSessionHookGlobals,
-} from "./sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 const FILE_URI = "boxteam://workspace/0191f2ab-1234-7abc-8def-0123456789ab/resources/files/root/src/a.ts";
 
@@ -77,7 +77,7 @@ describe("会话文件变更请求协调", () => {
     installGatewayFetch(({ path, init }) => {
       if (path.endsWith("/review")) {
         expect(JSON.parse(String(init?.body))).toEqual({ file_path: FILE_URI, reviewed: true });
-        return errorResponse(500, "审查后端崩溃");
+        return apiErrorResponse(500, "审查后端崩溃");
       }
       return undefined;
     });
@@ -101,7 +101,7 @@ describe("会话文件变更请求协调", () => {
     installGatewayFetch(({ path }) => {
       if (/^\/api\/v1\/sessions\/[^/]+\/changesets$/.test(path)) {
         changesetListRequestCount += 1;
-        return apiResponse({
+        return apiSuccessResponse({
           items: [{
             changeset_id: "cs_default",
             session_id: path.split("/")[4],
@@ -113,7 +113,7 @@ describe("会话文件变更请求协调", () => {
       }
       if (/^\/api\/v1\/sessions\/[^/]+\/changesets\/cs_default$/.test(path)) {
         changesetDetailRequestCount += 1;
-        return apiResponse({
+        return apiSuccessResponse({
           changeset_id: "cs_default",
           session_id: path.split("/")[4],
           title: "默认变更",
@@ -158,7 +158,7 @@ describe("会话文件变更请求协调", () => {
         if (listRequestCount === 1) {
           return firstListResponse;
         }
-        return apiResponse({
+        return apiSuccessResponse({
           items: [{
             changeset_id: "cs_refreshed",
             session_id: currentSession.session_id,
@@ -176,7 +176,7 @@ describe("会话文件变更请求协调", () => {
     await Promise.resolve();
     const refreshed = mounted.loader().loadSessionChangesets(currentSession.session_id, true);
     await Promise.resolve();
-    resolveFirstList(apiResponse({
+    resolveFirstList(apiSuccessResponse({
       items: [{
         changeset_id: "cs_stale",
         session_id: currentSession.session_id,
@@ -201,7 +201,7 @@ describe("会话文件变更请求协调", () => {
       title: "另一个会话",
     };
     const { promise: reviewResponse, release: releaseReview } =
-      hangUntilReleased<Response>();
+      createDeferredResult<Response>();
     installGatewayFetch(({ path }) => {
       if (path.endsWith("/review")) return reviewResponse;
       return undefined;
@@ -239,7 +239,7 @@ describe("会话文件变更请求协调", () => {
     });
     expect(currentState.currentSession?.session_id).toBe("ses_other_changes_loader");
 
-    releaseReview(errorResponse(500, "会话 A 的审查后端崩了"));
+    releaseReview(apiErrorResponse(500, "会话 A 的审查后端崩了"));
     await act(async () => {
       await review;
     });
@@ -298,7 +298,7 @@ describe("后台连接控制请求协调", () => {
   test("控制后台连接失败时必须给出带原因的可见诊断", async () => {
     installGatewayFetch(({ path }) => {
       if (path.endsWith("/control")) {
-        return errorResponse(500, "后台连接服务崩溃");
+        return apiErrorResponse(500, "后台连接服务崩溃");
       }
       return undefined;
     });
@@ -321,7 +321,7 @@ describe("后台连接控制请求协调", () => {
       title: "另一个会话",
     };
     const { promise: controlResponse, release: releaseControl } =
-      hangUntilReleased<Response>();
+      createDeferredResult<Response>();
     installGatewayFetch(({ path }) => {
       if (path.endsWith("/control")) return controlResponse;
       return undefined;
@@ -335,7 +335,7 @@ describe("后台连接控制请求协调", () => {
     await mounted.switchTo(sessionB);
     expect(mounted.state().currentSession?.session_id).toBe("ses_other_resource_loader");
 
-    releaseControl(errorResponse(500, "会话 A 的后台连接崩了"));
+    releaseControl(apiErrorResponse(500, "会话 A 的后台连接崩了"));
     await act(async () => {
       await control;
     });

@@ -70,7 +70,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import control_request
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,

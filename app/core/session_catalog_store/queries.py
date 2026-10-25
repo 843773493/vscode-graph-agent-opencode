@@ -15,6 +15,7 @@ import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.identifier import validate_thread_id
@@ -364,20 +365,30 @@ def _session_list_created_us(created_at: str) -> int:
     return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
 
 
-def _session_list_member_part(node_id: str, created_at: str, part: int) -> int:
-    """表达式索引的成员指纹；保留旧成员定义中的 datetime 文本规范化。"""
+def _session_list_member_fingerprint(node_id: str, created_at: str) -> bytes:
+    """表达式索引成员指纹；保留旧成员定义中的 datetime 文本规范化。"""
     encoded = json.dumps(
         (node_id, str(datetime.fromisoformat(created_at))),
-        ensure_ascii=False, separators=(",", ":"),
+        ensure_ascii=False,
+        separators=(",", ":"),
     ).encode("utf-8")
-    fingerprint = hashlib.sha256(encoded).digest()
-    return int.from_bytes(fingerprint[part * 4:(part + 1) * 4], "big")
+    return hashlib.sha256(encoded).digest()
 
 
 def _register_session_list_functions(connection: sqlite3.Connection) -> None:
     """每个 catalog 连接都注册同一派生索引函数，包含只读重开。"""
-    connection.create_function("session_list_created_us", 1, _session_list_created_us, deterministic=True)
-    connection.create_function("session_list_member_part", 3, _session_list_member_part, deterministic=True)
+    connection.create_function(
+        "session_list_created_us", 1, _session_list_created_us, deterministic=True
+    )
+    cached_fingerprint = lru_cache(maxsize=64)(_session_list_member_fingerprint)
+
+    def session_list_member_part(node_id: str, created_at: str, part: int) -> int:
+        fingerprint = cached_fingerprint(node_id, created_at)
+        return int.from_bytes(fingerprint[part * 4 : (part + 1) * 4], "big")
+
+    connection.create_function(
+        "session_list_member_part", 3, session_list_member_part, deterministic=True
+    )
 
 
 def _encode_session_list_cursor(offset: int, *, revision: str) -> str:

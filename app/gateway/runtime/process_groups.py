@@ -7,11 +7,19 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
-ProcessStartTime = int | float
+ProcessStartMarker = int | float
 
 
-def _linux_process_stat(pid: int) -> tuple[str, int, int, int] | None:
+class _ProcessIdentity(NamedTuple):
+    state: str
+    process_group_id: int
+    process_session_id: int
+    process_start_marker: ProcessStartMarker
+
+
+def _read_linux_process_identity(pid: int) -> _ProcessIdentity | None:
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except (FileNotFoundError, ProcessLookupError):
@@ -20,17 +28,23 @@ def _linux_process_stat(pid: int) -> tuple[str, int, int, int] | None:
     fields = raw.rpartition(")")[2].split()
     if len(fields) < 20:
         raise RuntimeError(f"进程 stat 字段不足，无法核实 owned group: pid={pid}")
-    return fields[0], int(fields[2]), int(fields[3]), int(fields[19])
+    return _ProcessIdentity(
+        state=fields[0],
+        process_group_id=int(fields[2]),
+        process_session_id=int(fields[3]),
+        process_start_marker=int(fields[19]),
+    )
 
 
-def _posix_process_stat(pid: int) -> tuple[str, int, int, float] | None:
+def _read_posix_process_identity(pid: int) -> _ProcessIdentity | None:
     import psutil
 
     try:
         process = psutil.Process(pid)
-        starttime = process.create_time()
+        process_start_marker = process.create_time()
         status = process.status()
-        group, session = os.getpgid(pid), os.getsid(pid)
+        process_group_id = os.getpgid(pid)
+        process_session_id = os.getsid(pid)
         if not process.is_running():
             return None
     except psutil.NoSuchProcess:
@@ -46,7 +60,12 @@ def _posix_process_stat(pid: int) -> tuple[str, int, int, float] | None:
         if status == psutil.STATUS_DEAD
         else "S"
     )
-    return state, group, session, starttime
+    return _ProcessIdentity(
+        state=state,
+        process_group_id=process_group_id,
+        process_session_id=process_session_id,
+        process_start_marker=process_start_marker,
+    )
 
 
 def _posix_process_group_members(pgid: int) -> list[tuple[int, str]]:
@@ -86,83 +105,96 @@ def _posix_process_group_members(pgid: int) -> list[tuple[int, str]]:
     return members
 
 
-def _capture_posix_group_starttime(pid: int) -> ProcessStartTime | None:
+def _capture_posix_group_leader_start_marker(pid: int) -> ProcessStartMarker | None:
     if sys.platform == "linux":
-        identity = _linux_process_stat(pid)
+        identity = _read_linux_process_identity(pid)
         if identity is None:
             return None
-        _, group, session, starttime = identity
     else:
-        identity = _posix_process_stat(pid)
+        identity = _read_posix_process_identity(pid)
         if identity is None:
             return None
-        _, group, session, starttime = identity
-    if group != pid or session != pid:
+    if identity.process_group_id != pid or identity.process_session_id != pid:
         raise RuntimeError(
-            f"进程不是独立 owned group 的 leader: pid={pid}, pgid={group}, session={session}"
+            f"进程不是独立 owned group 的 leader: pid={pid}, "
+            f"pgid={identity.process_group_id}, session={identity.process_session_id}"
         )
-    return starttime
+    return identity.process_start_marker
 
 
-def _posix_group_is_alive(pid: int, leader_starttime: ProcessStartTime | None) -> bool:
+def _posix_group_is_alive(
+    pid: int, leader_start_marker: ProcessStartMarker | None
+) -> bool:
     if sys.platform != "linux":
-        leader = _posix_process_stat(pid)
+        leader = _read_posix_process_identity(pid)
         if leader is not None:
-            state, group, session, starttime = leader
-            if (group, session) != (pid, pid) or starttime != leader_starttime:
+            if (
+                leader.process_group_id != pid
+                or leader.process_session_id != pid
+                or leader.process_start_marker != leader_start_marker
+            ):
                 raise RuntimeError(f"owned group 的 leader 已被替换: pid={pid}")
-            if state not in {"Z", "X", "x"}:
+            if leader.state not in {"Z", "X", "x"}:
                 return True
         try:
             os.killpg(pid, 0)
         except ProcessLookupError:
             return False
         except PermissionError as error:
-            raise RuntimeError(f"核实 owned group 是否存活失败: pid={pid}: {error}") from error
-        for member_pid, state in _posix_process_group_members(pid):
-            if state in {"Z", "X", "x"}:
+            raise RuntimeError(
+                f"核实 owned group 是否存活失败: pid={pid}: {error}"
+            ) from error
+        for member_pid, member_state in _posix_process_group_members(pid):
+            if member_state in {"Z", "X", "x"}:
                 continue
             try:
-                group = os.getpgid(member_pid)
-                if group != pid:
+                member_process_group_id = os.getpgid(member_pid)
+                if member_process_group_id != pid:
                     continue
-                session = os.getsid(member_pid)
+                member_process_session_id = os.getsid(member_pid)
             except ProcessLookupError:
                 continue
-            if session != pid:
+            if member_process_session_id != pid:
                 raise RuntimeError(
-                    f"无法证明进程属于原 owned group: pid={member_pid}, pgid={pid}, sid={session}"
+                    f"无法证明进程属于原 owned group: pid={member_pid}, "
+                    f"pgid={pid}, sid={member_process_session_id}"
                 )
-            if leader_starttime is None:
+            if leader_start_marker is None:
                 raise RuntimeError(
                     f"无法证明进程属于原 owned group: pid={member_pid}, pgid={pid}"
                 )
             return True
         return False
-    leader = _linux_process_stat(pid)
+    leader = _read_linux_process_identity(pid)
     if leader is not None:
-        state, group, session, starttime = leader
-        if (group, session) != (pid, pid) or starttime != leader_starttime:
+        if (
+            leader.process_group_id != pid
+            or leader.process_session_id != pid
+            or leader.process_start_marker != leader_start_marker
+        ):
             raise RuntimeError(f"owned group 的 leader 已被替换: pid={pid}")
-        if state not in {"Z", "X", "x"}:
+        if leader.state not in {"Z", "X", "x"}:
             return True
     try:
         os.killpg(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError as error:
-        raise RuntimeError(f"核实 owned group 是否存活失败: pid={pid}: {error}") from error
+        raise RuntimeError(
+            f"核实 owned group 是否存活失败: pid={pid}: {error}"
+        ) from error
     for entry in Path("/proc").iterdir():
         if not entry.name.isdecimal():
             continue
-        identity = _linux_process_stat(int(entry.name))
+        identity = _read_linux_process_identity(int(entry.name))
         if identity is None:
             continue
-        state, group, session, _ = identity
-        if group != pid or state in {"Z", "X", "x"}:
+        if identity.process_group_id != pid or identity.state in {"Z", "X", "x"}:
             continue
-        if leader_starttime is None or session != pid:
-            raise RuntimeError(f"无法证明进程属于原 owned group: pid={entry.name}, pgid={pid}")
+        if leader_start_marker is None or identity.process_session_id != pid:
+            raise RuntimeError(
+                f"无法证明进程属于原 owned group: pid={entry.name}, pgid={pid}"
+            )
         return True
     return False
 
@@ -174,4 +206,3 @@ def _wait_until_closed(is_alive: Callable[[], bool], *, deadline: float) -> bool
             return False
         time.sleep(min(0.05, remaining))
     return True
-

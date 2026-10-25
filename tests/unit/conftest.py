@@ -15,7 +15,7 @@ from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from tests.harness.python.run_context import TestRunContext
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     CommunicationProbe,

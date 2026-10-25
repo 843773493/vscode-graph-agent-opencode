@@ -157,16 +157,39 @@ class BackgroundMessageBus:
         with self._store.control(session_id) as control:
             control.acknowledge_background_consumption(consumption_id)
 
-    def acknowledge_tool_results(self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord]) -> None:
+    def acknowledge_tool_results(
+        self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord]
+    ) -> None:
         """仅供 canonical sink 在真实 append 提交后调用；不从工具返回正文取身份。"""
+        consumption_ids: list[str] = []
         for item in items:
             identity = item.projection_identity
-            if item.semantic_kind != "tool_result" or item.status != "completed" or identity is None or identity.model_call_id is None or item.tool_call_id is None:
+            if (
+                item.semantic_kind != "tool_result"
+                or item.status != "completed"
+                or identity is None
+                or identity.model_call_id is None
+                or item.tool_call_id is None
+            ):
                 continue
-            consumption_id = software_tool_operation_id("background_collect", session_id, thread_id,
-                identity.model_call_id, provider_tool_call_id(identity, item.tool_call_id))
-            with self._store.control(session_id) as control:
-                control.acknowledge_background_consumption(consumption_id, if_present=True)
+            consumption_ids.append(
+                software_tool_operation_id(
+                    "background_collect",
+                    session_id,
+                    thread_id,
+                    identity.model_call_id,
+                    provider_tool_call_id(identity, item.tool_call_id),
+                )
+            )
+        if not consumption_ids:
+            return
+        # 一个 canonical append 可能包含多个工具结果；共享一次连接初始化，
+        # 但保留每个消费记录各自的 durable ack 事务。
+        with self._store.control(session_id) as control:
+            for consumption_id in consumption_ids:
+                control.acknowledge_background_consumption(
+                    consumption_id, if_present=True
+                )
 
     async def reconcile(self, reader: BackgroundToolResultReader) -> int:
         """补齐 canonical 已提交、ack 未提交的重启窗口；未提交结果保持原 batch。"""

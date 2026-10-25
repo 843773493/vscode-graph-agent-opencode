@@ -16,6 +16,10 @@ from app.gateway.control.catalog_search import (
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.schemas.gateway_control import (
+    WorkspaceNavigationNodeDTO,
+    WorkspaceNavigationTreeDTO,
+)
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
 
@@ -96,6 +100,104 @@ def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
     assert (
         catalog_service._search_snapshot(target, loaded, "2026/10/21", limit=10) == []
     )
+
+
+def test_catalog_search_limits_matches_after_stable_name_sort(
+    catalog_service: GatewaySessionCatalogSearchService,
+) -> None:
+    target = _offline_target()
+    nodes = [
+        SessionCatalogNodeDTO(
+            node_id="node-z",
+            kind="folder",
+            name="Zulu needle",
+            node_revision=1,
+        ),
+        SessionCatalogNodeDTO(
+            node_id="node-b",
+            kind="folder",
+            name="Alpha needle",
+            node_revision=1,
+        ),
+        SessionCatalogNodeDTO(
+            node_id="node-a",
+            kind="folder",
+            name="alpha needle",
+            node_revision=1,
+        ),
+    ]
+    snapshot = _CatalogSnapshot(
+        revision="revision-one",
+        updated_at=datetime.now(UTC),
+        nodes_by_id={node.node_id: node for node in nodes},
+    )
+
+    matches = catalog_service._search_snapshot(target, snapshot, "needle", limit=2)
+
+    assert [item.node_id for item in matches] == ["node-a", "node-b"]
+    assert catalog_service._search_snapshot(target, snapshot, "needle", limit=0) == []
+    assert [
+        item.node_id
+        for item in catalog_service._search_snapshot(
+            target,
+            snapshot,
+            "needle",
+            limit=-1,
+        )
+    ] == ["node-a", "node-b"]
+
+
+def test_workspace_folder_search_uses_stable_path_sort_and_limit(
+    catalog_service: GatewaySessionCatalogSearchService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = [
+        WorkspaceNavigationNodeDTO(
+            node_id="folder-b",
+            kind="workspace_folder",
+            name="Beta needle",
+        ),
+        WorkspaceNavigationNodeDTO(
+            node_id="folder-child",
+            kind="workspace_folder",
+            name="Needle child",
+            parent_node_id="folder-a",
+        ),
+        WorkspaceNavigationNodeDTO(
+            node_id="folder-z",
+            kind="workspace_folder",
+            name="Alpha needle",
+        ),
+        WorkspaceNavigationNodeDTO(
+            node_id="folder-a",
+            kind="workspace_folder",
+            name="alpha NEEDLE",
+        ),
+    ]
+    tree = WorkspaceNavigationTreeDTO(revision="test", nodes=nodes)
+    monkeypatch.setattr(
+        catalog_service._navigation_store,
+        "list_tree",
+        lambda _targets: tree,
+    )
+
+    matches = catalog_service._search_workspace_folders("needle", limit=3)
+
+    assert [item.node_id for item in matches] == [
+        "folder-a",
+        "folder-z",
+        "folder-child",
+    ]
+    assert [item.relative_path for item in matches] == [
+        "alpha NEEDLE",
+        "Alpha needle",
+        "alpha NEEDLE/Needle child",
+    ]
+    assert catalog_service._search_workspace_folders("needle", limit=0) == []
+    assert [
+        item.node_id
+        for item in catalog_service._search_workspace_folders("needle", limit=-1)
+    ] == ["folder-a", "folder-z", "folder-child"]
 
 
 @pytest.mark.parametrize("schema_version", [1, 2])

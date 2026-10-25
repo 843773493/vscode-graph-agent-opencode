@@ -59,6 +59,10 @@ from app.services.mapping.turn_response_parts import (
     response_parts_from_records,
 )
 
+_ASSISTANT_HISTORY_FIELDS = frozenset(
+    {"assistant", "assistant_text", "text", "reasoning_detail"}
+)
+
 
 @dataclass(slots=True)
 class _InternalExecutionHistoryProjection:
@@ -139,9 +143,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 view_id=indexed.view_id,
                 history_view_revision=bounds.history_view_revision,
                 turn_read_upper_bound=bounds.upper_turn_ordinal,
-                logical_item_read_upper_bound=(
-                    bounds.upper_logical_item_ordinal
-                ),
+                logical_item_read_upper_bound=(bounds.upper_logical_item_ordinal),
                 # 游标沿用 snapshot SQL 返回的 1-based logical ordinal。
                 turn_ordinal=span.ordinal,
                 logical_item_ordinal=None,
@@ -172,16 +174,23 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             if request.cursor is not None:
                 raise InvalidTurnCursorError("尚未物化的历史不能使用分页游标")
             binding = self._cursor_binding(
-                request, policy or default_history_loading_config(), None,
-                history_view_revision=0, turn_read_upper_bound=None,
+                request,
+                policy or default_history_loading_config(),
+                None,
+                history_view_revision=0,
+                turn_read_upper_bound=None,
                 logical_item_read_upper_bound=None,
             )
             references = request.turn_ids or (
                 [binding.anchor_turn_id] if binding.anchor_turn_id is not None else []
             )
             if references:
-                raise StaleTurnReferenceError(session_id=session_id, turn_ids=references)
-            return TurnHistoryPageDTO(items=[], next_cursor=None, has_more=False, projection_epoch=1)
+                raise StaleTurnReferenceError(
+                    session_id=session_id, turn_ids=references
+                )
+            return TurnHistoryPageDTO(
+                items=[], next_cursor=None, has_more=False, projection_epoch=1
+            )
         try:
             return self._load_indexed_history(
                 session_id,
@@ -357,26 +366,28 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     ) -> TurnHistoryPageDTO:
         budget = DetailReadBudget(LoadLimits())
         summary_budget = DetailReadBudget(LoadLimits())
-        load_tool_payload = bool(set(include) & {"tool_call", "tool_result"})
+        include_fields = set(include)
+        load_tool_payload = (
+            "tool_call" in include_fields or "tool_result" in include_fields
+        )
         selected_tool_call_ids = frozenset(tool_call_ids) or None
         projections = self._context_reader.read_turn_projections(
             snapshot,
             chain,
             [span.turn_id for span in spans],
         )
-        record_roles = {"user"} if set(include) & {"user", "internal"} else set()
-        if set(include) & {
-            "assistant",
-            "assistant_text",
-            "text",
-            "reasoning_detail",
-        }:
+        record_roles = (
+            {"user"}
+            if "user" in include_fields or "internal" in include_fields
+            else set()
+        )
+        if not include_fields.isdisjoint(_ASSISTANT_HISTORY_FIELDS):
             record_roles.add("assistant")
         tool_kinds: set[str] = set()
-        if "tool_call" in include:
+        if "tool_call" in include_fields:
             tool_kinds.add("tool_call")
             record_roles.add("assistant")
-        if "tool_result" in include:
+        if "tool_result" in include_fields:
             tool_kinds.add("tool_result")
         required_sequences: dict[str, set[int]] = {}
         for span in spans:
@@ -389,7 +400,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             if (
                 isinstance(final_sequence, int)
                 and not isinstance(final_sequence, bool)
-                and "assistant" in include
+                and "assistant" in include_fields
             ):
                 required_sequences.setdefault(span.turn_id, set()).add(final_sequence)
         if selected_tool_call_ids is not None:
@@ -483,7 +494,10 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 )
 
             item = entry.item
-            if "internal" in fields and item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
+            if (
+                "internal" in fields
+                and item.semantic_kind == SemanticKind.RUNTIME_NOTICE
+            ):
                 if (
                     item.payload_kind != PayloadKind.STRUCTURED_CONTENT
                     or not isinstance(item.payload, Mapping)
@@ -492,7 +506,10 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                     continue
                 notice = RuntimeNoticePayload.from_dict(item.payload)
                 display_part = notice.display_part
-                if display_part is not None and display_part.kind == "generated_session_result":
+                if (
+                    display_part is not None
+                    and display_part.kind == "generated_session_result"
+                ):
                     projection.display_parts.append(
                         InternalExecutionDisplayPartDTO(
                             kind=display_part.kind,

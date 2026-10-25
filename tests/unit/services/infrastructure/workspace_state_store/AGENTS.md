@@ -1,8 +1,21 @@
 # 目录用途
 
 本目录按工作区状态库的职责族组织单元测试，避免把配置来源、配置 apply、配置事件
-和宿主组合行为堆在一个大型测试文件中。生产实现仍由
-`app/services/infrastructure/workspace_state_store.py` 及其专属职责模块提供。
+和宿主组合行为堆在一个大型测试文件中。生产实现由
+`app/services/infrastructure/workspace_state_store/` 提供。
+
+生产实现对应树：
+
+```text
+workspace_state_store/
+├── __init__.py          store 装配和 schema 迁移顺序
+├── apply.py             apply claim 与 journal
+├── pending.py           pending candidate 状态
+├── restart.py           重启状态
+├── snapshot.py          active snapshot
+├── sql_statements.py    共享 SQL
+└── workspace_state_sql/ 静态 schema 迁移
+```
 
 ```text
 workspace_state_store/

@@ -26,8 +26,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         phase: str,
         ledger_path: Path,
     ) -> tuple[str, str]:
-        reservation_phase = self._read_ledger(ledger_path).get("phase")
-        self._update_execution_phase(
+        previous_execution_phase = self._update_execution_phase(
             ledger_path,
             phase="session_ready",
             session_id=session_id,
@@ -53,15 +52,17 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             session_id=session_id,
             message=message,
         )
-        record = self._read_ledger(ledger_path)
-        raw_identity = record.get("dispatched_execution_identity")
-        if "dispatched_job_id" in record:
+        execution_ledger_record = self._read_ledger(ledger_path)
+        stored_execution_identity = execution_ledger_record.get(
+            "dispatched_execution_identity"
+        )
+        if "dispatched_job_id" in execution_ledger_record:
             raise RuntimeError(
                 "生成账本仍包含旧式单字段 Job 预留，拒绝从 trace 或缺省值恢复: "
                 f"{ledger_path}"
             )
-        if "dispatched_execution_identity" not in record:
-            if reservation_phase in {
+        if "dispatched_execution_identity" not in execution_ledger_record:
+            if previous_execution_phase in {
                 "job_reserved",
                 "child_dispatched",
             }:
@@ -73,12 +74,12 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
                 self._session_orchestrator.reserve_user_execution_identity()
             )
         else:
-            if not isinstance(raw_identity, dict):
+            if not isinstance(stored_execution_identity, dict):
                 raise RuntimeError(
                     f"生成账本的 execution identity 格式无效: {ledger_path}"
                 )
             try:
-                execution_identity = UserExecutionIdentity(**raw_identity)
+                execution_identity = UserExecutionIdentity(**stored_execution_identity)
             except (TypeError, ValueError) as error:
                 raise RuntimeError(
                     f"生成账本的 execution identity 无效: {ledger_path}: {error}"
@@ -90,12 +91,12 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             message=message,
             execution_identity=execution_identity,
         )
-        terminal_types = self._terminal_event_types()
+        terminal_event_types = self._terminal_event_types()
         if (
             self._persisted_terminal_status(
                 session_id,
                 execution_identity.job_id,
-                terminal_types,
+                terminal_event_types,
             )
             is None
         ):
@@ -232,9 +233,14 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         session_id: str,
         message: MessageDTO | None = None,
         execution_identity: UserExecutionIdentity | None = None,
-    ) -> None:
-        record = self._read_ledger(ledger_path)
-        record.update(
+    ) -> str | None:
+        execution_ledger_record = self._read_ledger(ledger_path)
+        previous_execution_phase = execution_ledger_record.get("phase")
+        if previous_execution_phase is not None and not isinstance(
+            previous_execution_phase, str
+        ):
+            raise RuntimeError(f"会话生成账本的执行阶段格式无效: {ledger_path}")
+        execution_ledger_record.update(
             {
                 "status": "executing",
                 "phase": phase,
@@ -242,13 +248,21 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             }
         )
         if message is not None:
-            record["prepared_message_id"] = message.message_id
+            execution_ledger_record["prepared_message_id"] = message.message_id
         if execution_identity is not None:
-            raw_identity = record.get("dispatched_execution_identity")
-            if raw_identity is not None and raw_identity != asdict(execution_identity):
+            stored_execution_identity = execution_ledger_record.get(
+                "dispatched_execution_identity"
+            )
+            if (
+                stored_execution_identity is not None
+                and stored_execution_identity != asdict(execution_identity)
+            ):
                 raise RuntimeError(
                     "生成账本的 execution identity 与预留值冲突: "
                     f"{ledger_path}"
                 )
-            record["dispatched_execution_identity"] = asdict(execution_identity)
-        self._write_ledger(ledger_path, record)
+            execution_ledger_record["dispatched_execution_identity"] = asdict(
+                execution_identity
+            )
+        self._write_ledger(ledger_path, execution_ledger_record)
+        return previous_execution_phase

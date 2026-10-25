@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { renderToStaticMarkup } from "react-dom/server";
 import WorkspaceMarkdownPreview, {
   LARGE_MARKDOWN_PREVIEW_LENGTH,
 } from "./WorkspaceMarkdownPreview";
@@ -29,9 +28,10 @@ function overThresholdContent(): string {
   );
 }
 
-function render(props: { content: string }): ReactTestRenderer {
+async function render(props: { content: string }): Promise<ReactTestRenderer> {
+  await import("./WorkspaceMarkdownRenderer");
   let renderer!: ReactTestRenderer;
-  act(() => {
+  await act(async () => {
     renderer = create(
       <WorkspaceMarkdownPreview
         apiPort={8014}
@@ -41,41 +41,34 @@ function render(props: { content: string }): ReactTestRenderer {
         onOpenWorkspacePath={async () => undefined}
       />,
     );
+    await Promise.resolve();
   });
   return renderer;
 }
 
-function staticMarkup(content: string): string {
-  return renderToStaticMarkup(
-    <WorkspaceMarkdownPreview
-      apiPort={8014}
-      workspaceId="ws_test"
-      path="docs/guide.md"
-      content={content}
-      onOpenWorkspacePath={async () => undefined}
-    />,
-  );
-}
-
 describe("大文档 Markdown 预览的渲染上限", () => {
-  test("超过上限时只解析前 N 个字符，上限之后的正文不进入渲染", () => {
-    const markup = staticMarkup(overThresholdContent());
+  test("超过上限时只解析前 N 个字符，上限之后的正文不进入渲染", async () => {
+    const renderer = await render({ content: overThresholdContent() });
+    const markup = JSON.stringify(renderer.toJSON());
 
     expect(markup).toContain(WITHIN_LIMIT_MARKER);
     expect(markup).not.toContain(BEYOND_LIMIT_MARKER);
+    act(() => renderer.unmount());
   });
 
-  test("超过上限时展示含总字符数的提示，并给出渲染完整文档的入口", () => {
+  test("超过上限时展示含总字符数的提示，并给出渲染完整文档的入口", async () => {
     const content = overThresholdContent();
-    const markup = staticMarkup(content);
+    const renderer = await render({ content });
+    const markup = JSON.stringify(renderer.toJSON());
 
     expect(markup).toContain("workspace-preview-truncation-notice");
     expect(markup).toContain(content.length.toLocaleString());
     expect(markup).toContain("渲染完整 Markdown");
+    act(() => renderer.unmount());
   });
 
-  test("点击入口后在原位渲染完整文档", () => {
-    const renderer = render({ content: overThresholdContent() });
+  test("点击入口后在原位渲染完整文档", async () => {
+    const renderer = await render({ content: overThresholdContent() });
 
     const expandButton = renderer.root.find(
       (node) =>
@@ -94,9 +87,9 @@ describe("大文档 Markdown 预览的渲染上限", () => {
     act(() => renderer.unmount());
   });
 
-  test("未超过上限时不展示提示且渲染完整正文", () => {
+  test("未超过上限时不展示提示且渲染完整正文", async () => {
     const content = WITHIN_LIMIT_MARKER + "x".repeat(LARGE_MARKDOWN_PREVIEW_LENGTH - 20);
-    const renderer = render({ content });
+    const renderer = await render({ content });
 
     expect(
       renderer.root.findAllByProps({

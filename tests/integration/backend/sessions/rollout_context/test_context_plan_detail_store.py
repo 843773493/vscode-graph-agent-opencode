@@ -33,7 +33,7 @@ OTHER_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
 @pytest.fixture
-def tmp_path(integration_workspace_root_path, request) -> Path:
+def detail_case_root(integration_workspace_root_path, request) -> Path:
     """会话数据与故障注入文件均放在正式 workspace 的独立 case 目录。"""
     node = hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:16]
     target = Path(integration_workspace_root_path) / "detail-cases" / node
@@ -189,7 +189,7 @@ def test_sensitive_detail_survives_restart_and_rejects_body_tamper(detail_sessio
 
 def test_detail_read_rejects_symlink_target(
     detail_sessions: Path,
-    tmp_path: Path,
+    detail_case_root: Path,
 ) -> None:
     store = ContextPlanDetailStore(detail_sessions)
     record = store.write(
@@ -202,7 +202,7 @@ def test_detail_read_rejects_symlink_target(
         detail={"value": "safe"},
     )
     target = _thread_node(detail_sessions, SESSION_ID) / record.relative_path
-    outside = tmp_path / "outside.json"
+    outside = detail_case_root / "outside.json"
     outside.write_text("{}", encoding="utf-8")
     target.unlink()
     target.symlink_to(outside)
@@ -297,8 +297,8 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
 
 
 @pytest.fixture
-def detail_sessions(tmp_path: Path, session_bundle_factory) -> Path:
-    sessions = tmp_path / "workspace" / ".boxteam" / "sessions"
+def detail_sessions(detail_case_root: Path, session_bundle_factory) -> Path:
+    sessions = detail_case_root / "workspace" / ".boxteam" / "sessions"
     session_bundle_factory(sessions, SESSION_ID)
     session_bundle_factory(sessions, OTHER_SESSION_ID)
     return sessions
@@ -683,13 +683,13 @@ def test_gc_retries_tombstoned_exact_files_without_source_sharing(
 @pytest.mark.parametrize("operation", ["read", "remove", "gc"])
 @pytest.mark.parametrize("location", ["body", "parent"])
 def test_symlink_preflight_preserves_other_files(
-    detail_sessions, detail_store, detail_arguments, tmp_path, operation, location
+    detail_sessions, detail_store, detail_arguments, detail_case_root, operation, location
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
     root = _thread_node(detail_sessions, SESSION_ID)
     manifest = root / record.relative_path
     victim = manifest if location == "body" else manifest.parent
-    saved = tmp_path / "artifacts" / "original"
+    saved = detail_case_root / "artifacts" / "original"
     saved.parent.mkdir()
     victim.rename(saved)
     victim.symlink_to(saved, target_is_directory=location == "parent")
@@ -718,11 +718,11 @@ def test_symlink_preflight_preserves_other_files(
 
 @pytest.mark.parametrize("failure", ["collision", "symlink", "io"])
 def test_publish_failure_preserves_existing_target(
-    detail_sessions, detail_store, detail_arguments, tmp_path, monkeypatch, failure,
+    detail_sessions, detail_store, detail_arguments, detail_case_root, monkeypatch, failure,
 ):
     original_publish = detail_store._files.publish
     attempted = []
-    outside = tmp_path / "artifacts" / "existing-body"
+    outside = detail_case_root / "artifacts" / "existing-body"
     outside.parent.mkdir()
     outside.write_bytes(b"existing-owner-content")
 

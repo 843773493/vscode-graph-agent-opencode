@@ -20,6 +20,46 @@ import type {
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && left.every((value, index) => value === right[index]);
+}
+
+function sameGenerationRunList(
+  previous: readonly GenerationRun[],
+  next: readonly GenerationRun[],
+): boolean {
+  return previous.length === next.length
+    && previous.every((run, index) => {
+      const candidate = next[index];
+      if (!candidate) return false;
+      const fields = Object.keys(run) as Array<keyof GenerationRun>;
+      if (fields.length !== Object.keys(candidate).length) return false;
+      for (const field of fields) {
+        if (field === "outputs") continue;
+        if (
+          !Object.prototype.hasOwnProperty.call(candidate, field)
+          || run[field] !== candidate[field]
+        ) return false;
+      }
+      return run.outputs.length === candidate.outputs.length
+        && run.outputs.every((output, outputIndex) => {
+          const candidateOutput = candidate.outputs[outputIndex];
+          if (!candidateOutput) return false;
+          const outputFields = Object.keys(output) as Array<keyof typeof output>;
+          if (outputFields.length !== Object.keys(candidateOutput).length) return false;
+          for (const field of outputFields) {
+            if (field === "navigation_path") continue;
+            if (
+              !Object.prototype.hasOwnProperty.call(candidateOutput, field)
+              || output[field] !== candidateOutput[field]
+            ) return false;
+          }
+          return sameStringList(output.navigation_path, candidateOutput.navigation_path);
+        });
+    });
+}
+
 export function useSessionGeneratorResources(apiPort: number, enabled = true) {
   const [generators, setGenerators] = useState<SessionGeneratorList | null>(null);
   const [generationRuns, setGenerationRuns] = useState<Map<string, GenerationRun[]>>(
@@ -59,6 +99,8 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
     const request = (async (): Promise<GenerationRun[]> => {
       const result = await listSessionGeneratorRuns(apiPort, generatorId);
       setGenerationRuns((previous) => {
+        const existing = previous.get(generatorId);
+        if (existing && sameGenerationRunList(existing, result.items)) return previous;
         const next = new Map(previous);
         next.set(generatorId, result.items);
         return next;

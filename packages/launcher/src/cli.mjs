@@ -1,21 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { initializeUserConfiguration } from "./config-bootstrap.mjs";
-import { defaultBoxteamHome } from "./config-bootstrap.mjs";
-import { buildDoctorReport, printDoctorReport } from "./doctor.mjs";
-import { issueFederationToken } from "./federation-token.mjs";
-import { superviseGateway } from "./gateway/supervisor.mjs";
-import { acquireLauncherLock } from "./instance-lock.mjs";
-import { discoverRuntime } from "./configuration/runtime-discovery.mjs";
-import { openServiceLog } from "./logging/service-log.mjs";
-import { stopLauncher } from "./stop.mjs";
-
-const launcherPackageMetadata = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
+const SUPPORTED_COMMANDS = new Set([
+  "start",
+  "stop",
+  "restart",
+  "doctor",
+  "config",
+  "gateway",
+]);
 
 function resolvePackageVersion() {
+  const launcherPackageMetadata = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
   const packageVersion = launcherPackageMetadata.version?.trim();
   if (packageVersion) return packageVersion;
   const projectRoot = path.resolve(
@@ -35,21 +33,20 @@ function resolvePackageVersion() {
   return version;
 }
 
-const packageVersion = resolvePackageVersion();
+let cachedPackageVersion = null;
+
+function packageVersion() {
+  cachedPackageVersion ??= resolvePackageVersion();
+  return cachedPackageVersion;
+}
 
 export async function main(args) {
   if (args.includes("--version") || args.includes("-v")) {
-    process.stdout.write(`${packageVersion}\n`);
+    process.stdout.write(`${packageVersion()}\n`);
     return;
   }
   const command = args[0]?.startsWith("-") ? "start" : (args[0] ?? "start");
-  if (
-    !new Set(["start", "stop", "restart", "doctor", "config", "gateway"]).has(
-      command,
-    )
-  ) {
-    throw new Error(`未知命令: ${command}`);
-  }
+  if (!SUPPORTED_COMMANDS.has(command)) throw new Error(`未知命令: ${command}`);
   const commandArgs = command === args[0] ? args.slice(1) : args;
   const manifestIndex = commandArgs.indexOf("--runtime-manifest");
   const environment = { ...process.env };
@@ -66,11 +63,16 @@ export async function main(args) {
       : commandArgs.filter(
           (_, index) => index !== manifestIndex && index !== manifestIndex + 1,
         );
+  const { discoverRuntime } = await import("./configuration/runtime-discovery.mjs");
   const runtime = discoverRuntime({ environment });
+  const { defaultBoxteamHome, initializeUserConfiguration } = await import(
+    "./config-bootstrap.mjs"
+  );
   const boxteamHome =
     environment.BOXTEAM_HOME?.trim() ||
     defaultBoxteamHome(runtime.distribution);
   if (command === "doctor") {
+    const { buildDoctorReport, printDoctorReport } = await import("./doctor.mjs");
     const invalidDoctorArgs = effectiveArgs.filter((arg) => arg !== "--json");
     if (invalidDoctorArgs.length > 0) {
       throw new Error(`未知 doctor 参数: ${invalidDoctorArgs.join(", ")}`);
@@ -81,6 +83,7 @@ export async function main(args) {
     return;
   }
   if (command === "stop") {
+    const { stopLauncher } = await import("./stop.mjs");
     if (effectiveArgs.length > 0) {
       throw new Error(`未知 stop 参数: ${effectiveArgs.join(", ")}`);
     }
@@ -95,6 +98,7 @@ export async function main(args) {
     return;
   }
   if (command === "restart") {
+    const { stopLauncher } = await import("./stop.mjs");
     const result = await stopLauncher({ boxteamHome });
     if (result.status !== "not-running") {
       process.stdout.write(
@@ -103,6 +107,7 @@ export async function main(args) {
     }
   }
   if (command === "gateway") {
+    const { issueFederationToken } = await import("./federation-token.mjs");
     if (effectiveArgs[0] !== "issue-federation-token") {
       throw new Error("未知 gateway 子命令；当前支持 issue-federation-token");
     }
@@ -143,6 +148,15 @@ export async function main(args) {
   if (unknownArgs.length > 0) {
     throw new Error(`未知 start 参数: ${unknownArgs.join(", ")}`);
   }
+  const [
+    { acquireLauncherLock },
+    { openServiceLog },
+    { superviseGateway },
+  ] = await Promise.all([
+    import("./instance-lock.mjs"),
+    import("./logging/service-log.mjs"),
+    import("./gateway/supervisor.mjs"),
+  ]);
   const lock = acquireLauncherLock({
     boxteamHome,
     runtime,

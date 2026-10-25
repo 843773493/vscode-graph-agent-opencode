@@ -26,7 +26,7 @@ from configs.cli import main as config_cli_main
 from configs.installer import validate_config_resource_pair
 
 
-def _load(path: Path) -> dict[str, object]:
+def _load_jsonc_object(path: Path) -> dict[str, object]:
     payload = commentjson.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
@@ -55,7 +55,7 @@ def test_static_configuration_matches_domain_schema(
     suffix: str,
     static_schema_validators: dict[str, jsonschema.Draft202012Validator],
 ) -> None:
-    config = _load(Path(f"configs/{domain}{suffix}.jsonc"))
+    config = _load_jsonc_object(Path(f"configs/{domain}{suffix}.jsonc"))
     static_schema_validators[domain].validate(config)
 
 
@@ -78,7 +78,7 @@ def test_config_resource_pair_rejects_invalid_configuration(tmp_path: Path) -> N
 def static_schema_validators() -> dict[str, jsonschema.Draft202012Validator]:
     validators: dict[str, jsonschema.Draft202012Validator] = {}
     for domain in ("gateway", "workspace"):
-        schema = _load(Path(f"configs/{domain}_schema.jsonc"))
+        schema = _load_jsonc_object(Path(f"configs/{domain}_schema.jsonc"))
         jsonschema.Draft202012Validator.check_schema(schema)
         validators[domain] = jsonschema.Draft202012Validator(schema)
     return validators
@@ -87,10 +87,10 @@ def static_schema_validators() -> dict[str, jsonschema.Draft202012Validator]:
 def test_development_templates_enable_development_capabilities_and_docker_gateway() -> (
     None
 ):
-    gateway = _load(Path("configs/gateway_inline.jsonc"))
-    gateway_dev = _load(Path("configs/gateway_dev.jsonc"))
-    workspace = _load(Path("configs/workspace_inline.jsonc"))
-    workspace_dev = _load(Path("configs/workspace_dev.jsonc"))
+    gateway = _load_jsonc_object(Path("configs/gateway_inline.jsonc"))
+    gateway_dev = _load_jsonc_object(Path("configs/gateway_dev.jsonc"))
+    workspace = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
+    workspace_dev = _load_jsonc_object(Path("configs/workspace_dev.jsonc"))
 
     assert gateway["workspaces"] == []
     assert gateway_dev["workspaces"][0]["enabled"] is True  # type: ignore[index]
@@ -162,8 +162,8 @@ def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
         config_root / "gateway.jsonc",
         config_root / "workspace.jsonc",
     }
-    assert "stale" not in _load(config_root / "gateway.jsonc")
-    assert "stale" not in _load(config_root / "workspace.jsonc")
+    assert "stale" not in _load_jsonc_object(config_root / "gateway.jsonc")
+    assert "stale" not in _load_jsonc_object(config_root / "workspace.jsonc")
 
 
 def test_source_development_install_uses_dev_profiles_and_source_env(
@@ -197,8 +197,8 @@ def test_source_development_install_uses_dev_profiles_and_source_env(
 
     assert result.env_path is not None
     assert result.env_path.read_text(encoding="utf-8") == "BOXTEAM_TEST=source\n"
-    assert _load(config_root / "gateway.jsonc")["workspaces"][0]["enabled"] is True  # type: ignore[index]
-    assert _load(config_root / "workspace.jsonc")["development"] == {"test_tools": True}
+    assert _load_jsonc_object(config_root / "gateway.jsonc")["workspaces"][0]["enabled"] is True  # type: ignore[index]
+    assert _load_jsonc_object(config_root / "workspace.jsonc")["development"] == {"test_tools": True}
 
 
 def test_install_source_development_configuration_requires_source_env(
@@ -241,7 +241,7 @@ def test_cli_migrate_splits_legacy_user_configuration(
     boxteam_home = tmp_path / "boxteam-home"
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
-    legacy = _load(Path("configs/workspace_inline.jsonc"))
+    legacy = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
     legacy.pop("$schema")
     legacy["config_version"] = 4
     legacy["gateway"] = {"workspaces": []}

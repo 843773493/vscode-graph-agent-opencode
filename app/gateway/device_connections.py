@@ -74,7 +74,9 @@ def _device_name(credential: FederationCredential) -> str | None:
     return name or None
 
 
-def _device_dto(credential: FederationCredential, *, device_name: str) -> DeviceConnectionDTO:
+def _device_dto(
+    credential: FederationCredential, *, device_name: str
+) -> DeviceConnectionDTO:
     return DeviceConnectionDTO(
         connection_id=credential.connection_id,
         device_name=device_name,
@@ -92,22 +94,19 @@ def _origin_candidate(raw_origin: str, *, label: str) -> DeviceAccessAddressDTO 
         url=f"{parsed.scheme}://{parsed.netloc}",
         label=label,
         is_loopback=(
-            hostname == "localhost"
-            or hostname == "::1"
-            or hostname.startswith("127.")
+            hostname == "localhost" or hostname == "::1" or hostname.startswith("127.")
         ),
     )
 
 
-def _preferred_network_addresses() -> set[str]:
+def _route_selected_source_addresses() -> set[str]:
     addresses: set[str] = set()
     route_probes = (
         (socket.AF_INET, ("192.0.2.1", 9)),
         (socket.AF_INET6, ("2001:db8::1", 9)),
     )
     for family, destination in route_probes:
-        # TODO: Windows、Linux 与 macOS 没有统一的网卡枚举标准库接口；
-        # 这里通过不发送数据的 UDP connect 读取系统选出的本机路由地址。
+        # UDP connect 只让系统选定源地址，不发送数据，也不依赖网卡枚举接口。
         try:
             with socket.socket(family, socket.SOCK_DGRAM) as route_socket:
                 route_socket.connect(destination)
@@ -179,17 +178,19 @@ async def list_device_access_addresses(
         else request.headers.get("origin")
     )
     request_origin = f"{request.url.scheme}://{request.url.netloc}"
-    current = _origin_candidate(
+    current_access_address = _origin_candidate(
         forwarded_origin or request_origin,
         label="当前访问地址",
     )
-    if current is None:
+    if current_access_address is None:
         raise ValueError("无法从当前请求解析 Gateway 访问地址")
 
-    parsed = urlsplit(current.url)
-    port_suffix = f":{parsed.port}" if parsed.port is not None else ""
-    candidates = [current]
-    resolved_addresses = _preferred_network_addresses() | {
+    parsed_current_url = urlsplit(current_access_address.url)
+    port_suffix = (
+        f":{parsed_current_url.port}" if parsed_current_url.port is not None else ""
+    )
+    address_candidates = [current_access_address]
+    candidate_addresses = _route_selected_source_addresses() | {
         result[4][0]
         for result in socket.getaddrinfo(
             socket.gethostname(),
@@ -197,15 +198,15 @@ async def list_device_access_addresses(
             type=socket.SOCK_STREAM,
         )
     }
-    for raw_address in sorted(resolved_addresses):
-        address = ip_address(raw_address)
+    for address_text in sorted(candidate_addresses):
+        address = ip_address(address_text)
         if address.is_loopback or address.is_link_local or address.is_unspecified:
             continue
         host = f"[{address}]" if address.version == 6 else str(address)
-        url = f"{parsed.scheme}://{host}{port_suffix}"
-        if url == current.url:
+        url = f"{parsed_current_url.scheme}://{host}{port_suffix}"
+        if url == current_access_address.url:
             continue
-        candidates.append(
+        address_candidates.append(
             DeviceAccessAddressDTO(
                 url=url,
                 label="本机网络地址候选",
@@ -213,7 +214,7 @@ async def list_device_access_addresses(
             )
         )
     return APIResponse(
-        data=DeviceAccessAddressListDTO(items=candidates),
+        data=DeviceAccessAddressListDTO(items=address_candidates),
         request_id=request_id,
     )
 

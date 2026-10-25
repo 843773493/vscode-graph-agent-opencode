@@ -45,7 +45,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
-from tests.support.model_stream_config import ModelStreamReplay
+from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.workspaces import prepare_default_test_workspace
 
 

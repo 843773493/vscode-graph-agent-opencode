@@ -10,6 +10,12 @@ export interface WorkspaceBottomPanelState {
   terminalId: string | null;
 }
 
+/** 用户打开的本次界面错误快照，不依赖服务端日志请求。 */
+export interface OutputDiagnostic {
+  title: string;
+  detail: string;
+}
+
 export function resolveWorkspaceBottomPanelState(
   persisted: WebUiWorkspaceBottomPanelSettings | null | undefined,
   fallback: WorkspaceBottomPanelState,

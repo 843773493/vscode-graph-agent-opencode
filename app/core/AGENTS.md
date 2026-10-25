@@ -2,7 +2,50 @@
 
 `app/core/` 存放不带具体业务语义的后端通用内核，包括环境读取、路径契约、标识符、事件总线、后台任务注册、Trace 中间件和一次性存储迁移。
 
-## 子包索引
+## 顶层模块导航
+
+先按调用目的定位，再进入专用子包。下面的分组描述模块职责，不表示运行时调用顺序：
+
+```text
+app/core/
+├── 环境、身份与路径
+│   ├── env.py / config_sources.py / distribution_identity.py
+│   ├── user_identity.py / workspace_identity.py / mounted_workspaces.py
+│   ├── path_utils.py / path_segments.py
+│   ├── user_storage_migration.py
+│   └── logging_config.py
+├── 请求、模型与执行上下文
+│   ├── trace_middleware.py / job_context.py
+│   ├── model_request_context.py / model_delta_context.py
+│   ├── execution_admission_context.py / session_thread_context.py
+│   ├── turn_execution_scope.py / cancelable_stream.py
+│   └── session_interrupt_state.py / history_loading.py / checkpoint_config.py
+├── 标识、内容与协议基础
+│   ├── identifier.py / hashing.py / bounded_json.py
+│   ├── resource_uri.py
+│   └── exceptions.py
+├── 并发、生命周期与后台工作
+│   ├── key_lock_pool.py / lifecycle.py / session_lifecycle_gate.py
+│   ├── shielded_cleanup.py / phase_observer.py / job_event_bus.py
+│   ├── background_task_contracts.py / background_task_registry.py
+│   └── background_message_bus.py / thread_residency_contracts.py
+├── 文件系统与持久化原语
+│   ├── atomic_fs.py / file_permissions.py / sqlite_state.py
+└── 会话创建、定位与专用持久化基础
+    ├── session_control_primitives.py
+    ├── session_catalog_resolver.py
+    ├── session_creation.py / thread_creation.py / session_subtree_delete.py
+    ├── session_catalog_store/
+    ├── session_control_store/
+    ├── session_control_thread_catalog/
+    ├── session_control_thread_owner_binding/
+    ├── session_control_operation_lease/
+    └── session_control_communication_ledger/
+
+专用存储子包内部的 SQL、schema、投影与读写 owner 见各子包对应的 `AGENTS.md`。
+```
+
+## 共享原语与专用子包说明
 
 - `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供core registry与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
@@ -10,6 +53,7 @@
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建与子树删除共用同一套
   tempfile + fsync + os.replace + 目录 fsync 语义，单点承载。
+- `file_permissions.py`：私有文件与目录权限原语。POSIX 使用 `0600/0700`，Windows 通过 `icacls` 移除继承权限并只授予所有者、SYSTEM 与本机管理员；不承载凭据格式或业务策略。
 - `key_lock_pool.py`：进程内 per-key 串行锁的中立实现（`KeyLockPool` 固定分片锁池）。
   同一 key 经 `crc32` 恒命中同一把 `asyncio.Lock`，锁对象数量恒为分片数，不随历史
   key 数无界增长。会话创建、child thread 创建与子树删除三条链路共用，单点承载。

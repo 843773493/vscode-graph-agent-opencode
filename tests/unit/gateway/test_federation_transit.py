@@ -50,7 +50,7 @@ from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     TARGET_SESSION,

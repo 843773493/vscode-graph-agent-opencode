@@ -141,17 +141,40 @@ def _content_tool_calls(content: Any) -> list[dict[str, Any]]:
 
 def _message_with_standard_tool_calls(message: AIMessage) -> AIMessage:
     """把散落在 content/additional_kwargs 的工具声明统一到 tool_calls。"""
+    raw_additional = message.additional_kwargs or {}
+    additional_calls = raw_additional.get("tool_calls")
+    legacy_call = raw_additional.get("function_call")
+    content_calls: list[dict[str, Any]] | None = None
+
+    if not (
+        (isinstance(additional_calls, list) and additional_calls)
+        or isinstance(legacy_call, dict)
+    ):
+        seen_ids: set[str] = set()
+        for call in message.tool_calls:
+            if not isinstance(call, dict):
+                break
+            call_id = _tool_call_id(call)
+            if call_id is None or call_id in seen_ids:
+                break
+            seen_ids.add(call_id)
+        else:
+            content_calls = _content_tool_calls(message.content)
+            if not content_calls:
+                return message
+
     calls: list[dict[str, Any]] = [
         dict(call) for call in message.tool_calls if isinstance(call, dict)
     ]
-    raw_additional = message.additional_kwargs or {}
-    additional_calls = raw_additional.get("tool_calls")
     if isinstance(additional_calls, list):
         calls.extend(dict(call) for call in additional_calls if isinstance(call, dict))
-    legacy_call = raw_additional.get("function_call")
     if isinstance(legacy_call, dict):
         calls.append(dict(legacy_call))
-    calls.extend(_content_tool_calls(message.content))
+    calls.extend(
+        content_calls
+        if content_calls is not None
+        else _content_tool_calls(message.content)
+    )
     unique_calls: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for call in calls:

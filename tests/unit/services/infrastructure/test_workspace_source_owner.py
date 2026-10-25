@@ -3,10 +3,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.core.config_sources import read_stable_config_file
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.config import WorkspaceSourceOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
+
+
+@pytest.fixture
+def config_workspace_roots(request: pytest.FixtureRequest) -> tuple[Path, Path]:
+    output_workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
+    roots = (output_workspace / "workspace-a", output_workspace / "workspace-b")
+    for root in roots:
+        prepare_test_workspace(
+            workspace_root=root,
+            template_root=template_root,
+            template_items=(),
+        )
+        load_or_create_workspace_id(root)
+    return roots
 
 
 def _write_config(path: Path, *, logger_level: str) -> None:
@@ -151,17 +171,19 @@ def test_shared_source_owner_prepares_stopped_workspace_and_preserves_failed_res
 async def test_config_service_materializes_shared_user_source_generation(
     tmp_path: Path,
     monkeypatch,
+    config_workspace_roots: tuple[Path, Path],
 ) -> None:
+    first_workspace_root, second_workspace_root = config_workspace_roots
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = tmp_path / "workspace.jsonc"
     _write_config(config_path, logger_level="info")
     owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
-    first_store = WorkspaceStateStore(workspace_root=tmp_path / "workspace-a")
-    second_store = WorkspaceStateStore(workspace_root=tmp_path / "workspace-b")
+    first_store = WorkspaceStateStore(workspace_root=first_workspace_root)
+    second_store = WorkspaceStateStore(workspace_root=second_workspace_root)
     first_service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
-        workspace_root=tmp_path / "workspace-a",
+        workspace_root=first_workspace_root,
         workspace_state_store=first_store,
         source_owner=owner,
         source_owner_workspace_id="workspace-a",
@@ -169,7 +191,7 @@ async def test_config_service_materializes_shared_user_source_generation(
     second_service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
-        workspace_root=tmp_path / "workspace-b",
+        workspace_root=second_workspace_root,
         workspace_state_store=second_store,
         source_owner=owner,
         source_owner_workspace_id="workspace-b",
@@ -205,17 +227,19 @@ async def test_config_service_materializes_shared_user_source_generation(
 def test_config_service_catches_up_stopped_workspace_from_source_high_water(
     tmp_path: Path,
     monkeypatch,
+    config_workspace_roots: tuple[Path, Path],
 ) -> None:
+    workspace_root = config_workspace_roots[0]
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = tmp_path / "workspace.jsonc"
     _write_config(config_path, logger_level="info")
     owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
-            workspace_root=tmp_path / "workspace",
+            workspace_root=workspace_root,
             workspace_state_store=store,
             source_owner=owner,
             source_owner_workspace_id="stopped-workspace",
@@ -246,7 +270,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
         restarted = ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
-            workspace_root=tmp_path / "workspace",
+            workspace_root=workspace_root,
             workspace_state_store=store,
             source_owner=owner,
             source_owner_workspace_id="stopped-workspace",

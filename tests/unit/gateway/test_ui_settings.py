@@ -99,7 +99,7 @@ def test_gateway_ui_settings_merge_workspace_port_panel_state():
 
 
 def test_gateway_ui_settings_rejects_incomplete_auxiliary_tab_order():
-    with pytest.raises(ValidationError, match="全部四个标签"):
+    with pytest.raises(ValidationError, match="不得重复"):
         WebUILayoutSettingsDTO.model_validate(
             {"auxiliary_tab_order": ["files", "changes", "debug", "debug"]}
         )
@@ -120,9 +120,28 @@ def test_gateway_ui_settings_merge_debug_auxiliary_tab():
     assert updated.layout.auxiliary_tab_order == [
         "files",
         "changes",
+        "goal",
         "debug",
         "resources",
     ]
+
+
+def test_gateway_ui_settings_normalizes_existing_order_without_reordering_tabs():
+    settings = WebUILayoutSettingsDTO(
+        auxiliary_tab_order=["resources", "debug", "changes", "files"],
+    )
+    assert settings.model_dump()["auxiliary_tab_order"] == [
+        "resources", "goal", "debug", "changes", "files",
+    ]
+
+
+@pytest.mark.parametrize("order", [
+    ["files", "changes", "goal", "debug", "debug"],
+    ["files", "changes", "goal", "resources"],
+])
+def test_gateway_ui_settings_rejects_missing_or_repeated_tabs_with_goal(order):
+    with pytest.raises(ValidationError, match="全部标签"):
+        WebUILayoutSettingsDTO(auxiliary_tab_order=order)
 
 
 def test_gateway_ui_settings_merge_preserves_unpatched_sidebar_values():
@@ -213,6 +232,28 @@ def ui_settings_client(tmp_path, monkeypatch):
     finally:
         client.close()
         state.close()
+
+
+def test_goal_tab_order_http_round_trip(ui_settings_client):
+    created = ui_settings_client.post("/api/gateway/users", json={"display_name": "Goal 测试用户"})
+    assert created.status_code == 200, created.text
+    acquired = ui_settings_client.post(
+        f"/api/gateway/users/{created.json()['data']['user_id']}/access",
+        json={"client_label": "Goal 布局回归"},
+    )
+    assert acquired.status_code == 200, acquired.text
+    layout = {
+        "auxiliary_tab": "goal",
+        "auxiliary_tab_order": ["resources", "goal", "files", "changes", "debug"],
+    }
+    response = ui_settings_client.put("/api/gateway/ui-settings", json={"layout": layout})
+    assert response.status_code == 200, response.text
+    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+    restored = ui_settings_client.get("/api/gateway/ui-settings")
+    assert restored.status_code == 200, restored.text
+    for key, value in layout.items():
+        assert response.json()["data"]["layout"][key] == value
+        assert restored.json()["data"]["layout"][key] == value
 
 
 @pytest.mark.parametrize("field", ["workspace_preview_file_paths", "workspace_preview_active_file_path", "expanded_paths_by_workspace"])

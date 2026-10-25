@@ -27,7 +27,7 @@ def typed_detail_vectors() -> dict[str, object]:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def typed_detail_plan(typed_detail_vectors) -> ContextRequestPlan:
     scenario = typed_detail_vectors["scenario"]
     source = DetailRef(**scenario["source_ref"])
@@ -59,7 +59,7 @@ def typed_detail_plan(typed_detail_vectors) -> ContextRequestPlan:
     ).seal_for_assembly(scenario["assembly_id"], selection=(selection,))
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def typed_detail_snapshot(typed_detail_plan, typed_detail_vectors):
     plan = typed_detail_plan
     provider = typed_detail_vectors["scenario"]["provider"]

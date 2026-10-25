@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.schemas.internal_v2.communication import CommunicationObservationRequest
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     TARGET_SESSION,

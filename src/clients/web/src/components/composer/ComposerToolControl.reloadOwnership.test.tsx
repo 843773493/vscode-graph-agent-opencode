@@ -3,11 +3,11 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import { invalidateGatewayToken } from "../../api/http";
 import {
-  apiResponse,
+  apiSuccessResponse,
   installGatewayFetch,
-  restoreSessionHookGlobals,
+  restoreGatewayTestEnvironment,
   type GatewayFetchRequest,
-} from "../../hooks/session/sessionHookTestFixtures";
+} from "../../tests/fixtures/session/gatewayEnvironment";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 import ComposerToolControl from "./ComposerToolControl";
 
@@ -50,7 +50,7 @@ function installComposerTestEnvironment(): void {
 
 afterEach(() => {
   restoreComposerTestEnvironment();
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
 });
 
 /** 手工触发所有仍然存活的轮询回调，不等待真实 1s 间隔。 */
@@ -82,7 +82,7 @@ function installToolCatalogFetch(catalogs: Record<string, Deferred>): void {
       });
     }
     if (request.path === "/api/v1/tools/tests") {
-      return apiResponse({ items: [], next_cursor: null, has_more: false });
+      return apiSuccessResponse({ items: [], next_cursor: null, has_more: false });
     }
     return undefined;
   }, { token: "tool-reload-token" });
@@ -165,14 +165,14 @@ describe("工具目录加载的 owner 归属", () => {
 
     // 新 Agent 的目录先返回。
     await act(async () => {
-      catalogs.agent_b.resolve(apiResponse(toolCatalogPayload("beta_tool")));
+      catalogs.agent_b.resolve(apiSuccessResponse(toolCatalogPayload("beta_tool")));
     });
     await flush();
     expect(JSON.stringify(renderer.toJSON())).toContain("beta_tool");
 
     // 旧 Agent 的目录后返回：必须被归属守卫丢弃。
     await act(async () => {
-      catalogs.agent_a.resolve(apiResponse(toolCatalogPayload("alpha_tool")));
+      catalogs.agent_a.resolve(apiSuccessResponse(toolCatalogPayload("alpha_tool")));
     });
     await flush();
     expect(JSON.stringify(renderer.toJSON())).not.toContain("alpha_tool");
@@ -202,10 +202,10 @@ describe("工具测试进度轮询的 owner 归属", () => {
         });
       }
       if (request.path === "/api/v1/tools/tests") {
-        return apiResponse({ items: [], next_cursor: null, has_more: false });
+        return apiSuccessResponse({ items: [], next_cursor: null, has_more: false });
       }
       if (request.path === "/api/v1/tools/alpha_tool/tests") {
-        return apiResponse({
+        return apiSuccessResponse({
           run_id: "tooltest_1",
           tool_name: "alpha_tool",
           status: "running",
@@ -228,7 +228,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
 
     const renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: "ws_1" });
     await act(async () => {
-      catalogs.agent_a.resolve(apiResponse(toolCatalogPayload("alpha_tool")));
+      catalogs.agent_a.resolve(apiSuccessResponse(toolCatalogPayload("alpha_tool")));
     });
     await flush();
 
@@ -258,7 +258,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
     await flush();
 
     await act(async () => {
-      runPoll.resolve(apiResponse({
+      runPoll.resolve(apiSuccessResponse({
         run_id: "tooltest_1",
         tool_name: "alpha_tool",
         status: "completed",

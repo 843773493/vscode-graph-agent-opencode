@@ -230,20 +230,20 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
 
     @staticmethod
     def _prune_session_logs(log_dir: Path) -> None:
-        log_files = sorted(log_dir.glob("*.json"), key=lambda path: path.name)
-        total_bytes = sum(path.stat().st_size for path in log_files)
+        log_files = sorted(
+            ((path, path.stat().st_size) for path in log_dir.glob("*.json")),
+            key=lambda entry: entry[0].name,
+        )
+        total_bytes = sum(size for _, size in log_files)
         remaining_file_count = len(log_files)
-        for stale_file in log_files:
+        for stale_file, stale_size in log_files:
             if (
                 remaining_file_count <= LLM_LOG_MAX_FILES
                 and total_bytes <= LLM_LOG_MAX_TOTAL_BYTES
             ):
                 break
-            remaining_file_count -= 1
             try:
-                stale_size = stale_file.stat().st_size
                 stale_file.unlink()
-                total_bytes -= stale_size
             except OSError:
                 # 诊断日志清理失败不覆盖模型调用的真实结果，但必须留痕。
                 import logging
@@ -253,6 +253,9 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                     stale_file,
                     exc_info=True,
                 )
+            else:
+                remaining_file_count -= 1
+                total_bytes -= stale_size
 
     def wrap_model_call(
         self,

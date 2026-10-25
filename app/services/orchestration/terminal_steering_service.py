@@ -5,7 +5,7 @@ import logging
 from urllib.error import URLError
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.terminal_execution_monitor import (
+from app.abstractions.terminal.execution_monitor import (
     TerminalExecutionMonitorClientProtocol,
 )
 from app.core.exceptions import NotFoundError

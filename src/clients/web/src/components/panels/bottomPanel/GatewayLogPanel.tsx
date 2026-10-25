@@ -3,10 +3,12 @@ import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../../../types/backend";
 import { diagnosticLogUnavailableHint } from "../gatewayLogPresentation";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { OutputDiagnostic } from "../../../state/workspaceBottomPanel";
 
 interface GatewayLogPanelProps {
   apiPort: number;
   workspaceId: string | null;
+  diagnostic?: OutputDiagnostic | null;
   height: number;
   onClose: () => void;
   onOpenTerminal?: () => void;
@@ -61,6 +63,7 @@ function filterLogTail(tail: string, filterText: string): string {
 export default function GatewayLogPanel({
   apiPort,
   workspaceId,
+  diagnostic = null,
   height,
   onClose,
   onOpenTerminal,
@@ -72,6 +75,7 @@ export default function GatewayLogPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
+  const [showDiagnostic, setShowDiagnostic] = useState(Boolean(diagnostic));
   const inFlightRequestRef = useRef<{
     key: string;
     promise: Promise<void>;
@@ -161,22 +165,28 @@ export default function GatewayLogPanel({
     [apiPort, workspaceId],
   );
 
-  const selectedLogTail = selectedLog?.tail;
+  const viewingDiagnostic = showDiagnostic && diagnostic !== null;
+  const selectedLogTail = viewingDiagnostic
+    ? `${diagnostic.title}\n\n${diagnostic.detail}`
+    : selectedLog?.tail;
   const filteredLogTail = useMemo(
     () => (selectedLogTail ? filterLogTail(selectedLogTail, filterText) : ""),
     [filterText, selectedLogTail],
   );
 
   useEffect(() => {
-    void loadDiagnostics(null);
-  }, [loadDiagnostics]);
+    setShowDiagnostic(Boolean(diagnostic));
+    setFilterText("");
+    if (!diagnostic) void loadDiagnostics(null);
+  }, [diagnostic, loadDiagnostics]);
 
   useEffect(() => {
+    if (viewingDiagnostic) return;
     const intervalId = window.setInterval(() => {
       void loadDiagnostics(selectedLogId, true);
     }, 3000);
     return () => window.clearInterval(intervalId);
-  }, [loadDiagnostics, selectedLogId]);
+  }, [loadDiagnostics, selectedLogId, viewingDiagnostic]);
 
   return (
     <section
@@ -241,12 +251,17 @@ export default function GatewayLogPanel({
           <label className="gateway-log-panel-channel">
             <span className="visually-hidden">选择输出通道</span>
             <select
-              value={selectedLog?.log_id ?? ""}
+              value={viewingDiagnostic ? "interface-diagnostic" : selectedLog?.log_id ?? ""}
               aria-label="选择输出通道"
-              disabled={workspaceLogs.length === 0}
-              onChange={(event) => void loadDiagnostics(event.target.value)}
+              disabled={!diagnostic && workspaceLogs.length === 0}
+              onChange={(event) => {
+                const isDiagnostic = event.target.value === "interface-diagnostic";
+                setShowDiagnostic(isDiagnostic);
+                if (!isDiagnostic) void loadDiagnostics(event.target.value || null);
+              }}
             >
-              {workspaceLogs.length === 0 ? <option value="">暂无输出通道</option> : null}
+              {diagnostic ? <option value="interface-diagnostic">界面诊断</option> : null}
+              {workspaceLogs.length === 0 ? <option value="">工作区服务日志</option> : null}
               {workspaceLogs.map((log) => (
                 <option key={log.log_id} value={log.log_id}>
                   {serviceLabel(log)}
@@ -256,7 +271,7 @@ export default function GatewayLogPanel({
           </label>
         </div>
         <div className="gateway-log-panel-actions">
-          <button
+          {!viewingDiagnostic ? <button
             type="button"
             className="gateway-log-panel-icon-button"
             title={loading ? "正在刷新工作区输出" : "刷新工作区输出"}
@@ -265,7 +280,7 @@ export default function GatewayLogPanel({
             onClick={() => void loadDiagnostics(selectedLogId)}
           >
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-          </button>
+          </button> : null}
           <button
             type="button"
             className="gateway-log-panel-icon-button"
@@ -278,7 +293,7 @@ export default function GatewayLogPanel({
         </div>
       </header>
 
-      {error ? (
+      {error && !viewingDiagnostic ? (
         <div className="gateway-log-panel-alert" role="alert">
           <span className="codicon codicon-error" aria-hidden="true" />
           <span>工作区输出读取失败：{error}</span>
@@ -286,8 +301,10 @@ export default function GatewayLogPanel({
       ) : null}
 
       <div className="gateway-log-panel-content">
-        <article className="gateway-log-panel-viewer" aria-label="当前工作区日志内容">
-          {selectedLog ? (
+        <article className="gateway-log-panel-viewer" aria-label={viewingDiagnostic ? "界面诊断内容" : "当前工作区日志内容"}>
+          {viewingDiagnostic ? (
+            <pre>{filteredLogTail || "没有匹配的输出"}</pre>
+          ) : selectedLog ? (
             <>
               {selectedLog.status === "unavailable" ? (
                 <div className="gateway-log-panel-viewer-empty">

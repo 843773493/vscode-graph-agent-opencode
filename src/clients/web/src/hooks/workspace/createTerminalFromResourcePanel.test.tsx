@@ -7,7 +7,11 @@ import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { resolveTerminalResourceTarget, useChildThreadConversation } from "../sessionTurnHistory/useChildThreadConversation";
 import { useSessionResourceLoader } from "../session/useSessionResourceLoader";
-import { apiResponse, installGatewayFetch, restoreSessionHookGlobals } from "../session/sessionHookTestFixtures";
+import {
+  apiSuccessResponse,
+  installGatewayFetch,
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
 import { useWorkspaceTerminalResources } from "./useWorkspaceTerminalResources";
 import {
   closeChildConversationAndClearForkSelection,
@@ -143,7 +147,7 @@ afterEach(async () => {
   if (renderer) await act(async () => renderer?.unmount());
   renderer = null;
   for (const restore of restores.splice(0)) restore();
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
 });
 
 test("主线程终端创建等待强制 session 刷新后收起 child，并让底部 owner 回到 main", async () => {
@@ -165,7 +169,7 @@ test("主线程终端创建等待强制 session 刷新后收起 child，并让�
     expect(create).toHaveBeenCalledWith(API_PORT, WORKSPACE_ID, MAIN_THREAD, "thread");
     expect(current.childSelectionIntent?.threadId).toBe(CHILD_THREAD_ID);
     expect(current.panel).toEqual({ tab: "resources", terminalId: null });
-    read.resolve(apiResponse({ session_id: SESSION_ID, items: [] }));
+    read.resolve(apiSuccessResponse({ session_id: SESSION_ID, items: [] }));
     await pending;
   });
 

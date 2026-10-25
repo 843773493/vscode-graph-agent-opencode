@@ -204,7 +204,7 @@ async def test_replaced_goal_ignores_old_job_and_failed_job_blocks_owner(
     goal_runtime._job_goal_ids["job_1"] = old.goal_id
     new = await goal_service.set("sess_1", objective="新目标", replace=True)
 
-    await goal_runtime._continue_after_agent_end("job_1", tokens=99)
+    await goal_runtime._continue_after_agent_end("job_1", total_tokens=99)
     current = await goal_service.get("sess_1")
     assert current.goal_id == new.goal_id
     assert current.tokens_used == 0
@@ -277,7 +277,7 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt(
     goal = await goal_service.set("sess_1", objective="完成预算目标", token_budget=100)
     goal_runtime._job_goal_ids["job_budget"] = goal.goal_id
 
-    await goal_runtime._continue_after_agent_end("job_budget", tokens=120)
+    await goal_runtime._continue_after_agent_end("job_budget", total_tokens=120)
 
     current = await goal_service.get("sess_1")
     assert current.status == GoalStatus.budget_limited

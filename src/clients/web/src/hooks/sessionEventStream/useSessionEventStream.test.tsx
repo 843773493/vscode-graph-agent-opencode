@@ -11,7 +11,7 @@ import { flushSessionStreamEventBatch } from "./batchUpdates";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import type { Session, SessionStreamEvent } from "../../types/backend";
 import { useSessionLifecycleActions } from "../session/useSessionLifecycleActions";
-import { buildSessionHookState } from "../session/sessionHookTestFixtures";
+import { createSessionHookState } from "../../tests/fixtures/session/appState";
 
 test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 payload", () => {
   const sessionId = "ses_same_attachments";
@@ -124,8 +124,8 @@ for (const entry of ["session", "workspace"] as const) {
     const workspaceA = "gw_selection_a";
     const workspaceB = entry === "workspace" ? "gw_selection_b" : workspaceA;
     const targets = [workspaceRequestTarget(workspaceA), workspaceRequestTarget(workspaceB)];
-    const initial = buildSessionHookState({
-      workspaceId: workspaceA, current: sessionA, sessions: [sessionA, sessionB],
+    const initial = createSessionHookState({
+      workspaceId: workspaceA, currentSession: sessionA, sessions: [sessionA, sessionB],
       gatewayWorkspaces: targets.map((target) => ({
         workspace_id: target.workspace_id, name: target.workspace_id,
       })),

@@ -101,7 +101,7 @@ function lastEventId(conversation: ConversationView): string | null {
   return conversation.events[conversation.events.length - 1]?.event_id ?? null;
 }
 
-function lastAssistantIdentity(conversation: ConversationView): string {
+function assistantMessagesMemoKey(conversation: ConversationView): string {
   const messages = conversation.assistantMessages ?? [];
   const last = messages[messages.length - 1];
   return last
@@ -192,7 +192,7 @@ export function areChatTurnPropsEqual(
     && responsePartsEqual(left.responseParts, right.responseParts)
     && left.events.length === right.events.length
     && lastEventId(left) === lastEventId(right)
-    && lastAssistantIdentity(left) === lastAssistantIdentity(right);
+    && assistantMessagesMemoKey(left) === assistantMessagesMemoKey(right);
 }
 
 export default React.memo(ChatTurn, areChatTurnPropsEqual);

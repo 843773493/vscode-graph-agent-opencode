@@ -1,4 +1,5 @@
 .resource-panel {
+  position: relative;
   container-type: inline-size;
   background: var(--bt-panel-background);
 }
@@ -265,6 +266,27 @@
   color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.resource-panel-notifications {
+  position: absolute;
+  inset-inline: 8px;
+  bottom: 8px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(40%, 160px);
+  overflow: auto;
+  pointer-events: none;
+}
+
+.resource-panel-notifications > .resource-notice {
+  flex: 0 0 auto;
+  margin: 0;
+  background: var(--bt-panel-background);
+  box-shadow: 0 4px 12px color-mix(in srgb, black 18%, transparent);
+  pointer-events: auto;
 }
 
 .resource-notice > span {

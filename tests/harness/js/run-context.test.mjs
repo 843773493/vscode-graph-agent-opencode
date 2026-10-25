@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { TestRunContext } from "./run-context.mjs";
@@ -15,7 +16,87 @@ describe("TestRunContext", () => {
       path.join(projectRoot, "out", "tests", "unit", "harness", "sample.test"),
     );
     expect(context.workspaceRoot).toBe(path.join(context.outputRoot, "workspace"));
-    expect(context.artifactsDir).toBe(path.join(context.outputRoot, "artifacts"));
+    expect(context.runRoot).toMatch(path.join(context.outputRoot, "runs", "run-"));
+    expect(context.artifactsDir).toBe(path.join(context.runRoot, "artifacts"));
+    expect(context.boxteamHome).toBe(path.join(context.outputRoot, "boxteam-home"));
+  });
+
+  test("不同测试运行使用独立产物目录", async () => {
+    const projectRoot = process.cwd();
+    const testFile = path.join(projectRoot, "tests", "harness", "js", "run-context.test.mjs");
+    const previousRunId = process.env.BOXTEAM_TEST_RUN_ID;
+    const previousWorkerId = process.env.PYTEST_XDIST_WORKER;
+    try {
+      process.env.BOXTEAM_TEST_RUN_ID = "first-run";
+      process.env.PYTEST_XDIST_WORKER = "gw0";
+      const first = TestRunContext.fromTestFile(testFile, projectRoot);
+      const sameRun = TestRunContext.fromTestFile(testFile, projectRoot);
+      process.env.PYTEST_XDIST_WORKER = "gw1";
+      const parallelWorker = TestRunContext.fromTestFile(testFile, projectRoot);
+      process.env.PYTEST_XDIST_WORKER = "gw0";
+      process.env.BOXTEAM_TEST_RUN_ID = "second-run";
+      const second = TestRunContext.fromTestFile(testFile, projectRoot);
+
+      expect(first.runRoot).toBe(sameRun.runRoot);
+      expect(first.artifactsDir).toBe(sameRun.artifactsDir);
+      expect(first.runRoot).not.toBe(parallelWorker.runRoot);
+      expect(first.runRoot).not.toBe(second.runRoot);
+      expect(first.artifactsDir).not.toBe(second.artifactsDir);
+      expect(first.boxteamHome).toBe(second.boxteamHome);
+      expect(first.workspaceRoot).toBe(second.workspaceRoot);
+      await first.writeResult("passed", { run: "first" });
+      await second.writeResult("passed", { run: "second" });
+      const firstResult = JSON.parse(await readFile(
+        path.join(first.artifactsDir, "result.json"), "utf8",
+      ));
+      const secondResult = JSON.parse(await readFile(
+        path.join(second.artifactsDir, "result.json"), "utf8",
+      ));
+      expect(firstResult.details).toEqual({ run: "first" });
+      expect(secondResult.details).toEqual({ run: "second" });
+    } finally {
+      if (previousRunId === undefined) delete process.env.BOXTEAM_TEST_RUN_ID;
+      else process.env.BOXTEAM_TEST_RUN_ID = previousRunId;
+      if (previousWorkerId === undefined) delete process.env.PYTEST_XDIST_WORKER;
+      else process.env.PYTEST_XDIST_WORKER = previousWorkerId;
+    }
+  });
+
+  test("继承 pytest 用例身份时按用例隔离产物", async () => {
+    const projectRoot = process.cwd();
+    const testFile = path.join(projectRoot, "tests", "harness", "js", "run-context.test.mjs");
+    const previousRunId = process.env.BOXTEAM_TEST_RUN_ID;
+    const previousWorkerId = process.env.PYTEST_XDIST_WORKER;
+    const previousCurrentTest = process.env.PYTEST_CURRENT_TEST;
+    try {
+      process.env.BOXTEAM_TEST_RUN_ID = "shared-run";
+      process.env.PYTEST_XDIST_WORKER = "gw0";
+      process.env.PYTEST_CURRENT_TEST = "tests/sample.py::first (call)";
+      const first = TestRunContext.fromTestFile(testFile, projectRoot);
+      await first.writeResult("passed", { case: "first" });
+
+      process.env.PYTEST_CURRENT_TEST = "tests/sample.py::second (call)";
+      const second = TestRunContext.fromTestFile(testFile, projectRoot);
+      await second.writeResult("failed", { case: "second" });
+
+      expect(first.runRoot).toBe(second.runRoot);
+      expect(first.artifactsDir).not.toBe(second.artifactsDir);
+      const firstResult = JSON.parse(await readFile(
+        path.join(first.artifactsDir, "result.json"), "utf8",
+      ));
+      const secondResult = JSON.parse(await readFile(
+        path.join(second.artifactsDir, "result.json"), "utf8",
+      ));
+      expect(firstResult.details).toEqual({ case: "first" });
+      expect(secondResult.details).toEqual({ case: "second" });
+    } finally {
+      if (previousRunId === undefined) delete process.env.BOXTEAM_TEST_RUN_ID;
+      else process.env.BOXTEAM_TEST_RUN_ID = previousRunId;
+      if (previousWorkerId === undefined) delete process.env.PYTEST_XDIST_WORKER;
+      else process.env.PYTEST_XDIST_WORKER = previousWorkerId;
+      if (previousCurrentTest === undefined) delete process.env.PYTEST_CURRENT_TEST;
+      else process.env.PYTEST_CURRENT_TEST = previousCurrentTest;
+    }
   });
 
   test.each([
@@ -143,7 +224,8 @@ describe("显式项目根下的相对测试路径", () => {
     expect(context.testFile).toBe(path.resolve(projectRoot, relativeFile));
     expect(context.testId).toBe(testId);
     expect(context.outputRoot).toBe(expectedOutput);
+    expect(context.runRoot).toMatch(path.join(expectedOutput, "runs", "run-"));
     expect(context.workspaceRoot).toBe(path.join(expectedOutput, "workspace"));
-    expect(context.artifactsDir).toBe(path.join(expectedOutput, "artifacts"));
+    expect(context.artifactsDir).toBe(path.join(context.runRoot, "artifacts"));
   });
 });

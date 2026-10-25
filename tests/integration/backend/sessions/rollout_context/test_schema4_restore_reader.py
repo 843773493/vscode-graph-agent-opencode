@@ -537,6 +537,11 @@ def test_offline_restore_installs_exact_owner_backup_and_preserves_quarantine(re
 
     (quarantine,) = tuple((case.index.parent / "recovery-quarantine").iterdir())
     assert (quarantine / "index.sqlite").read_bytes() == b"corrupted-target"
+    if os.name == "posix":
+        assert case.index.stat().st_mode & 0o777 == 0o600
+        assert quarantine.parent.stat().st_mode & 0o777 == 0o700
+        assert quarantine.stat().st_mode & 0o777 == 0o700
+        assert (quarantine / "index.sqlite").stat().st_mode & 0o777 == 0o600
     manifest = json.loads((quarantine / "restore-manifest.json").read_text())
     assert manifest["session_id"] == case.session
     assert json.dumps(str(case.backup.parent))[1:-1] not in json.dumps(manifest)

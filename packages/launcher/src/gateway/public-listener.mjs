@@ -1,4 +1,8 @@
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
+import {
+  Agent as HttpAgent,
+  request as httpRequest,
+  createServer as createHttpServer,
+} from "node:http";
 import { closeServer, listenServer } from "./server-lifetime.mjs";
 
 function gatewayTargetUrl(target) {
@@ -13,11 +17,20 @@ function writeUnavailableResponse(response) {
   response.end("Gateway supervisor 尚未绑定 active generation\n");
 }
 
-function proxyHttpRequest(request, response, target) {
-  if (target === null) {
+function retireTargetAgent(agent) {
+  if (agent === null) return;
+  agent.keepAlive = false;
+  for (const sockets of Object.values(agent.freeSockets)) {
+    for (const socket of sockets) socket.destroy();
+  }
+}
+
+function proxyHttpRequest(request, response, targetState) {
+  if (targetState === null) {
     writeUnavailableResponse(response);
     return;
   }
+  const { target, agent } = targetState;
   const failResponse = (error) => {
     if (response.destroyed) return;
     if (response.headersSent) {
@@ -37,7 +50,7 @@ function proxyHttpRequest(request, response, target) {
       method: request.method,
       path: request.url,
       headers: request.headers,
-      agent: false,
+      agent,
     },
     (upstreamResponse) => {
       upstreamResponse.once("error", failResponse);
@@ -48,26 +61,29 @@ function proxyHttpRequest(request, response, target) {
       upstreamResponse.pipe(response);
     },
   );
-  // 响应关闭包含客户端取消，不能让上游流继续占用连接。
-  response.once("close", () => upstream.destroy());
+  // close也会在正常结束后触发；只中止未完成的响应，完整响应留给Agent复用。
+  response.once("close", () => {
+    if (!response.writableFinished) upstream.destroy();
+  });
   upstream.once("error", failResponse);
   request.pipe(upstream);
 }
 
-function proxyGatewayUpgrade(request, clientSocket, clientHead, target) {
-  if (target === null) {
+function proxyGatewayUpgrade(request, clientSocket, clientHead, targetState) {
+  if (targetState === null) {
     clientSocket.end(
       "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
     );
     return;
   }
+  const { target, agent } = targetState;
   const upstream = httpRequest({
     hostname: target.host,
     port: target.port,
     method: request.method,
     path: request.url,
     headers: request.headers,
-    agent: false,
+    agent,
   });
   let upgradedUpstreamSocket = null;
   const closeSockets = () => {
@@ -110,12 +126,12 @@ function proxyGatewayUpgrade(request, clientSocket, clientHead, target) {
 }
 
 export function createGatewayPublicListener({ host, port }) {
-  let target = null;
+  let targetState = null;
   const server = createHttpServer((request, response) => {
-    proxyHttpRequest(request, response, target);
+    proxyHttpRequest(request, response, targetState);
   });
   server.on("upgrade", (request, clientSocket, clientHead) => {
-    proxyGatewayUpgrade(request, clientSocket, clientHead, target);
+    proxyGatewayUpgrade(request, clientSocket, clientHead, targetState);
   });
   return {
     async listen() {
@@ -131,15 +147,22 @@ export function createGatewayPublicListener({ host, port }) {
       ) {
         throw new TypeError("Gateway supervisor target 无效");
       }
-      target = nextTarget;
+      const previousAgent = targetState?.agent ?? null;
+      // 每个generation使用独立连接池；旧在途请求结束后关闭，不跨generation复用。
+      targetState = nextTarget === null
+        ? null
+        : { target: nextTarget, agent: new HttpAgent({ keepAlive: true }) };
+      retireTargetAgent(previousAgent);
     },
     address() {
       return server.address();
     },
     targetUrl() {
-      return target === null ? null : gatewayTargetUrl(target);
+      return targetState === null ? null : gatewayTargetUrl(targetState.target);
     },
     async close() {
+      retireTargetAgent(targetState?.agent ?? null);
+      targetState = null;
       await closeServer(server);
     },
   };

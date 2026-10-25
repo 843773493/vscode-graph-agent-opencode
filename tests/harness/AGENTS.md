@@ -16,7 +16,18 @@ harness/
 
 这里组织运行上下文和进程生命周期；端口分配、工作区模板准备及跨测试复用的协议辅助函数位于 `tests/support/`，客户端页面动作位于 `tests/clients/drivers/`。
 
-测试上下文决定产物根，进程装具管理所启动的服务，输出载体只负责日志描述符。业务工作区可以嵌套或有多个，但辅助服务日志仍由调用方显式传入同一测试的 `artifacts_dir`，不能从工作区深度推导归属。
+测试上下文镜像测试文件生成正式 `output_root`，并在其下按测试运行 ID 和 xdist worker 分隔 `runs/<run-id>/`。pytest 用例与其启动的 JS 子进程继承当前用例 ID，将产物隔离到 `runs/<run-id>/nodes/<node-id>/artifacts/`；独立 JS 测试脚本使用 `runs/<run-id>/artifacts/`。节点 runtime 沿用 `runtime/<run-id>/node-<id>/`。共享测试工作区与 Gateway fixture 使用的 `boxteam-home/` 仍位于 `output_root/`。按节点隔离的 Python `BOXTEAM_HOME` 位于对应 runtime 节点目录。进程装具管理所启动的服务，输出载体只负责日志描述符。业务工作区可以嵌套或有多个，但辅助服务日志仍由调用方显式传入所属用例的 `artifacts_dir`，不能从工作区深度推导归属。
+
+```text
+out/tests/<test-id>/
+├── workspace/                         测试文件固定的隔离工作区
+├── boxteam-home/                      Gateway 集成 fixture 的共享控制面
+├── runtime/
+│   └── <run-id>/node-<node-id>/        按运行和 pytest 节点隔离的运行时
+└── runs/<run-id>/                      每次测试命令独立保留
+    ├── artifacts/                     独立 JS 测试脚本产物
+    └── nodes/<node-id>/artifacts/      pytest 用例与子进程产物
+```
 
 ## 可修改内容
 

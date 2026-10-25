@@ -16,7 +16,7 @@ from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def draft() -> ContextRequestPlan:
     body = {"instructions": "保留草稿来源", "weight": 0.0000001}
     contribution = ContextContribution(

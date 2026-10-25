@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from heapq import nsmallest
 from typing import Literal
 
@@ -50,15 +50,17 @@ _TERMINAL_TURN_STATUSES = {
 }
 
 
-def _text(value: object) -> str:
+def _text_chunks(value: object) -> Iterator[str]:
     if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "".join(_text(item) for item in value)
-    if isinstance(value, Mapping):
+        if value:
+            yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _text_chunks(item)
+    elif isinstance(value, Mapping):
         candidate = value.get("text")
-        return candidate if isinstance(candidate, str) else ""
-    return ""
+        if isinstance(candidate, str) and candidate:
+            yield candidate
 
 
 def _serialized_message(record: Mapping[str, object]) -> Mapping[str, object]:
@@ -100,8 +102,27 @@ def _completion_metadata_for_sequence(
 
 
 def _bounded(value: object, limit: int = _TEXT_LIMIT) -> tuple[str, bool]:
-    text = _text(value)
-    return text[:limit], len(text) > limit
+    if limit < 0:
+        text = "".join(_text_chunks(value))
+        return text[:limit], len(text) > limit
+
+    text_chunks: list[str] = []
+    text_length = 0
+    truncated = False
+    for chunk in _text_chunks(value):
+        remaining = limit - text_length
+        if remaining == 0:
+            truncated = True
+            break
+        if len(chunk) > remaining:
+            text_chunks.append(chunk[:remaining])
+            truncated = True
+            break
+        text_chunks.append(chunk)
+        text_length += len(chunk)
+    if len(text_chunks) == 1:
+        return text_chunks[0], truncated
+    return "".join(text_chunks), truncated
 
 
 def _int_or_none(raw: Mapping[str, object], key: str) -> int | None:

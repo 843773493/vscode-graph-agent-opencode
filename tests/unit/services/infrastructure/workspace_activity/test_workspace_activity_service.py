@@ -15,8 +15,10 @@ from app.services.infrastructure.workspace_state_store import (
 
 
 @pytest.fixture
-def workspace_activity_service(tmp_path: Path) -> Iterator[WorkspaceActivityService]:
-    service = WorkspaceActivityService(workspace_root=tmp_path / "workspace")
+def workspace_activity_service(
+    empty_workspace_scope: tuple[str, Path],
+) -> Iterator[WorkspaceActivityService]:
+    service = WorkspaceActivityService(workspace_root=empty_workspace_scope[1])
     try:
         yield service
     finally:

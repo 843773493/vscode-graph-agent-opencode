@@ -37,7 +37,7 @@ describe("顶层语义表面", () => {
   test("布局宿主透明且大面积工作区不叠加内容面板", async () => {
     const [css, app] = await Promise.all([
       Bun.file(new URL("./themeSurfaces.css", import.meta.url)).text(),
-      Bun.file(new URL("../App.tsx", import.meta.url)).text(),
+      Bun.file(new URL("../../App.tsx", import.meta.url)).text(),
     ]);
 
     expect(css).toMatch(/\[data-bt-surface="layout"\][\s\S]*?background:\s*transparent/);
@@ -54,7 +54,7 @@ describe("顶层语义表面", () => {
       Bun.file(new URL("./workbenchLayout.css", import.meta.url)).text(),
       Bun.file(
         new URL(
-          "../components/workspace/WorkspaceAuxiliaryPanel.tsx",
+          "../../components/workspace/WorkspaceAuxiliaryPanel.tsx",
           import.meta.url,
         ),
       ).text(),
@@ -104,7 +104,7 @@ describe("顶层语义表面", () => {
     const [themeCss, builtins] = await Promise.all([
       Bun.file(new URL("./theme.css", import.meta.url)).text(),
       Bun.file(
-        new URL("../../../../../app/gateway/theme/builtins.py", import.meta.url),
+        new URL("../../../../../../app/gateway/theme/builtins.py", import.meta.url),
       ).text(),
     ]);
     const normalize = (value: string | undefined) =>

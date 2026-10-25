@@ -103,7 +103,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from tests.support.rollout_view_mutations import mutate_view_members
+from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_A = "ses_019b781159d47374805bc4427d081a14"
 SESSION_B = "ses_019b9cdd1ad5758788a18bb227323523"

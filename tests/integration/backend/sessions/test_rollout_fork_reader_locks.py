@@ -28,7 +28,7 @@ SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
-def _locks(index: Path) -> list[str]:
+def _linux_database_lock_records(index: Path) -> list[str]:
     inode = index.stat().st_ino
     return [
         line
@@ -138,12 +138,18 @@ async def test_fork_preserves_live_reader_and_independent_writer(
 ):
     saver = protected_source[0]
     index = saver._storage.storage.index_path(SOURCE_SESSION_ID)
-    transaction_reader = source_reader.in_transaction
-    before = _locks(index) if sys.platform == "linux" else []
+    has_read_transaction = source_reader.in_transaction
+    lock_records_before_fork = (
+        _linux_database_lock_records(index) if sys.platform == "linux" else []
+    )
     if sys.platform == "linux":
-        assert before, "合法 source reader 必须持有 SQLite database SHARED lock"
+        assert lock_records_before_fork, (
+            "合法 source reader 必须持有 SQLite database SHARED lock"
+        )
     else:
-        assert transaction_reader, "非 Linux 平台只运行可由 SQLite checkpoint 验证的显式读事务"
+        assert has_read_transaction, (
+            "非 Linux 平台只运行可由 SQLite checkpoint 验证的显式读事务"
+        )
     initial_count = source_reader.execute(
         "SELECT count(*) FROM context_plans"
     ).fetchone()[0]
@@ -151,10 +157,14 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         await saver.forks.source.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
         await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
-    after = _locks(index) if sys.platform == "linux" else []
+    lock_records_after_fork = (
+        _linux_database_lock_records(index) if sys.platform == "linux" else []
+    )
     if sys.platform == "linux":
-        assert after, "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
-    assert source_reader.in_transaction == transaction_reader
+        assert lock_records_after_fork, (
+            "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
+        )
+    assert source_reader.in_transaction == has_read_transaction
     result = await asyncio.to_thread(
         subprocess.run,
         [sys.executable, "-c", _WRITER, str(saver._storage.storage.sessions_dir), SOURCE_SESSION_ID],
@@ -163,18 +173,18 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         text=True,
         timeout=30,
     )
-    checkpoint = _wal_checkpoint(index) if transaction_reader else None
+    checkpoint = _wal_checkpoint(index) if has_read_transaction else None
     evidence = {
         "parent_pid": os.getpid(),
         "operation": operation,
-        "transaction_reader": transaction_reader,
-        "locks_before": before,
-        "locks_after_fork": after,
+        "transaction_reader": has_read_transaction,
+        "locks_before": lock_records_before_fork,
+        "locks_after_fork": lock_records_after_fork,
         "wal_checkpoint_after_writer": checkpoint,
         "writer_exit_code": result.returncode,
         "writer_stderr": result.stderr,
     }
-    artifact = lock_artifacts / f"{operation}-{transaction_reader}.json"
+    artifact = lock_artifacts / f"{operation}-{has_read_transaction}.json"
     artifact.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     assert result.returncode == 0, f"独立 writer 失败，证据: {artifact}"
     if checkpoint is not None:
@@ -182,7 +192,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
             "活动 SQLite reader 必须阻止 WAL 截断 checkpoint；"
             f"observed={checkpoint}, evidence={artifact}"
         )
-    if transaction_reader:
+    if has_read_transaction:
         assert (
             source_reader.execute("SELECT count(*) FROM context_plans").fetchone()[0]
             == initial_count

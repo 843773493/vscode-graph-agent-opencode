@@ -56,12 +56,11 @@ def _write_legacy_workspace_config_only_row(
     finally:
         database.close()
 
-def test_legacy_workspace_config_only_row_migrates_to_authoritative_layer(tmp_path):
+def test_legacy_workspace_config_only_row_migrates_to_authoritative_layer(workspace_root):
     """仅有 legacy ``workspace_config`` 行的旧库，必须还原为等价 layer 语义后删表。
 
     如果迁移丢掉这行，运行时覆盖读将从旧表切到权威 layer 表时整体丢失配置。
     """
-    workspace_root = tmp_path / "workspace"
     _write_legacy_workspace_config_only_row(
         workspace_root, "workspace_runtime_override", {"ui": {"theme": "dark"}}
     )
@@ -87,14 +86,13 @@ def test_legacy_workspace_config_only_row_migrates_to_authoritative_layer(tmp_pa
     finally:
         store.close()
 
-def test_legacy_workspace_config_only_row_preserves_runtime_override_keys(tmp_path):
+def test_legacy_workspace_config_only_row_preserves_runtime_override_keys(workspace_root, tmp_path):
     """回归保护 T-1 证据 3：只有 wc 行的旧库，``ConfigService`` 仍须读到运行时覆盖。
 
     迁移前该读依赖 legacy 表；迁移后必须改由权威 layer 行承载，结果仍为 ('ui',)。
     """
     from app.services.infrastructure.config_service import ConfigService
 
-    workspace_root = tmp_path / "workspace"
     _write_legacy_workspace_config_only_row(
         workspace_root, "workspace_runtime_override", {"ui": {"theme": "dark"}}
     )
@@ -112,10 +110,10 @@ def test_legacy_workspace_config_only_row_preserves_runtime_override_keys(tmp_pa
     finally:
         store.close()
 
-def test_workspace_config_read_reports_corrupt_payload_with_context(tmp_path):
+def test_workspace_config_read_reports_corrupt_payload_with_context(workspace_root):
     """权威 layer 行被外部写成非法 JSON / 非对象时，读取必须带上下文响亮失败。"""
 
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.sync_config_source(
             config_key="user",
@@ -155,8 +153,8 @@ def test_workspace_config_read_reports_corrupt_payload_with_context(tmp_path):
     finally:
         store.close()
 
-def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         connection = store.connection()
         try:
@@ -199,8 +197,8 @@ def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(tmp
     finally:
         store.close()
 
-def test_legacy_workspace_secret_migration_blocks_irreversible_digest(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_legacy_workspace_secret_migration_blocks_irreversible_digest(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         connection = store.connection()
         try:
@@ -252,8 +250,8 @@ def test_secret_binding_resolver_reports_failure_and_detects_rotation(
     assert "first-secret" not in json.dumps(first)
     assert "second-secret" not in json.dumps(second)
 
-def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = store.append_config_source_journal(
             source_key="user",
@@ -316,8 +314,8 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
     finally:
         store.close()
 
-def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = store.append_config_source_journal(
             source_key="shared-user-workspace",

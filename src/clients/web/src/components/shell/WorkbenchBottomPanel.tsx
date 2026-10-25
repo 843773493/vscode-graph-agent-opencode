@@ -2,7 +2,7 @@ import { lazy, Suspense, type PointerEvent as ReactPointerEvent } from "react";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type { WorkspaceTerminalController } from "../../hooks/workspace/useWorkspaceTerminalResources";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
-import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
+import type { OutputDiagnostic, WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import type { GatewayWorkspace } from "../../types/backend";
 
 const GatewayLogPanel = lazy(() => import("../panels/bottomPanel/GatewayLogPanel"));
@@ -36,6 +36,7 @@ interface WorkbenchBottomPanelProps {
   state: WorkspaceBottomPanelState;
   apiPort: number;
   workspaceId: string | null;
+  diagnostic: OutputDiagnostic | null;
   workspace: GatewayWorkspace | null;
   workspaceName: string;
   currentSessionId: string;
@@ -62,6 +63,7 @@ export default function WorkbenchBottomPanel({
   state,
   apiPort,
   workspaceId,
+  diagnostic,
   workspace,
   workspaceName,
   currentSessionId,
@@ -148,6 +150,7 @@ export default function WorkbenchBottomPanel({
           <GatewayLogPanel
             apiPort={apiPort}
             workspaceId={workspaceId}
+            diagnostic={diagnostic}
             height={state.height}
             onOpenTerminal={() => switchTab("terminal")}
             onOpenPorts={() => switchTab("ports")}

@@ -35,9 +35,9 @@ def _local_child_environment() -> dict[str, str]:
     return environment
 
 
-# TODO: Uvicorn 的命令行参数只接受整数秒；配置模型允许小数时向上取整，避免 Windows 启动时被 CLI 拒绝。
-def _uvicorn_graceful_shutdown_timeout(seconds: float) -> str:
-    return str(max(1, math.ceil(seconds)))
+# Uvicorn 命令行只接受整数秒；向上取整，避免缩短配置的优雅关闭期限。
+def _uvicorn_graceful_shutdown_timeout_arg(timeout_seconds: float) -> str:
+    return str(max(1, math.ceil(timeout_seconds)))
 
 
 def resolve_python_executable() -> Path:
@@ -259,7 +259,7 @@ def start_local_backend_process(
             "--log-level",
             "warning",
             "--timeout-graceful-shutdown",
-            _uvicorn_graceful_shutdown_timeout(connection_drain_timeout_seconds),
+            _uvicorn_graceful_shutdown_timeout_arg(connection_drain_timeout_seconds),
         ]
     )
     log_store = ProcessLogStore(log_dir)

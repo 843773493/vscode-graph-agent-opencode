@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.core.path_segments import validate_generator_physical_segment
+from app.core.path_segments import validate_generator_name
 from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.session import SessionDTO
@@ -375,9 +375,9 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
     def _validate_workspace_locators(
         payload: SessionGenerationExecuteRequest,
     ) -> None:
-        validate_generator_physical_segment(payload.title)
+        validate_generator_name(payload.title)
         for segment in payload.navigation_path:
-            validate_generator_physical_segment(segment)
+            validate_generator_name(segment)
         execution_workspace_id = payload.execution_workspace_id
         if payload.placement.workspace_id != execution_workspace_id:
             raise ValueError(

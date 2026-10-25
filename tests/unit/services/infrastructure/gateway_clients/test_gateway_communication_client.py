@@ -14,7 +14,7 @@ from app.services.infrastructure import gateway_communication_client as client_m
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from tests.support.communication import WORKSPACE_ID
+from tests.support.communication.probe import WORKSPACE_ID
 
 REQUEST_ID = "communication-startup-ready"
 GATEWAY_ID = "gateway_11111111111111111111111111111111"

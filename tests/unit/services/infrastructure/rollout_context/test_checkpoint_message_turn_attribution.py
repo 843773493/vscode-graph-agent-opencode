@@ -31,7 +31,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 OTHER_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd657"

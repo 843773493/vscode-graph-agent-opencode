@@ -252,9 +252,9 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
-from tests.support.rollout_output import commit_fixture_output
-from tests.support.rollout_view_mutations import mutate_view_members
-from tests.support.session_navigation_queue import (
+from tests.support.rollout.fixture_output import commit_fixture_output
+from tests.support.rollout.view_mutations import mutate_view_members
+from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
 )

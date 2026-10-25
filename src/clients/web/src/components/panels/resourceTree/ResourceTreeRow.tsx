@@ -9,7 +9,7 @@ import type { ResourceThreadRef } from "../../../api/workspaceResources";
 import { resourceThreadAssociations } from "../../../state/display/workspaceResourceDisplay";
 import {
   actionLabel,
-  metadataRows,
+  resourceMetadataRows,
   resourceTreeDescription,
   resourceKindIcon,
   resourceTreeStatus,
@@ -56,7 +56,7 @@ export default function ResourceTreeRow({
   canAttachCurrent?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const rows = metadataRows(resource);
+  const metadataRows = expanded ? resourceMetadataRows(resource) : [];
   const canOpen = resource.status === "running" && resource.metadata.reconciliation_status === "verified"
     && (resource.metadata.retention_scope === "workspace" || resourceThreadAssociations(resource).length > 0);
   const title = resourceTreeTitle(resource);
@@ -196,7 +196,7 @@ export default function ResourceTreeRow({
             {typeof resource.metadata.reclaim_at === "string" ? <span>无关联，将于 {formatDateTime(resource.metadata.reclaim_at)} 回收</span> : null}
             {resource.metadata.error ? <span role="alert">{String(resource.metadata.error)}</span> : null}
           </div> : null}
-          {rows.length > 0 ? (
+          {metadataRows.length > 0 ? (
             <details className="resource-details">
               <summary>高级信息</summary>
               <div className="resource-tree-lifecycle">
@@ -208,7 +208,7 @@ export default function ResourceTreeRow({
                 复制 ID
               </button>
               <dl className="resource-detail-grid">
-                {rows.map(([key, value]) => (
+                {metadataRows.map(([key, value]) => (
                   <div key={key} className="resource-detail-row">
                     <dt>{key}</dt>
                     <dd>{value}</dd>

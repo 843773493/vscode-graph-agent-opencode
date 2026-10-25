@@ -26,7 +26,8 @@ runtime/
 
 按资源 owner 选择模块：完整 Backend 的进程合同放 `managed_backend.py`，启动命令与本地身份 CLI 调用放
 `workspace_process.py`，Windows/POSIX 清理分支放 `process_lifecycle.py`，POSIX session/process group
-身份核验放 `process_groups.py`；不要在
+身份核验放 `process_groups.py`；该模块的 `_ProcessIdentity` 按字段命名 PGID、OS session ID 和
+进程起始标记。Linux 的启动滴答数与其他 POSIX 的创建时间都只作为不透明身份比较。不要在
 `controller.py` 或 Gateway 路由中复制这些底层规则。工作区 `.boxteam/` 身份仍由 Workspace CLI
 读取，Gateway 不得直接访问该目录。
 

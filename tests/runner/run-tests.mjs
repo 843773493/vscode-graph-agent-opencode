@@ -11,7 +11,15 @@ const matrixPath = path.join(projectRoot, "tests", "runner", "matrix.jsonc");
 const defaultTimeoutMs = 90 * 60 * 1000;
 const timeoutGraceMs = 30 * 1000;
 const defaultDataLimitKb = 8 * 1024 * 1024;
-const isPosix = process.platform !== "win32";
+const isWindows = process.platform === "win32";
+const isPosix = !isWindows;
+const windowsJobRunnerPath = path.join(
+  projectRoot,
+  "tests",
+  "support",
+  "processes",
+  "windows_job.py",
+);
 
 function validateSuite(suite) {
   if (!suite || typeof suite !== "object") throw new Error("测试 suite 必须是对象");
@@ -33,7 +41,20 @@ function validateSuite(suite) {
 // 用 ulimit -d 限定数据段：harness 一旦无界增长就立刻 MemoryExhaustion 退出，
 // 不再把整机内存吃满；exec 保证退出码与信号语义不变。
 function buildSuiteCommand(suite, dataLimitKb) {
-  if (!isPosix) return suite.command;
+  if (isWindows) {
+    return [
+      "uv",
+      "run",
+      "--no-sync",
+      "--",
+      "python",
+      windowsJobRunnerPath,
+      "--memory-limit-kb",
+      String(dataLimitKb),
+      "--",
+      ...suite.command,
+    ];
+  }
   return [
     "bash",
     "-c",
@@ -44,10 +65,43 @@ function buildSuiteCommand(suite, dataLimitKb) {
   ];
 }
 
-// 只杀自己创建的进程组：bun/pytest 派生的孙进程不会被遗留成游离进程。
-function killProcessGroup(pid, signal) {
+function isProcessRunning(pid) {
   try {
-    process.kill(isPosix ? -pid : pid, signal);
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function killWindowsProcessTree(pid, force) {
+  if (!isProcessRunning(pid)) return;
+  const command = ["taskkill", "/T", ...(force ? ["/F"] : []), "/PID", String(pid)];
+  const result = Bun.spawnSync(command, {
+    cwd: projectRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode === 0 && result.signalCode === null) return;
+  if (!isProcessRunning(pid)) return;
+  const stdout = new TextDecoder().decode(result.stdout).trim();
+  const stderr = new TextDecoder().decode(result.stderr).trim();
+  throw new Error(
+    `无法清理 Windows 测试进程树: ${command.join(" ")} ` +
+      `exit=${String(result.exitCode)} signal=${result.signalCode ?? "none"}` +
+      `${stdout ? `\n${stdout}` : ""}${stderr ? `\n${stderr}` : ""}`,
+  );
+}
+
+// Windows 由共享Job Object helper回收suite后代；taskkill负责终止监督器进程树。
+function terminateSuiteProcesses(pid, signal) {
+  if (isWindows) {
+    killWindowsProcessTree(pid, signal === "SIGKILL");
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
   } catch (error) {
     if (error?.code === "ESRCH") return;
     throw error;
@@ -137,19 +191,25 @@ async function runSuite(suite) {
   // 首次中断给退出宽限，再次中断立即强杀；不能先退出runner而撤掉回收责任。
   const onInterrupt = () => {
     if (interrupted) {
-      killProcessGroup(child.pid, "SIGKILL");
+      terminateSuiteProcesses(child.pid, "SIGKILL");
       return;
     }
     interrupted = true;
     clearTimeout(termTimer);
-    killProcessGroup(child.pid, "SIGTERM");
-    interruptKillTimer = setTimeout(() => killProcessGroup(child.pid, "SIGKILL"), timeoutGraceMs);
+    terminateSuiteProcesses(child.pid, "SIGTERM");
+    interruptKillTimer = setTimeout(
+      () => terminateSuiteProcesses(child.pid, "SIGKILL"),
+      timeoutGraceMs,
+    );
   };
   const termTimer = setTimeout(() => {
     timedOut = true;
-    killProcessGroup(child.pid, "SIGTERM");
+    terminateSuiteProcesses(child.pid, "SIGTERM");
   }, timeoutMs);
-  const killTimer = setTimeout(() => killProcessGroup(child.pid, "SIGKILL"), timeoutMs + timeoutGraceMs);
+  const killTimer = setTimeout(
+    () => terminateSuiteProcesses(child.pid, "SIGKILL"),
+    timeoutMs + timeoutGraceMs,
+  );
   process.on("SIGINT", onInterrupt);
   process.on("SIGTERM", onInterrupt);
   let exitCode;
@@ -161,8 +221,8 @@ async function runSuite(suite) {
     clearTimeout(interruptKillTimer);
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onInterrupt);
-    // POSIX根进程退出不等于进程组为空，残留后代不能随定时器一起被遗忘。
-    if (isPosix) killProcessGroup(child.pid, "SIGKILL");
+    // POSIX根进程退出不等于进程组为空；Windows监督器关闭时由Job Object回收后代。
+    if (isPosix) terminateSuiteProcesses(child.pid, "SIGKILL");
   }
   if (interrupted) return 130;
   if (timedOut) {

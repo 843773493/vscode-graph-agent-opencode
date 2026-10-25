@@ -56,7 +56,7 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
-from tests.support.communication import TARGET_SESSION, WORKSPACE_ID
+from tests.support.communication.probe import TARGET_SESSION, WORKSPACE_ID
 
 
 def test_default_policy_allows_all_core_capabilities() -> None:

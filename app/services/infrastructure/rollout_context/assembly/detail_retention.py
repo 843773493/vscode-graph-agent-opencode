@@ -24,6 +24,8 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
+_REFERENCE_QUERY_BATCH_SIZE = 100
+
 
 def _activation_referenced(
     connection: sqlite3.Connection,
@@ -92,7 +94,7 @@ class DetailRetentionMixin:
         *,
         expired_before: datetime,
         checkpoint_ns: str = "",
-    ) -> tuple[tuple[DetailRef, str], ...]:
+    ) -> tuple[DetailRef, ...]:
         session_id = strict_text(session_id, field="list_expired_details.session_id")
         thread_id = strict_text(thread_id, field="list_expired_details.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
@@ -113,14 +115,14 @@ class DetailRetentionMixin:
                 ).fetchall()
         except RolloutNotMaterializedError:
             return ()
-        result: list[tuple[DetailRef, str]] = []
+        result: list[DetailRef] = []
         for key, owner_session_id, owner_thread_id, assembly in rows:
             ref = detail_ref_from_key(key)
             assembly = strict_text(assembly, field="assembly_id")
             ref.require_owner(owner_session_id, owner_thread_id, assembly)
             if (owner_session_id, owner_thread_id) not in scopes:
                 raise ValueError("source-mismatch: detail manifest 不属于当前 rollout 的冻结本地 scope")
-            result.append((ref, assembly))
+            result.append(ref)
         return tuple(result)
 
     def context_assembly_references_detail(
@@ -135,23 +137,110 @@ class DetailRetentionMixin:
         session_id = strict_text(session_id, field="context_assembly_references.session_id")
         thread_id = strict_text(thread_id, field="context_assembly_references.thread_id")
         assembly_id = strict_text(assembly_id, field="assembly_id")
-        key = detail_ref_key(detail_ref)
         if detail_ref.assembly_id != assembly_id:
             raise ValueError("source-mismatch: detail_ref 不属于请求的 assembly")
+        return detail_ref in self.find_referenced_context_details(
+            session_id,
+            thread_id,
+            detail_refs=(detail_ref,),
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def find_referenced_context_details(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        detail_refs: Iterable[DetailRef],
+        checkpoint_ns: str = "",
+    ) -> frozenset[DetailRef]:
+        """在一个只读连接内查出仍被封存 assembly/activation 引用的详情。"""
+        session_id = strict_text(session_id, field="context_assembly_references.session_id")
+        thread_id = strict_text(thread_id, field="context_assembly_references.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
+        refs_by_key: dict[str, DetailRef] = {}
+        for ref in detail_refs:
+            if not isinstance(ref, DetailRef):
+                raise TypeError("detail_refs 只能包含 DetailRef")
+            refs_by_key.setdefault(detail_ref_key(ref), ref)
+        if not refs_by_key:
+            return frozenset()
+
+        referenced: set[DetailRef] = set()
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._storage._require_v2_runtime(connection)
-                require_historical_scope(
-                    connection, detail_ref.session_id, detail_ref.thread_id,
-                    current_owner=(session_id, thread_id),
+                validated_scopes: set[tuple[str, str]] = set()
+                for ref in refs_by_key.values():
+                    scope = (ref.session_id, ref.thread_id)
+                    if scope not in validated_scopes:
+                        require_historical_scope(
+                            connection, *scope, current_owner=(session_id, thread_id),
+                        )
+                        validated_scopes.add(scope)
+
+                def query_referenced_detail_keys(
+                    candidates: tuple[tuple[str, DetailRef], ...],
+                    reference_predicate: str,
+                    trailing_parameters: tuple[str, ...] = (),
+                ) -> set[str]:
+                    keys: set[str] = set()
+                    for offset in range(0, len(candidates), _REFERENCE_QUERY_BATCH_SIZE):
+                        batch = candidates[offset : offset + _REFERENCE_QUERY_BATCH_SIZE]
+                        values_sql = ", ".join("(?, ?, ?, ?)" for _ in batch)
+                        values = tuple(
+                            value
+                            for key, ref in batch
+                            for value in (ref.session_id, ref.thread_id, key, ref.assembly_id)
+                        )
+                        rows = connection.execute(
+                            "WITH candidates(session_id, thread_id, detail_ref, assembly_id) "
+                            f"AS (VALUES {values_sql}) "
+                            "SELECT c.detail_ref FROM candidates AS c WHERE "
+                            f"{reference_predicate}",
+                            (*values, *trailing_parameters),
+                        ).fetchall()
+                        keys.update(row[0] for row in rows)
+                    return keys
+
+                candidates = tuple(refs_by_key.items())
+                context_keys = query_referenced_detail_keys(
+                    candidates,
+                    "EXISTS (SELECT 1 FROM context_plan_details AS d "
+                    "JOIN context_assemblies AS a ON a.assembly_id = d.assembly_id "
+                    "AND a.session_id = d.session_id AND a.thread_id = d.thread_id "
+                    "WHERE d.session_id = c.session_id AND d.thread_id = c.thread_id "
+                    "AND d.checkpoint_ns = ? AND d.detail_ref = c.detail_ref "
+                    "AND a.assembly_id = c.assembly_id AND a.status IN ('sealed','terminal') "
+                    "AND (a.detail_ref = d.detail_ref OR EXISTS ("
+                    "SELECT 1 FROM context_assembly_selections AS s "
+                    "WHERE s.assembly_id = a.assembly_id AND s.included = 1 "
+                    "AND s.detail_ref = d.detail_ref) OR EXISTS ("
+                    "SELECT 1 FROM assembly_item_refs AS r "
+                    "WHERE r.assembly_id = a.assembly_id AND r.detail_ref = d.detail_ref)))",
+                    (checkpoint_ns,),
                 )
-                return _referenced(
-                    connection, detail_ref.session_id, detail_ref.thread_id,
-                    checkpoint_ns, key, assembly_id,
+                remaining = tuple(
+                    (key, ref) for key, ref in candidates if key not in context_keys
                 )
+                if remaining:
+                    # activation provenance/lineage 不是 context assembly 的附属 detail，
+                    # 必须由 activation catalog 自己的引用列保护。
+                    require_resource_activation_schema(connection)
+                    activation_keys = query_referenced_detail_keys(
+                        remaining,
+                        "EXISTS (SELECT 1 FROM resource_activation_snapshots AS s "
+                        "WHERE s.session_id = c.session_id AND s.thread_id = c.thread_id "
+                        "AND s.lineage_detail_ref = c.detail_ref) OR EXISTS ("
+                        "SELECT 1 FROM resource_activation_bindings AS b "
+                        "WHERE b.session_id = c.session_id AND b.thread_id = c.thread_id "
+                        "AND (b.snapshot_ref = c.detail_ref OR b.detail_ref = c.detail_ref))",
+                    )
+                    context_keys.update(activation_keys)
+                referenced.update(refs_by_key[key] for key in context_keys)
         except RolloutNotMaterializedError:
-            return False
+            return frozenset()
+        return frozenset(referenced)
 
     def mark_context_plan_details_unavailable(
         self,

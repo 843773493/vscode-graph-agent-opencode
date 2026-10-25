@@ -1,9 +1,13 @@
 import React from "react";
-import { addSessionFileTreeShortcut, getSessionAttachmentBlob } from "../../../api";
+import {
+  addSessionFileTreeShortcut,
+  getSessionAttachmentBlob,
+  getSessionAttachmentTextPreview,
+} from "../../../api";
 import type { AttachmentRef } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
 
-const MAX_TEXT_PREVIEW_CHARS = 200_000;
+const MAX_TEXT_PREVIEW_CODE_UNITS = 200_000;
 
 function attachmentName(attachment: AttachmentRef): string {
   return attachment.name || attachment.file_id || "附件";
@@ -49,24 +53,31 @@ export default function WorkspaceAttachmentPreview({
     setLoading(true);
     setError(null);
 
-    void getSessionAttachmentBlob(
-      apiPort,
-      sessionId,
-      attachment.file_id,
-      workspaceId,
-      { variant: "original", signal: controller.signal },
-    ).then(async (blob) => {
-      if (!active) return;
+    void (async () => {
       if (isTextContent(contentType)) {
-        const content = await blob.text();
+        const preview = await getSessionAttachmentTextPreview(
+          apiPort,
+          sessionId,
+          attachment.file_id,
+          workspaceId,
+          { maxCodeUnits: MAX_TEXT_PREVIEW_CODE_UNITS, signal: controller.signal },
+        );
         if (!active) return;
-        setText(content.slice(0, MAX_TEXT_PREVIEW_CHARS));
-        setTruncated(content.length > MAX_TEXT_PREVIEW_CHARS);
+        setText(preview.text);
+        setTruncated(preview.truncated);
       } else {
+        const blob = await getSessionAttachmentBlob(
+          apiPort,
+          sessionId,
+          attachment.file_id,
+          workspaceId,
+          { variant: "original", signal: controller.signal },
+        );
+        if (!active) return;
         objectUrl = URL.createObjectURL(blob);
         setSource(objectUrl);
       }
-    }).catch((reason: unknown) => {
+    })().catch((reason: unknown) => {
       if (!active || (reason instanceof DOMException && reason.name === "AbortError")) {
         return;
       }

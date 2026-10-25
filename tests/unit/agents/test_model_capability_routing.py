@@ -11,7 +11,10 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     ProviderModelCandidate,
 )
-from app.agents.provider_capabilities import parse_provider_capabilities
+from app.agents.provider_capabilities import (
+    detect_required_capabilities_from_messages,
+    parse_provider_capabilities,
+)
 from app.core.model_request_context import (
     SummaryCandidateScope,
     summary_candidate_scope,
@@ -120,6 +123,27 @@ def test_provider_capabilities_reject_legacy_reasoning_name_in_api_mode() -> Non
                 },
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("block_type", "expected"),
+    [
+        ("text", {"text_input"}),
+        ("future_custom_block", {"text_input"}),
+        ("image", {"text_input", "image_input"}),
+        ("video_url", {"text_input", "video_input"}),
+        ("input_audio", {"text_input", "audio_input"}),
+    ],
+)
+def test_message_capability_scan_ignores_unknown_blocks_and_keeps_media_requirements(
+    block_type: str,
+    expected: set[str],
+) -> None:
+    capabilities = detect_required_capabilities_from_messages(
+        [{"content": [{"type": block_type}]}]
+    )
+
+    assert capabilities == expected
 
 
 @pytest.mark.asyncio

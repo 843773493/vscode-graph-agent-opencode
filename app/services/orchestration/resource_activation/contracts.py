@@ -18,7 +18,9 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationPolicySnapshot,
     ResourceActivationSnapshotRef,
 )
-from app.domain.itemized.resource_activation.common import ResourceActivationBoundary
+from app.domain.itemized.resource_activation.shared_contract import (
+    ResourceActivationBoundary,
+)
 
 # binding 的 owner scope 由资源平台声明；derivation 契约当前未携带该字段
 # （见 derivation/types.SemanticResourceDescriptor）。在资源平台补全前，

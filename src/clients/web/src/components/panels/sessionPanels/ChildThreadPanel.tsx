@@ -110,22 +110,25 @@ export default function ChildThreadPanel({
         {ownerLabel}
       </div>
 
-      {notice ? (
-        <div
-          className={`child-thread-notice${noticeError ? " is-error" : ""}`}
-          role="status"
-        >
-          <span>{notice}</span>
-          <button
-            type="button"
-            className="child-thread-notice-close"
-            aria-label="关闭提示"
-            onClick={() => setNotice("")}
+      <div className="child-thread-notice-slot">
+        {notice ? (
+          <div
+            className={`child-thread-notice${noticeError ? " is-error" : ""}`}
+            role="status"
+            title={notice}
           >
-            <span className="codicon codicon-close" aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
+            <span>{notice}</span>
+            <button
+              type="button"
+              className="child-thread-notice-close"
+              aria-label="关闭提示"
+              onClick={() => setNotice("")}
+            >
+              <span className="codicon codicon-close" aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       {loading ? <div className="empty-state">正在读取子会话线程...</div> : null}
       {!loading && error ? (

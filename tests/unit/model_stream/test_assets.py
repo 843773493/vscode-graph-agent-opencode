@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import commentjson
 import pytest
 
 from app.testing.model_stream import (
@@ -20,41 +21,69 @@ from app.testing.model_stream import (
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
 
 
-def test_all_handwritten_scenarios_load_to_the_same_cassette_model() -> None:
-    scenario_ids = (
-        "basic-text",
-        "checkpoint-persistence",
-        "split-tool-call",
-        "reasoning-stream",
-        "reasoning-tool",
-        "finish-and-usage",
-        "responses-basic-text",
-        "responses-reasoning-text",
-        "responses-reasoning-tool",
-        "responses-reasoning-parallel-tool",
-        "anthropic-reasoning-stream",
-        "anthropic-reasoning-tool",
-    )
+@pytest.mark.parametrize(
+    "scenario_id",
+    sorted(path.stem for path in (FIXTURE_ROOT / "scenarios").glob("*.jsonc")),
+)
+def test_each_scenario_manifest_loads_to_the_same_cassette_model(
+    scenario_id: str,
+) -> None:
+    scenario = load_scenario(FIXTURE_ROOT, scenario_id)
+    assert scenario.cassette.kind == "model_stream_cassette"
+    assert scenario.cassette.metadata["source"] == "handwritten"
+    protocol = scenario.cassette.metadata["protocol"]
+    assert protocol in {
+        "openai_chat_sse",
+        "openai_responses_sse",
+        "anthropic_messages_sse",
+    }
+    terminal = scenario.cassette.interactions[0].response.frames[-1]
+    if protocol == "openai_chat_sse":
+        assert terminal.payload == "[DONE]"
+    elif protocol == "openai_responses_sse":
+        assert terminal.event == "response.completed"
+        assert terminal.payload["type"] == "response.completed"
+    else:
+        assert terminal.event == "message_stop"
+        assert terminal.payload["type"] == "message_stop"
 
-    for scenario_id in scenario_ids:
-        scenario = load_scenario(FIXTURE_ROOT, scenario_id)
-        assert scenario.cassette.kind == "model_stream_cassette"
-        assert scenario.cassette.metadata["source"] == "handwritten"
-        protocol = scenario.cassette.metadata["protocol"]
-        assert protocol in {
-            "openai_chat_sse",
-            "openai_responses_sse",
-            "anthropic_messages_sse",
-        }
-        terminal = scenario.cassette.interactions[0].response.frames[-1]
-        if protocol == "openai_chat_sse":
-            assert terminal.payload == "[DONE]"
-        elif protocol == "openai_responses_sse":
-            assert terminal.event == "response.completed"
-            assert terminal.payload["type"] == "response.completed"
-        else:
-            assert terminal.event == "message_stop"
-            assert terminal.payload["type"] == "message_stop"
+
+def test_every_handwritten_cassette_is_referenced_by_a_scenario() -> None:
+    scenario_paths = sorted((FIXTURE_ROOT / "scenarios").glob("*.jsonc"))
+    referenced_cassettes = {
+        load_scenario(FIXTURE_ROOT, path.stem).asset_path.resolve()
+        for path in scenario_paths
+    }
+    handwritten_cassettes = {
+        path.resolve()
+        for path in (FIXTURE_ROOT / "handwritten").rglob("*.json")
+    }
+
+    assert referenced_cassettes == handwritten_cassettes
+
+
+def test_every_business_expectation_is_referenced_by_a_scenario() -> None:
+    scenario_paths = sorted((FIXTURE_ROOT / "scenarios").glob("*.jsonc"))
+    referenced_assertions = {
+        load_scenario(FIXTURE_ROOT, path.stem).business_assertion
+        for path in scenario_paths
+    }
+    expectation_paths = sorted(
+        path
+        for pattern in ("*.json", "*.jsonc")
+        for path in (FIXTURE_ROOT / "expectations").glob(pattern)
+    )
+    expectation_ids = [
+        commentjson.loads(path.read_text(encoding="utf-8")).get("expectation_id")
+        for path in expectation_paths
+    ]
+
+    assert all(
+        isinstance(expectation_id, str) and expectation_id
+        for expectation_id in expectation_ids
+    )
+    assert len(expectation_ids) == len(set(expectation_ids))
+    assert set(expectation_ids) <= referenced_assertions
 
 
 @pytest.mark.parametrize(

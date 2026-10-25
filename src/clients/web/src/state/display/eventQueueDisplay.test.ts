@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import type { TraceEvent } from "../../types/backend";
-import type { ConversationView } from "../../types/frontend";
+import type { ConversationView, FrontendReceivedEvent } from "../../types/frontend";
 import { buildTraceTimelineItems } from "../timeline/chatTimeline";
-import { buildKeyTraceSummary } from "./eventQueueDisplay";
+import { buildKeyTraceSummary, orderedTraceItems } from "./eventQueueDisplay";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -32,6 +32,43 @@ function event(
   };
 }
 
+function receivedTrace(
+  trace: TraceEvent,
+  receivedAt = trace.timestamp,
+): FrontendReceivedEvent {
+  return {
+    id: trace.event_id,
+    kind: "trace",
+    source: "initial_load",
+    sessionId: trace.session_id,
+    receivedAt,
+    event: trace,
+  };
+}
+
+test("Trace排序优先事件时间，非法时间回退接收时间并保留重复ID首次记录", () => {
+  const late = event(4, "agent_end", {});
+  const invalidTime = { ...event(2, "agent_end", {}), timestamp: "invalid" };
+  const early = event(1, "agent_end", {});
+  const duplicateLate = { ...late, timestamp: "2026-07-06T00:00:00.000Z" };
+
+  const ordered = orderedTraceItems([
+    receivedTrace(late, "2026-07-06T00:00:01.000Z"),
+    receivedTrace(invalidTime, "2026-07-06T00:00:02.000Z"),
+    receivedTrace(early, "2026-07-06T00:00:03.000Z"),
+    receivedTrace(duplicateLate),
+  ]);
+
+  expect(ordered.map((item) => item.id)).toEqual([
+    early.event_id,
+    invalidTime.event_id,
+    late.event_id,
+  ]);
+  expect(
+    ordered.map((item) => item.kind === "trace" ? item.event.timestamp : null),
+  ).toEqual([early.timestamp, invalidTime.timestamp, late.timestamp]);
+});
+
 test("事件汇总只接受 Skill 加载成功回执，普通文件和失败回执不算激活", () => {
   const receipt = { name: "actual", mode: "tracked", status: "loaded", append_status: "appended", error: null };
   const events = [
@@ -41,8 +78,7 @@ test("事件汇总只接受 Skill 加载成功回执，普通文件和失败回�
     event(4, "tool_call_end", { tool_name: "skill_load", result: { ...receipt, name: "failed", status: "error" } }),
     event(5, "tool_call_end", { tool_name: "skill_load", result: { ...receipt, name: "untracked", mode: "untrack" } }),
   ];
-  const summary = buildKeyTraceSummary(events.map((trace) => ({ id: trace.event_id, kind: "trace" as const,
-    source: "initial_load" as const, sessionId: trace.session_id, receivedAt: trace.timestamp, event: trace })));
+  const summary = buildKeyTraceSummary(events.map((trace) => receivedTrace(trace)));
   expect(summary.acceptedSkillLoads).toEqual(["actual"]);
 });
 
@@ -64,14 +100,7 @@ const customToolEvents: TraceEvent[] = [
 ];
 
 const eventSummary = buildKeyTraceSummary(
-  customToolEvents.map((trace) => ({
-    id: trace.event_id,
-    kind: "trace" as const,
-    source: "initial_load" as const,
-    sessionId: trace.session_id,
-    receivedAt: trace.timestamp,
-    event: trace,
-  })),
+  customToolEvents.map((trace) => receivedTrace(trace)),
 );
 assert(
   eventSummary.keyFlowToolResults.some(

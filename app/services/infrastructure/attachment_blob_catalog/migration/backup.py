@@ -138,6 +138,5 @@ def prepare_backup(workspace: Path, directory: Path) -> dict[str, object]:
         journal.update(state="prepared", manifest_sha256=file_digest(directory / "manifest.json"))
         atomic_write_bytes(directory / "journal.json", _json(journal))
         fsync_directory(directory.parent)
-        # TODO: 备份之后的 schema 3 → 4 转换、持久切换点与继续/撤销由此接续，
-        # 当前只准备可核验的源快照，不提升 schema 或改变线上 locator。
+        # 后续转换和安装显式消费此备份；prepared 本身不改变线上 locator。
         return verify_backup(directory)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import tracemalloc
 from dataclasses import replace
 from datetime import datetime
 
@@ -211,6 +212,43 @@ def test_internal_structured_content_include_keeps_stable_part_ids(
     )
     assert [part.source.part_ordinal for part in parts] == ordinals
     assert [part.part_id for part in parts] == [f"{internal_structured_content.item_id}:part:{ordinal}" for ordinal in ordinals]
+
+
+def test_tool_result_truncation_does_not_join_full_input() -> None:
+    content_chunks = ["x" * (1024 * 1024) for _ in range(16)]
+    records = [
+        _record(
+            1,
+            {"type": "tool", "data": {"tool_call_id": "call-large", "content": content_chunks}},
+        )
+    ]
+    projection = _projection(
+        _activity(
+            "large-result",
+            1,
+            "tool_result",
+            tool_call_id="call-large",
+            message_sequence=1,
+            result_message_sequence=1,
+        )
+    )
+
+    tracemalloc.start()
+    try:
+        parts = response_parts_from_records(
+            records,
+            projection=projection,
+            mode="detail",
+            include=frozenset({"tool_result"}),
+        )
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert len(parts) == 1
+    assert parts[0].result == "x" * 65536
+    assert parts[0].truncated
+    assert peak_bytes < 2 * 1024 * 1024
 
 
 @pytest.mark.parametrize(("first", "second"), [

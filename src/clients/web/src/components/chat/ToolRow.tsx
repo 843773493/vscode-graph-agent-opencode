@@ -1,8 +1,5 @@
 import React from "react";
-import {
-  formatToolCardContent,
-  toolCollapsedText,
-} from "../../state/display/toolDisplay";
+import { deriveToolRowDisplay } from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 import { errorMessage } from "../../utils/errorMessage";
@@ -81,6 +78,7 @@ function ToolRow({
   );
   const canLoadDetails = Boolean(item.toolCallId && onLoadDetails);
   const hasDetails = hasMaterializedDetails || canLoadDetails;
+  const display = deriveToolRowDisplay(item, open);
   const handleClick = async () => {
     if (loading) return;
     if (!item.detailsLoaded && item.toolCallId && onLoadDetails) {
@@ -101,7 +99,7 @@ function ToolRow({
     setOpen((current) => !current);
   };
   const content = open
-    ? formatToolCardContent(item) ?? fallbackContent(item)
+    ? display.detailsContent ?? fallbackContent(item)
     : null;
 
   return (
@@ -117,7 +115,7 @@ function ToolRow({
         <span className={`codicon ${loading ? "codicon-loading codicon-modifier-spin" : status.icon}`} aria-hidden="true" />
         <span className="chat-tool-label">{status.label}</span>
         <span className="chat-tool-preview">
-          {loading ? "正在加载工具详情…" : toolCollapsedText(item)}
+          {loading ? "正在加载工具详情…" : display.previewText}
         </span>
         {hasDetails ? (
           <span

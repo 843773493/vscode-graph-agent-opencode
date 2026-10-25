@@ -55,8 +55,17 @@ function* collectToolResultMessages(
   }
 }
 
-export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogKeyFlow {
+export function buildRequestLogKeyFlow(
+  logs: readonly LLMRequestLogRecord[],
+): RequestLogKeyFlow {
   const orderedLogs = [...logs].sort((left, right) => left.timestamp - right.timestamp);
+  return buildRequestLogKeyFlowFromOrderedLogs(orderedLogs);
+}
+
+/** 调用方已经按时间排序时复用该顺序，避免重复复制和排序。 */
+export function buildRequestLogKeyFlowFromOrderedLogs(
+  orderedLogs: readonly LLMRequestLogRecord[],
+): RequestLogKeyFlow {
   const state = createSkillKeyFlowState();
   const customInvokerNames: string[] = [];
   const customToolNames: string[] = [];

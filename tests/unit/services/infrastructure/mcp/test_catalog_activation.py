@@ -59,7 +59,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径隔离 SQLite fixture
 )
-from tests.support.mcp_session_doubles import drain_pending_relists
+from tests.support.mcp.session_doubles import drain_pending_relists
 
 
 class CatalogSession:

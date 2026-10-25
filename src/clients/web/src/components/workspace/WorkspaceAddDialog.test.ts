@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { GatewayWorkspace } from "../../types/backend";
-import { gatewayChoices } from "./WorkspaceAddDialog";
+import { buildWorkspaceAddGatewayChoices } from "./workspaceAddDialog/gatewayChoices";
 
 function createWorkspace(
   overrides: Partial<GatewayWorkspace>,
@@ -26,7 +26,7 @@ function createWorkspace(
 
 describe("工作区设备选项", () => {
   test("本机使用用户可理解的名称和可用状态", () => {
-    const [local] = gatewayChoices([createWorkspace({})]);
+    const [local] = buildWorkspaceAddGatewayChoices([createWorkspace({})]);
 
     expect(local).toMatchObject({
       kind: "local",
@@ -38,7 +38,7 @@ describe("工作区设备选项", () => {
   });
 
   test("远程设备优先使用 SSH 别名并始终展示登录地址", () => {
-    const choices = gatewayChoices([
+    const choices = buildWorkspaceAddGatewayChoices([
       createWorkspace({
         connection_kind: "remote_gateway",
         remote: {
@@ -64,7 +64,7 @@ describe("工作区设备选项", () => {
   });
 
   test("没有别名和自定义名时使用 user@host，异常信息不会被吞掉", () => {
-    const choices = gatewayChoices([
+    const choices = buildWorkspaceAddGatewayChoices([
       createWorkspace({
         connection_kind: "remote_gateway",
         connection_error: "SSH 握手超时",

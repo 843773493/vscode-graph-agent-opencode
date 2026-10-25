@@ -128,6 +128,29 @@ describe("TerminalPanel 终端连接兜底", () => {
     renderer.unmount();
   });
 
+  test("资源错误和操作错误显示在固定状态行，不进入可换行工具栏", () => {
+    installWindow();
+    const props = panelProps([{
+      ...entry("workspace_test", "terminal_error"),
+      error: "终端运行状态尚待核实",
+    }]);
+    const renderer = create(
+      <TerminalPanel
+        {...props}
+        controller={{ ...props.controller, error: "刷新终端失败" }}
+      />,
+    );
+
+    const toolbar = renderer.root.findByProps({ className: "terminal-panel-resource-actions" });
+    const errorSlot = renderer.root.findByProps({ className: "terminal-panel-error-slot" });
+    const alert = errorSlot.findByProps({ role: "alert" });
+    expect(toolbar.findAll((node) => node.props.role === "alert")).toHaveLength(0);
+    expect(alert.props.title).toBe("终端运行状态尚待核实 · 刷新终端失败");
+    expect(textOf(alert.props.children)).toBe("终端运行状态尚待核实 · 刷新终端失败");
+    expect(renderer.root.findAllByProps({ className: "terminal-panel-frame-fallback" })).toHaveLength(0);
+    renderer.unmount();
+  });
+
   test("临时孤儿不发起无授权 iframe，显示重新关联与保留入口", () => {
     installWindow();
     const orphan = { ...entry("workspace_test", "term_orphan"), retention_scope: "thread", available_actions: ["promote", "attach"], thread_associations: [] };

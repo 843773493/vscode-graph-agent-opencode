@@ -44,24 +44,30 @@ def _file_uri(root: Path, *parts: str) -> str:
     )
 
 
-@pytest.mark.parametrize("entry", ["relative", "absolute", "uri"])
+@pytest.mark.parametrize("reference_form", ["relative", "absolute", "uri"])
 def test_user_content_builder_converts_workspace_image_attachment(
     empty_workspace_scope: tuple[str, Path],
-    entry: str,
+    reference_form: str,
 ):
     """图片附件应被转换成 OpenAI-compatible image_url content block。"""
-    workspace_root = empty_workspace_scope[1]
+    _, workspace_root = empty_workspace_scope
     image_path = workspace_root / "assets" / "test.jpg"
     image_path.parent.mkdir(parents=True, exist_ok=True)
-    image_path.write_bytes(_image_bytes("JPEG", (1600, 900)))
+    original_image_bytes = _image_bytes("JPEG", (1600, 900))
+    image_path.write_bytes(original_image_bytes)
     uri = _file_uri(workspace_root, "assets", "test.jpg")
-    value = {"relative": "assets/test.jpg", "absolute": str(image_path), "uri": uri}[entry]
+    attachment_reference_by_form = {
+        "relative": "assets/test.jpg",
+        "absolute": str(image_path),
+        "uri": uri,
+    }
+    attachment_reference = attachment_reference_by_form[reference_form]
 
     content = _build_user_content(
         "请描述图片",
         [
             AttachmentRef(
-                file_id=value,
+                file_id=attachment_reference,
                 name="test.jpg",
                 content_type="image/jpeg",
             )
@@ -87,7 +93,7 @@ def test_user_content_builder_converts_workspace_image_attachment(
 
     with Image.open(BytesIO(preview_bytes)) as preview:
         assert max(preview.size) == 512
-    assert len(preview_bytes) < len(image_path.read_bytes())
+    assert len(preview_bytes) < len(original_image_bytes)
 
 
 def test_user_content_builder_rejects_unpersisted_inline_image(
@@ -95,6 +101,7 @@ def test_user_content_builder_rejects_unpersisted_inline_image(
 ):
     """Agent 运行时只接受已经持久化的附件定位符。"""
     data_url = "data:image/jpeg;base64,/9j/2Q=="
+    _, workspace_root = empty_workspace_scope
 
     with pytest.raises(ValueError, match="必须先持久化"):
         _build_user_content(
@@ -107,7 +114,7 @@ def test_user_content_builder_rejects_unpersisted_inline_image(
                     data_url=data_url,
                 )
             ],
-            workspace_root=empty_workspace_scope[1],
+            workspace_root=workspace_root,
         )
 
 
@@ -128,7 +135,7 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
         / "assets"
         / "multimodal-test.mp4"
     )
-    workspace_root = empty_workspace_scope[1]
+    _, workspace_root = empty_workspace_scope
     assets = workspace_root / "assets"
     assets.mkdir(exist_ok=True)
     shutil.copy2(video_source, assets / "multimodal-test.mp4")
@@ -164,7 +171,7 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
 
 def test_user_content_builder_labels_multiple_attachments_in_order(empty_workspace_scope):
     """多附件应向模型显式标注序号和文件名，避免最终回复把附件合并理解。"""
-    workspace_root = empty_workspace_scope[1]
+    _, workspace_root = empty_workspace_scope
     assets = workspace_root / "assets"
     assets.mkdir(exist_ok=True)
     (assets / "first.jpg").write_bytes(_image_bytes("JPEG"))
@@ -234,7 +241,7 @@ def test_generated_attachment_preview_is_optional_for_capability_routing():
 
 
 def test_user_content_builder_keeps_generic_file_as_manifest_only(empty_workspace_scope):
-    workspace_root = empty_workspace_scope[1]
+    _, workspace_root = empty_workspace_scope
     document = workspace_root / "report.pdf"
     document.write_bytes(b"%PDF-1.7")
 
@@ -258,15 +265,15 @@ def test_user_content_builder_keeps_generic_file_as_manifest_only(empty_workspac
 
 
 def test_user_content_builder_reports_preview_failure_without_losing_path(empty_workspace_scope):
-    workspace_root = empty_workspace_scope[1]
-    image_path = workspace_root / "broken.png"
-    image_path.write_bytes(b"not-an-image")
+    _, workspace_root = empty_workspace_scope
+    broken_image_path = workspace_root / "broken.png"
+    broken_image_path.write_bytes(b"not-an-image")
 
     content = _build_user_content(
         "请检查附件",
         [
             AttachmentRef(
-                file_id=str(image_path),
+                file_id=str(broken_image_path),
                 name='危险"文件.png',
                 content_type="image/png",
             )

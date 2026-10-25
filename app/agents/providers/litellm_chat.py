@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any, cast
@@ -52,10 +53,11 @@ from app.agents.providers.litellm_history_projection import (
 )
 from app.agents.providers.litellm_stream_types import (
     _as_dict,
+    _as_mapping,
     _close_sync_stream,
     _create_usage_metadata,
     _message_chunk_token,
-    _streamed_response_payload,
+    _StreamedResponsePayloadBuilder,
     _StreamPartState,
 )
 from app.agents.providers.output_normalization import (
@@ -597,7 +599,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             chunks.append(
                 AIMessageChunk(
                     content="",
-                    additional_kwargs={"tool_calls": raw_tool_calls},
+                    additional_kwargs={"tool_calls": copy.deepcopy(raw_tool_calls)},
                     tool_call_chunks=tool_call_chunks,  # type: ignore[arg-type]
                 )
             )
@@ -610,7 +612,9 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                 AIMessageChunk(
                     content="",
                     additional_kwargs={
-                        "provider_specific_fields": provider_specific_fields
+                        "provider_specific_fields": copy.deepcopy(
+                            provider_specific_fields
+                        )
                     },
                 )
             )
@@ -633,7 +637,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             first_chunk_yielded = False
             part_state = _StreamPartState()
             semantic_delta_seen = False
-            streamed_chunks: list[AIMessageChunk] = []
+            response_payload = _StreamedResponsePayloadBuilder()
             raw_stream = self.completion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
@@ -673,7 +677,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         first_chunk_yielded=first_chunk_yielded,
                         part_state=part_state,
                     ):
-                        streamed_chunks.append(cg_chunk.message)
+                        response_payload.add(cg_chunk.message)
                         if self._message_chunk_has_semantic_delta(cg_chunk.message):
                             semantic_delta_seen = True
                             if delta_sink is not None:
@@ -695,7 +699,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             if scope is not None:
                 scope.raise_if_cancelled()
             if self._has_real_stream_termination(raw_stream):
-                record_upstream_response(_streamed_response_payload(streamed_chunks))
+                record_upstream_response(response_payload.build())
                 return
             error = self._incomplete_stream_error(attempt)
             record_upstream_error(error)
@@ -720,7 +724,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             first_chunk_yielded = False
             part_state = _StreamPartState()
             semantic_delta_seen = False
-            streamed_chunks: list[AIMessageChunk] = []
+            response_payload = _StreamedResponsePayloadBuilder()
             raw_stream = await self.acompletion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
@@ -757,7 +761,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         first_chunk_yielded=first_chunk_yielded,
                         part_state=part_state,
                     ):
-                        streamed_chunks.append(cg_chunk.message)
+                        response_payload.add(cg_chunk.message)
                         if self._message_chunk_has_semantic_delta(cg_chunk.message):
                             semantic_delta_seen = True
                             if delta_sink is not None:
@@ -780,7 +784,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             if scope is not None:
                 scope.raise_if_cancelled()
             if self._has_real_stream_termination(raw_stream):
-                record_upstream_response(_streamed_response_payload(streamed_chunks))
+                record_upstream_response(response_payload.build())
                 return
             error = self._incomplete_stream_error(attempt)
             record_upstream_error(error)
@@ -804,7 +808,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         first_chunk_yielded: bool,
         part_state: _StreamPartState,
     ) -> list[ChatGenerationChunk]:
-        chunk = _as_dict(raw_chunk)
+        chunk = _as_mapping(raw_chunk)
         usage_metadata = None
         if chunk.get("usage"):
             usage_metadata = _create_usage_metadata(chunk["usage"])
@@ -816,8 +820,8 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             message_chunk = AIMessageChunk(content="", usage_metadata=usage_metadata)
             return [ChatGenerationChunk(message=message_chunk)]
 
-        choice = _as_dict(choices[0])
-        delta = _as_dict(choice.get("delta"))
+        choice = _as_mapping(choices[0])
+        delta = dict(_as_mapping(choice.get("delta")))
         if chunk.get("provider_specific_fields"):
             delta["provider_specific_fields"] = chunk["provider_specific_fields"]
         elif chunk.get("vertex_ai_grounding_metadata"):

@@ -30,16 +30,21 @@ from tests.support.processes.workspace import terminate_process
 
 
 class ProcessSnapshot(NamedTuple):
-    state: str
-    group_id: int
-    session_id: int | str
-    start_time: int | str
+    process_state: str
+    process_group_id: int
+    process_session_id: int | str
+    process_start_time: int | str
 
 
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path() -> str:
     """生命周期测试只需空工作区，避免复制未使用的默认项目模板。"""
     return prepare_empty_terminal_e2e_workspace(Path(__file__))
+
+
+@pytest.fixture(scope="module")
+def terminal_run_context() -> TestRunContext:
+    return TestRunContext.from_test_file(Path(__file__))
 
 
 def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot | None:
@@ -52,13 +57,25 @@ def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot |
         if len(fields) < 20:
             raise RuntimeError(f"Linux 进程 stat 字段不足: pid={pid}")
         snapshot = ProcessSnapshot(
-            fields[0], int(fields[2]), int(fields[3]), int(fields[19]),
+            fields[0],
+            int(fields[2]),
+            int(fields[3]),
+            int(fields[19]),
         )
     elif os.name == "posix":
         result = subprocess.run(
             [
-                "ps", "-o", "stat=", "-o", "pgid=", "-o", "sess=", "-o",
-                "lstart=", "-p", str(pid),
+                "ps",
+                "-o",
+                "stat=",
+                "-o",
+                "pgid=",
+                "-o",
+                "sess=",
+                "-o",
+                "lstart=",
+                "-p",
+                str(pid),
             ],
             capture_output=True,
             text=True,
@@ -79,15 +96,26 @@ def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot |
                 f"POSIX ps 进程快照字段不足: pid={pid}, output={result.stdout!r}"
             )
         snapshot = ProcessSnapshot(
-            fields[0][0], int(fields[1]), fields[2], " ".join(fields[3:]),
+            fields[0][0],
+            int(fields[1]),
+            fields[2],
+            " ".join(fields[3:]),
         )
     else:
         raise RuntimeError(f"不支持读取进程组快照的平台: {sys.platform}")
 
     for actual, expected, field in (
-        (snapshot.group_id, record["process_group_id"], "process_group_id"),
-        (snapshot.session_id, record["process_session_id"], "process_session_id"),
-        (snapshot.start_time, record["process_start_time"], "process_start_time"),
+        (snapshot.process_group_id, record["process_group_id"], "process_group_id"),
+        (
+            snapshot.process_session_id,
+            record["process_session_id"],
+            "process_session_id",
+        ),
+        (
+            snapshot.process_start_time,
+            record["process_start_time"],
+            "process_start_time",
+        ),
     ):
         if actual != expected:
             raise AssertionError(
@@ -98,12 +126,12 @@ def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot |
 
 def _reap_registered_process(record: dict[str, object]) -> None:
     snapshot = _registered_process_snapshot(record)
-    if snapshot is not None and snapshot.state not in {"Z", "X", "x"}:
+    if snapshot is not None and snapshot.process_state not in {"Z", "X", "x"}:
         os.killpg(int(record["process_group_id"]), signal.SIGKILL)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         snapshot = _registered_process_snapshot(record)
-        if snapshot is None or snapshot.state in {"Z", "X", "x"}:
+        if snapshot is None or snapshot.process_state in {"Z", "X", "x"}:
             return
         time.sleep(0.05)
     raise AssertionError(f"测试登记的进程组仍在执行: {record}")
@@ -145,14 +173,18 @@ def _assert_preserved_transport(
 
 @pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
-    e2e_workspace_root_path: str, e2e_backend_port: int
+    e2e_workspace_root_path: str,
+    e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 70)
-    root = create_terminal_scenario_workspace(
-        e2e_workspace_root_path, "sigterm"
-    )
+    root = create_terminal_scenario_workspace(e2e_workspace_root_path, "sigterm")
     workspace_id = load_or_create_workspace_id(Path(root))
-    process = start_terminal_backend(backend_port=backend_port, workspace_root=root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+    process = start_terminal_backend(
+        backend_port=backend_port,
+        workspace_root=root,
+        artifacts_dir=terminal_run_context.artifacts_dir,
+    )
     original = None
     try:
         terminal = create_long_running_terminal(
@@ -174,14 +206,18 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
 
 @pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recovered(
-    e2e_workspace_root_path: str, e2e_backend_port: int
+    e2e_workspace_root_path: str,
+    e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 72)
-    root = create_terminal_scenario_workspace(
-        e2e_workspace_root_path, "startup"
-    )
+    root = create_terminal_scenario_workspace(e2e_workspace_root_path, "startup")
     workspace_id = load_or_create_workspace_id(Path(root))
-    process = start_terminal_backend(backend_port=backend_port, workspace_root=root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+    process = start_terminal_backend(
+        backend_port=backend_port,
+        workspace_root=root,
+        artifacts_dir=terminal_run_context.artifacts_dir,
+    )
     original = None
     try:
         terminal = create_long_running_terminal(
@@ -192,7 +228,11 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
         original = terminal_state_record(root, terminal_id)
         process.kill()
         process.wait(timeout=10)
-        process = start_terminal_backend(backend_port=backend_port, workspace_root=root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+        process = start_terminal_backend(
+            backend_port=backend_port,
+            workspace_root=root,
+            artifacts_dir=terminal_run_context.artifacts_dir,
+        )
         snapshot = wait_terminal_snapshot(backend_port, terminal_id, workspace_id)
         record = _assert_preserved_transport(root, original, workspace_id)
         assert snapshot["terminal_id"] == terminal_id

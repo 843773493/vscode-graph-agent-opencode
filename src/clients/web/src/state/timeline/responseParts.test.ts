@@ -7,7 +7,7 @@ import {
   type MessageStreamEvent,
 } from "../messageStream/index";
 import { responsePartsToTimelineItems } from "./responseParts";
-import { formatToolCardContent, toolCollapsedText } from "../display/toolDisplay";
+import { deriveToolRowDisplay } from "../display/toolDisplay";
 import type { TurnResponsePart } from "../../types/backend";
 
 function streamEvent(
@@ -153,8 +153,9 @@ describe("responsePartsToTimelineItems", () => {
       }),
     });
     if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
-    expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
-    expect(formatToolCardContent(item)).toContain("/workspace");
+    const display = deriveToolRowDisplay(item, true);
+    expect(display.previewText).toBe("命令已完成，终端仍可打开");
+    expect(display.detailsContent).toContain("/workspace");
   });
 
   it("历史 detail response parts 使用 arguments/result 展示 exec_command", () => {
@@ -182,9 +183,10 @@ describe("responsePartsToTimelineItems", () => {
 
     expect(item?.kind).toBe("aggregated_tool");
     if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
-    expect(formatToolCardContent(item)).toContain("ls");
-    expect(formatToolCardContent(item)).toContain("README.md");
-    expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
+    const display = deriveToolRowDisplay(item, true);
+    expect(display.detailsContent).toContain("ls");
+    expect(display.detailsContent).toContain("README.md");
+    expect(display.previewText).toBe("命令已完成，终端仍可打开");
   });
 
   it("历史 summary 没有正文时保留 tool_call_id，供 ToolRow 加载 detail", () => {
@@ -209,7 +211,7 @@ describe("responsePartsToTimelineItems", () => {
       detailsLoaded: false,
     });
     if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
-    expect(toolCollapsedText(item)).toBe("命令工具已返回，终端仍可打开");
+    expect(deriveToolRowDisplay(item, false).previewText).toBe("命令工具已返回，终端仍可打开");
   });
 
   it("按统一语义模型渲染历史 content、工具和最终文本", () => {

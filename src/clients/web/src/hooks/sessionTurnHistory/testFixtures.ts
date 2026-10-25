@@ -93,26 +93,12 @@ export function turnDetail(epoch: number): TurnDetail {
   };
 }
 
-function turnBootstrapSession(): SessionTurnBootstrap["session"] {
-  return {
-    session_id: SESSION_ID,
-    workspace_id: WORKSPACE_ID,
-    resource_identity: `fixture-${SESSION_ID}`,
-    uri: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
-    scope: "workspace",
-    title: "渐进 Turn 历史",
-    current_agent_id: "default",
-    created_at: "2026-07-28T00:00:00Z",
-    updated_at: "2026-07-28T00:00:00Z",
-  };
-}
-
 export function bootstrap(
   projectionState: "partial" | "ready",
   projectionEpoch: number,
 ): SessionTurnBootstrap {
   return {
-    session: turnBootstrapSession(),
+    session: session(),
     thread_id: THREAD_ID,
     latest_turn: latestTurn(),
     active_job_id: null,

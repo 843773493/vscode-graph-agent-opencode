@@ -29,13 +29,14 @@ def control_probe(request: pytest.FixtureRequest) -> tuple[list[str], Path]:
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
-const { createGatewaySupervisorControl, requestGatewayHandoff, resolveGatewaySupervisorSocketPath } =
+const { createGatewaySupervisorControl, gatewaySupervisorControlAddress } =
   await import(process.argv[2]);
-const home = path.join(process.argv[3], "控制目录 " + "长目录".repeat(40));
-const endpoint = resolveGatewaySupervisorSocketPath(home);
-assert.equal(resolveGatewaySupervisorSocketPath(""), null);
-assert.equal(resolveGatewaySupervisorSocketPath(home), endpoint);
-assert.notEqual(resolveGatewaySupervisorSocketPath(home + "other"), endpoint);
+const { requestGatewayHandoff } = await import(process.argv[3]);
+const home = path.join(process.argv[4], "控制目录 " + "长目录".repeat(40));
+const endpoint = gatewaySupervisorControlAddress(home);
+assert.equal(gatewaySupervisorControlAddress(""), null);
+assert.equal(gatewaySupervisorControlAddress(home), endpoint);
+assert.notEqual(gatewaySupervisorControlAddress(home + "other"), endpoint);
 if (process.platform === "win32") assert.ok(endpoint.startsWith("\\\\.\\pipe\\"));
 else assert.ok(Buffer.byteLength(endpoint) <= 100);
 const environment = {
@@ -44,7 +45,7 @@ const environment = {
   BOXTEAM_CONFIG_FENCING_TOKEN: "fence-native",
 };
 const calls = [];
-const control = createGatewaySupervisorControl({ socketPath: endpoint, onHandoff: async payload => {
+const control = createGatewaySupervisorControl({ address: endpoint, onHandoff: async payload => {
   calls.push(payload);
   return { accepted: true, target_generation: payload.target_generation };
 }});
@@ -62,8 +63,9 @@ if (process.platform !== "win32") assert.equal(existsSync(endpoint), false);
 assert.deepEqual(await requestGatewayHandoff({ boxteamHome: home, environment, timeoutMs: 5000 }), { handled: false });
 console.log(JSON.stringify({ platform: process.platform, endpoint, observed, calls, closed: true }));
 ''', encoding="utf-8")
-    module = (root / "packages/launcher/src/process/gateway/handoff-control.mjs").as_uri()
-    return [node, str(probe), module, str(workspace)], output
+    control_module = (root / "packages/launcher/src/gateway/control-channel.mjs").as_uri()
+    supervisor_module = (root / "packages/launcher/src/gateway/supervisor.mjs").as_uri()
+    return [node, str(probe), control_module, supervisor_module, str(workspace)], output
 
 
 def test_gateway_launcher_native_control_endpoint(control_probe: tuple[list[str], Path]) -> None:

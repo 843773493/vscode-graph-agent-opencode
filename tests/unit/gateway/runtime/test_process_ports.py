@@ -1,5 +1,6 @@
 import os
 import socket
+from types import SimpleNamespace
 
 import pytest
 
@@ -106,3 +107,35 @@ def test_port_availability_probe_allows_reuse_after_restart(
 
     assert is_local_port_available(8010) is True
     assert calls == [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
+
+
+def test_port_availability_probe_requires_exclusive_binding_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int, int]] = []
+
+    class _ProbeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            calls.append((level, option, value))
+
+        def bind(self, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 8010)
+
+    socket_api = SimpleNamespace(
+        AF_INET=socket.AF_INET,
+        SOCK_STREAM=socket.SOCK_STREAM,
+        SOL_SOCKET=socket.SOL_SOCKET,
+        SO_EXCLUSIVEADDRUSE=-5,
+        socket=lambda *_: _ProbeSocket(),
+    )
+    monkeypatch.setattr(process_ports, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(process_ports, "socket", socket_api)
+
+    assert is_local_port_available(8010) is True
+    assert calls == [(socket.SOL_SOCKET, -5, 1)]

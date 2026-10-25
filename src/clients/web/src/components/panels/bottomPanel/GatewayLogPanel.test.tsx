@@ -2,11 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
   installGatewayFetch,
-  restoreSessionHookGlobals,
-} from "../../../hooks/session/sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../../tests/fixtures/session/gatewayEnvironment";
 import GatewayLogPanel from "./GatewayLogPanel";
 
-afterEach(() => restoreSessionHookGlobals());
+afterEach(() => restoreGatewayTestEnvironment());
 
 /** GatewayLogPanel 会注册 3 秒轮询，测试环境必须显式提供 setInterval。 */
 function installPollingWindow(port: number): void {
@@ -89,6 +89,75 @@ async function flush(): Promise<void> {
   });
 }
 
+test("断网时界面诊断直接显示错误详情，不依赖再次读取服务日志", async () => {
+  let requests = 0;
+  installGatewayFetch(() => {
+    requests += 1;
+    throw new Error("仍然离线");
+  }, { token: "offline-diagnostic-token" });
+  installPollingWindow(8025);
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<GatewayLogPanel
+      apiPort={8025}
+      workspaceId="ws_a"
+      height={200}
+      diagnostic={{ title: "工作区甲 · 切换工作区失败", detail: "请求超时: /api/gateway/workspaces/ws_a/activate" }}
+      onClose={() => undefined}
+    />);
+  });
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain("请求超时: /api/gateway/workspaces/ws_a/activate");
+  expect(text).toContain("界面诊断");
+  expect(text).not.toContain("工作区输出读取失败");
+  expect(requests).toBe(0);
+  act(() => renderer.unmount());
+});
+
+test("界面诊断与服务日志共用输出通道，打开新错误时清除旧筛选", async () => {
+  installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
+    ? Response.json({ data: diagnosticsPayload("ws_a"), request_id: "req_logs" })
+    : undefined, { token: "diagnostic-channel-token" });
+  installPollingWindow(8025);
+  let renderer!: ReactTestRenderer;
+  const renderPanel = (detail: string) => <GatewayLogPanel
+    apiPort={8025} workspaceId="ws_a" height={200}
+    diagnostic={{ title: "读取目录失败", detail }} onClose={() => undefined}
+  />;
+  await act(async () => { renderer = create(renderPanel("首次错误")); });
+  await act(async () => {
+    renderer.root.findByProps({ "aria-label": "选择输出通道" }).props.onChange({ target: { value: "" } });
+  });
+  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_ws_a");
+  act(() => {
+    renderer.root.findByProps({ "aria-label": "选择输出通道" }).props.onChange({ target: { value: "interface-diagnostic" } });
+    renderer.root.findByProps({ "aria-label": "筛选当前输出" }).props.onChange({ target: { value: "不会匹配的过滤词" } });
+  });
+  expect(JSON.stringify(renderer.toJSON())).toContain("没有匹配的输出");
+  await act(async () => { renderer.update(renderPanel("新的错误详情")); });
+  expect(renderer.root.findByProps({ "aria-label": "选择输出通道" }).props.value).toBe("interface-diagnostic");
+  expect(JSON.stringify(renderer.toJSON())).toContain("新的错误详情");
+  act(() => renderer.unmount());
+});
+
+test("切换工作区后不继续显示上一个工作区的界面错误", async () => {
+  const pending = installPendingDiagnosticsFetch("diagnostic-workspace-token");
+  installPollingWindow(8025);
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<GatewayLogPanel apiPort={8025} workspaceId="ws_a" height={200}
+      diagnostic={{ title: "甲的错误", detail: "甲的请求超时" }} onClose={() => undefined} />);
+  });
+  act(() => {
+    renderer.update(<GatewayLogPanel apiPort={8025} workspaceId="ws_b" height={200} onClose={() => undefined} />);
+  });
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("甲的请求超时");
+  await flush();
+  await act(async () => { pending[0].resolve(); });
+  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_ws_b");
+  act(() => renderer.unmount());
+});
+
 test("切换工作区后到达的旧输出不得覆盖新工作区", async () => {
   // 底部输出面板跟随当前工作区；工作区切换会重发诊断请求。慢的旧请求若在快的
   // 新请求之后返回，必须被丢弃，否则用户切到新工作区后仍看到上一个工作区的日志。
@@ -125,7 +194,7 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain("TAIL_ws_b");
   expect(text).not.toContain("TAIL_ws_a");
-  renderer.unmount();
+  act(() => renderer.unmount());
 });
 test("切换工作区到新工作区期间不得继续渲染旧工作区日志", async () => {
   // 切换窗口保护：A 已显示后切到 B，B 的响应仍在途时，面板必须立刻作废 A 的快照，
@@ -170,5 +239,5 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   const after = JSON.stringify(renderer.toJSON());
   expect(after).toContain("TAIL_ws_b");
   expect(after).not.toContain("TAIL_ws_a");
-  renderer.unmount();
+  act(() => renderer.unmount());
 });

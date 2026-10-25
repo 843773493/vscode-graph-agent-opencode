@@ -4,7 +4,8 @@
 
 ```text
 preview/
-├── WorkspaceMarkdownPreview.tsx      Markdown/GFM 文档预览与渲染上限
+├── WorkspaceMarkdownPreview.tsx      文档上限提示与 renderer 延迟加载
+├── WorkspaceMarkdownRenderer.tsx      Markdown/GFM 解析、链接、图片与 Mermaid 投影
 ├── WorkspaceMarkdownImage.tsx         工作区图片请求、外链图片原生懒加载
 ├── WorkspaceAttachmentPreview.tsx     会话附件预览与对象 URL 生命周期
 └── MermaidDiagram.tsx                 Mermaid 懒加载与图表渲染

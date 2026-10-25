@@ -2,13 +2,15 @@
 
 `scripts/install/` 存放本地发布包安装和运行时安装后处理入口。
 
-安装命令测试区分“目标发布平台”和“运行主机路径”：前者决定平台包名及npm/npm.cmd，项目根、tarball和prefix的真实路径仍遵循宿主`node:path`规则。纯命令测试使用正式输出镜像路径下的中文、空格路径作为输入，不创建安装目录；通过注入spawn结果检查命令，不执行安装或打包。Windows路径边界模拟只证明路径和命令接线，不代表Windows原生安装验收。
+安装命令测试区分“目标发布平台”和“运行主机路径”：前者决定平台包名及npm/npm.cmd，项目根、tarball和prefix的真实路径仍遵循宿主`node:path`规则。纯命令测试使用正式输出镜像路径下的中文、空格路径作为输入，不创建安装目录；通过注入spawn结果检查命令，不执行安装或打包。`windows-npm-execution.test.mjs`验证安装和安装后核验共用`cross-spawn`处理`.cmd`及参数转义；在Windows宿主上还会执行隔离的`npm.cmd`替身，实际验证命令解释器链路，不安装真实包。
 
 ```text
 安装入口
 ├── install-release.mjs       选择本地发布包并调用安装命令
 │   ├── 源码指纹与构建metadata  先核平台、版本、源码和归档文件名
 │   ├── 归档摘要               仅对仍可能复用的缓存或重建结果读取正文
+│   ├── install-release.test.mjs 命令构造和参数边界
+│   ├── windows-npm-execution.test.mjs npm.cmd执行和参数转义
 │   └── install-release-cache.test.mjs  真实复用入口、重建与失败边界
 └── runtime-postinstall.mjs   安装包内部的runtime取得与校验
     ├── 本地文件复制 / 远端HTTP下载  取得同一暂存归档
@@ -22,7 +24,7 @@
 
 本地发行包复用先核构建结果的平台、版本、源码指纹和归档文件名；已明确过期时直接进入既有重建流程，不读取旧归档正文。仍可能复用的缓存和新构建结果必须继续验证两个归档的完整摘要，必要校验的IO错误原样暴露；源码在构建期间变化或重建metadata仍不匹配时拒绝交付，不因此跳过摘要保证。
 
-`install-release-cache.test.mjs`在`out/tests/scripts/install/install-release-cache/workspace/<run_id>/<case_id>/`创建最小完整源码输入，独立Node调用真实`ensureCurrentLocalPackage`及指纹/摘要owner；仅重建子进程为替身。测试记录摘要流读取顺序与字节，覆盖两目标平台的有效缓存、过期metadata、损坏摘要及失败重建，不执行实际打包、安装、Git操作或原生Windows验收。
+`install-release-cache.test.mjs`在`out/tests/scripts/install/install-release-cache/workspace/<run_id>/<platform>/<scenario>/`创建最小完整源码输入，独立Node调用真实`ensureCurrentLocalPackage`及指纹/摘要owner；仅重建子进程为替身。对应`artifacts/<run_id>/`保存观察脚本，`artifacts/<run_id>/<platform>/<scenario>/`保存输入、原始stdout/stderr和进程结果。测试记录摘要流读取顺序与字节，覆盖两目标平台的有效缓存、过期metadata、损坏摘要及失败重建，不执行实际打包、安装、Git操作或原生Windows验收。
 
 `runtime-postinstall.test.mjs`的Node子进程只在`out/tests/scripts/install/runtime-postinstall/workspace/<run_id>/<scenario>/`内运行；原始stdout/stderr和精简结果保留在同镜像根`artifacts/<run_id>/<scenario>/`。每个运行ID与场景目录独占创建，运行原件不覆盖、不清理。通过VM执行原入口全文、本地随机端口HTTP及真实文件和摘要，文件边界可注入短写/错误；tar是明确的替身，只验证进入解包前的归档与参数，不证明真实解包或安装成功。fixture自身阶段上限1秒，Node子进程上限5秒，并由外层测试runner保护；不安装依赖、不访问远端发布服务、不写用户安装目录。当前根项目不含下载器的tar依赖，不能为这些边界测试临时安装它。
 

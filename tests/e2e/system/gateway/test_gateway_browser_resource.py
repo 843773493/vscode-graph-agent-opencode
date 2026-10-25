@@ -26,7 +26,7 @@ from tests.e2e.system.gateway.gateway_target import (
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
     start_remote_gateway_via_ssh,
-    stop_remote_backend,
+    stop_remote_gateway,
 )
 from tests.harness.python.browser_manager import (
     BrowserFrontendProcess,
@@ -39,6 +39,7 @@ from tests.harness.python.terminal_frontend import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -49,7 +50,6 @@ from tests.support.processes.gateway import (
     start_gateway_process,
     write_gateway_remote_gateway_config,
 )
-from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.scope import register_test_process, unregister_test_process
 from tests.support.processes.workspace import (
     ensure_local_port_available,
@@ -808,7 +808,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
         if remote_gateway_declared:
             reset_gateway_user_configuration(workspace_root=local_workspace)
         if remote_gateway_pid is not None and docker_target is not None:
-            stop_remote_backend(docker_target, remote_gateway_pid)
+            stop_remote_gateway(docker_target, remote_gateway_pid)
         if browser_frontend is not None:
             close_browser_frontend_process(browser_frontend)
         if terminal_frontend is not None:

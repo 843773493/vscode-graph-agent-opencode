@@ -232,7 +232,7 @@ class WorkspaceActivityService:
             occurred_at=occurred_at,
         )
         async with self._subscriber_lock:
-            for subscriber in tuple(self._subscribers):
+            for subscriber in self._subscribers:
                 try:
                     subscriber.put_nowait(record)
                 except asyncio.QueueFull as error:

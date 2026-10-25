@@ -299,7 +299,7 @@ async function status(unit) {
 export async function main(args = process.argv.slice(2)) {
   if (process.platform !== "linux") {
     throw new Error(
-      "transient systemd 开发启动仅支持 Linux；其他平台请运行 bun run dev:foreground",
+      "transient systemd 开发启动仅支持 Linux；跨平台请使用统一入口 bun run dev",
     );
   }
   const action = args[0] ?? "start";

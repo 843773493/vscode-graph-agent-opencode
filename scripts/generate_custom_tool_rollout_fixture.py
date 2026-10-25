@@ -40,12 +40,12 @@ from tests.support.custom_tool_test_workspace import (
     FixtureStageObserver,
     timed_fixture_stage,
 )
-from tests.support.frozen_provider import (
+from tests.support.model_stream.frozen_provider import (
     create_frozen_provider_activation,
     create_frozen_provider_prepare,
     frozen_provider_wire,
 )
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 
 FIXTURE_VERSION: Final = 3
 STATIC_LONG_SESSION_ID: Final = "ses_019c642bc2ec78718d0a296b3319d6df"

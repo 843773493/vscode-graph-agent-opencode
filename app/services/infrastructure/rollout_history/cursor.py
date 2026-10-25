@@ -279,17 +279,20 @@ class HistoryCursorMixin:
     ) -> TurnCursorDTO | None:
         if cursor is None:
             return None
-        value = self._decode_cursor_payload(cursor)
-        if "item_sequence" in value or "item_read_upper_bound" in value:
+        cursor_payload = self._decode_cursor_payload(cursor)
+        if (
+            "item_sequence" in cursor_payload
+            or "item_read_upper_bound" in cursor_payload
+        ):
             raise InvalidTurnCursorError("v2 历史游标不得使用物理 item sequence 坐标")
         if (
-            value.get("session_id") != session_id
-            or value.get("thread_id") != thread_id
-            or value.get("checkpoint_ns") != checkpoint_ns
-            or value.get("rollout_id") != rollout_id
+            cursor_payload.get("session_id") != session_id
+            or cursor_payload.get("thread_id") != thread_id
+            or cursor_payload.get("checkpoint_ns") != checkpoint_ns
+            or cursor_payload.get("rollout_id") != rollout_id
         ):
             raise InvalidTurnCursorError("历史游标不属于当前 rollout")
-        raw_direction = value.get("direction")
+        raw_direction = cursor_payload.get("direction")
         if not isinstance(raw_direction, str) or raw_direction not in {
             "before",
             "after",
@@ -297,7 +300,7 @@ class HistoryCursorMixin:
             raise InvalidTurnCursorError("历史游标 direction 非法")
         if expected_direction is not None and raw_direction != expected_direction:
             raise InvalidTurnCursorError("历史游标 direction 与请求不一致")
-        raw_epoch = value.get("projection_epoch")
+        raw_epoch = cursor_payload.get("projection_epoch")
         if (
             isinstance(raw_epoch, bool)
             or not isinstance(raw_epoch, int)
@@ -310,7 +313,7 @@ class HistoryCursorMixin:
                 cursor_epoch=raw_epoch,
                 current_epoch=projection_epoch,
             )
-        raw_history_revision = value.get("history_view_revision")
+        raw_history_revision = cursor_payload.get("history_view_revision")
         if (
             isinstance(raw_history_revision, bool)
             or not isinstance(raw_history_revision, int)
@@ -327,19 +330,19 @@ class HistoryCursorMixin:
                 cursor_history_view_revision=raw_history_revision,
                 current_history_view_revision=history_view_revision,
             )
-        raw_view_id = value.get("view_id")
+        raw_view_id = cursor_payload.get("view_id")
         if view_id is None or raw_view_id != view_id:
             raise InvalidTurnCursorError("历史游标不属于当前 context view")
         if (
-            value.get("turn_read_upper_bound") != turn_read_upper_bound
-            or value.get("logical_item_read_upper_bound")
+            cursor_payload.get("turn_read_upper_bound") != turn_read_upper_bound
+            or cursor_payload.get("logical_item_read_upper_bound")
             != logical_item_read_upper_bound
         ):
             raise RuntimeError(
                 "相同 history_view_revision 下 rollout history upper bound 漂移"
             )
         try:
-            decoded = TurnCursorDTO.model_validate(value)
+            decoded = TurnCursorDTO.model_validate(cursor_payload)
         except ValueError as error:
             raise InvalidTurnCursorError("历史游标字段非法") from error
         if (

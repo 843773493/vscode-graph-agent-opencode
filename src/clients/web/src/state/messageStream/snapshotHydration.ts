@@ -10,7 +10,6 @@ import {
   activityStatusValue,
   blockStatusValue,
   boundedMessageStreamText,
-  cloneMessageStreamState,
   createMessageStreamState,
   defaultedTextValue,
   failureFromValue,
@@ -43,31 +42,30 @@ export function applyMessageStreamSnapshot(
   current: MessageStreamState,
   snapshot: MessageStreamSnapshotResponse,
 ): MessageStreamState {
-  const state = cloneMessageStreamState(current);
-  if (state.sessionId !== snapshot.session_id || state.turnId !== snapshot.turn_id
-    || state.threadId !== snapshot.thread_id) {
+  if (current.sessionId !== snapshot.session_id || current.turnId !== snapshot.turn_id
+    || current.threadId !== snapshot.thread_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流快照关联键与当前 Turn 不一致",
     };
   }
-  if (state.workspaceId && snapshot.workspace_id && state.workspaceId !== snapshot.workspace_id) {
+  if (current.workspaceId && snapshot.workspace_id && current.workspaceId !== snapshot.workspace_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流快照 workspace_id 与当前工作区不一致",
     };
   }
-  if (state.turnStreamId && state.turnStreamId !== snapshot.turn_stream_id) {
+  if (current.turnStreamId && current.turnStreamId !== snapshot.turn_stream_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流快照 turn_stream_id 在同一 Turn 内发生变化",
     };
   }
-  if (snapshot.snapshot_seq < state.lastEventSeq) return state;
-  return drainPendingEvents(applySnapshotState(state, snapshot, snapshot));
+  if (snapshot.snapshot_seq < current.lastEventSeq) return current;
+  return drainPendingEvents(applySnapshotState(current, snapshot, snapshot));
 }
 
 type MessageStreamSnapshotIdentity = Pick<

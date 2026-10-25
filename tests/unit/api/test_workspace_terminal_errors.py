@@ -25,15 +25,15 @@ from tests.support.resource_owners.terminal import TerminalOwnerFixture
     ("json", "json"), ("utf8", "json"), ("response", "response"),
 ])
 def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
-    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
+    terminal_resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, native_path: str,
     failure: str, stage: str | None, resource_http,
 ) -> None:
-    created = resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
+    created = terminal_resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     rid = resource["resource_id"]
-    detached = resource_api_client.post(f"/api/v1/resources/{rid}/detach", json={
+    detached = terminal_resource_api_client.post(f"/api/v1/resources/{rid}/detach", json={
         "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
     })
     assert detached.status_code == 200, detached.text
@@ -76,7 +76,7 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     monkeypatch.setattr(terminal_owner_bundle.transport, "delete_resource", transport.delete_resource)
     command = {"expected_revision": resource["owner_revision"]}
     with caplog.at_level(logging.ERROR):
-        failed = resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
+        failed = terminal_resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
     value_error = failure in {"json", "utf8", "missing_status", "status_type"}
     assert failed.status_code == (400 if value_error else 500), failed.text
     error_type = "ValueError" if value_error else "TypeError"
@@ -114,18 +114,18 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
             if record.name == "app.services.business.workspace_resources.owner"
         )
     terminal_owner_bundle.restart()
-    observed = resource_api_client.get(f"/api/v1/resources/{rid}")
+    observed = terminal_resource_api_client.get(f"/api/v1/resources/{rid}")
     assert observed.status_code == 200, observed.text
     current = observed.json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
     assert current["available_actions"] == ["stop", "delete"]
-    listed = resource_api_client.get("/api/v1/resources?kind=terminal")
+    listed = terminal_resource_api_client.get("/api/v1/resources?kind=terminal")
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == [current]
     assert native_path not in (terminal_owner_bundle.root / ".boxteam/terminal-resources.json").read_text()
     pending, = terminal_owner_bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
-    retry = resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
+    retry = terminal_resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
     assert retry.status_code == 409, retry.text
     assert attempted == [("DELETE", f"http://terminal.test/api/terminals/{rid}")]

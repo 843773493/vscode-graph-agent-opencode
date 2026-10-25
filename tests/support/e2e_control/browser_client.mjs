@@ -1,12 +1,13 @@
 import { createConnection } from "node:net";
 import { readFile } from "node:fs/promises";
-import { constants, closeSync, fsyncSync, openSync, readFileSync, writeSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { constants, closeSync, existsSync, fsyncSync, openSync, writeSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const FORK_OPERATION_TIMEOUT_MS = 60_000;
 const FORK_WATCHDOG_ENTRY = fileURLToPath(import.meta.url);
+const FORK_DEADLINE_ENTRY = resolve(process.cwd(), "tests/support/fork_deadline.py");
 let forkWatchdog;
 let forkOperationOrdinal = 0;
 const forkOperations = new Map();
@@ -16,20 +17,41 @@ function forkOperationIdentity(target, operationKey) {
   return `${target}\0${operationKey}`;
 }
 
-function processIdentity(pid) {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
-  return { ppid: Number(fields[1]), pgid: Number(fields[2]), sid: Number(fields[3]), startTime: fields[19] };
+function forkDeadlinePython() {
+  const environmentRoot = process.env.VIRTUAL_ENV
+    || process.env.UV_PROJECT_ENVIRONMENT
+    || resolve(process.cwd(), ".venv");
+  const executable = resolve(
+    environmentRoot,
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  if (!existsSync(executable)) {
+    throw new Error(`fork deadline Python 不存在: platform=${process.platform}, path=${executable}`);
+  }
+  return executable;
+}
+
+function runForkDeadlinePython(arguments_) {
+  const result = spawnSync(forkDeadlinePython(), [FORK_DEADLINE_ENTRY, ...arguments_], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      "fork deadline 跨平台进程操作失败: "
+      + `action=${arguments_[0]}, status=${String(result.status)}, signal=${String(result.signal)}, `
+      + `stderr=${result.stderr?.trim() || "<empty>"}`,
+      { cause: result.error },
+    );
+  }
+  return result.stdout.trim();
 }
 
 function assertIsolatedDriver(pid) {
-  if (process.platform !== "linux") {
-    throw new Error("fork deadline watchdog 仅支持 Linux 的隔离 browser-driver session");
-  }
-  const identity = processIdentity(pid);
-  if (identity.pgid !== pid || identity.sid !== pid || identity.pgid <= 1) {
-    throw new Error(`fork deadline watchdog 拒绝未隔离的 browser driver: pid=${pid}, pgid=${identity.pgid}, sid=${identity.sid}`);
-  }
+  const result = runForkDeadlinePython(["--browser-driver-identity", String(pid)]);
+  const identity = JSON.parse(result);
+  if (identity.pid !== pid) throw new Error(`fork deadline 返回了错误的浏览器驱动身份: ${result}`);
   return identity;
 }
 
@@ -43,15 +65,17 @@ function validateForkArtifactRoot(directory) {
 }
 
 class ForkDeadlineWatchdogClient {
-  constructor(artifactRoot, targetPid, targetStartTime) {
+  constructor(artifactRoot, targetPid, targetIdentity) {
     this.artifactRoot = validateForkArtifactRoot(artifactRoot);
-    this.targetPid = targetPid;
-    this.targetStartTime = targetStartTime;
     this.pending = new Map();
     this.buffer = "";
-    this.child = spawn(process.env.BOXTEAM_E2E_WATCHDOG_NODE || "node", [
-      FORK_WATCHDOG_ENTRY, "--fork-deadline-watchdog", String(targetPid), targetStartTime, this.artifactRoot,
-    ], { detached: true, stdio: ["pipe", "pipe", "inherit"] });
+    this.child = spawn(process.execPath, [
+      FORK_WATCHDOG_ENTRY,
+      "--browser-driver-watchdog",
+      String(targetPid),
+      JSON.stringify(targetIdentity),
+      this.artifactRoot,
+    ], { cwd: process.cwd(), detached: true, stdio: ["pipe", "pipe", "inherit"] });
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk) => this._read(chunk));
     this.child.on("error", (error) => this._rejectPending(error));
@@ -117,7 +141,7 @@ function forkWatchdogForThisDriver() {
   const artifactRoot = process.env.BOXTEAM_E2E_FORK_ARTIFACT_ROOT
     || process.env.BOXTEAM_BROWSER_ARTIFACT_ROOT;
   if (!artifactRoot) throw new Error("缺少 fork deadline 诊断目录 BOXTEAM_E2E_FORK_ARTIFACT_ROOT");
-  forkWatchdog = new ForkDeadlineWatchdogClient(artifactRoot, process.pid, identity.startTime);
+  forkWatchdog = new ForkDeadlineWatchdogClient(artifactRoot, process.pid, identity);
   return forkWatchdog;
 }
 
@@ -241,12 +265,6 @@ export async function assertForkDeadlineCloseSemanticsForTest() {
   await closeForkDeadlineWatchdog();
 }
 
-function procStat(pid) {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
-  return { pgrp: Number(fields[2]), sid: Number(fields[3]), startTime: fields[19] };
-}
-
 function writeForkDeadlineDiagnostic(directory, record, now) {
   const path = resolve(directory, `fork-deadline-${now}-${record.token}.json`);
   const payload = {
@@ -255,7 +273,7 @@ function writeForkDeadlineDiagnostic(directory, record, now) {
     last_stage: record.last_stage,
     elapsed_seconds: Number((Number(now - record.started_ns) / 1_000_000_000).toFixed(3)),
     backend_state: "unknown",
-    error: "fork operation deadline exceeded; watchdog terminated the isolated browser driver process group",
+    error: "fork operation deadline exceeded; watchdog terminated the isolated browser driver process scope",
   };
   const descriptor = openSync(path, "wx", 0o600);
   try {
@@ -264,6 +282,7 @@ function writeForkDeadlineDiagnostic(directory, record, now) {
   } finally {
     closeSync(descriptor);
   }
+  if (process.platform === "win32") return;
   const directoryDescriptor = openSync(directory, constants.O_RDONLY);
   try {
     fsyncSync(directoryDescriptor);
@@ -272,15 +291,13 @@ function writeForkDeadlineDiagnostic(directory, record, now) {
   }
 }
 
-async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot) {
-  const own = procStat(process.pid);
-  const target = procStat(targetPid);
-  if (own.pgrp !== process.pid || own.sid !== process.pid
-      || target.pgrp !== targetPid || target.sid !== targetPid || target.startTime !== targetStartTime
-      || process.ppid !== targetPid || process.pid === targetPid) {
-    throw new Error(`fork watchdog 拒绝不安全进程组边界: watcher=${process.pid}/${own.pgrp}/${own.sid}, `
-      + `driver=${targetPid}/${target.pgrp}/${target.sid}, parent=${process.ppid}`);
-  }
+async function runForkDeadlineWatchdog(targetPid, targetIdentity, artifactRoot) {
+  runForkDeadlinePython([
+    "--browser-driver-validate",
+    String(targetPid),
+    String(process.pid),
+    JSON.stringify(targetIdentity),
+  ]);
   const active = new Map();
   const identities = new Map();
   let buffer = "";
@@ -289,19 +306,6 @@ async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot)
   let expiring = false;
   let watchdogExitCode = 0;
   const reply = (id, value, error) => process.stdout.write(`${JSON.stringify({ id, value, error })}\n`);
-  const ensureTargetGroup = () => {
-    let current;
-    try {
-      current = procStat(targetPid);
-    } catch {
-      const error = new Error(`browser driver leader 已退出，不能证明目标 process group: pid=${targetPid}`);
-      error.code = "ESRCH";
-      throw error;
-    }
-    if (current.startTime !== targetStartTime || current.pgrp !== targetPid || current.sid !== targetPid) {
-      throw new Error(`browser driver process group identity 已变化: pid=${targetPid}`);
-    }
-  };
   const stopTimer = () => clearTimeout(timer);
   const schedule = () => {
     stopTimer();
@@ -334,33 +338,22 @@ async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot)
       watchdogExitCode = 1;
     }
     try {
-      ensureTargetGroup();
-      process.kill(-targetPid, "SIGTERM");
+      runForkDeadlinePython([
+        "--browser-driver-terminate",
+        String(targetPid),
+        String(process.pid),
+        JSON.stringify(targetIdentity),
+      ]);
     } catch (error) {
       watchdogExitCode = 1;
       try {
-        writeSync(2, `fork watchdog 无法终止已验证 browser group: ${String(error)}\n`);
+        writeSync(2, `fork watchdog 无法终止已验证 browser driver: ${String(error)}\n`);
       } catch {
-        // 目标组身份或信号失败仍通过非零退出报告。
+        // 目标树身份或终止失败仍通过非零退出报告。
       }
       return process.exit(watchdogExitCode || 1);
     }
-    setTimeout(() => {
-      try {
-        ensureTargetGroup();
-        process.kill(-targetPid, "SIGKILL");
-      } catch (error) {
-        if (error?.code !== "ESRCH") {
-          watchdogExitCode = 1;
-          try {
-            writeSync(2, `fork watchdog 强制回收失败: ${String(error)}\n`);
-          } catch {
-            // 继续以非零状态结束，避免遮蔽回收错误。
-          }
-        }
-      }
-      process.exit(watchdogExitCode);
-    }, 500);
+    process.exit(watchdogExitCode);
   };
   const dispatch = (message) => {
     try {
@@ -445,8 +438,8 @@ async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot)
   });
 }
 
-if (process.argv[2] === "--fork-deadline-watchdog") {
-  await runForkDeadlineWatchdog(Number(process.argv[3]), process.argv[4], process.argv[5]);
+if (process.argv[2] === "--browser-driver-watchdog") {
+  await runForkDeadlineWatchdog(Number(process.argv[3]), JSON.parse(process.argv[4]), process.argv[5]);
 }
 
 export async function testControl(payload) {

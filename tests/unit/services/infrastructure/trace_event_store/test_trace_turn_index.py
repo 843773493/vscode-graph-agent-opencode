@@ -19,6 +19,43 @@ from app.schemas.event import (
 from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
 
 
+def test_trace_turn_prepare_serializes_source_event_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ses_019c3e6c2a7a7208aa9f84e0f0478712"
+    event = JobCreatedEvent(
+        event_id="evt_single_event_dump",
+        job_id="job_single_event_dump",
+        timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(
+            session_id=session_id,
+            thread_id="thr_019c3e6c2a7a7208aa9f84e0f0478712",
+            message="serialize once",
+            agent_id="default",
+        ),
+    )
+    serialized_size = len(event.model_dump_json().encode("utf-8")) + 1
+    original_model_dump = JobCreatedEvent.model_dump
+    model_dump_calls = 0
+
+    def count_model_dump(self, *args, **kwargs):
+        nonlocal model_dump_calls
+        model_dump_calls += 1
+        return original_model_dump(self, *args, **kwargs)
+
+    monkeypatch.setattr(JobCreatedEvent, "model_dump", count_model_dump)
+    prepared = TraceTurnIndex(tmp_path / "logs" / "traces").prepare(
+        event,
+        trace_start=0,
+        serialized_size=serialized_size,
+        projects_turn=True,
+    )
+
+    assert prepared.entry.event_id == event.event_id
+    assert model_dump_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_turn_migration_snapshot_uses_immutable_message_boundary(
     tmp_path: Path,
@@ -130,7 +167,9 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
-                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(
+                    session_id
+                ),
                 message="x" * (2 * 1024 * 1024),
                 agent_id="default",
             ),
@@ -150,7 +189,9 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
     assert len(batch.events) == 1
     assert len(batch.events[0].event.payload.message) <= 2048
     assert batch.has_older_events is True
-    assert (session_dir / "logs" / "traces" / "events.jsonl").stat().st_size > 2 * 1024 * 1024
+    assert (
+        session_dir / "logs" / "traces" / "events.jsonl"
+    ).stat().st_size > 2 * 1024 * 1024
 
 
 def test_turn_bootstrap_fails_closed_when_manifest_is_missing(
@@ -197,7 +238,9 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
                 timestamp=datetime.now(UTC),
                 payload=JobCreatedPayload(
                     session_id=session_id,
-                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(
+                        session_id
+                    ),
                     message="recover",
                     agent_id="default",
                 ),
@@ -207,7 +250,9 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
 
     events = store.read_trace_page(session_id, cursor=None, limit=10).events
     assert store.event_threads(session_id, events) == {
-        "evt_index_recover": get_session_path_resolver(tmp_path).main_thread_id(session_id),
+        "evt_index_recover": get_session_path_resolver(tmp_path).main_thread_id(
+            session_id
+        ),
     }
 
     batch = store.read_turn_bootstrap_batch(
@@ -225,7 +270,9 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
-                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(
+                    session_id
+                ),
                 message="after recover",
                 agent_id="default",
             ),
@@ -241,39 +288,52 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
 
 @pytest.mark.asyncio
 async def test_trace_owner_rejects_missing_drifting_or_foreign_job_facts(
-    tmp_path: Path, trace_event_store_factory,
+    tmp_path: Path,
+    trace_event_store_factory,
 ) -> None:
     session_id = "ses_019c4169dad7706c86613137c1972acb"
     store, _ = trace_event_store_factory(session_id)
     thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
     now = datetime.now(UTC)
     orphan = AgentStartEvent(
-        event_id="evt_orphan", job_id="job_orphan", timestamp=now,
+        event_id="evt_orphan",
+        job_id="job_orphan",
+        timestamp=now,
         payload=AgentStartPayload(agent_id="default"),
     )
     await store.append(session_id, orphan)
     with pytest.raises(RuntimeError, match="缺少持久 Thread 归属"):
         store.event_threads(session_id, [orphan])
 
-    def created(event_id: str, owner_session: str, owner_thread: str) -> JobCreatedEvent:
+    def created(
+        event_id: str, owner_session: str, owner_thread: str
+    ) -> JobCreatedEvent:
         return JobCreatedEvent(
-            event_id=event_id, job_id="job_drift", timestamp=now,
+            event_id=event_id,
+            job_id="job_drift",
+            timestamp=now,
             payload=JobCreatedPayload(
-                session_id=owner_session, thread_id=owner_thread,
-                message="归属", agent_id="default",
+                session_id=owner_session,
+                thread_id=owner_thread,
+                message="归属",
+                agent_id="default",
             ),
         )
 
     first = created("evt_first_owner", session_id, thread_id)
     await store.append(session_id, first)
     assert store.event_threads(session_id, [first]) == {first.event_id: thread_id}
-    drift = created("evt_drift_owner", session_id, "thr_018f0000000070008000000000000001")
+    drift = created(
+        "evt_drift_owner", session_id, "thr_018f0000000070008000000000000001"
+    )
     assert drift.payload.thread_id != thread_id
     await store.append(session_id, drift)
     with pytest.raises(RuntimeError, match="Thread 归属漂移"):
         store.event_threads(session_id, [first])
 
-    foreign = created("evt_foreign_owner", "ses_018f0000000070008000000000000001", thread_id)
+    foreign = created(
+        "evt_foreign_owner", "ses_018f0000000070008000000000000001", thread_id
+    )
     foreign.job_id = "job_foreign"
     await store.append(session_id, foreign)
     with pytest.raises(RuntimeError, match="归属与 Session 不一致"):
@@ -281,18 +341,26 @@ async def test_trace_owner_rejects_missing_drifting_or_foreign_job_facts(
 
 
 def test_goal_trace_owner_is_explicitly_main_without_job_binding(
-    tmp_path: Path, trace_event_store_factory,
+    tmp_path: Path,
+    trace_event_store_factory,
 ) -> None:
     session_id = "ses_019c4169dad7706c86613137c1972acb"
     store, _ = trace_event_store_factory(session_id)
     event = GoalClearedEvent(
-        event_id="evt_goal_main", job_id=f"goal:{session_id}", timestamp=datetime.now(UTC),
-        payload=GoalClearedPayload(session_id=session_id, thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id)),
+        event_id="evt_goal_main",
+        job_id=f"goal:{session_id}",
+        timestamp=datetime.now(UTC),
+        payload=GoalClearedPayload(
+            session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+        ),
     )
     assert store.event_threads(session_id, [event]) == {
         event.event_id: get_session_path_resolver(tmp_path).main_thread_id(session_id),
     }
     for drift in ({"session_id": "ses_foreign"}, {"thread_id": "thr_child"}):
-        wrong = event.model_copy(update={"payload": event.payload.model_copy(update=drift)})
+        wrong = event.model_copy(
+            update={"payload": event.payload.model_copy(update=drift)}
+        )
         with pytest.raises(ValueError, match="main Thread 不一致"):
             store.event_threads(session_id, [wrong])

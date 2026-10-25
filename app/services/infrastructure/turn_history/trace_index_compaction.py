@@ -43,8 +43,12 @@ def is_turn_projected_event(event: Event) -> bool:
 
 
 def compact_event(event: Event) -> dict[str, object]:
+    return compact_event_json(event.model_dump(mode="json"))
+
+
+def compact_event_json(event_json: dict[str, object]) -> dict[str, object]:
     remaining = [COMPACT_TOTAL_CHARS]
-    compact = _compact_value(event.model_dump(mode="json"), remaining=remaining)
+    compact = _compact_value(event_json, remaining=remaining)
     if not isinstance(compact, dict):
         raise TypeError("Trace compact event 必须是 object")
     _AnyEvent.model_validate(compact)

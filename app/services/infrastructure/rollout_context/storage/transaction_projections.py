@@ -58,10 +58,16 @@ class RolloutTransactionProjectionMixin:
             raise TypeError("checkpoint channel_versions 的名称必须是非空字符串")
         if any(not isinstance(name, str) or not name for name in updated):
             raise TypeError("checkpoint updated_channels 的名称必须是非空字符串")
-        if len(set(updated)) != len(updated):
-            raise ValueError("checkpoint updated_channels 不得重复")
+        updated_index_by_name: dict[str, int] = {}
+        for channel_index, name in enumerate(updated):
+            if name in updated_index_by_name:
+                raise ValueError("checkpoint updated_channels 不得重复")
+            updated_index_by_name[name] = channel_index
         # 官方 Delta 根步可以既无值也无版本，仍登记其冻结空 selection。
-        names = set(values) | set(versions) | set(updated) | {"messages"}
+        names = set(values)
+        names.update(versions)
+        names.update(updated_index_by_name)
+        names.add("messages")
         for name in sorted(names):
             version = versions.get(name)
             if name in values and version is None:
@@ -71,7 +77,7 @@ class RolloutTransactionProjectionMixin:
                     version,
                     field=f"checkpoint channel version: {name}",
                 )
-            updated_index = updated.index(name) if name in updated else None
+            updated_index = updated_index_by_name.get(name)
             if name == "messages":
                 result = connection.execute(
                     "INSERT INTO checkpoint_channels(checkpoint_id, channel_name, storage_kind, value_state, channel_version, context_view_id, updated_index, created_at) VALUES (?, ?, 'rollout_view', ?, ?, ?, ?, ?)",

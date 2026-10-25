@@ -6,7 +6,7 @@ import type {
 } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { dedupeTraceEvents, isJobTerminalTraceType } from "../traceEvents";
-import { conversationsMatch, TERMINAL_TURN_STATUSES } from "./conversationMerge";
+import { conversationMatchKeys, TERMINAL_TURN_STATUSES } from "./conversationMerge";
 import { writePendingList } from "./pendingMap";
 import type { TurnRecord } from "../session/turnTimeline";
 import {
@@ -62,56 +62,61 @@ export function pendingSnapshotToConversations(
   if (!snapshot.thread_id) {
     throw new Error("主视图待处理快照缺少精确 thread 范围");
   }
-  const requests = snapshot.requests ?? [];
-  if (requests.some((request) =>
+  const pendingRequests = snapshot.requests ?? [];
+  if (pendingRequests.some((request) =>
     request.session_id !== snapshot.session_id || request.thread_id !== snapshot.thread_id
   )) {
     throw new Error("主视图待处理快照包含范围之外的消息");
   }
-  return [...requests]
-    .sort((left, right) => left.enqueue_sequence - right.enqueue_sequence)
+  const orderedRequests = [...pendingRequests].sort(
+    (left, right) => left.enqueue_sequence - right.enqueue_sequence,
+  );
+  const conversations: ConversationView[] = [];
+  for (const request of orderedRequests) {
     // 内部准入的 turn_id 明确为空；其展示只来自 standalone history envelope。
-    .filter((request) => request.turn_id !== null)
-    .map((request) => {
-      const messageUpdatedAt = request.message_metadata?.updated_at;
-      if (typeof messageUpdatedAt !== "string" || !messageUpdatedAt) {
-        throw new Error(`待处理消息缺少 canonical updated_at: message_id=${request.message_id}`);
-      }
-      return {
-        conversationId: request.message_id,
-        displayMode: "live" as const,
-        sessionId: request.session_id,
-        threadId: request.thread_id,
-        userMessage: {
-          message_id: request.message_id,
-          session_id: request.session_id,
-          thread_id: request.thread_id,
-          role: "user",
-          content: request.content,
-          attachments: request.attachments ?? [],
-          metadata: {
-            ...request.message_metadata,
-            source: "pending",
-            job_id: request.job_id,
-            delivery_policy: request.delivery_policy,
-          },
-          created_at: request.message_created_at,
-          updated_at: messageUpdatedAt,
+    if (request.turn_id === null) {
+      continue;
+    }
+    const messageUpdatedAt = request.message_metadata?.updated_at;
+    if (typeof messageUpdatedAt !== "string" || !messageUpdatedAt) {
+      throw new Error(`待处理消息缺少 canonical updated_at: message_id=${request.message_id}`);
+    }
+    conversations.push({
+      conversationId: request.message_id,
+      displayMode: "live" as const,
+      sessionId: request.session_id,
+      threadId: request.thread_id,
+      userMessage: {
+        message_id: request.message_id,
+        session_id: request.session_id,
+        thread_id: request.thread_id,
+        role: "user",
+        content: request.content,
+        attachments: request.attachments ?? [],
+        metadata: {
+          ...request.message_metadata,
+          source: "pending",
+          job_id: request.job_id,
+          delivery_policy: request.delivery_policy,
         },
-        assistantMessages: [],
-        events: [],
-        status: "queued",
-        jobId: request.job_id,
-        turnId: request.turn_id ?? undefined,
-        pending: true,
-        deliveryPolicy: request.delivery_policy,
-        enqueueSequence: request.enqueue_sequence,
-        waitingReason: request.waiting_reason,
-        queueSnapshotVersion: snapshot.snapshot_version,
-        pendingPosition: request.position,
-        source: "pending",
-      };
+        created_at: request.message_created_at,
+        updated_at: messageUpdatedAt,
+      },
+      assistantMessages: [],
+      events: [],
+      status: "queued",
+      jobId: request.job_id,
+      turnId: request.turn_id ?? undefined,
+      pending: true,
+      deliveryPolicy: request.delivery_policy,
+      enqueueSequence: request.enqueue_sequence,
+      waitingReason: request.waiting_reason,
+      queueSnapshotVersion: snapshot.snapshot_version,
+      pendingPosition: request.position,
+      source: "pending",
     });
+  }
+  return conversations;
 }
 
 export function writePendingSnapshot(
@@ -128,20 +133,31 @@ export function writePendingSnapshot(
   )) {
     throw new Error("待处理快照与既有 live 对话的 Session/thread 范围不一致");
   }
-  const existingSnapshotVersion = Math.max(
-    0,
-    ...existingPending.map(
-      (conversation) => conversation.queueSnapshotVersion ?? 0,
-    ),
-  );
+  let existingSnapshotVersion = 0;
+  for (const conversation of existingPending) {
+    existingSnapshotVersion = Math.max(
+      existingSnapshotVersion,
+      conversation.queueSnapshotVersion ?? 0,
+    );
+  }
   if ((snapshot.snapshot_version ?? 0) < existingSnapshotVersion) {
     return;
   }
-  const snapshotConversations: ConversationView[] = incomingConversations.map((conversation) => {
-    const live = existingPending.find((candidate) =>
-      candidate.jobId && candidate.jobId === conversation.jobId,
-    );
-    if (!live) return conversation;
+  const existingPendingByJobId = new Map<string, ConversationView>();
+  for (const conversation of existingPending) {
+    if (conversation.jobId && !existingPendingByJobId.has(conversation.jobId)) {
+      existingPendingByJobId.set(conversation.jobId, conversation);
+    }
+  }
+  const snapshotConversations: ConversationView[] = [];
+  for (const conversation of incomingConversations) {
+    const live = conversation.jobId
+      ? existingPendingByJobId.get(conversation.jobId)
+      : undefined;
+    if (!live) {
+      snapshotConversations.push(conversation);
+      continue;
+    }
     if (live.turnId && conversation.turnId && live.turnId !== conversation.turnId) {
       throw new Error("待处理快照与既有 live 对话的 Job/Turn 归属不一致");
     }
@@ -149,7 +165,7 @@ export function writePendingSnapshot(
       || TERMINAL_TURN_STATUSES.has(live.turnStatus ?? "");
     // 快照完整替换队列事实；同一 owner 已收到的 live 内容和事件独立续存。
     // root/revision/view 坐标只由当前 timeline 投影。
-    return {
+    snapshotConversations.push({
       ...live,
       ...conversation,
       assistantMessages: live.assistantMessages,
@@ -158,12 +174,10 @@ export function writePendingSnapshot(
         : conversation.jobId === snapshot.active_job_id ? "running" : conversation.status,
       pending: !terminal,
       activeJobOverlay: !terminal && conversation.jobId === snapshot.active_job_id,
-    };
-  });
+    });
+  }
   const existingActiveConversation = snapshot.active_job_id
-    ? existingPending.find(
-        (conversation) => conversation.jobId === snapshot.active_job_id,
-      )
+    ? existingPendingByJobId.get(snapshot.active_job_id)
     : undefined;
   if (
     snapshot.active_job_id
@@ -182,30 +196,40 @@ export function writePendingSnapshot(
   }
   // replay 的新 Job 可能尚未进入 bootstrap/pending-requests 快照，但后端已经
   // 移除了旧上下文。保留乐观 replay，避免上下文切换期间出现空聊天区。
-  const optimisticReplayConversations = existingPending.filter(
-    (conversation) =>
+  const retainedConversationKeys = new Set<string>();
+  const retainIfUnmatched = (conversation: ConversationView): void => {
+    const keys = conversationMatchKeys(conversation);
+    if (keys.some((key) => retainedConversationKeys.has(key))) return;
+    snapshotConversations.push(conversation);
+    for (const key of keys) retainedConversationKeys.add(key);
+  };
+  for (const conversation of snapshotConversations) {
+    for (const key of conversationMatchKeys(conversation)) {
+      retainedConversationKeys.add(key);
+    }
+  }
+  for (const conversation of existingPending) {
+    if (
       conversation.pending
       && conversation.source === "pending"
       && Boolean(conversation.jobId)
-      && conversation.userMessage?.metadata?.source === "optimistic_replay",
-  );
+      && conversation.userMessage?.metadata?.source === "optimistic_replay"
+    ) {
+      retainIfUnmatched(conversation);
+    }
+  }
   // 终态回合仍由实时消息流或 Trace 提供当前视图；下一次 bootstrap 会用
   // canonical 历史替换它，不能被空 pending 快照提前删掉。
-  const terminalConversations = existingPending.filter(
-    (conversation) =>
+  for (const conversation of existingPending) {
+    if (
       conversation.source === "pending"
       && Boolean(conversation.jobId)
       && (
         hasJobTerminalTraceEvent(conversation.events)
         || TERMINAL_TURN_STATUSES.has(conversation.turnStatus ?? "")
-      ),
-  );
-  for (const conversation of [
-    ...optimisticReplayConversations,
-    ...terminalConversations,
-  ]) {
-    if (!snapshotConversations.some((candidate) => conversationsMatch(candidate, conversation))) {
-      snapshotConversations.push(conversation);
+      )
+    ) {
+      retainIfUnmatched(conversation);
     }
   }
   writePendingList(

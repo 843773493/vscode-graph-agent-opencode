@@ -71,12 +71,12 @@ describe("工作区原始文件 API", () => {
 
     await getWorkspaceRawFileBlob(
       28_015,
-      "filesystem:/home/hyf/.cache/model.bin",
+      "C:\\Models\\model.bin",
       "workspace-raw",
     );
 
     expect(businessRequest(requests, "/api/v1/workspace/files/raw").url).toEndWith(
-      "/api/v1/workspace/files/raw?path=%2Fhome%2Fhyf%2F.cache%2Fmodel.bin&scope=filesystem",
+      "/api/v1/workspace/files/raw?path=C%3A%5CModels%5Cmodel.bin&scope=filesystem",
     );
   });
 });

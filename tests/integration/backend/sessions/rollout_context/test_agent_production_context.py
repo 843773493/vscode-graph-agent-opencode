@@ -247,6 +247,29 @@ def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request
     assert len(snapshot.tool_set_refs) == 1
 
 
+@pytest.mark.parametrize("read_enabled", [False, True])
+@pytest.mark.parametrize("skill_enabled", [False, True])
+def test_sealed_skill_metadata_follows_skill_load_without_read_file(
+    factory_context, read_enabled: bool, skill_enabled: bool,
+):
+    saver, session, thread, _connection, selection, _manager, _captured, _registered, dispatch, _files = factory_context
+    selection.apply_changes(agent_id="default", changes={
+        "read_file": (read_enabled, read_enabled),
+        "skill_load": (skill_enabled, skill_enabled),
+    })
+    outbound = dispatch("skill-tool-selection")
+    tool_names = {schema["function"]["name"] for schema in outbound.tools}
+    assert ("read_file" in tool_names) is read_enabled
+    assert ("skill_load" in tool_names) is skill_enabled
+    assert isinstance(outbound.messages[0], SystemMessage)
+    assert ("集成测试 Skill" in outbound.messages[0].content) is skill_enabled
+    assert all("Skill 正文" not in message.content for message in outbound.messages)
+    sealed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
+    assert ("instruction:skill-catalog" in {
+        source.source_identity for source in sealed.seal_binding.root.sources
+    }) is skill_enabled
+
+
 def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(factory_context, monkeypatch):
     saver, session, thread, _connection, selection, manager, captured, registered, dispatch, _file_registry = factory_context
     first = dispatch("first")

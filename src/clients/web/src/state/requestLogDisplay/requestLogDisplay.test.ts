@@ -165,6 +165,45 @@ assert(
   "请求日志应先收集全部 tool_call_id 映射，再归因跨请求文件的扩展工具结果",
 );
 
+const additionalToolCallsLog = requestLogRecordFixture({
+  timestamp: 3,
+  session_id: "ses_additional_tool_calls",
+  request: {
+    messages: [
+      {
+        tool_calls: [
+          { name: "invoke_extension_tool", args: { tool_name: "request_direct" } },
+        ],
+        additional_kwargs: {
+          tool_calls: [
+            { name: "invoke_extension_tool", args: { tool_name: "request_additional" } },
+          ],
+        },
+      },
+    ],
+  },
+  response: {
+    result: [
+      {
+        tool_calls: [
+          { name: "invoke_extension_tool", args: { tool_name: "response_direct" } },
+        ],
+        additional_kwargs: {
+          tool_calls: [
+            { name: "invoke_extension_tool", args: { tool_name: "response_additional" } },
+          ],
+        },
+      },
+    ],
+  },
+});
+const additionalCallKeyFlow = buildRequestLogKeyFlow([additionalToolCallsLog]);
+assert(
+  additionalCallKeyFlow.customToolNames.join(",") ===
+    "request_direct,request_additional,response_direct,response_additional",
+  "工具调用投影应按请求消息和响应消息顺序保留两种 tool_calls 来源",
+);
+
 const retryAfterInvalidInvocationLog = requestLogRecordFixture({
   timestamp: 3,
   session_id: "ses_retry_after_invalid_invocation",
@@ -372,6 +411,20 @@ assert(
   replayDisplay.systemPromptCharCount === 123 && replayDisplay.toolSchemaCharCount === 88,
   "折叠摘要应优先使用后端记录的统计值",
 );
+test("Prompt 统计 metadata 缺失时按内容计算组件和总字符数", () => {
+  const fallbackReplay = buildRequestReplayDisplay({
+    ...replayLog,
+    request: {
+      ...replayLog.request,
+      replay: {
+        prompt_components: [{ source: "middleware", content_blocks: ["abc"] }],
+      },
+    },
+  });
+
+  expect(fallbackReplay.systemPromptCharCount).toBe(3);
+  expect(fallbackReplay.promptComponents[0]?.charCount).toBe(3);
+});
 
 // 旧日志（无 replay 元数据）只允许标记来源未记录；即使日志里残留
 // system_message，也不得再从它合成第二套 Prompt 组成。

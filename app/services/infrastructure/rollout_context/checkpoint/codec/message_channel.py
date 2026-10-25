@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from itertools import chain
 
 from langchain_core.messages import (
     AnyMessage,
@@ -57,7 +58,9 @@ def replay_message_values(
         if any(isinstance(message, RemoveMessage) for message in batch):
             # 删除再添加同 ID 的位置、重复删除与清空边界由官方 add_messages 决定。
             folded = _messages_delta_reducer(base, batches)
-            unidentified = [message for message in [*folded, *batch] if message.id is None]
+            unidentified = [
+                message for message in chain(folded, batch) if message.id is None
+            ]
             base = add_messages(folded, batch)
             # fresh read 的原生输入尚未由 put_writes 规范；不能暴露临时转换对象的 UUID。
             for message in unidentified:

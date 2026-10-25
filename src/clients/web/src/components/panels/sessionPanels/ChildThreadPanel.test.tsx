@@ -333,6 +333,9 @@ describe("子会话线程面板", () => {
           <ChildThreadPanel {...panelProps()} threads={[thread(1)]} />,
         );
       });
+      expect(
+        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+      ).toHaveLength(0);
       const copyButton = renderer!.root.findByProps({
         "aria-label": "复制 child thread ID: thr_child_1",
       });
@@ -342,10 +345,21 @@ describe("子会话线程面板", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
       expect(written).toEqual(["thr_child_1"]);
+      const noticeSlot = renderer!.root.findByProps({
+        className: "child-thread-notice-slot",
+      });
       const notice = renderer!.root.findByProps({
         className: "child-thread-notice",
       });
       expect(textOf(notice)).toContain("已复制 child thread ID");
+      expect(notice.props.title).toBe("已复制 child thread ID: thr_child_1");
+      expect(noticeSlot.findByProps({ className: "child-thread-notice" })).toBeDefined();
+      await act(async () => {
+        renderer!.root.findByProps({ "aria-label": "关闭提示" }).props.onClick();
+      });
+      expect(
+        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+      ).toHaveLength(0);
       renderer!.unmount();
     } finally {
       Object.defineProperty(navigator, "clipboard", {

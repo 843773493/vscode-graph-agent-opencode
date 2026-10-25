@@ -47,25 +47,24 @@ export function applyMessageStreamEvent(
   current: MessageStreamState,
   event: MessageStreamEvent,
 ): MessageStreamState {
-  const state = cloneMessageStreamState(current);
-  if (state.sessionId !== event.session_id || state.turnId !== event.turn_id
-    || state.threadId !== event.thread_id) {
+  if (current.sessionId !== event.session_id || current.turnId !== event.turn_id
+    || current.threadId !== event.thread_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流关联键与当前 Turn 不一致",
     };
   }
-  if (state.workspaceId && event.workspace_id && state.workspaceId !== event.workspace_id) {
+  if (current.workspaceId && event.workspace_id && current.workspaceId !== event.workspace_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流 workspace_id 与当前工作区不一致",
     };
   }
-  if (state.turnStreamId && state.turnStreamId !== event.turn_stream_id) {
+  if (current.turnStreamId && current.turnStreamId !== event.turn_stream_id) {
     return {
-      ...state,
+      ...current,
       connectionStatus: "gap",
       protocolError: "消息流 turn_stream_id 在同一 Turn 内发生变化",
     };
@@ -78,17 +77,19 @@ export function applyMessageStreamEvent(
   // interrupt.rejected 是「中断请求在终态后到达」的可见反馈；快照控制帧仍是恢复权威，
   // 二者都必须继续走各自分支，其余事件直接丢弃。
   if (
-    isTerminalStatus(state.streamStatus)
+    isTerminalStatus(current.streamStatus)
     && event.type !== "interrupt.rejected"
     && event.type !== "stream.snapshot"
   ) {
-    return state;
+    return current;
   }
   if (event.type === "stream.snapshot") {
-    if (event.payload.snapshot_seq < state.lastEventSeq) return state;
-    return drainPendingEvents(applySnapshotState(state, event.payload, event));
+    if (event.payload.snapshot_seq < current.lastEventSeq) return current;
+    return drainPendingEvents(applySnapshotState(current, event.payload, event));
   }
-  if (event.event_seq <= state.lastEventSeq) return state;
+  if (event.event_seq <= current.lastEventSeq) return current;
+
+  const state = cloneMessageStreamState(current);
   if (event.event_seq !== state.lastEventSeq + 1) {
     const pendingEvents = state.pendingEvents.filter(
       (pending) => pending.event_id !== event.event_id,

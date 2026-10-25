@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from app.core.atomic_fs import native_io_path
 from app.core.path_utils import (
     SessionCatalogComponents,
     get_session_catalog_components,
@@ -24,6 +26,25 @@ class LogSnapshotFixture:
     subtree_deletion: SessionSubtreeDeleteService
     session_directory: Path
     workspace_root: Path
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspacePathResolverProbe:
+    sessions_root: Path
+    workspace_id: str
+
+
+@pytest.fixture
+def long_path_workspace(tmp_path: Path) -> tuple[Path, WorkspacePathResolverProbe]:
+    workspace_root = tmp_path
+    for index in range(14):
+        workspace_root /= f"long-segment-{index:02d}-abcdefghijklmnop"
+    native_io_path(workspace_root).mkdir(parents=True)
+    path_resolver = WorkspacePathResolverProbe(
+        sessions_root=workspace_root / ".boxteam" / "sessions",
+        workspace_id="workspace_probe",
+    )
+    return workspace_root, path_resolver
 
 
 @pytest.fixture
@@ -134,3 +155,36 @@ async def test_snapshot_reopen_uses_catalog_and_metadata_identity(
         await reopened.read_html_snapshot(
             result.snapshot_id, session_id=SESSION_ID, metadata=True
         )
+
+
+@pytest.mark.asyncio
+async def test_workspace_snapshot_round_trips_with_windows_long_path(
+    long_path_workspace: tuple[Path, WorkspacePathResolverProbe],
+) -> None:
+    workspace_root, path_resolver = long_path_workspace
+    snapshots_directory = workspace_root / ".boxteam" / "logs" / "webview"
+    assert len(str(snapshots_directory)) > 260
+
+    service = LogService(
+        workspace_root=workspace_root,
+        path_resolver=path_resolver,
+    )
+
+    result = await service.write_html_snapshot(
+        LogSnapshotRecord(session_id=None, html="<p>long path</p>")
+    )
+
+    assert (
+        await service.read_html_snapshot(
+            result.snapshot_id,
+            session_id=None,
+            metadata=False,
+        )
+        == "<p>long path</p>"
+    )
+    metadata = await service.read_html_snapshot(
+        result.snapshot_id,
+        session_id=None,
+        metadata=True,
+    )
+    assert json.loads(metadata)["snapshot_id"] == result.snapshot_id

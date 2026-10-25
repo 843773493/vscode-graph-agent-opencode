@@ -57,6 +57,7 @@ from app.services.orchestration.event_stream.identity import (
     validate_stream_event_identity,
 )
 from app.services.orchestration.event_stream.model_events import (
+    materialize_model_content_parts,
     merge_model_content_part,
     stream_chunk_token_usage,
 )
@@ -201,9 +202,10 @@ async def process_agent_event_stream(
                 latest_model_visible_text_seen = True
                 record_latest_model_part(part)
                 collected_text_parts.append(part.text)
-                SessionInterruptState.set(
-                    session_id, thread_id=thread_id,
-                    current_text="".join(collected_text_parts),
+                SessionInterruptState.append_text(
+                    session_id,
+                    thread_id=thread_id,
+                    text=part.text,
                 )
 
     def normalize_end_output_content(
@@ -822,10 +824,9 @@ async def process_agent_event_stream(
 
     return AgentEventStreamResult(
         final_text="".join(collected_text_parts).strip(),
-        latest_model_content_blocks=tuple(
-            part
-            for part_id in latest_model_part_ids_in_order
-            if (part := latest_model_parts_by_id.get(part_id)) is not None
+        latest_model_content_blocks=materialize_model_content_parts(
+            latest_model_part_ids_in_order,
+            latest_model_parts_by_id,
         ),
         last_tool_result_text=last_tool_result_text,
         successful_tool_calls=tuple(successful_tool_calls),

@@ -26,10 +26,10 @@ export default function ChatHistoryPageHeader({
         <span>已到达会话起点</span>
       )}
       {error ? (
-        <>
-          <span role="alert">{error}</span>
+        <div className="chat-history-page-error" role="alert" title={error}>
+          <span className="chat-history-page-error-message">{error}</span>
           <button type="button" onClick={onRetry}>重试</button>
-        </>
+        </div>
       ) : null}
     </div>
   );

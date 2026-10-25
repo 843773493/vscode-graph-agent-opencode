@@ -648,7 +648,23 @@ async function captureClockAlignment(page, label) {
   }
 }
 const fileTree = (page) => page.getByRole("tree", { name: "工作区文件树" });
-const fileTreeTitle = (treePath) => path.resolve(measurementConfig.workspaceRoot, treePath);
+function encodeFileTreeSegment(segment) {
+  if (!segment || segment === "." || segment === "..") {
+    throw new Error(`文件树路径包含无效段: ${segment}`);
+  }
+  return encodeURIComponent(segment).replace(/[!'()*]/g, (character) => (
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  ));
+}
+function workspaceFileUri(treePath) {
+  const rootUri = measurementConfig.workspaceUri;
+  if (typeof rootUri !== "string" || !rootUri.startsWith("boxteam://workspace/")) {
+    throw new Error("量化配置缺少工作区文件树 URI 根");
+  }
+  const segments = treePath.split(/[\\/]+/).filter(Boolean);
+  return segments.reduce((uri, segment) => `${uri}/${encodeFileTreeSegment(segment)}`, rootUri);
+}
+const fileTreeTitle = workspaceFileUri;
 const waitForTreePaint = (page) => page.evaluate(() => new Promise((resolve) =>
   requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function treeNavigationFacts(page) {
@@ -755,7 +771,8 @@ async function openReadyMeasurementPage(page, expanded) {
   const deadline = performance.now() + 60000;
   const expected = Array.from({ length: expanded }, (_, index) => `d${String(index).padStart(3, "0")}`);
   while (!expected.every((directory) => pageRequests.get(page).some((record) =>
-    record.path === "/api/v1/workspace/files" && new URLSearchParams(record.query).get("path") === directory
+    record.path === "/api/v1/workspace/files"
+    && new URLSearchParams(record.query).get("path") === workspaceFileUri(directory)
     && record.status === 200))) {
     if (performance.now() >= deadline) throw new Error(`未真实加载 ${expanded} 个展开目录`);
     await waitForMeasurementPageDelay(page, 50);
@@ -763,6 +780,33 @@ async function openReadyMeasurementPage(page, expanded) {
   await page.waitForFunction(() => Boolean(window.gatewayMutation?.nodes().length
     && window.navigationHarness?.ready && window.navigationHarness?.observerReady));
   await waitForMeasurementPageDelay(page, 650);
+}
+async function verifyFileTreeNotificationDoesNotReflow(page) {
+  const layout = await page.evaluate(() => {
+    const tree = document.querySelector(".files-tree-root");
+    const notifications = document.querySelector(".files-tree-notifications");
+    if (!tree || !notifications) throw new Error("文件树缺少布局稳定性观察目标");
+    const before = tree.getBoundingClientRect();
+    const notice = document.createElement("div");
+    notice.className = "files-tree-action-error";
+    notice.setAttribute("role", "alert");
+    notice.textContent = "模拟文件操作失败：此提示不得推动文件树内容";
+    try {
+      notifications.append(notice);
+      const after = tree.getBoundingClientRect();
+      return { notification_position: getComputedStyle(notifications).position,
+        tree_top_delta_px: after.top - before.top,
+        tree_height_delta_px: after.height - before.height };
+    } finally {
+      notice.remove();
+    }
+  });
+  if (layout.notification_position !== "absolute"
+    || Math.abs(layout.tree_top_delta_px) > 0.25
+    || Math.abs(layout.tree_height_delta_px) > 0.25) {
+    throw new Error("文件树提示改变了列表布局: " + JSON.stringify(layout));
+  }
+  return layout;
 }
 async function contextMenu(page, treePath) {
   const row = await visibleTreePath(page, treePath);
@@ -948,7 +992,7 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
   const intent = payload?.intent;
   if (fact.method !== "POST" || actualUrl.origin !== baseUrl
     || actualUrl.pathname !== `/api/v1/workspace/files/${endpointByKind[sample.kind]}`
-    || actualUrl.searchParams.get("path") !== sample.directory
+    || actualUrl.searchParams.get("path") !== workspaceFileUri(sample.directory)
     || actualUrl.searchParams.get("scope") !== "workspace"
     || targetUrl.href !== expectedTarget.href
     || fact.workspace_id_header !== measurementConfig.workspaceId || !fact.has_local_token
@@ -956,14 +1000,14 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
   if (sample.kind === "file" || sample.kind === "directory") {
     return payload.name === sample.name && payload.kind === (sample.kind === "directory" ? "directory" : "file");
   }
-  const sourcePath = path.join(measurementConfig.workspaceRoot, "a_sources", sample.name);
+  const sourceUri = workspaceFileUri(path.join("a_sources", sample.name));
   if (sample.kind === "copy") {
-    return path.resolve(measurementConfig.workspaceRoot, payload.source_path) === sourcePath
+    return payload.source_path === workspaceFileUri(path.join("a_sources", sample.name))
       && payload.source_scope === "workspace";
   }
   if (sample.kind === "paste") {
     return payload.source_paths?.length === 1
-      && path.resolve(measurementConfig.workspaceRoot, payload.source_paths[0]) === sourcePath;
+      && payload.source_paths[0] === sourceUri;
   }
   return sample.kind === "upload" && payload.fileNames?.length === 1
     && payload.fileNames[0] === sample.name && payload.relativePaths?.length === 1
@@ -974,7 +1018,7 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
 
 async function freezeFileOperation(sample) {
   const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
-    root: measurementConfig.workspaceRoot, path: sample.directory };
+    root: measurementConfig.workspaceUri, path: workspaceFileUri(sample.directory) };
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
     const matches = actualMutationRequests.slice(sample.actualRequestOffset)
@@ -1014,7 +1058,8 @@ function fileMutationAttemptPairs(operation, sample) {
   const malformed = actualMutationRequests.slice(sample.actualRequestOffset).filter((fact) => {
     const url = new URL(fact.url);
     return fact.method === "POST" && url.pathname === `/api/v1/workspace/files/${endpointByKind[sample.kind]}`
-      && url.searchParams.get("path") === sample.directory && url.searchParams.get("scope") === "workspace"
+      && url.searchParams.get("path") === workspaceFileUri(sample.directory)
+      && url.searchParams.get("scope") === "workspace"
       && fact.payload_error;
   });
   if (malformed.length) throw new Error("样本目标目录收到无法解析的文件 mutation attempt: "
@@ -1484,12 +1529,12 @@ async function finishFileMutation(page, operation, sample) {
   const expectedGatewayUrl = new URL(actualUrl.pathname + actualUrl.search, measurementConfig.gatewayUrl);
   const observedGatewayUrl = new URL(acceptedRequest.gateway_target_url);
   const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
-    root: measurementConfig.workspaceRoot, path: sample.directory };
+    root: measurementConfig.workspaceUri, path: workspaceFileUri(sample.directory) };
   const requestPayload = acceptedRequest.payload;
   const requestIntent = requestPayload?.intent;
   const endpointByKind = { file: "entries", directory: "entries", paste: "paste", copy: "copy", upload: "upload" };
   if (requestUrl.origin !== baseUrl || actualUrl.pathname !== "/api/v1/workspace/files/" + endpointByKind[sample.kind]
-    || actualUrl.searchParams.get("path") !== sample.directory
+    || actualUrl.searchParams.get("path") !== workspaceFileUri(sample.directory)
     || actualUrl.searchParams.get("scope") !== expectedDirectoryKey.scope
     || observedGatewayUrl.href !== expectedGatewayUrl.href
     || acceptedRequest.workspace_id_header !== measurementConfig.workspaceId || !acceptedRequest.has_local_token
@@ -1504,17 +1549,17 @@ async function finishFileMutation(page, operation, sample) {
         workspace_id_header: acceptedRequest.workspace_id_header, has_local_token: acceptedRequest.has_local_token,
         request_directory_key: requestIntent?.directory_key, expectedDirectoryKey }));
   }
-  const sourcePath = path.join(measurementConfig.workspaceRoot, "a_sources", sample.name);
+  const sourceUri = workspaceFileUri(path.join("a_sources", sample.name));
   if ((sample.kind === "file" || sample.kind === "directory")
     && (requestPayload.name !== sample.name || requestPayload.kind !== (sample.kind === "directory" ? "directory" : "file"))) {
     throw new Error("创建请求内容与目标样本不一致: " + JSON.stringify(requestPayload));
   }
-  if (sample.kind === "copy" && (path.resolve(measurementConfig.workspaceRoot, requestPayload.source_path) !== sourcePath
+  if (sample.kind === "copy" && (requestPayload.source_path !== sourceUri
     || requestPayload.source_scope !== "workspace")) {
     throw new Error("复制请求来源与样本不一致: " + JSON.stringify(requestPayload));
   }
   if (sample.kind === "paste" && (requestPayload.source_paths?.length !== 1
-    || path.resolve(measurementConfig.workspaceRoot, requestPayload.source_paths[0]) !== sourcePath)) {
+    || requestPayload.source_paths[0] !== sourceUri)) {
     throw new Error("粘贴请求来源与样本不一致: " + JSON.stringify(requestPayload));
   }
   if (sample.kind === "upload" && (requestPayload.fileNames?.length !== 1
@@ -1548,20 +1593,21 @@ async function finishFileMutation(page, operation, sample) {
     }
   }
   const relative = sample.directory + "/" + sample.name;
+  const publishedUri = workspaceFileUri(relative);
   const itemKind = sample.kind === "directory" ? "directory" : "file";
   const expectedOperationKind = sample.kind === "file" || sample.kind === "directory" ? "create" : sample.kind;
-  const items = terminal.items.filter((value) => value.path === sample.name && value.kind === itemKind);
+  const items = terminal.items.filter((value) => value.path === publishedUri && value.kind === itemKind);
   const directories = terminal.directories.filter((value) => sameDirectoryKey(value.directory_key, expectedDirectoryKey));
   const snapshots = terminal.snapshots.filter((value) => sameDirectoryKey(value.directory_key, expectedDirectoryKey)
-    && value.root_path === measurementConfig.workspaceRoot && value.path === sample.directory);
+    && value.root_path === measurementConfig.workspaceUri && value.path === workspaceFileUri(sample.directory));
   const snapshot = snapshots[0];
-  const snapshotItems = snapshot?.items.filter((value) => value.path === relative && value.kind === itemKind) ?? [];
-  const expectedCreatedPath = expectedOperationKind === "create" ? relative : null;
+  const snapshotItems = snapshot?.items.filter((value) => value.path === publishedUri && value.kind === itemKind) ?? [];
+  const expectedCreatedPath = expectedOperationKind === "create" ? publishedUri : null;
   if (terminal.kind !== expectedOperationKind || items.length !== 1 || items[0].state !== "published"
     || directories.length !== 1 || !directories[0].exists || snapshots.length !== 1
     || snapshot.directory_revision !== directories[0].directory_revision || snapshotItems.length !== 1
     || (expectedCreatedPath !== null && terminal.created_path !== expectedCreatedPath)
-    || (terminal.created_path && terminal.created_path !== relative)) {
+    || (terminal.created_path && terminal.created_path !== publishedUri)) {
     throw new Error("committed 回执未证明原请求目标下的发布项与同目标快照: "
       + JSON.stringify({ terminal, expectedDirectoryKey, expectedCreatedPath }));
   }
@@ -1654,6 +1700,7 @@ async function createViaMenu(page, name, kind, directory = "d000", observationSt
 const sumFileSystemReadCounts = (readCounts) => Object.values(readCounts ?? {}).reduce((total, count) => total + count, 0);
 const calculateP95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
 async function measureMutations() {
+  const fileTreeNotificationLayout = [];
   for (const expanded of (focusConcurrent ? [] : minimalSamples ? [1] : [1, 20, 200])) {
     const page = await context.newPage();
     const pageId = attachMeasurementPageObservers(page);
@@ -1661,6 +1708,8 @@ async function measureMutations() {
       await captureClockAlignment(page, "run_before");
     }
     await openReadyMeasurementPage(page, expanded);
+    fileTreeNotificationLayout.push({ page_id: pageId,
+      ...(await verifyFileTreeNotificationDoesNotReflow(page)) });
     const kinds = ["file", "directory", "paste", "copy", "upload"];
     const sampleOrder = minimalSamples ? kinds.map((kind) => ({ kind, index: 0 })) : [
       ...kinds.map((kind) => ({ kind, index: 0 })),
@@ -1800,7 +1849,7 @@ async function measureMutations() {
         if (!peerBaseline) throw new Error("跨页 DOM 快照缺少操作前基线: " + operationId);
         const baseline = { completed_before: peerBaseline.completed_before,
           event_offset: peerBaseline.event_offset, snapshot_offset: peerBaseline.snapshot_offset };
-        const targetPathTitle = path.resolve(measurementConfig.workspaceRoot, "concurrent", pair[column]);
+        const targetPathTitle = workspaceFileUri(path.join("concurrent", pair[column]));
         const deadline = performance.now() + 30000;
         let peerSnapshot = null;
         let acceptedQueueSeq = null;
@@ -2016,6 +2065,7 @@ async function measureMutations() {
       fs_read_counts: gatewaySamples.filter((sample) => sample.kind === kind).map((sample) => sample.gateway_fs_read_count),
     })),
     concurrent: { expected_names: names, missing_from_ui: missing, actions: concurrentActions },
+    file_tree_notification_layout: fileTreeNotificationLayout,
     backend_concurrent_observation: backendConcurrentObservation,
     cross_page_observation: crossPageObservation,
     file_gate: minimalSamples ? { decision: "not_evaluated", reason: "最小样本仅验证消费者与目标归属，不参与 10.4b 门控" }

@@ -15,20 +15,36 @@ from tests.support.e2e_control import harness as e2e_test_control
 class LeaseCase:
     lease: e2e_test_control.E2EProcessLease
     port_checks: list[tuple[int, str]]
+    start_times: dict[int, float]
 
     def expected_record(self) -> dict[str, object]:
-        return {"pid": os.getpid(), "start_time": "12345", "token": self.lease.token, "ports": list(self.lease.ports)}
+        return {
+            "pid": os.getpid(),
+            "start_time": self.start_times[os.getpid()],
+            "token": self.lease.token,
+            "ports": list(self.lease.ports),
+        }
 
 
 @pytest.fixture
 def lease_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LeaseCase:
     checks: list[tuple[int, str]] = []
-    monkeypatch.setattr(e2e_test_control, "_linux_process_start_ticks", lambda _pid: "12345")
+    start_times = {os.getpid(): 100.25}
+    monkeypatch.setattr(
+        e2e_test_control,
+        "_process_start_time",
+        lambda pid: start_times.get(pid),
+    )
     monkeypatch.setattr(e2e_test_control, "ensure_local_port_available", lambda port, *, service_name: checks.append((port, service_name)))
-    original_exists = Path.exists
-    owner_proc_stat = Path(f"/proc/{os.getpid()}/stat")
-    monkeypatch.setattr(Path, "exists", lambda path: True if path == owner_proc_stat else original_exists(path))
-    return LeaseCase(e2e_test_control.E2EProcessLease(tmp_path / "control/process-lease.json", (18800,), token="fixture-token"), checks)
+    return LeaseCase(
+        e2e_test_control.E2EProcessLease(
+            tmp_path / "control/process-lease.json",
+            (18800,),
+            token="fixture-token",
+        ),
+        checks,
+        start_times,
+    )
 
 
 @pytest.mark.parametrize("stage", ["dump", "close"])
@@ -167,13 +183,19 @@ def test_success_preserves_record_and_checks_ports_on_acquire_and_release(lease_
     assert json.loads(lease.path.read_text()) == lease_case.expected_record()
     lease.release()
     assert not lease.path.exists()
-    assert lease_case.port_checks == [(18800, "Section8 owner"), (18800, "Section8 teardown")]
+    assert lease_case.port_checks == [
+        (18800, "E2E process lease owner"),
+        (18800, "E2E process lease teardown"),
+    ]
 
 
-def test_reused_pid_with_different_start_ticks_does_not_own_old_lease(lease_case: LeaseCase) -> None:
+def test_reused_pid_with_different_creation_time_does_not_own_old_lease(
+    lease_case: LeaseCase,
+) -> None:
     lease = lease_case.lease
     lease.path.parent.mkdir(parents=True)
     lease.path.write_text(json.dumps({**lease_case.expected_record(), "start_time": "previous-process", "token": "old-token"}))
+    lease_case.start_times[os.getpid()] = 101.5
     lease.acquire()
     assert json.loads(lease.path.read_text()) == lease_case.expected_record()
     lease.release()

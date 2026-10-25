@@ -11,8 +11,8 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
-def test_workspace_apply_journal_records_idempotent_side_effect(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_apply_journal_records_idempotent_side_effect(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.start_config_apply_journal(
             config_domain="workspace",
@@ -49,8 +49,8 @@ def test_workspace_apply_journal_records_idempotent_side_effect(tmp_path):
     finally:
         store.close()
 
-def test_workspace_apply_journal_requires_explicit_compensation_result(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_apply_journal_requires_explicit_compensation_result(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.start_config_apply_journal(
             config_domain="workspace",
@@ -96,8 +96,8 @@ def test_workspace_apply_journal_requires_explicit_compensation_result(tmp_path)
     finally:
         store.close()
 
-def test_workspace_active_promotion_commits_apply_journal_atomically(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_active_promotion_commits_apply_journal_atomically(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         active = store.ensure_active_config_snapshot(
             config_domain="workspace",
@@ -171,9 +171,9 @@ def test_workspace_active_promotion_commits_apply_journal_atomically(tmp_path):
         store.close()
 
 def test_workspace_pending_candidate_persists_secret_binding_without_secret_value(
-    tmp_path,
+    workspace_root,
 ):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         pending = store.create_pending_config_candidate(
             config_domain="workspace",
@@ -203,8 +203,8 @@ def test_workspace_pending_candidate_persists_secret_binding_without_secret_valu
     finally:
         store.close()
 
-def test_workspace_pending_candidate_can_be_explicitly_discarded(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_pending_candidate_can_be_explicitly_discarded(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         pending = store.create_pending_config_candidate(
             config_domain="workspace",
@@ -251,8 +251,8 @@ def test_workspace_pending_candidate_can_be_explicitly_discarded(tmp_path):
     finally:
         store.close()
 
-def test_workspace_config_apply_claim_uses_lease_and_fencing(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_workspace_config_apply_claim_uses_lease_and_fencing(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.ensure_active_config_snapshot(
             config_domain="workspace",
@@ -322,8 +322,8 @@ def test_workspace_config_apply_claim_uses_lease_and_fencing(tmp_path):
     finally:
         store.close()
 
-def test_expired_workspace_apply_recovers_candidate_journal_and_claim(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path)
+def test_expired_workspace_apply_recovers_candidate_journal_and_claim(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.ensure_active_config_snapshot(
             config_domain="workspace",
@@ -388,8 +388,8 @@ def test_expired_workspace_apply_recovers_candidate_journal_and_claim(tmp_path):
     finally:
         store.close()
 
-def test_workspace_pending_retry_reuses_candidate_and_rotates_fencing(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path)
+def test_workspace_pending_retry_reuses_candidate_and_rotates_fencing(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.ensure_active_config_snapshot(
             config_domain="workspace",
@@ -456,8 +456,8 @@ def test_workspace_pending_retry_reuses_candidate_and_rotates_fencing(tmp_path):
     finally:
         store.close()
 
-def test_corrupt_workspace_active_snapshot_enters_explicit_recovery_state(tmp_path):
-    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+def test_corrupt_workspace_active_snapshot_enters_explicit_recovery_state(workspace_root):
+    store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         store.ensure_active_config_snapshot(
             config_domain="workspace",

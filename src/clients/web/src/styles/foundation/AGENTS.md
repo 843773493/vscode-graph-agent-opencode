@@ -8,6 +8,7 @@ foundation/
 ├── themeSurfaces.css      # 按主题变化的表面颜色
 ├── panelShared.css        # 面板共用布局基线
 ├── workbenchLayout.css    # 主窗口区域与尺寸布局
+├── workbenchViewSwitcher.css # 主工具栏的工作台视图切换器
 ├── workbenchPanel.css     # 停靠面板外观
 └── themeSurfaces.test.ts  # 主题表面变量约束
 ```

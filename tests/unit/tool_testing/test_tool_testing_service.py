@@ -5,40 +5,29 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import InjectedToolArg, tool
-from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic.errors import PydanticInvalidForJsonSchema
 
-from app.agents.tools.apply_patch import create_apply_patch_tool
-from app.runtime.provider_errors import (
-    is_transient_provider_error,
-    mark_provider_failure,
-)
-from app.schemas.internal_v2.tool_test import ToolTestStartRequest
+import app.tool_testing.service as tool_test_service_module
+from app.schemas.internal_v2.tool_test import ToolTestRunDTO, ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
 from app.tool_testing.definitions import (
     PreparedToolTest,
     ToolTestEvaluation,
     get_model_tool_parameters,
 )
-from app.tool_testing.model_invocation import (
-    MAX_MODEL_CALLS_PER_ATTEMPT,
-    MAX_TRANSIENT_RETRIES,
-    ToolCallProbeInvocationError,
-    probe_tool_call,
-    probe_tool_call_with_transient_retries,
-)
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
 from app.tool_testing.store import ToolTestStore
 
 
-class _ConfigService:
+class _TwoProviderConfigService:
     def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == "default"
         return {
@@ -60,63 +49,7 @@ def test_apply_patch_defaults_to_ten_distinct_cases_and_one_repetition() -> None
     assert len({case.case_id for case in cases}) == 10
 
 
-def test_transient_provider_error_classification_uses_http_status() -> None:
-    class _ProviderHttpError(RuntimeError):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"HTTP {status_code}")
-            self.status_code = status_code
-
-    assert is_transient_provider_error(
-        mark_provider_failure(_ProviderHttpError(503))
-    ) is True
-    assert is_transient_provider_error(
-        mark_provider_failure(_ProviderHttpError(429))
-    ) is True
-    assert is_transient_provider_error(
-        mark_provider_failure(_ProviderHttpError(400))
-    ) is False
-    assert is_transient_provider_error(TimeoutError("本地 payload 超时")) is False
-    assert is_transient_provider_error(ConnectionError("来源未标记")) is False
-
-
-def test_transient_provider_error_ignores_unmarked_outer_timeout() -> None:
-    class _ProviderHttpError(RuntimeError):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"HTTP {status_code}")
-            self.status_code = status_code
-
-    provider_error = mark_provider_failure(_ProviderHttpError(400))
-    local_timeout = TimeoutError("本地 on_llm_error 回调超时")
-    local_timeout.__cause__ = provider_error
-
-    assert is_transient_provider_error(local_timeout) is False
-
-    class _LocalStatusError(RuntimeError):
-        status_code = 503
-
-    local_status_error = _LocalStatusError("本地回调失败")
-    local_status_error.__cause__ = provider_error
-    assert is_transient_provider_error(local_status_error) is False
-
-
-def test_transient_provider_error_follows_explicit_provider_cause() -> None:
-    class _ProviderHttpError(RuntimeError):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"HTTP {status_code}")
-            self.status_code = status_code
-
-    provider_error = mark_provider_failure(_ProviderHttpError(503))
-    try:
-        raise provider_error
-    except _ProviderHttpError as caught:
-        try:
-            raise RuntimeError("显式包装的 Provider 错误") from caught
-        except RuntimeError as wrapped_error:
-            assert wrapped_error.__cause__ is provider_error
-            assert is_transient_provider_error(wrapped_error) is True
-
-
-class _BoundModel:
+class _ConcurrentApplyPatchBoundModel:
     def __init__(self, provider_id: str, concurrency: dict[str, int]) -> None:
         self._provider_id = provider_id
         self._concurrency = concurrency
@@ -152,8 +85,13 @@ class _BoundModel:
                 tool_calls=[
                     {
                         "name": "apply_patch",
-                        "args": {"input": patch, "explanation": "测试补丁",
-                                 "expected_versions": json.loads(re.search(r"expected_versions = (.+)", prompt).group(1))},
+                        "args": {
+                            "input": patch,
+                            "explanation": "测试补丁",
+                            "expected_versions": json.loads(
+                                re.search(r"expected_versions = (.+)", prompt).group(1)
+                            ),
+                        },
                         "id": f"call-{self._provider_id}",
                         "type": "tool_call",
                     }
@@ -164,18 +102,29 @@ class _BoundModel:
             self._concurrency["active"] -= 1
 
 
-class _Model:
+class _ConcurrentApplyPatchModel:
     def __init__(self, provider_id: str, concurrency: dict[str, int]) -> None:
         self._provider_id = provider_id
         self._concurrency = concurrency
 
-    def bind_tools(self, tools: list[object]) -> _BoundModel:
+    def bind_tools(self, tools: list[object]) -> _ConcurrentApplyPatchBoundModel:
         assert len(tools) == 1
-        return _BoundModel(self._provider_id, self._concurrency)
+        return _ConcurrentApplyPatchBoundModel(self._provider_id, self._concurrency)
+
+
+@pytest.fixture
+def apply_patch_test_roots(tmp_path: Path) -> tuple[Path, Path]:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    asset_root = tmp_path / "assets"
+    seed_root = asset_root / "apply_patch" / "update"
+    seed_root.mkdir(parents=True)
+    (seed_root / "target.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    return workspace_root, asset_root
 
 
 @dataclass(frozen=True, slots=True)
-class _InjectedArgumentCase:
+class _RuntimeInjectedArgumentCase:
     case_id: str = "runtime_injected_argument"
     tool_name: str = "runtime_aware"
     title: str = "隐藏运行时参数"
@@ -217,7 +166,7 @@ class _InjectedArgumentCase:
         )
 
 
-class _InjectedArgumentBoundModel:
+class _RuntimeInjectedArgumentBoundModel:
     async def ainvoke(self, messages: list[object]) -> AIMessage:
         del messages
         return AIMessage(
@@ -233,18 +182,18 @@ class _InjectedArgumentBoundModel:
         )
 
 
-class _InjectedArgumentModel:
+class _RuntimeInjectedArgumentModel:
     def __init__(self) -> None:
         self.bound_parameters: dict[str, Any] | None = None
 
-    def bind_tools(self, tools: list[object]) -> _InjectedArgumentBoundModel:
+    def bind_tools(self, tools: list[object]) -> _RuntimeInjectedArgumentBoundModel:
         assert len(tools) == 1
         candidate = tools[0]
         self.bound_parameters = get_model_tool_parameters(candidate)  # type: ignore[arg-type]
-        return _InjectedArgumentBoundModel()
+        return _RuntimeInjectedArgumentBoundModel()
 
 
-class _SingleProviderConfigService:
+class _SingleProviderRuntimeConfig:
     def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == "default"
         return {
@@ -261,8 +210,8 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
-    model = _InjectedArgumentModel()
-    case = _InjectedArgumentCase()
+    model = _RuntimeInjectedArgumentModel()
+    case = _RuntimeInjectedArgumentCase()
     prepared = case.prepare(
         workspace_root=workspace_root,
         attempt_root=tmp_path / "schema-check",
@@ -272,7 +221,7 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
         prepared.tool.args_schema.model_json_schema()
 
     service = ToolTestService(
-        config_service=_SingleProviderConfigService(),  # type: ignore[arg-type]
+        config_service=_SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=[case]),
         store=store,
         workspace_root=workspace_root,
@@ -306,49 +255,12 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
     assert "callback" not in request_path.read_text(encoding="utf-8")
 
 
-def test_model_tool_parameters_reports_missing_public_schema() -> None:
-    class _ToolWithoutPublicSchema:
-        name = "missing_schema"
-        tool_call_schema = None
-
-    with pytest.raises(
-        TypeError,
-        match=(
-            "tool_name=missing_schema "
-            "tool_type=_ToolWithoutPublicSchema"
-        ),
-    ):
-        get_model_tool_parameters(_ToolWithoutPublicSchema())  # type: ignore[arg-type]
-
-
-def test_model_tool_parameters_excludes_tool_runtime() -> None:
-    @tool
-    def runtime_tool(value: str, runtime: ToolRuntime) -> str:
-        """返回公开值，运行时对象只由 LangGraph 注入。"""
-        del runtime
-        return value
-
-    with pytest.raises(PydanticInvalidForJsonSchema):
-        runtime_tool.args_schema.model_json_schema()
-
-    parameters = get_model_tool_parameters(runtime_tool)
-
-    assert parameters["properties"] == {
-        "value": {"title": "Value", "type": "string"},
-    }
-    assert parameters["required"] == ["value"]
-
-
 @pytest.mark.asyncio
 async def test_tool_tests_run_models_concurrently_and_each_model_serially(
-    tmp_path: Path,
+    apply_patch_test_roots: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
-    asset_root = tmp_path / "assets"
-    seed_root = asset_root / "apply_patch" / "update"
-    seed_root.mkdir(parents=True)
-    (seed_root / "target.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    workspace_root, asset_root = apply_patch_test_roots
     concurrency = {
         "provider_a": 0,
         "provider_b": 0,
@@ -357,14 +269,43 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
         "max:provider_a": 0,
         "max:provider_b": 0,
     }
+    model_builds = {"provider_a": 0, "provider_b": 0}
+    redacted_provider_count = 0
+    redact_secrets = tool_test_service_module._redact_secrets
 
-    def build_model(*, provider: dict[str, Any], runtime_config: dict[str, Any]) -> _Model:
+    def count_provider_redaction(value: object) -> object:
+        nonlocal redacted_provider_count
+        if isinstance(value, dict) and value.get("id") in {
+            "provider_a",
+            "provider_b",
+        }:
+            redacted_provider_count += 1
+        return redact_secrets(value)
+
+    monkeypatch.setattr(
+        tool_test_service_module, "_redact_secrets", count_provider_redaction
+    )
+
+    def build_model(
+        *, provider: dict[str, Any], runtime_config: dict[str, Any]
+    ) -> _ConcurrentApplyPatchModel:
         assert runtime_config["temperature"] == 0.2
-        return _Model(str(provider["id"]), concurrency)
+        provider_id = str(provider["id"])
+        model_builds[provider_id] += 1
+        return _ConcurrentApplyPatchModel(provider_id, concurrency)
 
     store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
+    read_run_calls = 0
+    read_run = store.read_run
+
+    def count_run_reads(run_id: str) -> dict[str, Any]:
+        nonlocal read_run_calls
+        read_run_calls += 1
+        return read_run(run_id)
+
+    monkeypatch.setattr(store, "read_run", count_run_reads)
     service = ToolTestService(
-        config_service=_ConfigService(),  # type: ignore[arg-type]
+        config_service=_TwoProviderConfigService(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=[create_apply_patch_cases()[0]]),
         store=store,
         workspace_root=workspace_root,
@@ -395,6 +336,9 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     assert concurrency["max_active"] >= 2
     assert concurrency["max:provider_a"] == 1
     assert concurrency["max:provider_b"] == 1
+    assert model_builds == {"provider_a": 1, "provider_b": 1}
+    assert redacted_provider_count == 2
+    assert read_run_calls <= 1
     assert (store.tool_dir("apply_patch") / "run.json").is_file()
     case_dir = store.case_dir(
         "apply_patch",
@@ -419,272 +363,124 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     )
 
 
-class _ScriptedBoundModel:
-    def __init__(self, responses: list[AIMessage]) -> None:
-        self._responses = responses
-        self.calls = 0
-        self.received_messages: list[list[object]] = []
-
-    async def ainvoke(self, messages: list[object]) -> AIMessage:
-        self.received_messages.append(list(messages))
-        response = self._responses[self.calls]
-        self.calls += 1
-        return response
-
-
-class _ScriptedModel:
-    def __init__(self, bound_model: _ScriptedBoundModel) -> None:
-        self._bound_model = bound_model
-
-    def bind_tools(self, tools: list[object]) -> _ScriptedBoundModel:
-        assert len(tools) == 1
-        return self._bound_model
-
-
-def _tool_call_message() -> AIMessage:
-    return AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "apply_patch",
-                "args": {"input": "*** Begin Patch\n*** End Patch"},
-                "id": "call-scripted",
-                "type": "tool_call",
-            }
-        ],
-    )
-
-
 @pytest.mark.asyncio
-async def test_probe_tool_call_continues_after_reasoning_only_response(text_mutations_factory,
-    tmp_path: Path,
+async def test_active_run_cache_serves_copies_and_recovers_after_write_failure(
+    apply_patch_test_roots: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bound_model = _ScriptedBoundModel(
-        [
-            AIMessage(
-                content=[
-                    {
-                        "type": "reasoning",
-                        "reasoning": "先确认目标文件和补丁上下文。",
-                    }
-                ]
-            ),
-            _tool_call_message(),
-        ]
-    )
-    result = await probe_tool_call(
-        model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-        messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-    )
-
-    assert result.tool_call is not None
-    assert result.model_calls == 2
-    assert result.reasoning_only_calls == 1
-    assert bound_model.calls == 2
-    assert len(bound_model.received_messages[1]) == 4
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_plain_text_response(text_mutations_factory, tmp_path: Path) -> None:
-    bound_model = _ScriptedBoundModel([AIMessage(content="我将使用工具修改文件。")])
-    result = await probe_tool_call(
-        model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-        messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-    )
-
-    assert result.tool_call is None
-    assert result.model_calls == 1
-    assert result.reasoning_only_calls == 0
-    assert result.failure is not None and "不是纯 reasoning" in result.failure
-    assert bound_model.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_limits_consecutive_reasoning_responses(text_mutations_factory,
-    tmp_path: Path,
-) -> None:
-    reasoning_response = AIMessage(
-        content=[{"type": "reasoning", "reasoning": "继续分析补丁格式。"}]
-    )
-    bound_model = _ScriptedBoundModel(
-        [reasoning_response] * MAX_MODEL_CALLS_PER_ATTEMPT
-    )
-    result = await probe_tool_call(
-        model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-        messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-    )
-
-    assert result.tool_call is None
-    assert result.model_calls == MAX_MODEL_CALLS_PER_ATTEMPT
-    assert result.reasoning_only_calls == MAX_MODEL_CALLS_PER_ATTEMPT
-    assert result.failure is not None and "连续 3 次" in result.failure
-    assert bound_model.calls == MAX_MODEL_CALLS_PER_ATTEMPT
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_reports_invocation_count_on_provider_error(text_mutations_factory,
-    tmp_path: Path,
-) -> None:
-    class _FailingBoundModel(_ScriptedBoundModel):
-        def __init__(self) -> None:
-            super().__init__([])
-
-        async def ainvoke(self, messages: list[object]) -> AIMessage:
-            raise ConnectionError("上游连接中断")
-
-    failing_model = _ScriptedModel(_FailingBoundModel())
-    with pytest.raises(ToolCallProbeInvocationError) as captured:
-        await probe_tool_call(
-            model=failing_model,
-            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-        )
-
-    assert captured.value.model_calls == 1
-    assert captured.value.reasoning_only_calls == 0
-    assert "ConnectionError: 上游连接中断" in str(captured.value)
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_retries_transient_provider_error_three_times(text_mutations_factory,
-    tmp_path: Path,
-) -> None:
-    class _FlakyBoundModel(_ScriptedBoundModel):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.calls = 0
-
-        async def ainvoke(self, messages: list[object]) -> AIMessage:
-            self.calls += 1
-            if self.calls <= MAX_TRANSIENT_RETRIES:
-                raise mark_provider_failure(ConnectionError("上游连接中断"))
-            return _tool_call_message()
-
-    bound_model = _FlakyBoundModel()
-    result = await probe_tool_call_with_transient_retries(
-        model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-        messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-        retry_delays=(0, 0, 0),
-    )
-
-    assert result.tool_call is not None
-    assert result.model_calls == 4
-    assert result.transient_retries == 3
-    assert bound_model.calls == 4
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_non_transient_provider_error(text_mutations_factory,
-    tmp_path: Path,
-) -> None:
-    class _InvalidRequestBoundModel(_ScriptedBoundModel):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.calls = 0
-
-        async def ainvoke(self, messages: list[object]) -> AIMessage:
-            self.calls += 1
-            raise ValueError("请求参数无效")
-
-    bound_model = _InvalidRequestBoundModel()
-    with pytest.raises(ToolCallProbeInvocationError) as captured:
-        await probe_tool_call_with_transient_retries(
-            model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-            retry_delays=(0, 0, 0),
-        )
-
-    assert captured.value.model_calls == 1
-    assert captured.value.transient_retries == 0
-    assert bound_model.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_local_timeout_error(text_mutations_factory,
-    tmp_path: Path,
-) -> None:
-    class _LocalTimeoutBoundModel(_ScriptedBoundModel):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.calls = 0
-
-        async def ainvoke(self, messages: list[object]) -> AIMessage:
-            self.calls += 1
-            raise TimeoutError("Responses payload 在本地构造超时")
-
-    bound_model = _LocalTimeoutBoundModel()
-    with pytest.raises(ToolCallProbeInvocationError) as captured:
-        await probe_tool_call_with_transient_retries(
-            model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-            retry_delays=(0, 0, 0),
-        )
-
-    assert captured.value.model_calls == 1
-    assert captured.value.transient_retries == 0
-    assert bound_model.calls == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("provider_status", [400, 503])
-async def test_probe_tool_call_does_not_retry_local_error_with_provider_context(text_mutations_factory,
-    tmp_path: Path,
-    provider_status: int,
-) -> None:
-    class _ProviderHttpError(RuntimeError):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"HTTP {status_code}")
-            self.status_code = status_code
-
-    provider_error = mark_provider_failure(_ProviderHttpError(provider_status))
-
-    class _LocalCallbackErrorBoundModel(_ScriptedBoundModel):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.local_error: TimeoutError | None = None
-
-        async def ainvoke(self, messages: list[object]) -> AIMessage:
-            self.received_messages.append(list(messages))
-            self.calls += 1
-            try:
-                raise provider_error
-            except _ProviderHttpError:
-                self.local_error = TimeoutError("本地 on_llm_error 回调超时")
-                raise self.local_error
-
-    bound_model = _LocalCallbackErrorBoundModel()
-    with pytest.raises(ToolCallProbeInvocationError) as captured:
-        await probe_tool_call_with_transient_retries(
-            model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
-            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
-            retry_delays=(0, 0, 0),
-        )
-
-    assert bound_model.calls == 1
-    assert captured.value.model_calls == 1
-    assert captured.value.transient_retries == 0
-    assert captured.value.cause is bound_model.local_error
-    assert captured.value.cause.__context__ is provider_error
-
-
-def test_tool_test_store_lists_readable_run_files(tmp_path: Path) -> None:
-    store = ToolTestStore(root=tmp_path / "tool_tests")
+    workspace_root, asset_root = apply_patch_test_roots
+    store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
     store.reset_tool("apply_patch")
-    store.write_run("run_a", {"run_id": "run_a", "tool_name": "apply_patch", "created_at": "2"})
-    store.reset_tool("edit_file")
-    store.write_run("run_b", {"run_id": "run_b", "tool_name": "edit_file", "created_at": "1"})
+    now = datetime.now(UTC)
+    run = ToolTestRunDTO(
+        run_id="tooltest_write_failure",
+        tool_name="apply_patch",
+        status="running",
+        created_at=now,
+        updated_at=now,
+        repetitions=1,
+    )
+    store.write_run(run.run_id, run.model_dump(mode="json"))
+    service = ToolTestService(
+        config_service=_SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=create_apply_patch_cases()[:1]),
+        store=store,
+        workspace_root=workspace_root,
+        asset_root=asset_root,
+    )
+    service._active_run_states[run.run_id] = run.model_copy(deep=True)
 
-    assert [item["run_id"] for item in store.list_runs(tool_name="apply_patch")] == ["run_a"]
+    persisted_read_run = store.read_run
+    read_run_calls = 0
 
-    store.reset_tool("apply_patch")
-    store.write_run("run_c", {"run_id": "run_c", "tool_name": "apply_patch", "created_at": "3"})
-    with pytest.raises(FileNotFoundError, match="已被新测试覆盖"):
-        store.read_run("run_a")
-    assert [item["run_id"] for item in store.list_runs(tool_name="apply_patch")] == ["run_c"]
+    def count_run_reads(run_id: str) -> dict[str, Any]:
+        nonlocal read_run_calls
+        read_run_calls += 1
+        return persisted_read_run(run_id)
+
+    monkeypatch.setattr(store, "read_run", count_run_reads)
+
+    returned_run = service.get(run.run_id)
+    returned_run.progress = 90
+
+    assert service.get(run.run_id).progress == 0
+    assert read_run_calls == 0
+
+    write_run = store.write_run
+    write_attempts = 0
+
+    def fail_first_write(run_id: str, payload: dict[str, Any]) -> None:
+        nonlocal write_attempts
+        write_attempts += 1
+        if write_attempts == 1:
+            raise OSError("模拟 run 状态写入失败")
+        write_run(run_id, payload)
+
+    monkeypatch.setattr(store, "write_run", fail_first_write)
+
+    def increment_progress(state: ToolTestRunDTO) -> None:
+        state.progress += 1
+
+    with pytest.raises(OSError, match="模拟 run 状态写入失败"):
+        await service._mutate_run(run.run_id, increment_progress)
+
+    assert run.run_id not in service._active_run_states
+    assert service.get(run.run_id).progress == 0
+    assert read_run_calls == 1
+
+    await service._mutate_run(run.run_id, increment_progress)
+
+    assert service.get(run.run_id).progress == 1
+    assert read_run_calls == 2
+    assert persisted_read_run(run.run_id)["progress"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_model_construction_is_retried_on_next_attempt(
+    apply_patch_test_roots: tuple[Path, Path],
+) -> None:
+    workspace_root, asset_root = apply_patch_test_roots
+    concurrency = {
+        "provider_a": 0,
+        "active": 0,
+        "max_active": 0,
+        "max:provider_a": 0,
+    }
+    model_builds = 0
+
+    def build_model(
+        *, provider: dict[str, Any], runtime_config: dict[str, Any]
+    ) -> _ConcurrentApplyPatchModel:
+        nonlocal model_builds
+        assert runtime_config["temperature"] == 0.2
+        model_builds += 1
+        if model_builds == 1:
+            raise RuntimeError("模型客户端暂时不可用")
+        return _ConcurrentApplyPatchModel(str(provider["id"]), concurrency)
+
+    store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
+    service = ToolTestService(
+        config_service=_TwoProviderConfigService(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[create_apply_patch_cases()[0]]),
+        store=store,
+        workspace_root=workspace_root,
+        asset_root=asset_root,
+        model_builder=build_model,
+    )
+    started = await service.start(
+        tool_name="apply_patch",
+        request=ToolTestStartRequest(provider_ids=["provider_a"], repetitions=2),
+    )
+    for _ in range(100):
+        result = service.get(started.run_id)
+        if result.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise TimeoutError("工具测试没有在预期时间内结束")
+
+    assert result.status == "completed"
+    assert model_builds == 2
+    assert [attempt.status for attempt in result.attempts] == ["failed", "completed"]
+    assert result.attempts[0].error == "RuntimeError: 模型客户端暂时不可用"
+    assert result.attempts[1].passed is True

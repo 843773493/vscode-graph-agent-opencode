@@ -1,13 +1,16 @@
 import { cpSync } from "node:fs";
 import path from "node:path";
 
+const PYTHON_CACHE_DIRECTORY_PATH = `${path.sep}__pycache__${path.sep}`;
+
 export function copyApplicationSources(projectRoot, applicationRoot) {
   const copyOptions = {
     recursive: true,
     filter(source) {
       const relative = path.relative(projectRoot, source);
+      const paddedRelative = `${path.sep}${relative}${path.sep}`;
       return (
-        !relative.split(path.sep).includes("__pycache__") &&
+        !paddedRelative.includes(PYTHON_CACHE_DIRECTORY_PATH) &&
         !relative.endsWith(".pyc")
       );
     },

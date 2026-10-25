@@ -17,7 +17,7 @@ from textwrap import dedent
 import psutil
 import pytest
 
-from app.abstractions.terminal_resources import TerminalRequestError
+from app.abstractions.terminal.resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.resource_uri import file_uri_child, parse_resource_uri

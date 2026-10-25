@@ -12,13 +12,13 @@ def _build_posix_shell_input(
     shell_executable: str | None,
     login: bool,
 ) -> str:
-    executable = (
+    resolved_shell_executable = (
         shlex.quote(shell_executable)
         if shell_executable
         else '"${SHELL:-/bin/bash}"'
     )
-    shell_flag = "-lc" if login else "-c"
-    invocation = f"{executable} {shell_flag} {shlex.quote(command_text)}"
+    shell_mode_flag = "-lc" if login else "-c"
+    invocation = f"{resolved_shell_executable} {shell_mode_flag} {shlex.quote(command_text)}"
     if working_directory is None:
         return invocation
     return f"cd -- {shlex.quote(working_directory)} && {invocation}"
@@ -29,10 +29,10 @@ def _windows_shell_executable_name(shell_executable: str | None) -> str:
     return configured.replace("\\", "/").rsplit("/", maxsplit=1)[-1].lower()
 
 
-def _windows_cmd_quote(path: str) -> str:
-    if '"' in path:
-        raise ValueError("Windows 命令路径不能包含双引号")
-    return f'"{path}"'
+def _quote_windows_cmd_argument(argument: str) -> str:
+    if '"' in argument:
+        raise ValueError("Windows 命令参数不能包含双引号")
+    return f'"{argument}"'
 
 
 def _windows_powershell_quote(value: str) -> str:
@@ -86,7 +86,7 @@ def _build_windows_powershell_input(
         "\n".join(script_lines).encode("utf-16le")
     ).decode("ascii")
     return (
-        f"{_windows_cmd_quote(shell_executable)} -NoLogo -NoProfile -NonInteractive "
+        f"{_quote_windows_cmd_argument(shell_executable)} -NoLogo -NoProfile -NonInteractive "
         f"-ExecutionPolicy Bypass -EncodedCommand {encoded_script}\r"
     )
 
@@ -99,25 +99,25 @@ def _build_windows_shell_input(
     start_marker: str,
     done_marker: str,
 ) -> str:
-    shell_name = _windows_shell_executable_name(shell_executable)
-    executable = shell_executable or os.environ.get("COMSPEC") or "cmd.exe"
-    if shell_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+    shell_executable_name = _windows_shell_executable_name(shell_executable)
+    resolved_shell_executable = shell_executable or os.environ.get("COMSPEC") or "cmd.exe"
+    if shell_executable_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
         return _build_windows_powershell_input(
             command_text=command_text,
             working_directory=working_directory,
-            shell_executable=executable,
+            shell_executable=resolved_shell_executable,
             start_marker=start_marker,
             done_marker=done_marker,
         )
-    if shell_name not in {"cmd", "cmd.exe"}:
+    if shell_executable_name not in {"cmd", "cmd.exe"}:
         raise ValueError(
             "Windows 终端暂不支持该 shell；请使用 cmd.exe、powershell.exe 或 pwsh.exe: "
-            f"{executable}"
+            f"{resolved_shell_executable}"
         )
 
     lines = [f"echo {start_marker}"]
     if working_directory is not None:
-        lines.append(f"cd /d {_windows_cmd_quote(working_directory)}")
+        lines.append(f"cd /d {_quote_windows_cmd_argument(working_directory)}")
     lines.extend(
         [
             command_text,

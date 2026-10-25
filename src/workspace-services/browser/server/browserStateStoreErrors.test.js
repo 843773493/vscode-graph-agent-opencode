@@ -7,7 +7,7 @@ import { after, test } from "node:test";
 
 import { BrowserStateStore } from "./browserStateStore.js";
 
-const { cp, mkdir, readFile, readdir, rm, writeFile } = fs;
+const { mkdir, readFile, readdir, rm, writeFile } = fs;
 const workspaceRunRoot = path.join(
   process.cwd(), "out/tests/src/workspace-services/browser/server/browserStateStoreErrors/workspace", randomUUID(),
 );
@@ -20,8 +20,7 @@ async function createStore(t) {
   });
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
   const workspaceId = "00000000-0000-4000-8000-000000000001";
-  await cp(path.join(process.cwd(), "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
-  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  await mkdir(workspaceRoot, { recursive: true });
   return new BrowserStateStore({ workspaceRoot, workspaceId });
 }
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import type { WorkspaceFileNode } from "../../../types/backend";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 import { fileTreeNodeFixture as fileNode } from "./workspaceFileTreeTestFixtures";
 import {
@@ -108,13 +109,13 @@ async function mountTree(port: number): Promise<Harness> {
       deferredPaths.push(path);
       await new Promise<void>((resolve) => { deferred.push(resolve); });
     }
-    const items: Array<Record<string, unknown>> = (
+    const items: WorkspaceFileNode[] = (
       path === ROOT
         ? [fileNode(`${ROOT}/src`, "directory")]
         : path === `${ROOT}/src`
           ? [fileNode(`${ROOT}/src/gone`, "directory"), fileNode(`${ROOT}/src/kept`, "directory")]
           : [fileNode(path + "/a.ts", "file")]
-    ).filter((item) => !deletedPaths.has(String(item.path)));
+    ).filter((item) => !deletedPaths.has(item.path));
     return apiResponse({ root_path: path, path, items, truncated: false, next_cursor: null });
   }, { preconnect: originalFetch.preconnect });
 

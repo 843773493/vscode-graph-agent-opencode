@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from tests.support.custom_tool_test_workspace import custom_tool_workspace_template_items
+from tests.support.custom_tool_test_workspace import (
+    custom_tool_workspace_template_copy_paths,
+)
 
 
 def test_template_copy_omits_generated_fixture_tree(tmp_path: Path) -> None:
@@ -12,7 +14,7 @@ def test_template_copy_omits_generated_fixture_tree(tmp_path: Path) -> None:
     (tmp_path / ".boxteam" / "AGENTS.md").write_text("boxteam rules", encoding="utf-8")
     (tmp_path / ".boxteam" / "skills").mkdir()
 
-    assert custom_tool_workspace_template_items(tmp_path) == (
+    assert custom_tool_workspace_template_copy_paths(tmp_path) == (
         ".boxteam/AGENTS.md",
         ".boxteam/skills",
         "AGENTS.md",

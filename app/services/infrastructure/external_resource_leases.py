@@ -13,7 +13,7 @@ import json
 import logging
 import os
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +24,7 @@ from app.services.infrastructure.events.channel_events import (
 )
 
 logger = logging.getLogger(__name__)
+_UNSETTLED_LEASE_STATUSES = frozenset({"active", "reconcile_required"})
 
 
 @dataclass(slots=True)
@@ -203,7 +204,7 @@ class ExternalResourceLeaseLedger:
             allow_unverified=allow_unverified,
         )
 
-    def release(self, lease_id: str, *, reason: str = "operation_finished") -> ResourceLease:
+    def release(self, lease_id: str) -> ResourceLease:
         lease = self._leases.get(lease_id)
         if lease is None:
             raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
@@ -320,8 +321,24 @@ class ExternalResourceLeaseLedger:
             self._copy_lease(lease)
             for lease in self._leases.values()
             if lease.resource_id == resource_id
-            and lease.status in {"active", "reconcile_required"}
+            and lease.status in _UNSETTLED_LEASE_STATUSES
         ]
+
+    def leases_for_resources(
+        self, resource_ids: Collection[str]
+    ) -> dict[str, list[ResourceLease]]:
+        """单次扫描多个资源的未结清 lease，保持资源及 lease 的原有迭代顺序。"""
+        resource_order = tuple(dict.fromkeys(resource_ids))
+        for resource_id in resource_order:
+            self._require_record(resource_id)
+        result = {resource_id: [] for resource_id in resource_order}
+        for lease in self._leases.values():
+            if (
+                lease.resource_id in result
+                and lease.status in _UNSETTLED_LEASE_STATUSES
+            ):
+                result[lease.resource_id].append(self._copy_lease(lease))
+        return result
 
     def update_external_state(
         self, resource_id: str, *, lifetime_scope: str, status: str,
@@ -336,6 +353,10 @@ class ExternalResourceLeaseLedger:
         lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
         if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
             raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
+        # 列表读取会逐项同步；相同状态不重写并 fsync 整个账本。
+        if (record.lifetime_scope == lifetime_scope and record.status == status
+                and (lease is None or lease.status != "active")):
+            return
         record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now())
         changed_leases = ()
         if lease is not None and lease.status == "active":

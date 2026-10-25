@@ -13,6 +13,7 @@ import PendingQueueBar from "./components/chat/pending/PendingQueueBar";
 import Composer from "./components/composer/Composer";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
+import GoalManagerCard from "./components/cards/GoalManagerCard";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
@@ -60,6 +61,7 @@ import {
   DEFAULT_MAIN_AREA_RATIOS,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
+import type { OutputDiagnostic } from "./state/workspaceBottomPanel";
 import { getConversationsForSession } from "./state/conversations";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import {
@@ -87,6 +89,9 @@ export default function AppShell() {
     loadSessionChangesets,
     refreshSessionChanges,
     refreshSessionResources,
+    refreshGoal,
+    updateGoal,
+    clearGoal,
     reviewSessionChangeFile,
     switchContentView,
     controlSessionResource,
@@ -162,6 +167,10 @@ export default function AppShell() {
     }
   }, [activeSession?.session_id, selectedAttachmentPreview]);
   const bottomPanelWorkspaceId = state.activeGatewayWorkspaceId ?? activeSessionWorkspaceId;
+  const [outputDiagnostic, setOutputDiagnostic] = useState<{
+    workspaceId: string | null;
+    diagnostic: OutputDiagnostic;
+  } | null>(null);
   const bottomPanelWorkspace = useMemo(
     () => state.gatewayWorkspaces.find(
       (workspace) => workspace.workspace_id === bottomPanelWorkspaceId,
@@ -196,6 +205,14 @@ export default function AppShell() {
     updateUiSettings,
     setStatus,
   });
+  const openOutputDiagnostic = (title: string, detail: string) => {
+    setOutputDiagnostic({ workspaceId: bottomPanelWorkspaceId, diagnostic: { title, detail } });
+    // 查看错误是本地展示动作；断网时也必须能打开，不能等待布局偏好写入成功。
+    setWorkspaceBottomPanelStates((previous) => ({
+      ...previous,
+      [bottomPanelWorkspaceId ?? ""]: { ...bottomPanelState, visible: true, tab: "output" },
+    }));
+  };
   const activeSessionCacheKey =
     activeSession && activeSessionWorkspaceId
       ? sessionScopeKey(activeSessionWorkspaceId, activeSession.session_id)
@@ -744,6 +761,7 @@ export default function AppShell() {
           onSetSessionParent={handleSetSessionParent}
           onForkSessionContext={handleForkSessionContext}
           onStatusChange={setStatus}
+          onOpenDiagnostic={openOutputDiagnostic}
           isOpen={agentSessionsVisible && workbenchView === "sessions"}
           workspaceName={state.workspaceName ?? ""}
           gatewayWorkspaces={state.gatewayWorkspaces}
@@ -1070,6 +1088,23 @@ export default function AppShell() {
                         )
                         : null
                     }
+                    goalPanel={extensionWindowRequested ? null : (
+                      <GoalManagerCard
+                        key={activeSessionCacheKey ?? "no-session"}
+                        sessionId={activeSession?.session_id ?? ""}
+                        goal={state.currentGoalSessionId === activeSession?.session_id
+                          ? state.currentGoal : null}
+                        loading={Boolean(activeSession) && (
+                          state.goalLoading
+                          || state.currentGoalSessionId !== activeSession?.session_id
+                        )}
+                        error={state.currentGoalSessionId === activeSession?.session_id
+                          ? state.goalError : null}
+                        onRefresh={() => refreshGoal()}
+                        onUpdate={updateGoal}
+                        onClear={clearGoal}
+                      />
+                    )}
                     resourcePanel={(
                       extensionWindowRequested ? (
                         <GatewayExtensionResourcePanel
@@ -1279,6 +1314,8 @@ export default function AppShell() {
         state={bottomPanelState}
         apiPort={resolvedApiPort}
         workspaceId={bottomPanelWorkspaceId}
+        diagnostic={outputDiagnostic?.workspaceId === bottomPanelWorkspaceId
+          ? outputDiagnostic.diagnostic : null}
         workspace={bottomPanelWorkspace}
         workspaceName={state.workspaceName ?? ""}
         currentSessionId={activeSession?.session_id ?? ""}

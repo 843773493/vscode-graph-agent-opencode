@@ -124,10 +124,17 @@ class ItemProjectionIdentity:
             raise ItemSchemaError("block_index 不得脱离 block_id")
         if self.block_index is not None:
             _ordinal(self.block_index, "ItemProjectionIdentity.block_index")
-        if not isinstance(self.content_part_refs, tuple) or not all(isinstance(ref, ProjectionPartRef) for ref in self.content_part_refs):
+        if not isinstance(self.content_part_refs, tuple):
             raise ItemSchemaError("content_part_refs 必须是有序 typed ProjectionPartRef tuple")
-        indices = [ref.index for ref in self.content_part_refs]
-        if indices != sorted(set(indices)):
+        previous_index = -1
+        indices_are_ordered = True
+        for ref in self.content_part_refs:
+            if not isinstance(ref, ProjectionPartRef):
+                raise ItemSchemaError("content_part_refs 必须是有序 typed ProjectionPartRef tuple")
+            if ref.index <= previous_index:
+                indices_are_ordered = False
+            previous_index = ref.index
+        if not indices_are_ordered:
             raise ItemSchemaError("content_part_refs index 必须有序且唯一")
         if self.reasoning_carrier is not None and not isinstance(self.reasoning_carrier, ReasoningCarrier):
             raise ItemSchemaError("reasoning_carrier 必须是 typed ReasoningCarrier")

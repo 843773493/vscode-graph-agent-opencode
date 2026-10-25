@@ -3,6 +3,7 @@ import {
   createWorkspaceFileEntry,
   copyWorkspaceFileEntry,
   getWorkspace,
+  getWorkspaceFileRoots,
   getWorkspaceFileOperations,
   getWorkspaceFiles,
   pasteWorkspaceFileEntries,
@@ -60,16 +61,15 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
     if (!workspaceId) throw new Error("文件操作需要固定的 Gateway 工作区身份");
     if (!driver.current) {
       driver.current = (async () => {
-        const [health, workspace, rootFiles, store] = await Promise.all([
-          getGatewayHealth(port), getWorkspace(port, workspaceId), getWorkspaceFiles(port, "", workspaceId),
+        const [gatewayHealth, backendWorkspace, fileRoots, store] = await Promise.all([
+          getGatewayHealth(port), getWorkspace(port, workspaceId), getWorkspaceFileRoots(port, workspaceId),
           openWorkspaceFileIntentStore(),
         ]);
-        if (!health.gateway_id || !workspace.workspace_id || !rootFiles.directory_key.root
-          || rootFiles.directory_key.workspace_id !== workspace.workspace_id) {
+        if (!gatewayHealth.gateway_id || !backendWorkspace.workspace_id || !fileRoots.workspace_uri) {
           throw new Error("缺少固定 Gateway/工作区身份，拒绝受理文件操作");
         }
-        return { store, scope: { gatewayId: health.gateway_id, gatewayWorkspaceId: workspaceId,
-          backendWorkspaceId: workspace.workspace_id, workspaceRoot: rootFiles.directory_key.root, actor: "local" } };
+        return { store, scope: { gatewayId: gatewayHealth.gateway_id, gatewayWorkspaceId: workspaceId,
+          backendWorkspaceId: backendWorkspace.workspace_id, workspaceRoot: fileRoots.workspace_uri, actor: "local" } };
       })();
     }
     return await driver.current;
@@ -91,15 +91,12 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       if (oldOwners.length > 0) callbacks.current.onError("存在原 Gateway/工作区的未确认文件操作，保留原目标等待恢复");
       if (records.length === 0) { setPendingCreations([]); return; }
       // 查询与重试前重新核固定 route，Gateway 或工作区重连不能改投原 intent。
-      const [health, workspace, rootFiles] = await Promise.all([
+      const [gatewayHealth, backendWorkspace] = await Promise.all([
         getGatewayHealth(port), getWorkspace(port, target.scope.gatewayWorkspaceId),
-        getWorkspaceFiles(port, "", target.scope.gatewayWorkspaceId),
       ]);
       if (!current()) return;
-      if (health.gateway_id !== target.scope.gatewayId
-        || workspace.workspace_id !== target.scope.backendWorkspaceId
-        || rootFiles.directory_key.workspace_id !== target.scope.backendWorkspaceId
-        || rootFiles.directory_key.root !== target.scope.workspaceRoot) {
+      if (gatewayHealth.gateway_id !== target.scope.gatewayId
+        || backendWorkspace.workspace_id !== target.scope.backendWorkspaceId) {
         throw new Error("文件意图原 Gateway/工作区已变化，保留原请求等待原目标恢复");
       }
       const updatePending = (values: StoredFileIntent[]) => {

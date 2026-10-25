@@ -8,6 +8,7 @@
 app/tool_testing/
 ├── definitions.py       用例协议、模型调用输入和评估结果
 ├── registry.py          按工具名登记和查询用例
+├── sandbox.py           attempt 内文件访问边界与安全发布
 ├── service.py           provider/用例调度、运行状态和并发控制
 ├── model_invocation.py  单次工具调用探测、交换记录和短暂错误重试
 ├── store.py             run 与 case JSON 产物的读写

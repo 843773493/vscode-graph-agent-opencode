@@ -15,10 +15,7 @@ from tests.support.trace import get_trace_payload
 from tests.support.workspaces import prepare_test_workspace
 
 WEB_SEARCH_SKILL_NAME = "web-search-fetch"
-WEB_SEARCH_WORKSPACE_TEMPLATE_ITEMS = (
-    "AGENTS.md",
-    ".boxteam/skills",
-)
+WEB_SEARCH_WORKSPACE_TEMPLATE_ITEMS = ("AGENTS.md",)
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +29,13 @@ def e2e_workspace_root_path(
     workspace_root = (
         project_root / "out" / "tests" / "e2e" / relative_test_path / "workspace"
     )
-    template_root = project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace"
+    template_root = (
+        project_root
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "custom_tool_test_workspace"
+    )
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
@@ -50,7 +53,7 @@ def _json_object_from_text(text: str) -> dict[str, Any]:
     end = text.rfind("}")
     if start < 0 or end < start:
         raise AssertionError(f"未在文本中找到 JSON object: {text!r}")
-    parsed = json.loads(text[start:end + 1])
+    parsed = json.loads(text[start : end + 1])
     assert isinstance(parsed, dict)
     return parsed
 

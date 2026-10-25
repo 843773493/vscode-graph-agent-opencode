@@ -401,6 +401,74 @@ async def test_gateway_search_routes_by_control_id_but_uses_backend_uuid_for_uri
 
 
 @pytest.mark.asyncio
+async def test_gateway_search_pages_stably_across_workspace_matches() -> None:
+    first_workspace_id = _workspace_id(1)
+    second_workspace_id = _workspace_id(2)
+    first_backend_id = _backend_workspace_id(1)
+    second_backend_id = _backend_workspace_id(2)
+    same_session_later = _session_match(
+        first_backend_id,
+        "ses_1",
+        preview="same session later",
+    ).model_copy(update={"match_start": 10, "match_end": 16})
+    same_session_earlier = _session_match(
+        first_backend_id,
+        "ses_1",
+        preview="same session earlier",
+    ).model_copy(update={"match_start": 1, "match_end": 7})
+    first_workspace_matches = [
+        same_session_later,
+        same_session_earlier,
+        _session_match(first_backend_id, "ses_2", preview="first workspace last"),
+    ]
+    second_workspace_matches = [
+        _session_match(second_backend_id, "ses_1", preview="second workspace last")
+    ]
+    transport = _FakeTransport([first_workspace_id, second_workspace_id])
+    transport.search_results = {
+        first_workspace_id: _workspace_search_result(
+            first_workspace_id,
+            query="marker",
+            total_matches=len(first_workspace_matches),
+            matches=first_workspace_matches,
+        ),
+        second_workspace_id: _workspace_search_result(
+            second_workspace_id,
+            query="marker",
+            total_matches=len(second_workspace_matches),
+            matches=second_workspace_matches,
+        ),
+    }
+    service = GatewayContextQueryService(transport=transport)
+
+    first_page = await service.search_gateway_context(
+        _gateway_search_request(query="marker", max_results=2)
+    )
+    assert [match.preview for match in first_page.matches] == [
+        "same session earlier",
+        "same session later",
+    ]
+    assert first_page.has_more is True
+    assert first_page.next_cursor is not None
+
+    second_page = await service.search_gateway_context(
+        _gateway_search_request(
+            query="marker",
+            max_results=2,
+            cursor=first_page.next_cursor,
+            revision=first_page.revision,
+        )
+    )
+
+    assert [match.preview for match in second_page.matches] == [
+        "first workspace last",
+        "second workspace last",
+    ]
+    assert second_page.has_more is False
+    assert second_page.next_cursor is None
+
+
+@pytest.mark.asyncio
 async def test_gateway_search_partial_errors_obey_total_character_budget() -> None:
     workspace_ids = [_workspace_id(index) for index in range(25)]
     transport = _FakeTransport(workspace_ids)

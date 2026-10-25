@@ -10,19 +10,21 @@ workspaces/
 │   ├── .boxteam/workspace-identity.json    固定工作区身份
 │   ├── assets/                             图片、视频等输入资源
 │   └── src/                                示例工程源文件
+├── browser_state_store_workspace/          浏览器持久化 owner 的轻量完整工作区
+│   └── .boxteam/workspace-identity.json    固定工作区身份
+├── terminal_cwd_workspace/                 终端 cwd 生命周期测试所需的最小工作区
+│   └── .boxteam/workspace-identity.json    固定工作区身份
 ├── model_tool_test_workspace/              apply_patch、edit_file 场景输入
 │   ├── apply_patch/<scenario>/              补丁工具的最小初始文件
 │   └── edit_file/exact_replacement/          精确替换的目标文本样本
-└── custom_tool_test_workspace/              扩展工具与历史加载输入
-    ├── fixture/                             扩展工具读取的编号 JSON 文件
-    ├── rollout-fixture.json                 静态会话的生成清单
+└── custom_tool_test_workspace/              扩展工具说明与历史生成清单
+    ├── rollout-fixture.json                 运行时历史生成器的输入
     └── .boxteam/
-        ├── skills/                          测试专用 Skill
-        ├── sessions/                        静态 rollout 会话
-        └── navigation/                      会话目录索引
+        ├── AGENTS.md                        测试工作区约束
+        └── skills/                          模板内的测试专用 Skill
 ```
 
-根据测试要验证的边界选择最小模板：通用工作区行为用 `default_test_workspace/`，模型对文件工具的输入输出用 `model_tool_test_workspace/`，扩展工具说明或静态历史加载用 `custom_tool_test_workspace/`。运行时只改复制到对应 `out/tests/` 的工作区。
+扩展工具历史场景通过 `scripts/generate_custom_tool_rollout_fixture.py` 在隔离工作区生成 `fixture/<turn>.json` 与 rollout 数据；这些生成物不存放在模板源目录。根据测试要验证的边界选择最小模板：仅验证 BrowserStateStore/BrowserManager 身份与持久化、且不读取项目文件时用 `browser_state_store_workspace/`；只验证终端 cwd 解析、创建、落盘与恢复时用 `terminal_cwd_workspace/`，需要具体目录的用例在复制后创建；通用项目行为用 `default_test_workspace/`，模型对文件工具的输入输出用 `model_tool_test_workspace/`，扩展工具说明或历史生成场景用 `custom_tool_test_workspace/`。运行时只改复制到对应 `out/tests/` 的工作区。
 
 # 可修改内容
 

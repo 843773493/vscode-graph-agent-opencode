@@ -920,12 +920,14 @@ class JobService:
                 job_status=job.status.value, queued_jobs_ahead=0, queued_job_count=0,
                 pending_job_count=0, queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
             )
-        queued_ids = self._pending_queue.queued_job_ids(job.session_id, job.thread_id)
-        try:
-            queued_ahead = queued_ids.index(job.job_id)
-        except ValueError:
-            queued_ahead = None
-        if queued_ahead is not None:
+        queued_jobs_ahead, queued_job_count = (
+            self._pending_queue.queued_job_position_and_count(
+                job.session_id,
+                job.thread_id,
+                job.job_id,
+            )
+        )
+        if queued_jobs_ahead is not None:
             active_job_id = self._thread_current_job.get((job.session_id, job.thread_id))
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
@@ -934,9 +936,9 @@ class JobService:
                 job_status="queued",
                 active_job_id=active_job_id,
                 blocked_by_job_id=active_job_id,
-                queued_jobs_ahead=queued_ahead,
-                queued_job_count=len(queued_ids),
-                pending_job_count=len(queued_ids) + (1 if active_job_id else 0),
+                queued_jobs_ahead=queued_jobs_ahead,
+                queued_job_count=queued_job_count,
+                pending_job_count=queued_job_count + (1 if active_job_id else 0),
                 delivery_policy=job.delivery_policy,
                 enqueue_sequence=self._pending_queue.entry(job.job_id).enqueue_sequence,
                 queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
@@ -954,8 +956,8 @@ class JobService:
             active_job_id=job.job_id,
             blocked_by_job_id=None,
             queued_jobs_ahead=0,
-            queued_job_count=len(queued_ids),
-            pending_job_count=1 + len(queued_ids),
+            queued_job_count=queued_job_count,
+            pending_job_count=1 + queued_job_count,
             delivery_policy=None,
             queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
         )

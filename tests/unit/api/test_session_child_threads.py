@@ -53,60 +53,64 @@ SUBAGENT_TYPE = "general-purpose"
 
 
 @pytest.fixture()
-def workspace(tmp_path: Path):
-    context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
+def catalog_workspace_context(tmp_path: Path):
+    workspace_context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
     try:
-        yield context
+        yield workspace_context
     finally:
-        context.close()
+        workspace_context.close()
 
 
 @pytest.fixture()
-def service(workspace) -> SessionService:
+def session_service(catalog_workspace_context) -> SessionService:
     return SessionService(
         config_service=ConfigService(),
-        trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
+        trace_event_store=TraceEventStore(
+            sessions_dir=catalog_workspace_context.sessions_root
+        ),
         workspace_id=WORKSPACE_ID,
-        path_resolver=workspace.resolver,
-        creation_service=workspace.creation_service,
+        path_resolver=catalog_workspace_context.resolver,
+        creation_service=catalog_workspace_context.creation_service,
     )
 
 
 @pytest.fixture
-def residency_tracker() -> ThreadResidencyTracker:
+def thread_residency_tracker() -> ThreadResidencyTracker:
     return ThreadResidencyTracker()
 
 
 @pytest.fixture
-def saver(workspace) -> RolloutCheckpointSaver:
-    return RolloutCheckpointSaver(workspace.sessions_root)
+def checkpoint_saver(catalog_workspace_context) -> RolloutCheckpointSaver:
+    return RolloutCheckpointSaver(catalog_workspace_context.sessions_root)
 
 
 @pytest.fixture
-def team_service() -> AsyncMock:
-    service = AsyncMock(spec=TeamCoordinationService)
-    service.list_teams.return_value = TeamListDTO(items=[])
-    return service
+def team_coordination_service() -> AsyncMock:
+    team_service_mock = AsyncMock(spec=TeamCoordinationService)
+    team_service_mock.list_teams.return_value = TeamListDTO(items=[])
+    return team_service_mock
 
 
 @pytest.fixture
-def thread_creation_factory(workspace) -> OwnerThreadCreationFactory:
-    factory = OwnerThreadCreationFactory(
-        sessions_root=workspace.sessions_root,
+def owner_thread_creation_factory(
+    catalog_workspace_context,
+) -> OwnerThreadCreationFactory:
+    owner_factory = OwnerThreadCreationFactory(
+        sessions_root=catalog_workspace_context.sessions_root,
         workspace_id=WORKSPACE_ID,
-        path_resolver=workspace.resolver,
+        path_resolver=catalog_workspace_context.resolver,
     )
     try:
-        yield factory
+        yield owner_factory
     finally:
-        for service in factory._services.values():
-            service.control_store.close()
+        for owner_service in owner_factory._services.values():
+            owner_service.control_store.close()
 
 
 async def _seed_child_thread(
-    service: SessionService,
-    factory: OwnerThreadCreationFactory,
-    saver: RolloutCheckpointSaver,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    checkpoint_saver: RolloutCheckpointSaver,
     parent_session_id: str,
     parent_thread_id: str,
     *,
@@ -130,7 +134,7 @@ async def _seed_child_thread(
         "parent_thread_id": parent_thread_id,
         "delegation_id": delegation_id,
     }
-    owner = factory.for_owner_session(parent_session_id)
+    owner = owner_thread_creation_factory.for_owner_session(parent_session_id)
     created = await owner.create(
         idempotency_key=key,
         session_id=parent_session_id,
@@ -172,7 +176,7 @@ async def _seed_child_thread(
         ),
     )
     if admit_execution:
-        saver.admit_internal_execution(
+        checkpoint_saver.admit_internal_execution(
             parent_session_id,
             thread_id=created.child_thread_id,
             job_id=created.frozen_job_id,
@@ -180,7 +184,7 @@ async def _seed_child_thread(
             message=None,
         )
     assert owner.control_store.get_initial_execution_intent(key).state == "pending"
-    final_dir = service.path_resolver.resolve_thread_node(
+    final_dir = session_service.path_resolver.resolve_thread_node(
         parent_session_id, created.child_thread_id
     )
     assert final_dir.is_dir()
@@ -188,18 +192,20 @@ async def _seed_child_thread(
 
 
 async def _seed_parent_with_child_thread(
-    service: SessionService,
-    factory: OwnerThreadCreationFactory,
-    saver: RolloutCheckpointSaver,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    checkpoint_saver: RolloutCheckpointSaver,
     *,
     admit_execution: bool = True,
 ) -> tuple[str, str, Path]:
-    parent_session = await service.create(SessionCreateRequest(title="父会话"))
-    parent_thread_id = await service.resolve_main_thread(parent_session.session_id)
+    parent_session = await session_service.create(SessionCreateRequest(title="父会话"))
+    parent_thread_id = await session_service.resolve_main_thread(
+        parent_session.session_id
+    )
     thread_id, final_dir = await _seed_child_thread(
-        service,
-        factory,
-        saver,
+        session_service,
+        owner_thread_creation_factory,
+        checkpoint_saver,
         parent_session.session_id,
         parent_thread_id,
         key="child-api-published",
@@ -210,24 +216,24 @@ async def _seed_parent_with_child_thread(
 
 
 async def test_child_threads_api_returns_thread_payload(
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     parent_session_id, thread_id, _final_dir = await _seed_parent_with_child_thread(
-        service, thread_creation_factory, saver
+        session_service, owner_thread_creation_factory, checkpoint_saver
     )
 
     response = await list_session_child_threads(
         parent_session_id,
         _="local",
         request_id="req_child_threads",
-        session_service=service,
-        residency_tracker=residency_tracker,
-        saver=saver,
-        team_service=team_service,
+        session_service=session_service,
+        residency_tracker=thread_residency_tracker,
+        saver=checkpoint_saver,
+        team_service=team_coordination_service,
     )
 
     assert response.data is not None
@@ -236,9 +242,11 @@ async def test_child_threads_api_returns_thread_payload(
     assert data.parent_session_id == parent_session_id
     assert data.total == 1
     assert data.teams == []
-    team_service.list_teams.assert_awaited_once_with(
+    team_coordination_service.list_teams.assert_awaited_once_with(
         requester_session_id=parent_session_id,
-        requester_thread_id=await service.resolve_main_thread(parent_session_id),
+        requester_thread_id=await session_service.resolve_main_thread(
+            parent_session_id
+        ),
     )
     assert len(data.items) == 1
     item = data.items[0]
@@ -256,20 +264,20 @@ async def test_child_threads_api_returns_thread_payload(
 
 
 async def test_child_threads_api_maps_missing_parent_to_404(
-    service: SessionService,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     with pytest.raises(HTTPException) as raised:
         await list_session_child_threads(
             "ses_019000000000700080000000000000ff",
             _="local",
             request_id="req_child_threads",
-            session_service=service,
-            residency_tracker=residency_tracker,
-            saver=saver,
-            team_service=team_service,
+            session_service=session_service,
+            residency_tracker=thread_residency_tracker,
+            saver=checkpoint_saver,
+            team_service=team_coordination_service,
         )
 
     assert raised.value.status_code == 404
@@ -277,22 +285,26 @@ async def test_child_threads_api_maps_missing_parent_to_404(
 
 
 def test_child_threads_api_http_envelope_and_auth(
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     parent_session_id, thread_id, _final_dir = asyncio.run(
-        _seed_parent_with_child_thread(service, thread_creation_factory, saver)
+        _seed_parent_with_child_thread(
+            session_service, owner_thread_creation_factory, checkpoint_saver
+        )
     )
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_session_service] = lambda: service
-    app.dependency_overrides[get_thread_residency_tracker] = lambda: residency_tracker
-    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: saver
-    app.dependency_overrides[get_team_service] = lambda: team_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[get_thread_residency_tracker] = lambda: (
+        thread_residency_tracker
+    )
+    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: checkpoint_saver
+    app.dependency_overrides[get_team_service] = lambda: team_coordination_service
     try:
         with TestClient(app) as client:
             unauthorized = client.get(
@@ -326,45 +338,54 @@ def test_child_threads_api_http_envelope_and_auth(
 
 
 def test_child_thread_missing_directory_http_keeps_identity_without_native_path(
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     session_id, thread_id, directory = asyncio.run(
-        _seed_parent_with_child_thread(service, thread_creation_factory, saver)
+        _seed_parent_with_child_thread(
+            session_service, owner_thread_creation_factory, checkpoint_saver
+        )
     )
     rmtree(directory)
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_session_service] = lambda: service
-    app.dependency_overrides[get_thread_residency_tracker] = lambda: residency_tracker
-    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: saver
-    app.dependency_overrides[get_team_service] = lambda: team_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[get_thread_residency_tracker] = lambda: (
+        thread_residency_tracker
+    )
+    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: checkpoint_saver
+    app.dependency_overrides[get_team_service] = lambda: team_coordination_service
     with TestClient(app) as client:
-        response = client.get(f"/api/v1/sessions/{session_id}/child-threads", headers={
-            "X-Local-Token": "local-dev-token", "X-Request-ID": "missing-child-native-path"})
+        response = client.get(
+            f"/api/v1/sessions/{session_id}/child-threads",
+            headers={
+                "X-Local-Token": "local-dev-token",
+                "X-Request-ID": "missing-child-native-path",
+            },
+        )
     assert response.status_code == 409
     assert "冻结 locator 缺失或不是普通目录" in response.json()["detail"]
     assert session_id in response.text and thread_id in response.text
     assert str(directory) not in response.text
-    assert str(service._path_resolver.sessions_root) not in response.text
+    assert str(session_service._path_resolver.sessions_root) not in response.text
     assert response.headers["X-Request-ID"] == "missing-child-native-path"
     assert not directory.exists()
 
 
 @pytest.mark.asyncio
 async def test_child_threads_api_missing_published_locator_fails_closed(
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     parent_session_id, _thread_id, final_dir = await _seed_parent_with_child_thread(
-        service, thread_creation_factory, saver
+        session_service, owner_thread_creation_factory, checkpoint_saver
     )
     rmtree(final_dir)
 
@@ -373,10 +394,10 @@ async def test_child_threads_api_missing_published_locator_fails_closed(
             parent_session_id,
             _="local",
             request_id="req_child_threads_missing_locator",
-            session_service=service,
-            residency_tracker=residency_tracker,
-            saver=saver,
-            team_service=team_service,
+            session_service=session_service,
+            residency_tracker=thread_residency_tracker,
+            saver=checkpoint_saver,
+            team_service=team_coordination_service,
         )
 
     assert raised.value.status_code == 409
@@ -384,28 +405,39 @@ async def test_child_threads_api_missing_published_locator_fails_closed(
     assert parent_session_id in str(raised.value.detail)
     assert _thread_id in str(raised.value.detail)
     assert str(final_dir) not in str(raised.value.detail)
-    assert str(service._path_resolver.sessions_root) not in str(raised.value.detail)
+    assert str(session_service._path_resolver.sessions_root) not in str(
+        raised.value.detail
+    )
 
 
 @pytest.mark.asyncio
 async def test_child_threads_pending_read_does_not_materialize_rollout(
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
 ) -> None:
     parent_id, thread_id, final_dir = await _seed_parent_with_child_thread(
-        service, thread_creation_factory, saver, admit_execution=False
+        session_service,
+        owner_thread_creation_factory,
+        checkpoint_saver,
+        admit_execution=False,
     )
     assert final_dir.is_dir()
-    rollout_root = saver._storage.storage.root(parent_id, thread_id=thread_id)
+    rollout_root = checkpoint_saver._storage.storage.root(
+        parent_id, thread_id=thread_id
+    )
     assert not rollout_root.exists()
 
     response = await list_session_child_threads(
-        parent_id, _="local", request_id="req_cold_child_no_rollout",
-        session_service=service, residency_tracker=residency_tracker,
-        saver=saver, team_service=team_service,
+        parent_id,
+        _="local",
+        request_id="req_cold_child_no_rollout",
+        session_service=session_service,
+        residency_tracker=thread_residency_tracker,
+        saver=checkpoint_saver,
+        team_service=team_coordination_service,
     )
     assert len(response.data.items) == 1
     item = response.data.items[0]
@@ -419,29 +451,33 @@ async def test_child_threads_pending_read_does_not_materialize_rollout(
 
 @pytest.mark.asyncio
 async def test_child_thread_report_read_blocks_real_delete_until_response_is_complete(
-    workspace,
-    service: SessionService,
-    thread_creation_factory: OwnerThreadCreationFactory,
-    residency_tracker: ThreadResidencyTracker,
-    saver: RolloutCheckpointSaver,
-    team_service: AsyncMock,
+    catalog_workspace_context,
+    session_service: SessionService,
+    owner_thread_creation_factory: OwnerThreadCreationFactory,
+    thread_residency_tracker: ThreadResidencyTracker,
+    checkpoint_saver: RolloutCheckpointSaver,
+    team_coordination_service: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parent_id, thread_id, final_dir = await _seed_parent_with_child_thread(
-        service, thread_creation_factory, saver
+        session_service, owner_thread_creation_factory, checkpoint_saver
     )
-    control = thread_creation_factory.for_owner_session(parent_id).control_store
+    control = owner_thread_creation_factory.for_owner_session(parent_id).control_store
     intent = control.claim_initial_execution_intent(
-        "child-api-published", claim_owner="report-race", claim_generation=1,
+        "child-api-published",
+        claim_owner="report-race",
+        claim_generation=1,
     )
     control.mark_initial_execution_bound(
         intent.admission_idempotency_key,
-        execution_binding_id=intent.execution_binding_id, job_id=intent.job_id,
-        claim_owner="report-race", claim_generation=1,
+        execution_binding_id=intent.execution_binding_id,
+        job_id=intent.job_id,
+        claim_owner="report-race",
+        claim_generation=1,
     )
     query_paused, continue_query = asyncio.Event(), asyncio.Event()
     delete_attempted, delete_admitted = asyncio.Event(), asyncio.Event()
-    original_exclusive = workspace.delete_service._gate.exclusive
+    original_exclusive = catalog_workspace_context.delete_service._gate.exclusive
 
     @asynccontextmanager
     async def observe_delete_admission():
@@ -455,31 +491,45 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         await continue_query.wait()
         return TeamListDTO(items=[])
 
-    original_outcome = saver.runtime_execution_outcome
+    original_outcome = checkpoint_saver.runtime_execution_outcome
     report_reads = []
+
     def read_report(session_id, current_thread_id, execution_id):
         assert not delete_admitted.is_set()
         assert final_dir.is_dir()
         report_reads.append((session_id, current_thread_id, execution_id))
         return original_outcome(session_id, current_thread_id, execution_id)
 
-    monkeypatch.setattr(workspace.delete_service._gate, "exclusive", observe_delete_admission)
-    monkeypatch.setattr(saver, "runtime_execution_outcome", read_report)
-    team_service.list_teams.side_effect = pause_teams
-    query = asyncio.create_task(list_session_child_threads(
-        parent_id, _="local", request_id="req_child_delete_race",
-        session_service=service, residency_tracker=residency_tracker,
-        saver=saver, team_service=team_service,
-    ))
+    monkeypatch.setattr(
+        catalog_workspace_context.delete_service._gate,
+        "exclusive",
+        observe_delete_admission,
+    )
+    monkeypatch.setattr(checkpoint_saver, "runtime_execution_outcome", read_report)
+    team_coordination_service.list_teams.side_effect = pause_teams
+    query = asyncio.create_task(
+        list_session_child_threads(
+            parent_id,
+            _="local",
+            request_id="req_child_delete_race",
+            session_service=session_service,
+            residency_tracker=thread_residency_tracker,
+            saver=checkpoint_saver,
+            team_service=team_coordination_service,
+        )
+    )
     delete = None
     try:
         await asyncio.wait_for(query_paused.wait(), timeout=3)
-        delete = asyncio.create_task(workspace.delete_service.delete(
-            idempotency_key="child-report-delete-race", root_node_id=parent_id,
-        ))
+        delete = asyncio.create_task(
+            catalog_workspace_context.delete_service.delete(
+                idempotency_key="child-report-delete-race",
+                root_node_id=parent_id,
+            )
+        )
         await asyncio.wait_for(delete_attempted.wait(), timeout=3)
         assert not delete_admitted.is_set()
-        assert workspace.node(parent_id).state == "active"
+        assert catalog_workspace_context.node(parent_id).state == "active"
         continue_query.set()
         response = await asyncio.wait_for(query, timeout=3)
         assert response.data.items[0].admission_state == "bound"
@@ -488,10 +538,13 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         assert delete_admitted.is_set()
         assert not final_dir.exists()
         with pytest.raises(KeyError):
-            workspace.node(parent_id)
+            catalog_workspace_context.node(parent_id)
     finally:
         continue_query.set()
         for task in (query, delete):
             if task is not None and not task.done():
                 task.cancel()
-        await asyncio.gather(*(task for task in (query, delete) if task is not None), return_exceptions=True)
+        await asyncio.gather(
+            *(task for task in (query, delete) if task is not None),
+            return_exceptions=True,
+        )

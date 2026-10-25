@@ -248,5 +248,4 @@ def convert_backup(directory: Path) -> dict[str, object]:
             fsync_directory(path)
         atomic_write_bytes(root / "journal.json", _json({"format_version": 1, "state": "directories_prepared", "plan_sha256": file_digest(root / "manifest.json")}))
         fsync_directory(directory)
-        # TODO: 接续旧冻结 alias/claim 的线上解析与唯一切换点。
         return _verify(root, plan)

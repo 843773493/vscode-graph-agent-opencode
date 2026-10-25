@@ -172,7 +172,7 @@ def build_deep_agent_middleware(
         deepagent_middleware,
         catalog=resolved_skills,
         system_prompt=(
-            SKILLS_SYSTEM_PROMPT if "read_file" not in resolved_tool_denylist else None
+            SKILLS_SYSTEM_PROMPT if "skill_load" not in resolved_tool_denylist else None
         ),
         context_source_manager=context_source_manager,
         source_registry=source_registry,

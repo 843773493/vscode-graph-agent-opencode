@@ -111,3 +111,20 @@ test("聚合 Trace 即使 Job 或消息相同也不能进入其它 Session/Threa
   expect(pending.get(SESSION)?.[0]?.events).toEqual([matching]);
   expect(pending.get(SESSION)?.[0]?.pending).toBe(false);
 });
+
+test("Trace 批次同时匹配 Job 与消息时保留列表中最早的归属", () => {
+  const first = liveConversation(1);
+  const second = liveConversation(2);
+  const event = {
+    ...terminalEvent("job_1"),
+    payload: { message_id: "msg_2" },
+  };
+  const pending = new Map([[SESSION, [first, second]]]);
+
+  appendTraceEventsToPendingConversations(pending, SESSION, [event], SESSION, true);
+
+  expect(pending.get(SESSION)?.[0]?.events).toEqual([event]);
+  expect(pending.get(SESSION)?.[0]?.pending).toBe(false);
+  expect(pending.get(SESSION)?.[1]?.events).toEqual([]);
+  expect(pending.get(SESSION)?.[1]?.pending).toBe(true);
+});

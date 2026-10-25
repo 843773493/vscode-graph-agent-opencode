@@ -224,9 +224,9 @@ function isLiveProcess(stat) {
 
 async function hasLiveProcesses(pids) {
   for (const pid of pids) {
-    const isLive = process.platform === "win32"
-      ? processExists(pid)
-      : isLiveProcess(await readProcessStat(pid));
+    const isLive = process.platform === "linux"
+      ? isLiveProcess(await readProcessStat(pid))
+      : processExists(pid);
     if (isLive) {
       return true;
     }

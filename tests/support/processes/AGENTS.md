@@ -4,15 +4,17 @@
 
 ```text
 processes/
-├── scope.py      当前测试拥有的进程句柄登记、嵌套归属与统一清理
-├── workspace.py  Workspace Backend 启动/关闭、端口检查、Python 路径与 HTTP 就绪
-└── gateway.py    Gateway 配置准备、启动/关闭、就绪与持久状态重置
+├── scope.py        当前测试拥有的进程句柄登记、嵌套归属与统一清理
+├── workspace.py    Workspace Backend 启动/关闭、端口检查、Python 路径与 HTTP 就绪
+├── gateway.py      Gateway 配置准备、启动/关闭、就绪与持久状态重置
+└── windows_job.py  Windows Job Object 启动、整树内存限制与后代回收
 ```
 
 ## 可修改内容
 
 - 测试拥有的 Workspace、Gateway 和辅助子进程生命周期。
 - 端口占用检查、健康探针以及进程输出句柄归属。
+- 测试 runner 与 Windows 开发目标共用的 Windows Job Object 进程树保护。
 
 ## 不可修改内容
 
@@ -23,6 +25,7 @@ processes/
 ## 规范
 
 - `scope.py` 只登记和回收进程句柄；进程创建者显式移交句柄与清理动作。
+- `windows_job.py` 在挂起根进程时先绑定 Job Object；矩阵 runner 和 Windows 目标套件共用同一套进程树资源限制与退出回收。
 - `workspace.py` 与 `gateway.py` 分别拥有对应运行面的启动参数和就绪合同。
 - 创建进程前检查端口并准备日志；创建失败关闭日志，成功后由句柄接管。
 - 更新本目录文件时同步维护 `tests/support/AGENTS.md` 的树形索引与调用方导入路径。

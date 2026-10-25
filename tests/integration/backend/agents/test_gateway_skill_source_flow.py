@@ -22,7 +22,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.e2e_control.harness import E2ETestControlHarness
-from tests.support.model_stream_config import model_stream_replay
+from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,

@@ -1,12 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  buildRequestLogKeyFlow,
+  buildRequestLogKeyFlowFromOrderedLogs,
+} from "../../../state/requestLogDisplay";
 import { requestLogRecordFixture } from "../../../state/requestLogDisplay/requestLogRecordFixture";
 import RequestLogPanel, {
   INITIAL_VISIBLE_REQUEST_LOG_COUNT,
 } from "./RequestLogPanel";
 
 describe("RequestLogPanel", () => {
+  test("有序日志的关键流转复用顺序且保留时间语义", () => {
+    const older = requestLogRecordFixture({
+      timestamp: 1,
+      response: { result: [{ content: "较早回复" }] },
+    });
+    const newer = requestLogRecordFixture({
+      timestamp: 2,
+      response: { result: [{ content: "最新回复" }] },
+    });
+    const orderedLogs = [older, newer];
+    const orderedFlow = buildRequestLogKeyFlowFromOrderedLogs(orderedLogs);
+
+    expect(orderedFlow).toEqual(buildRequestLogKeyFlow([newer, older]));
+    expect(orderedFlow.finalText).toBe("最新回复");
+  });
+
   test("默认按时间正序渲染最新一批请求", () => {
     const logCount = INITIAL_VISIBLE_REQUEST_LOG_COUNT + 2;
     const html = renderToStaticMarkup(

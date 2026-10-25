@@ -12,13 +12,14 @@ import { requestToolNames, responseCalledToolNames } from "./tools";
 import type { RequestLogDisplayModel, UpstreamAttemptDisplay } from "./types";
 
 export function buildRequestLogDisplay(log: LLMRequestLogRecord): RequestLogDisplayModel {
-  const responseText = compactPreview(responsePreview(log));
+  const fullResponsePreview = responsePreview(log);
+  const responseText = compactPreview(fullResponsePreview);
   const requestMessages = Array.isArray(log.request.messages) ? log.request.messages : [];
   const responseMessages = Array.isArray(log.response.result) ? log.response.result : [];
   return {
     model: modelLabel(log),
     responseText,
-    phaseLabel: responsePhaseLabel(log),
+    phaseLabel: responsePhaseLabel(log, fullResponsePreview),
     toolNames: requestToolNames(log),
     calledToolNames: responseCalledToolNames(log),
     messageCount: requestMessages.length,

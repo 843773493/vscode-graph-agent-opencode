@@ -3,8 +3,7 @@ from __future__ import annotations
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
-def test_workspace_state_uses_workspace_boundary_and_activity_cursor(tmp_path):
-    workspace_root = tmp_path / "workspace"
+def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_root):
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         assert store.path == workspace_root / ".boxteam" / "state" / "workspace.sqlite"

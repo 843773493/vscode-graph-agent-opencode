@@ -104,13 +104,21 @@
   color: var(--bt-button-foreground);
 }
 
+.port-forward-feedback-slot {
+  min-height: 36px;
+  flex: 0 0 36px;
+  overflow: hidden;
+}
+
 .port-forward-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 100%;
   gap: 8px;
-  padding: 6px 10px;
+  overflow: hidden;
+  padding: 4px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--bt-status-danger) 45%, var(--bt-border));
   color: var(--bt-status-danger);
   font-size: 11px;
@@ -118,6 +126,10 @@
 
 .port-forward-error span {
   min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
 

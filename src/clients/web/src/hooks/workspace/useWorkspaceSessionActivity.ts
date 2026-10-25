@@ -36,6 +36,7 @@ function markActivity(
     ) {
       return previous;
     }
+    if (previous.unreadSessionKeys.has(cacheKey)) return previous;
     const next = cloneMaps(previous);
     next.unreadSessionKeys.add(cacheKey);
     return next;
@@ -66,7 +67,6 @@ export function useWorkspaceSessionActivity({
     let reconnectAttempt = 0;
     let refreshPending = false;
     let refreshTimer: number | null = null;
-    const seenEventIds = new Set<string>();
 
     const scheduleSessionRefresh = () => {
       refreshPending = true;
@@ -91,9 +91,8 @@ export function useWorkspaceSessionActivity({
     };
 
     const receive = (event: SessionActivity, nextCursor: number) => {
-      if (seenEventIds.has(event.event_id)) return;
-      seenEventIds.add(event.event_id);
-      cursor = Math.max(cursor, nextCursor);
+      if (nextCursor <= cursor) return;
+      cursor = nextCursor;
       markActivity(
         event,
         workspaceId,

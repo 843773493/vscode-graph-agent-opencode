@@ -6,6 +6,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from app.core.file_permissions import restrict_private_path_access
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,13 +31,14 @@ def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     write_error: Exception | None = None
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            restrict_private_path_access(
+                temporary_path,
+                descriptor=file.fileno(),
+            )
             json.dump(payload, file, ensure_ascii=False, indent=2)
             file.write("\n")
             file.flush()
             os.fsync(file.fileno())
-        # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-        if os.name != "nt":
-            temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
     except Exception as error:
         write_error = error

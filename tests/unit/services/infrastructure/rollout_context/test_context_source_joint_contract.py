@@ -77,10 +77,10 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
-from tests.unit.services.infrastructure.test_context_source_reactor import (
+from tests.unit.services.infrastructure.resource_platform.registry.test_context_source_reactor import (
     _write_skill,
 )
+from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 
 MAIN_SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
 CHILD_SESSION_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"

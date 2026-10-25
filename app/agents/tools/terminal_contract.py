@@ -53,6 +53,11 @@ def extract_command_output(
     return True, output.strip(), int(done_match.group(1))
 
 
+def contains_command_completion_marker(output_window: str, done_marker: str) -> bool:
+    """在当前增量及其前缀重叠区中检查命令完成标记。"""
+    return re.search(rf"{re.escape(done_marker)}:(\d+)", output_window) is not None
+
+
 def clean_terminal_delta(output: str, terminal: dict[str, Any]) -> str:
     normalized = output.replace("\r\n", "\n").replace("\r", "\n")
     for marker_field in ("last_command_start_marker", "last_command_done_marker"):
@@ -162,6 +167,7 @@ __all__ = [
     "DEFAULT_WRITE_STDIN_YIELD_TIME_MS",
     "classify_terminal_environment_issue",
     "clean_terminal_delta",
+    "contains_command_completion_marker",
     "effective_yield_time_ms",
     "extract_command_output",
     "tool_output",

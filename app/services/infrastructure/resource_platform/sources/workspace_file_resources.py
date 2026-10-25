@@ -515,21 +515,14 @@ class WorkspaceFileResourceRegistry:
                             entry.uri for directory_id in dirty_directories
                             for entry in self.skill_directory_snapshot(directory_id).entries
                         }
-                        if batch.overflow or self._watch_unavailable:
-                            # 只对已登记文件和固定 Skill 一层边界对账。
-                            paths = tuple(
-                                self._handle_path(handle)
-                                for handle in tuple(self._file_handles_by_uri.values())
-                            )
-                        else:
-                            paths = tuple(
-                                self._handle_path(handle)
-                                for handle in tuple(self._file_handles_by_uri.values())
-                                if any(self._handle_path(handle).is_relative_to(changed) for changed in changed_paths)
-                            )
+                        reconcile_all_files = batch.overflow or self._watch_unavailable
                         for uri, handle in tuple(self._file_handles_by_uri.items()):
+                            if uri in skill_uris:
+                                continue
                             path = self._handle_path(handle)
-                            if path in paths and uri not in skill_uris:
+                            if reconcile_all_files or any(
+                                path.is_relative_to(changed) for changed in changed_paths
+                            ):
                                 self.refresh(uri)
                         for directory_id in dirty_directories:
                             directory = self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])

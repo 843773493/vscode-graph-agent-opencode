@@ -72,6 +72,55 @@ test("同 session/turn ID 的消息流投影和尾帧订阅按 Gateway 会话隔
   expect(messageStreamTurnIdForSession(sessionId, state, rightKey)).toBe(turnId);
 });
 
+test("pending 合并按消息或 Job 归属匹配并更新身份索引", () => {
+  const sessionId = "ses_pending_identity_index";
+  const pendingConversation = (
+    messageId: string,
+    jobId: string,
+  ): ConversationView => ({
+    conversationId: messageId,
+    threadId: "thr_conversation",
+    displayMode: "live",
+    sessionId,
+    userMessage: {
+      message_id: messageId,
+      session_id: sessionId,
+      thread_id: "thr_conversation",
+      role: "user",
+      content: messageId,
+      attachments: [],
+      metadata: {},
+      created_at: "2026-10-24T00:00:00Z",
+      updated_at: "2026-10-24T00:00:00Z",
+    },
+    assistantMessages: [],
+    events: [],
+    status: "running",
+    jobId,
+    pending: true,
+    source: "pending",
+  });
+  const state = {
+    pendingConversations: new Map([[sessionId, [
+      pendingConversation("msg_first", "job_shared"),
+      pendingConversation("msg_second", "job_shared"),
+      pendingConversation("msg_first", "job_new"),
+    ]]]),
+    turnTimelinesBySession: new Map(),
+  } as unknown as AppState;
+
+  const conversations = getConversationsForSession(sessionId, state);
+
+  expect(conversations).toHaveLength(2);
+  expect(conversations.map((conversation) => [
+    conversation.userMessage?.message_id,
+    conversation.jobId,
+  ])).toEqual([
+    ["msg_second", "job_shared"],
+    ["msg_first", "job_new"],
+  ]);
+});
+
 test("历史 Turn 不显示实时事件流等待状态", () => {
   const historyConversation: ConversationView = { threadId: "thr_conversation",
     conversationId: "turn_history_running",

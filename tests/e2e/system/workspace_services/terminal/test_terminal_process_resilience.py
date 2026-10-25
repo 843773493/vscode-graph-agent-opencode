@@ -45,6 +45,12 @@ def e2e_workspace_root_path() -> str:
     return prepare_empty_terminal_e2e_workspace(Path(__file__))
 
 
+@pytest.fixture(scope="module")
+def terminal_run_context() -> TestRunContext:
+    # artifacts_dir 按当前 pytest 节点动态解析，可复用上下文且仍隔离每个用例的日志。
+    return TestRunContext.from_test_file(Path(__file__))
+
+
 async def _wait_for_output(
     websocket: websockets.ClientConnection,
     text: str,
@@ -65,13 +71,18 @@ async def _wait_for_output(
 async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 88)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "utf8_output"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(backend_port=backend_port, workspace_root=workspace_root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+    process = start_terminal_backend(
+        backend_port=backend_port,
+        workspace_root=workspace_root,
+        artifacts_dir=terminal_run_context.artifacts_dir,
+    )
     try:
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{backend_port}",
@@ -140,6 +151,7 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
 async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 74)
     workspace_root = create_terminal_scenario_workspace(
@@ -149,7 +161,7 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -222,6 +234,7 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
 async def test_failed_terminal_start_rolls_back_session_and_worker(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 78)
     workspace_root = create_terminal_scenario_workspace(
@@ -231,7 +244,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         initial_children = _direct_child_pids(process.pid)
@@ -275,6 +288,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
 async def test_websocket_attach_messages_are_processed_in_order(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 80)
     workspace_root = create_terminal_scenario_workspace(
@@ -284,7 +298,7 @@ async def test_websocket_attach_messages_are_processed_in_order(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -358,6 +372,7 @@ async def test_websocket_attach_messages_are_processed_in_order(
 async def test_websocket_reconnect_replays_only_unacknowledged_output(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 76)
     workspace_root = create_terminal_scenario_workspace(
@@ -367,7 +382,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -466,6 +481,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
 async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 82)
     workspace_root = create_terminal_scenario_workspace(
@@ -475,7 +491,7 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     worker_pid = 0
     shell_pid = 0
@@ -544,6 +560,7 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
 async def test_concurrent_kill_and_delete_share_one_release(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 84)
     workspace_root = create_terminal_scenario_workspace(
@@ -553,7 +570,7 @@ async def test_concurrent_kill_and_delete_share_one_release(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -602,6 +619,7 @@ async def test_concurrent_kill_and_delete_share_one_release(
 async def test_normal_shell_exit_reaps_term_resistant_descendant(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 86)
     workspace_root = create_terminal_scenario_workspace(
@@ -611,7 +629,7 @@ async def test_normal_shell_exit_reaps_term_resistant_descendant(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -678,6 +696,7 @@ async def test_normal_shell_exit_reaps_term_resistant_descendant(
 async def test_pre_ready_exit_reaps_term_resistant_descendant(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 88)
     workspace_root = create_terminal_scenario_workspace(
@@ -688,7 +707,7 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
@@ -730,6 +749,7 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
 async def test_shutdown_persist_failure_still_exits_manager(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
+    terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 90)
     workspace_root = create_terminal_scenario_workspace(
@@ -739,7 +759,7 @@ async def test_shutdown_persist_failure_still_exits_manager(
     process = start_terminal_backend(
         backend_port=backend_port,
         workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+        artifacts_dir=terminal_run_context.artifacts_dir,
     )
     manager_path = Path(workspace_root) / ".boxteam" / "terminal-manager"
     backup_path = Path(workspace_root) / ".boxteam" / "terminal-manager-backup"

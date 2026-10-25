@@ -46,6 +46,29 @@ _OPTIONAL_FIELDS = frozenset(
 )
 _INTERNAL_DISPLAY_KINDS = frozenset({"delegated_task", "generated_session_result"})
 _RUNTIME_NOTICE_PAYLOAD_FIELDS = frozenset({"prompt", "display_part", "attachments", "attachment_blocks"})
+_RUNTIME_NOTICE_ATTACHMENT_FIELDS = frozenset({"file_id", "directory_uri", "name", "content_type", "availability"})
+_RUNTIME_NOTICE_ATTACHMENT_BLOCK_FIELDS = frozenset({"type", "text", "image_url", "metadata"})
+_RUNTIME_NOTICE_ATTACHMENT_METADATA_FIELDS = frozenset(
+    {
+        "origin",
+        "kind",
+        "schema_version",
+        "file_id",
+        "path",
+        "name",
+        "content_type",
+        "variant",
+        "preview_status",
+        "availability",
+        "directory_uri",
+    }
+)
+_RUNTIME_NOTICE_MANIFEST_ATTRIBUTES = frozenset(
+    {"id", "path", "name", "content_type", "preview_status", "preview_error", "directory_uri", "output_directory", "processing"}
+)
+_RUNTIME_NOTICE_MANIFEST_BLOCK_FIELDS = frozenset({"type", "text", "metadata"})
+_RUNTIME_NOTICE_PREVIEW_BLOCK_FIELDS = frozenset({"type", "image_url", "metadata"})
+_RUNTIME_NOTICE_PREVIEW_FIELDS = frozenset({"url"})
 _DISPLAY_PART_FIELDS = frozenset({"kind", "text", "provenance"})
 _DISPLAY_PROVENANCE_FIELDS = frozenset(
     {
@@ -59,6 +82,22 @@ _DISPLAY_PROVENANCE_FIELDS = frozenset(
 GENERATED_RESULT_ANNOTATION_FIELDS = frozenset({
     "structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id",
 })
+_ITEM_PROJECTION_MANIFEST_FIELDS = frozenset(
+    {
+        "projection_group",
+        "projection_identity",
+        "tool_result_evidence",
+        "source_manifest",
+        "provenance_relations",
+        "extensions",
+    }
+)
+_ITEM_PROJECTION_MANIFEST_TYPES = (
+    ("projection_group", ProjectionGroup),
+    ("projection_identity", ItemProjectionIdentity),
+    ("tool_result_evidence", ToolResultEvidence),
+    ("source_manifest", ItemSourceManifest),
+)
 
 
 def validate_generated_result_extensions(extensions: Mapping[str, object]) -> None:
@@ -78,10 +117,10 @@ def validate_generated_result_extensions(extensions: Mapping[str, object]) -> No
 def _strict_mapping(value: object, allowed: frozenset[str], name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ItemSchemaError(f"{name} 必须是 object")
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise ItemSchemaError(f"{name} 含未知字段: " + ",".join(unknown))
-    return value
+    if value.keys() <= allowed:
+        return value
+    unknown = sorted(value.keys() - allowed)
+    raise ItemSchemaError(f"{name} 含未知字段: " + ",".join(unknown))
 
 
 
@@ -199,7 +238,7 @@ class RuntimeNoticePayload:
             raise ItemSchemaError("RuntimeNoticePayload 缺少字段: display_part 或附件")
         references: dict[str, str | None] = {}
         for attachment in self.attachments:
-            raw = _strict_mapping(attachment, frozenset({"file_id", "directory_uri", "name", "content_type", "availability"}), "runtime_notice.attachment")
+            raw = _strict_mapping(attachment, _RUNTIME_NOTICE_ATTACHMENT_FIELDS, "runtime_notice.attachment")
             file_id = _non_empty_string(raw.get("file_id"), "runtime_notice.attachment.file_id")
             parse_attachment_uri(file_id, require_file=True)
             directory_uri = raw.get("directory_uri")
@@ -212,8 +251,8 @@ class RuntimeNoticePayload:
                 raise ItemSchemaError("runtime_notice 附件 availability 非法")
         manifests = []
         for block in self.attachment_blocks:
-            raw = _strict_mapping(block, frozenset({"type", "text", "image_url", "metadata"}), "runtime_notice.attachment_block")
-            metadata = _strict_mapping(raw.get("metadata"), frozenset({"origin", "kind", "schema_version", "file_id", "path", "name", "content_type", "variant", "preview_status", "availability", "directory_uri"}), "runtime_notice.attachment_block.metadata")
+            raw = _strict_mapping(block, _RUNTIME_NOTICE_ATTACHMENT_BLOCK_FIELDS, "runtime_notice.attachment_block")
+            metadata = _strict_mapping(raw.get("metadata"), _RUNTIME_NOTICE_ATTACHMENT_METADATA_FIELDS, "runtime_notice.attachment_block.metadata")
             file_id = _non_empty_string(metadata.get("file_id"), "runtime_notice.attachment_block.file_id")
             if (metadata.get("origin") != "generated" or type(metadata.get("schema_version")) is not int or metadata["schema_version"] != 1
                     or file_id not in references or metadata.get("path") != file_id):
@@ -224,16 +263,16 @@ class RuntimeNoticePayload:
                 raise ItemSchemaError("runtime_notice 附件块 availability 非法")
             kind = metadata.get("kind")
             if kind == "attachment_manifest":
-                if set(raw) != {"type", "text", "metadata"} or raw["type"] != "text":
+                if raw.keys() != _RUNTIME_NOTICE_MANIFEST_BLOCK_FIELDS or raw["type"] != "text":
                     raise ItemSchemaError("runtime_notice 附件 manifest 必须是 text block")
                 text = _non_empty_string(raw["text"], "runtime_notice.attachment_block.text")
                 try:
                     manifest = ElementTree.fromstring(text + "</attachment>")
                 except ElementTree.ParseError as error:
                     raise ItemSchemaError("runtime_notice 附件 manifest 结构非法") from error
-                if (manifest.tag != "attachment" or list(manifest) or manifest.text or manifest.tail
+                if (manifest.tag != "attachment" or len(manifest) or manifest.text or manifest.tail
                         or manifest.attrib.get("id") != file_id or manifest.attrib.get("path") != file_id
-                        or set(manifest.attrib) - {"id", "path", "name", "content_type", "preview_status", "preview_error", "directory_uri", "output_directory", "processing"}):
+                        or not manifest.attrib.keys() <= _RUNTIME_NOTICE_MANIFEST_ATTRIBUTES):
                     raise ItemSchemaError("runtime_notice 附件 manifest 与生成来源不一致")
                 directory_uri = references[file_id]
                 if directory_uri is not None:
@@ -246,9 +285,9 @@ class RuntimeNoticePayload:
             elif kind == "attachment_preview":
                 if not manifests or manifests[-1] != file_id:
                     raise ItemSchemaError("runtime_notice preview 必须跟随同一附件 manifest")
-                if set(raw) != {"type", "image_url", "metadata"} or raw["type"] != "image_url":
+                if raw.keys() != _RUNTIME_NOTICE_PREVIEW_BLOCK_FIELDS or raw["type"] != "image_url":
                     raise ItemSchemaError("runtime_notice 附件 preview 必须是 image_url block")
-                image = _strict_mapping(raw["image_url"], frozenset({"url"}), "runtime_notice.attachment_block.image_url")
+                image = _strict_mapping(raw["image_url"], _RUNTIME_NOTICE_PREVIEW_FIELDS, "runtime_notice.attachment_block.image_url")
                 url = _non_empty_string(image.get("url"), "runtime_notice.attachment_block.image_url.url")
                 if not url.startswith("data:image/"):
                     raise ItemSchemaError("runtime_notice preview 必须是冻结的图片内容")
@@ -406,18 +445,11 @@ def _validate_payload(
 
 def parse_item_projection_manifest(value: object) -> dict[str, object]:
     """恢复 catalogue 的无正文镜像；禁止扩展覆盖 typed owner。"""
-    fields = {"projection_group", "projection_identity", "tool_result_evidence", "source_manifest", "provenance_relations", "extensions"}
-    if not isinstance(value, Mapping) or set(value) != fields:
+    if not isinstance(value, Mapping) or value.keys() != _ITEM_PROJECTION_MANIFEST_FIELDS:
         raise ItemSchemaError("item projection manifest 字段缺失或含未知字段")
     validate_extensions(value["extensions"])
-    types = {
-        "projection_group": ProjectionGroup,
-        "projection_identity": ItemProjectionIdentity,
-        "tool_result_evidence": ToolResultEvidence,
-        "source_manifest": ItemSourceManifest,
-    }
     result = {"extensions": dict(value["extensions"])}
-    for name, target_type in types.items():
+    for name, target_type in _ITEM_PROJECTION_MANIFEST_TYPES:
         child = value[name]
         result[name] = target_type.from_dict(child).to_dict() if child is not None else None
     relations = value["provenance_relations"]

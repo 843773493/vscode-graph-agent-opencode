@@ -16,7 +16,7 @@ from app.services.orchestration.event_stream.tool_events import (
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
-# 调试扩展工具（app/agents/tools/debugging.py 的 _failure/_success）的固定结果形状：
+# 调试扩展工具（app/agents/tools/debugging/payloads.py 的 _failure/_success）的固定结果形状：
 # 以 ok 布尔值声明执行结论，不携带 status 字段。这里直接按该形状构造，避免
 # 测试经由扩展工具装配链（ToolInvocationContext/MCP catalog）造成无关耦合。
 def _debug_failure_json(code: str, message: str) -> str:

@@ -6,6 +6,7 @@ import type { NodeDebugBreakpoint } from "../../types/backend";
 import NodeDebugBreakpointGutter, {
   type NodeDebugBreakpointDefinition,
 } from "./NodeDebugBreakpointGutter";
+import { createSourceLineStarts, visibleSourceLines } from "./nodeDebugSourceLines";
 
 interface NodeDebugSourcePreviewProps {
   apiPort: number;
@@ -57,15 +58,16 @@ const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
     };
   }, [apiPort, path, sourceRevision, workspaceId]);
 
-  const sourceLines = useMemo(() => content?.split("\n") ?? [], [content]);
-  const visibleRange = useMemo(() => {
-    if (sourceLines.length === 0) return { start: 0, end: 0 };
-    const center = Math.max(1, Math.min(focusLine ?? 1, sourceLines.length));
-    return {
-      start: Math.max(0, center - 1 - SOURCE_WINDOW_RADIUS),
-      end: Math.min(sourceLines.length, center + SOURCE_WINDOW_RADIUS),
-    };
-  }, [focusLine, sourceLines.length]);
+  const lineStartOffsets = useMemo(
+    () => content === null ? [] : createSourceLineStarts(content),
+    [content],
+  );
+  const visibleLines = useMemo(
+    () => content === null
+      ? []
+      : visibleSourceLines(content, lineStartOffsets, focusLine, SOURCE_WINDOW_RADIUS),
+    [content, focusLine, lineStartOffsets],
+  );
   const breakpointByLine = useMemo(
     () => new Map(
       breakpoints
@@ -76,23 +78,29 @@ const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
   );
 
   if (!path) {
-    return <div className="debug-empty-state compact">选择脚本或等待模型命中源码断点。</div>;
+    return null;
   }
-  if (error) return <div className="debug-error" role="alert">{error}</div>;
-  if (content === null) return <div className="debug-empty-state compact">正在读取 {path}…</div>;
-
   return (
     <div className="node-debug-source-preview">
       <header>
         <span title={path}>{path}</span>
-        <button type="button" onClick={() => void onOpenWorkspacePath(path)} title="在完整编辑器打开">
-          <span className="codicon codicon-go-to-file" aria-hidden="true" />
-          打开
-        </button>
+        {content !== null && !error && (
+          <button type="button" onClick={() => void onOpenWorkspacePath(path)} title="在完整编辑器打开">
+            <span className="codicon codicon-go-to-file" aria-hidden="true" />
+            打开
+          </button>
+        )}
       </header>
-      <div className="node-debug-code" role="grid" aria-label={`${path} 源码预览`}>
-        {sourceLines.slice(visibleRange.start, visibleRange.end).map((line, index) => {
-          const lineNumber = visibleRange.start + index + 1;
+      <div
+        className="node-debug-code"
+        role={error ? "alert" : content === null ? "status" : "grid"}
+        aria-label={`${path} 源码预览`}
+      >
+        {error ? (
+          <div className="node-debug-source-state error">{error}</div>
+        ) : content === null ? (
+          <div className="node-debug-source-state">正在读取 {path}…</div>
+        ) : visibleLines.map(({ line, lineNumber }) => {
           const breakpoint = breakpointByLine.get(lineNumber) ?? null;
           const current = lineNumber === focusLine;
           return (

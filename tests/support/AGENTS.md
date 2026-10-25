@@ -16,14 +16,17 @@
 │   ├── processes/scope.py                    进程句柄登记及作用域释放
 │   ├── processes/workspace.py                Workspace后端、日志、端口预检与HTTP就绪
 │   ├── processes/gateway.py                  Gateway进程、配置和就绪
+│   ├── processes/windows_job.py               Windows Job Object整树内存限制与回收
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放
 ├── 会话与历史数据前提
 │   ├── canonical_id_at.py / graph_binding.py  确定性身份与图绑定
 │   ├── catalog_session_bundle.py          catalog、物理节点和会话控制数据的统一播种
 │   ├── job_thread_fixture.py              Job测试的Thread与执行绑定
-│   ├── rollout_output.py                  工具输出装具的封存
-│   └── web_boundary_seeding.py            Web历史边界场景数据
+│   └── rollout/                            canonical历史与视图场景装具
+│       ├── fixture_output.py               通过正式owner提交静态fixture输出
+│       ├── view_mutations.py                隔离注入view成员索引损坏
+│       └── web_boundary_seeding.py           Web历史边界场景数据
 ├── 业务owner装配与显式替身
 │   ├── resource_owners/sessions.py        Terminal/Browser共享Session与Thread前提
 │   ├── resource_owners/terminal.py        Terminal owner及传输替身
@@ -34,29 +37,32 @@
 │   └── background_work.py                 可控后台任务handler与注册装配
 ├── 跨进程控制与场景入口
 │   ├── e2e_control/harness.py                pytest控制端口、可控时钟、phase barrier和租约
-│   ├── e2e_control/browser_client.mjs        JS控制客户端与独立fork期限watchdog
-│   ├── fork_deadline.py                   Python侧fork期限与独立watchdog
+│   ├── e2e_control/browser_client.mjs        JS控制客户端、fork期限状态机与外置watchdog
+│   ├── fork_deadline.py                   Python进程身份、进程树回收与fork期限watchdog
 │   ├── e2e_control/runtime_ports.py          无应用副作用的显式受控端口
 │   ├── e2e_control/backend_app.py            注入测试控制入口的Workspace ASGI
 │   ├── e2e_control/tool_observations.py      真实 canonical 工具提交观测
 │   ├── e2e_control/communication_backend_app.py  同一受控Backend的通信故障观测组合
 │   ├── e2e_control/gateway_app.py            将托管后端绑定到测试ASGI的Gateway入口
 │   └── e2e_control/mcp_stdio_server.py       场景所用的MCP服务入口
-├── 模型与MCP前提
-│   ├── model_stream_config.py            流式模型测试的显式配置准备
-│   ├── model_stream_crash_worker.py       模型流故障实验的独立执行入口
-│   ├── frozen_provider.py                冻结Provider请求与上下文前提
-│   ├── mcp_configuration.py              MCP配置文件准备
-│   └── mcp_session_doubles.py             MCP会话及工厂替身
+├── model_stream/                          流式模型回放与故障执行
+│   ├── config.py                           provider配置、回放生命周期与运行参数
+│   ├── frozen_provider.py                  冻结请求构造和检查点读取观测
+│   └── crash_worker.py                     独立模型流故障执行入口
+├── mcp/                                    MCP测试配置和协议替身
+│   ├── configuration.py                    MCP配置文件准备
+│   └── session_doubles.py                  MCP会话及工厂替身
 ├── 通信目标与故障
-│   ├── communication.py                  send/read/wait显式返回值probe
-│   ├── communication_federation.py       联邦通信的多节点与SSH装配
-│   └── communication_fault_backend.py    通信故障注入后端
+│   └── communication/
+│       ├── probe.py                       send/read/wait显式返回值probe
+│       ├── federation.py                  联邦通信的多节点与SSH装配
+│       └── fault_backend.py               通信故障注入后端
 └── API等待、观察与断言
     ├── sealed_request_audit.py           Provider日志、真实transport与sealed registry/checkpoint只读核对
     ├── api_helpers.py / api_waiters.py    HTTP建会话、checkpoint样板与Job等待
-    ├── session_navigation_http.py        导航operation提交及终态等待
-    ├── session_navigation_queue.py       导航catalog intent准备
+    ├── session_navigation/
+    │   ├── http_operations.py             真实HTTP导航operation提交及终态等待
+    │   └── catalog_intents.py             直接调用catalog owner的intent准备与提交
     ├── gateway_skill_sources.py          Skill发布与接受的显式装配
     ├── skill_gateway_observations.py     Skill Gateway请求、响应观察
     ├── sse.py                            SSE事件读取与匹配
@@ -71,7 +77,7 @@
 
 控制状态归 pytest 的 Python harness；JS driver 通过单行 JSON 请求观察或操作已登记的装具。客户端只在当前 UTF-8 分块内找换行，收齐第一条回执后拼接并解析一次，不重复扫描累计前缀；仍须保存完整回执，不能据此声称内存与响应大小无关。控制端口传输与独立 fork watchdog 是不同生命周期，本地传输优化不得改动 fork 的60秒期限。
 
-控制装具的 JSON 租约、事件和模型回放文件统一显式使用 UTF-8，不能依赖宿主默认编码。回放文件读取、临时写入与发布共用此合同；损坏编码直接报错，不尝试本地代码页或替换字符。网络仍传输 UTF-8 字节，文件编码与平台进程身份是不同边界，不能据此声称 Linux 租约已跨平台。
+控制装具的 JSON 租约、事件和模型回放文件统一显式使用 UTF-8，不能依赖宿主默认编码。回放文件读取、临时写入与发布共用此合同；损坏编码直接报错，不尝试本地代码页或替换字符。网络仍传输 UTF-8 字节；文件编码与平台进程身份是不同边界，租约进程身份由 `psutil.Process.create_time()` 独立提供跨平台标记。
 
 socket 回调不在创建 Promise 时的同步异常边界内：回执解析或读取结果字段失败时，客户端必须关闭自己持有的连接，并用原始异常拒绝该请求，保留错误类型与栈。不能把回调抛错留给进程的未捕获异常处理，也不能用空结果伪装成功；正常远端错误回执仍按原消息拒绝。
 
@@ -119,7 +125,8 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 - `e2e_control/harness.py` 的控制端口从构造时归 harness 持有，绑定后立即登记关闭；启动准备失败也要释放，不能对未启动线程调用 shutdown。只有目录创建成功后才保存事件，线程启动成功后才登记停机与 join；close 先释放两类 barrier，再执行完整清理，一个动作失败仍尝试其余动作。控制时钟和事件用于观测，不写业务状态或延长业务期限。
 - 控制端口的 `read_directory` 只查询已登记 trace 根下的显式目标；检查叶名称时用有关闭作用域的 scandir，命中即结束，不构造父目录名称全集。缺失叶仍返回 null，父目录缺失、断链、文件和越界仍明确失败；真正返回目录内容时继续完整读取并排序。存在性查找与目录内容返回是两种成本，不维护路径缓存或改变注册根归属。
-- `E2EProcessLease`的JSON文件声明pytest当前进程使用的服务端口，不持续持有socket或系统文件锁。记录中的`start_time`来自Linux `/proc/<pid>/stat`第22字段，是启动滴答数原文，不能当Unix秒、毫秒或UTC时间；内部读取函数明确命名为`_linux_process_start_ticks`。release用PID、启动标记、随机token共同校验持有者，端口块如何分配归`ports.py`；进程身份、租约归属、端口分配和端口当前空闲是不同事实。
+- `E2EProcessLease`的JSON文件声明pytest当前进程使用的服务端口，不持续持有socket或系统文件锁。`start_time`来自`psutil.Process(pid).create_time()`，是用于识别PID复用的平台进程创建时间；不自行解析Linux `/proc`。release用PID、创建时间、随机token共同校验持有者，端口块如何分配归`ports.py`；进程身份、租约归属、端口分配和端口当前空闲是不同事实。
+- Browser driver fork deadline 由 `e2e_control/browser_client.mjs` 维护单调时钟状态；身份和回收委托给 `fork_deadline.py`：Linux 使用 `/proc`，macOS 使用 `psutil` 加 POSIX process group，Windows 使用 `psutil` 进程树。POSIX driver 必须由 owner 用独立 session 启动，Windows 必须仍属于 matrix runner 进程树。
 - 新租约文件独占创建成功后立即登记失败回收，写入和关闭均成功才保留；写入中断后可显式重试，不留下半截JSON或尚未取得的租约。独占创建碰到竞争文件时不回收他人的记录；已有损坏记录仍明确报错，不能把新建失败回收变成通用清除。回收自身也失败时保留原始写入异常链。
 
 ### 导航操作的等待边界

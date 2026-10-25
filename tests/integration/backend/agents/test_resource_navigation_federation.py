@@ -488,7 +488,9 @@ async def test_model_attachment_uri_reads_media_through_original_owner(communica
     from PIL import Image
 
     from app.core.resource_uri import parse_session_artifact_uri
-    from tests.support.session_navigation_http import submit_navigation_operation
+    from tests.support.session_navigation.http_operations import (
+        submit_navigation_operation,
+    )
 
     case = communication_triad
     nodes, artifacts = case.nodes, case.artifacts

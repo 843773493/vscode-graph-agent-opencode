@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.core.file_permissions import restrict_private_path_access
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
 from app.schemas.gateway.ui_settings import WebUISettingsDTO
@@ -249,11 +250,13 @@ def _atomic_write_text(path: Path, content: str) -> None:
     primary_error: Exception | None = None
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            restrict_private_path_access(
+                temporary_path,
+                descriptor=file.fileno(),
+            )
             file.write(content)
             file.flush()
             os.fsync(file.fileno())
-        if os.name != "nt":
-            temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
     except Exception as error:
         primary_error = error

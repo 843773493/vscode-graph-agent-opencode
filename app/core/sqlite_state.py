@@ -181,10 +181,12 @@ def _required_tables(
         created.extend(_CREATE_TABLE_PATTERN.findall(migration))
         dropped.update(_DROP_TABLE_PATTERN.findall(migration))
     required: list[str] = []
+    required_table_names: set[str] = set()
     for table in created:
-        if table in dropped or table in required:
+        if table in dropped or table in required_table_names:
             continue
         required.append(table)
+        required_table_names.add(table)
     return tuple(required)
 
 

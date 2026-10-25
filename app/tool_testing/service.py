@@ -56,10 +56,12 @@ class ToolTestService:
         self._asset_root = asset_root
         self._model_builder = (
             partial(build_model_from_provider, invocation_purpose="tool_test")
-            if model_builder is None else model_builder
+            if model_builder is None
+            else model_builder
         )
         self._tasks: set[asyncio.Task[None]] = set()
         self._active_tools: set[str] = set()
+        self._active_run_states: dict[str, ToolTestRunDTO] = {}
         self._provider_locks: dict[str, asyncio.Lock] = {}
         self._state_lock = asyncio.Lock()
 
@@ -115,25 +117,39 @@ class ToolTestService:
         self._store.reset_tool(tool_name)
         self._store.write_run(run.run_id, run.model_dump(mode="json"))
         self._active_tools.add(tool_name)
-        task = asyncio.create_task(
-            self._run(
-                run_id=run.run_id,
-                cases=cases,
-                providers=[provider_map[provider_id] for provider_id in provider_ids],
-                runtime_config=runtime_config,
-                repetitions=request.repetitions,
-            ),
-            name=f"tool-test:{run.run_id}",
-        )
+        self._active_run_states[run.run_id] = run.model_copy(deep=True)
+        try:
+            task = asyncio.create_task(
+                self._run(
+                    run_id=run.run_id,
+                    cases=cases,
+                    providers=[
+                        provider_map[provider_id] for provider_id in provider_ids
+                    ],
+                    runtime_config=runtime_config,
+                    repetitions=request.repetitions,
+                ),
+                name=f"tool-test:{run.run_id}",
+            )
+        except BaseException:
+            self._active_run_states.pop(run.run_id, None)
+            self._active_tools.discard(tool_name)
+            raise
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         task.add_done_callback(lambda _: self._active_tools.discard(tool_name))
         return run
 
     def get(self, run_id: str) -> ToolTestRunDTO:
+        run = self._active_run_states.get(run_id)
+        if run is not None:
+            # 活动状态优先走内存；返回副本，避免响应对象反向修改服务缓存。
+            return run.model_copy(deep=True)
         return ToolTestRunDTO.model_validate(self._store.read_run(run_id))
 
-    def list(self, *, tool_name: str | None = None, limit: int = 20) -> list[ToolTestRunDTO]:
+    def list(
+        self, *, tool_name: str | None = None, limit: int = 20
+    ) -> list[ToolTestRunDTO]:
         return [
             ToolTestRunDTO.model_validate(item)
             for item in self._store.list_runs(tool_name=tool_name, limit=limit)
@@ -156,30 +172,38 @@ class ToolTestService:
         runtime_config: dict[str, Any],
         repetitions: int,
     ) -> None:
-        await self._mutate_run(run_id, lambda run: self._set_run_status(run, "running"))
         try:
-            await asyncio.gather(
-                *[
-                    self._run_provider(
-                        run_id=run_id,
-                        provider=provider,
-                        runtime_config=runtime_config,
-                        cases=cases,
-                        repetitions=repetitions,
-                    )
-                    for provider in providers
-                ]
-            )
-        except BaseException as error:
-            if isinstance(error, asyncio.CancelledError):
-                raise
-            error_message = str(error)
             await self._mutate_run(
-                run_id,
-                lambda run: self._fail_run(run, error_message),
+                run_id, lambda run: self._set_run_status(run, "running")
             )
-            return
-        await self._mutate_run(run_id, lambda run: self._set_run_status(run, "completed"))
+            try:
+                await asyncio.gather(
+                    *[
+                        self._run_provider(
+                            run_id=run_id,
+                            provider=provider,
+                            runtime_config=runtime_config,
+                            cases=cases,
+                            repetitions=repetitions,
+                        )
+                        for provider in providers
+                    ]
+                )
+            except BaseException as error:
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                error_message = str(error)
+                await self._mutate_run(
+                    run_id,
+                    lambda run: self._fail_run(run, error_message),
+                )
+                return
+            await self._mutate_run(
+                run_id, lambda run: self._set_run_status(run, "completed")
+            )
+        finally:
+            async with self._state_lock:
+                self._active_run_states.pop(run_id, None)
 
     async def _run_provider(
         self,
@@ -200,13 +224,17 @@ class ToolTestService:
                 run_id,
                 lambda run: self._set_provider_status(run, provider_id, "running"),
             )
+            redacted_provider = _redact_secrets(provider)
+            provider_model: Any | None = None
             for case in cases:
                 for _ in range(repetitions):
-                    attempt = await self._run_attempt(
+                    attempt, provider_model = await self._run_attempt(
                         run_id=run_id,
                         provider=provider,
+                        redacted_provider=redacted_provider,
                         runtime_config=runtime_config,
                         case=case,
+                        provider_model=provider_model,
                     )
                     await self._mutate_run(
                         run_id,
@@ -222,9 +250,11 @@ class ToolTestService:
         *,
         run_id: str,
         provider: dict[str, Any],
+        redacted_provider: object,
         runtime_config: dict[str, Any],
         case: ToolTestCase,
-    ) -> ToolTestAttemptDTO:
+        provider_model: Any | None,
+    ) -> tuple[ToolTestAttemptDTO, Any | None]:
         provider_id = str(provider["id"])
         model_name = str(provider.get("model") or "")
         attempt_id = create_prefixed_id("attempt")
@@ -242,12 +272,13 @@ class ToolTestService:
         transient_retries = 0
         exchanges = []
         tool_result: object | None = None
+        model = provider_model
         request_payload: dict[str, Any] = {
             "run_id": run_id,
             "attempt_id": attempt_id,
             "tool_name": case.tool_name,
             "case_id": case.case_id,
-            "provider": _redact_secrets(provider),
+            "provider": redacted_provider,
         }
         try:
             prepared = case.prepare(
@@ -261,7 +292,9 @@ class ToolTestService:
             ]
             request_payload.update(
                 {
-                    "messages": [message.model_dump(mode="json") for message in messages],
+                    "messages": [
+                        message.model_dump(mode="json") for message in messages
+                    ],
                     "tool": {
                         "name": prepared.tool.name,
                         "description": prepared.tool.description,
@@ -269,10 +302,11 @@ class ToolTestService:
                     },
                 }
             )
-            model = self._model_builder(
-                provider=provider,
-                runtime_config=runtime_config,
-            )
+            if model is None:
+                model = self._model_builder(
+                    provider=provider,
+                    runtime_config=runtime_config,
+                )
             probe = await probe_tool_call_with_transient_retries(
                 model=model,
                 tool=prepared.tool,
@@ -365,7 +399,7 @@ class ToolTestService:
             file_name="result.json",
             payload=attempt.model_dump(mode="json"),
         )
-        return attempt
+        return attempt, model
 
     async def _mutate_run(
         self,
@@ -373,10 +407,17 @@ class ToolTestService:
         mutator: Callable[[ToolTestRunDTO], None],
     ) -> None:
         async with self._state_lock:
-            run = self.get(run_id)
-            mutator(run)
-            run.updated_at = datetime.now(UTC)
-            self._store.write_run(run_id, run.model_dump(mode="json"))
+            run = self._active_run_states.get(run_id)
+            if run is None:
+                run = self.get(run_id)
+            try:
+                mutator(run)
+                run.updated_at = datetime.now(UTC)
+                self._store.write_run(run_id, run.model_dump(mode="json"))
+            except BaseException:
+                self._active_run_states.pop(run_id, None)
+                raise
+            self._active_run_states[run_id] = run
 
     @staticmethod
     def _set_run_status(run: ToolTestRunDTO, status: str) -> None:
@@ -395,7 +436,9 @@ class ToolTestService:
         provider_id: str,
         status: str,
     ) -> None:
-        provider = next(item for item in run.providers if item.provider_id == provider_id)
+        provider = next(
+            item for item in run.providers if item.provider_id == provider_id
+        )
         provider.status = status  # type: ignore[assignment]
 
     @staticmethod

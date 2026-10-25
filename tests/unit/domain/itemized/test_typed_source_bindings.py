@@ -14,7 +14,7 @@ from app.domain.itemized.plans.contributions import (
 from app.domain.itemized.serde.registry import parse_contribution
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def contribution() -> ContextContribution:
     return ContextContribution(
         contribution_id="source-1",

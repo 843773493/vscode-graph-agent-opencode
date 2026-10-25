@@ -3,21 +3,25 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import type { SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
 import {
-  apiResponse,
+  apiSuccessResponse,
   catalogChildrenResponse,
-  createTestSessionCatalogOutboxRuntime,
-  errorResponse,
-  flushEffects,
+  apiErrorResponse,
   installGatewayFetch,
-  liveExplorerHarness,
-  mountResourceExplorer,
-  restoreSessionHookGlobals,
+  restoreGatewayTestEnvironment,
   testGatewayUserAccess,
-  TEST_WORKSPACE_REQUEST_TARGET,
-  withCatalogDefaults,
-} from "./sessionHookTestFixtures";
+  TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
+  withDefaultGatewayApiResponses,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import {
+  createSessionCatalogOutboxTestRuntime,
+} from "../../tests/fixtures/session/sessionCatalogOutbox";
+import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
+import {
+  createLiveSessionResourceExplorerHarness,
+  mountSessionResourceExplorerHarness,
+} from "../../tests/fixtures/session/sessionResourceExplorer";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 const moveNodes: SessionCatalogNode[] = [
   { node_id: "ses_move", kind: "session", name: "待移动会话", parent_node_id: "fld_old",
@@ -29,7 +33,7 @@ const moveNodes: SessionCatalogNode[] = [
 ];
 
 function waitForReportedCatalogError(
-  runtime: ReturnType<typeof createTestSessionCatalogOutboxRuntime>,
+  runtime: ReturnType<typeof createSessionCatalogOutboxTestRuntime>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -49,7 +53,7 @@ function waitForReportedCatalogError(
 }
 
 function waitForCatalogPrune(
-  runtime: ReturnType<typeof createTestSessionCatalogOutboxRuntime>,
+  runtime: ReturnType<typeof createSessionCatalogOutboxTestRuntime>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -89,16 +93,16 @@ describe("useSessionResourceExplorer 自动同步", () => {
         };
         return [destination, ...(mode === "定位续页" ? [sibling] : []), moved];
       };
-      installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
         if (path === "/api/v1/session-catalog/export") {
-          return apiResponse({ revision: `catalog-${catalogRevision}`, catalog_revision: catalogRevision, items: nodes() });
+          return apiSuccessResponse({ revision: `catalog-${catalogRevision}`, catalog_revision: catalogRevision, items: nodes() });
         }
         if (path === "/api/v1/session-catalog/children") {
           const query = new URL(url).searchParams;
           const parent = query.get("parent_node_id");
           const children = nodes().filter((node) => node.parent_node_id === parent);
           if (mode === "定位续页" && parent === "folder-b" && catalogRevision === 4) {
-            return apiResponse({
+            return apiSuccessResponse({
               revision: "catalog-4", catalog_revision: 4, parent_node_id: parent,
               items: query.get("cursor") ? children.slice(1) : children.slice(0, 1),
               cursor: query.get("cursor") ? null : "second-page", total: children.length,
@@ -108,13 +112,13 @@ describe("useSessionResourceExplorer 自动同步", () => {
         }
         return undefined;
       }));
-      const { explorer, unmount } = await mountResourceExplorer({});
+      const { explorer, unmount } = await mountSessionResourceExplorerHarness({});
       await act(async () => {
         await explorer().loadBranch("ws-test", "folder-b");
         catalogRevision = 4;
         if (mode === "展开") await explorer().loadBranch("ws-test", "folder-b");
         else await explorer().revealSearchResult("ws-test", ["folder-b", "folder-a"], "folder");
-        await flushEffects();
+        await flushReactEffects();
       });
       expect(explorer().branches.get("ws-test:root")?.items.map((node) => node.node_id)).toEqual(["folder-b"]);
       expect(explorer().branches.get("ws-test:folder-b")?.items.map((node) => node.node_id))
@@ -129,21 +133,21 @@ describe("useSessionResourceExplorer 自动同步", () => {
   }
 
   test("恢复的已提交操作在分支刷新失败后保留 outbox 并显示错误", async () => {
-    const runtime = createTestSessionCatalogOutboxRuntime();
+    const runtime = createSessionCatalogOutboxTestRuntime();
     await runtime.runtime.submit(
-      TEST_WORKSPACE_REQUEST_TARGET,
+      TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
       testGatewayUserAccess(),
       { kind: "create_folder", name: "恢复后的文件夹" },
       { baseCatalogRevision: 3 },
     );
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
-        return errorResponse(500, "终态分支刷新故障");
+        return apiErrorResponse(500, "终态分支刷新故障");
       }
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: {
         apiPort: 49_413,
         sessionCatalogOutboxRuntime: runtime.runtime,
@@ -153,7 +157,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     });
     await act(async () => {
       await waitForReportedCatalogError(runtime);
-      await flushEffects();
+      await flushReactEffects();
     });
 
     expect(explorer().branches.get("ws-test:root")?.error).toContain("终态分支刷新故障");
@@ -166,16 +170,16 @@ describe("useSessionResourceExplorer 自动同步", () => {
   });
 
   test("恢复的已提交操作仅在分支 revision 追上回执后 prune", async () => {
-    const runtime = createTestSessionCatalogOutboxRuntime();
+    const runtime = createSessionCatalogOutboxTestRuntime();
     await runtime.runtime.submit(
-      TEST_WORKSPACE_REQUEST_TARGET,
+      TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
       testGatewayUserAccess(),
       { kind: "create_folder", name: "等待分支确认的文件夹" },
       { baseCatalogRevision: 3 },
     );
-    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
-        return apiResponse({
+        return apiSuccessResponse({
           revision: "catalog-4",
           catalog_revision: 4,
           parent_node_id: new URL(url).searchParams.get("parent_node_id"),
@@ -188,7 +192,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: {
         apiPort: 49_414,
         sessionCatalogOutboxRuntime: runtime.runtime,
@@ -198,7 +202,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     });
     await act(async () => {
       await waitForCatalogPrune(runtime);
-      await flushEffects();
+      await flushReactEffects();
     });
 
     expect(explorer().branches.get("ws-test:root")?.catalog_revision).toBe(4);
@@ -214,7 +218,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
   test("初始目录同步与激活工作区加载根分支共享同一个请求", async () => {
     let releaseCatalog!: (response: Response) => void;
     let rootCatalogRequests = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         rootCatalogRequests += 1;
         return new Promise<Response>((resolve) => {
@@ -224,7 +228,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
 
-    const { unmount } = await mountResourceExplorer({
+    const { unmount } = await mountSessionResourceExplorerHarness({
       props: { apiPort: 49_405, catalogSyncKeys: new Map([["ws-test", "session-sync"]]) },
     });
     expect(rootCatalogRequests).toBe(1);
@@ -241,8 +245,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("当前会话定位复用已加载的根分支，不重复读取目录", async () => {
     const catalogRequests: string[] = [];
-    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
-      if (path === "/api/v1/session-catalog/export") return apiResponse({
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
         revision: "catalog", catalog_revision: 3,
         items: [
           { node_id: "folder-a", kind: "folder", name: "Folder A", has_children: true },
@@ -251,7 +255,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       });
       const parentNodeId = new URL(url).searchParams.get("parent_node_id");
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
-        return apiResponse({
+        return apiSuccessResponse({
           items: [
             { node_id: "folder-a", kind: "folder", name: "Folder A" },
             { node_id: "session-a", kind: "session", name: "Session A", session_id: "session-a" },
@@ -260,7 +264,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       }
       if (path.includes("/api/v1/session-catalog/children")) {
         catalogRequests.push(parentNodeId ?? "root");
-        return apiResponse({
+        return apiSuccessResponse({
           revision: "catalog",
           catalog_revision: 3,
           parent_node_id: parentNodeId,
@@ -274,7 +278,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
 
-    const { unmount } = await mountResourceExplorer({
+    const { unmount } = await mountSessionResourceExplorerHarness({
       props: { apiPort: 49_407, currentSessionId: "session-a" },
       flushes: 3,
     });
@@ -286,7 +290,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("当前会话不在已完成缓存分支时会自动重读，避免误报导航故障", async () => {
     let rootCatalogRequests = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         rootCatalogRequests += 1;
         return rootCatalogRequests === 1
@@ -302,7 +306,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: { apiPort: 49_408 },
       flushes: 3,
     });
@@ -310,7 +314,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
     await act(async () => {
       await explorer().revealSearchResult("ws-test", ["session-new"], "session");
-      await flushEffects();
+      await flushReactEffects();
     });
 
     expect(rootCatalogRequests).toBe(2);
@@ -322,15 +326,15 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("目录移动失败时对账旧父/新父分支并保留树状态", async () => {
     const catalogRequests: string[] = [];
-    const runtime = createTestSessionCatalogOutboxRuntime({
+    const runtime = createSessionCatalogOutboxTestRuntime({
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
-    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
-      if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
-        workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
+        workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
         catalog_revision: 4, event_seq_watermark: 0, generation: 1,
       });
-      if (path === "/api/v1/session-catalog/export") return apiResponse({
+      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
         revision: "catalog", catalog_revision: 4, items: moveNodes,
       });
       if (path.includes("/api/v1/session-catalog/children")) {
@@ -346,7 +350,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: {
         apiPort: 49_404,
         sessionCatalogOutboxRuntime: runtime.runtime,
@@ -360,7 +364,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       catalogRequests.length = 0;
       await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
       await waitForReportedCatalogError(runtime);
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(catalogRequests).toContain("limit=100&parent_node_id=fld_old");
     expect(catalogRequests).toContain("limit=100&parent_node_id=fld_new");
@@ -370,7 +374,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("工作区拓扑键变化会重读导航，迟到旧响应不会覆盖新树", async () => {
     const navigationResolvers: Array<(response: Response) => void> = [];
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/gateway/workspace-navigation")) {
         return new Promise<Response>((resolve) => {
           navigationResolvers.push(resolve);
@@ -380,7 +384,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     }));
 
     let latestNavigation: WorkspaceNavigationTree | null = null;
-    const Harness = liveExplorerHarness({
+    const Harness = createLiveSessionResourceExplorerHarness({
       apiPort: 49_402,
       activeWorkspaceId: null,
       onExplorer: (value) => {
@@ -391,25 +395,25 @@ describe("useSessionResourceExplorer 自动同步", () => {
     let renderer: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(<Harness syncKey="ws-1" />);
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(navigationResolvers).toHaveLength(1);
 
     await act(async () => {
       renderer.update(<Harness syncKey={"ws-1\u0000ws-2"} />);
-      await flushEffects();
+      await flushReactEffects();
     });
     expect(navigationResolvers).toHaveLength(2);
 
     await act(async () => {
-      navigationResolvers[1](apiResponse({ revision: "new", nodes: [] }));
+      navigationResolvers[1](apiSuccessResponse({ revision: "new", nodes: [] }));
       await Promise.resolve();
       await Promise.resolve();
     });
     expect((latestNavigation as WorkspaceNavigationTree | null)?.revision).toBe("new");
 
     await act(async () => {
-      navigationResolvers[0](apiResponse({ revision: "old", nodes: [] }));
+      navigationResolvers[0](apiSuccessResponse({ revision: "old", nodes: [] }));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -419,7 +423,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("切换工作区时失效的旧会话定位请求不会污染导航错误", async () => {
     let rejectBreadcrumb: ((reason: Error) => void) | null = null;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
         return new Promise<Response>((_resolve, reject) => {
           rejectBreadcrumb = reject;
@@ -429,7 +433,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     }));
 
     let latestNavigationError: string | null = null;
-    const Harness = liveExplorerHarness({
+    const Harness = createLiveSessionResourceExplorerHarness({
       apiPort: 49_403,
       activeWorkspaceId: "ws-default",
       workspaceNavigationSyncKey: "ws-default",
@@ -441,14 +445,14 @@ describe("useSessionResourceExplorer 自动同步", () => {
     let renderer: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(<Harness currentSessionId="session-from-closed-workspace" />);
-      await flushEffects();
-      await flushEffects();
+      await flushReactEffects();
+      await flushReactEffects();
     });
     expect(rejectBreadcrumb).not.toBeNull();
 
     await act(async () => {
       renderer.update(<Harness currentSessionId="" />);
-      await flushEffects();
+      await flushReactEffects();
     });
     await act(async () => {
       rejectBreadcrumb!(new Error("HTTP 404"));
@@ -461,9 +465,9 @@ describe("useSessionResourceExplorer 自动同步", () => {
   });
 
   test("定位当前会话失败不写入 navigationError，而是独立 revealError", async () => {
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
-        return errorResponse(500, "面包屑读取炸了");
+        return apiErrorResponse(500, "面包屑读取炸了");
       }
       return undefined;
     }));
@@ -472,7 +476,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       navigationError: null,
       revealError: null,
     };
-    const Harness = liveExplorerHarness({
+    const Harness = createLiveSessionResourceExplorerHarness({
       apiPort: 49_409,
       activeWorkspaceId: "ws-default",
       workspaceNavigationSyncKey: "ws-default",
@@ -487,9 +491,9 @@ describe("useSessionResourceExplorer 自动同步", () => {
       renderer = create(
         <Harness currentSessionId="session-hidden" />,
       );
-      await flushEffects();
-      await flushEffects();
-      await flushEffects();
+      await flushReactEffects();
+      await flushReactEffects();
+      await flushReactEffects();
     });
 
     // 工作区导航本身读到了；定位当前会话失败必须走独立通道，
@@ -501,27 +505,27 @@ describe("useSessionResourceExplorer 自动同步", () => {
   });
 
   test("目录移动失败且补偿重读也失败时抛出错误必须同时含两条文案", async () => {
-    const runtime = createTestSessionCatalogOutboxRuntime({
+    const runtime = createSessionCatalogOutboxTestRuntime({
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
     let failRead = false;
-    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
-      if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
-        workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
+        workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
         catalog_revision: 4, event_seq_watermark: 0, generation: 1,
       });
-      if (path === "/api/v1/session-catalog/export") return apiResponse({
+      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
         revision: "catalog", catalog_revision: 4, items: moveNodes,
       });
       if (path.includes("/api/v1/session-catalog/children")) {
         const parent = new URL(url).searchParams.get("parent_node_id");
-        if (failRead && parent !== null) return errorResponse(503, "目录重读崩了");
+        if (failRead && parent !== null) return apiErrorResponse(503, "目录重读崩了");
         return catalogChildrenResponse("catalog", moveNodes.filter((node) => node.parent_node_id === parent), parent, 4);
       }
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: {
         apiPort: 49_407,
         sessionCatalogOutboxRuntime: runtime.runtime,
@@ -536,7 +540,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       failRead = true;
       await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
       await waitForReportedCatalogError(runtime);
-      await flushEffects();
+      await flushReactEffects();
     });
 
     // 移动终态拒绝与补偿分支重读失败是两条独立事实，必须同时进入可见错误。
@@ -549,7 +553,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
   test("刷新目录顶掉在途分支读取且刷新失败时，分支必须落到失败终态而不是永久加载", async () => {
     let releaseChildren!: (response: Response) => void;
     let childrenCalls = 0;
-    installGatewayFetch(withCatalogDefaults(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
         childrenCalls += 1;
         return new Promise<Response>((resolve) => {
@@ -557,12 +561,12 @@ describe("useSessionResourceExplorer 自动同步", () => {
         });
       }
       if (path.includes("/api/v1/session-catalog/refresh")) {
-        return errorResponse(500, "目录刷新失败");
+        return apiErrorResponse(500, "目录刷新失败");
       }
       return undefined;
     }));
 
-    const { explorer, unmount } = await mountResourceExplorer({
+    const { explorer, unmount } = await mountSessionResourceExplorerHarness({
       props: { apiPort: 49_412 },
       flushes: 1,
     });
@@ -571,7 +575,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
     await act(async () => {
       await explorer().refreshResourceTree().catch(() => undefined);
-      await flushEffects();
+      await flushReactEffects();
     });
     const afterRefreshFailure = explorer().branches.get("ws-test:root");
     expect(afterRefreshFailure?.loading).toBe(false);
@@ -579,8 +583,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
     // 被顶掉的在途分支即使随后成功返回也不得覆盖失败终态（请求已失效）。
     await act(async () => {
       releaseChildren(catalogChildrenResponse("catalog"));
-      await flushEffects();
-      await flushEffects();
+      await flushReactEffects();
+      await flushReactEffects();
     });
     expect(explorer().branches.get("ws-test:root")?.loading).toBe(false);
     unmount();

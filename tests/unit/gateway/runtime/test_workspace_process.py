@@ -201,10 +201,16 @@ def test_identity_cli_process_failure_retains_type_and_private_log(
         assert caught.value.errno == original.errno
 
 
-def test_workspace_backend_has_bounded_connection_drain_timeout(
+@pytest.mark.parametrize(
+    ("timeout_seconds", "expected_cli_seconds"),
+    [(0.25, "1"), (2.0, "2"), (2.01, "3")],
+)
+def test_workspace_backend_rounds_connection_drain_timeout_for_uvicorn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     managed_process_stub_factory,
+    timeout_seconds: float,
+    expected_cli_seconds: str,
 ) -> None:
     calls: list[list[str]] = []
     process = managed_process_stub_factory(timeout_once=False)
@@ -222,10 +228,13 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
     workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        mounts=(MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root),),
+        mounts=(
+            MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root),
+        ),
         backend_generation="test-backend-generation",
         port=41000,
         log_dir=tmp_path / "logs",
+        connection_drain_timeout_seconds=timeout_seconds,
     )
     managed.detach()
 
@@ -233,7 +242,7 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
         "--log-level",
         "warning",
         "--timeout-graceful-shutdown",
-        "2",
+        expected_cli_seconds,
     ]
 
 

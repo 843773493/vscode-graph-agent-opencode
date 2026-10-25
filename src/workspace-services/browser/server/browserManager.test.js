@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BrowserManager, BrowserTransportGrantRejected } from "./browserManager.js";
@@ -12,9 +12,11 @@ afterAll(() => rmSync(workspaceRunRoot, { recursive: true, force: true }));
 
 function createBrowserManagerWithStateWriter(writer, options = {}) {
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
-  cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
-  mkdirSync(path.join(workspaceRoot, ".boxteam"), { recursive: true });
-  writeFileSync(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: WORKSPACE_ID }));
+  cpSync(
+    path.join(process.cwd(), "tests/fixtures/workspaces/browser_state_store_workspace"),
+    workspaceRoot,
+    { recursive: true },
+  );
   const manager = new BrowserManager({ workspaceRoot, workspaceId: WORKSPACE_ID, ...options });
   if (writer !== null) manager.stateStore.write = writer;
   return manager;

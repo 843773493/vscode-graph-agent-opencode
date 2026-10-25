@@ -25,8 +25,8 @@ function installSaveBackend(requests: RecordedRequest[]): void {
           message: "ok",
           request_id: "req_save",
           data: {
-            root_path: "/workspace",
-            path: "notes/a b.txt",
+            root_path: "boxteam://workspace/workspace-test/resources/files/root",
+            path: "boxteam://workspace/workspace-test/resources/files/root/notes/a%20b.txt",
             name: "a b.txt",
             content: "after\n",
             language: "plaintext",

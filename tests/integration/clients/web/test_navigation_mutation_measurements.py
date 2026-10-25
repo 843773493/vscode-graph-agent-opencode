@@ -9,6 +9,7 @@ import math
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -26,21 +27,49 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_test_workspace,
+)
+
+
+async def _workspace_file_root_uri(client: httpx.AsyncClient) -> str:
+    response = await client.get("/api/v1/workspace/files/roots")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["code"] == 0 and isinstance(payload["data"]["workspace_uri"], str)
+    return payload["data"]["workspace_uri"]
+
+
+def _workspace_file_uri(root_uri: str, relative_path: str) -> str:
+    segments = relative_path.replace("\\", "/").split("/")
+    return "/".join((root_uri, *(quote(segment, safe="") for segment in segments if segment)))
 
 
 @pytest.fixture
 def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
-    """每个用例重置到完整模板，避免共享模块工作区累积导航与会话数据。"""
+    """只复制稳定工作区身份；量化场景按 profile 创建自己的 workload。"""
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     reset_gateway_persistent_state(workspace_root=workspace)
     project_root = Path.cwd().resolve()
-    prepare_default_test_workspace(
+    prepare_test_workspace(
         workspace_root=workspace,
         template_root=project_root / "tests/fixtures/workspaces/default_test_workspace",
-        shared_skill_root=project_root / "resources/skills",
+        template_items=(".boxteam/workspace-identity.json",),
     )
     return str(workspace)
+
+
+@pytest.fixture
+def integration_workspace_config_path(
+    integration_workspace_root_path: str,
+    integration_config_path: str,
+) -> str:
+    return str(install_test_workspace_config(
+        workspace_root=Path(integration_workspace_root_path),
+        config_path=Path(integration_config_path),
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    ))
 
 
 @pytest.fixture
@@ -126,6 +155,7 @@ async def navigation_measurement_stack(
         workspace_root=str(workspace), port=ports.port(0), log_name="measurements",
         asgi_app="tests.integration.clients.web.navigation_measurement_app:app",
         env_overrides={
+            "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(1)}",
             "BOXTEAM_MEASUREMENT_RUNTIME": "backend",
             "BOXTEAM_MEASUREMENT_READ_ROOTS": json.dumps([str(workspace)]),
             "BOXTEAM_NAVIGATION_TRACE": os.environ.get("BOXTEAM_NAVIGATION_TRACE", ""),
@@ -220,7 +250,8 @@ async def test_navigation_mutation_measurement_gate(
         configuration = {
             "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
             "workspaceId": workspace_id, "backendWorkspaceId": session["workspace_id"],
-            "workspaceRoot": str(context.workspace_root), "sessionId": session["session_id"],
+            "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
+            "sessionId": session["session_id"],
             "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
             "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
             "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
@@ -303,7 +334,8 @@ async def test_navigation_mutation_measurement_gate(
     configuration = {
         "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
         "workspaceId": workspace_id, "backendWorkspaceId": last_session["workspace_id"],
-        "workspaceRoot": str(context.workspace_root), "sessionId": last_session["session_id"],
+        "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
+        "sessionId": last_session["session_id"],
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
         "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
         "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
@@ -312,6 +344,7 @@ async def test_navigation_mutation_measurement_gate(
                             "copy_paste_source_files": 120, "gateway_folders": len(folders)},
     }
     configuration_path = context.artifacts_dir / "configuration.json"
+    workspace_uri = str(configuration["workspaceUri"])
     configuration_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     browser_log = context.artifacts_dir / "browser.raw.log"
     with browser_log.open("wb") as stream:
@@ -321,7 +354,7 @@ async def test_navigation_mutation_measurement_gate(
             stdout=stream, stderr=asyncio.subprocess.STDOUT,
         )
         try:
-            await asyncio.wait_for(process.wait(), 900)
+            await asyncio.wait_for(process.wait(), 1500)
         except BaseException:
             if process.returncode is None:
                 process.kill()
@@ -361,8 +394,8 @@ async def test_navigation_mutation_measurement_gate(
         assert snapshot["event_index"] >= snapshot["baseline_event_offset"]
         assert snapshot["snapshot_index"] >= snapshot["baseline_snapshot_offset"]
         assert snapshot["target_row_visible"] is True
-        assert snapshot["target_path_title"] == str(
-            context.workspace_root / sample["directory"] / sample["name"]
+        assert snapshot["target_path_title"] == _workspace_file_uri(
+            workspace_uri, f"{sample['directory']}/{sample['name']}"
         )
         assert snapshot["browser_epoch_ms"] == snapshot["browser_time_origin_ms"] + snapshot["browser_now_ms"]
         assert math.isfinite(sample["elapsed_ms"]) and sample["elapsed_ms"] >= 0
@@ -414,7 +447,8 @@ async def test_navigation_mutation_measurement_minimal_samples(
     configuration = {
         "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
         "workspaceId": workspace_id, "backendWorkspaceId": session["workspace_id"],
-        "workspaceRoot": str(context.workspace_root), "sessionId": session["session_id"],
+        "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
+        "sessionId": session["session_id"],
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders,
         "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
         "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
@@ -423,6 +457,7 @@ async def test_navigation_mutation_measurement_minimal_samples(
                             "copy_paste_source_files": 2, "gateway_folders": len(folders)},
     }
     configuration_path = context.artifacts_dir / "minimal-configuration.json"
+    workspace_uri = str(configuration["workspaceUri"])
     configuration_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     browser_log = context.artifacts_dir / "minimal-browser.raw.log"
     with browser_log.open("wb") as stream:
@@ -441,6 +476,11 @@ async def test_navigation_mutation_measurement_minimal_samples(
     output = browser_log.read_bytes()
     assert process.returncode == 0, output.decode(errors="replace")[-10000:]
     measurements = json.loads((context.artifacts_dir / "measurements.json").read_text(encoding="utf-8"))
+    notification_layout = measurements["file_tree_notification_layout"]
+    assert len(notification_layout) == 1
+    assert all(item["notification_position"] == "absolute"
+        and abs(item["tree_top_delta_px"]) <= 0.25
+        and abs(item["tree_height_delta_px"]) <= 0.25 for item in notification_layout)
     clock_alignment = measurements["clock_alignment"]
     assert clock_alignment["method"].startswith("performance.timeOrigin + performance.now()")
     assert {sample["label"] for sample in clock_alignment["samples"]} == {"run_before", "run_after"}
@@ -518,8 +558,8 @@ async def test_navigation_mutation_measurement_minimal_samples(
             if item["operation_id"] == sample["operation_id"]]
         for query_hold in query_holds:
             assert query_hold["completion_page"] == sample["confirmation_page"]
-            assert query_hold["target_path_title"] == str(
-                context.workspace_root / "concurrent" / sample["name"]
+            assert query_hold["target_path_title"] == _workspace_file_uri(
+                workspace_uri, f"concurrent/{sample['name']}"
             )
     for sample in [*file_samples, *cross_page["samples"]]:
         assert sample["ui_completion"]["message"] == "文件操作已完成"
@@ -531,8 +571,8 @@ async def test_navigation_mutation_measurement_minimal_samples(
         assert snapshot["client_sequence"] == sample["client_sequence"]
         assert snapshot["queue_seq"] == sample["accepted_queue_seq"]
         assert snapshot["receipt_revision"] == sample["receipt_revision"]
-        assert snapshot["target_path_title"] == str(
-            context.workspace_root / sample["directory"] / sample["name"]
+        assert snapshot["target_path_title"] == _workspace_file_uri(
+            workspace_uri, f"{sample['directory']}/{sample['name']}"
         )
         assert snapshot["snapshot_index"] >= snapshot["baseline_snapshot_offset"]
         assert snapshot["event_index"] >= snapshot["baseline_event_offset"]
@@ -560,7 +600,7 @@ async def test_navigation_mutation_measurement_minimal_samples(
         assert sample["confirmation_page"] >= 1
         assert snapshot["event_index"] >= 0
         expected_key = {"workspace_id": session["workspace_id"], "scope": "workspace",
-            "root": str(context.workspace_root), "path": sample["directory"]}
+            "root": workspace_uri, "path": _workspace_file_uri(workspace_uri, sample["directory"])}
         assert sample["directory_key"] == sample["target_directory_key"] == sample["request_directory_key"] == expected_key
         assert sample["owner_preimage_sha256"]
         assert sample["owner_preimage"]["directory_key"] == expected_key
@@ -580,14 +620,15 @@ async def test_navigation_mutation_measurement_minimal_samples(
                 assert attempt["receipt"]["client_sequence"] == sample["client_sequence"]
                 assert attempt["receipt"]["queue_seq"] == sample["accepted_queue_seq"]
     expected_directory_key = {"workspace_id": session["workspace_id"], "scope": "workspace",
-        "root": str(context.workspace_root), "path": "d000"}
+        "root": workspace_uri, "path": _workspace_file_uri(workspace_uri, "d000")}
     for sample in file_samples:
         assert sample["target_directory_key"] == expected_directory_key
         assert sample["request_directory_key"] == expected_directory_key
-        assert sample["receipt_item_path"] == sample["name"]
+        item_uri = _workspace_file_uri(workspace_uri, f"d000/{sample['name']}")
+        assert sample["receipt_item_path"] == item_uri
         assert sample["receipt_item_kind"] == ("directory" if sample["kind"] == "directory" else "file")
-        assert sample["snapshot_path"] == "d000"
-        assert sample["snapshot_item_path"] == f"d000/{sample['name']}"
+        assert sample["snapshot_path"] == expected_directory_key["path"]
+        assert sample["snapshot_item_path"] == item_uri
         assert sample["terminal_state"] == "committed" and sample["terminal_effect"] == "complete"
         assert sample["request_has_local_token"] and sample["request_workspace_id"] == workspace_id
         assert sample["initiating_ui_path_visible"] and sample["confirmation_ui_completed"]

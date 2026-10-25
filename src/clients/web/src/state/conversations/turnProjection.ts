@@ -140,18 +140,21 @@ export function turnTimelineConversations(
   if (timeline.scopeKey !== sessionCacheKey) {
     throw new Error("Turn timeline 与当前会话视图的范围不一致");
   }
-  return timeline.orderedTurnIds.flatMap((turnId) => {
+  const conversations: ConversationView[] = [];
+  for (const turnId of timeline.orderedTurnIds) {
     const turn = timeline.turnsById[turnId];
     if (turn?.session_id !== sessionId) {
-      return [];
+      continue;
     }
     if (!timeline.threadId) throw new Error("Turn 消息投影缺少已读取的 thread owner");
     const cached = turnConversationCache.get(turn);
     if (cached?.threadId === timeline.threadId) {
-      return [cached];
+      conversations.push(cached);
+      continue;
     }
     const conversation = conversationFromTurn(turn, timeline.threadId);
     turnConversationCache.set(turn, conversation);
-    return [conversation];
-  });
+    conversations.push(conversation);
+  }
+  return conversations;
 }

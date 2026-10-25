@@ -27,7 +27,9 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
 @pytest.fixture
-def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> Callable:
+def migration_setup_factory(
+    request: pytest.FixtureRequest, session_bundle_factory
+) -> Callable:
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
 
     def setup(records: list[dict[str, object]]) -> RolloutContextStore:
@@ -53,7 +55,7 @@ def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> C
     ],
 )
 def test_tool_calls_and_results_get_target_local_linked_identity(
-    migration_setup: Callable,
+    migration_setup_factory: Callable,
     role: str,
     outcome: str | None,
     status: str,
@@ -87,7 +89,7 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
         },
         "metadata": {},
     }
-    storage = migration_setup([*records, result, final])
+    storage = migration_setup_factory([*records, result, final])
     imported = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
         source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
@@ -139,7 +141,7 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
     ],
 )
 def test_conflicting_candidates_never_create_turns(
-    migration_setup: Callable, case: str, expected: str
+    migration_setup_factory: Callable, case: str, expected: str
 ) -> None:
     records = _accepted_records()
     if case == "different_ids":
@@ -154,7 +156,7 @@ def test_conflicting_candidates_never_create_turns(
         records.append(second)
         if case == "unsupported_same_id":
             records[1]["role"] = "unknown-role"
-    storage = migration_setup(records)
+    storage = migration_setup_factory(records)
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
         source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
@@ -177,14 +179,14 @@ def test_conflicting_candidates_never_create_turns(
 
 @pytest.mark.parametrize("trusted", [True, False])
 def test_system_reminder_never_becomes_a_turn_member(
-    migration_setup: Callable, trusted: bool
+    migration_setup_factory: Callable, trusted: bool
 ) -> None:
     records = _accepted_records()
     notice = copy.deepcopy(records[0])
     notice.update(message_sequence=3, message_id="notice", role="system_reminder")
     notice["message"]["data"]["id"] = "notice"
     notice["metadata"] = {"internal": True, "checkpoint": True} if trusted else {}
-    storage = migration_setup([*records, notice])
+    storage = migration_setup_factory([*records, notice])
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
         source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
@@ -230,11 +232,11 @@ def test_system_reminder_never_becomes_a_turn_member(
 
 @pytest.mark.parametrize("corrupt", [False, True])
 def test_manifest_final_pointer_is_validated(
-    migration_setup: Callable, corrupt: bool
+    migration_setup_factory: Callable, corrupt: bool
 ) -> None:
     records = _accepted_records()
     records[1]["metadata"] = {}
-    storage = migration_setup(records)
+    storage = migration_setup_factory(records)
     with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.execute(
             "CREATE TABLE turns(turn_id TEXT,status TEXT,final_message_id TEXT,final_message_sequence INTEGER)"
@@ -267,10 +269,10 @@ def test_manifest_final_pointer_is_validated(
 
 @pytest.mark.parametrize("corruption", [None, "hash", "length", "role"])
 def test_legacy_manifest_content_identity_is_checked(
-    migration_setup: Callable, corruption: str | None
+    migration_setup_factory: Callable, corruption: str | None
 ) -> None:
     records = _accepted_records()
-    storage = migration_setup(records)
+    storage = migration_setup_factory(records)
     with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.executescript(
             "ALTER TABLE messages ADD COLUMN role TEXT; ALTER TABLE messages ADD COLUMN content_hash TEXT; ALTER TABLE messages ADD COLUMN content_length INTEGER;"

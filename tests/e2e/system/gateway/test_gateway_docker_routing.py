@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
-
 import json
 import os
 from collections.abc import Callable
@@ -14,6 +12,7 @@ import pytest
 
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
@@ -42,8 +41,9 @@ from tests.e2e.system.gateway.gateway_target import (
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
     start_remote_gateway_via_ssh,
-    stop_remote_backend,
+    stop_remote_gateway,
 )
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -53,7 +53,6 @@ from tests.support.processes.gateway import (
     workspace_id_from_response,
     write_gateway_remote_gateway_config,
 )
-from tests.support.ports import e2e_port_block_for_file
 
 
 @pytest.fixture
@@ -336,7 +335,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             for item in gateway_inventory.items
         )
 
-        stop_remote_backend(docker_target, remote_gateway_pid)
+        stop_remote_gateway(docker_target, remote_gateway_pid)
         remote_gateway_pid = None
         offline_search = await context_service.search_gateway_context(
             SessionContextSearchRequest(
@@ -359,4 +358,4 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         if gateway is not None:
             close_gateway_process(gateway)
         if remote_gateway_pid is not None and docker_target is not None:
-            stop_remote_backend(docker_target, remote_gateway_pid)
+            stop_remote_gateway(docker_target, remote_gateway_pid)

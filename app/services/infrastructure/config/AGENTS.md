@@ -2,6 +2,36 @@
 
 `app/services/infrastructure/config/` 存放配置基础设施的聚焦组件，包括不可变快照、文件变化监听、状态模型、Workspace pending candidate 的待重启契约链路、配置事件消费者游标族、LLM provider/模型解析、Workspace 会话默认值持久化和配置重载状态聚合。
 
+## 职责树
+
+按配置从来源到应用的流程查找文件；`sql/` 子目录的表结构和迁移由自己的 `AGENTS.md` 说明。
+
+```text
+app/services/infrastructure/config/
+├── 来源与快照
+│   ├── source_uri.py       内置配置来源标识
+│   ├── source_owner.py     Workspace 配置来源与扇出记录
+│   ├── watcher.py          配置文件变化监听
+│   ├── snapshot.py         不可变配置快照与重载结果
+│   └── store.py            快照读取、构建与发布
+├── 配置语义
+│   ├── contracts.py        跨协作者共享的配置契约
+│   ├── policy.py           配置路径策略与清单校验
+│   ├── state.py            状态记录、迁移、路径差异和密钥引用
+│   └── llm_resolution.py   生效配置到 Provider/模型的解析结果
+├── 候选应用与重载
+│   ├── pending_restart.py  待重启候选的启动证明、重试和提交
+│   ├── reload_status.py    快照状态与 active/pending 记录聚合
+│   └── shadow_scope.py     影子配置代次及应用生命周期
+├── 事件消费
+│   └── event_cursor.py     配置事件消费者游标协作
+├── 工作区会话默认值
+│   └── session_defaults.py 会话默认 Agent 和 Provider 的持久化
+├── 影子生命周期适配
+│   └── shadow_adapter.py   将影子配置生命周期接入宿主
+└── sql/                    Source owner 表结构与旧列迁移
+```
+
 # 可修改内容
 
 - 配置快照、fingerprint 与来源元数据。
@@ -31,3 +61,4 @@
 - 重载状态协作者只接收快照状态的叶子提供者（无参、返回不可变 `ConfigReloadStatus`），不得注入 `ConfigSnapshotStore`，以免把候选快照构建反向拖入本目录。
 - 重载状态聚合不得抹掉快照基底的 `healthy`/`reason`/`last_error`，叠加 active/pending 只能补充字段。
 - `sql/` 保存 source owner 的结构和旧列迁移；连接、条件判断、事务协调留在 Python。
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

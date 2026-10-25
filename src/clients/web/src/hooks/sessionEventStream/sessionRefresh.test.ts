@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Session } from "../../types/backend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
-import { buildSessionHookState } from "../session/sessionHookTestFixtures";
+import { createSessionHookState } from "../../tests/fixtures/session/appState";
 import { refreshWorkspaceSessionList } from "./sessionRefresh";
 
 const originalFetch = globalThis.fetch;
@@ -34,7 +34,7 @@ for (const hasMore of [true, false]) {
       if (data === undefined) throw new Error(`未声明请求: ${url}`);
       return Response.json({ code: 0, message: "ok", data, request_id: "page-request" });
     }, { preconnect: originalFetch.preconnect });
-    let state = buildSessionHookState({ workspaceId, current: selected, sessions });
+    let state = createSessionHookState({ workspaceId, currentSession: selected, sessions });
     state.sessionAttachmentSummaries.set(selectedKey, { count: 1, names: ["附件.txt"], latestAt: null });
     await refreshWorkspaceSessionList(49_751, { workspace_id: workspaceId,
       backend_workspace_id: "backend-workspace", connection_kind: "local" }, (update) => {

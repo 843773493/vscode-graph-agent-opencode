@@ -54,6 +54,9 @@ export default function TerminalPanel({
     ) ?? entries[0] ?? null,
     [entries, selectedTerminalId],
   );
+  const terminalErrorMessage = [selectedEntry?.error, controller.error]
+    .filter((message): message is string => typeof message === "string" && message.length > 0)
+    .join(" · ");
   const isCurrentThreadAssociated = selectedEntry?.thread_associations.some((ref) => ref.session_id === currentThread?.session_id && ref.thread_id === currentThread?.thread_id);
   const canAttachToCurrentThread = currentThread && !isCurrentThreadAssociated && (selectedEntry?.retention_scope === "workspace"
     || (selectedEntry?.source_thread?.session_id === currentThread.session_id && selectedEntry?.source_thread?.thread_id === currentThread.thread_id));
@@ -222,10 +225,15 @@ export default function TerminalPanel({
             <button type="button" disabled={!canControlSelectedTerminal("detach")} onClick={() => void controlSelectedTerminal("detach", ref)}>解除关联</button>
           </span>)}
           {selectedEntry.reclaim_at ? <span>无关联，将于 {formatLocalTime(selectedEntry.reclaim_at)} 回收</span> : null}
-          {selectedEntry.error ? <span role="alert">{selectedEntry.error}</span> : null}
         </> : null}
       </div>
-      {controller.error ? <div role="alert" className="terminal-panel-frame-fallback">{controller.error}</div> : null}
+      <div className="terminal-panel-error-slot">
+        {terminalErrorMessage ? (
+          <div role="alert" title={terminalErrorMessage}>
+            {terminalErrorMessage}
+          </div>
+        ) : null}
+      </div>
 
       <div className="terminal-panel-content">
         <aside

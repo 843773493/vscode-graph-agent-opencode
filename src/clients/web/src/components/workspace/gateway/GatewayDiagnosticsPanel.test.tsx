@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayDiagnostics, GatewayWorkspace } from "../../../types/backend";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
-import { installGatewayFetch, restoreSessionHookGlobals } from "../../../hooks/session/sessionHookTestFixtures";
+import {
+  installGatewayFetch,
+  restoreGatewayTestEnvironment,
+} from "../../../tests/fixtures/session/gatewayEnvironment";
 import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
 import type { GatewayDiagnosticLog } from "../../../types/backend";
 
@@ -10,7 +13,7 @@ const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard"
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 
 afterEach(() => {
-  restoreSessionHookGlobals();
+  restoreGatewayTestEnvironment();
   if (originalClipboard) {
     Object.defineProperty(navigator, "clipboard", originalClipboard);
   } else {
@@ -263,5 +266,72 @@ test("切换工作区后、新范围响应到达前不得继续渲染旧范围�
   const after = JSON.stringify(renderer.toJSON());
   expect(after).toContain("TAIL_second");
   expect(after).not.toContain("TAIL_first");
+  renderer.unmount();
+});
+
+test("刷新失败保留上次诊断快照并使用固定反馈槽", async () => {
+  let requestCount = 0;
+  installGatewayFetch(({ path }) => {
+    if (path !== "/api/gateway/diagnostics") return undefined;
+    requestCount += 1;
+    if (requestCount === 1) {
+      return Response.json({ data: diagnosticsFor("gateway"), request_id: "req_diag_initial" });
+    }
+    return Response.json(
+      { detail: "Gateway 诊断服务暂不可用" },
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }, { token: "diag-refresh-failure-token" });
+
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<GatewayDiagnosticsPanel apiPort={8027} workspaces={[workspace]} />);
+  });
+  await flush();
+  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_gateway");
+  expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" }).children).toHaveLength(0);
+
+  const refreshButton = renderer.root.findAllByType("button").find((button) => (
+    button.children.some((child) => child === "刷新日志")
+  ));
+  expect(refreshButton).toBeDefined();
+  await act(async () => {
+    refreshButton!.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain("TAIL_gateway");
+  expect(rendered).toContain("刷新失败");
+  expect(rendered).toContain("Gateway 诊断服务暂不可用");
+  expect(rendered).not.toContain("正在读取 Gateway 诊断信息");
+  expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+  expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" })).toBeDefined();
+  renderer.unmount();
+});
+
+test("首次诊断读取失败展示空错误态并停止加载提示", async () => {
+  installGatewayFetch(({ path }) => {
+    if (path !== "/api/gateway/diagnostics") return undefined;
+    return Response.json(
+      { detail: "Gateway 诊断服务暂不可用" },
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }, { token: "diag-initial-failure-token" });
+
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<GatewayDiagnosticsPanel apiPort={8029} workspaces={[workspace]} />);
+  });
+  await act(async () => {
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain("日志读取失败");
+  expect(rendered).toContain("当前范围没有可用的诊断快照");
+  expect(rendered).not.toContain("正在读取 Gateway 诊断信息");
+  expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" })).toBeDefined();
   renderer.unmount();
 });

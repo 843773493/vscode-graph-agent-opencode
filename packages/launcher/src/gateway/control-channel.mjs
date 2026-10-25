@@ -36,11 +36,12 @@ export function createGatewaySupervisorControl({ address, onHandoff }) {
   if (typeof onHandoff !== "function") {
     throw new TypeError("Gateway supervisor control handler 无效");
   }
-  const usesFilesystem = !address.startsWith("\\\\.\\pipe\\");
+  const isFilesystemSocketPath = !address.startsWith("\\\\.\\pipe\\");
   const server = net.createServer((socket) => {
     // Socket保留跨数据块的未完成UTF-8字符，不能逐块独立解码。
     socket.setEncoding("utf8");
     let buffer = "";
+    let newlineSearchOffset = 0;
     let handled = false;
     socket.on("error", () => {
       // 控制请求方断开时只结束当前请求，不得让 supervisor 进程崩溃。
@@ -52,8 +53,11 @@ export function createGatewaySupervisorControl({ address, onHandoff }) {
         socket.destroy(new Error("Gateway supervisor control 请求过大"));
         return;
       }
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
+      const newlineIndex = buffer.indexOf("\n", newlineSearchOffset);
+      if (newlineIndex === -1) {
+        newlineSearchOffset = buffer.length;
+        return;
+      }
       handled = true;
       const line = buffer.slice(0, newlineIndex).trim();
       let payload;
@@ -80,16 +84,16 @@ export function createGatewaySupervisorControl({ address, onHandoff }) {
   });
   return {
     async listen() {
-      if (usesFilesystem) {
+      if (isFilesystemSocketPath) {
         mkdirSync(path.dirname(address), { recursive: true, mode: 0o700 });
         rmSync(address, { force: true });
       }
       await listenServer(server, address);
-      if (usesFilesystem) chmodSync(address, 0o600);
+      if (isFilesystemSocketPath) chmodSync(address, 0o600);
     },
     async close() {
       await closeServer(server);
-      if (usesFilesystem) rmSync(address, { force: true });
+      if (isFilesystemSocketPath) rmSync(address, { force: true });
     },
   };
 }
@@ -99,6 +103,7 @@ export function requestGatewaySupervisorControl({ address, payload, timeoutMs })
     const socket = net.createConnection(address);
     socket.setEncoding("utf8");
     let buffer = "";
+    let newlineSearchOffset = 0;
     let settled = false;
     const timer = setTimeout(() => {
       finish(() => reject(
@@ -126,8 +131,11 @@ export function requestGatewaySupervisorControl({ address, payload, timeoutMs })
     socket.on("data", (chunk) => {
       if (settled) return;
       buffer += chunk;
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
+      const newlineIndex = buffer.indexOf("\n", newlineSearchOffset);
+      if (newlineIndex === -1) {
+        newlineSearchOffset = buffer.length;
+        return;
+      }
       let response;
       try {
         response = JSON.parse(buffer.slice(0, newlineIndex));

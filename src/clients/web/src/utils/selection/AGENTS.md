@@ -5,7 +5,7 @@
 与相邻文件的边界：
 
 - `utils/jsonDisplay.ts`：提供全前端共享的 `isRecord` 权威实现（非数组的 object）。本包 `browserElementSelection` 内的 `isRecord` 刻意接受数组，仅服务元素选择校验，语义与前者不同，不得合并。
-- `utils/markdown.ts`、`utils/workspaceMarkdown.ts`、`utils/skillMarkdown.ts`：Markdown 渲染与解析族，与选择结果无关。
+- `utils/markdown/workspaceMarkdown.ts`：工作区 Markdown 链接与图片目标解析，与选择结果无关。Markdown 展示组件位于 `components/chat/` 和 `components/workspace/preview/`。
 - `utils/fileTransferHost.ts`、`utils/mediaAttachments.ts`、`utils/messageMedia.ts`：附件与文件传输族，与元素/目录选择无关。
 
 # 可修改内容

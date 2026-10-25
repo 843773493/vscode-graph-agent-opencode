@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
-from app.core.path_segments import validate_generator_physical_segment
+from app.core.path_segments import validate_generator_name
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.schemas.gateway_control import (
     GenerationRunDTO,
@@ -133,13 +133,13 @@ class SessionGeneratorStore:
             "generator.name": payload.name,
             "session.title": payload.session_title,
         }
-        title = self._render_segment(
+        title = self._render_name(
             payload.naming.title_template,
             values=values,
             generated_at=generated_at,
         )
         path_segments = [
-            self._render_segment(
+            self._render_name(
                 segment,
                 values={**values, "session.title": title},
                 generated_at=generated_at,
@@ -290,7 +290,7 @@ class SessionGeneratorStore:
         return hashlib.sha256(encoded).hexdigest()
 
     @classmethod
-    def _render_segment(
+    def _render_name(
         cls,
         template: str,
         *,
@@ -324,9 +324,9 @@ class SessionGeneratorStore:
             return value
 
         rendered = _TOKEN_PATTERN.sub(replace, template).strip()
-        cls._validate_path_segment(rendered)
+        cls._validate_name(rendered)
         return rendered
 
     @staticmethod
-    def _validate_path_segment(value: str) -> None:
-        validate_generator_physical_segment(value)
+    def _validate_name(value: str) -> None:
+        validate_generator_name(value)

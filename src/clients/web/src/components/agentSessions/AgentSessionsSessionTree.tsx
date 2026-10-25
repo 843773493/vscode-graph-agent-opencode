@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { buildSessionTree, type SessionTreeNode } from "../../state/session/sessionTree";
 import type { Session } from "../../types/backend";
 import AgentSessionsSessionButton from "./AgentSessionsSessionButton";
@@ -46,13 +46,19 @@ export default function AgentSessionsSessionTree({
   activeJobIdsBySession,
   unreadSessionKeys,
 }: AgentSessionsSessionTreeProps): ReactNode {
-  const tree = buildSessionTree(sessions, sortMode);
+  const tree = useMemo(
+    () => buildSessionTree(sessions, sortMode),
+    [sessions, sortMode],
+  );
   const visibleRoots = showAllRoots
     ? tree
     : tree.slice(0, DEFAULT_VISIBLE_ROOT_COUNT);
-  const hiddenSessionCount = tree
-    .slice(DEFAULT_VISIBLE_ROOT_COUNT)
-    .reduce((total, node) => total + countTreeSessions(node), 0);
+  const hiddenSessionCount = useMemo(
+    () => tree
+      .slice(DEFAULT_VISIBLE_ROOT_COUNT)
+      .reduce((total, node) => total + countTreeSessions(node), 0),
+    [tree],
+  );
 
   const renderNode = (node: SessionTreeNode): ReactNode => {
     const sessionId = node.session.session_id;

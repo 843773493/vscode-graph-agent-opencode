@@ -327,6 +327,25 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.orderedTurnIds).toEqual(["current"]);
   });
 
+  test("bootstrap 绑定 thread 后重复摘要仍推进历史视图版本", () => {
+    const latestTurn = summary("job_latest", 1, 1, 2);
+    let timeline = upsertTurn(
+      createSessionTurnTimeline(SCOPE_KEY),
+      latestTurn,
+    );
+    timeline = beginTurnBootstrap(timeline, 1);
+
+    timeline = applyTurnBootstrap(
+      timeline,
+      1,
+      bootstrap(latestTurn),
+    );
+
+    expect(timeline.threadId).toBe(THREAD_ID);
+    expect(timeline.historyViewRevision).toBe(2);
+    expect(timeline.turnsById.job_latest).toBe(latestTurn);
+  });
+
   test("partial bootstrap 保留最新 Turn 并在 ready 后开放历史游标", () => {
     let timeline = beginTurnBootstrap(createSessionTurnTimeline(SCOPE_KEY), 1);
     timeline = applyTurnBootstrap(timeline, 1, {
@@ -787,6 +806,34 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.orderedTurnIds).toHaveLength(64);
     expect(timeline.orderedTurnIds[0]).toBe("job_1");
     expect(timeline.orderedTurnIds[timeline.orderedTurnIds.length - 1]).toBe("job_64");
+  });
+
+  test("Turn 内容修订复用现有顺序，排序键变化时重新排序", () => {
+    const job1 = summary("job_1", 1);
+    const job2 = summary("job_2", 2);
+    let timeline = upsertTurns(
+      createSessionTurnTimeline(SCOPE_KEY),
+      [job1, job2],
+    );
+    const orderedTurnIds = timeline.orderedTurnIds;
+
+    timeline = upsertTurn(timeline, {
+      ...job2,
+      revision: 2,
+      response_preview: "已更新的回复摘要",
+    });
+
+    expect(timeline.orderedTurnIds).toBe(orderedTurnIds);
+    expect(timeline.orderedTurnIds).toEqual(["job_1", "job_2"]);
+
+    timeline = upsertTurn(timeline, {
+      ...job2,
+      ordinal: 0,
+      revision: 3,
+    });
+
+    expect(timeline.orderedTurnIds).not.toBe(orderedTurnIds);
+    expect(timeline.orderedTurnIds).toEqual(["job_2", "job_1"]);
   });
 
   test("执行 Turn 水合后隐藏已合并 Job，旧分页也不能重新加入", () => {

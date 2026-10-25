@@ -253,12 +253,9 @@ class StreamBlockAssemblyMixin:
             provider_block_id,
             model_call_id=model_call_id or self.current_model_call_id,
         )
-        if block_id not in self._active_blocks:
-            for previous_block_id in tuple(self._active_block_order):
-                if (
-                    previous_block_id != block_id
-                    and previous_block_id in self._active_blocks
-                ):
+        if block_id not in self._active_block_ids:
+            for previous_block_id in tuple(self._active_block_ids):
+                if previous_block_id != block_id:
                     await self._close_block(
                         previous_block_id,
                         completion_reason="carrier_switched",
@@ -280,7 +277,7 @@ class StreamBlockAssemblyMixin:
                     f"block_id={block_id} existing={existing_metadata!r} "
                     f"incoming={(block_index, carrier_type)!r}"
                 )
-            self._active_blocks.add(block_id)
+            self._active_block_ids[block_id] = None
             if existing_metadata is None:
                 self._active_block_order.append(block_id)
                 self._block_metadata[block_id] = (block_index, carrier_type)
@@ -510,7 +507,7 @@ class StreamBlockAssemblyMixin:
             arguments = {}
         self._tool_call_arguments_by_id[tool_call_id] = arguments
         self._tool_call_arguments_complete[tool_call_id] = arguments_complete
-        for block_id in tuple(self._active_blocks):
+        for block_id in tuple(self._active_block_ids):
             await self._close_block(
                 block_id,
                 completion_reason="carrier_switched",
@@ -676,7 +673,7 @@ class StreamBlockAssemblyMixin:
         partial: bool,
         model_call_id: str | None = None,
     ) -> None:
-        if block_id not in self._active_blocks or block_id in self._closing_blocks:
+        if block_id not in self._active_block_ids or block_id in self._closing_blocks:
             return
         self._closing_blocks.add(block_id)
         block_index, carrier_type = self._block_metadata[block_id]
@@ -698,7 +695,7 @@ class StreamBlockAssemblyMixin:
                 )
             await self._observe("block.completed", payload)
         finally:
-            self._active_blocks.discard(block_id)
+            self._active_block_ids.pop(block_id, None)
             self._closing_blocks.discard(block_id)
 
     def normalized_final_text(self) -> str:

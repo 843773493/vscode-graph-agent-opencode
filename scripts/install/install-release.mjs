@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crossSpawn from "cross-spawn";
 
 import { computeBuildInputFingerprint } from "../../packaging/runtime/build-input-fingerprint.mjs";
 import { sha256File } from "../../packaging/runtime/runtime-release-assets.mjs";
@@ -112,7 +113,7 @@ function runPackageBuild({
   paths,
   projectRoot,
   environment,
-  spawnSyncImpl,
+  spawnSyncImpl = nodeSpawnSync,
 }) {
   const result = spawnSyncImpl(process.execPath, [paths.buildScript], {
     cwd: projectRoot,
@@ -195,7 +196,7 @@ export function runReleaseInstall({
   args,
   cwd = process.cwd(),
   environment = process.env,
-  spawnSyncImpl = spawnSync,
+  spawnSyncImpl = crossSpawn.sync,
 } = {}) {
   const result = spawnSyncImpl(command, args, {
     cwd,
@@ -214,11 +215,11 @@ export function runReleaseInstall({
   }
 }
 
-function verifyInstalledRelease({
+export function verifyInstalledRelease({
   command,
   cwd,
   environment,
-  spawnSyncImpl = spawnSync,
+  spawnSyncImpl = crossSpawn.sync,
 }) {
   const rootArguments = ["root", "--global"];
   if (command.prefix !== null) {
@@ -295,7 +296,7 @@ export async function ensureCurrentLocalPackage({
   command,
   projectRoot,
   environment = process.env,
-  spawnSyncImpl = spawnSync,
+  spawnSyncImpl = nodeSpawnSync,
 } = {}) {
   const sourceFingerprint = computeBuildInputFingerprint({
     projectRoot,

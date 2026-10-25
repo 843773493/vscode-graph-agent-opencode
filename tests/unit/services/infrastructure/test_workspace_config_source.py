@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -12,8 +13,13 @@ from app.services.infrastructure.workspace_state_store import WorkspaceStateStor
 _URI = "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
 
 
-def _store(tmp_path) -> WorkspaceStateStore:
-    return WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+@pytest.fixture
+def workspace_root(empty_workspace_scope: tuple[str, Path]) -> Path:
+    return empty_workspace_scope[1]
+
+
+def _store(workspace_root: Path) -> WorkspaceStateStore:
+    return WorkspaceStateStore(workspace_root=workspace_root)
 
 
 def _journal(
@@ -44,8 +50,8 @@ def _journal(
     )
 
 
-def test_journal_row_projection_preserves_every_column(tmp_path):
-    store = _store(tmp_path)
+def test_journal_row_projection_preserves_every_column(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         created = _journal(
             store,
@@ -82,8 +88,8 @@ def test_journal_row_projection_preserves_every_column(tmp_path):
         store.close()
 
 
-def test_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
-    store = _store(tmp_path)
+def test_journal_distinguishes_a_b_a_and_deduplicates_a_a(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         first = _journal(store, event_id="ev1", layer_revision=1, layer_digest="a")
         dup = _journal(
@@ -109,10 +115,10 @@ def test_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         store.close()
 
 
-def test_journal_event_id_replay_is_idempotent(tmp_path):
+def test_journal_event_id_replay_is_idempotent(workspace_root: Path):
     """同 event_id 重放返回同一条记录，不新增 generation。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         first = _journal(store, event_id="ev1", layer_revision=1, layer_digest="a")
         replay = _journal(store, event_id="ev1", layer_revision=1, layer_digest="a")
@@ -123,14 +129,14 @@ def test_journal_event_id_replay_is_idempotent(tmp_path):
         store.close()
 
 
-def test_journal_event_id_rebind_differs_between_public_and_in_transaction_paths(tmp_path):
+def test_journal_event_id_rebind_differs_between_public_and_in_transaction_paths(workspace_root: Path):
     """锁定 event_id 重绑在两个入口上的既有语义差异（非本轮引入）。
 
     公开入口对同 event_id 的不同 source 记录宽松返回旧行；事务内辅助严格报冲突。
     两者行为不同，本测试把两条语义都钉住，避免后续误改造成静默漂移。
     """
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         original = _journal(store, source_key="user", event_id="ev1", layer_revision=1,
                             layer_digest="a")
@@ -160,8 +166,8 @@ def test_journal_event_id_rebind_differs_between_public_and_in_transaction_paths
         store.close()
 
 
-def test_journal_rejects_invalid_inputs_and_cas(tmp_path):
-    store = _store(tmp_path)
+def test_journal_rejects_invalid_inputs_and_cas(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         with pytest.raises(ValueError, match="presence"):
             _journal(store, event_id="ev-bad", presence="maybe")
@@ -182,10 +188,10 @@ def test_journal_rejects_invalid_inputs_and_cas(tmp_path):
         store.close()
 
 
-def test_journal_row_projection_preserves_absent_presence(tmp_path):
+def test_journal_row_projection_preserves_absent_presence(workspace_root: Path):
     """行工厂必须还原 presence 列本身，而非任何固定值。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         created = _journal(
             store, event_id="ev-absent", layer_revision=1, layer_digest=None,
@@ -199,10 +205,10 @@ def test_journal_row_projection_preserves_absent_presence(tmp_path):
         store.close()
 
 
-def test_in_transaction_journal_helper_dedup_and_cas(tmp_path):
+def test_in_transaction_journal_helper_dedup_and_cas(workspace_root: Path):
     """直接钉住事务内辅助的去重与 generation CAS 分支。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         _journal(store, event_id="ev1", layer_revision=1, layer_digest="a")
 
@@ -243,10 +249,10 @@ def test_in_transaction_journal_helper_dedup_and_cas(tmp_path):
         store.close()
 
 
-def test_in_transaction_journal_helper_rejects_source_key_rebind_alone(tmp_path):
+def test_in_transaction_journal_helper_rejects_source_key_rebind_alone(workspace_root: Path):
     """仅 source_key 不同（其余列一致）也必须被拒绝：绑定守卫不能只靠其它列兜底。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         _journal(store, source_key="user", event_id="ev1", layer_revision=1,
                  layer_digest="a", presence="present")
@@ -272,8 +278,8 @@ def test_in_transaction_journal_helper_rejects_source_key_rebind_alone(tmp_path)
         store.close()
 
 
-def test_journal_list_pagination_and_unknown_high_water_mark(tmp_path):
-    store = _store(tmp_path)
+def test_journal_list_pagination_and_unknown_high_water_mark(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         assert store.source_generation_high_water_mark(source_key="unknown") == 0
         assert store.list_config_source_journal(source_key="unknown") == ()
@@ -287,8 +293,8 @@ def test_journal_list_pagination_and_unknown_high_water_mark(tmp_path):
         store.close()
 
 
-def test_source_layer_sync_get_and_cas(tmp_path):
-    store = _store(tmp_path)
+def test_source_layer_sync_get_and_cas(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         layer = store.sync_config_source(
             config_key="workspace",
@@ -356,8 +362,8 @@ def test_source_layer_sync_get_and_cas(tmp_path):
         store.close()
 
 
-def test_source_layer_corrupt_payload_is_reported(tmp_path):
-    store = _store(tmp_path)
+def test_source_layer_corrupt_payload_is_reported(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         store.sync_config_source(
             config_key="workspace", uri=None,
@@ -378,8 +384,8 @@ def test_source_layer_corrupt_payload_is_reported(tmp_path):
         store.close()
 
 
-def test_update_source_generation_binds_layer_to_shared_owner(tmp_path):
-    store = _store(tmp_path)
+def test_update_source_generation_binds_layer_to_shared_owner(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         store.sync_config_source(
             config_key="workspace", uri=None,
@@ -406,8 +412,8 @@ def test_update_source_generation_binds_layer_to_shared_owner(tmp_path):
         store.close()
 
 
-def test_fanout_prepare_record_list_and_summary_states(tmp_path):
-    store = _store(tmp_path)
+def test_fanout_prepare_record_list_and_summary_states(workspace_root: Path):
+    store = _store(workspace_root)
     try:
         for index in range(1, 4):
             _journal(store, event_id=f"ev{index}", layer_revision=index,
@@ -473,10 +479,10 @@ def test_fanout_prepare_record_list_and_summary_states(tmp_path):
         store.close()
 
 
-def test_fanout_prepare_reports_persisted_status_not_hardcoded_pending(tmp_path):
+def test_fanout_prepare_reports_persisted_status_not_hardcoded_pending(workspace_root: Path):
     """prepare 必须回读库中真实状态：既有 applied/conflict 行不得被谎报为 pending。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         for index in range(1, 4):
             _journal(store, event_id=f"ev{index}", layer_revision=index,
@@ -507,10 +513,10 @@ def test_fanout_prepare_reports_persisted_status_not_hardcoded_pending(tmp_path)
         store.close()
 
 
-def test_fanout_prepare_rolls_back_all_generations_on_midloop_failure(tmp_path):
+def test_fanout_prepare_rolls_back_all_generations_on_midloop_failure(workspace_root: Path):
     """批量 prepare 必须整批原子：中途失败不得残留前几条已写入的行。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         for index in range(1, 4):
             _journal(store, event_id=f"ev{index}", layer_revision=index,
@@ -545,10 +551,10 @@ def test_fanout_prepare_rolls_back_all_generations_on_midloop_failure(tmp_path):
         store.close()
 
 
-def test_source_water_mark_rejects_missing_owner_with_existing_journal(tmp_path):
+def test_source_water_mark_rejects_missing_owner_with_existing_journal(workspace_root: Path):
     """水位行被外部清空但 journal 仍有 generation 时必须响亮报错，不返回虚假 0。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         _journal(store, event_id="ev1", layer_revision=1, layer_digest="d1")
         assert store.source_generation_high_water_mark(source_key="user") == 1
@@ -566,10 +572,10 @@ def test_source_water_mark_rejects_missing_owner_with_existing_journal(tmp_path)
         store.close()
 
 
-def test_source_water_mark_rejects_corrupt_owner_generation(tmp_path):
+def test_source_water_mark_rejects_corrupt_owner_generation(workspace_root: Path):
     """owner 水位被写成非法值（会算出负值高水位）时必须 fail-closed。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         _journal(store, event_id="ev1", layer_revision=1, layer_digest="d1")
         connection = sqlite3.connect(store.path)
@@ -587,10 +593,10 @@ def test_source_water_mark_rejects_corrupt_owner_generation(tmp_path):
         store.close()
 
 
-def test_persisted_source_records_never_hold_real_path(tmp_path):
+def test_persisted_source_records_never_hold_real_path(workspace_root: Path):
     """5A.6：持久化记录只含 URI 兄弟字段，物理表内不存在真实路径列。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         store.sync_config_source(
             config_key="workspace_root_mutable_override",
@@ -618,18 +624,18 @@ def test_persisted_source_records_never_hold_real_path(tmp_path):
             "boxteam://workspace/ws-1/resources/config/"
             "workspace_root_mutable_override"
         )
-        assert str(tmp_path) not in layer.uri
+        assert str(workspace_root) not in layer.uri
         journal = store.list_config_source_journal(source_key="user")[0]
         assert journal.uri == _URI
-        assert str(tmp_path) not in journal.uri
+        assert str(workspace_root) not in journal.uri
     finally:
         store.close()
 
 
-def test_source_layer_uri_round_trips_and_sqlite_layer_is_unaddressable(tmp_path):
+def test_source_layer_uri_round_trips_and_sqlite_layer_is_unaddressable(workspace_root: Path):
     """可寻址层（inline/workspace）URI 原样往返；sqlite 层 uri 恒为 None。"""
 
-    store = _store(tmp_path)
+    store = _store(workspace_root)
     try:
         addressable = store.sync_config_source(
             config_key="workspace_inline",

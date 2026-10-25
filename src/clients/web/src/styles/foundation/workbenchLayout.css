@@ -1044,10 +1044,83 @@ body.is-layout-resizing {
 }
 
 .workspace-file-tree {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+}
+
+/* 固定预留提示位；提示出现时不推移树，也不覆盖树末行。 */
+.files-tree-notifications {
+  display: flex;
+  flex: 0 0 36px;
+  box-sizing: border-box;
+  height: 36px;
+  min-height: 36px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.files-tree-notifications > * {
+  flex: 0 0 100%;
+  pointer-events: auto;
+}
+
+.files-tree-notification-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+
+.files-tree-notification-row > .files-tree-error,
+.files-tree-notification-row > .files-tree-action-error {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 80%, transparent);
+  border-radius: 4px;
+  background: var(--bt-panel-background);
+  box-shadow: 0 4px 12px color-mix(in srgb, black 18%, transparent);
+}
+
+.files-tree-notification-row > .files-tree-notification-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 80%, transparent);
+  border-radius: 4px;
+  background: var(--bt-panel-background);
+  box-shadow: 0 4px 12px color-mix(in srgb, black 18%, transparent);
+  color: var(--bt-text-muted);
+}
+
+.files-tree-notification-next {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 46px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 35%, transparent);
+  border-radius: 4px;
+  background: var(--bt-panel-background);
+  color: var(--bt-status-danger);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.files-tree-notification-next:hover,
+.files-tree-notification-next:focus-visible {
+  background: var(--bt-toolbar-hover-background);
 }
 
 .files-tree-root {
@@ -1062,7 +1135,7 @@ body.is-layout-resizing {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 6px;
-  margin: 4px 8px;
+  margin: 0;
   padding: 6px 8px;
   color: var(--bt-status-danger);
   background: color-mix(in srgb, currentColor 10%, transparent);
@@ -1070,6 +1143,13 @@ body.is-layout-resizing {
   border-radius: 4px;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.files-tree-action-error > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .files-tree-action-error button {
@@ -1337,20 +1417,20 @@ body.is-layout-resizing {
   justify-content: space-between;
   gap: 8px;
   flex: 0 0 auto;
-  min-height: 24px;
-  padding: 0 4px 6px;
+  box-sizing: border-box;
+  height: 20px;
+  min-height: 20px;
+  overflow: hidden;
+  padding: 0 4px;
   color: var(--bt-text-muted);
   font-size: 11px;
 }
 
-.files-tree-loading-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 4px 6px;
-  color: var(--bt-text-muted);
-  font-size: 11px;
+.files-tree-search-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .files-tree-search-status button {

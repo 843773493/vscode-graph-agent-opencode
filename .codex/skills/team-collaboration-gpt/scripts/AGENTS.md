@@ -2,6 +2,16 @@
 
 保存 GPT 团队协作可重复使用的本地验证和结构化读取脚本。
 
+```text
+scripts/
+├── run_task.py     按固定 profile 运行命令，记录源码指纹、日志与平台进程清理事实
+│   ├── POSIX       管理独立进程组并核对残留进程
+│   └── Windows     调用 tests/support/processes/windows_job.py 管理 Job Object
+└── verify_run.py   核验 runner、命令退出和平台进程树回收证据
+```
+
+平台进程管理实现归属 `tests/support/processes/`；本目录只负责任务运行与证据核验。`verify_run.py` 复查 POSIX 进程组状态，Windows 则核验 Job Object runner 指纹和回收回执。
+
 # 可修改内容
 
 仅维护本目录中的标准库 Python helper 及其必要参数、manifest 和错误处理。

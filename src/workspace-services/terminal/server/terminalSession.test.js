@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import path from "node:path";
-import { cpSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
@@ -14,10 +14,7 @@ after(() => rmSync(workspaceRunRoot, { recursive: true, force: true }));
 function createTerminalSessionTestWorkspace(t) {
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
   t.after(() => rmSync(workspaceRoot, { recursive: true, force: true }));
-  cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
-  writeFileSync(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({
-    workspace_id: "00000000-0000-4000-8000-000000000001",
-  }));
+  cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/terminal_cwd_workspace"), workspaceRoot, { recursive: true });
   return workspaceRoot;
 }
 
@@ -230,6 +227,7 @@ test("持久记录只承载工作区内相对路径，绝不落盘任何真实�
 
 test("restore 用工作区根 + 相对路径在调用栈内重推导 PTY cwd", async (t) => {
   const workspaceRoot = createTerminalSessionTestWorkspace(t);
+  mkdirSync(path.join(workspaceRoot, "src"));
   const manager = {
     workspaceId: "00000000-0000-4000-8000-000000000001",
     workspaceRoot,

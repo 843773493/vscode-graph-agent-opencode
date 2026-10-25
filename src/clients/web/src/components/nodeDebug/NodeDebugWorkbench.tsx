@@ -1,6 +1,8 @@
+import { lazy, Suspense } from "react";
 import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
 import type { Session } from "../../types/backend";
-import NodeDebugPanel from "./NodeDebugPanel";
+
+const NodeDebugPanel = lazy(() => import("./NodeDebugPanel"));
 
 interface NodeDebugWorkbenchProps {
   apiPort: number;
@@ -44,19 +46,27 @@ export default function NodeDebugWorkbench({
           <button type="button" onClick={() => onSelectThread(mainThreadId)}>切回主线程</button>
         ) : null}
       </header>
-      {threadId ? <NodeDebugPanel
-        apiPort={apiPort}
-        workspaceId={workspaceId}
-        sessionId={sessionId}
-        threadId={threadId}
-        activeFilePath={activeFilePath}
-        controller={nodeDebugController}
-        sessions={sessions}
-        extensionWindow={!compact}
-        onOpenExtensionWindow={onOpenExtensionWindow}
-        onOpenWorkspacePath={onOpenWorkspacePath}
-        onStatusChange={onStatusChange}
-      /> : null}
+      <Suspense fallback={threadId ? (
+        <section
+          className={`node-debug-panel${compact ? " compact" : " extension-window"}`}
+          role="status"
+          aria-label="Node 源码调试"
+        >正在加载调试面板…</section>
+      ) : null}>
+        {threadId ? <NodeDebugPanel
+          apiPort={apiPort}
+          workspaceId={workspaceId}
+          sessionId={sessionId}
+          threadId={threadId}
+          activeFilePath={activeFilePath}
+          controller={nodeDebugController}
+          sessions={sessions}
+          extensionWindow={!compact}
+          onOpenExtensionWindow={onOpenExtensionWindow}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+          onStatusChange={onStatusChange}
+        /> : null}
+      </Suspense>
     </aside>
   );
 }

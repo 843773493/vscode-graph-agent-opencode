@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from app.core.env import get_project_root
+from app.core.file_permissions import restrict_private_path_access
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -382,13 +383,14 @@ class RegistryPersistenceMixin:
             temporary_path = Path(temporary_name)
             try:
                 with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                    restrict_private_path_access(
+                        temporary_path,
+                        descriptor=descriptor,
+                    )
                     json.dump(payload, file, ensure_ascii=False, indent=2)
                     file.write("\n")
                     file.flush()
                     os.fsync(file.fileno())
-                # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-                if os.name != "nt":
-                    temporary_path.chmod(0o600)
                 os.replace(temporary_path, self._storage_path)
             finally:
                 temporary_path.unlink(missing_ok=True)

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import {
+  act,
+  create,
+  type ReactTestInstance,
+  type ReactTestRenderer,
+} from "react-test-renderer";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 import type {
   CreateGatewayPortForwardRequest,
@@ -24,7 +29,7 @@ afterEach(() => {
   restoreGlobalDescriptor("document", originalDocument);
 });
 
-const remoteWorkspace: GatewayWorkspace = {
+const remoteGatewayWorkspace: GatewayWorkspace = {
   workspace_id: "gw_remote_project",
   name: "远程项目",
   backend_url: "http://127.0.0.1:8010",
@@ -49,10 +54,12 @@ const remoteWorkspace: GatewayWorkspace = {
   checked_at: "2026-08-02T00:00:00Z",
 };
 
-function forward(overrides: Partial<GatewayPortForward> = {}): GatewayPortForward {
+function createPortForward(
+  overrides: Partial<GatewayPortForward> = {},
+): GatewayPortForward {
   return {
     forward_id: "pf_vite",
-    workspace_id: remoteWorkspace.workspace_id,
+    workspace_id: remoteGatewayWorkspace.workspace_id,
     connection_id: "remote_dev",
     remote_host: "127.0.0.1",
     remote_port: 5173,
@@ -67,25 +74,49 @@ function forward(overrides: Partial<GatewayPortForward> = {}): GatewayPortForwar
   };
 }
 
-function list(
+function createPortForwardList(
   items: GatewayPortForward[],
 ): GatewayPortForwardList {
   return { items };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
+function createPortForwardApiFixture(
+  overrides: Partial<WorkspacePortForwardApi> = {},
+): WorkspacePortForwardApi {
+  return {
+    list: async () => {
+      throw new Error("测试未配置读取端口转发列表行为");
+    },
+    create: async () => {
+      throw new Error("测试未配置创建端口转发行为");
+    },
+    remove: async () => {
+      throw new Error("测试未配置停止端口转发行为");
+    },
+    reconnect: async () => {
+      throw new Error("测试未配置重连端口转发行为");
+    },
+    changeLocalPort: async () => {
+      throw new Error("测试未配置更改本地端口行为");
+    },
+    changeLabel: async () => {
+      throw new Error("测试未配置更改端口标签行为");
+    },
+    ...overrides,
+  };
 }
 
-function renderPanel(
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+function renderPortForwardPanel(
   api: WorkspacePortForwardApi,
-  workspace: GatewayWorkspace = remoteWorkspace,
+  workspace: GatewayWorkspace = remoteGatewayWorkspace,
   confirmStop: (item: GatewayPortForward) => Promise<boolean> = async () => true,
 ) {
   let renderer!: ReactTestRenderer;
@@ -105,7 +136,7 @@ function renderPanel(
   return renderer;
 }
 
-async function flush() {
+async function flushReactUpdates() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
@@ -118,15 +149,9 @@ function renderedText(renderer: ReactTestRenderer): string {
 
 describe("工作区端口转发面板", () => {
   test("本地工作区空状态仍明确显示端口目录归属", () => {
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api, {
-      ...remoteWorkspace,
+    const api = createPortForwardApiFixture();
+    const renderer = renderPortForwardPanel(api, {
+      ...remoteGatewayWorkspace,
       name: "本地项目",
       connection_kind: "local",
       remote: null,
@@ -139,15 +164,14 @@ describe("工作区端口转发面板", () => {
   });
 
   test("默认优先显示工作区端口列表，并可展开和取消新增表单", async () => {
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([forward(), forward({ forward_id: "pf_terminal", remote_port: 8013 })]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([
+        createPortForward(),
+        createPortForward({ forward_id: "pf_terminal", remote_port: 8013 }),
+      ]),
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
 
     expect(renderer.root.findAllByType("form")).toHaveLength(0);
     expect(renderedText(renderer)).not.toContain("筛选端口...");
@@ -167,18 +191,14 @@ describe("工作区端口转发面板", () => {
   });
 
   test("筛选框按远端或本地端口过滤列表", async () => {
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([
-        forward({ label: "前端预览", remote_port: 5173 }),
-        forward({ forward_id: "pf_terminal", label: "终端服务", remote_port: 8013, local_port: 41002 }),
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([
+        createPortForward({ label: "前端预览", remote_port: 5173 }),
+        createPortForward({ forward_id: "pf_terminal", label: "终端服务", remote_port: 8013, local_port: 41002 }),
       ]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
 
     act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
     const filterMenuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
@@ -198,20 +218,16 @@ describe("工作区端口转发面板", () => {
   test("筛选端口按端口号精确匹配，不误命中包含该子串的端口", async () => {
     // 用户按 "80" 筛选时，8013 / 8080 / 41080 都包含 "80"，但都不是端口 80，
     // 不得出现在结果里；只有远端端口恰好是 80 的条目应该留下。
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([
-        forward({ forward_id: "pf_80", label: "精确命中", remote_port: 80, local_port: 41080 }),
-        forward({ forward_id: "pf_8013", label: "终端服务", remote_port: 8013, local_port: 41002 }),
-        forward({ forward_id: "pf_8080", label: "预览服务", remote_port: 8080, local_port: 41003 }),
-        forward({ forward_id: "pf_5173", label: "前端预览", remote_port: 5173, local_port: 41001 }),
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([
+        createPortForward({ forward_id: "pf_80", label: "精确命中", remote_port: 80, local_port: 41080 }),
+        createPortForward({ forward_id: "pf_8013", label: "终端服务", remote_port: 8013, local_port: 41002 }),
+        createPortForward({ forward_id: "pf_8080", label: "预览服务", remote_port: 8080, local_port: 41003 }),
+        createPortForward({ forward_id: "pf_5173", label: "前端预览", remote_port: 5173, local_port: 41001 }),
       ]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
 
     act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
     const filterMenuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
@@ -240,18 +256,18 @@ describe("工作区端口转发面板", () => {
 
   test("通过更多操作更改本地端口并替换完整列表", async () => {
     const payloads: number[] = [];
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([forward()]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([createPortForward()]),
       changeLocalPort: async (_port, _workspaceId, _forwardId, payload) => {
         payloads.push(payload.local_port);
-        return list([forward({ local_port: payload.local_port, local_url: `http://127.0.0.1:${payload.local_port}` })]);
+        return createPortForwardList([createPortForward({
+          local_port: payload.local_port,
+          local_url: `http://127.0.0.1:${payload.local_port}`,
+        })]);
       },
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
 
     const menuItem = renderer.root.findAllByProps({ role: "menuitem" }).find(
       (item) => item.children.includes("更改本地端口"),
@@ -263,7 +279,7 @@ describe("工作区端口转发面板", () => {
     const portInput = editForm.findByType("input");
     act(() => portInput.props.onChange({ target: { value: "41009" } }));
     act(() => editForm.props.onSubmit({ preventDefault() {} }));
-    await flush();
+    await flushReactUpdates();
 
     expect(payloads).toEqual([41009]);
     expect(renderedText(renderer)).toContain("127.0.0.1:41009");
@@ -272,15 +288,11 @@ describe("工作区端口转发面板", () => {
   });
 
   test("展开表单默认使用 HTTP，并将本地端口留空交给后端分配", async () => {
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([]),
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
     act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
 
     const protocol = renderer.root.findByType("select");
@@ -297,20 +309,17 @@ describe("工作区端口转发面板", () => {
   });
 
   test("提交完整负载，创建期间即时禁用表单，成功后使用完整列表替换", async () => {
-    const pending = deferred<GatewayPortForwardList>();
+    const pending = createDeferred<GatewayPortForwardList>();
     const payloads: CreateGatewayPortForwardRequest[] = [];
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([]),
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([]),
       create: async (_port, _workspaceId, payload) => {
         payloads.push(payload);
         return pending.promise;
       },
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
     act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
 
     act(() => {
@@ -337,7 +346,7 @@ describe("工作区端口转发面板", () => {
     }]);
     expect(renderedText(renderer)).toContain("正在创建…");
 
-    await act(async () => pending.resolve(list([forward({
+    await act(async () => pending.resolve(createPortForwardList([createPortForward({
       label: "前端预览",
       local_port: 4173,
       protocol: "https",
@@ -351,22 +360,33 @@ describe("工作区端口转发面板", () => {
     renderer.unmount();
   });
 
-  test("创建失败后重新读取后端权威列表并保留失败反馈", async () => {
+  test("创建失败后重新读取后端权威列表，并在固定槽保留失败反馈", async () => {
     let listCalls = 0;
-    const api: WorkspacePortForwardApi = {
+    const api = createPortForwardApiFixture({
       list: async () => {
         listCalls += 1;
-        return listCalls === 1 ? list([]) : list([forward({ label: "后端现状" })]);
+        return listCalls === 1
+          ? createPortForwardList([])
+          : createPortForwardList([createPortForward({ label: "后端现状" })]);
       },
       create: async () => {
         throw new Error("本地端口已占用");
       },
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
+    const panelFeedbackLayout = () => renderer.root
+      .findByProps({ "aria-label": "工作区 SSH 端口转发" })
+      .children
+      .filter((child): child is ReactTestInstance => typeof child !== "string")
+      .map((child) => child.props.className)
+      .filter((className) => className === "port-forward-feedback-slot" || className === "port-forward-list");
+    const initialFeedbackLayout = panelFeedbackLayout();
+    expect(initialFeedbackLayout).toEqual([
+      "port-forward-feedback-slot",
+      "port-forward-list",
+    ]);
+
     act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
     act(() => {
       renderer.root.findByProps({ placeholder: "例如 5173" }).props.onChange({
@@ -376,12 +396,15 @@ describe("工作区端口转发面板", () => {
     act(() => {
       renderer.root.findByType("form").props.onSubmit({ preventDefault() {} });
     });
-    await flush();
+    await flushReactUpdates();
 
     expect(listCalls).toBe(2);
     expect(renderedText(renderer)).toContain("创建端口转发失败");
     expect(renderedText(renderer)).toContain("本地端口已占用");
     expect(renderedText(renderer)).toContain("后端现状");
+    expect(panelFeedbackLayout()).toEqual(initialFeedbackLayout);
+    expect(renderer.root.findByProps({ className: "port-forward-feedback-slot" }).children)
+      .toHaveLength(1);
     expect(renderer.root.findAllByType("form")).toHaveLength(1);
     renderer.unmount();
   });
@@ -389,29 +412,26 @@ describe("工作区端口转发面板", () => {
   test("停止前要求确认，停止失败后刷新并给出明确反馈", async () => {
     let listCalls = 0;
     let confirmations = 0;
-    const api: WorkspacePortForwardApi = {
+    const api = createPortForwardApiFixture({
       list: async () => {
         listCalls += 1;
-        return list([forward()]);
+        return createPortForwardList([createPortForward()]);
       },
-      create: async () => list([]),
       remove: async () => {
         throw new Error("SSH 进程未退出");
       },
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api, remoteWorkspace, async () => {
+    });
+    const renderer = renderPortForwardPanel(api, remoteGatewayWorkspace, async () => {
       confirmations += 1;
       return true;
     });
-    await flush();
+    await flushReactUpdates();
     const stopButton = renderer.root.findAllByType("button").find(
       (button) => button.children.includes("停止转发"),
     );
     expect(stopButton).toBeDefined();
     act(() => stopButton!.props.onClick());
-    await flush();
+    await flushReactUpdates();
 
     expect(confirmations).toBe(1);
     expect(listCalls).toBe(2);
@@ -421,26 +441,23 @@ describe("工作区端口转发面板", () => {
   });
 
   test("错误条目可以重新连接，并用重连响应替换列表", async () => {
-    const reconnected = forward({ status: "active", error: null });
+    const reconnected = createPortForward({ status: "active", error: null });
     let reconnectId = "";
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([forward({ status: "error", error: "网络已断开" })]),
-      create: async () => list([]),
-      remove: async () => list([]),
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([createPortForward({ status: "error", error: "网络已断开" })]),
       reconnect: async (_port, _workspaceId, forwardId) => {
         reconnectId = forwardId;
-        return list([reconnected]);
+        return createPortForwardList([reconnected]);
       },
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
     const reconnectButton = renderer.root.findAllByType("button").find(
       (button) => button.children.includes("重新连接"),
     );
     expect(reconnectButton).toBeDefined();
     act(() => reconnectButton!.props.onClick());
-    await flush();
+    await flushReactUpdates();
 
     expect(reconnectId).toBe("pf_vite");
     expect(renderedText(renderer)).toContain("已转发");
@@ -450,26 +467,22 @@ describe("工作区端口转发面板", () => {
 
   test("切换工作区后丢弃旧列表并读取新工作区", async () => {
     const requestedWorkspaceIds: string[] = [];
-    const api: WorkspacePortForwardApi = {
+    const api = createPortForwardApiFixture({
       list: async (_port, workspaceId) => {
         requestedWorkspaceIds.push(workspaceId);
-        return list([
-          forward({
+        return createPortForwardList([
+          createPortForward({
             forward_id: `pf_${workspaceId}`,
             workspace_id: workspaceId,
             label: workspaceId,
           }),
         ]);
       },
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
     const secondWorkspace: GatewayWorkspace = {
-      ...remoteWorkspace,
+      ...remoteGatewayWorkspace,
       workspace_id: "gw_remote_api",
       name: "远程 API",
     };
@@ -486,7 +499,7 @@ describe("工作区端口转发面板", () => {
         </WarmConfirmProvider>,
       );
     });
-    await flush();
+    await flushReactUpdates();
 
     expect(requestedWorkspaceIds).toEqual(["gw_remote_project", "gw_remote_api"]);
     expect(renderedText(renderer)).toContain("gw_remote_api");
@@ -518,15 +531,11 @@ describe("工作区端口转发面板", () => {
         },
       },
     });
-    const api: WorkspacePortForwardApi = {
-      list: async () => list([forward()]),
-      create: async () => list([]),
-      remove: async () => list([]),
-      reconnect: async () => list([]),
-      changeLocalPort: async () => list([]),
-    };
-    const renderer = renderPanel(api);
-    await flush();
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([createPortForward()]),
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
 
     const copyButton = renderer.root.findByProps({ "aria-label": "复制本地地址" });
     await act(async () => {

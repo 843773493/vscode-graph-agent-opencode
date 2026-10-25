@@ -17,7 +17,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _prepare_workspace,
 )
-from tests.support.communication_federation import open_communication_triad
+from tests.support.communication.federation import open_communication_triad
 
 
 @pytest.fixture

@@ -32,6 +32,12 @@ export type AgentStateJsonlLine =
   | { ok: true; lineNumber: number; value: unknown }
   | { ok: false; lineNumber: number; raw: string; message: string };
 
+export interface AgentStatePanelProjection {
+  displayJsonl: string;
+  invalidLines: Array<Extract<AgentStateJsonlLine, { ok: false }>>;
+  summary: AgentStateSummary;
+}
+
 /**
  * Agent State JSONL 的唯一解析原语。
  *
@@ -88,13 +94,15 @@ export function agentStateInvalidLineNote(
   return `[[第 ${line.lineNumber} 行解析失败：${line.message}；原文片段：${line.raw}]]`;
 }
 
+function formatAgentStateLineForDisplay(line: AgentStateJsonlLine): string {
+  return line.ok
+    ? JSON.stringify(redactLargeData(line.value)) ?? ""
+    : agentStateInvalidLineNote(line);
+}
+
 /** 供组件渲染的逐行文本：成功行脱敏后重新序列化，失败行标注原文片段。 */
 export function formatAgentStateLinesForDisplay(lines: AgentStateJsonlLine[]): string {
-  return lines
-    .map((line) => line.ok
-      ? JSON.stringify(redactLargeData(line.value))
-      : agentStateInvalidLineNote(line))
-    .join("\n");
+  return lines.map(formatAgentStateLineForDisplay).join("\n");
 }
 
 /** 从已解析行中取出可用的记录：非法行被排除，但调用方仍可据 lines 给出诊断。 */
@@ -259,5 +267,27 @@ export function buildAgentStateSummary(
     customTools: Array.from(customTools),
     customToolResults,
     finalText: snapshot.finalText,
+  };
+}
+
+/** 一次遍历 Agent State JSONL，同时生成原文展示、错误行和摘要输入。 */
+export function buildAgentStatePanelProjection(jsonl: string): AgentStatePanelProjection {
+  const invalidLines: AgentStatePanelProjection["invalidLines"] = [];
+  const records: Record<string, unknown>[] = [];
+  const displayLines: string[] = [];
+
+  for (const line of iterateAgentStateJsonlLines(jsonl.trim())) {
+    if (line.ok) {
+      if (isRecord(line.value)) records.push(line.value);
+    } else {
+      invalidLines.push(line);
+    }
+    displayLines.push(formatAgentStateLineForDisplay(line));
+  }
+
+  return {
+    displayJsonl: displayLines.join("\n"),
+    invalidLines,
+    summary: buildAgentStateSummary(records),
   };
 }

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionResource } from "../../types/backend";
 import {
+  resourceAttentionGroup,
   resourceKindIcon,
+  resourceMetadataRows,
+  resourceTreeStatus,
   resourceTreeTitle,
   statusLabel,
   stripTerminalNamePrefix,
@@ -48,6 +51,52 @@ describe("资源展示投影", () => {
     expect(resourceKindIcon("browser")).toBe("codicon-globe");
     expect(resourceKindIcon("terminal")).toBe("codicon-terminal");
     expect(resourceKindIcon("background_task")).toBe("codicon-server-process");
+  });
+
+  test("资源详情只生成可见元数据行，保留属性顺序与原值格式", () => {
+    const resource = terminalResource("终端", {
+      cwd_relative: "app",
+      attach_url: "不应展示",
+      command_exit_code: 7,
+      custom_value: { count: 2 },
+    });
+
+    expect(resourceMetadataRows(resource)).toEqual([
+      ["工作目录", "app"],
+      ["退出码", "7"],
+      ["custom_value", '{"count":2}'],
+    ]);
+  });
+
+  test("资源分组状态映射保持失败、历史、挂起和可恢复边界", () => {
+    const failed = terminalResource("失败");
+    failed.status = "failed";
+    const historical = terminalResource("历史");
+    historical.status = "closed";
+    const sleeping = terminalResource("挂起", { resource_state: "frozen" });
+    const backgroundTask: SessionResource = {
+      ...terminalResource("后台任务"),
+      kind: "background_task",
+      status: "pending",
+    };
+    const recoverableBrowser: SessionResource = {
+      ...terminalResource("可恢复浏览器"),
+      kind: "browser",
+      status: "lost",
+      metadata: { resource_state: "discarded", checkpoint_available: true },
+    };
+
+    expect(resourceAttentionGroup(failed, null)).toBe("attention");
+    expect(resourceAttentionGroup(historical, null)).toBe("history");
+    expect(resourceAttentionGroup(sleeping, null)).toBe("sleeping");
+    expect(resourceAttentionGroup(backgroundTask, "terminal://another"))
+      .toBe("active");
+    expect(resourceAttentionGroup(recoverableBrowser, null)).toBe("sleeping");
+  });
+
+  test("资源状态只格式化一次连接数并显示用户可读值", () => {
+    expect(resourceTreeStatus(terminalResource("终端", { client_count: 3 })))
+      .toBe("3 个连接");
   });
 
   test("后端实际会发出的资源状态都有中文标签，不把英文枚举漏给用户", () => {

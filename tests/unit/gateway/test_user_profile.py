@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from app.core import file_permissions
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control import user_profile as user_profile_module
 from app.gateway.control.user_profile import UserProfileStore
@@ -33,6 +35,34 @@ def test_user_profile_isolated_and_gitignored_runtime_data(tmp_path):
     other = store.ensure_user(user_id="user-b", display_name="用户 B")
     assert other != profile_root
     assert store.read_profile(user_id="user-b")["display_name"] == "用户 B"
+
+
+def test_user_profile_writes_with_private_windows_acl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        file_permissions,
+        "_windows_acl_is_private",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    store = UserProfileStore(gateway_root=tmp_path / "gateway")
+
+    store.ensure_user(user_id="user-a", display_name="用户 A")
+
+    assert len(calls) == 4
+    assert all(
+        Path(arguments[1]).parent == tmp_path / "gateway" / "users" / "user-a"
+        for arguments in calls
+    )
 
 
 def test_user_profile_rejects_invalid_user_id(tmp_path):

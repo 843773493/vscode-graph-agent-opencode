@@ -98,6 +98,11 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         deadline: float | None = None,
     ) -> list[BaseMessage]:
         normalized_messages = _project_tool_history(messages, deadline=deadline)
+        target_capabilities = {"reasoning_items"}
+        if self.reasoning_items_summary_replay:
+            target_capabilities.add("reasoning_summary")
+        if self.reasoning_items_encrypted_replay:
+            target_capabilities.add("encrypted_reasoning_replay")
         prepared: list[BaseMessage] = []
         for message in normalized_messages:
             if deadline is not None and time.monotonic() >= deadline:
@@ -122,19 +127,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             projection = project_ai_message_content(
                 message.content,
                 target_provider=self.provider_id,
-                target_capabilities={
-                    "reasoning_items",
-                    *(
-                        {"reasoning_summary"}
-                        if self.reasoning_items_summary_replay
-                        else set()
-                    ),
-                    *(
-                        {"encrypted_reasoning_replay"}
-                        if self.reasoning_items_encrypted_replay
-                        else set()
-                    ),
-                },
+                target_capabilities=target_capabilities,
                 response_metadata=message.response_metadata,
             )
             content = projection["content"]
@@ -164,16 +157,13 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 or message.additional_kwargs.get("tool_calls")
                 or message.additional_kwargs.get("function_call")
             )
-            reasoning_content = [
-                block
-                for block in prepared_content
-                if isinstance(block, dict) and block.get("type") == "reasoning"
-            ]
-            visible_content = [
-                block
-                for block in prepared_content
-                if not (isinstance(block, dict) and block.get("type") == "reasoning")
-            ]
+            reasoning_content: list[Any] = []
+            visible_content: list[Any] = []
+            for block in prepared_content:
+                if isinstance(block, dict) and block.get("type") == "reasoning":
+                    reasoning_content.append(block)
+                else:
+                    visible_content.append(block)
             if reasoning_content and (visible_content or has_tool_calls):
                 prepared.append(
                     message.model_copy(

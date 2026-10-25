@@ -25,7 +25,7 @@ from app.schemas.internal_v2.session_context import (
 from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO
 from app.services.business.session_context_resource import session_resource_identity
-from tests.support.communication import TARGET_SESSION, WORKSPACE_ID
+from tests.support.communication.probe import TARGET_SESSION, WORKSPACE_ID
 
 
 class _MissingAgentToolService:

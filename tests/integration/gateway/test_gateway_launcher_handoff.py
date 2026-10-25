@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 import commentjson
 
-from tests.support.model_stream_config import prepare_e2e_model_stream_config
+from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.ports import integration_port_block_for_file
 
 

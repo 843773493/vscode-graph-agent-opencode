@@ -4,26 +4,26 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
 import { useBackgroundSessionActivity } from "./useBackgroundSessionActivity";
 import {
-  apiResponse,
-  buildSessionHookState,
+  apiSuccessResponse,
   installGatewayFetch,
-  installTestWindow,
-  restoreSessionHookGlobals,
-} from "./sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
+import { createSessionHookState } from "../../tests/fixtures/session/appState";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 describe("useBackgroundSessionActivity", () => {
   test("前台状态产生新的 Map 引用时不重复对账后台 Job", async () => {
     const port = 49_506;
     // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
     // installGatewayFetch 内部用显式 base 解析，保证被测 hook 能看到响应。
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     let jobRequests = 0;
     installGatewayFetch(({ path }) => {
       if (path === "/api/v1/jobs/job-background") {
         jobRequests += 1;
-        return apiResponse({
+        return apiSuccessResponse({
           job_id: "job-background",
           session_id: "session-background",
           status: "running",
@@ -36,9 +36,9 @@ describe("useBackgroundSessionActivity", () => {
       ["workspace-a::session-background", "job-background"],
     ]);
     function Harness(): React.ReactNode {
-      const [, setState] = React.useState<AppState>(() => buildSessionHookState({
+      const [, setState] = React.useState<AppState>(() => createSessionHookState({
         workspaceId: "workspace-a",
-        current: null,
+        currentSession: null,
         sessions: [],
       }));
       useBackgroundSessionActivity({

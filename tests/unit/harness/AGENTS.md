@@ -16,6 +16,7 @@ harness/
 ├── test_e2e_control_files.py           控制事件与模型回放文件的UTF-8读写
 ├── test_fixture_stage_observer.py      fixture计时JSONL的初始化与摘要失败释放
 ├── test_catalog_fixture_lifetime.py   SQLite catalog 装具归属
+├── test_gateway_target.py             Gateway SSH 命令生成与平台分支
 ├── test_workspace_tool_fixture_lifetime.py  资源工具装具的多资源清理及错误链
 ├── test_shutdown_environment_fixture_lifetime.py  隔离配置恢复与Linux目录fd释放
 ├── test_ports.py                      测试文件端口分配

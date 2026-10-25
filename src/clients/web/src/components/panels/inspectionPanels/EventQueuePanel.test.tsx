@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  act,
+  create,
+  type ReactTestInstance,
+  type ReactTestRenderer,
+} from "react-test-renderer";
+import { LARGE_STRING_DISPLAY_LIMIT } from "../../../utils/jsonDisplay";
 import type { FrontendReceivedEvent } from "../../../types/frontend";
 import EventQueuePanel, { INITIAL_VISIBLE_EVENT_COUNT } from "./EventQueuePanel";
 
@@ -54,6 +61,31 @@ function textDeltaItem(index: number, text: string): FrontendReceivedEvent {
       raw: { payload: { text, kind: "reasoning" } },
     },
   };
+}
+
+function firstEventCard(renderer: ReactTestRenderer): ReactTestInstance {
+  const card = renderer.root.findAllByType("details").find((details) =>
+    details.findAllByType("summary")[0]?.props.className === "event-queue-card-summary",
+  );
+  if (!card) throw new Error("事件卡片尚未渲染");
+  return card;
+}
+
+function detailsByTitle(renderer: ReactTestRenderer, title: string): ReactTestInstance {
+  const details = renderer.root.findAllByType("details").find((candidate) =>
+    candidate.findAllByType("summary")[0]?.children.join("") === title,
+  );
+  if (!details) throw new Error(`未找到事件详情: ${title}`);
+  return details;
+}
+
+function openDetails(details: ReactTestInstance): void {
+  const onToggle = details.props.onToggle;
+  if (typeof onToggle !== "function") throw new Error("详情元素缺少 toggle 处理器");
+  const event = {
+    currentTarget: { open: true },
+  } as unknown as React.SyntheticEvent<HTMLDetailsElement>;
+  act(() => onToggle(event));
 }
 
 describe("EventQueuePanel", () => {
@@ -123,23 +155,61 @@ describe("EventQueuePanel", () => {
 });
 
 describe("EventQueuePanel 超大 payload 兜底", () => {
-  test("折叠状态下也不会把完整 payload 原样渲染进 DOM", () => {
+  test("卡片和 payload 折叠时不格式化大 JSON，展开后仍限制文本长度", () => {
     const huge = "X".repeat(500_000);
     const base = traceItem(1);
     if (base.kind !== "trace") throw new Error("traceItem 必须返回 trace 事件");
-    const html = renderToStaticMarkup(
+    const element = (
       <EventQueuePanel
         {...historyProps}
         items={[{ ...base, event: { ...base.event, payload: { result: huge } } }]}
         limit={200}
         sessionId="ses_events"
         active
+      />
+    );
+    const html = renderToStaticMarkup(element);
+
+    expect(html).not.toContain(huge);
+    expect(html).not.toContain("已截断展示");
+    expect(html).not.toContain("<pre>");
+    expect(html.length).toBeLessThan(20_000);
+
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(element); });
+    const card = firstEventCard(renderer);
+    expect(card.findAllByType("pre")).toHaveLength(0);
+
+    openDetails(card);
+    const payloadDetails = detailsByTitle(renderer, "payload");
+    expect(payloadDetails.findAllByType("pre")).toHaveLength(0);
+
+    openDetails(payloadDetails);
+    const formattedPayload = payloadDetails.findByType("pre").children.join("");
+    expect(formattedPayload).toContain("已截断展示");
+    expect(formattedPayload).not.toContain(huge);
+    renderer.unmount();
+  });
+
+  test("text_delta 摘要只保留有界预览并报告完整原文长度", () => {
+    const firstText = "X".repeat(LARGE_STRING_DISPLAY_LIMIT + 9);
+    const secondText = "后续文本";
+    const totalLength = firstText.length + secondText.length;
+    const html = renderToStaticMarkup(
+      <EventQueuePanel
+        {...historyProps}
+        items={[textDeltaItem(1, firstText), textDeltaItem(2, secondText)]}
+        limit={200}
+        sessionId="ses_events"
+        active
       />,
     );
 
-    expect(html).not.toContain(huge);
-    expect(html).toContain("已截断展示");
-    expect(html.length).toBeLessThan(200_000);
+    expect(html).toContain(
+      `${"X".repeat(LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${totalLength} 字符）`,
+    );
+    expect(html).not.toContain(firstText);
+    expect(html).not.toContain("<pre>");
   });
 });
 

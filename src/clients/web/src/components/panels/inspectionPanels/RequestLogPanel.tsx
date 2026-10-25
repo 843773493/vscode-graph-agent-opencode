@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { formatDateTime } from "../../../utils/format";
 import {
-  buildRequestLogKeyFlow,
+  buildRequestLogKeyFlowFromOrderedLogs,
   type RequestLogKeyFlow,
 } from "../../../state/requestLogDisplay/index";
 import type { LLMRequestLogRecord } from "../../../types/backend";
@@ -110,13 +110,15 @@ export default function RequestLogPanel({
   active: boolean;
   onRetryRequestLogs: () => void;
 }) {
-  const { displayLogs, keyFlow } = useMemo(() => ({
-    displayLogs: [...logs].sort(
-      (left, right) =>
-        new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
-    ),
-    keyFlow: buildRequestLogKeyFlow(logs),
-  }), [logs]);
+  const { displayLogs, keyFlow } = useMemo(() => {
+    const displayLogs = [...logs].sort(
+      (left, right) => left.timestamp - right.timestamp,
+    );
+    return {
+      displayLogs,
+      keyFlow: buildRequestLogKeyFlowFromOrderedLogs(displayLogs),
+    };
+  }, [logs]);
   const { firstVisibleIndex, handleListScroll, listRef } = useScrollWindow({
     active,
     scopeKey,

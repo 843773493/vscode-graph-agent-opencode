@@ -72,7 +72,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_default_test_workspace
 

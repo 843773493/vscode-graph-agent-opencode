@@ -9,7 +9,7 @@ tests/fixtures/
 ├── workspaces/                         可复制的完整测试工作区
 │   ├── default_test_workspace/         通用工作区文件与多模态输入
 │   ├── model_tool_test_workspace/      apply_patch、edit_file 的最小输入
-│   └── custom_tool_test_workspace/     扩展工具说明与静态 rollout 历史
+│   └── custom_tool_test_workspace/     扩展工具说明与 rollout 生成清单
 ├── model_stream/                       Provider 原始协议帧和产品行为预期
 │   ├── handwritten/<provider>/         人工设计的 SSE 输入
 │   ├── scenarios/                      将原始输入关联到断言

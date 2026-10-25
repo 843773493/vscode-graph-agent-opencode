@@ -284,6 +284,63 @@ def test_llm_log_pruning_enforces_file_count_and_total_bytes(
     assert sum(path.stat().st_size for path in log_dir.glob("*.json")) <= 10
 
 
+def test_llm_log_pruning_reads_each_file_size_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_dir = tmp_path / "logs" / "llm_requests"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_FILES", 3)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_TOTAL_BYTES", 100)
+    for index in range(4):
+        (log_dir / f"{index:03d}.json").write_bytes(b"x")
+
+    original_stat = Path.stat
+    stat_counts: dict[str, int] = {}
+
+    def count_stat(path: Path, *args, **kwargs):
+        if path.parent == log_dir and path.suffix == ".json":
+            stat_counts[path.name] = stat_counts.get(path.name, 0) + 1
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", count_stat)
+
+    LLMLoggingMiddleware._prune_session_logs(log_dir)
+
+    assert stat_counts == {f"{index:03d}.json": 1 for index in range(4)}
+
+
+def test_llm_log_pruning_keeps_file_count_accurate_when_unlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log_dir = tmp_path / "logs" / "llm_requests"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_FILES", 3)
+    monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_TOTAL_BYTES", 100)
+    for index in range(4):
+        (log_dir / f"{index:03d}.json").write_bytes(b"x")
+
+    original_unlink = Path.unlink
+
+    def fail_oldest_once(path: Path, *args, **kwargs) -> None:
+        if path.name == "000.json":
+            raise PermissionError("日志仍被占用")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_oldest_once)
+
+    LLMLoggingMiddleware._prune_session_logs(log_dir)
+
+    assert sorted(path.name for path in log_dir.glob("*.json")) == [
+        "000.json",
+        "002.json",
+        "003.json",
+    ]
+    assert "日志轮转失败" in caplog.text
+
+
 @pytest.mark.parametrize("handler_error", [None, "provider-profile-change-requires-rebuild"])
 def test_llm_log_persists_failed_upstream_attempt(
     tmp_path: Path,

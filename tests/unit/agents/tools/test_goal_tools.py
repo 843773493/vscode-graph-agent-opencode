@@ -57,16 +57,19 @@ async def test_goal_agent_tools_enforce_status_boundary():
         )
     }
     assert "token 与耗时用量" in tools["get_goal"].description
+    assert "必须先调用" in tools["get_goal"].description
     assert "不得从普通任务自行推断" in tools["create_goal"].description
-    assert "预算限制由用户或系统控制" in tools["update_goal"].description
+    assert "明确要求暂停或停止" in tools["update_goal"].description
     created = await tools["create_goal"].ainvoke({"objective": "完成目标"})
     assert created["status"] == "active"
     # Goal 只属于 main thread：响应投影的 thread_id 来自 resolve_main_thread，
     # 必须与 session_id 可区分。
     assert created["thread_id"] == MAIN_THREAD_ID
     assert (await tools["get_goal"].ainvoke({}))["goal_id"] == created["goal_id"]
-    with pytest.raises(ValueError, match="complete 或 blocked"):
-        await tools["update_goal"].ainvoke({"status": GoalStatus.paused.value})
+    paused = await tools["update_goal"].ainvoke({"status": "paused"})
+    assert paused["status"] == "paused"
+    with pytest.raises(ValueError, match="paused、complete 或 blocked"):
+        await tools["update_goal"].ainvoke({"status": GoalStatus.active.value})
     completed = await tools["update_goal"].ainvoke({"status": "complete"})
     assert completed["status"] == "complete"
 

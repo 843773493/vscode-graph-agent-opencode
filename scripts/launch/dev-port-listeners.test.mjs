@@ -11,31 +11,32 @@ import ts from "typescript";
 import { remainingOccupiedPorts } from "./dev-environment.mjs";
 
 const runId = randomUUID();
-const outputRoot = path.resolve("out/tests/scripts/launch/dev-port-listeners");
-const workspace = path.join(outputRoot, "workspace", runId);
-const artifacts = path.join(outputRoot, "artifacts", runId);
+const testOutputRoot = path.resolve("out/tests/scripts/launch/dev-port-listeners");
+const fixtureProjectRoot = path.join(testOutputRoot, "workspace", runId);
+const artifactDirectory = path.join(testOutputRoot, "artifacts", runId);
+const posixHarnessPlatform = process.platform === "win32" ? "linux" : process.platform;
 for (const kind of ["workspace", "artifacts"]) {
-  mkdirSync(path.join(outputRoot, kind), { recursive: true });
-  mkdirSync(path.join(outputRoot, kind, runId));
+  mkdirSync(path.join(testOutputRoot, kind), { recursive: true });
+  mkdirSync(path.join(testOutputRoot, kind, runId));
 }
 
-const source = readFileSync(path.resolve("scripts/launch/dev.mjs"), "utf8");
-const parsed = ts.createSourceFile("dev.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const functions = ["readUnixListenerPidsByPort", "assertDevelopmentPortsFree", "cleanDevelopmentPorts"].map((name) => {
-  const node = parsed.statements.find((entry) => ts.isFunctionDeclaration(entry) && entry.name?.text === name);
+const devManagerSource = readFileSync(path.resolve("scripts/launch/dev.mjs"), "utf8");
+const devManagerAst = ts.createSourceFile("dev.mjs", devManagerSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const portCleanupSource = ["readUnixListenerPidsByPort", "assertDevelopmentPortsFree", "cleanDevelopmentPorts"].map((name) => {
+  const node = devManagerAst.statements.find((entry) => ts.isFunctionDeclaration(entry) && entry.name?.text === name);
   if (!node) throw new Error(`dev.mjs 缺少 ${name} 入口`);
-  return node.getText(parsed);
+  return node.getText(devManagerAst);
 }).join("\n");
 
-function portOperations(spawnSync, {
+function createPortCleanupHarness(spawnSync, {
   ports = [23947],
   kill = () => { throw new Error("此用例禁止发送进程信号"); },
   sleep = () => { throw new Error("错误路径不应进入终止后等待"); },
 } = {}) {
   // 不加载 dev.mjs 顶层编排；默认拒绝信号，真实清理用例只授权自己的子进程。
-  return vm.runInNewContext(`${functions}\n({ readUnixListenerPidsByPort, cleanDevelopmentPorts })`, {
-    projectRoot: workspace,
-    process: { platform: "linux", kill },
+  return vm.runInNewContext(`${portCleanupSource}\n({ readUnixListenerPidsByPort, cleanDevelopmentPorts })`, {
+    projectRoot: fixtureProjectRoot,
+    process: { platform: posixHarnessPlatform, kill },
     TextDecoder,
     selectedPorts: () => ports,
     remainingOccupiedPorts,
@@ -44,7 +45,7 @@ function portOperations(spawnSync, {
 }
 
 function saveObservation(scenario, result) {
-  writeFileSync(path.join(artifacts, `${scenario}.json`), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
+  writeFileSync(path.join(artifactDirectory, `${scenario}.json`), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
 }
 
 describe("Unix 开发端口监听者选择", () => {
@@ -68,7 +69,7 @@ describe("Unix 开发端口监听者选择", () => {
         "-e",
         'import { createConnection } from "node:net"; createConnection({ host: "127.0.0.1", port: Number(process.argv[1]) }).once("connect", () => process.stdout.write("connected\\n"));',
         String(observation.ports[0]),
-      ], { cwd: workspace, stdio: ["ignore", "pipe", "pipe"] });
+      ], { cwd: fixtureProjectRoot, stdio: ["ignore", "pipe", "pipe"] });
       closed = new Promise((resolve) => client.once("close", (code, signal) => resolve([code, signal])));
       await once(client, "spawn");
       observation.clientPid = client.pid;
@@ -76,14 +77,14 @@ describe("Unix 开发端口监听者选择", () => {
         once(client.stdout, "data", { signal: AbortSignal.timeout(1500) }),
         closed.then(([code, signal]) => { throw new Error(`TCP 客户端提前退出: exit=${code} signal=${signal}`); }),
       ]);
-      const operations = portOperations((command, options) => {
+      const portCleanup = createPortCleanupHarness((command, options) => {
         if (command[0] !== "lsof") throw new Error(`禁止 fixture 执行 ${command[0]}`);
         const result = Bun.spawnSync(command, options);
         observation.commands.push({ command, exitCode: result.exitCode, signalCode: result.signalCode,
           stdout: result.stdout.toString(), stderr: result.stderr?.toString() ?? null });
         return result;
       });
-      const listeners = operations.readUnixListenerPidsByPort(observation.ports);
+      const listeners = portCleanup.readUnixListenerPidsByPort(observation.ports);
       observation.detectedPidsByPort = Object.fromEntries(listeners);
       for (const [index, port] of observation.ports.entries()) {
         expect([...listeners.get(port)]).toEqual(index < 2 ? [String(process.pid)] : []);
@@ -106,7 +107,7 @@ describe("Unix 开发端口监听者选择", () => {
     try {
       child = spawn(process.execPath, ["-e",
         'import { createServer } from "node:net"; const server = createServer(); server.listen(0, "127.0.0.1", () => console.log(server.address().port));',
-      ], { cwd: workspace, stdio: ["ignore", "pipe", "pipe"], timeout: 4500, killSignal: "SIGKILL" });
+      ], { cwd: fixtureProjectRoot, stdio: ["ignore", "pipe", "pipe"], timeout: 4500, killSignal: "SIGKILL" });
       closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
       observation.pid = child.pid;
       const port = await new Promise((resolve, reject) => {
@@ -120,7 +121,7 @@ describe("Unix 开发端口监听者选择", () => {
       });
       expect(Number.isInteger(port) && port > 0 && port <= 65535).toBe(true);
       observation.port = port;
-      const operations = portOperations((command, options) => {
+      const portCleanup = createPortCleanupHarness((command, options) => {
         observation.commands.push(command);
         if (command[0] !== "lsof") throw new Error(`禁止 fixture 执行 ${command[0]}`);
         return Bun.spawnSync(command, options);
@@ -133,7 +134,7 @@ describe("Unix 开发端口监听者选择", () => {
         },
         sleep: Bun.sleep,
       });
-      await operations.cleanDevelopmentPorts();
+      await portCleanup.cleanDevelopmentPorts();
       observation.exit = await closed;
       expect(observation.signals).toEqual([[child.pid, "SIGTERM"]]);
       expect(observation.exit.signal).toBe("SIGTERM");
@@ -148,7 +149,7 @@ describe("Unix 开发端口监听者选择", () => {
   test("进程API在TERM后重查并只KILL残留监听者，最后确认释放", async () => {
     const events = [];
     let queries = 0;
-    const operations = portOperations((command) => {
+    const portCleanup = createPortCleanupHarness((command) => {
       if (command[0] !== "lsof") throw new Error(`禁止 fixture 执行 ${command[0]}`);
       events.push("query");
       queries++;
@@ -158,7 +159,7 @@ describe("Unix 开发端口监听者选择", () => {
       kill(pid, signal) { events.push([pid, signal]); },
       async sleep(milliseconds) { events.push(["sleep", milliseconds]); },
     });
-    await operations.cleanDevelopmentPorts();
+    await portCleanup.cleanDevelopmentPorts();
     saveObservation("process-api-force-order", { events });
     expect(events).toEqual([
       "query", [41001, "SIGTERM"], ["sleep", 1000],
@@ -174,7 +175,7 @@ describe("Unix 开发端口监听者选择", () => {
       "p41001\nn*:23947\nn[::]:23948\n",
       "",
     ];
-    const operations = portOperations((command) => {
+    const portCleanup = createPortCleanupHarness((command) => {
       calls.push([...command]);
       if (calls.length > 3) throw new Error("发生多余的lsof查询");
       events.push("query");
@@ -185,7 +186,7 @@ describe("Unix 开发端口监听者选择", () => {
       kill(pid, signal) { events.push([pid, signal]); },
       async sleep(milliseconds) { events.push(["sleep", milliseconds]); },
     });
-    await operations.cleanDevelopmentPorts();
+    await portCleanup.cleanDevelopmentPorts();
     saveObservation("three-multiport-snapshots", { ports, calls, events });
     expect(calls).toEqual(Array.from({ length: 3 }, () => [
       "lsof", "-nP", "-a", `-iTCP:${ports.join(",")}`, "-sTCP:LISTEN", "-Fpn",
@@ -200,7 +201,7 @@ describe("Unix 开发端口监听者选择", () => {
     test(`进程API保留${errorCode}的实际含义，不静默吞掉权限失败`, async () => {
       const failure = Object.assign(new Error(`fixture signal ${errorCode}`), { code: errorCode });
       const calls = [], signals = [], delays = [];
-      const operations = portOperations((command) => {
+      const portCleanup = createPortCleanupHarness((command) => {
         calls.push(command);
         if (command[0] !== "lsof") throw new Error(`禁止 fixture 执行 ${command[0]}`);
         return { exitCode: calls.length === 1 ? 0 : 1, signalCode: null,
@@ -210,7 +211,7 @@ describe("Unix 开发端口监听者选择", () => {
         async sleep(milliseconds) { delays.push(milliseconds); },
       });
       let observedError;
-      try { await operations.cleanDevelopmentPorts(); }
+      try { await portCleanup.cleanDevelopmentPorts(); }
       catch (error) { observedError = error; }
       saveObservation(`process-api-${errorCode}`, { calls, signals, delays, error: observedError?.message });
       expect(signals).toEqual([[41001, "SIGTERM"]]);
@@ -228,11 +229,11 @@ describe("Unix 开发端口监听者选择", () => {
 
   test("lsof 明确无匹配时允许端口空闲", () => {
     const calls = [];
-    const operations = portOperations((command) => {
+    const portCleanup = createPortCleanupHarness((command) => {
       calls.push(command);
       return { exitCode: 1, signalCode: null, stdout: Buffer.from(""), stderr: Buffer.from("") };
     });
-    const pids = [...operations.readUnixListenerPidsByPort([23947]).get(23947)];
+    const pids = [...portCleanup.readUnixListenerPidsByPort([23947]).get(23947)];
     saveObservation("no-listener", { calls, pids });
     expect(pids).toEqual([]);
     expect(calls).toHaveLength(1);
@@ -241,17 +242,17 @@ describe("Unix 开发端口监听者选择", () => {
   for (const stdout of ["", "pnot-a-pid", "p123\ninvalid", "p0\nn*:23947",
     "n*:23947", "p123", "p123\nn*:23948", "p123\nninvalid"]) {
     test(`成功查询也不能用无效监听记录 ${JSON.stringify(stdout)} 伪报空闲`, () => {
-      const operations = portOperations(() => ({
+      const portCleanup = createPortCleanupHarness(() => ({
         exitCode: 0, signalCode: null, stdout: Buffer.from(stdout), stderr: Buffer.from(""),
       }));
-      expect(() => operations.readUnixListenerPidsByPort([23947])).toThrow(/无效监听/);
+      expect(() => portCleanup.readUnixListenerPidsByPort([23947])).toThrow(/无效监听/);
     });
   }
 
   test("同一PID的IPv4和IPv6监听在端口内去重", () => {
-    const operations = portOperations(() => ({ exitCode: 0, signalCode: null,
+    const portCleanup = createPortCleanupHarness(() => ({ exitCode: 0, signalCode: null,
       stdout: Buffer.from("p41001\nn*:23947\nn[::]:23947\np41002\nn127.0.0.1:23947\n"), stderr: Buffer.from("") }));
-    expect([...operations.readUnixListenerPidsByPort([23947]).get(23947)]).toEqual(["41001", "41002"]);
+    expect([...portCleanup.readUnixListenerPidsByPort([23947]).get(23947)]).toEqual(["41001", "41002"]);
   });
 
   for (const failure of [
@@ -261,14 +262,14 @@ describe("Unix 开发端口监听者选择", () => {
   ]) {
     test(`${failure.name} 明确失败，不能当作空闲或继续发信号`, async () => {
       const calls = [];
-      const operations = portOperations((command) => {
+      const portCleanup = createPortCleanupHarness((command) => {
         calls.push(command);
         if (command[0] !== "lsof") throw new Error(`禁止 fixture 执行 ${command[0]}`);
         return { ...failure, stdout: Buffer.from(""), stderr: Buffer.from(failure.stderr) };
       });
       let observedError;
       try {
-        await operations.cleanDevelopmentPorts();
+        await portCleanup.cleanDevelopmentPorts();
       } catch (error) {
         observedError = error;
       }

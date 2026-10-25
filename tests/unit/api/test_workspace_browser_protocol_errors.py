@@ -26,11 +26,11 @@ from tests.support.resource_owners.sessions import SESSION_A, WORKSPACE_ID
     ("missing_status", "browser", 400), ("status_type", "browser", 400),
 ])
 def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
-    resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     native_path: str, failure: str, stage: str | None, resource_http, status: int,
 ) -> None:
-    created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
+    created = browser_resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     rid = resource["resource_id"]
@@ -72,7 +72,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
     command = {"action": "read", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     with caplog.at_level(logging.ERROR):
-        failed = resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
+        failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
     assert failed.status_code == status, failed.text
     exception_type = "ValueError" if status == 400 else "TypeError"
     expected = (
@@ -106,20 +106,20 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
             for record in caplog.records if record.name == "app.services.business.workspace_resources.owner"
         )
     browser_owner_bundle.restart()
-    observed = resource_api_client.get(f"/api/v1/resources/{rid}")
+    observed = browser_resource_api_client.get(f"/api/v1/resources/{rid}")
     assert observed.status_code == 200, observed.text
     current = observed.json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
     assert current["available_actions"] == ["stop"]
-    listed = resource_api_client.get("/api/v1/resources?kind=browser")
+    listed = browser_resource_api_client.get("/api/v1/resources?kind=browser")
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == [current]
     saved = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
     assert saved["records"][0]["error"] == expected
     pending, = browser_owner_bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
-    retry = resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
+    retry = browser_resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
     assert retry.status_code == 409, retry.text
     assert attempts == [("GET", f"http://browser.test/api/browsers/{rid}/read")]
 
@@ -129,11 +129,11 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     ("owner_revision", True), ("grant_token", ""), ("grant_token", None), ("expires_at", ""),
 ])
 def test_malformed_successful_grant_marks_unknown_before_api_serialization(
-    resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, field: str | None, value: object,
     resource_http,
 ) -> None:
-    created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
+    created = browser_resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     rid = resource["resource_id"]
@@ -157,30 +157,30 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     monkeypatch.setattr(browser_owner_bundle.transport, "issue_transport_grant", transport.issue_transport_grant)
     command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     with caplog.at_level(logging.ERROR):
-        failed = resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
+        failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
     assert failed.status_code == 500, failed.text
     expected = "TypeError: 浏览器管理器响应协议错误: stage=grant.receipt；请查看工作区浏览器服务日志"
     assert failed.json()["message"] == expected
     assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
     assert any(isinstance(record.args, tuple) and record.args[-1] == grant for record in caplog.records)
     browser_owner_bundle.restart()
-    current = resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
+    current = browser_resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
     assert current["available_actions"] == ["stop"]
     pending, = browser_owner_bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
-    retried = resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
+    retried = browser_resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
     assert retried.status_code == 409, retried.text
     assert attempts == [("POST", f"http://browser.test/api/browsers/{rid}/transport-grant")]
 
 
 def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
-    resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch,
     resource_http,
 ) -> None:
-    created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
+    created = browser_resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     rid = created.json()["data"]["resource_id"]
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
@@ -194,7 +194,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     sync = browser_owner_bundle.transport.sync_owner_revision
     monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", transport.sync_owner_revision)
     browser_owner_bundle.restart()
-    failed = resource_api_client.get(f"/api/v1/resources/{rid}")
+    failed = browser_resource_api_client.get(f"/api/v1/resources/{rid}")
     expected = "ValueError: 浏览器管理器响应协议错误: stage=browser；请查看工作区浏览器服务日志"
     assert failed.status_code == 400, failed.text
     assert failed.json() == {"detail": expected}
@@ -204,14 +204,14 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     frozen_revision = saved["records"][0]["owner_revision"]
     assert frozen_revision == created.json()["data"]["owner_revision"] + 1
     # 普通查询仅展示原失败，不自动重发失败的撤权或再推进整批版本。
-    observed = resource_api_client.get(f"/api/v1/resources/{rid}")
+    observed = browser_resource_api_client.get(f"/api/v1/resources/{rid}")
     assert observed.status_code == 200, observed.text
     unknown = observed.json()["data"]
     assert unknown["owner_revision"] == frozen_revision
     assert unknown["reconciliation_status"] == "unknown" and unknown["error"] == expected
     assert unknown["available_actions"] == []
     assert unknown["metadata"]["transport_owner_revision"] == frozen_revision - 1
-    blocked = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+    blocked = browser_resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": frozen_revision,
     })
     assert blocked.status_code == 409, blocked.text
@@ -222,7 +222,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     assert persisted["records"][0]["error"] == expected
     monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", sync)
     browser_owner_bundle.restart()
-    recovered = resource_api_client.get(f"/api/v1/resources/{rid}")
+    recovered = browser_resource_api_client.get(f"/api/v1/resources/{rid}")
     assert recovered.status_code == 200, recovered.text
     current = recovered.json()["data"]
     assert current["owner_revision"] == frozen_revision + 1
@@ -230,7 +230,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     assert current["available_actions"] == ["stop"]
     assert current["metadata"]["transport_owner_revision"] == current["owner_revision"]
     assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"]
-    stopped = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+    stopped = browser_resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": current["owner_revision"],
     })
     assert stopped.status_code == 200, stopped.text

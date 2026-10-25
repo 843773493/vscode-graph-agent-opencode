@@ -11,6 +11,16 @@ def _provider(api_mode: dict[str, object]) -> dict[str, object]:
     return {"id": "provider-test", "api_mode": api_mode}
 
 
+@pytest.mark.parametrize("capacity", [0, -1, True, "400000", None])
+def test_rejects_invalid_input_context_capacity(capacity):
+    with pytest.raises(ValueError, match="max_input_tokens 必须是正整数"):
+        parse_provider_api_mode(_provider({
+            "protocol": "chat_completions",
+            "model_info": {"max_input_tokens": capacity},
+            "supports_reasoning": {"reasoning_content": False},
+        }))
+
+
 def test_parses_chat_completions_reasoning_content_and_litellm_modalities():
     parsed = parse_provider_api_mode(
         _provider(

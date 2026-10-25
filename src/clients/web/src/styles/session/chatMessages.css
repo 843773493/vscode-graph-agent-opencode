@@ -62,6 +62,7 @@
 }
 
 .chat-history-page-header {
+  position: relative;
   display: flex;
   min-height: 42px;
   align-items: center;
@@ -70,6 +71,30 @@
   padding: 12px;
   color: var(--bt-text-muted);
   font-size: 12px;
+}
+
+.chat-history-page-error {
+  position: absolute;
+  inset: 4px 8px;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--bt-status-danger) 45%, var(--bt-border));
+  border-radius: 6px;
+  color: var(--bt-status-danger);
+  background: var(--bt-floating-surface);
+  box-shadow: var(--bt-surface-shadow);
+}
+
+.chat-history-page-error-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-history-page-header button {

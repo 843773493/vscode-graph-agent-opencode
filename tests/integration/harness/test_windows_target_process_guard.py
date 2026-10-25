@@ -59,7 +59,7 @@ def test_target_guard_reaps_root_when_observation_fails(target_guard, monkeypatc
     import psutil
 
     roots = []
-    create_process = target_guard.win32process.CreateProcess
+    create_process = target_guard.windows_job.win32process.CreateProcess
 
     def capture_process(*args):
         result = create_process(*args)
@@ -69,11 +69,19 @@ def test_target_guard_reaps_root_when_observation_fails(target_guard, monkeypatc
     def fail_notification(*args):
         raise OSError("注入 Job 通知读取失败")
 
-    monkeypatch.setattr(target_guard.win32process, "CreateProcess", capture_process)
+    monkeypatch.setattr(
+        target_guard.windows_job.win32process, "CreateProcess", capture_process
+    )
     if failure_stage == "notification":
-        monkeypatch.setattr(target_guard, "_next_notification", fail_notification)
+        monkeypatch.setattr(
+            target_guard.windows_job, "_next_notification", fail_notification
+        )
     else:
-        monkeypatch.setattr(target_guard.win32job, "AssignProcessToJobObject", fail_notification)
+        monkeypatch.setattr(
+            target_guard.windows_job.win32job,
+            "AssignProcessToJobObject",
+            fail_notification,
+        )
     try:
         with pytest.raises(OSError, match="注入 Job 通知读取失败"):
             target_guard.run_command([sys.executable, "-c", "import time; time.sleep(60)"])

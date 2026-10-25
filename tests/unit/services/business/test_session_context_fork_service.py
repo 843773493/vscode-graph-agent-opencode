@@ -92,7 +92,7 @@ def fork_boundary(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ForkBoundary]:
         reset_current_gateway_id(token)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def fork_request() -> SessionForkRequest:
     return SessionForkRequest(
         idempotency_key="exact-remote-child",
@@ -107,7 +107,7 @@ def fork_request() -> SessionForkRequest:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def fork_result(fork_request: SessionForkRequest) -> SessionForkResultDTO:
     now = datetime.now(UTC)
     return SessionForkResultDTO(

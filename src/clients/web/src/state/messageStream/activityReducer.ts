@@ -18,13 +18,16 @@ import type {
 } from "./types";
 
 export function modelOutputPhase(carrierType: string): string {
-  return [
-    "reasoning",
-    "reasoning_content",
-    "reasoning_items",
-    "thinking",
-    "redacted_thinking",
-  ].includes(carrierType) ? "reasoning" : "text";
+  switch (carrierType) {
+    case "reasoning":
+    case "reasoning_content":
+    case "reasoning_items":
+    case "thinking":
+    case "redacted_thinking":
+      return "reasoning";
+    default:
+      return "text";
+  }
 }
 
 /**

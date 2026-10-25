@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core import file_permissions
 from app.gateway.runtime.process_lifecycle import _spawn_logged_process
 from app.gateway.runtime.process_logs import (
     PROCESS_LOG_MAX_BYTES,
@@ -29,6 +30,35 @@ def test_process_log_store_appends_and_restricts_permissions(tmp_path: Path) -> 
     if os.name == "posix":
         assert log_root.stat().st_mode & 0o777 == 0o700
         assert log_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_process_log_store_uses_private_windows_acl(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        file_permissions,
+        "_windows_acl_is_private",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+
+    with ProcessLogStore(tmp_path / "logs").open("gateway.log") as stream:
+        stream.write("private log\n")
+
+    assert [arguments[1] for arguments in calls] == [
+        str(tmp_path / "logs"),
+        str(tmp_path / "logs"),
+        str(tmp_path / "logs" / "gateway.log"),
+        str(tmp_path / "logs" / "gateway.log"),
+    ]
 
 
 def test_process_log_store_rotates_an_oversized_previous_log(tmp_path: Path) -> None:

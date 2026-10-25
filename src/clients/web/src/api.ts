@@ -88,6 +88,7 @@ export {
   getAgentStateMessages,
   getLLMRequestLogs,
   getSessionAttachmentBlob,
+  getSessionAttachmentTextPreview,
   interruptSession,
   listMessages,
   replayMessageTurn,

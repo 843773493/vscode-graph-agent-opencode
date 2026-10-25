@@ -22,7 +22,7 @@ from tests.support.processes.workspace import (
     start_backend_process,
     workspace_backend_id_for_root,
 )
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 @pytest.mark.asyncio

@@ -66,6 +66,18 @@ interface WorkspaceFileTreeProps {
   onStatusChange: (text: string) => void;
 }
 
+type WorkspaceFileTreeNotificationKind =
+  | "roots_loading"
+  | "workspace_loading"
+  | "roots"
+  | "action"
+  | "settings";
+
+interface WorkspaceFileTreeNotification {
+  kind: WorkspaceFileTreeNotificationKind;
+  message: string;
+}
+
 const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
 
 function fileIcon(node: WorkspaceFileNode): string {
@@ -121,6 +133,8 @@ export default function WorkspaceFileTree({
   // 顶部会永久停在「正在加载工作区文件…」。
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsReloadNonce, setSettingsReloadNonce] = useState(0);
+  const [activeNotificationKind, setActiveNotificationKind] =
+    useState<WorkspaceFileTreeNotificationKind>("roots");
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
   const shortcutTreePathsRef = useRef<Set<string>>(new Set());
@@ -718,6 +732,27 @@ export default function WorkspaceFileTree({
     ),
   );
   const showSettingsError = active && sessionId !== "" && settingsError !== null;
+  const notifications: WorkspaceFileTreeNotification[] = [];
+  if (rootsError !== null) {
+    notifications.push({ kind: "roots", message: rootsError });
+  }
+  if (menu.actionError !== null) {
+    notifications.push({ kind: "action", message: menu.actionError });
+  }
+  if (showSettingsError && settingsError !== null) {
+    notifications.push({ kind: "settings", message: settingsError });
+  }
+  if (!roots && rootsError === null) {
+    // 错误优先显示；加载态仍保留在队列中，可通过同一个轮播按钮查看。
+    notifications.push({ kind: "roots_loading", message: "正在读取文件根…" });
+  } else if (roots && fileTreeLoading) {
+    notifications.push({ kind: "workspace_loading", message: "正在加载工作区文件…" });
+  }
+  const activeNotificationIndex = Math.max(
+    0,
+    notifications.findIndex((notification) => notification.kind === activeNotificationKind),
+  );
+  const activeNotification = notifications[activeNotificationIndex] ?? null;
 
   const renderFlatRow = (row: WorkspaceFileTreeRow) => {
     if (row.kind === "root") {
@@ -800,8 +835,78 @@ export default function WorkspaceFileTree({
 
   return (
     <div className="workspace-file-tree">
-      {rootsError ? <div className="files-tree-error">{rootsError}<button type="button" onClick={() => setRootsReloadNonce((value) => value + 1)}>重试</button></div> : null}
-      {!roots && !rootsError ? <div className="files-tree-loading">正在读取文件根…</div> : null}
+      <div className="files-tree-notifications">
+        {activeNotification ? (
+          <div className="files-tree-notification-row">
+            {activeNotification.kind === "roots_loading"
+              || activeNotification.kind === "workspace_loading" ? (
+              <div className="files-tree-notification-loading" role="status">
+                <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+                <span>{activeNotification.message}</span>
+              </div>
+            ) : activeNotification.kind === "action" ? (
+              <div className="files-tree-action-error" role="alert">
+                <span className="codicon codicon-error" aria-hidden="true" />
+                <span title={activeNotification.message}>{activeNotification.message}</span>
+                <button
+                  type="button"
+                  aria-label="关闭文件操作错误"
+                  onClick={menu.clearActionError}
+                >
+                  <span className="codicon codicon-close" aria-hidden="true" />
+                </button>
+              </div>
+            ) : (
+              <div
+                className={`files-tree-error${activeNotification.kind === "settings"
+                  ? " files-tree-settings-error"
+                  : ""}`}
+                role="alert"
+              >
+                <span
+                  title={activeNotification.kind === "settings"
+                    ? `快捷路径加载失败：${activeNotification.message}`
+                    : activeNotification.message}
+                >
+                  {activeNotification.kind === "settings"
+                    ? `快捷路径加载失败：${activeNotification.message}`
+                    : activeNotification.message}
+                </span>
+                <button
+                  type="button"
+                  className={activeNotification.kind === "settings"
+                    ? "files-tree-settings-retry"
+                    : undefined}
+                  onClick={() => {
+                    if (activeNotification.kind === "settings") {
+                      setSettingsReloadNonce((nonce) => nonce + 1);
+                    } else {
+                      setRootsReloadNonce((value) => value + 1);
+                    }
+                  }}
+                >
+                  重试
+                </button>
+              </div>
+            )}
+            {notifications.length > 1 ? (
+              <button
+                type="button"
+                className="files-tree-notification-next"
+                title={`下一条提示 ${activeNotificationIndex + 1}/${notifications.length}`}
+                aria-label={`下一条提示 ${activeNotificationIndex + 1}/${notifications.length}`}
+                onClick={() => {
+                  const nextIndex = (activeNotificationIndex + 1) % notifications.length;
+                  setActiveNotificationKind(notifications[nextIndex].kind);
+                }}
+              >
+                <span>{activeNotificationIndex + 1}/{notifications.length}</span>
+                <span className="codicon codicon-chevron-right" aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
       {searchOpen ? (
         <div className="files-tree-search">
           <input
@@ -829,19 +934,16 @@ export default function WorkspaceFileTree({
               <span className="codicon codicon-close" aria-hidden="true" />
             </button>
           ) : null}
-        </div>
-      ) : null}
-      {menu.actionError ? (
-        <div className="files-tree-action-error" role="alert">
-          <span className="codicon codicon-error" aria-hidden="true" />
-          <span>{menu.actionError}</span>
-          <button
-            type="button"
-            aria-label="关闭文件操作错误"
-            onClick={menu.clearActionError}
+          <div
+            className="files-tree-search-status"
+            role="status"
+            aria-hidden={searchStatus === null}
           >
-            <span className="codicon codicon-close" aria-hidden="true" />
-          </button>
+            <span title={searchStatus ?? undefined}>{searchStatus}</span>
+            {searchQuery ? (
+              <button type="button" onClick={() => setSearchQuery("")}>清除</button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {menu.pendingCreations.map((entry) => (
@@ -854,26 +956,6 @@ export default function WorkspaceFileTree({
           <span className="files-tree-meta">{entry.state === "pending_local" ? "等待受理" : "已受理，等待完成"}</span>
         </button>
       ))}
-      {showSettingsError ? (
-        <div className="files-tree-error files-tree-settings-error" role="alert">
-          <span>快捷路径加载失败：{settingsError}</span>
-          <button
-            type="button"
-            className="files-tree-settings-retry"
-            onClick={() => setSettingsReloadNonce((nonce) => nonce + 1)}
-          >
-            重试
-          </button>
-        </div>
-      ) : null}
-      {searchStatus ? (
-        <div className="files-tree-search-status" role="status">
-          <span>{searchStatus}</span>
-          {searchQuery ? (
-            <button type="button" onClick={() => setSearchQuery("")}>清除</button>
-          ) : null}
-        </div>
-      ) : null}
       <div className="files-tree-root" role="tree" aria-label="工作区文件树" aria-busy={fileTreeLoading}>
         {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
           <Virtuoso
@@ -968,12 +1050,6 @@ export default function WorkspaceFileTree({
           </>
         )}
       </div>
-      {fileTreeLoading ? (
-        <div className="files-tree-loading-status" role="status">
-          <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-          <span>正在加载工作区文件…</span>
-        </div>
-      ) : null}
       <input
         ref={menu.uploadInputRef}
         type="file"

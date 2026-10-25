@@ -16,10 +16,12 @@ def allocate_local_port() -> int:
 
 def is_local_port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        # 发布版默认 Workspace 固定端口在重启后可能短暂处于 TIME_WAIT；POSIX
-        # 服务端同样允许复用该地址，探测必须与实际监听语义保持一致。
+        # POSIX 服务端允许重启时复用 TIME_WAIT 地址，探测沿用该语义。
         if os.name == "posix":
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        elif os.name == "nt":
+            # Windows 的 SO_REUSEADDR 可令已占用端口的重复绑定成功；探测必须独占地址。
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         try:
             sock.bind(("127.0.0.1", port))
         except OSError:

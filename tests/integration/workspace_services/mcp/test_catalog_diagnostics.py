@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.support.mcp_configuration import write_mcp_config
+from tests.support.mcp.configuration import write_mcp_config
 
 
 @pytest.fixture(scope="module")

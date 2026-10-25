@@ -13,7 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import Connection
 
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.mcp_configuration import write_mcp_config
+from tests.support.mcp.configuration import write_mcp_config
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
 

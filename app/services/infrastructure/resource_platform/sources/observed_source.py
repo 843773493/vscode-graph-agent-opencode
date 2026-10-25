@@ -187,7 +187,11 @@ class StableSourceReader:
             raise StableSourceReadError(
             "symlink_rejected", f"来源路径是符号链接，拒绝跟随: uri={uri}"
         )
-        open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        open_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
         try:
             fd = os.open(file_path, open_flags)
         except FileNotFoundError as error:
@@ -281,8 +285,9 @@ class StableSourceReader:
     def _read_all(fd: int, size: int) -> bytes:
         chunks: list[bytes] = []
         offset = 0
+        os.lseek(fd, 0, os.SEEK_SET)
         while True:
-            chunk = os.pread(fd, 65536, offset)
+            chunk = os.read(fd, 65536)
             if not chunk:
                 break
             chunks.append(chunk)

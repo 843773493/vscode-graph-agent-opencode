@@ -22,7 +22,7 @@ from typing import Final
 
 from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash, sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -325,6 +325,9 @@ class ResourceActivationCoordinator:
                 payload=item.payload,
                 checkpoint_ns=checkpoint_ns,
             )
+            canonical_payload_bytes, payload_hash = canonical_json_bytes_and_hash(
+                item.payload
+            )
             lineage = SourceLineageRef(
                 lineage_id=f"lineage:{item.resource_id}",
                 derivation_version="resource-derivation:v1",
@@ -339,8 +342,8 @@ class ResourceActivationCoordinator:
                     facet=item.facet,
                     revision=item.revision,
                     availability="available",
-                    content_length=len(canonical_json_bytes(item.payload)),
-                    content_hash=sha256_jcs(item.payload),
+                    content_length=len(canonical_payload_bytes),
+                    content_hash=payload_hash,
                     source_lineage_ref=lineage,
                     source_lineage_digest=lineage.digest,
                     activation_ordinal=ordinal,

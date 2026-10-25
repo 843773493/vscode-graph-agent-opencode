@@ -207,5 +207,4 @@ def prepare_converted_catalog(directory: Path) -> dict[str, object]:
         # 覆盖 rename 已完成而 journal 尚未发布时的中断，绝不覆盖成品库。
         _verify_catalog(path, rows)
         atomic_write_bytes(journal_path, _json({**binding, "state": "catalog_prepared", "catalog_sha256": file_digest(path)}))
-        # TODO: 迁齐线上上传/读取/fork 与 ingest 表后，使用此结构完成唯一切换点。
         return _result(plan, rows)

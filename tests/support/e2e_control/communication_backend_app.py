@@ -2,7 +2,7 @@
 
 # isort: off
 from tests.support.e2e_control.backend_app import app
-from tests.support import communication_fault_backend  # noqa: F401
+from tests.support.communication import fault_backend  # noqa: F401
 # isort: on
 
 from app.services.orchestration.execution_step import runner

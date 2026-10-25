@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.support.workspaces import prepare_default_test_workspace
+
 if TYPE_CHECKING:
     from tests.e2e.system.gateway.gateway_target import GatewayTargetE2EPaths
 
@@ -24,7 +26,14 @@ def docker_e2e_paths(request: pytest.FixtureRequest) -> GatewayTargetE2EPaths:
 
     if root.exists():
         shutil.rmtree(root)
-    _copy_default_workspace(local_workspace)
+    prepare_default_test_workspace(
+        workspace_root=local_workspace,
+        template_root=project_root
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "default_test_workspace",
+    )
     artifacts.mkdir(parents=True, exist_ok=True)
     container_test_root = (
         f"/opt/boxteam-dev/repository/out/tests/{relative_test_path.as_posix()}"
@@ -48,15 +57,3 @@ def e2e_workspace_root_path(docker_e2e_paths: GatewayTargetE2EPaths) -> str:
 @pytest.fixture
 def keep_docker_runtime(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--keep-docker-runtime"))
-
-
-def _copy_default_workspace(target: Path) -> None:
-    source = (
-        Path.cwd().resolve()
-        / "tests"
-        / "fixtures"
-        / "workspaces"
-        / "default_test_workspace"
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)

@@ -4,6 +4,7 @@ import { bindBrowserToolbarEvents } from "./browserToolbarEvents.js";
 import { createBrowserModalUi } from "./browserModalUi.js";
 import { createBrowserCollaborationUi } from "./browserCollaborationUi.js";
 import { createBrowserShortcuts } from "./browserShortcuts.js";
+import { renderDebugElementTree } from "./browserDebugElementTree.js";
 import {
   backendWsUrl,
   createOpaqueId,
@@ -500,46 +501,6 @@ function setDebugPanel(panel) {
   }
 }
 
-function renderDebugElements(root) {
-  debugElementsTree.replaceChildren();
-  if (!root) {
-    debugElementsTree.innerHTML = '<span class="debug-empty">暂无 DOM 数据</span>';
-    return;
-  }
-  const renderNode = (node, depth) => {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "debug-element-node";
-    row.style.paddingLeft = `${10 + depth * 16}px`;
-    row.title = node.node_id || "DOM 节点";
-    const tag = document.createElement("span");
-    tag.className = "debug-element-tag";
-    tag.textContent = `<${node.tag || "element"}`;
-    row.append(tag);
-    for (const [name, value] of Object.entries(node.attributes || {})) {
-      const attribute = document.createElement("span");
-      attribute.className = "debug-element-attribute";
-      attribute.textContent = ` ${name}="${value}"`;
-      row.append(attribute);
-    }
-    const end = document.createElement("span");
-    end.className = "debug-element-tag";
-    end.textContent = ">";
-    row.append(end);
-    if (node.text) {
-      const text = document.createElement("span");
-      text.className = "debug-element-text";
-      text.textContent = ` ${node.text}`;
-      row.append(text);
-    }
-    debugElementsTree.append(row);
-    for (const child of node.children || []) {
-      renderNode(child, depth + 1);
-    }
-  };
-  renderNode(root, 0);
-}
-
 function renderDebugConsole(messages) {
   debugConsoleList.replaceChildren();
   if (!messages?.length) {
@@ -602,17 +563,17 @@ function renderDebugSources(sources) {
   }
 }
 
-function renderDebugSnapshot(data) {
-  debugSnapshotData = data;
-  renderDebugElements(data?.elements);
-  renderDebugConsole(data?.console || []);
-  renderDebugSources(data?.sources || []);
-  renderDebugNetwork(data?.network || []);
-  const consoleCount = data?.console?.length || 0;
-  const networkCount = data?.network?.length || 0;
+function renderDebugSnapshot(snapshot) {
+  debugSnapshotData = snapshot;
+  renderDebugElementTree(debugElementsTree, snapshot?.elements);
+  renderDebugConsole(snapshot?.console || []);
+  renderDebugSources(snapshot?.sources || []);
+  renderDebugNetwork(snapshot?.network || []);
+  const consoleCount = snapshot?.console?.length || 0;
+  const networkCount = snapshot?.network?.length || 0;
   debugDrawerSummary.textContent = `${consoleCount} 条控制台消息 · ${networkCount} 条网络请求`;
-  if (data?.title || data?.url) {
-    debugPageLabel.textContent = `${data.title || "无标题"} · ${shortUrlLabel(data.url || "about:blank")}`;
+  if (snapshot?.title || snapshot?.url) {
+    debugPageLabel.textContent = `${snapshot.title || "无标题"} · ${shortUrlLabel(snapshot.url || "about:blank")}`;
   }
 }
 
@@ -1709,7 +1670,7 @@ debugToggle.addEventListener("click", () => {
 });
 debugClear.addEventListener("click", () => {
   const panel = activeDebugPanel();
-  if (panel === "elements") renderDebugElements(null);
+  if (panel === "elements") renderDebugElementTree(debugElementsTree, null);
   if (panel === "console") {
     renderDebugConsole([]);
     if (debugSnapshotData) {

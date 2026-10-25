@@ -332,26 +332,6 @@
   opacity: 0.6;
 }
 
-.session-resource-error-card details {
-  min-width: 0;
-  color: var(--bt-text-muted);
-}
-
-.session-resource-error-card summary {
-  cursor: pointer;
-}
-
-.session-resource-error-card code {
-  display: block;
-  max-height: 120px;
-  margin-top: 4px;
-  overflow: auto;
-  color: var(--bt-status-danger);
-  font-family: var(--bt-font-family-mono);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
 .session-resource-starting-icon {
   flex: 0 0 auto;
   margin-left: 4px;

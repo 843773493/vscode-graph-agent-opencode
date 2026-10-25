@@ -17,16 +17,18 @@ import { applySessionListConvergence } from "../../state/session/sessions";
 import { useChildThreadLoader } from "./useChildThreadLoader";
 import { useRequestLogLoader } from "../runtime/useRequestLogLoader";
 import type { ChildThreadList } from "../../types/backend";
+import { createAppStateMirror } from "../../tests/fixtures/session/appState";
+import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import {
-  createStateMirror,
-  hangUntilReleased,
   installGatewayFetch,
-  installTestWindow,
-  restoreSessionHookGlobals,
-  useSessionMessageStreamHarness,
-} from "./sessionHookTestFixtures";
+  restoreGatewayTestEnvironment,
+} from "../../tests/fixtures/session/gatewayEnvironment";
+import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
+import {
+  createSessionMessageStreamHarness,
+} from "../../tests/fixtures/session/sessionMessageStream";
 
-afterEach(restoreSessionHookGlobals);
+afterEach(restoreGatewayTestEnvironment);
 
 afterEach(() => {
   mock.restore();
@@ -50,7 +52,7 @@ function minimalState(): AppState {
   } as unknown as AppState;
 }
 
-type Mirror = ReturnType<typeof createStateMirror>;
+type Mirror = ReturnType<typeof createAppStateMirror>;
 
 /** 读镜像里第一条（唯一一条）Turn 消息流状态。 */
 function streamOf(mirror: Mirror): MessageStreamState | undefined {
@@ -59,7 +61,7 @@ function streamOf(mirror: Mirror): MessageStreamState | undefined {
 
 /**
  * 把 window.setTimeout 压成 0 延迟，避免真实退避把有界重连用例拖到分钟级。
- * 由 afterEach(restoreSessionHookGlobals) 还原。
+ * 由 afterEach(restoreGatewayTestEnvironment) 还原。
  */
 function installZeroDelayWindow(): void {
   Object.defineProperty(globalThis, "window", {
@@ -209,11 +211,11 @@ function streamHarness(props: {
   workspaceId: string;
   initialState?: AppState;
 }): { mirror: Mirror; Harness: () => React.ReactNode } {
-  const mirror = createStateMirror(props.initialState ?? minimalState());
+  const mirror = createAppStateMirror(props.initialState ?? minimalState());
   mirror.current().sessionsByWorkspace.set(props.workspaceId, [
     { session_id: props.sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>,
   ]);
-  const Harness = useSessionMessageStreamHarness({ threadId: "thr_00000000400070008000000000000002",
+  const Harness = createSessionMessageStreamHarness({ threadId: "thr_00000000400070008000000000000002",
     apiPort: props.port,
     sessionId: props.sessionId,
     turnId: props.turnId,
@@ -261,7 +263,7 @@ async function flushReconnectRounds(
 
 describe("useSessionMessageStream 有界重连", () => {
   test("child 列表切到同 Session ID 的另一 Gateway 时，新 render 不暴露旧 owner 列表", async () => {
-    installTestWindow(49_761);
+    installGatewayTestWindow(49_761);
     const sessionId = "ses_same_children";
     const requests: string[] = [];
     let resolveSecond!: (response: Response) => void;
@@ -292,10 +294,10 @@ describe("useSessionMessageStream 有界重连", () => {
   });
 
   test("真实消息流入口在同 session/turn/stream ID 下分别保留两个 Gateway owner", async () => {
-    installTestWindow(49_760);
+    installGatewayTestWindow(49_760);
     const sessionId = "ses_same_owner";
     const turnId = "turn_same_owner";
-    const mirror = createStateMirror(minimalState());
+    const mirror = createAppStateMirror(minimalState());
     for (const workspaceId of ["gateway_a", "gateway_b"]) {
       mirror.current().sessionsByWorkspace.set(workspaceId, [{ session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>]);
     }
@@ -466,7 +468,7 @@ describe("useSessionMessageStream 首次连接", () => {
       });
     const initial = minimalState();
     initial.sessionsByWorkspace.set("workspace_thread", [{ session_id: sessionId, thread_id: main } as NonNullable<AppState["currentSession"]>]);
-    const mirror = createStateMirror(initial);
+    const mirror = createAppStateMirror(initial);
     function Harness({ threadId }: { threadId: string }): React.ReactNode {
       useSessionMessageStream({ apiPort: 49_883, sessionId, threadId, turnId,
         workspaceId: "workspace_thread", sessionCacheKey: scope, setState: mirror.setState });
@@ -508,9 +510,9 @@ describe("useSessionMessageStream 首次连接", () => {
   for (const fails of [false, true]) {
     test(`同 Session ID 切 Gateway 后，旧请求日志${fails ? "失败" : "成功"}不覆盖新 owner`, async () => {
       const sessionId = "ses_same_logs";
-      const mirror = createStateMirror({ ...minimalState(), currentSession: { session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as AppState["currentSession"],
+      const mirror = createAppStateMirror({ ...minimalState(), currentSession: { session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as AppState["currentSession"],
         currentSessionWorkspaceId: "gateway_logs_a", activeGatewayWorkspaceId: "gateway_logs_a", contentView: "requests" });
-      const gate = hangUntilReleased<Awaited<ReturnType<typeof api.getLLMRequestLogs>>>();
+      const gate = createDeferredResult<Awaited<ReturnType<typeof api.getLLMRequestLogs>>>();
       const logSpy = spyOn(api, "getLLMRequestLogs").mockImplementation(async () => {
         const logs = await gate.promise;
         if (fails) throw new Error("旧 Gateway 日志失败");
@@ -540,7 +542,7 @@ describe("useSessionMessageStream 首次连接", () => {
   }
 
   test("权威列表删除 owner 后，在途消息流 callback 不能重建被清除的缓存", async () => {
-    installTestWindow(49_762);
+    installGatewayTestWindow(49_762);
     const sessionId = "ses_deleted_stream";
     const workspaceId = "gateway_deleted_stream";
     const scope = sessionScopeKey(workspaceId, sessionId);
@@ -568,7 +570,7 @@ describe("useSessionMessageStream 首次连接", () => {
 
   test("首个 404 后有限退避重试，随后 200 继续消费终态", async () => {
     const port = 49_410;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     let streamRequests = 0;
     installGatewayFetch(() => {
       streamRequests += 1;
@@ -594,7 +596,7 @@ describe("useSessionMessageStream 首次连接", () => {
 
   test("组件更新不会重新建立已连接的消息流", async () => {
     const port = 49_411;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     let streamRequests = 0;
     let releaseStream: ((response: Response) => void) | undefined;
     installGatewayFetch(() => {
@@ -632,7 +634,7 @@ describe("useSessionMessageStream 首次连接", () => {
 
   test("收到终态事件后不等待 SSE 关闭就清理前端运行态", async () => {
     const port = 49_412;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     installGatewayFetch(
       () => openAfterTerminalStreamResponse(),
       { token: "stream-terminal-token" },
@@ -748,7 +750,7 @@ describe("useSessionMessageStream 首次连接", () => {
 
   test("真实 React 异步状态更新不会丢失增量事件游标和正文", async () => {
     const port = 49_413;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     const messageStreamUrls: string[] = [];
     let streamRequests = 0;
     installGatewayFetch(({ url }) => {
@@ -836,7 +838,7 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
     port: number,
     response: Response,
   ): Promise<{ status: string; failure: unknown }> {
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     installGatewayFetch(() => response, { token: "failure-norm-token" });
     const initialState = minimalState();
     initialState.status = "任务失败前";
@@ -872,7 +874,7 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
 describe("useSessionMessageStream 连接与终态语义", () => {
   test("协议非法事件必须写出可见诊断，不能只标记断开后无限静默重连", async () => {
     const port = 49_719;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     installGatewayFetch(
       (): Response => new Response(
         // 信封缺失 event_id / turn_stream_id：非法事件，重复取同一字节永远失败。
@@ -898,7 +900,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
 
   test("游标失效且快照也读不到时写可见诊断，不停留在静默重连", async () => {
     const port = 49_720;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     let snapshotRequests = 0;
     installGatewayFetch(({ path }) => {
       if (path.includes("/message-stream/snapshot")) {
@@ -936,7 +938,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
 
   test("interrupted 终态归类为已取消而不是任务失败", async () => {
     const port = 49_721;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     installGatewayFetch(() => sseResponse([
       streamEvent("cancel", "ses_cancel", "turn_cancel", 1, "stream.interrupted", { interrupt_request_id: "ir_1", status: "interrupted" }),
     ]), { token: "ms-guard-cancel-token" });
@@ -981,7 +983,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
   test("半死连接在默认空闲阈值后写出可见断开诊断，而不是无限挂起", async () => {
     const port = 49_723;
     jest.useFakeTimers();
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     installGatewayFetch(({ path }) => {
       if (path.includes("/message-stream")) {
         // 建立连接后一个字节都不再发送：进程被 SIGSTOP / TCP 半开 / 网络黑洞。
@@ -1022,9 +1024,9 @@ describe("useSessionMessageStream 连接与终态语义", () => {
 
   test("组件卸载会 abort 在途消息流连接", async () => {
     const port = 49_722;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     let streamSignal: AbortSignal | null = null;
-    const hanging = hangUntilReleased<Response>();
+    const hanging = createDeferredResult<Response>();
     installGatewayFetch(({ path, init }) => {
       if (path.includes("/message-stream/snapshot")) {
         return new Response(JSON.stringify({ detail: "无快照" }), {
@@ -1060,7 +1062,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
 
   test("gap 态主动读取一次权威快照补齐，同一缺口不重试也不轮询", async () => {
     const port = 49_724;
-    installTestWindow(port);
+    installGatewayTestWindow(port);
     // 连接保持打开：1、2 连续，随后直接跳到 5，制造一个本连接内的事件序号缺口。
     // 这条路径没有任何错误分支可命中（连接没断），旧实现只能被动等 service 补发
     // stream.snapshot，页面会永久停在缺口态。

@@ -34,7 +34,11 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
-from tests.support.communication import SOURCE_SESSION, TARGET_SESSION, WORKSPACE_ID
+from tests.support.communication.probe import (
+    SOURCE_SESSION,
+    TARGET_SESSION,
+    WORKSPACE_ID,
+)
 
 REMOTE_WORKSPACE = "33333333-3333-4333-8333-333333333333"
 

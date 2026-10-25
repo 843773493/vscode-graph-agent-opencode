@@ -48,6 +48,27 @@ describe("渐进 Markdown 渲染", () => {
     expect(html).not.toContain("<strong>");
   });
 
+  test("响应来源变化时刷新 Markdown 根节点的来源标记", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MarkdownContent value="同一段 Markdown" responseSources="来源 A" />,
+      );
+    });
+    const markdownRoot = () => renderer!.root.findByProps({ className: "chat-markdown" });
+    expect(markdownRoot().props["data-response-sources"]).toBe("来源 A");
+
+    await act(async () => {
+      renderer!.update(
+        <MarkdownContent value="同一段 Markdown" responseSources="来源 B" />,
+      );
+    });
+
+    expect(markdownRoot().props["data-response-sources"]).toBe("来源 B");
+    renderer!.unmount();
+  });
+
   test("超大用户输入只挂载有界预览", () => {
     const hiddenTail = "USER_MESSAGE_HIDDEN_TAIL";
     const content = `用户输入${"x".repeat(LARGE_USER_MESSAGE_RENDER_LIMIT)}${hiddenTail}`;

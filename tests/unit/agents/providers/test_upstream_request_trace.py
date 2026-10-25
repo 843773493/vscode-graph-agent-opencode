@@ -380,7 +380,7 @@ async def test_empty_chat_retry_settles_each_attempt_before_next_request(
 
 
 @pytest.fixture
-def event_provider(monkeypatch: pytest.MonkeyPatch, protocol: str):
+def event_stream_model_factory(monkeypatch: pytest.MonkeyPatch, protocol: str):
     """只替换 SDK 开流，真实 Provider 继续转换事件并结算 attempt。"""
     class EventStream:
         logging_obj = SimpleNamespace(model_call_details={"additional_args": {}})
@@ -409,7 +409,7 @@ def event_provider(monkeypatch: pytest.MonkeyPatch, protocol: str):
         def close(self) -> None:
             self.closed = True
 
-    def create(events: list[object]):
+    def create_model_and_streams(events: list[object]):
         opened: list[EventStream] = []
 
         def open_stream(**_kwargs: object) -> EventStream:
@@ -433,7 +433,7 @@ def event_provider(monkeypatch: pytest.MonkeyPatch, protocol: str):
         )
         return model, opened
 
-    return create
+    return create_model_and_streams
 
 
 @pytest.fixture
@@ -462,9 +462,9 @@ def response_events(scenario: str) -> list[object]:
 @pytest.mark.parametrize("scenario", ["empty", "created", "text", "tool", "reasoning"])
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_responses_clean_eof_without_terminal_settles_provider_error(
-    event_provider, response_events: list[object], scenario: str, is_async: bool,
+    event_stream_model_factory, response_events: list[object], scenario: str, is_async: bool,
 ) -> None:
-    model, opened = event_provider(response_events)
+    model, opened = event_stream_model_factory(response_events)
     chunks = []
     token = begin_upstream_capture()
     try:
@@ -492,13 +492,13 @@ async def test_responses_clean_eof_without_terminal_settles_provider_error(
 @pytest.mark.parametrize("status", ["completed", "incomplete"])
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_responses_terminal_response_keeps_existing_semantics(
-    event_provider, status: str, is_async: bool,
+    event_stream_model_factory, status: str, is_async: bool,
 ) -> None:
     response = ResponsesAPIResponse(
         id="response-1", created_at=1, model="test-model", output=[], status=status,
         incomplete_details=IncompleteDetails(reason="max_output_tokens") if status == "incomplete" else None,
     )
-    model, opened = event_provider([SimpleNamespace(type=f"response.{status}", response=response)])
+    model, opened = event_stream_model_factory([SimpleNamespace(type=f"response.{status}", response=response)])
     token = begin_upstream_capture()
     try:
         chunks = [chunk async for chunk in model._astream([HumanMessage(content="hello")])] if is_async else list(model._stream([HumanMessage(content="hello")]))
@@ -520,13 +520,13 @@ async def test_responses_terminal_response_keeps_existing_semantics(
 ])
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_malformed_responses_event_is_archived_as_provider_error(
-    event_provider, event_type: str, with_response: bool, is_async: bool,
+    event_stream_model_factory, event_type: str, with_response: bool, is_async: bool,
 ) -> None:
     # terminal 缺 response，或 function_call 缺 item ID，均属于实际收到的协议错误。
     event = SimpleNamespace(type=event_type, output_index=0, item={"type": "function_call"})
     if with_response:
         event.response = None
-    model, opened = event_provider([event])
+    model, opened = event_stream_model_factory([event])
     token = begin_upstream_capture()
     try:
         with pytest.raises(RuntimeError, match="缺少") as raised:
@@ -551,9 +551,9 @@ async def test_malformed_responses_event_is_archived_as_provider_error(
 ])
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_local_preflight_rejection_does_not_create_provider_attempt(
-    monkeypatch: pytest.MonkeyPatch, event_provider, protocol: str, preflight: str, is_async: bool,
+    monkeypatch: pytest.MonkeyPatch, event_stream_model_factory, protocol: str, preflight: str, is_async: bool,
 ) -> None:
-    model, opened = event_provider([])
+    model, opened = event_stream_model_factory([])
     error = ValueError(f"source-mismatch: local {preflight} rejected")
 
     def reject(*_args: object, **_kwargs: object) -> None:
@@ -588,9 +588,9 @@ async def test_local_preflight_rejection_does_not_create_provider_attempt(
 @pytest.mark.parametrize("protocol", ["chat_completions"])
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_chat_partial_output_without_real_finish_does_not_retry(
-    event_provider, is_async: bool,
+    event_stream_model_factory, is_async: bool,
 ) -> None:
-    model, opened = event_provider([
+    model, opened = event_stream_model_factory([
         {"choices": [{"index": 0, "delta": {"content": "partial"}, "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
     ])

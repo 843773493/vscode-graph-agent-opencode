@@ -26,10 +26,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_BINDING_SCHEMA,
     extension_args_fingerprint,
 )
-from tests.support.mcp_session_doubles import (
+from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory as _FakeSessionFactory,
 )
-from tests.support.mcp_session_doubles import (
+from tests.support.mcp.session_doubles import (
     drain_pending_relists as _drain_pending_relists,
 )
 

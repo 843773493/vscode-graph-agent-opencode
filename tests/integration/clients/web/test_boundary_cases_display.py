@@ -13,7 +13,7 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -26,7 +26,7 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
-from tests.support.web_boundary_seeding import prepare_boundary_test_workspace
+from tests.support.rollout.web_boundary_seeding import prepare_boundary_test_workspace
 
 BOUNDARY_CASES = (
     ("ses_019bf985d867717182fe710be0f6adae", "boundary-turn-0001", "completed"),

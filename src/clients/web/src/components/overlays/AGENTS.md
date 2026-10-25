@@ -2,6 +2,16 @@
 
 存放跨运行面复用的覆盖层与对话框：锚定浮层 AnchoredOverlay、暖色确认/操作对话框 WarmActionDialog、会话命名对话框 SessionNameDialog 和 Gateway 用户访问菜单 GatewayUserAccessMenu，负责把浮层定位、Portal 渲染与确认交互封装成可复用组件。
 
+```text
+overlays/
+├── AnchoredOverlay.tsx           轻量入口；默认关闭时不加载定位引擎
+├── AnchoredOverlayFloating.tsx   首次打开时加载的 Floating UI 定位实现
+├── GatewayUserAccessMenu.tsx     Gateway 用户访问菜单
+├── SessionContextForkDialog.tsx  会话上下文分叉对话框
+├── SessionNameDialog.tsx         会话命名对话框
+└── WarmActionDialog.tsx          通用确认与操作对话框
+```
+
 本目录与相邻子包的分工边界：
 
 - `components/panels/`：停靠式面板容器；本目录是浮层/对话框，非停靠面板。

@@ -159,7 +159,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
-from tests.support.session_navigation_queue import create_catalog_intent
+from tests.support.session_navigation.catalog_intents import create_catalog_intent
 from tests.support.workspaces import render_test_workspace_config
 
 COMPACTION_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"

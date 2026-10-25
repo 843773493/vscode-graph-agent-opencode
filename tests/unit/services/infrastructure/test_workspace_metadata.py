@@ -13,10 +13,11 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 
 
 @pytest.fixture
-def metadata_service(tmp_path: Path) -> WorkspaceService:
-    root = tmp_path / "metadata-workspace"
-    root.mkdir()
-    return WorkspaceService(config_service=Mock(spec=ConfigService), workspace_root=root)
+def metadata_service(empty_workspace_scope: tuple[str, Path]) -> WorkspaceService:
+    _, workspace_root = empty_workspace_scope
+    return WorkspaceService(
+        config_service=Mock(spec=ConfigService), workspace_root=workspace_root,
+    )
 
 
 @pytest.mark.asyncio
@@ -24,7 +25,7 @@ async def test_workspace_owner_publishes_identity_without_duplicate_locations(me
     workspace = (await metadata_service.get()).model_dump(mode="json")
     context = (await metadata_service.get_context()).model_dump(mode="json")
     assert workspace["workspace_id"] == context["workspace_id"] == metadata_service.workspace_id
-    assert workspace["name"] == "metadata-workspace"
+    assert workspace["name"] == Path(metadata_service.root_path).name
     assert "root_path" not in workspace and "root_path" not in context
     assert "root" not in workspace["git"]
     assert metadata_service.root_path not in str(workspace) + str(context)

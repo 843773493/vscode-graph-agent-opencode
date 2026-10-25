@@ -90,12 +90,25 @@ export function isTurnDetail(turn: TurnRecord): turn is TurnDetail {
 
 function sortedTurnIds(turnsById: Record<string, TurnRecord>): string[] {
   return Object.values(turnsById)
-    .sort((left, right) =>
-      left.ordinal - right.ordinal
-      || left.created_at.localeCompare(right.created_at)
-      || left.turn_id.localeCompare(right.turn_id),
-    )
+    .sort(compareTurnOrder)
     .map((turn) => turn.turn_id);
+}
+
+function compareTurnOrder(left: TurnRecord, right: TurnRecord): number {
+  return left.ordinal - right.ordinal
+    || left.created_at.localeCompare(right.created_at)
+    || left.turn_id.localeCompare(right.turn_id);
+}
+
+function sameTurnOrderingKey(
+  left: TurnRecord | undefined,
+  right: TurnRecord | undefined,
+): boolean {
+  return left !== undefined
+    && right !== undefined
+    && left.ordinal === right.ordinal
+    && left.created_at === right.created_at
+    && left.turn_id === right.turn_id;
 }
 
 function jsonValuesEqual(left: unknown, right: unknown): boolean {
@@ -411,11 +424,26 @@ export function upsertTurns(
       ? { ...timeline, historyViewRevision }
       : timeline;
   }
+  if (
+    timeline.mergedTurnIds.length === 0
+    && timeline.invalidatedTurnIds.length === 0
+    && freshTurns.every((incoming) =>
+      !isTurnDetail(incoming)
+      && (incoming.merged_job_ids?.length ?? 0) === 0
+      && timeline.turnsById[incoming.turn_id] === incoming
+      && timeline.summaryTurnsById[incoming.turn_id] === incoming
+    )
+  ) {
+    return historyRevisionChanged
+      ? { ...timeline, historyViewRevision }
+      : timeline;
+  }
   let turnsById = { ...timeline.turnsById };
   let summaryTurnsById = { ...timeline.summaryTurnsById };
   let detailAccessOrder = [...timeline.detailAccessOrder];
   const mergedTurnIds = new Set(timeline.mergedTurnIds);
   let changed = false;
+  let orderChanged = false;
 
   for (const incoming of freshTurns) {
     if (
@@ -444,7 +472,11 @@ export function upsertTurns(
         changed = true;
       }
     }
+    const previousTurn = turnsById[incoming.turn_id];
     if (upsertTurnRecord(turnsById, incoming)) {
+      if (!sameTurnOrderingKey(previousTurn, turnsById[incoming.turn_id])) {
+        orderChanged = true;
+      }
       changed = true;
     }
     const acceptedRecord = turnsById[incoming.turn_id];
@@ -460,6 +492,7 @@ export function upsertTurns(
     for (const turnId of newlyMergedIds) {
       if (Object.prototype.hasOwnProperty.call(turnsById, turnId)) {
         delete turnsById[turnId];
+        orderChanged = true;
       }
       delete summaryTurnsById[turnId];
       detailAccessOrder = detailAccessOrder.filter((id) => id !== turnId);
@@ -477,7 +510,9 @@ export function upsertTurns(
     turnsById,
     summaryTurnsById,
     detailAccessOrder,
-    orderedTurnIds: sortedTurnIds(turnsById),
+    orderedTurnIds: orderChanged
+      ? sortedTurnIds(turnsById)
+      : timeline.orderedTurnIds,
     mergedTurnIds: [...mergedTurnIds],
     loadingDetailIds: timeline.loadingDetailIds.filter(
       (turnId) => !mergedTurnIds.has(turnId),

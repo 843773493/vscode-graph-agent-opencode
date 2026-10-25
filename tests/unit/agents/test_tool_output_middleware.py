@@ -20,20 +20,26 @@ from app.services.infrastructure.tool_output_store import (
 )
 
 
-def test_tool_output_missing_session_is_missing_resource(tmp_path: Path, session_bundle_factory):
-    session_bundle_factory(tmp_path / ".boxteam/sessions", "ses_019bd0aa8bb2784aaadbe51563ee17f0")
+@pytest.fixture
+def workspace_root(empty_workspace_scope: tuple[str, Path]) -> Path:
+    """返回本测试文件按规范隔离并由 empty_workspace_scope 重建的工作区。"""
+    return empty_workspace_scope[1]
+
+
+def test_tool_output_missing_session_is_missing_resource(workspace_root: Path, session_bundle_factory):
+    session_bundle_factory(workspace_root / ".boxteam/sessions", "ses_019bd0aa8bb2784aaadbe51563ee17f0")
     missing_session = "ses_019c3567da377a6f855e1bddac8f1f76"
-    uri = session_artifact_uri(read_workspace_id(tmp_path), missing_session, "tool-results", "tool_" + "a" * 24 + ".txt")
-    store = ToolOutputStore(workspace_root=tmp_path)
+    uri = session_artifact_uri(read_workspace_id(workspace_root), missing_session, "tool-results", "tool_" + "a" * 24 + ".txt")
+    store = ToolOutputStore(workspace_root=workspace_root)
     with pytest.raises(FileNotFoundError) as failure:
         store.read(missing_session, uri, 1024)
     assert missing_session in str(failure.value)
-    assert str(tmp_path) not in str(failure.value)
+    assert str(workspace_root) not in str(failure.value)
     assert isinstance(failure.value.__cause__, KeyError)
 
 
-def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:
-    store = ToolOutputStore(workspace_root=tmp_path)
+def test_tool_output_store_keeps_small_result_unchanged(workspace_root: Path) -> None:
+    store = ToolOutputStore(workspace_root=workspace_root)
     message = ToolMessage(content="small result", tool_call_id="call-small")
 
     result = store.bound(
@@ -44,26 +50,26 @@ def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:
     )
 
     assert result is message
-    if (tmp_path / ".boxteam").exists():
+    if (workspace_root / ".boxteam").exists():
         # catalog 模式：ToolOutputStore 构造经 path_utils 工厂装配 SQLite
         # catalog（开关副作用），但不允许物化任何工具输出产物。
-        assert not list((tmp_path / ".boxteam").rglob("tool-results"))
-        assert not (tmp_path / ".boxteam" / "sessions").exists()
+        assert not list((workspace_root / ".boxteam").rglob("tool-results"))
+        assert not (workspace_root / ".boxteam" / "sessions").exists()
     # 旧模式：构造零副作用（.boxteam 不存在即完整锁定）。
 
 
 def test_tool_output_store_persists_exact_large_result_and_returns_preview(
-    tmp_path: Path,
+    workspace_root: Path,
     session_bundle_factory,
 ) -> None:
     session_id = "ses_019bd0aa8bb2784aaadbe51563ee17f0"
     session_dir = session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions",
+        workspace_root / ".boxteam" / "sessions",
         session_id,
     )
     content = "\n".join(f"large-line-{index:04d}: {'内容' * 20}" for index in range(80))
     store = ToolOutputStore(
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         max_lines=20,
         max_bytes=1_024,
     )
@@ -92,7 +98,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     assert reference["type"] == "tool_output"
     output_name = Path(str(reference["read_path"])).name
     assert reference["path"] == (
-        session_artifact_uri(read_workspace_id(tmp_path), session_id, "tool-results", output_name)
+        session_artifact_uri(read_workspace_id(workspace_root), session_id, "tool-results", output_name)
     )
     assert reference["read_path"] == (
         reference["path"]
@@ -116,14 +122,14 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
 
 
 def test_tool_output_store_reuses_identical_tool_call_output(
-    tmp_path: Path,
+    workspace_root: Path,
     session_bundle_factory,
 ) -> None:
     session_id = "ses_019c268530e971098bb8da438d000f00"
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    session_bundle_factory(workspace_root / ".boxteam" / "sessions", session_id)
     content = "x" * 2_000
     store = ToolOutputStore(
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         max_lines=20,
         max_bytes=1_024,
     )
@@ -147,11 +153,11 @@ def test_tool_output_store_reuses_identical_tool_call_output(
 
 
 def test_tool_output_store_keeps_large_exec_command_result_valid_json(
-    tmp_path: Path,
+    workspace_root: Path,
     session_bundle_factory,
 ) -> None:
     session_id = "ses_019bea2f102b7f6c805a92b787288ac0"
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    session_bundle_factory(workspace_root / ".boxteam" / "sessions", session_id)
     full_payload = {
         "chunk_id": "term_large",
         "exit_code": 0,
@@ -159,7 +165,7 @@ def test_tool_output_store_keeps_large_exec_command_result_valid_json(
         "wall_time_seconds": 0.5,
     }
     store = ToolOutputStore(
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         max_lines=20,
         max_bytes=1_024,
     )
@@ -183,13 +189,13 @@ def test_tool_output_store_keeps_large_exec_command_result_valid_json(
 
 
 def test_tool_output_middleware_uses_custom_target_name(
-    tmp_path: Path,
+    workspace_root: Path,
     session_bundle_factory,
 ) -> None:
     session_id = "ses_019c49d551f17a0686eed4c785689d2a"
-    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    session_bundle_factory(workspace_root / ".boxteam" / "sessions", session_id)
     store = ToolOutputStore(
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         max_lines=20,
         max_bytes=1_024,
     )
@@ -237,18 +243,18 @@ async def test_declared_failure_bypasses_output_preview(mode, declaration):
     store.abound.assert_not_called()
 
 
-def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(tmp_path, session_bundle_factory):
+def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(workspace_root, session_bundle_factory):
     import pytest
 
     session_id = "ses_019bd0aa8bb2784aaadbe51563ee17f0"
-    session_bundle_factory(tmp_path / ".boxteam/sessions", session_id)
-    store = ToolOutputStore(workspace_root=tmp_path, max_lines=8, max_bytes=1024)
+    session_bundle_factory(workspace_root / ".boxteam/sessions", session_id)
+    store = ToolOutputStore(workspace_root=workspace_root, max_lines=8, max_bytes=1024)
     body = "hit\r\n" * 1000
     bounded = store.bound(session_id=session_id, tool_name="large", tool_call_id="call-reopen",
                           message=ToolMessage(content=body, tool_call_id="call-reopen"))
     reference = extract_tool_output_reference(bounded)
     assert reference["path"] == reference["read_path"]
-    cold = ToolOutputStore(workspace_root=tmp_path)
+    cold = ToolOutputStore(workspace_root=workspace_root)
     assert cold.read(session_id, reference["path"], len(body.encode())).data == body.encode()
     with pytest.raises(PermissionError, match="当前工作区会话"):
         cold.read("ses_019bc4518d0079d3a53e974eea6f21a9", reference["path"], 10000)

@@ -16,7 +16,7 @@ from tests.integration.backend.sessions.test_rollout_fork_transfer import (
     transfer_triad as transfer_triad,  # noqa: PLC0414 - 复用真实三端 SSH/Gateway fixture
 )
 from tests.support.api_helpers import create_session
-from tests.support.communication_federation import CommunicationNode
+from tests.support.communication.federation import CommunicationNode
 from tests.support.processes.gateway import close_gateway_process
 
 

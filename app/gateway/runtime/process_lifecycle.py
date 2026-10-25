@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from app.gateway.runtime.process_groups import (
-    ProcessStartTime,
-    _capture_posix_group_starttime,
+    ProcessStartMarker,
+    _capture_posix_group_leader_start_marker,
     _posix_group_is_alive,
     _wait_until_closed,
 )
@@ -175,7 +175,7 @@ class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
-    _leader_starttime: ProcessStartTime | None = field(
+    _leader_start_marker: ProcessStartMarker | None = field(
         default=None, init=False, repr=False
     )
     _group_closed: bool = field(default=False, init=False, repr=False)
@@ -187,7 +187,9 @@ class ManagedProcess:
 
     def __post_init__(self) -> None:
         if os.name == "posix":
-            self._leader_starttime = _capture_posix_group_starttime(self.process.pid)
+            self._leader_start_marker = _capture_posix_group_leader_start_marker(
+                self.process.pid
+            )
         elif os.name == "nt":
             self._windows_root_start_time = _windows_process_start_time(
                 self.process.pid
@@ -278,7 +280,7 @@ class ManagedProcess:
             )
         if not self._group_closed:
             self._group_closed = not _posix_group_is_alive(
-                self.process.pid, self._leader_starttime
+                self.process.pid, self._leader_start_marker
             )
         return not self._group_closed
 
@@ -306,7 +308,7 @@ class AdoptedManagedProcess:
 
     pid: int
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
-    _leader_starttime: ProcessStartTime | None = field(
+    _leader_start_marker: ProcessStartMarker | None = field(
         default=None, init=False, repr=False
     )
     _group_closed: bool = field(default=False, init=False, repr=False)
@@ -320,7 +322,9 @@ class AdoptedManagedProcess:
         if self.pid <= 0:
             raise ValueError(f"接管进程 PID 必须为正整数: {self.pid}")
         if os.name == "posix":
-            self._leader_starttime = _capture_posix_group_starttime(self.pid)
+            self._leader_start_marker = _capture_posix_group_leader_start_marker(
+                self.pid
+            )
         elif os.name == "nt":
             self._windows_root_start_time = _windows_process_start_time(self.pid)
 
@@ -408,7 +412,7 @@ class AdoptedManagedProcess:
             )
         if not self._group_closed:
             self._group_closed = not _posix_group_is_alive(
-                self.pid, self._leader_starttime
+                self.pid, self._leader_start_marker
             )
         return not self._group_closed
 

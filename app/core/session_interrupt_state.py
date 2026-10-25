@@ -19,6 +19,7 @@ class InterruptibleState:
     cancellation_reason: str | None = None
     interrupt_request_id: str | None = None
     active_tools_by_run_id: dict[str, str] = field(default_factory=dict)
+    _pending_text_parts: list[str] = field(default_factory=list, repr=False)
 
     @property
     def active_tool_names(self) -> tuple[str, ...]:
@@ -34,11 +35,17 @@ class InterruptibleState:
             self.phase is None
             and self.tool_name is None
             and self.current_text == ""
+            and not self._pending_text_parts
             and not self.user_interrupt_reminder_injected
             and self.cancellation_reason is None
             and self.interrupt_request_id is None
             and not self.active_tools_by_run_id
         )
+
+    def materialize_current_text(self) -> None:
+        if self._pending_text_parts:
+            self.current_text += "".join(self._pending_text_parts)
+            self._pending_text_parts.clear()
 
 
 class SessionInterruptState:
@@ -55,8 +62,24 @@ class SessionInterruptState:
             cls._states[(get_workspace_id(), session_id, thread_id)] = state
 
     @classmethod
+    def _get_for_update(cls, session_id: str, thread_id: str) -> InterruptibleState:
+        state = cls._states.get((get_workspace_id(), session_id, thread_id))
+        return state if state is not None else InterruptibleState()
+
+    @classmethod
     def get(cls, session_id: str, *, thread_id: str) -> InterruptibleState:
-        return cls._states.get((get_workspace_id(), session_id, thread_id), InterruptibleState())
+        state = cls._get_for_update(session_id, thread_id)
+        state.materialize_current_text()
+        return state
+
+    @classmethod
+    def append_text(cls, session_id: str, *, thread_id: str, text: str) -> None:
+        """暂存流式正文片段，在中断读取时一次拼成完整文本。"""
+        if not text:
+            return
+        state = cls._get_for_update(session_id, thread_id)
+        state._pending_text_parts.append(text)
+        cls._store(session_id, thread_id, state)
 
     @classmethod
     def set(
@@ -72,7 +95,7 @@ class SessionInterruptState:
         interrupt_request_id: str | None | object = _UNSET,
         clear_active_tools: bool = False,
     ) -> None:
-        state = cls.get(session_id, thread_id=thread_id)
+        state = cls._get_for_update(session_id, thread_id)
         changes_activity = phase is not _UNSET or tool_name is not _UNSET
         if state.active_tools_by_run_id and changes_activity and not clear_active_tools:
             raise RuntimeError(
@@ -87,6 +110,7 @@ class SessionInterruptState:
             state.tool_name = tool_name
         if current_text is not _UNSET:
             state.current_text = "" if current_text is None else current_text
+            state._pending_text_parts.clear()
         if user_interrupt_reminder_injected is not _UNSET:
             state.user_interrupt_reminder_injected = bool(user_interrupt_reminder_injected)
         if cancellation_reason is not _UNSET:
@@ -114,6 +138,7 @@ class SessionInterruptState:
         state.phase = "tool"
         state.tool_name = cls._summarize_active_tools(state)
         cls._store(session_id, thread_id, state)
+        state.materialize_current_text()
         return state
 
     @classmethod
@@ -129,6 +154,7 @@ class SessionInterruptState:
         state.tool_name = cls._summarize_active_tools(state)
         state.phase = "tool" if state.active_tools_by_run_id else None
         cls._store(session_id, thread_id, state)
+        state.materialize_current_text()
         return state
 
     @staticmethod

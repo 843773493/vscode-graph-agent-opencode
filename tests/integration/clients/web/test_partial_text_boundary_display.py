@@ -14,7 +14,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -27,7 +27,7 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
-from tests.support.web_boundary_seeding import prepare_boundary_test_workspace
+from tests.support.rollout.web_boundary_seeding import prepare_boundary_test_workspace
 
 PARTIAL_TEXT_SESSION_ID = "ses_019c5123cafb789e8fdf8704f6464f74"
 PARTIAL_TEXT_TURN_ID = "boundary-turn-0004"

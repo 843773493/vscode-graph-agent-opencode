@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +23,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -77,10 +77,13 @@ class QueueCase:
 @pytest.fixture
 async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace_root = context.workspace_root
-    if workspace_root.exists():
-        shutil.rmtree(workspace_root)
-    shutil.copytree(Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", workspace_root)
+    prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=(
+            Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
+        ),
+        template_items=(),
+    )
     workspace = build_catalog_workspace(context.output_root, workspace_id=load_or_create_workspace_id(context.workspace_root))
     session_id = await workspace.create_session("事务 FIFO 验证")
     thread_id = workspace.resolver.main_thread_id(session_id)

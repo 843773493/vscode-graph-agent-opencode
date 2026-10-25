@@ -21,12 +21,12 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
-from tests.support.communication_federation import (
+from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
-from tests.support.model_stream_config import prepare_e2e_model_stream_config
+from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (

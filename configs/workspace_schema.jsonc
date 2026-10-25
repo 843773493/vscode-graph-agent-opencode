@@ -740,6 +740,11 @@
               "additionalProperties": false,
               "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
               "properties": {
+                "max_input_tokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "显式声明模型输入上下文容量，写入 LangChain model.profile；不作为上游请求参数，也不推导输出上限。"
+                },
                 "supports_vision": {
                   "type": "boolean",
                   "default": false,

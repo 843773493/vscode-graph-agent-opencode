@@ -443,25 +443,27 @@ export default function WorkspacePortForwardPanel({
 
   return (
     <section className="port-forward-panel" aria-label="工作区 SSH 端口转发">
-      {error ? (
-        <div className="port-forward-error" role="alert">
-          <span>{error}</span>
-          {copyRetryId ? (
-            <button
-              type="button"
-              onClick={() => {
-                const retryForward = forwards?.items.find((item) => item.forward_id === copyRetryId);
-                if (retryForward) void handleCopyAddress(retryForward);
-              }}
-              disabled={loading}
-            >
-              重试复制
-            </button>
-          ) : (
-            <button type="button" onClick={() => void refresh()} disabled={loading}>重试刷新</button>
-          )}
-        </div>
-      ) : null}
+      <div className="port-forward-feedback-slot">
+        {error ? (
+          <div className="port-forward-error" role="alert" title={error}>
+            <span>{error}</span>
+            {copyRetryId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const retryForward = forwards?.items.find((item) => item.forward_id === copyRetryId);
+                  if (retryForward) void handleCopyAddress(retryForward);
+                }}
+                disabled={loading}
+              >
+                重试复制
+              </button>
+            ) : (
+              <button type="button" onClick={() => void refresh()} disabled={loading}>重试刷新</button>
+            )}
+          </div>
+        ) : null}
+      </div>
 
       <div className="port-forward-list" aria-live="polite">
         {loading && !forwards ? <p className="port-forward-empty">正在读取端口…</p> : null}

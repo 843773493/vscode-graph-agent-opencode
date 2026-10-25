@@ -37,28 +37,32 @@ def prepare_test_workspace(
     *,
     workspace_root: Path,
     template_root: Path,
-    template_items: tuple[str, ...],
+    template_items: tuple[str, ...] | None,
     shared_skill_root: Path | None = None,
 ) -> Path:
-    """从只读模板创建全新的隔离测试工作区。"""
+    """从只读模板创建隔离工作区；None复制完整模板，空tuple创建空目录。"""
 
     if workspace_root.exists():
         _make_test_tree_writable(native_io_path(workspace_root))
         shutil.rmtree(native_io_path(workspace_root))
-    workspace_root.mkdir(parents=True, exist_ok=True)
 
-    for relative_template_path in template_items:
-        source = template_root / relative_template_path
-        try:
-            source_mode = source.stat().st_mode
-        except FileNotFoundError as error:
-            raise FileNotFoundError(f"测试模板缺少必要文件: {source}") from error
-        target = workspace_root / relative_template_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if S_ISDIR(source_mode):
-            shutil.copytree(source, target)
-        else:
-            shutil.copy2(source, target)
+    if template_items is None:
+        workspace_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(template_root, workspace_root)
+    else:
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        for relative_template_path in template_items:
+            source = template_root / relative_template_path
+            try:
+                source_mode = source.stat().st_mode
+            except FileNotFoundError as error:
+                raise FileNotFoundError(f"测试模板缺少必要文件: {source}") from error
+            target = workspace_root / relative_template_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if S_ISDIR(source_mode):
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
     if shared_skill_root is not None:
         if not shared_skill_root.is_dir():
             raise FileNotFoundError(f"共享 Skill 源目录不存在: {shared_skill_root}")
@@ -82,13 +86,10 @@ def prepare_default_test_workspace(
 ) -> Path:
     """完整复制只读模板，创建文件级隔离工作区。"""
 
-    template_entry_names = tuple(
-        sorted(entry.name for entry in template_root.iterdir())
-    )
     return prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
-        template_items=template_entry_names,
+        template_items=None,
         shared_skill_root=shared_skill_root,
     )
 

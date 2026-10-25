@@ -83,6 +83,40 @@ function conversationOwnsTraceEvent(conversation: ConversationView, event: Trace
     && (conversation.threadId ?? conversation.userMessage?.thread_id) === event.thread_id;
 }
 
+function traceMatchKeys(
+  sessionId: string | undefined,
+  threadId: string | null | undefined,
+  jobId: string | undefined,
+  messageId: string | undefined,
+): string[] {
+  const owner = JSON.stringify([
+    [typeof sessionId, sessionId],
+    [typeof threadId, threadId],
+  ]);
+  const keys: string[] = [];
+  if (jobId) keys.push(`${owner}:job:${JSON.stringify(jobId)}`);
+  if (messageId) keys.push(`${owner}:message:${JSON.stringify(messageId)}`);
+  return keys;
+}
+
+function traceMatchKeysForConversation(conversation: ConversationView): string[] {
+  return traceMatchKeys(
+    conversation.sessionId,
+    conversation.threadId ?? conversation.userMessage?.thread_id,
+    conversation.jobId ?? undefined,
+    conversation.userMessage?.message_id,
+  );
+}
+
+function traceMatchKeysForEvent(event: TraceEvent): string[] {
+  return traceMatchKeys(
+    event.session_id,
+    event.thread_id,
+    traceJobId(event),
+    tracePayloadString(event, "message_id"),
+  );
+}
+
 export function appendTraceEventsToPendingConversations(
   map: Map<string, ConversationView[]>,
   sessionId: string,
@@ -95,11 +129,26 @@ export function appendTraceEventsToPendingConversations(
     return;
   }
 
+  const pendingIndexByTraceKey = new Map<string, number>();
+  for (let index = 0; index < pendingList.length; index += 1) {
+    for (const key of traceMatchKeysForConversation(pendingList[index]!)) {
+      if (!pendingIndexByTraceKey.has(key)) {
+        pendingIndexByTraceKey.set(key, index);
+      }
+    }
+  }
+
   const eventsByPendingIndex = new Map<number, TraceEvent[]>();
   for (const traceEvent of traceEvents) {
-    let pendingIndex = pendingList.findIndex((conversation) =>
-      conversationMatchesTraceEvent(conversation, traceEvent),
-    );
+    let pendingIndex = -1;
+    for (const key of traceMatchKeysForEvent(traceEvent)) {
+      const candidateIndex = pendingIndexByTraceKey.get(key);
+      if (candidateIndex !== undefined
+        && (pendingIndex === -1 || candidateIndex < pendingIndex)
+        && conversationMatchesTraceEvent(pendingList[candidateIndex]!, traceEvent)) {
+        pendingIndex = candidateIndex;
+      }
+    }
     if (
       pendingIndex === -1
       && fallbackToSinglePending

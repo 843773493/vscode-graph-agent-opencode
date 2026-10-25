@@ -36,6 +36,7 @@ class ProviderModelInfo:
     supports_audio_output: bool = False
     supports_function_calling: bool = False
     supports_reasoning: bool = False
+    max_input_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,9 @@ def _reject_unknown_fields(
 
 def _parse_model_info(raw: object) -> ProviderModelInfo:
     value = _require_object(raw, "provider.api_mode.model_info")
-    _reject_unknown_fields(value, _MODEL_INFO_FIELDS, "provider.api_mode.model_info")
+    _reject_unknown_fields(
+        value, _MODEL_INFO_FIELDS | {"max_input_tokens"}, "provider.api_mode.model_info"
+    )
     defaults = {
         field_name: False
         for field_name in _MODEL_INFO_FIELDS
@@ -114,7 +117,16 @@ def _parse_model_info(raw: object) -> ProviderModelInfo:
         )
         for field_name, default in defaults.items()
     }
-    return ProviderModelInfo(**parsed)
+    max_input_tokens = None
+    if "max_input_tokens" in value:
+        max_input_tokens = value["max_input_tokens"]
+        if (
+            isinstance(max_input_tokens, bool)
+            or not isinstance(max_input_tokens, int)
+            or max_input_tokens <= 0
+        ):
+            raise ValueError("provider.api_mode.model_info.max_input_tokens 必须是正整数")
+    return ProviderModelInfo(**parsed, max_input_tokens=max_input_tokens)
 
 
 def _parse_reasoning_support(

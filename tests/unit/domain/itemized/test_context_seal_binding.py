@@ -176,7 +176,7 @@ def test_rebuild_transition_is_applied_only_by_first_successful_seal(binding, re
     assert not transition.consumed
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def snapshot(binding, tool_set):
     tool_ref = tool_set.bind(session_id="session", thread_id="thread", plan_id="plan")
     entry = ContextSelectionEntry(
@@ -332,9 +332,10 @@ def test_snapshot_rejects_cross_binding_tamper(snapshot, tampered_binding):
 
 def test_validate_hashes_rechecks_toolset_cross_binding(snapshot, tampered_binding):
     # 独立模拟构造后内存篡改，避免仅以构造器拒绝冒充 seal 的最终校验。
-    object.__setattr__(snapshot, "seal_binding", tampered_binding)
+    damaged = replace(snapshot)
+    object.__setattr__(damaged, "seal_binding", tampered_binding)
     with pytest.raises(ItemSchemaError, match="compatibility key.*ToolSet"):
-        snapshot.validate_hashes()
+        damaged.validate_hashes()
 
 
 @pytest.fixture(params=["protected", "redacted"])

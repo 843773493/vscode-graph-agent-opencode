@@ -84,6 +84,7 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import checkpoint_fixture
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -92,14 +93,13 @@ from tests.support.processes.gateway import (
     start_gateway_process,
     workspace_id_from_response,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     ensure_local_port_available,
     start_backend_process,
     terminate_process,
 )
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.session_catalog_owner import FixtureCatalogOwner
 
 

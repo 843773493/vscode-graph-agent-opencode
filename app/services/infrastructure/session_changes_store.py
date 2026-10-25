@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.abstractions.session_changes import StoredFileEdit
+from app.core.atomic_fs import native_io_path
 from app.core.path_utils import get_session_path_resolver, safe_join
 from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session_changes import (
@@ -40,29 +41,35 @@ class SessionChangesStore:
         diff_text: str,
     ) -> None:
         record = replace(record, file_path=self.normalize_file_reference(record.file_path))
-        edit_dir = self._edit_dir(record.session_id, record.edit_id)
+        native_edit_dir = native_io_path(
+            self._edit_dir(record.session_id, record.edit_id)
+        )
         changes_dir = self._ensure_changes_dir(record.session_id)
-        edit_dir.mkdir(parents=True, exist_ok=False)
+        native_edit_dir.mkdir(parents=True, exist_ok=False)
         if record.before_exists:
-            (edit_dir / "before.txt").write_text(before_content, encoding="utf-8")
+            (native_edit_dir / "before.txt").write_text(before_content, encoding="utf-8")
         if record.after_exists:
-            (edit_dir / "after.txt").write_text(after_content, encoding="utf-8")
-        (edit_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
+            (native_edit_dir / "after.txt").write_text(after_content, encoding="utf-8")
+        (native_edit_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
         metadata = asdict(record)
-        (edit_dir / "metadata.json").write_text(
+        (native_edit_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        with (changes_dir / EDIT_INDEX_FILE).open("a", encoding="utf-8") as handle:
+        index_file = native_io_path(changes_dir / EDIT_INDEX_FILE)
+        with index_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")))
             handle.write("\n")
 
     def read_records(self, session_id: str) -> list[StoredFileEdit]:
-        index_file = self._session_changes_dir(session_id) / EDIT_INDEX_FILE
-        if not index_file.exists():
+        changes_dir = self._session_changes_dir(session_id)
+        index_file = native_io_path(changes_dir / EDIT_INDEX_FILE)
+        try:
+            handle = index_file.open("r", encoding="utf-8")
+        except FileNotFoundError:
             return []
         records: list[StoredFileEdit] = []
-        with index_file.open("r", encoding="utf-8") as handle:
+        with handle:
             for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if not stripped:
@@ -74,18 +81,20 @@ class SessionChangesStore:
                         f"文件变更索引损坏: session_id={session_id}, line={line_number}"
                     ) from exc
                 record = StoredFileEdit(**data)
-                self._edit_dir(session_id, record.edit_id)
+                self._edit_dir_in(changes_dir, record.edit_id)
                 if record.session_id != session_id:
                     raise ValueError(f"文件变更索引归属错误: session_id={session_id}, line={line_number}")
                 records.append(replace(record, file_path=self.normalize_file_reference(record.file_path)))
         return records
 
     def read_reviewed_map(self, session_id: str) -> dict[str, bool]:
-        reviewed_file = self._session_changes_dir(session_id) / REVIEWED_FILE
-        if not reviewed_file.exists():
-            return {}
+        reviewed_file = native_io_path(
+            self._session_changes_dir(session_id) / REVIEWED_FILE
+        )
         try:
             raw = json.loads(reviewed_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"文件审查状态损坏: session_id={session_id}") from exc
         if not isinstance(raw, dict):
@@ -106,7 +115,7 @@ class SessionChangesStore:
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None:
         reviewed = self._reviewed_references(reviewed)
         target = self._ensure_changes_dir(session_id) / REVIEWED_FILE
-        target.write_text(
+        native_io_path(target).write_text(
             json.dumps(reviewed, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
@@ -115,9 +124,12 @@ class SessionChangesStore:
         if phase not in {"before", "after"}:
             raise ValueError("文件变更快照阶段必须为 before 或 after")
         file_path = safe_join(self._edit_dir(session_id, edit_id), f"{phase}.txt")
-        if not file_path.exists():
-            raise RuntimeError(f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}")
-        return file_path.read_text(encoding="utf-8")
+        try:
+            return native_io_path(file_path).read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}"
+            ) from exc
 
     def save_changeset_file(
         self,
@@ -133,12 +145,13 @@ class SessionChangesStore:
         changeset_name = self._safe_name(changeset_id)
         stem = self._file_stem(file_path)
         file_dir = self._ensure_changes_dir(session_id) / "changesets" / changeset_name / stem
-        file_dir.mkdir(parents=True, exist_ok=True)
-        (file_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
+        native_file_dir = native_io_path(file_dir)
+        native_file_dir.mkdir(parents=True, exist_ok=True)
+        (native_file_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
         if before_content is not None:
-            (file_dir / "before.txt").write_text(before_content, encoding="utf-8")
+            (native_file_dir / "before.txt").write_text(before_content, encoding="utf-8")
         if after_content is not None:
-            (file_dir / "after.txt").write_text(after_content, encoding="utf-8")
+            (native_file_dir / "after.txt").write_text(after_content, encoding="utf-8")
 
     def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None:
         target = (
@@ -147,21 +160,26 @@ class SessionChangesStore:
             / self._safe_name(changeset.changeset_id)
             / "summary.json"
         )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(changeset.model_dump_json(indent=2), encoding="utf-8")
+        native_target = native_io_path(target)
+        native_target.parent.mkdir(parents=True, exist_ok=True)
+        native_target.write_text(changeset.model_dump_json(indent=2), encoding="utf-8")
 
     def _session_changes_dir(self, session_id: str) -> Path:
         return self._path_resolver.resolve_session_node(session_id) / "changes"
 
     def _edit_dir(self, session_id: str, edit_id: str) -> Path:
+        return self._edit_dir_in(self._session_changes_dir(session_id), edit_id)
+
+    @staticmethod
+    def _edit_dir_in(changes_dir: Path, edit_id: str) -> Path:
         if re.fullmatch(r"edit_[0-9a-f]{12}", edit_id) is None:
             raise ValueError("文件变更 edit_id 格式错误")
-        return safe_join(self._session_changes_dir(session_id), "edits", edit_id)
+        return safe_join(changes_dir, "edits", edit_id)
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)
-        (changes_dir / "edits").mkdir(parents=True, exist_ok=True)
-        (changes_dir / "changesets").mkdir(parents=True, exist_ok=True)
+        native_io_path(changes_dir / "edits").mkdir(parents=True, exist_ok=True)
+        native_io_path(changes_dir / "changesets").mkdir(parents=True, exist_ok=True)
         return changes_dir
 
     @staticmethod

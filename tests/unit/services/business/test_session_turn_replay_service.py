@@ -26,7 +26,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.message_service import build_message_service
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
 

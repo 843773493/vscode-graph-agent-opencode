@@ -19,9 +19,11 @@ from app.core.workspace_identity import load_or_create_workspace_id
 
 
 @pytest.fixture
-def read_case(configure_filesystem_tools, tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+def read_case(
+    configure_filesystem_tools,
+    empty_workspace_scope: tuple[str, Path],
+):
+    workspace = empty_workspace_scope[1]
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
     old_read = next(tool for tool in middleware.tools if tool.name == "read_file")
 
@@ -205,13 +207,18 @@ async def test_read_private_and_escaping_symlink_targets_are_rejected(read_case,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("synchronous", [False, True])
-async def test_existing_workspace_read_permission_applies_to_all_three_inputs(configure_filesystem_tools, tmp_path, synchronous):
-    (tmp_path / "secret.txt").write_text("DO NOT READ")
-    middleware = FilesystemMiddleware(backend=build_workspace_backend(tmp_path),
+async def test_existing_workspace_read_permission_applies_to_all_three_inputs(
+    configure_filesystem_tools,
+    empty_workspace_scope: tuple[str, Path],
+    synchronous,
+):
+    workspace = empty_workspace_scope[1]
+    (workspace / "secret.txt").write_text("DO NOT READ")
+    middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace),
         _permissions=[FilesystemPermission(operations=["read"], paths=["/secret.txt"], mode="deny")])
-    owner = configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    owner = configure_filesystem_tools(middleware, workspace_root=workspace)
     tools = {tool.name: tool for tool in middleware.tools}
-    for path in ("secret.txt", str(tmp_path / "secret.txt"), owner.input_uri("secret.txt")):
+    for path in ("secret.txt", str(workspace / "secret.txt"), owner.input_uri("secret.txt")):
         result = await _read(tools, path, synchronous)
         assert result.status == "error" and json.loads(result.content)["code"] == "capability_denied"
         assert "DO NOT READ" not in result.content

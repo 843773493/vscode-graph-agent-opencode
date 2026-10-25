@@ -20,48 +20,59 @@ _FIELDS = ("request_hash_preimage", "tool_snapshot", "tool_set_refs", "seal_bind
 _FORMAT = "assembly_content_v1"
 
 
-class _ContentStore:
+class _AssemblyContentStore:
     def __init__(self, connection: sqlite3.Connection, session: str, thread: str) -> None:
         require_historical_scope(connection, session, thread)
         self.connection = connection
-        self.owner = (session, thread)
+        self.assembly_owner = (session, thread)
         self.nodes: dict[str, dict[str, object]] = {}
         self.values: dict[str, object] = {}
-        self.canonical: dict[tuple[str, str, str], object] = {}
+        self.canonical_payloads: dict[tuple[str, str, str], object] = {}
         self.sources: dict[str, dict[str, object]] = {}
         self.dependencies: set[str] = set()
 
-    def _payload(self, item_id: str, owner: tuple[str, str]) -> object:
-        require_historical_scope(self.connection, *owner)
-        key = (*owner, item_id)
-        if key in self.canonical:
-            return self.canonical[key]
-        row = self.connection.execute(
+    def _canonical_item_payload(
+        self, canonical_item_id: str, historical_owner: tuple[str, str],
+    ) -> object:
+        require_historical_scope(self.connection, *historical_owner)
+        canonical_identity = (*historical_owner, canonical_item_id)
+        if canonical_identity in self.canonical_payloads:
+            return self.canonical_payloads[canonical_identity]
+        locator = self.connection.execute(
             "SELECT i.item_sequence,i.jsonl_offset,i.jsonl_length,e.session_id,e.thread_id "
             "FROM item_catalog i JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",
-            (item_id,),
+            (canonical_item_id,),
         ).fetchone()
-        if row is None or row[3:] != owner:
-            raise ValueError(f"source-mismatch: assembly canonical owner/locator 不一致: {item_id}")
-        database = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
-        with Path(database).with_name("rollout.jsonl").open("rb") as stream:
+        if locator is None or locator[3:] != historical_owner:
+            raise ValueError(f"source-mismatch: assembly canonical owner/locator 不一致: {canonical_item_id}")
+        database_path = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
+        with Path(database_path).with_name("rollout.jsonl").open("rb") as stream:
             item = RolloutCanonicalReadMixin._read_v2_item_at(
-                self.connection, stream, sequence=row[0], offset=row[1], length=row[2],
+                self.connection, stream, sequence=locator[0], offset=locator[1], length=locator[2],
             )
-        self.canonical[key] = item.payload
-        self.dependencies.add(item_id)
+        self.canonical_payloads[canonical_identity] = item.payload
+        self.dependencies.add(canonical_item_id)
         return item.payload
 
     def capture_sources(self, snapshot: dict[str, object]) -> None:
         def visit(value: object, path: list[str | int], reference: dict[str, object]) -> None:
-            if isinstance(value, str) and len(value.encode("utf-8")) >= 128:
-                self.sources.setdefault(value, {**reference, "path": path, "value_hash": sha256_jcs(value)})
+            if isinstance(value, str):
+                if value not in self.sources and len(value.encode("utf-8")) >= 128:
+                    self.sources[value] = {
+                        **reference,
+                        "path": path.copy(),
+                        "value_hash": sha256_jcs(value),
+                    }
             elif isinstance(value, dict):
                 for key, child in value.items():
-                    visit(child, [*path, key], reference)
+                    path.append(key)
+                    visit(child, path, reference)
+                    path.pop()
             elif isinstance(value, list):
                 for index, child in enumerate(value):
-                    visit(child, [*path, index], reference)
+                    path.append(index)
+                    visit(child, path, reference)
+                    path.pop()
 
         local_scopes = read_local_scopes(self.connection)
         for selection in snapshot["selection"]:
@@ -80,9 +91,13 @@ class _ContentStore:
             if source is None or source[:4] != (ref["content_hash"], ref["content_length"], ref["source_revision"], ref["item_sequence"]):
                 raise ValueError(f"source-mismatch: assembly canonical 版本不一致: {ref['ref_id']}")
             # fork 的本地 selection scope 与 immutable item 的历史 execution owner 分开。
-            owner = source[4:]
-            payload = self._payload(ref["ref_id"], owner)
-            visit(payload, [], {"item_id": ref["ref_id"], "session_id": owner[0], "thread_id": owner[1]})
+            historical_owner = source[4:]
+            payload = self._canonical_item_payload(ref["ref_id"], historical_owner)
+            visit(payload, [], {
+                "item_id": ref["ref_id"],
+                "session_id": historical_owner[0],
+                "thread_id": historical_owner[1],
+            })
 
     def _put(self, node: dict[str, object]) -> dict[str, str]:
         raw = canonical_json_bytes(node).decode("utf-8")
@@ -91,11 +106,11 @@ class _ContentStore:
             self.connection.execute(
                 "INSERT INTO assembly_content_nodes(session_id,thread_id,node_id,body_json) VALUES (?,?,?,?) "
                 "ON CONFLICT(session_id,thread_id,node_id) DO NOTHING",
-                (*self.owner, key, raw),
+                (*self.assembly_owner, key, raw),
             )
             stored = self.connection.execute(
                 "SELECT body_json FROM assembly_content_nodes WHERE session_id=? AND thread_id=? AND node_id=?",
-                (*self.owner, key),
+                (*self.assembly_owner, key),
             ).fetchone()
             if stored is None or stored[0] != raw:
                 raise ValueError(f"source-mismatch: assembly content 同版本异正文: {key}")
@@ -121,10 +136,10 @@ class _ContentStore:
         if key not in self.nodes:
             row = self.connection.execute(
                 "SELECT body_json FROM assembly_content_nodes WHERE session_id=? AND thread_id=? AND node_id=?",
-                (*self.owner, key),
+                (*self.assembly_owner, key),
             ).fetchone()
             if row is None:
-                raise ValueError(f"source-mismatch: assembly content 缺失: {self.owner}/{key}")
+                raise ValueError(f"source-mismatch: assembly content 缺失: {self.assembly_owner}/{key}")
             node = json.loads(row[0])
             if (not isinstance(node, dict) or sha256_jcs(node) != key
                     or canonical_json_bytes(node).decode("utf-8") != row[0]):
@@ -157,7 +172,8 @@ class _ContentStore:
                 cursor = current["parent"]
             value = list(reversed(reversed_values))
         elif kind == "canonical" and set(node) == {"kind", "item_id", "session_id", "thread_id", "path", "value_hash"}:
-            value = self._payload(node["item_id"], (node["session_id"], node["thread_id"]))
+            historical_owner = (node["session_id"], node["thread_id"])
+            value = self._canonical_item_payload(node["item_id"], historical_owner)
             for part in node["path"]:
                 value = value[part]
             if sha256_jcs(value) != node["value_hash"]:
@@ -173,7 +189,7 @@ def store_snapshot(connection: sqlite3.Connection, snapshot: dict[str, object]) 
     """仅在封存/显式迁移的原事务内发布节点及有序引用，不维护第二份完整请求。"""
     if not connection.in_transaction:
         raise RuntimeError("assembly content 写入必须位于封存事务内")
-    store = _ContentStore(connection, snapshot["session_id"], snapshot["thread_id"])
+    store = _AssemblyContentStore(connection, snapshot["session_id"], snapshot["thread_id"])
     store.capture_sources(snapshot)
     manifest = {**snapshot, "_storage_format": _FORMAT}
     for field in _FIELDS:
@@ -197,7 +213,7 @@ def snapshot_node_references(
     manifest = _manifest(raw)
     if (manifest["session_id"], manifest["thread_id"]) != owner:
         raise ValueError("source-mismatch: assembly content manifest owner不一致")
-    store = _ContentStore(connection, manifest["session_id"], manifest["thread_id"])
+    store = _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"])
     pending = [manifest[field] for field in _FIELDS]
     retained: set[tuple[str, str, str]] = set()
     while pending:
@@ -208,7 +224,7 @@ def snapshot_node_references(
             continue
         if set(reference) != {"node"} or not isinstance(reference["node"], str):
             raise ValueError("source-mismatch: assembly content 引用非法")
-        identity = (*store.owner, reference["node"])
+        identity = (*store.assembly_owner, reference["node"])
         if identity in retained:
             continue
         node = store._node(reference["node"])
@@ -232,7 +248,7 @@ def load_snapshot(
 ) -> dict[str, object]:
     """schema22仅接受引用manifest；重建依赖历史内容，不访问当前文件或配置。"""
     manifest = _manifest(raw)
-    store = _ContentStore(connection, manifest["session_id"], manifest["thread_id"])
+    store = _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"])
     for field in _FIELDS:
         manifest[field] = store.decode(manifest[field])
     if canonical_item_ids is not None:

@@ -2,6 +2,8 @@
 
 `tests/fixtures/workspaces/custom_tool_test_workspace/` 是扩展工具 e2e 和历史加载测试使用的完整工作区 fixture。
 
+`rollout-fixture.json` 是静态生成清单。编号文件 `fixture/<turn>.json` 由 `scripts/generate_custom_tool_rollout_fixture.py` 在隔离工作区中生成，属于运行时输出，不保存在模板源目录。
+
 # 可修改内容
 
 - 可以调整测试所需的工作区输入文件、静态会话和导航索引。

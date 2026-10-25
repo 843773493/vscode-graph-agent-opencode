@@ -78,7 +78,7 @@ describe("工作台布局偏好链路", () => {
         auxiliary_visible: false,
         chat_visible: false,
         auxiliary_tab: "changes",
-        auxiliary_tab_order: ["changes", "files", "debug", "resources"],
+        auxiliary_tab_order: ["changes", "files", "goal", "debug", "resources"],
       }),
     });
     await mounted.mount();
@@ -91,9 +91,21 @@ describe("工作台布局偏好链路", () => {
     expect(hook.auxiliaryTabOrder).toEqual([
       "changes",
       "files",
+      "goal",
       "debug",
       "resources",
     ]);
+  });
+
+  test("新布局包含独立 Goal 标签，已保存的 Goal 选择可以恢复", async () => {
+    const defaults = mountHook();
+    await defaults.mount();
+    expect(defaults.hook().auxiliaryTabOrder).toEqual([
+      "files", "changes", "goal", "debug", "resources",
+    ]);
+    const restored = mountHook({ uiSettings: settings({ auxiliary_tab: "goal" }) });
+    await restored.mount();
+    expect(restored.hook().auxiliaryTab).toBe("goal");
   });
 
   test("扩展窗口的本地初始态不继承主窗口设置", async () => {
@@ -148,6 +160,9 @@ describe("工作台布局偏好链路", () => {
     });
 
     expect(mounted.persisted).toEqual([]);
+    expect(mounted.hook().panelVisible).toBe(true);
+    act(() => mounted.hook().updateBottomPanelState({ visible: false }));
+    expect(mounted.hook().panelVisible).toBe(false);
     expect(mounted.hook().bottomPanelState.visible).toBe(false);
   });
 

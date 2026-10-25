@@ -2,6 +2,19 @@
 
 提供工作区内通用会话生成请求的执行、幂等和生成器类型注册机制。
 
+## 按职责和数据流查找
+
+```text
+session_generation/
+├── __init__.py          对外导出服务和生成器接口
+├── providers.py         生成器类型合同与内置 prompt 生成器
+├── reporting.py         子 Job 终态观察、结果回写与报告任务恢复
+├── message_dispatch.py  消息意图持久化、execution identity 预留与幂等派发
+└── service.py           请求入口、策略执行、运行账本与冷启动恢复
+```
+
+沿调用方向阅读时，先从 `service.py` 找状态 owner 和策略入口，再跟进消息派发与终态报告的副作用边界；`providers.py` 只负责把类型化配置转换为 prompt。这个划分可复用于“一个服务持有运行状态，窄模块分别负责提交和收口外部副作用”的业务链路。
+
 # 可修改内容
 
 - 会话生成策略、生成器 provider、运行幂等记录和结果映射。

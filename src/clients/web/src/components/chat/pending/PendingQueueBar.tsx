@@ -8,7 +8,7 @@ import {
 import type { DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 
-function PendingQueueItem({
+const PendingQueueItem = React.memo(function PendingQueueItem({
   conversation,
   onRemove,
   onChangePolicy,
@@ -113,7 +113,7 @@ function PendingQueueItem({
       {error ? <div className="chat-pending-composer-error" role="alert">{error}</div> : null}
     </div>
   );
-}
+});
 
 export default function PendingQueueBar({
   conversations,
@@ -130,17 +130,20 @@ export default function PendingQueueBar({
     expectedSnapshotVersion?: number,
   ) => Promise<void>;
 }): React.ReactNode {
-  const queued = conversations
-    .filter((conversation) =>
-      conversation.pending
-      && !conversation.activeJobOverlay
-      && conversation.userMessage
-      && conversation.deliveryPolicy,
-    )
-    .sort((left, right) =>
-      (left.enqueueSequence ?? Number.MAX_SAFE_INTEGER)
-      - (right.enqueueSequence ?? Number.MAX_SAFE_INTEGER),
-    );
+  const queued = React.useMemo(
+    () => conversations
+      .filter((conversation) =>
+        conversation.pending
+        && !conversation.activeJobOverlay
+        && conversation.userMessage
+        && conversation.deliveryPolicy,
+      )
+      .sort((left, right) =>
+        (left.enqueueSequence ?? Number.MAX_SAFE_INTEGER)
+        - (right.enqueueSequence ?? Number.MAX_SAFE_INTEGER),
+      ),
+    [conversations],
+  );
   const [clearing, setClearing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 

@@ -649,14 +649,6 @@ export function useSessionResourceExplorer({
     } = {},
   ) => {
     const parentNodeIds = new Set<string | null>();
-    for (const [key, branch] of branchesRef.current.entries()) {
-      if (key.startsWith(`${workspaceId}:`)) {
-        parentNodeIds.add(branch.parent_node_id ?? null);
-      }
-    }
-    for (const parentNodeId of options.additionalParentNodeIds ?? []) {
-      parentNodeIds.add(parentNodeId);
-    }
     const scopedSnapshotKey = gatewayUserAccess
       ? sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess)
       : null;
@@ -668,19 +660,47 @@ export function useSessionResourceExplorer({
     ) ?? [];
     const operationIds = options.operationIds
       ?? terminalOperations.map((operation) => operation.client_operation_id);
+    const targetNodeIds = new Set<string>();
+    const createdParentOperationIds = new Set<string>();
+    for (const operation of terminalOperations) {
+      if (operation.target_node_id) targetNodeIds.add(operation.target_node_id);
+      if (operation.kind === "create_folder" && operation.created_by_operation_id !== null) {
+        createdParentOperationIds.add(operation.created_by_operation_id);
+      }
+    }
+    const targetParentsByNodeId = new Map<string, (string | null)[]>();
+    for (const [key, branch] of branchesRef.current.entries()) {
+      if (!key.startsWith(`${workspaceId}:`)) continue;
+      parentNodeIds.add(branch.parent_node_id ?? null);
+      if (targetNodeIds.size === 0) continue;
+      const unresolvedTargets = new Set(targetNodeIds);
+      for (const node of branch.items) {
+        if (!unresolvedTargets.delete(node.node_id)) continue;
+        const parents = targetParentsByNodeId.get(node.node_id) ?? [];
+        parents.push(node.parent_node_id ?? null);
+        targetParentsByNodeId.set(node.node_id, parents);
+        if (unresolvedTargets.size === 0) break;
+      }
+    }
+    for (const parentNodeId of options.additionalParentNodeIds ?? []) {
+      parentNodeIds.add(parentNodeId);
+    }
+    const createdParentByOperationId = currentOutbox && createdParentOperationIds.size > 0
+      ? new Map(currentOutbox.operations
+        .filter((operation) => createdParentOperationIds.has(operation.client_operation_id))
+        .map((operation) => [operation.client_operation_id, operation] as const))
+      : null;
     for (const operation of terminalOperations) {
       if (operation.kind === "create_folder") {
-        const createdParent = currentOutbox?.operations.find(
-          (item) => item.client_operation_id === operation.created_by_operation_id,
-        );
+        const createdParent = operation.created_by_operation_id === null
+          ? undefined
+          : createdParentByOperationId?.get(operation.created_by_operation_id);
         if (operation.created_by_operation_id === null) parentNodeIds.add(operation.parent_node_id);
         else if (createdParent?.created_node_id) parentNodeIds.add(createdParent.created_node_id);
       }
       if (operation.target_node_id) {
-        for (const [key, branch] of branchesRef.current.entries()) {
-          if (!key.startsWith(`${workspaceId}:`)) continue;
-          const target = branch.items.find((node) => node.node_id === operation.target_node_id);
-          if (target) parentNodeIds.add(target.parent_node_id ?? null);
+        for (const parentNodeId of targetParentsByNodeId.get(operation.target_node_id) ?? []) {
+          parentNodeIds.add(parentNodeId);
         }
       }
       if (operation.kind === "move_node") {

@@ -6,7 +6,7 @@ import logging
 
 from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
-from app.abstractions.terminal_resources import TerminalRequestError
+from app.abstractions.terminal.resources import TerminalRequestError
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,

@@ -7,16 +7,17 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import (
     RemoteGatewayConnection,
     build_projected_workspace_id,
 )
-from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
 )
+from app.gateway.registry import persistence as registry_persistence
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.workspace_ids import (
@@ -355,6 +356,50 @@ def test_external_local_workspace_resolves_backend_without_gateway_runtime(
     )
     with pytest.raises(LookupError, match="工作区运行时尚未连接"):
         registry.resolve_service_url("external", "terminal_manager")
+
+
+def test_registry_restricts_temporary_file_before_serializing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage_path = tmp_path / "gateway.json"
+    restricted_paths: list[Path] = []
+    restrict = registry_persistence.restrict_private_path_access
+
+    def restrict_and_record(
+        path: Path,
+        *,
+        is_directory: bool = False,
+        descriptor: int | None = None,
+    ) -> None:
+        assert path.is_file()
+        assert path.stat().st_size == 0
+        assert descriptor is not None
+        restrict(path, is_directory=is_directory, descriptor=descriptor)
+        restricted_paths.append(path)
+
+    monkeypatch.setattr(
+        registry_persistence,
+        "restrict_private_path_access",
+        restrict_and_record,
+    )
+    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="external",
+            name="External",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:30100",
+            connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            managed=False,
+        )
+    )
+
+    assert len(restricted_paths) == 1
+    assert not restricted_paths[0].exists()
+    assert storage_path.is_file()
+    assert '"workspace_id": "external"' in storage_path.read_text(encoding="utf-8")
 
 
 def test_route_references_track_requests_and_streams_without_persisting_runtime_state(

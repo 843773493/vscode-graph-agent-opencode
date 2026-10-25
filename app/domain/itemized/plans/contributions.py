@@ -26,6 +26,17 @@ from app.domain.itemized.schema import validate_extensions
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.validation import _non_empty_string
 
+_SOURCE_BINDING_FIELDS = frozenset(
+    {"source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"}
+)
+_CONTRIBUTION_BINDING_MANIFEST_FIELDS = frozenset(
+    {"root_placement", "source_binding", "extensions"}
+)
+_BASE_DELTA_ROLE_VALUES = frozenset(role.value for role in BaseDeltaRole)
+_DETAIL_PROTECTION_VALUES = frozenset(protection.value for protection in DetailProtection)
+_SELECTION_ROLE_VALUES = frozenset(role.value for role in SelectionRole)
+_REPLACEMENT_POLICY_VALUES = frozenset(policy.value for policy in ReplacementPolicy)
+
 
 @dataclass(frozen=True, slots=True)
 class SourceBinding:
@@ -44,7 +55,7 @@ class SourceBinding:
             value = getattr(self, name)
             if value is not None:
                 _non_empty_string(value, f"SourceBinding.{name}")
-        if not isinstance(self.overlay_role, str) or self.overlay_role not in {item.value for item in BaseDeltaRole}:
+        if not isinstance(self.overlay_role, str) or self.overlay_role not in _BASE_DELTA_ROLE_VALUES:
             raise ItemSchemaError("SourceBinding.overlay_role 必须是 none|base|delta")
         if self.overlay_role == BaseDeltaRole.NONE:
             if any(value is not None for value in (
@@ -61,10 +72,9 @@ class SourceBinding:
     def from_dict(cls, value: object) -> SourceBinding:
         if not isinstance(value, Mapping):
             raise ItemSchemaError("SourceBinding 必须是 object")
-        fields = {"source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"}
-        if set(value) - fields or "overlay_role" not in value:
+        if not value.keys() <= _SOURCE_BINDING_FIELDS or "overlay_role" not in value:
             raise ItemSchemaError("SourceBinding 缺少 overlay_role 或含未知字段")
-        return cls(**dict(value))
+        return cls(**value)
 
     def to_dict(self) -> dict[str, object]:
         return {name: value for name in (
@@ -160,9 +170,7 @@ class ContextContribution:
             raise ItemSchemaError(
                 f"未知 ContextContribution.visibility: {self.visibility}"
             )
-        if not isinstance(self.protection, str) or self.protection not in {
-            item.value for item in DetailProtection
-        }:
+        if not isinstance(self.protection, str) or self.protection not in _DETAIL_PROTECTION_VALUES:
             raise ItemSchemaError(
                 f"未知 ContextContribution.protection: {self.protection}"
             )
@@ -173,12 +181,12 @@ class ContextContribution:
                 f"未知 ContextContribution.root_placement: {self.root_placement!r}；"
                 "root 资格只能由 owner 显式声明为 root_eligible|tail_only"
             )
-        if self.selection_role not in {item.value for item in SelectionRole}:
+        if self.selection_role not in _SELECTION_ROLE_VALUES:
             raise ItemSchemaError(
                 f"未知 ContextContribution.selection_role: {self.selection_role!r}；"
                 "closed set 只有 direct|backing_only"
             )
-        if self.replacement_policy not in {item.value for item in ReplacementPolicy}:
+        if self.replacement_policy not in _REPLACEMENT_POLICY_VALUES:
             raise ItemSchemaError(
                 f"未知 ContextContribution.replacement_policy: {self.replacement_policy!r}；"
                 "closed set 只有 immutable|replaceable"
@@ -283,7 +291,7 @@ class ContextContribution:
 
 def parse_contribution_binding_manifest(value: object) -> dict[str, object]:
     """恢复唯一 typed binding 镜像；扩展不能覆盖其它 registry 核心列。"""
-    if not isinstance(value, Mapping) or set(value) != {"root_placement", "source_binding", "extensions"}:
+    if not isinstance(value, Mapping) or value.keys() != _CONTRIBUTION_BINDING_MANIFEST_FIELDS:
         raise ItemSchemaError("contribution binding manifest 字段非法")
     if not isinstance(value["root_placement"], str) or value["root_placement"] not in {"root_eligible", "tail_only"}:
         raise ItemSchemaError("contribution binding manifest 缺少有效 root_placement")
@@ -309,30 +317,38 @@ def resolve_contribution_for_ref(
 
     if ref.base_delta_role in {BaseDeltaRole.BASE.value, BaseDeltaRole.DELTA.value}:
         role = ref.base_delta_role
-        matches = tuple(
-            contribution
-            for contribution in contributions
-            if contribution.contribution_kind == f"overlay_{role}"
-            and contribution.source_binding is not None
-            and contribution.source_binding.overlay_ref == ref.ref_id
-            and contribution.source_binding.source_ref == ref.source_ref
-            and contribution.source_binding.overlay_role == role
-            and contribution.source_binding.source_overlay_epoch
-            == ref.source_overlay_epoch
-        )
-        if len(matches) > 1:
+        expected_contribution_kind = f"overlay_{role}"
+        matched_contribution = None
+        multiple_matches = False
+        for contribution in contributions:
+            if contribution.contribution_kind != expected_contribution_kind:
+                continue
+            binding = contribution.source_binding
+            if (
+                binding is None
+                or binding.overlay_ref != ref.ref_id
+                or binding.source_ref != ref.source_ref
+                or binding.overlay_role != role
+                or binding.source_overlay_epoch != ref.source_overlay_epoch
+            ):
+                continue
+            if matched_contribution is None:
+                matched_contribution = contribution
+            else:
+                multiple_matches = True
+        if multiple_matches:
             raise ValueError(
                 "plan-order-integrity: ref 映射到多个 contribution: "
                 f"{ref.ref_id}"
             )
-        if not matches:
+        if matched_contribution is None:
             if ref.availability == "available":
                 raise ValueError(
                     "plan-order-integrity: overlay ref 缺少唯一 contribution: "
                     f"{ref.ref_id}"
                 )
             return None
-        return matches[0]
+        return matched_contribution
 
     candidates_by_id = {
         contribution.contribution_id: contribution

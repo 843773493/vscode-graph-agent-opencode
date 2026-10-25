@@ -67,49 +67,52 @@ class LiteLLMEmbeddingComputer:
             max_retries=3,
             timeout=60,
         )
-        raw_items = response.data
-        if len(raw_items) != input_count:
+        response_items = response.data
+        if len(response_items) != input_count:
             raise RuntimeError(
                 "Embedding API 返回数量不匹配: "
                 f"provider={self.provider_id}, model={self.model}, "
-                f"expected={input_count}, actual={len(raw_items)}"
+                f"expected={input_count}, actual={len(response_items)}"
             )
 
-        ordered_vectors: list[list[float] | None] = [None] * input_count
-        actual_indexes: list[int] | None = None
-        placed_vector_count = 0
-        for position, item in enumerate(raw_items):
-            index = item.get("index", position)
-            if not isinstance(index, int):
+        vectors_by_input_index: list[list[float] | None] = [None] * input_count
+        reported_indexes: list[int] | None = None
+        filled_input_count = 0
+        for response_position, response_item in enumerate(response_items):
+            provider_index = response_item.get("index", response_position)
+            if not isinstance(provider_index, int):
                 raise TypeError("Embedding API 返回的 index 必须是整数")
 
-            if actual_indexes is not None:
-                actual_indexes.append(index)
-            elif index != position:
-                actual_indexes = [*range(position), index]
+            if reported_indexes is not None:
+                reported_indexes.append(provider_index)
+            elif provider_index != response_position:
+                reported_indexes = [*range(response_position), provider_index]
 
-            raw_vector = item.get("embedding")
-            if not isinstance(raw_vector, list) or not raw_vector:
+            embedding_value = response_item.get("embedding")
+            if not isinstance(embedding_value, list) or not embedding_value:
                 raise TypeError("Embedding API 返回了无效的 embedding 向量")
             vector: list[float] = []
-            for value in raw_vector:
+            for value in embedding_value:
                 if not isinstance(value, (int, float)):
                     raise TypeError("Embedding API 返回的向量必须只包含数值")
                 vector.append(float(value))
 
-            if 0 <= index < input_count and ordered_vectors[index] is None:
-                ordered_vectors[index] = vector
-                placed_vector_count += 1
+            if (
+                0 <= provider_index < input_count
+                and vectors_by_input_index[provider_index] is None
+            ):
+                vectors_by_input_index[provider_index] = vector
+                filled_input_count += 1
 
-        if placed_vector_count != input_count:
-            if actual_indexes is None:
-                actual_indexes = list(range(input_count))
-            actual_indexes.sort()
+        if filled_input_count != input_count:
+            if reported_indexes is None:
+                reported_indexes = list(range(input_count))
+            reported_indexes.sort()
             raise RuntimeError(
                 "Embedding API 返回的 index 不连续: "
-                f"expected={list(range(input_count))}, actual={actual_indexes}"
+                f"expected={list(range(input_count))}, actual={reported_indexes}"
             )
-        return [vector for vector in ordered_vectors if vector is not None]
+        return [vector for vector in vectors_by_input_index if vector is not None]
 
 
 def _required_string(values: Mapping[str, object], key: str) -> str:

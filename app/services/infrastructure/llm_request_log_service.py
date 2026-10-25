@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from stat import S_ISDIR
 from typing import Any
 
+from app.core.atomic_fs import native_io_path
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
@@ -23,14 +25,16 @@ class LLMRequestLogService:
         self._path_resolver = path_resolver or get_session_path_resolver(sessions_dir)
 
     def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
-        session_dir = (
+        session_dir = native_io_path(
             self._path_resolver.resolve_session_node_for_runtime(session_id)
             / "logs"
             / "llm_requests"
         )
-        if not session_dir.exists():
+        try:
+            session_dir_stat = session_dir.stat()
+        except FileNotFoundError:
             return []
-        if not session_dir.is_dir():
+        if not S_ISDIR(session_dir_stat.st_mode):
             raise NotADirectoryError(f"LLM 请求日志路径不是目录: {session_dir}")
 
         records: list[LLMRequestLogRecordDTO] = []
@@ -43,7 +47,7 @@ class LLMRequestLogService:
         log_file: Path,
         session_id: str,
     ) -> LLMRequestLogRecordDTO:
-        with log_file.open("r", encoding="utf-8") as handle:
+        with native_io_path(log_file).open("r", encoding="utf-8") as handle:
             raw = json.load(handle)
         if not isinstance(raw, dict):
             raise TypeError(f"LLM 请求日志不是 JSON object: {log_file}")

@@ -49,21 +49,34 @@ export function buildRequestReplayDisplay(
   const rawComponents = replay && Array.isArray(replay.prompt_components)
     ? replay.prompt_components
     : [];
-  const promptComponents = rawComponents.flatMap((item, index) => {
+  const recordedSystemPromptCharCount = replay
+    ? numberField(replay, "system_prompt_char_count")
+    : null;
+  let computedSystemPromptCharCount = 0;
+  const promptComponents: RequestPromptComponentDisplay[] = [];
+  for (const [index, item] of rawComponents.entries()) {
     if (!isRecord(item)) {
-      return [];
+      continue;
     }
     const contentBlocks = replayContentBlocks(item.content_blocks);
     const operation = item.operation === "replace" ? "replace" : "append";
-    return [{
+    const recordedCharCount = numberField(item, "char_count");
+    const measuredCharCount =
+      recordedSystemPromptCharCount === null || recordedCharCount === null
+        ? contentCharCount(contentBlocks)
+        : null;
+    if (recordedSystemPromptCharCount === null) {
+      computedSystemPromptCharCount += measuredCharCount ?? 0;
+    }
+    promptComponents.push({
       source: typeof item.source === "string" ? item.source : "unknown_middleware",
       label: typeof item.label === "string" ? item.label : `Prompt 组成 ${index + 1}`,
       operation,
       contentBlocks,
       blockCount: numberField(item, "block_count") ?? contentBlocks.length,
-      charCount: numberField(item, "char_count") ?? contentCharCount(contentBlocks),
-    } satisfies RequestPromptComponentDisplay];
-  });
+      charCount: recordedCharCount ?? measuredCharCount ?? 0,
+    });
+  }
 
   // 缺少 replay 元数据的日志只标记来源未记录，不再从 system_message 伪造
   // 一份 Prompt 组成：真实落盘日志的 request.system_message 恒为 null，
@@ -83,10 +96,7 @@ export function buildRequestReplayDisplay(
     messageCount: replay
       ? numberField(replay, "message_count") ?? requestMessages.length
       : requestMessages.length,
-    systemPromptCharCount: replay
-      ? numberField(replay, "system_prompt_char_count") ??
-        contentCharCount(promptComponents.map((item) => item.contentBlocks))
-      : contentCharCount(promptComponents.map((item) => item.contentBlocks)),
+    systemPromptCharCount: recordedSystemPromptCharCount ?? computedSystemPromptCharCount,
     toolSchemaCharCount: replayTools
       ? numberField(replayTools, "schema_char_count") ?? 0
       : contentCharCount(log.request.tools),

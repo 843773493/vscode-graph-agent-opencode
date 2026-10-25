@@ -2,6 +2,37 @@
 
 实现工作区会话目录、文件夹稳定引用、分页搜索和 breadcrumb 业务规则。
 
+## 模块树
+
+```text
+session_navigation/
+├── __init__.py                 对外导出 SessionCatalogService
+├── service.py                  mutation、生命周期与读服务装配
+├── read_service.py             catalog 快照、投影、分页、搜索、breadcrumb 与 cursor
+├── executor.py                 mutation operation 执行与提交
+├── operations_service.py       durable enqueue、status、snapshot 与 events
+├── queue_store.py              队列存储门面与语义方法
+├── queue_records.py            队列行投影与幂等 preimage
+├── queue_events.py             队列事件 outbox
+└── queue_dependencies.py       operation 依赖解析与失败传播
+```
+
+`SessionCatalogService` 继承 `SessionCatalogReadService`，统一暴露目录读 API；mutation 与生命周期仍由 `service.py` 协调。读模型只构造 catalog 投影，不扫描或重建物理目录。
+
+## 读快照索引树
+
+```text
+catalog revision
+└── 可见节点投影
+    ├── nodes_by_id                  breadcrumb 查父链；也把页内节点 ID 映射回 DTO
+    ├── visible_node_ids             O(1) 校验分页父节点是否可见
+    ├── child_node_ids_by_parent     每次快照按 folder/name/id 排序一次；请求只切当前页
+    └── folded_search_terms          与可见节点同序，复用名称、ID、物理 locator 的 casefold 结果
+        └── search                   大目录首屏用 top-K 取页但全量计算 total；游标页完整排序并校验 offset
+```
+
+按数据生命周期建索引：catalog revision 变化时重建节点投影、子节点顺序和搜索键；同一快照的分页或重复搜索复用它们。子节点索引只存稳定 ID，分页时从 `nodes_by_id` 取当前 DTO，避免默认 provider 变化重投影后留下旧对象引用。
+
 # 可修改内容
 
 - 权威会话索引的目录投影、revision、分页、搜索以及受控移动服务。

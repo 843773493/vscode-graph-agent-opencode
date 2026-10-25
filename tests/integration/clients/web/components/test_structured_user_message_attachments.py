@@ -5,51 +5,62 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+
+from tests.harness.python.run_context import TestRunContext
 
 
 @pytest.mark.asyncio
 async def test_structured_user_attachment_message_boundaries_in_real_browser() -> None:
     project_root = Path.cwd().resolve()
-    # Vite 装具直接加载组件源码，不消费整站构建生成的 dist。
-    result_path = (
+    script_path = (
         project_root
-        / "out"
         / "tests"
         / "integration"
         / "clients"
         / "web"
         / "components"
-        / "structured_user_message_attachments"
-        / "artifacts"
-        / "structured-user-message-attachments-result.json"
+        / "structured_user_message_attachments.mjs"
     )
-    screenshot_path = result_path.with_name(
-        "structured-user-message-attachments-failure.png"
-    )
-    result_path.unlink(missing_ok=True)
-    screenshot_path.unlink(missing_ok=True)
-    # 浏览器路径由 Node 装具统一选择；显式环境覆盖原样透传。
+    run_id = f"structured-attachments-{uuid4().hex}"
+    previous_run_id = os.environ.get("BOXTEAM_TEST_RUN_ID")
     environment = os.environ.copy()
     environment.update(
         {
             "BOXTEAM_PROJECT_ROOT": str(project_root),
+            "BOXTEAM_TEST_RUN_ID": run_id,
         }
     )
-    browser_result = await asyncio.to_thread(
-        subprocess.run,
-        [
-            "node",
-            "tests/integration/clients/web/components/structured_user_message_attachments.mjs",
-        ],
-        cwd=project_root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    os.environ["BOXTEAM_TEST_RUN_ID"] = run_id
+    try:
+        # Vite 装具直接加载组件源码，不消费整站构建生成的 dist。
+        run_context = TestRunContext.from_test_file(
+            script_path,
+            project_root=project_root,
+        )
+        result_path = (
+            run_context.artifacts_dir
+            / "structured-user-message-attachments-result.json"
+        )
+        screenshot_path = run_context.artifacts_dir / "structured-user-message-attachments-failure.png"
+        # 浏览器路径由 Node 装具统一选择；显式环境覆盖原样透传。
+        browser_result = await asyncio.to_thread(
+            subprocess.run,
+            ["node", str(script_path)],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        if previous_run_id is None:
+            os.environ.pop("BOXTEAM_TEST_RUN_ID", None)
+        else:
+            os.environ["BOXTEAM_TEST_RUN_ID"] = previous_run_id
     assert browser_result.returncode == 0, (
         "结构化用户附件消息浏览器集成失败:\n"
         f"stdout:\n{browser_result.stdout}\n"

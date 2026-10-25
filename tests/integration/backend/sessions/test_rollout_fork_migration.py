@@ -34,7 +34,9 @@ GRANDCHILD_SESSION_ID = "ses_019bf2257d7e7fd38db6585cdd161690"
 
 
 @pytest.fixture
-def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Callable:
+def fork_source_factory(
+    request: pytest.FixtureRequest, session_bundle_factory
+) -> Callable:
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
 
     def create(records):
@@ -53,10 +55,10 @@ def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Calla
 
 @pytest.mark.asyncio
 async def test_full_copy_rejects_v1_without_migration_side_effects(
-    fork_source: Callable, fork_deadlines,
+    fork_source_factory: Callable, fork_deadlines,
 ) -> None:
     records = _accepted_records()
-    storage = fork_source(records)
+    storage = fork_source_factory(records)
     before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     with (
         pytest.raises(FormatDispatchError, match="v1_migration_required"),
@@ -70,7 +72,7 @@ async def test_full_copy_rejects_v1_without_migration_side_effects(
 
 @pytest.mark.asyncio
 async def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
-    fork_source: Callable, fork_deadlines,
+    fork_source_factory: Callable, fork_deadlines,
 ) -> None:
     records = _accepted_records()
     final = copy.deepcopy(records[1])
@@ -110,7 +112,7 @@ async def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
             final,
         ]
     )
-    storage = fork_source(records)
+    storage = fork_source_factory(records)
     source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,

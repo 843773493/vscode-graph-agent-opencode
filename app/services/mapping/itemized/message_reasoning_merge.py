@@ -117,6 +117,7 @@ def merge_canonical_reasoning(
         return list(raw_messages)
 
     result = list(raw_messages)
+    unscoped_tool_call_ids: set[str] | None = None
     for index, message in enumerate(result):
         if not isinstance(message, AIMessage) or not message.tool_calls:
             continue
@@ -128,14 +129,17 @@ def merge_canonical_reasoning(
             if isinstance(call, Mapping) and isinstance(call.get("id"), str)
         }
         if not isinstance(scope, str) or not scope:
-            if call_ids & set().union(*tools.values()):
-                metadata.update(
-                    reasoning_merge_status="skipped_ambiguous_order",
-                    reasoning_merge_reason="model_call_scope_missing",
-                )
-                result[index] = message.model_copy(
-                    update={"response_metadata": metadata}
-                )
+            if call_ids:
+                if unscoped_tool_call_ids is None:
+                    unscoped_tool_call_ids = set().union(*tools.values())
+                if call_ids & unscoped_tool_call_ids:
+                    metadata.update(
+                        reasoning_merge_status="skipped_ambiguous_order",
+                        reasoning_merge_reason="model_call_scope_missing",
+                    )
+                    result[index] = message.model_copy(
+                        update={"response_metadata": metadata}
+                    )
             continue
         canonical_blocks = list(reasoning.get(scope, {}).values())
         scope_identity = ItemProjectionIdentity(model_call_id=scope)

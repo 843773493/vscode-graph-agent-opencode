@@ -4,7 +4,9 @@
 
 ```text
 workspace/
-├── gatewayConsole.css          # Gateway 控制台
+├── gatewayDiagnostics.css      # Gateway 诊断日志和状态
+├── gatewayConnections.css      # 本机、远程连接与设备授权
+├── gatewayConsole.css          # Gateway 控制台外壳、路由和主题设置
 ├── gatewayUserAccess.css       # Gateway 用户访问
 ├── portForwardPanel.css        # 端口转发面板
 ├── resourcePanel.css           # 后台资源树

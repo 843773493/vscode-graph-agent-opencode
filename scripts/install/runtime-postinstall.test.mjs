@@ -14,26 +14,34 @@ async function observeRuntimeDownload(scenario, scriptUrl) {
   const { createServer } = await import("node:http");
   const { SourceTextModule, SyntheticModule } = await import("node:vm");
   const packageRoot = process.cwd();
-  const payload = Buffer.from("runtime下载测试正文\n".repeat(4));
-  const digest = createHash("sha256").update(payload).digest("hex");
-  const openError = new Error("injected archive open failure");
-  const writeError = new Error("injected archive write failure");
-  const cleanupError = new Error("injected archive cleanup failure");
-  const cleanupFails = ["cleanup-only", "write-and-cleanup"].includes(scenario);
-  let tarCalls = 0, writeCalls = 0, closedFiles = 0, requests = 0, cleanupCalls = 0;
-  let activeResponse, archivePath, notifyClosed;
-  const responseClosed = new Promise((resolve) => { notifyClosed = resolve; });
+  const archivePayload = Buffer.from("runtime下载测试正文\n".repeat(4));
+  const expectedArchiveSha256 = createHash("sha256").update(archivePayload).digest("hex");
+  const archiveOpenError = new Error("injected archive open failure");
+  const archiveWriteError = new Error("injected archive write failure");
+  const temporaryArchiveCleanupError = new Error("injected archive cleanup failure");
+  const temporaryArchiveCleanupFails = ["cleanup-only", "write-and-cleanup"].includes(scenario);
+  let archiveExtractionCallCount = 0;
+  let archiveWriteAttemptCount = 0;
+  let archiveFileCloseCount = 0;
+  let httpRequestCount = 0;
+  let temporaryArchiveCleanupCallCount = 0;
+  let activeHttpResponse;
+  let temporaryArchivePath;
+  let resolveRequestSocketClosed;
+  const requestSocketClosed = new Promise((resolve) => {
+    resolveRequestSocketClosed = resolve;
+  });
   const server = createServer((request, response) => {
-    requests += 1;
-    activeResponse = response;
-    request.socket.once("close", notifyClosed);
+    httpRequestCount += 1;
+    activeHttpResponse = response;
+    request.socket.once("close", resolveRequestSocketClosed);
     if (scenario === "http-rejected") {
       response.writeHead(403);
       response.write("rejection-body-still-open");
     } else if (["open-failure", "write-failure", "write-and-cleanup", "body-disconnect"].includes(scenario)) {
-      response.writeHead(200, { "content-length": String(payload.length * 2) });
-      response.write(payload);
-    } else { response.end(payload); }
+      response.writeHead(200, { "content-length": String(archivePayload.length * 2) });
+      response.write(archivePayload);
+    } else { response.end(archivePayload); }
   });
   async function within(promise, phase) {
     let timer;
@@ -44,34 +52,34 @@ async function observeRuntimeDownload(scenario, scriptUrl) {
     } finally { clearTimeout(timer); }
   }
   const isArchive = (file) => typeof file === "string" && path.basename(file).startsWith(".boxteam-runtime-");
-  function noteWrite() {
-    writeCalls += 1;
-    if (["write-failure", "write-and-cleanup"].includes(scenario)) throw writeError;
-    if (scenario === "body-disconnect") activeResponse.destroy();
+  function recordArchiveWriteAttempt() {
+    archiveWriteAttemptCount += 1;
+    if (["write-failure", "write-and-cleanup"].includes(scenario)) throw archiveWriteError;
+    if (scenario === "body-disconnect") activeHttpResponse.destroy();
   }
   const bindings = {
     "node:fs": {
       ...fs,
       rmSync(file, options) {
         if (isArchive(file)) {
-          archivePath = file;
-          cleanupCalls += 1;
-          if (cleanupFails) throw cleanupError;
+          temporaryArchivePath = file;
+          temporaryArchiveCleanupCallCount += 1;
+          if (temporaryArchiveCleanupFails) throw temporaryArchiveCleanupError;
         }
         return fs.rmSync(file, options);
       },
       createWriteStream(file, options) {
-        archivePath = file;
+        temporaryArchivePath = file;
         return fs.createWriteStream(file, {
           ...options,
           fs: {
             open(file, flags, mode, callback) {
-              if (scenario === "open-failure") { queueMicrotask(() => callback(openError)); return; }
+              if (scenario === "open-failure") { queueMicrotask(() => callback(archiveOpenError)); return; }
               fs.open(file, flags, mode, callback);
             },
-            close(fd, callback) { closedFiles += 1; fs.close(fd, callback); },
+            close(fd, callback) { archiveFileCloseCount += 1; fs.close(fd, callback); },
             write(fd, buffer, offset, length, position, callback) {
-              try { noteWrite(); } catch (error) { queueMicrotask(() => callback(error)); return; }
+              try { recordArchiveWriteAttempt(); } catch (error) { queueMicrotask(() => callback(error)); return; }
               fs.write(fd, buffer, offset, Math.min(length, 3), position, callback);
             },
           },
@@ -80,12 +88,12 @@ async function observeRuntimeDownload(scenario, scriptUrl) {
     },
     tar: {
       async x(options) {
-        tarCalls += 1;
+        archiveExtractionCallCount += 1;
         assert.equal(options.cwd, packageRoot);
         assert.equal(options.strip, 1);
         assert.equal(options.filter("package/package.json"), false);
         assert.equal(options.filter("package/runtime-manifest.json"), true);
-        assert.deepEqual(fs.readFileSync(options.file), payload);
+        assert.deepEqual(fs.readFileSync(options.file), archivePayload);
         fs.writeFileSync(path.join(packageRoot, "runtime-manifest.json"), "{}\n");
       },
     },
@@ -97,13 +105,18 @@ async function observeRuntimeDownload(scenario, scriptUrl) {
     });
     const url = "http://127.0.0.1:" + server.address().port + "/runtime.tgz";
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-      boxteam_runtime: { release_asset: { url, sha256: scenario === "hash-mismatch" ? "0".repeat(64) : digest } },
+      boxteam_runtime: {
+        release_asset: {
+          url,
+          sha256: scenario === "hash-mismatch" ? "0".repeat(64) : expectedArchiveSha256,
+        },
+      },
     }));
     delete process.env.BOXTEAM_RUNTIME_ASSET_PATH;
     delete process.env.BOXTEAM_RUNTIME_ASSET_URL;
     if (scenario === "local-copy") {
       const source = path.join(packageRoot, "local-runtime.tgz");
-      fs.writeFileSync(source, payload);
+      fs.writeFileSync(source, archivePayload);
       process.env.BOXTEAM_RUNTIME_ASSET_PATH = source;
     }
     // 执行原安装入口全文；只替换文件边界与tar解包，不安装依赖或复制源码。
@@ -116,37 +129,42 @@ async function observeRuntimeDownload(scenario, scriptUrl) {
     });
     const outcome = await within(module.evaluate().then(() => ({}), (error) => ({ error })), "安装入口终态");
     if (["remote-short-writes", "local-copy", "cleanup-only"].includes(scenario)) {
-      assert.equal(outcome.error, scenario === "cleanup-only" ? cleanupError : undefined);
-      assert.equal(tarCalls, 1);
+      assert.equal(
+        outcome.error,
+        scenario === "cleanup-only" ? temporaryArchiveCleanupError : undefined,
+      );
+      assert.equal(archiveExtractionCallCount, 1);
       assert.equal(fs.existsSync(path.join(packageRoot, "runtime-manifest.json")), true);
       if (scenario !== "local-copy") {
-        assert(writeCalls > 1, "下载必须经历真实文件边界的多次短写");
-        assert.equal(closedFiles, 1);
+        assert(archiveWriteAttemptCount > 1, "下载必须经历真实文件边界的多次短写");
+        assert.equal(archiveFileCloseCount, 1);
       }
     } else {
       assert(outcome.error instanceof Error);
-      assert.equal(tarCalls, 0);
+      assert.equal(archiveExtractionCallCount, 0);
       assert.equal(fs.existsSync(path.join(packageRoot, "runtime-manifest.json")), false);
       if (scenario === "http-rejected") assert.match(outcome.error.message, /HTTP 403/);
       else if (scenario === "hash-mismatch") assert.match(outcome.error.message, /摘要不匹配/);
-      else if (scenario === "open-failure") assert.equal(outcome.error, openError);
-      else if (scenario === "write-failure") assert.equal(outcome.error, writeError);
+      else if (scenario === "open-failure") assert.equal(outcome.error, archiveOpenError);
+      else if (scenario === "write-failure") assert.equal(outcome.error, archiveWriteError);
       else if (scenario === "write-and-cleanup") {
         assert(outcome.error instanceof AggregateError);
-        assert.deepEqual(outcome.error.errors, [writeError, cleanupError]);
-        assert.equal(outcome.error.cause, writeError);
+        assert.deepEqual(outcome.error.errors, [archiveWriteError, temporaryArchiveCleanupError]);
+        assert.equal(outcome.error.cause, archiveWriteError);
       }
       else assert.match(outcome.error.message, /terminated|aborted|fetch failed/);
       if (["http-rejected", "open-failure", "write-failure", "write-and-cleanup", "body-disconnect"].includes(scenario)) {
-        await within(responseClosed, "失败后释放下载连接");
+        await within(requestSocketClosed, "失败后释放下载连接");
       }
-      if (["write-failure", "write-and-cleanup", "body-disconnect", "hash-mismatch"].includes(scenario)) assert.equal(closedFiles, 1);
+      if (["write-failure", "write-and-cleanup", "body-disconnect", "hash-mismatch"].includes(scenario)) {
+        assert.equal(archiveFileCloseCount, 1);
+      }
     }
-    assert.equal(requests, scenario === "local-copy" ? 0 : 1);
-    assert.equal(cleanupCalls, 1);
-    assert.equal(fs.existsSync(archivePath), cleanupFails);
+    assert.equal(httpRequestCount, scenario === "local-copy" ? 0 : 1);
+    assert.equal(temporaryArchiveCleanupCallCount, 1);
+    assert.equal(fs.existsSync(temporaryArchivePath), temporaryArchiveCleanupFails);
     assert.deepEqual(fs.readdirSync(packageRoot).filter((name) => name.startsWith(".boxteam-runtime-")),
-      cleanupFails ? [path.basename(archivePath)] : []);
+      temporaryArchiveCleanupFails ? [path.basename(temporaryArchivePath)] : []);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

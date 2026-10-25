@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import logging
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from heapq import nsmallest
 from pathlib import Path
 
 import httpx
@@ -23,6 +25,7 @@ from app.schemas.gateway_control import (
     GatewaySessionSearchMatchDTO,
     GatewaySessionSearchResultsDTO,
     GatewaySessionSearchWorkspaceStatusDTO,
+    WorkspaceNavigationNodeDTO,
 )
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
@@ -204,42 +207,64 @@ class GatewaySessionCatalogSearchService:
     ) -> list[GatewaySessionSearchMatchDTO]:
         tree = self._navigation_store.list_tree(self._registry.targets())
         nodes_by_id = {node.node_id: node for node in tree.nodes}
-        matches: list[GatewaySessionSearchMatchDTO] = []
-        for node in tree.nodes:
-            if node.kind != "workspace_folder" or query not in (
-                f"{node.name} {node.node_id}"
-            ).casefold():
-                continue
-            breadcrumb = []
-            current = node
-            visited: set[str] = set()
-            while current is not None:
-                if current.node_id in visited:
-                    raise RuntimeError(
-                        f"Gateway 工作区目录包含循环: {current.node_id}"
+
+        def iter_matching_folders() -> Iterator[
+            tuple[
+                tuple[str, str],
+                WorkspaceNavigationNodeDTO,
+                str,
+                list[WorkspaceNavigationNodeDTO],
+            ]
+        ]:
+            for node in tree.nodes:
+                if (
+                    node.kind != "workspace_folder"
+                    or query not in (f"{node.name} {node.node_id}").casefold()
+                ):
+                    continue
+                breadcrumb = []
+                current = node
+                visited: set[str] = set()
+                while current is not None:
+                    if current.node_id in visited:
+                        raise RuntimeError(
+                            f"Gateway 工作区目录包含循环: {current.node_id}"
+                        )
+                    visited.add(current.node_id)
+                    breadcrumb.append(current)
+                    current = (
+                        nodes_by_id.get(current.parent_node_id)
+                        if current.parent_node_id is not None
+                        else None
                     )
-                visited.add(current.node_id)
-                breadcrumb.append(current)
-                current = (
-                    nodes_by_id.get(current.parent_node_id)
-                    if current.parent_node_id is not None
-                    else None
+                breadcrumb.reverse()
+                relative_path = "/".join(item.name for item in breadcrumb)
+                yield (
+                    (relative_path.casefold(), node.node_id),
+                    node,
+                    relative_path,
+                    breadcrumb,
                 )
-            breadcrumb.reverse()
-            matches.append(
-                GatewaySessionSearchMatchDTO(
-                    workspace_id="gateway-navigation",
-                    workspace_name="工作区目录",
-                    node_id=node.node_id,
-                    node_kind="workspace_folder",
-                    name=node.name,
-                    relative_path="/".join(item.name for item in breadcrumb),
-                    breadcrumb_names=[item.name for item in breadcrumb],
-                    breadcrumb_node_ids=[item.node_id for item in breadcrumb],
-                )
+
+        candidates = iter_matching_folders()
+        selected_folders = (
+            sorted(candidates, key=lambda candidate: candidate[0])[:limit]
+            if limit < 0
+            else nsmallest(limit, candidates, key=lambda candidate: candidate[0])
+        )
+        return [
+            GatewaySessionSearchMatchDTO(
+                workspace_id="gateway-navigation",
+                workspace_name="工作区目录",
+                node_id=node.node_id,
+                node_kind="workspace_folder",
+                name=node.name,
+                relative_path=relative_path,
+                breadcrumb_names=[item.name for item in breadcrumb],
+                breadcrumb_node_ids=[item.node_id for item in breadcrumb],
             )
-        matches.sort(key=lambda item: (item.relative_path.casefold(), item.node_id))
-        return matches[:limit]
+            for _sort_key, node, relative_path, breadcrumb in selected_folders
+        ]
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -415,22 +440,34 @@ class GatewaySessionCatalogSearchService:
         *,
         limit: int,
     ) -> list[GatewaySessionSearchMatchDTO]:
-        matching_nodes = []
-        for node in snapshot.nodes_by_id.values():
-            text = f"{node.name} {node.node_id} {node.session_id or ''}"
-            # 日期查询只消费已有创建时间，不缓存或输出物理 locator。
-            if node.created_at is not None and node.session_id is not None:
-                text += f" {node.created_at.astimezone(UTC):%Y/%m/%d}/{node.session_id}"
-            if query in text.casefold():
-                matching_nodes.append(node)
-        matching_nodes.sort(key=lambda node: (node.name.casefold(), node.node_id))
+        def iter_matching_nodes() -> Iterator[SessionCatalogNodeDTO]:
+            for node in snapshot.nodes_by_id.values():
+                text = f"{node.name} {node.node_id} {node.session_id or ''}"
+                # 日期查询只消费已有创建时间，不缓存或输出物理 locator。
+                if node.created_at is not None and node.session_id is not None:
+                    text += (
+                        f" {node.created_at.astimezone(UTC):%Y/%m/%d}/{node.session_id}"
+                    )
+                if query in text.casefold():
+                    yield node
+
+        def sort_key(node: SessionCatalogNodeDTO) -> tuple[str, str]:
+            return node.name.casefold(), node.node_id
+
+        candidates = iter_matching_nodes()
+        # 路由只接受 1..200；保留内部负 limit 原有的切片语义。
+        selected_nodes = (
+            sorted(candidates, key=sort_key)[:limit]
+            if limit < 0
+            else nsmallest(limit, candidates, key=sort_key)
+        )
         return [
             GatewaySessionCatalogSearchService._map_match(
                 target,
                 node,
                 snapshot.nodes_by_id,
             )
-            for node in matching_nodes[:limit]
+            for node in selected_nodes
         ]
 
     @staticmethod

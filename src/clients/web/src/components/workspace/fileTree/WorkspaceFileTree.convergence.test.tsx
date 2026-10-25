@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import type { WorkspaceFileNode } from "../../../types/backend";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 import { fileTreeNodeFixture as fileNode } from "./workspaceFileTreeTestFixtures";
 import {
@@ -85,7 +86,7 @@ interface Harness {
   renderer: ReactTestRenderer;
   window: DocumentedWindow;
   listingRequests: string[];
-  directoryItems: Map<string, Array<Record<string, unknown>>>;
+  directoryItems: Map<string, WorkspaceFileNode[]>;
 }
 
 /** 每次 GET /workspace/files 都按 directoryItems 的当前快照返回，便于断言重载次数与被替换内容。 */
@@ -93,7 +94,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
   intentMocks.push(installWorkspaceFileIntentStoreMock());
   const windowHandle = installWindow(port, promptValue);
   const listingRequests: string[] = [];
-  const directoryItems = new Map<string, Array<Record<string, unknown>>>([
+  const directoryItems = new Map<string, WorkspaceFileNode[]>([
     [ROOT, [fileNode(`${ROOT}/src`, "directory"), fileNode(`${ROOT}/other`, "directory")]],
     [`${ROOT}/src`, [fileNode(`${ROOT}/src/old.ts`, "file")]],
     [`${ROOT}/other`, [fileNode(`${ROOT}/other/b.ts`, "file")]],

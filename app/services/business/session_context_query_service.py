@@ -39,6 +39,7 @@ from app.services.business.session_context_projection import (
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
+    exact_returned_chars_with_appended_json,
     parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
@@ -251,6 +252,7 @@ class SessionContextQueryService:
             require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
             selected = found[offset : offset + request.max_results]
             matches: list[SessionContextSearchMatchDTO] = []
+            match_json_chars = 0
             budget_truncated = False
             for candidate, match in selected:
                 preview_start = max(0, match.start() - 180)
@@ -267,17 +269,27 @@ class SessionContextQueryService:
                     match_start=match.start(),
                     match_end=match.end(),
                 )
-                candidate_result = self._build_search_result(
+                serialized_match = dto.model_dump_json()
+                candidate_match_count = len(matches) + 1
+                empty_candidate = self._build_search_result(
                     request=request,
                     revision=revision,
                     query_hash=query_hash,
-                    matches=[*matches, dto],
+                    matches=[],
+                    returned_match_count=candidate_match_count,
                     offset=offset,
                     total_matches=len(found),
                     budget_truncated=budget_truncated,
                 )
-                if candidate_result.returned_chars <= request.max_chars:
+                candidate_returned_chars = exact_returned_chars_with_appended_json(
+                    empty_result_returned_chars=empty_candidate.returned_chars,
+                    appended_json_chars=(
+                        match_json_chars + len(serialized_match) + len(matches)
+                    ),
+                )
+                if candidate_returned_chars <= request.max_chars:
                     matches.append(dto)
+                    match_json_chars += len(serialized_match)
                     continue
                 if matches:
                     budget_truncated = True
@@ -299,6 +311,7 @@ class SessionContextQueryService:
                 revision=revision,
                 query_hash=query_hash,
                 matches=matches,
+                returned_match_count=len(matches),
                 offset=offset,
                 total_matches=len(found),
                 budget_truncated=budget_truncated,
@@ -330,6 +343,7 @@ class SessionContextQueryService:
                 revision=revision,
                 query_hash=query_hash,
                 matches=[clipped],
+                returned_match_count=1,
                 offset=offset,
                 total_matches=total_matches,
                 budget_truncated=True,
@@ -348,12 +362,12 @@ class SessionContextQueryService:
         revision: str,
         query_hash: str,
         matches: list[SessionContextSearchMatchDTO],
+        returned_match_count: int,
         offset: int,
         total_matches: int,
         budget_truncated: bool,
     ) -> SessionContextSearchResultDTO:
-        consumed = len(matches)
-        has_more = offset + consumed < total_matches
+        has_more = offset + returned_match_count < total_matches
         next_cursor = None
         if has_more:
             next_cursor = SessionContextCursorCodec.encode(
@@ -362,7 +376,7 @@ class SessionContextQueryService:
                 scope=request.scope,
                 revision=revision,
                 operation=f"search:{query_hash}",
-                offset=offset + consumed,
+                offset=offset + returned_match_count,
             )
         result = SessionContextSearchResultDTO(
             resource_identity=request.resource_identity,

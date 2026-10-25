@@ -20,13 +20,13 @@ const fixtureRunRoot = path.resolve(
 );
 afterAll(() => rmSync(fixtureRunRoot, { recursive: true, force: true }));
 
-async function waitForFile(filePath) {
+async function waitForWorkerReadyMarker(readyMarkerPath) {
   const deadlineMonotonicMs = performance.now() + 10_000;
   while (performance.now() < deadlineMonotonicMs) {
-    if (existsSync(filePath)) return;
+    if (existsSync(readyMarkerPath)) return;
     await Bun.sleep(50);
   }
-  throw new Error(`等待文件超时: ${filePath}`);
+  throw new Error(`等待文件超时: ${readyMarkerPath}`);
 }
 
 describe("detached process", () => {
@@ -34,22 +34,26 @@ describe("detached process", () => {
     expect(() => terminateDetachedProcess(0)).toThrow(/pid 无效/);
   });
 
-  test.skipIf(process.platform === "win32")(
+  test(
     "启动者退出后 detached 子进程仍继续运行",
     async () => {
-      const root = path.join(fixtureRunRoot, randomUUID());
-      mkdirSync(root, { recursive: true });
-      const markerPath = path.join(root, "ready.txt");
-      const pidPath = path.join(root, "pid.txt");
-      const logPath = path.join(root, "services.log");
-      const workerPath = path.join(root, "worker.mjs");
-      const launcherPath = path.join(root, "launcher.mjs");
-      const helperUrl = new URL("./detached-process.mjs", import.meta.url).href;
+      const caseWorkspacePath = path.join(fixtureRunRoot, randomUUID());
+      mkdirSync(caseWorkspacePath, { recursive: true });
+      const workerReadyMarkerPath = path.join(caseWorkspacePath, "ready.txt");
+      const workerPidRecordPath = path.join(caseWorkspacePath, "pid.txt");
+      const logPath = path.join(caseWorkspacePath, "services.log");
+      const workerPath = path.join(caseWorkspacePath, "worker.mjs");
+      const launcherPath = path.join(caseWorkspacePath, "launcher.mjs");
+      const detachedProcessModuleUrl = new URL(
+        "./detached-process.mjs",
+        import.meta.url,
+      ).href;
+      let workerPid;
       try {
         writeFileSync(
           workerPath,
           `import { writeFileSync } from "node:fs";\n` +
-            `writeFileSync(${JSON.stringify(markerPath)}, "ready\\n");\n` +
+            `writeFileSync(${JSON.stringify(workerReadyMarkerPath)}, "ready\\n");\n` +
             // 父测试被外部终止时也不能留下永久运行的detached fixture。
             `setTimeout(() => process.exit(0), 15_000);\n`,
           "utf8",
@@ -57,37 +61,44 @@ describe("detached process", () => {
         writeFileSync(
           launcherPath,
           `import { writeFileSync } from "node:fs";\n` +
-            `import { spawnDetachedProcess } from ${JSON.stringify(helperUrl)};\n` +
+            `import { spawnDetachedProcess } from ${JSON.stringify(detachedProcessModuleUrl)};\n` +
             `const child = spawnDetachedProcess({` +
             `command: process.execPath, args: [${JSON.stringify(workerPath)}], ` +
-            `cwd: ${JSON.stringify(root)}, environment: process.env, ` +
+            `cwd: ${JSON.stringify(caseWorkspacePath)}, environment: process.env, ` +
             `logPath: ${JSON.stringify(logPath)}});\n` +
-            `writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));\n` +
+            `writeFileSync(${JSON.stringify(workerPidRecordPath)}, String(child.pid));\n` +
             `child.unref();\n`,
           "utf8",
         );
 
         const launcher = Bun.spawn([process.execPath, launcherPath], {
-          cwd: root,
+          cwd: caseWorkspacePath,
           stdout: "ignore",
           stderr: "pipe",
         });
         const exitCode = await launcher.exited;
         expect(exitCode).toBe(0);
-        await waitForFile(markerPath);
+        await waitForWorkerReadyMarker(workerReadyMarkerPath);
 
-        const pid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
-        expect(() => process.kill(pid, 0)).not.toThrow();
-        expect(readFileSync(markerPath, "utf8")).toBe("ready\n");
-        expect(statSync(logPath).mode & 0o777).toBe(0o600);
+        workerPid = Number.parseInt(readFileSync(workerPidRecordPath, "utf8"), 10);
+        const logStats = statSync(logPath);
+        expect(() => process.kill(workerPid, 0)).not.toThrow();
+        expect(readFileSync(workerReadyMarkerPath, "utf8")).toBe("ready\n");
+        expect(logStats.isFile()).toBe(true);
+        if (process.platform !== "win32") {
+          expect(logStats.mode & 0o777).toBe(0o600);
+        }
       } finally {
         // 从预先固定的PID记录清理，ready等待或断言失败也能发出终止请求。
         try {
-          if (existsSync(pidPath)) {
-            terminateDetachedProcess(Number.parseInt(readFileSync(pidPath, "utf8"), 10));
+          if (workerPid === undefined && existsSync(workerPidRecordPath)) {
+            workerPid = Number.parseInt(readFileSync(workerPidRecordPath, "utf8"), 10);
+          }
+          if (workerPid !== undefined) {
+            terminateDetachedProcess(workerPid);
           }
         } finally {
-          rmSync(root, { recursive: true, force: true });
+          rmSync(caseWorkspacePath, { recursive: true, force: true });
         }
       }
     },

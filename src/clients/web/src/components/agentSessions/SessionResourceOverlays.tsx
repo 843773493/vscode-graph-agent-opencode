@@ -76,7 +76,7 @@ interface SessionResourceOverlaysProps {
     deletedCurrentSession: boolean,
   ) => Promise<void>;
   onStatusChange: (message: string) => void;
-  setActionError: Dispatch<SetStateAction<string | null>>;
+  onClearError: () => void;
   handleError: (prefix: string, error: unknown) => void;
 }
 
@@ -92,7 +92,7 @@ export default function SessionResourceOverlays({
   onCreateSessionInFolder,
   onSessionFolderDeleted,
   onStatusChange,
-  setActionError,
+  onClearError,
   handleError,
 }: SessionResourceOverlaysProps): ReactNode {
   const canonicalFolderMenu = folderMenu?.folderId
@@ -351,7 +351,7 @@ export default function SessionResourceOverlays({
         if (!resourceDialog) {
           throw new Error("会话资源操作目标已失效");
         }
-        setActionError(null);
+        onClearError();
         if (resourceDialog.kind === "delete_workspace_folder") {
           await explorer.deleteWorkspaceFolder(resourceDialog.nodeId);
           onStatusChange(`已删除工作区文件夹 ${resourceDialog.name}`);

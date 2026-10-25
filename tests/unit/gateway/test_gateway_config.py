@@ -792,6 +792,7 @@ def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
             state_store=state,
         )
         assert migrated.workspaces[0].connection_id
+        migrated_bytes = config_path.read_bytes()
         migrated_text = config_path.read_text(encoding="utf-8")
         assert "保留用户注释" in migrated_text
         assert '"config_version": 2' in migrated_text
@@ -814,7 +815,7 @@ def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
         assert (
             second.workspaces[0].connection_id == migrated.workspaces[0].connection_id
         )
-        assert config_path.read_bytes() == migrated_text.encode("utf-8")
+        assert config_path.read_bytes() == migrated_bytes
     finally:
         state.close()
 

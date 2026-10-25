@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
 import type { ChildThreadSummary, MessageRunAccepted } from "../../types/backend";
@@ -12,6 +12,7 @@ const CHILDREN: ChildThreadSummary[] = [1, 2].map((index) => ({
 }));
 let current: ReturnType<typeof useChildThreadConversation>;
 let renderer: ReactTestRenderer | null = null;
+let renderCount = 0;
 const response = (data: unknown) => Response.json({ code: 0, message: "ok", request_id: "req-child", data });
 const history = (threadId: string) => ({
   thread_id: threadId, source_view_id: `view-${threadId}`, source_view_revision: 1,
@@ -29,6 +30,7 @@ function Harness({
   threads?: ChildThreadSummary[];
   enabled?: boolean;
 }) {
+  renderCount += 1;
   current = useChildThreadConversation({ apiPort: 49199, workspaceId, sessionId, threads, enabled });
   return null;
 }
@@ -41,9 +43,15 @@ async function until(condition: () => boolean) {
   throw new Error("子线程状态未按预期收敛");
 }
 
+async function drainMicrotasks(): Promise<void> {
+  for (let round = 0; round < 50; round += 1) await Promise.resolve();
+}
+
 afterEach(() => {
   if (renderer) act(() => renderer?.unmount());
   renderer = null;
+  renderCount = 0;
+  jest.useRealTimers();
   unwrapSessionApiFetch();
 });
 
@@ -148,6 +156,93 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   expect(current.isUnread(CHILDREN[1]!)).toBe(true);
   expect(requests.every((request) => request.workspace === "workspace-a" && request.path.includes("/threads/thr_"))).toBe(true);
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
+});
+
+test("静默轮询遇到相同历史版本不触发重渲染，版本变化时刷新历史", async () => {
+  jest.useFakeTimers();
+  let historyRevision = 7;
+  let requests = 0;
+  let completePoll: ((reply: Response) => void) | null = null;
+  let completeManualRefresh: ((reply: Response) => void) | null = null;
+  installSessionApiFetchMock(({ path }) => {
+    requests += 1;
+    const threadId = path.split("/").slice(-2)[0]!;
+    const page = response({
+      ...history(threadId),
+      source_view_id: `view-${threadId}`,
+      source_view_revision: historyRevision,
+    });
+    if (requests === 2) return new Promise<Response>((resolve) => { completePoll = resolve; });
+    if (requests === 4) return Response.json({ detail: "轮询读取失败" }, { status: 503 });
+    if (requests === 6) return new Promise<Response>((resolve) => { completeManualRefresh = resolve; });
+    return page;
+  });
+
+  act(() => { renderer = create(<Harness />); });
+  act(() => current.selectThread(CHILDREN[0]!.thread_id));
+  await act(async () => { await drainMicrotasks(); });
+  expect(current.snapshot.history?.source_view_revision).toBe(7);
+
+  const renderedAfterInitialRead = renderCount;
+  const requestsAfterInitialRead = requests;
+  await act(async () => {
+    jest.advanceTimersByTime(2_500);
+    await drainMicrotasks();
+  });
+  expect(requests).toBe(requestsAfterInitialRead + 1);
+  expect(renderCount).toBe(renderedAfterInitialRead);
+  await act(async () => {
+    completePoll!(response({
+      ...history(CHILDREN[0]!.thread_id),
+      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
+      source_view_revision: historyRevision,
+    }));
+    await drainMicrotasks();
+  });
+  expect(renderCount).toBe(renderedAfterInitialRead);
+
+  historyRevision = 8;
+  await act(async () => {
+    jest.advanceTimersByTime(2_500);
+    await drainMicrotasks();
+  });
+  expect(current.snapshot.history?.source_view_revision).toBe(8);
+  expect(renderCount).toBeGreaterThan(renderedAfterInitialRead);
+
+  await act(async () => {
+    jest.advanceTimersByTime(2_500);
+    await drainMicrotasks();
+  });
+  expect(requests).toBe(4);
+  expect(current.snapshot.error).toContain("轮询读取失败");
+
+  await act(async () => {
+    jest.advanceTimersByTime(2_500);
+    await drainMicrotasks();
+  });
+  expect(requests).toBe(5);
+  expect(current.snapshot.error).toBeNull();
+  expect(current.snapshot.history?.source_view_revision).toBe(8);
+
+  let manualRefresh!: Promise<void>;
+  const requestsBeforeManualRefresh = requests;
+  await act(async () => {
+    manualRefresh = current.refresh();
+    await drainMicrotasks();
+  });
+  expect(requests).toBe(requestsBeforeManualRefresh + 1);
+  expect(current.snapshot.loading).toBe(true);
+  await act(async () => {
+    completeManualRefresh!(response({
+      ...history(CHILDREN[0]!.thread_id),
+      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
+      source_view_revision: historyRevision,
+    }));
+    await manualRefresh;
+    await drainMicrotasks();
+  });
+  expect(current.snapshot.loading).toBe(false);
+  expect(current.snapshot.history?.source_view_revision).toBe(8);
 });
 
 test("来源报告固定历史 execution，新报告发布后不改投或误标已读", async () => {

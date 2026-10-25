@@ -10,6 +10,7 @@ import pytest
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
+from app.services.infrastructure.rollout_context.assembly import content_store
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
     store_snapshot,
@@ -22,6 +23,7 @@ from app.services.infrastructure.rollout_context.storage import (
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
+    EXECUTION_QUEUE_SCHEMA_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
@@ -146,25 +148,43 @@ def test_shared_node_damage_fails_without_repair(shared_assemblies, damage):
 
 
 @pytest.mark.parametrize("row_factory", [None, sqlite3.Row])
-def test_large_canonical_payload_is_referenced_once_and_exact_owner_is_required(production_context, row_factory):
+def test_large_canonical_payload_is_referenced_once_and_exact_owner_is_required(
+    production_context, row_factory, monkeypatch,
+):
     saver, session, thread, connection, _manager, _prepare = production_context
     body = "唯一canonical正文，不能复制成第二份消息历史。" * 100
-    accepted = saver.accept_turn(session, thread_id=thread, accepted_ingress_id="large-body", acceptance_idempotency_key="large-body-accept", job_id="large-body-job", admission_idempotency_key="large-body-admit", payload=body, payload_kind="text")
+    payload = {"first": body, "nested": [{"second": body}]}
+    accepted = saver.accept_turn(session, thread_id=thread, accepted_ingress_id="large-body", acceptance_idempotency_key="large-body-accept", job_id="large-body-job", admission_idempotency_key="large-body-admit", payload=payload, payload_kind="structured_content")
     item, = saver._storage.storage.read_items(session, thread, item_ids=(accepted["root_input_item_id"],))
     ref = ContextRef.canonical_item(item, session_id=session, thread_id=thread).to_dict()
     value = {"session_id": session, "thread_id": thread, "selection": [{"ref": ref, "included": True}],
              "request_hash_preimage": {"messages": [{"role": "user", "content": body}]},
              "tool_snapshot": [], "tool_set_refs": [], "seal_binding": None}
+    body_hash_calls = 0
+    original_hash = content_store.sha256_jcs
+
+    def count_body_hash(candidate):
+        nonlocal body_hash_calls
+        if candidate == body:
+            body_hash_calls += 1
+        return original_hash(candidate)
+
+    monkeypatch.setattr(content_store, "sha256_jcs", count_body_hash)
     connection.execute("BEGIN IMMEDIATE")
     original_factory = connection.row_factory
     connection.row_factory = row_factory
     encoded = store_snapshot(connection, value)
+    assert body_hash_calls == 1
     dependencies: set[str] = set()
     assert load_snapshot(connection, encoded, canonical_item_ids=dependencies) == value
     assert dependencies == {item.item_id}
     nodes = [row[0] for row in connection.execute("SELECT body_json FROM assembly_content_nodes")]
     assert not any(body in node for node in nodes)
-    assert any(json.loads(node)["kind"] == "canonical" for node in nodes)
+    canonical_sources = [json.loads(node) for node in nodes if json.loads(node)["kind"] == "canonical"]
+    assert canonical_sources == [{
+        "kind": "canonical", "item_id": item.item_id, "session_id": session,
+        "thread_id": thread, "path": ["first"], "value_hash": original_hash(body),
+    }]
     connection.row_factory = original_factory
     connection.rollback()
 
@@ -182,6 +202,8 @@ def test_schema21_upgrade_preserves_historical_jcs_hashes_and_jsonl(shared_assem
     assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (22, "active")
     saver._storage.storage.migrate_schema(thread, session_id=session, to_version=23,
                                          migration_name="view_membership", migration_sql=VIEW_MEMBERSHIP_MIGRATION_SQL)
+    saver._storage.storage.migrate_schema(thread, session_id=session, to_version=24,
+                                         migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL)
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     for original in (first, second):
         assert cold.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict() == original.to_dict()

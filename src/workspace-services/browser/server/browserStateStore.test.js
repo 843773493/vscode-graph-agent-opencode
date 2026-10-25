@@ -13,8 +13,7 @@ afterEach(() => mock.restore());
 async function createBrowserStateStoreForTest(limits) {
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
   const workspaceId = "00000000-0000-4000-8000-000000000001";
-  await cp(path.join(process.cwd(), "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
-  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  await cp(path.join(process.cwd(), "tests/fixtures/workspaces/browser_state_store_workspace"), workspaceRoot, { recursive: true });
   return new BrowserStateStore({ workspaceRoot, workspaceId, checkpointLimits: limits });
 }
 

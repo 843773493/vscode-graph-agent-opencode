@@ -7,7 +7,7 @@
 ```text
 web-search/
 └── test_web_search_custom_tools.py
-    ├── 工作区 fixture：测试专用 Skill 模板 + resources/skills/web-search-fetch
+    ├── 工作区 fixture：工作区说明 + resources/skills/web-search-fetch
     └── 验收：真实 DuckDuckGo 调用、网页抓取结果与工具 trace
 ```
 

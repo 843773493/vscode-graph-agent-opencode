@@ -32,7 +32,7 @@ export function getOptionalString(
   return typeof value === "string" ? value : "";
 }
 
-function stringifyPayload(value: unknown): string {
+function formatPayloadText(value: unknown): string {
   if (value == null) {
     return "";
   }
@@ -46,7 +46,10 @@ function stringifyPayload(value: unknown): string {
 }
 
 export function formatToolDetail(value: unknown): string {
-  const text = stringifyPayload(value);
+  const text = formatPayloadText(value);
+  if (typeof value !== "string") {
+    return text;
+  }
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
@@ -55,7 +58,7 @@ export function formatToolDetail(value: unknown): string {
     return text;
   }
   try {
-    return stringifyPayload(JSON.parse(trimmed));
+    return formatPayloadText(JSON.parse(trimmed));
   } catch {
     return text;
   }

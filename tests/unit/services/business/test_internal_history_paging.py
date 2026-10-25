@@ -138,8 +138,15 @@ class _HistoryHarness(HistoryPageReadMixin):
         return page
 
 
+@dataclass
+class _HistorySetup:
+    reader: _HistoryHarness
+    indexed_history: IndexedHistory
+    snapshot: SimpleNamespace
+
+
 @pytest.fixture
-def history_setup() -> tuple[_HistoryHarness, IndexedHistory, SimpleNamespace]:
+def history_setup() -> _HistorySetup:
     context_reader = _FakeContextReader(
         bounds=HistorySnapshotBounds(
             view_id="view-1",
@@ -167,7 +174,11 @@ def history_setup() -> tuple[_HistoryHarness, IndexedHistory, SimpleNamespace]:
         snapshot=snapshot,
         chain=SimpleNamespace(),
     )
-    return _HistoryHarness(context_reader), indexed, snapshot
+    return _HistorySetup(
+        reader=_HistoryHarness(context_reader),
+        indexed_history=indexed,
+        snapshot=snapshot,
+    )
 
 
 def _entry(
@@ -251,9 +262,10 @@ def _cursor(
 
 
 def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, indexed, _snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
     reader._context_reader.bounds = HistorySnapshotBounds(
         view_id="view-1",
         history_view_revision=7,
@@ -326,13 +338,14 @@ def test_internal_projection_rejects_conflicting_execution_owners() -> None:
     ],
 )
 def test_tail_cursor_anchor_only_tracks_non_exhausted_lane(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
     turn_has_more: bool,
     internal_has_more: bool,
     expected_turn: int | None,
     expected_item: int | None,
 ) -> None:
-    reader, indexed, _snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
     reader._context_reader.turn_pages["tail"] = [[(_turn_row("turn-2", 2),), turn_has_more]]
     reader._context_reader.internal_pages["before"] = [
         InternalExecutionHistoryPage(
@@ -358,9 +371,10 @@ def test_tail_cursor_anchor_only_tracks_non_exhausted_lane(
 
 
 def test_default_anchor_include_reads_internal_history(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, indexed, _snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
     entry = _entry(80, logical_item_ordinal=20)
     reader._context_reader.internal_pages["before"] = [
         InternalExecutionHistoryPage((entry,), False)
@@ -384,11 +398,13 @@ def test_default_anchor_include_reads_internal_history(
     [("before", "before"), ("after", "after")],
 )
 def test_continuation_queries_both_lanes_from_independent_anchors(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
     direction: str,
     expected_query_direction: str,
 ) -> None:
-    reader, indexed, snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
+    snapshot = history_setup.snapshot
     anchor_direction = "before" if direction == "before" else "after"
     reader._context_reader.turn_pages[anchor_direction] = [
         ([_turn_row("turn-next", 2)], False)
@@ -427,9 +443,10 @@ def test_continuation_queries_both_lanes_from_independent_anchors(
 
 
 def test_around_uses_nearest_turn_pages_across_ordinal_gaps(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, indexed, _snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
     reader._context_reader.around_rows = [_turn_row("turn-anchor", 9)]
     reader._context_reader.turn_pages["before"] = [
         ([_turn_row("turn-3", 3), _turn_row("turn-6", 6)], True)
@@ -467,10 +484,12 @@ def test_around_uses_nearest_turn_pages_across_ordinal_gaps(
 
 @pytest.mark.parametrize("current_view_id", ["view-1", "view-after-append"])
 def test_cursor_rejects_changed_include_and_stale_history_revision(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
     current_view_id: str,
 ) -> None:
-    reader, indexed, snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
+    snapshot = history_setup.snapshot
     cursor = _cursor(
         reader,
         snapshot,
@@ -524,12 +543,14 @@ def test_cursor_rejects_changed_include_and_stale_history_revision(
 @pytest.mark.parametrize("drift", ["projection_epoch", "history_view_revision"])
 @pytest.mark.parametrize("cursor_direction,request_direction", [("before", "after"), ("after", "before")])
 def test_cursor_direction_mismatch_remains_invalid_after_snapshot_drift(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
     drift: str,
     cursor_direction: str,
     request_direction: str,
 ) -> None:
-    reader, indexed, snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
+    snapshot = history_setup.snapshot
     cursor = _cursor(
         reader, snapshot, direction=cursor_direction,
         turn_ordinal=4, logical_item_ordinal=80,
@@ -580,9 +601,11 @@ def test_stale_history_revision_requires_both_revision_values() -> None:
 
 
 def test_cursor_rejects_physical_item_sequence_v2_shape(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, indexed, snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
+    snapshot = history_setup.snapshot
     current = reader._decode_cursor_payload(
         _cursor(
             reader,
@@ -608,9 +631,10 @@ def test_cursor_rejects_physical_item_sequence_v2_shape(
 
 
 def test_cursor_accepts_zero_logical_item_ordinal(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, _indexed, snapshot = history_setup
+    reader = history_setup.reader
+    snapshot = history_setup.snapshot
     cursor = TurnCursorDTO.model_validate(
         reader._decode_cursor_payload(
             _cursor(
@@ -628,9 +652,11 @@ def test_cursor_accepts_zero_logical_item_ordinal(
 
 
 def test_cursor_rejects_sibling_thread_even_with_same_session_and_revision(
-    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    history_setup: _HistorySetup,
 ) -> None:
-    reader, indexed, snapshot = history_setup
+    reader = history_setup.reader
+    indexed = history_setup.indexed_history
+    snapshot = history_setup.snapshot
     cursor = _cursor(reader, snapshot, direction="before", turn_ordinal=4, logical_item_ordinal=80)
     snapshot.thread_id = "sibling-thread"
     with pytest.raises(InvalidTurnCursorError, match="历史游标不属于当前 rollout"):

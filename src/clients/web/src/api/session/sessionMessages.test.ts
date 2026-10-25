@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { getLLMRequestLogs, interruptSession, listMessages, replayMessageTurn, sendUserMessage } from "./sessionMessages";
+import {
+  getLLMRequestLogs,
+  getSessionAttachmentTextPreview,
+  interruptSession,
+  listMessages,
+  replayMessageTurn,
+  sendUserMessage,
+} from "./sessionMessages";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
   installSessionApiFetchMock,
@@ -52,6 +59,59 @@ describe("会话消息列表 API 的 CursorPage 契约", () => {
 
     await expect(listMessages(48_309, "ses_x", "workspace-1")).rejects
       .toThrow("会话消息列表响应 items 必须是数组，实际为 number");
+  });
+});
+
+describe("会话附件文本预览按需读取", () => {
+  test("超过预览上限时取消剩余响应体，并正确处理跨块 UTF-8 字符", async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode("abc"),
+      encoder.encode("界").subarray(0, 1),
+      encoder.encode("界").subarray(1),
+      encoder.encode("未读取的尾部"),
+    ];
+    let pullCount = 0;
+    let cancelled = false;
+    installSessionApiFetchMock(({ path, url }) => {
+      expect(path).toBe("/api/v1/sessions/ses_preview/attachments/content");
+      const query = new URL(url).searchParams;
+      expect(query.get("file_id")).toBe("file_preview");
+      expect(query.get("variant")).toBe("original");
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pullCount += 1;
+          const chunk = chunks.shift();
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }, { highWaterMark: 0 }));
+    });
+
+    await expect(getSessionAttachmentTextPreview(
+      48_315,
+      "ses_preview",
+      "file_preview",
+      "workspace-preview",
+      { maxCodeUnits: 3 },
+    )).resolves.toEqual({ text: "abc", truncated: true });
+    expect(pullCount).toBe(3);
+    expect(cancelled).toBe(true);
+  });
+
+  test("正好达到上限且正文结束时不标记截断", async () => {
+    installSessionApiFetchMock(() => new Response(new TextEncoder().encode("你好")));
+
+    await expect(getSessionAttachmentTextPreview(
+      48_316,
+      "ses_preview",
+      "file_preview",
+      "workspace-preview",
+      { maxCodeUnits: 2 },
+    )).resolves.toEqual({ text: "你好", truncated: false });
   });
 });
 

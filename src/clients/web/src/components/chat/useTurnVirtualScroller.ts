@@ -207,14 +207,20 @@ export function useTurnVirtualScroller({
         viewStateTimerRef.current = null;
         if (virtualIndexRef.current?.scopeKey !== scopeKey || anchorRef.current) return;
         const scrollerTop = scroller.getBoundingClientRect().top;
-        const anchor = Array.from(
-          scroller.querySelectorAll<HTMLElement>("[data-turn-id]"),
-        ).find((item) => item.getBoundingClientRect().bottom > scrollerTop) ?? null;
+        let anchor: HTMLElement | null = null;
+        let anchorTop: number | null = null;
+        for (const item of scroller.querySelectorAll<HTMLElement>("[data-turn-id]")) {
+          const bounds = item.getBoundingClientRect();
+          if (bounds.bottom <= scrollerTop) continue;
+          anchor = item;
+          anchorTop = bounds.top;
+          break;
+        }
         onViewStateChange({
           turn_anchor: anchor?.dataset.turnId ?? null,
-          scroll_offset: anchor
-            ? Math.max(0, scrollerTop - anchor.getBoundingClientRect().top)
-            : Math.max(0, scroller.scrollTop),
+          scroll_offset: anchorTop === null
+            ? Math.max(0, scroller.scrollTop)
+            : Math.max(0, scrollerTop - anchorTop),
           follow_latest: followsLatestRef.current,
         });
       }, 250);

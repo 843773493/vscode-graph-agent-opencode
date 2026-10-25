@@ -19,7 +19,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 from tests.support.workspaces import prepare_test_workspace
 
 
@@ -160,6 +160,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             env=environment,
             capture_output=True,
             text=True,
+            start_new_session=os.name == "posix",
             timeout=90,
             check=False,
         )

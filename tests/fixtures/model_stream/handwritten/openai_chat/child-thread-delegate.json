@@ -16,7 +16,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user"]
+          "message_roles": ["system", "user", "user", "user", "user", "user"]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 0 },
@@ -41,7 +41,16 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "assistant", "user"]
+          "message_roles": [
+            "system",
+            "user",
+            "user",
+            "user",
+            "user",
+            "user",
+            "assistant",
+            "user"
+          ]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 1 },
@@ -66,7 +75,18 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "assistant", "user", "assistant", "tool"]
+          "message_roles": [
+            "system",
+            "user",
+            "user",
+            "user",
+            "user",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "tool"
+          ]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 2 },
@@ -91,7 +111,17 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "assistant", "user", "assistant"]
+          "message_roles": [
+            "system",
+            "user",
+            "user",
+            "user",
+            "user",
+            "user",
+            "assistant",
+            "user",
+            "assistant"
+          ]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 3 },

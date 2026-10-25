@@ -21,16 +21,17 @@ function previewDataUrlsFromMetadata(metadata: Record<string, unknown>): string[
     return [];
   }
 
-  return blocks.flatMap((block) => {
+  const previewUrls: string[] = [];
+  for (const block of blocks) {
     if (!block || typeof block !== "object") {
-      return [];
+      continue;
     }
     const typedBlock = block as {
       type?: unknown;
       image_url?: unknown;
     };
     if (typedBlock.type !== "image_url") {
-      return [];
+      continue;
     }
     if (
       typedBlock.image_url &&
@@ -38,10 +39,12 @@ function previewDataUrlsFromMetadata(metadata: Record<string, unknown>): string[
       typeof (typedBlock.image_url as { url?: unknown }).url === "string"
     ) {
       const url = (typedBlock.image_url as { url: string }).url;
-      return url.startsWith("data:image/") ? [url] : [];
+      if (url.startsWith("data:image/")) {
+        previewUrls.push(url);
+      }
     }
-    return [];
-  });
+  }
+  return previewUrls;
 }
 
 function hydrateAttachmentPreviews(

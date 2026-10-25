@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import TextIO
 
+from app.core.file_permissions import restrict_private_path_access
+
 logger = logging.getLogger(__name__)
 
 PROCESS_LOG_MAX_BYTES = 64 * 1024 * 1024
@@ -35,8 +37,7 @@ class ProcessLogStore:
         try:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             stage = "directory_permissions"
-            if os.name == "posix":
-                self.root.chmod(0o700)
+            restrict_private_path_access(self.root, is_directory=True)
             if log_path.is_symlink():
                 logger.error("进程日志文件不允许是符号链接: %s", log_path)
                 raise RuntimeError(f"进程日志文件不允许是符号链接: log={file_name}")
@@ -49,8 +50,7 @@ class ProcessLogStore:
             descriptor = os.open(log_path, flags, 0o600)
             try:
                 stage = "file_permissions"
-                if os.name == "posix":
-                    os.fchmod(descriptor, 0o600)
+                restrict_private_path_access(log_path, descriptor=descriptor)
                 return os.fdopen(descriptor, "a", encoding="utf-8")
             except Exception:
                 os.close(descriptor)

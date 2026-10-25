@@ -53,7 +53,7 @@ class _RejectingQueueService:
 
 
 @pytest.fixture()
-def service(tmp_path: Path) -> SessionCatalogService:
+def session_catalog_service(tmp_path: Path) -> SessionCatalogService:
     workspace = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
     try:
         yield SessionCatalogService(
@@ -63,10 +63,10 @@ def service(tmp_path: Path) -> SessionCatalogService:
         workspace.close()
 
 
-def _client(service: object) -> tuple[FastAPI, TestClient]:
+def _client(service_override: object) -> tuple[FastAPI, TestClient]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        catalog = service if isinstance(service, SessionCatalogService) else None
+        catalog = service_override if isinstance(service_override, SessionCatalogService) else None
         if catalog is not None:
             await catalog.operations.start()
         try:
@@ -79,7 +79,7 @@ def _client(service: object) -> tuple[FastAPI, TestClient]:
     test_app.add_middleware(TraceMiddleware)
     test_app.add_exception_handler(HTTPException, main.workspace_http_exception_handler)
     test_app.include_router(navigation_api.router, prefix="/api/v1")
-    test_app.dependency_overrides[get_session_catalog_service] = lambda: service
+    test_app.dependency_overrides[get_session_catalog_service] = lambda: service_override
     test_app.dependency_overrides[verify_local_token] = lambda: "local"
     return test_app, TestClient(test_app, raise_server_exceptions=False)
 
@@ -135,17 +135,17 @@ def _wait_for_terminal(client: TestClient, operation_id: str) -> dict[str, objec
 
 
 def test_unknown_parent_is_reported_by_durable_rejection(
-    service: SessionCatalogService,
+    session_catalog_service: SessionCatalogService,
 ) -> None:
     operation_id = "op_" + "a" * 32
-    test_app, client = _client(service)
+    test_app, client = _client(session_catalog_service)
     try:
         with client:
             response = client.post(
                 "/api/v1/session-catalog/operations:enqueue",
                 json=_create_folder_payload(
                     operation_id=operation_id,
-                    catalog_revision=service.path_resolver.revision,
+                    catalog_revision=session_catalog_service.path_resolver.revision,
                     name="子目录",
                     parent_node_id=MISSING_NODE,
                 ),
@@ -212,17 +212,17 @@ def test_enqueue_preserves_admission_error_mapping(
 
 
 def test_create_folder_returns_durable_receipt_and_commits_to_catalog(
-    service: SessionCatalogService,
+    session_catalog_service: SessionCatalogService,
 ) -> None:
     operation_id = "op_" + "c" * 32
-    test_app, client = _client(service)
+    test_app, client = _client(session_catalog_service)
     try:
         with client:
             response = client.post(
                 "/api/v1/session-catalog/operations:enqueue",
                 json=_create_folder_payload(
                     operation_id=operation_id,
-                    catalog_revision=service.path_resolver.revision,
+                    catalog_revision=session_catalog_service.path_resolver.revision,
                     name="正常目录",
                 ),
                 headers=_headers("req_create_ok"),

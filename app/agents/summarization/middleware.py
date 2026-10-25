@@ -8,9 +8,11 @@ from __future__ import annotations
 from collections.abc import (
     Awaitable,
     Callable,
+    Iterator,
     Mapping,
 )
 from dataclasses import replace
+from itertools import chain
 from typing import (
     Any,
     ClassVar,
@@ -348,30 +350,26 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     @staticmethod
     def _summary_retry_candidates(
         partition: CachePreservingPartition,
-    ) -> list[tuple[list[AnyMessage], bool]]:
+    ) -> Iterator[tuple[list[AnyMessage], bool]]:
         middle_retries = _overflow_retry_middle_messages(
             partition.messages_to_summarize,
             partition.safe_retry_middle_boundaries,
         )
-        retries = [
-            (_forked_summary_messages(partition, middle), False)
-            for middle in middle_retries[: _MAX_SUMMARY_OVERFLOW_RETRIES - 1]
-        ]
-        stripped_middle, _ = strip_media_from_summary_messages(
-            partition.messages_to_summarize
-        )
+        for middle in middle_retries[: _MAX_SUMMARY_OVERFLOW_RETRIES - 1]:
+            yield _forked_summary_messages(partition, middle), False
         if middle_retries:
-            stripped_middle = middle_retries[-1]
-        retries.append(
-            (
-                [
-                    *stripped_middle,
-                    _summary_instruction(len(stripped_middle)),
-                ],
-                True,
+            fallback_middle = middle_retries[-1]
+        else:
+            fallback_middle, _ = strip_media_from_summary_messages(
+                partition.messages_to_summarize
             )
+        yield (
+            [
+                *fallback_middle,
+                _summary_instruction(len(fallback_middle)),
+            ],
+            True,
         )
-        return retries
 
     def _invoke_summary_candidate(
         self,
@@ -469,10 +467,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         handler: Callable[[ModelRequest], ModelResponse],
         partition: CachePreservingPartition,
     ) -> str:
-        candidates = [
-            (_forked_summary_messages(partition), False),
-            *self._summary_retry_candidates(partition),
-        ]
+        candidates = chain(
+            ((_forked_summary_messages(partition), False),),
+            self._summary_retry_candidates(partition),
+        )
         last_error: ContextOverflowError | None = None
         for candidate_ordinal, (messages, minimal_system) in enumerate(candidates):
             try:
@@ -496,10 +494,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
         partition: CachePreservingPartition,
     ) -> str:
-        candidates = [
-            (_forked_summary_messages(partition), False),
-            *self._summary_retry_candidates(partition),
-        ]
+        candidates = chain(
+            ((_forked_summary_messages(partition), False),),
+            self._summary_retry_candidates(partition),
+        )
         last_error: ContextOverflowError | None = None
         for candidate_ordinal, (messages, minimal_system) in enumerate(candidates):
             try:

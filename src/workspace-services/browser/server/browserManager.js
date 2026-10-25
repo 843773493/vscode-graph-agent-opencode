@@ -376,10 +376,12 @@ export class BrowserManager {
             error.code = "browser_creation_paused_memory_pressure";
             throw error;
           }
-          const managedStatuses = new Set(["created", "running"]);
-          const logicalBrowserCount = [...this.browsersById.values()].filter((session) => (
-            managedStatuses.has(session.status)
-          )).length;
+          let logicalBrowserCount = 0;
+          for (const session of this.browsersById.values()) {
+            if (session.status === "created" || session.status === "running") {
+              logicalBrowserCount += 1;
+            }
+          }
           if (logicalBrowserCount >= this.maxLogicalBrowsersPerWorkspace) {
             const error = new Error(
               `工作区浏览器数量达到硬上限: workspace_id=${workspaceId}, count=${logicalBrowserCount}, max=${this.maxLogicalBrowsersPerWorkspace}`,
@@ -388,14 +390,20 @@ export class BrowserManager {
             throw error;
           }
           const budget = await this.stateStore.checkpointBudgetSnapshot();
-          const uncheckpointedManagedCount = [...this.browsersById.values()].filter((session) => (
-            managedStatuses.has(session.status) && !session.record.checkpoint
-          )).length;
+          let uncheckpointedManagedBrowserCount = 0;
+          for (const session of this.browsersById.values()) {
+            if (
+              (session.status === "created" || session.status === "running")
+              && !session.record.checkpoint
+            ) {
+              uncheckpointedManagedBrowserCount += 1;
+            }
+          }
           const projectedReservedBytes = budget.used_bytes
-            + (uncheckpointedManagedCount + 1) * this.checkpointReservationBytes;
+            + (uncheckpointedManagedBrowserCount + 1) * this.checkpointReservationBytes;
           if (projectedReservedBytes > budget.max_bytes) {
             const error = new Error(
-              `工作区浏览器检查点预留预算不足: used=${budget.used_bytes}, uncheckpointed=${uncheckpointedManagedCount}, reservation=${this.checkpointReservationBytes}, max=${budget.max_bytes}`,
+              `工作区浏览器检查点预留预算不足: used=${budget.used_bytes}, uncheckpointed=${uncheckpointedManagedBrowserCount}, reservation=${this.checkpointReservationBytes}, max=${budget.max_bytes}`,
             );
             error.code = "browser_checkpoint_workspace_quota_exceeded";
             error.projected_workspace_bytes = projectedReservedBytes;

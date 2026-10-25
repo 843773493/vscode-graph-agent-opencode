@@ -3,9 +3,6 @@ import type { TurnResponsePart } from "../../types/backend";
 import {
   compareLifecycleEntities,
   isRecord,
-  sortBlocks,
-  sortToolExecutions,
-  sortedToolCallEntries,
   stringValue,
 } from "./state";
 import type {
@@ -46,9 +43,21 @@ function projectableToolExecutions(
   executions: readonly MessageStreamToolExecution[],
 ): MessageStreamToolExecution[] {
   const selectedByCallId = new Map<string, MessageStreamToolExecution>();
-  for (const execution of sortToolExecutions(executions)) {
+  for (const execution of executions) {
     const current = selectedByCallId.get(execution.tool_call_id);
-    if (current === undefined || toolExecutionRank(execution) < toolExecutionRank(current)) {
+    if (current === undefined) {
+      selectedByCallId.set(execution.tool_call_id, execution);
+      continue;
+    }
+    const executionRank = toolExecutionRank(execution);
+    const currentRank = toolExecutionRank(current);
+    if (
+      executionRank < currentRank
+      || (executionRank === currentRank && compareLifecycleEntities(
+        { value: execution, fallback: 0, id: execution.tool_execution_id },
+        { value: current, fallback: 0, id: current.tool_execution_id },
+      ) < 0)
+    ) {
       selectedByCallId.set(execution.tool_call_id, execution);
     }
   }
@@ -86,7 +95,7 @@ export function messageStreamToResponseParts(
     state.toolExecutions.map((execution) => execution.tool_call_id),
   );
   const entities: MessageStreamResponseEntity[] = [
-    ...sortBlocks(state.blocks).map((block) => ({
+    ...state.blocks.map((block) => ({
       kind: "block" as const,
       value: block,
       fallback: block.block_index,
@@ -98,7 +107,7 @@ export function messageStreamToResponseParts(
       fallback: 0,
       id: execution.tool_execution_id,
     })),
-    ...sortedToolCallEntries(state.toolCalls)
+    ...Object.entries(state.toolCalls)
       .filter(([toolCallId, toolCall]) => {
         if (executionCallIds.has(toolCallId)) return false;
         const callStatus = stringValue(toolCall.status);

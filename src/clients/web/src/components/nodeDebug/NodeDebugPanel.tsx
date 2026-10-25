@@ -338,7 +338,11 @@ export default function NodeDebugPanel({
           <span className="codicon codicon-debug-stop" aria-hidden="true" />
         </button>
       </div>
-      {localNotice ? <div className="debug-error" role="alert">{localNotice}</div> : null}
+      <div className="node-debug-action-notice-slot" aria-live="polite">
+        {localNotice ? (
+          <div className="debug-error" role="alert" title={localNotice}>{localNotice}</div>
+        ) : null}
+      </div>
 
       <nav className="node-debug-view-tabs" role="tablist" aria-label="源码调试二级菜单">
         {DEBUG_VIEWS.map((item) => (

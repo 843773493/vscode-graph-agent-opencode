@@ -4,18 +4,28 @@
 
 ```text
 harness/
-├── test_process_ownership.py               测试进程归属、端口替换、辅助静态服务绑定及回收
-├── test_gateway_readiness.py               Gateway就绪探针的认证与HTTP拒绝
-├── test_workspace_readiness.py             工作区就绪探针的身份与HTTP状态
-├── test_inprocess_model_replay.py          同一事件循环中回放 owner 重建与真实 SDK client 隔离
-├── test_browser_manager_addressing.py      Browser监听、访问URL与端口冲突的同目标接线
-├── test_matrix_process_cleanup.py          矩阵退出、中断、宽限到期与独立进程组回收
-├── dev_gateway_readiness.test.mjs          开发启动外层Gateway等待的HTTP期限与manager身份
-├── dev_service_readiness.test.mjs          开发栈各服务HTTP与detached就绪记录的观察预算
-├── e2e_control_client.test.mjs             JS控制端口客户端的真实TCP分块、回执与并发隔离
-├── test_outbox_fixture_lifetime.py          静态HTTP/Chromium装具的准备及清理失败回收
-├── test_boundary_display_fixture_lifetime.py 历史边界展示装具的准备与清理失败回收
-└── test_manual_browser_fixture_lifetime.py  手动连接装具的Chromium/context/page准备与逆序释放
+├── test_browser_manager_addressing.py       Browser 监听、访问 URL 与端口冲突接线
+├── test_boundary_display_fixture_lifetime.py 历史边界展示装具的准备及清理失败回收
+├── test_catalog_fixture_lifetime.py          Catalog 根路径、owner 复用与隔离释放
+├── test_gateway_launcher_control_endpoint.py 原生控制端点的监听、身份与清理
+├── test_gateway_readiness.py                 Gateway 就绪探针的认证与 HTTP 拒绝
+├── test_inprocess_model_replay.py            同一事件循环的 owner 重建与真实 SDK client 隔离
+├── test_manual_browser_fixture_lifetime.py   手动连接装具的 Chromium/context/page 逆序释放
+├── test_matrix_process_cleanup.py            矩阵退出、中断、宽限到期与隔离进程组回收
+├── test_model_http_assets.py                 模型 SDK 的真实 HTTP 服务、请求与响应验证
+├── test_model_metadata_refresh.py            HTTP 模型目录延迟出现后的采用与离线恢复
+├── test_outbox_fixture_lifetime.py            静态 HTTP/Chromium 装具准备及清理失败回收
+├── test_posix_gateway_target.py              POSIX Gateway 启动、健康探测与进程清理
+├── test_process_ownership.py                 进程归属、端口替换、静态服务绑定与回收
+├── test_run_task_source_snapshot.py           源码快照、profile 基线与进程组回收
+├── test_windows_gateway_target.py             原生 PowerShell Gateway 启动、健康探测与进程树清理
+├── test_windows_target_activation.py           Windows 目标激活生命周期
+├── test_windows_target_process_guard.py        Windows Job Object 进程树保护
+├── test_windows_target_stop.py                 Windows 目标停止与进程回收
+├── test_workspace_readiness.py                工作区就绪探针的身份与 HTTP 状态
+├── dev_gateway_readiness.test.mjs              外层 Gateway 等待的 HTTP 期限与 manager 身份
+├── dev_service_readiness.test.mjs              开发服务 HTTP 与 detached 就绪记录观察预算
+└── e2e_control_client.test.mjs                 JS 控制端口的 TCP 分块、回执与并发隔离
 ```
 
 浏览器场景保留在`clients/web/`；这里通过准备边界故障验证它的真实句柄生命周期，不重写业务场景。先观察被测装具的释放结果，再由探针回收仍持有的资源，不能用探针兜底制造“装具已释放”的结论。
@@ -35,6 +45,10 @@ JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UT
 矩阵清理测试从真实Bun入口启动有固定寿命的Python父子进程；后代明确忽略TERM，另有一个独立对照进程组。先记录runner退出后的实际状态，再由fixture兜底清理，不能用兜底制造产品已回收的结论。Linux用`/proc`区分仍执行和僵尸；PID回收属于其父进程，不把僵尸当作仍运行的程序。该组不启动产品服务，不证明Windows/macOS原生进程树行为。
 
 `test_model_http_assets.py` 持有共享模型资产的真实 HTTP 服务、监听线程及请求记录。它独立验证 Chat/Responses 同步和异步 SDK、认证、错误与非流式 JSON；启动和释放失败的资源归属由对应 harness 单测验证。业务场景使用现有精确回放，不反向依赖业务测试的模型服务。
+
+`test_windows_gateway_target.py` 只在原生 Windows 上运行。它在本测试的 `out/tests/integration/harness/test_windows_gateway_target/` 下创建临时仓库、fake Uvicorn 和独立 HTTP 端口，真实执行生成的 PowerShell 启动、健康探测与进程树清理命令；不连接 SSH 目标、不清理共享端口，也不启动用户开发 profile。Linux 上的跳过结果不能作为 Windows 原生验证证据。
+
+`test_posix_gateway_target.py` 在 Linux/macOS 上经本机 `sh` 执行与远端相同的 POSIX Gateway 启动、健康探测和清理命令；用路径含空格及单引号的隔离仓库核对配置复制、运行 manifest、环境变量和真实 HTTP 健康响应。进程回收另用本测试创建的 Python 子进程核实 TERM 清理与僵尸态识别；不连接 SSH 目标，fixture 最后仍负责回收本用例进程。
 
 ## 可修改内容
 

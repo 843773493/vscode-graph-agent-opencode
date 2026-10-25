@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -64,8 +64,8 @@ class ResourceActivationBodyStore:
     ) -> DetailRef:
         """写入必需的 精确正文，返回供 activation catalog 登记的真实 typed ref。"""
 
-        content_hash = sha256_jcs(payload)
-        content_length = len(canonical_json_bytes(payload))
+        canonical_payload_bytes, content_hash = canonical_json_bytes_and_hash(payload)
+        content_length = len(canonical_payload_bytes)
         record = self._detail_store.write(
             session_id=owner_session_id,
             thread_id=owner_thread_id,
@@ -166,9 +166,10 @@ class ResourceActivationBodyStore:
             ) from error
 
         payload = value.get("detail")
+        canonical_payload_bytes, payload_hash = canonical_json_bytes_and_hash(payload)
         if (
-            sha256_jcs(payload) != binding.content_hash
-            or len(canonical_json_bytes(payload)) != binding.content_length
+            payload_hash != binding.content_hash
+            or len(canonical_payload_bytes) != binding.content_length
         ):
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,

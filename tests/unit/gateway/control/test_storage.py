@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from app.core import file_permissions
 from app.gateway.control import storage
 
 
@@ -39,6 +41,33 @@ def test_read_json_object_returns_a_copy_of_default_for_missing_file(
     assert first is not default
     assert second is not default
     assert first is not second
+
+
+def test_atomic_write_json_sets_private_windows_acl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        file_permissions,
+        "_windows_acl_is_private",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    target = tmp_path / "gateway.json"
+
+    storage.atomic_write_json(target, {"value": "serializable"})
+
+    assert target.is_file()
+    assert len(calls) == 2
+    assert all(Path(arguments[1]).parent == tmp_path for arguments in calls)
+    assert all(Path(arguments[1]) != target for arguments in calls)
 
 
 def test_write_error_remains_primary_when_temporary_cleanup_fails(

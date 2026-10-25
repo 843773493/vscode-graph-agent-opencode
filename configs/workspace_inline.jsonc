@@ -68,8 +68,8 @@
       },
       {
         "id": "backup_3", // Agent fallback_providers 引用该 Provider ID。
-        "endpoint": "https://www.cctq.ai/v1", // LiteLLM Provider 请求端点。
-        "model": "gpt-5.6-luna", // AgentFactory 创建模型时使用。
+        "endpoint": "https://newapi.hyf2333.top/v1", // LiteLLM Provider 请求端点。
+        "model": "gpt-6-luna", // AgentFactory 创建模型时使用。
         "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
         "api_mode": {
           "protocol": "responses", // AgentFactory 选择 Responses API 协议。
@@ -95,7 +95,7 @@
         "request_options": {
           "overrides": {
             "reasoning": {
-              "effort": "high", // Provider request_options 传给 LiteLLM。
+              "effort": "max", // Provider request_options 传给 LiteLLM。
               "summary": "auto" // Provider request_options 传给 LiteLLM。
             }
           },
@@ -105,7 +105,7 @@
       {
         "id": "backup_4", // Agent fallback_providers 引用该 Provider ID。
         "endpoint": "https://chatgpt.com/backend-api/codex", // ChatGPT OAuth 请求端点。
-        "model": "gpt-5.6-luna", // AgentFactory 创建模型时使用。
+        "model": "gpt-6-luna", // AgentFactory 创建模型时使用。
         "custom_llm_provider": "chatgpt", // ChatGPT OAuth Provider 适配器类型。
         "api_mode": {
           "protocol": "responses", // ChatGPT OAuth 使用 Responses API 协议。
@@ -129,9 +129,36 @@
           "method": "chatgpt" // ChatGPT OAuth 认证方法。
         },
         "request_options": {
-          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
+          "overrides": {
+            "reasoning": {
+              "effort": "max"
+            }
+          }, // 按用户要求覆盖模型请求参数。
           "default_headers": {} // Provider 默认请求头默认为空。
         }
+      },
+      {
+        "id": "newapi_deepseek", // New API 的 DeepSeek 通道，与原有 Sub2API 通道分别选择。
+        "endpoint": "https://newapi.hyf2333.top/v1",
+        "model": "deepseek-v4.1-flash-1017",
+        "custom_llm_provider": "openai",
+        "api_mode": {
+          "protocol": "chat_completions",
+          "model_info": {
+            "supports_function_calling": true,
+            "supports_reasoning": true,
+            "max_input_tokens": 400000 // 输入上下文容量，不限制输出长度。
+          },
+          "supports_reasoning": {"reasoning_content": true}
+        },
+        "api_key": "${CCTQ_API_KEY}",
+        "request_options": {
+          "overrides": {
+            "extra_body": {
+              "reasoning_effort": "xhigh"
+            }
+          }
+        } // 复用同一 New API 端点的本机凭据。
       },
       {
         "id": "DeepSeek-V4.1-Flash", // 本地 Sub2API 网关模型。
@@ -231,6 +258,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ] // AgentFactory 按顺序尝试 fallback Provider。
       },
@@ -449,6 +477,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
@@ -486,6 +515,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ] // AgentFactory 按顺序选择 fallback Provider。
       },
@@ -521,6 +551,7 @@
           "backup_2",
           "backup_3",
           "backup_4",
+          "newapi_deepseek",
           "DeepSeek-V4.1-Flash"
         ] // AgentFactory 按顺序选择 fallback Provider。
       },

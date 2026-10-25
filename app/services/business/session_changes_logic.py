@@ -17,6 +17,7 @@ SESSION_FILE_CHANGE_PREVIEW_LIMIT = 8000
 _DIFF_LINE_BREAK = re.compile(
     r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]"
 )
+_NON_LF_LINE_BREAK = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DIFF_LINE_BREAKS = (
     "\n",
     "\r",
@@ -72,6 +73,11 @@ def count_diff_lines(diff_text: str) -> tuple[int, int]:
 
     additions = int(diff_text.startswith("+", body_start))
     deletions = int(diff_text.startswith("-", body_start))
+    if _NON_LF_LINE_BREAK.search(diff_text, body_start) is None:
+        additions += diff_text.count("\n+", body_start)
+        deletions += diff_text.count("\n-", body_start)
+        return additions, deletions
+
     for line_break in _DIFF_LINE_BREAKS:
         additions += diff_text.count(f"{line_break}+", body_start)
         deletions += diff_text.count(f"{line_break}-", body_start)

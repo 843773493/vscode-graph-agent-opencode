@@ -596,7 +596,12 @@ async function main() {
     if (detachedReadyFile !== null) {
       writeFileSync(
         detachedReadyFile,
-        `${JSON.stringify({ pid: process.pid, ready_at: new Date().toISOString() })}\n`,
+        `${JSON.stringify({
+          pid: process.pid,
+          ready_at: new Date().toISOString(),
+          project_root: projectRoot,
+          boxteam_home: boxteamHome,
+        })}\n`,
         { encoding: "utf8", mode: 0o600 },
       );
     }

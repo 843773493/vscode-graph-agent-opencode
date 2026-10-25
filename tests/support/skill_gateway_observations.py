@@ -113,8 +113,8 @@ elif role == "backend":
     from app.services.infrastructure.resource_platform import bootstrap
 
     bootstrap.GatewaySkillSources = ObservedGatewaySkillSources
-    from tests.support import (
-        communication_fault_backend,  # noqa: F401 - 安装既有通信崩溃屏障
+    from tests.support.communication import (
+        fault_backend,  # noqa: F401 - 安装既有通信崩溃屏障
     )
     from tests.support.e2e_control.backend_app import app
 else:

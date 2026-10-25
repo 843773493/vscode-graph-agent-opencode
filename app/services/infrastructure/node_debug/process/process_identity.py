@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -98,15 +99,22 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
         # zombie 与 dead 状态都已终止，不再查询可复用的启动身份。
         return None
     boot_id_path = _PROC_ROOT / "sys" / "kernel" / "random" / "boot_id"
-    boot_id = boot_id_path.read_text(encoding="utf-8").strip()
-    if not boot_id:
-        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: {boot_id_path}")
+    boot_id = _read_linux_boot_id(boot_id_path)
     return NodeDebugProcessIdentity(
         pid=pid,
         source=IDENTITY_SOURCE_LINUX_PROC,
         start_marker=f"{boot_id}:{starttime_ticks}",
         state=state,
     )
+
+
+@lru_cache(maxsize=16)
+def _read_linux_boot_id(boot_id_path: Path) -> str:
+    """Linux 启动 ID 在本次启动内稳定，按路径缓存以避免每次身份读取重复开文件。"""
+    boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+    if not boot_id:
+        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: {boot_id_path}")
+    return boot_id
 
 
 def _probe_psutil_identity(pid: int) -> NodeDebugProcessIdentity | None:

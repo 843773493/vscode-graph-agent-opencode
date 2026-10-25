@@ -79,8 +79,12 @@ from app.services.orchestration.execution_step.reminders import (
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from configs.runtime import read_jsonc_object
-from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
-from tests.support.mcp_session_doubles import (
+from tests.support.communication.probe import (
+    SOURCE_SESSION,
+    SOURCE_THREAD,
+    WORKSPACE_ID,
+)
+from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory,
     drain_pending_relists,
 )

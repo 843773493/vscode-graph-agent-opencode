@@ -4,8 +4,8 @@
 
 ```text
 components/
-├── anchored_overlay_positioning.mjs             浮层定位场景
-├── anchored_overlay_positioning_harness.*       相邻 HTML/TSX 入口
+├── anchored_overlay_positioning.mjs             锚定浮层、文件树提示与搜索行可达性场景
+├── anchored_overlay_positioning_harness.*       相邻 HTML/TSX 入口与文件树控制
 ├── tsconfig.anchored_overlay_positioning.json   浮层装具及真实组件的类型检查
 ├── structured_user_message_attachments.mjs      附件展示、预览及失败反馈场景
 ├── structured_user_message_attachments_harness.* 相邻 HTML/TSX 入口

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getSessionMainThread, listSessionCatalogChildren } from "../../api";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type {
@@ -61,9 +61,19 @@ export default function SessionGeneratorManager({
   }>>([]);
   const [sessionFolderChoicesError, setSessionFolderChoicesError] =
     useState<string | null>(null);
-  const workspaceGenerators = generatorResources.generators?.items.filter(
-    (generator) => generator.placement.workspace_id === activeWorkspaceId,
-  ) ?? [];
+  const activeWorkspaceGeneratorSummary = useMemo(() => {
+    const items = generatorResources.generators?.items ?? [];
+    const activeWorkspaceGenerators: typeof items = [];
+    let readyCount = 0;
+    let blockedCount = 0;
+    for (const generator of items) {
+      if (generator.placement.workspace_id !== activeWorkspaceId) continue;
+      activeWorkspaceGenerators.push(generator);
+      if (generator.status === "ready") readyCount += 1;
+      if (generator.status === "blocked") blockedCount += 1;
+    }
+    return { generators: activeWorkspaceGenerators, readyCount, blockedCount };
+  }, [generatorResources.generators?.items, activeWorkspaceId]);
 
   useEffect(() => {
     setTargetWorkspaceId(activeWorkspaceId ?? "");
@@ -234,15 +244,15 @@ export default function SessionGeneratorManager({
         }}>新建自动化</button> : null}
       </header>
       <div className="session-automation-summary" aria-label="自动化状态摘要">
-        <span>{workspaceGenerators.length} 个自动化</span>
-        <span>{workspaceGenerators.filter((item) => item.status === "ready").length} 个正常</span>
-        <span className={workspaceGenerators.some((item) => item.status === "blocked") ? "attention" : ""}>
-          {workspaceGenerators.filter((item) => item.status === "blocked").length} 个需要处理
+        <span>{activeWorkspaceGeneratorSummary.generators.length} 个自动化</span>
+        <span>{activeWorkspaceGeneratorSummary.readyCount} 个正常</span>
+        <span className={activeWorkspaceGeneratorSummary.blockedCount > 0 ? "attention" : ""}>
+          {activeWorkspaceGeneratorSummary.blockedCount} 个需要处理
         </span>
       </div>
       {generatorResources.generatorError ? <div className="session-resource-error" role="alert">{generatorResources.generatorError}</div> : null}
       <div className="session-generator-list">
-        {workspaceGenerators.map((generator) => {
+        {activeWorkspaceGeneratorSummary.generators.map((generator) => {
           const runs = generatorResources.generationRuns.get(generator.generator_id);
           const targetWorkspace = workspaces.find(
             (workspace) => workspace.workspace_id === generator.placement.workspace_id,
@@ -350,7 +360,7 @@ export default function SessionGeneratorManager({
             </div>
           );
         })}
-        {workspaceGenerators.length === 0 ? (
+        {activeWorkspaceGeneratorSummary.generators.length === 0 ? (
           <div className="session-generator-empty">当前工作区暂无自动化</div>
         ) : null}
       </div>

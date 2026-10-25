@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AttachmentRef } from "../../../../../src/clients/web/src/types/backend";
-import MessageAttachments from "../../../../../src/clients/web/src/components/chat/MessageAttachments";
+import MessageAttachments from "../../../../../src/clients/web/src/components/chat/turn/MessageAttachments";
 import WorkspaceAttachmentPreview from "../../../../../src/clients/web/src/components/workspace/preview/WorkspaceAttachmentPreview";
 import WorkspaceAuxiliaryPanel from "../../../../../src/clients/web/src/components/workspace/WorkspaceAuxiliaryPanel";
 
@@ -79,6 +79,7 @@ function StructuredUserMessageAttachmentsHarness(): React.ReactNode {
         resourcePanel={null}
         runtimePreview={null}
         debugPanel={null}
+        goalPanel={null}
         onToggleSearch={() => undefined}
         onCollapseAll={() => undefined}
         onSelectSessionChangeset={() => undefined}

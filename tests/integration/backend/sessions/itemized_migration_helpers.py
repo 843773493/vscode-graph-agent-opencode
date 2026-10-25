@@ -14,17 +14,18 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
 def prepare_migration_workspace(request: pytest.FixtureRequest) -> Path:
-    # 每个 case 重建同一正式 workspace；旧实例不能跨 case 保留目录索引。
+    # 每个 case 重建隔离 workspace；仅保留 identity，Session 数据由 bundle factory 播种。
     context = TestRunContext.from_test_file(Path(request.node.path))
-    return prepare_default_test_workspace(
+    return prepare_test_workspace(
         workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(".boxteam/workspace-identity.json",),
     )
 
 

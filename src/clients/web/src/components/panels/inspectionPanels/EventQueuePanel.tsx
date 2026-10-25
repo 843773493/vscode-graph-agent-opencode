@@ -1,6 +1,10 @@
 import React from "react";
 import { formatDateTime } from "../../../utils/format";
-import { boundedDisplayString, prettyJson } from "../../../utils/jsonDisplay";
+import {
+  boundedDisplayString,
+  LARGE_STRING_DISPLAY_LIMIT,
+  prettyJson,
+} from "../../../utils/jsonDisplay";
 import type { FrontendReceivedEvent } from "../../../types/frontend";
 import {
   attachmentNames,
@@ -32,7 +36,9 @@ function MessageCreatedSummary({
 }: {
   payload: Record<string, unknown>;
 }) {
-  const content = typeof payload.content === "string" ? payload.content : "";
+  const content = boundedDisplayString(
+    typeof payload.content === "string" ? payload.content : "",
+  );
   const names = attachmentNames(payload);
   if (!content && names.length === 0) {
     return null;
@@ -51,6 +57,35 @@ function MessageCreatedSummary({
   );
 }
 
+function useLazyExpandedContent() {
+  const [hasOpened, setHasOpened] = React.useState(false);
+  const handleToggle = React.useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (event.currentTarget.open) setHasOpened(true);
+  }, []);
+  return { hasOpened, handleToggle };
+}
+
+function LazyPrettyJsonDetails({
+  title,
+  getValue,
+}: {
+  title: string;
+  getValue: () => unknown;
+}) {
+  const { hasOpened, handleToggle } = useLazyExpandedContent();
+  const json = React.useMemo(
+    () => hasOpened ? prettyJson(getValue()) : "",
+    [getValue, hasOpened],
+  );
+
+  return (
+    <details className="panel-detail" onToggle={handleToggle}>
+      <summary>{title}</summary>
+      {hasOpened ? <pre>{json}</pre> : null}
+    </details>
+  );
+}
+
 const EventQueueCard = React.memo(function EventQueueCard({
   item,
   index,
@@ -64,13 +99,27 @@ const EventQueueCard = React.memo(function EventQueueCard({
   const receivedTime = formatDateTime(item.receivedAt);
   const event = item.kind === "trace" ? item.event : null;
   const jobId = event?.job_id ?? "";
-  const toolSummary = toolEventSummary(type, payload);
-  const compactContent = item.kind === "frontend"
-    ? item.detail || item.title
-    : item.event.content || "";
+  const { hasOpened, handleToggle } = useLazyExpandedContent();
+  const toolSummary = React.useMemo(
+    () => hasOpened ? toolEventSummary(type, payload) : null,
+    [hasOpened, payload, type],
+  );
+  const compactContent = boundedDisplayString(
+    item.kind === "frontend"
+      ? item.detail || item.title
+      : item.event.content || "",
+  );
+  const getPayload = React.useCallback(() => payload, [payload]);
+  const getEvent = React.useCallback(
+    () => item.kind === "trace" ? item.event : item,
+    [item],
+  );
 
   return (
-    <details className={`panel-card event-queue-card event-type-${type}`}>
+    <details
+      className={`panel-card event-queue-card event-type-${type}`}
+      onToggle={handleToggle}
+    >
       <summary className="event-queue-card-summary">
         <div className="panel-title-row">
           <span className="panel-index">#{index + 1}</span>
@@ -88,46 +137,85 @@ const EventQueueCard = React.memo(function EventQueueCard({
         </div>
       </summary>
 
-      <div className="event-queue-card-expanded">
-        <div className="panel-meta">
-          <span>session: {eventSessionId(item)}</span>
-          {jobId ? <span>job: {jobId}</span> : null}
-          {event?.agent_id ? <span>agent: {event.agent_id}</span> : null}
-          {event?.phase ? <span>phase: {event.phase}</span> : null}
-          {event?.status ? <span>status: {event.status}</span> : null}
-          {toolSummary ? <span>tool: {toolSummary.displayToolName}</span> : null}
-          {toolSummary?.skillNames.length ? (
-            <span>skill: {toolSummary.skillNames.join(", ")}</span>
-          ) : null}
-          {item.kind === "frontend" && item.detail ? (
-            <span>{item.detail}</span>
-          ) : null}
-        </div>
-
-        {toolSummary ? (
-          <div className="event-queue-tool-summary">
-            <span>{type === "tool_call_start" ? "输入" : "结果"}</span>
-            <code>{toolSummary.summary}</code>
+      {hasOpened ? (
+        <div className="event-queue-card-expanded">
+          <div className="panel-meta">
+            <span>session: {eventSessionId(item)}</span>
+            {jobId ? <span>job: {jobId}</span> : null}
+            {event?.agent_id ? <span>agent: {event.agent_id}</span> : null}
+            {event?.phase ? <span>phase: {event.phase}</span> : null}
+            {event?.status ? <span>status: {event.status}</span> : null}
+            {toolSummary ? <span>tool: {toolSummary.displayToolName}</span> : null}
+            {toolSummary?.skillNames.length ? (
+              <span>skill: {toolSummary.skillNames.join(", ")}</span>
+            ) : null}
+            {item.kind === "frontend" && item.detail ? (
+              <span>{boundedDisplayString(item.detail)}</span>
+            ) : null}
           </div>
-        ) : null}
 
-        {type === "message_created" ? (
-          <MessageCreatedSummary payload={payload} />
-        ) : null}
+          {toolSummary ? (
+            <div className="event-queue-tool-summary">
+              <span>{type === "tool_call_start" ? "输入" : "结果"}</span>
+              <code>{toolSummary.summary}</code>
+            </div>
+          ) : null}
 
-        <details className="panel-detail">
-          <summary>payload</summary>
-          <pre>{prettyJson(payload)}</pre>
-        </details>
+          {type === "message_created" ? (
+            <MessageCreatedSummary payload={payload} />
+          ) : null}
 
-        <details className="panel-detail">
-          <summary>完整事件</summary>
-          <pre>{prettyJson(item.kind === "trace" ? item.event : item)}</pre>
-        </details>
-      </div>
+          <LazyPrettyJsonDetails title="payload" getValue={getPayload} />
+          <LazyPrettyJsonDetails title="完整事件" getValue={getEvent} />
+        </div>
+      ) : null}
     </details>
   );
 });
+
+function summarizeTextDeltaGroup(items: FrontendReceivedEvent[]) {
+  const first = items[0];
+  const last = items[items.length - 1];
+  const previewParts: string[] = [];
+  const deltaKinds: string[] = [];
+  const seenDeltaKinds = new Set<string>();
+  let previewLength = 0;
+  let mergedTextLength = 0;
+
+  for (const item of items) {
+    const text = textDeltaText(item);
+    mergedTextLength += text.length;
+    const remainingPreviewLength = LARGE_STRING_DISPLAY_LIMIT - previewLength;
+    if (remainingPreviewLength > 0) {
+      const previewPart = text.slice(0, remainingPreviewLength);
+      previewParts.push(previewPart);
+      previewLength += previewPart.length;
+    }
+
+    const kind = textDeltaKind(item);
+    if (kind && !seenDeltaKinds.has(kind)) {
+      seenDeltaKinds.add(kind);
+      deltaKinds.push(kind);
+    }
+  }
+
+  const preview = previewParts.join("");
+  return {
+    previewText: mergedTextLength > LARGE_STRING_DISPLAY_LIMIT
+      ? `${preview}…（已截断展示，原文 ${mergedTextLength} 字符）`
+      : preview,
+    stats: {
+      delta_count: items.length,
+      merged_text_length: mergedTextLength,
+      source: first.source,
+      first_event_at: eventTimestamp(first),
+      last_event_at: eventTimestamp(last),
+      first_received_at: first.receivedAt,
+      last_received_at: last.receivedAt,
+      delta_kinds: deltaKinds,
+    },
+  };
+}
 
 const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
   items,
@@ -142,36 +230,34 @@ const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
   const jobId = event?.job_id ?? "";
   const eventTime = first ? formatDateTime(eventTimestamp(first)) : "";
   const receivedTime = last ? formatDateTime(last.receivedAt) : "";
-  const mergedText = items.map(textDeltaText).join("");
-  const deltaKinds = Array.from(
-    new Set(items.map(textDeltaKind).filter((kind) => kind.length > 0)),
+  const { previewText, stats } = React.useMemo(
+    () => summarizeTextDeltaGroup(items),
+    [items],
   );
-  const stats = {
-    delta_count: items.length,
-    merged_text_length: mergedText.length,
-    source: first.source,
-    first_event_at: eventTimestamp(first),
-    last_event_at: last ? eventTimestamp(last) : "",
-    first_received_at: first.receivedAt,
-    last_received_at: last?.receivedAt ?? "",
-    delta_kinds: deltaKinds,
-  };
-  const payloadPreview =
-    mergedText.length > 0
-      ? { text: mergedText, stats }
-      : { stats };
+  const getMergedPayload = React.useCallback(() => {
+    const mergedText = items.map(textDeltaText).join("");
+    return mergedText.length > 0 ? { text: mergedText, stats } : { stats };
+  }, [items, stats]);
+  const getOriginalEvents = React.useCallback(
+    () => items.map((item) => item.kind === "trace" ? item.event : item),
+    [items],
+  );
+  const { hasOpened, handleToggle } = useLazyExpandedContent();
 
   return (
-    <details className="panel-card event-queue-card event-type-text_delta event-queue-group-card">
+    <details
+      className="panel-card event-queue-card event-type-text_delta event-queue-group-card"
+      onToggle={handleToggle}
+    >
       <summary className="event-queue-card-summary">
         <div className="panel-title-row">
           <span className="panel-index">#{index + 1}</span>
           <span className="panel-type">text_delta × {items.length}</span>
           <span className="panel-pill event-queue-source">{sourceLabel(first.source)}</span>
         </div>
-        {mergedText ? (
+        {previewText ? (
           <span className="event-queue-compact-content">
-            {boundedDisplayString(mergedText)}
+            {previewText}
           </span>
         ) : null}
         <div className="panel-time">
@@ -180,36 +266,27 @@ const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
         </div>
       </summary>
 
-      <div className="event-queue-card-expanded">
-        <div className="panel-meta">
-          <span>session: {eventSessionId(first)}</span>
-          {jobId ? <span>job: {jobId}</span> : null}
-          {event?.agent_id ? <span>agent: {event.agent_id}</span> : null}
-          {event?.phase ? <span>phase: {event.phase}</span> : null}
+      {hasOpened ? (
+        <div className="event-queue-card-expanded">
+          <div className="panel-meta">
+            <span>session: {eventSessionId(first)}</span>
+            {jobId ? <span>job: {jobId}</span> : null}
+            {event?.agent_id ? <span>agent: {event.agent_id}</span> : null}
+            {event?.phase ? <span>phase: {event.phase}</span> : null}
+          </div>
+
+          <div className="event-queue-stats">
+            <span>delta 数: {stats.delta_count}</span>
+            <span>合并字符: {stats.merged_text_length}</span>
+            {stats.delta_kinds.length > 0 ? (
+              <span>kind: {stats.delta_kinds.join(", ")}</span>
+            ) : null}
+          </div>
+
+          <LazyPrettyJsonDetails title="合并文本" getValue={getMergedPayload} />
+          <LazyPrettyJsonDetails title="原始 text_delta 列表" getValue={getOriginalEvents} />
         </div>
-
-        <div className="event-queue-stats">
-          <span>delta 数: {stats.delta_count}</span>
-          <span>合并字符: {stats.merged_text_length}</span>
-          {deltaKinds.length > 0 ? <span>kind: {deltaKinds.join(", ")}</span> : null}
-        </div>
-
-        <details className="panel-detail">
-          <summary>合并文本</summary>
-          <pre>{prettyJson(payloadPreview)}</pre>
-        </details>
-
-        <details className="panel-detail">
-          <summary>原始 text_delta 列表</summary>
-          <pre>
-            {prettyJson(
-              items.map((item) =>
-                item.kind === "trace" ? item.event : item,
-              ),
-            )}
-          </pre>
-        </details>
-      </div>
+      ) : null}
     </details>
   );
 });

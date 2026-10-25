@@ -1,0 +1,80 @@
+.workbench-view-switcher {
+  position: relative;
+}
+
+.toolbar-view-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--bt-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.toolbar-view-button:hover,
+.toolbar-view-button.active {
+  border-color: var(--bt-border);
+  background: var(--bt-hover-background);
+}
+
+.toolbar-view-button > .codicon:last-child {
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.workbench-view-menu {
+  width: min(280px, var(--anchored-overlay-available-width, 280px));
+  max-height: var(--anchored-overlay-available-height, 520px);
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--bt-border);
+  border-radius: 9px;
+  background: var(--bt-dropdown-background);
+  box-shadow: var(--bt-surface-shadow);
+}
+
+.workbench-view-menu > button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  align-items: center;
+  width: 100%;
+  min-height: 54px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--bt-dropdown-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-view-menu > button:hover,
+.workbench-view-menu > button.active {
+  background: var(--bt-hover-background);
+}
+
+.workbench-view-menu-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.workbench-view-menu-copy strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workbench-view-menu-copy small {
+  overflow: hidden;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

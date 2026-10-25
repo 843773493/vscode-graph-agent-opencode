@@ -177,8 +177,8 @@ export type WebUILayoutSettingsDTO = Omit<
   | "delivery_policy_default"
 > & {
   workbench_view?: "sessions" | "gateway" | null;
-  auxiliary_tab?: "changes" | "files" | "resources" | "debug" | null;
-  auxiliary_tab_order?: Array<"changes" | "files" | "resources" | "debug"> | null;
+  auxiliary_tab?: "changes" | "files" | "goal" | "resources" | "debug" | null;
+  auxiliary_tab_order?: Array<"changes" | "files" | "goal" | "resources" | "debug"> | null;
   main_area_ratios?: WebUIMainAreaRatiosDTO | null;
   bottom_panel_by_workspace?: Record<string, WebUIWorkspaceBottomPanelSettingsDTO> | null;
   workspace_preview_file_paths?: string[] | null;

@@ -30,7 +30,7 @@ from tests.support.processes.workspace import (
     terminate_process,
     wait_for_http_ok,
 )
-from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:

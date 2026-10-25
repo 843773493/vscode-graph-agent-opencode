@@ -95,7 +95,7 @@ def test_restart_process_uses_validated_command_and_platform_options(
     assert log_path.is_file()
     options = captured["options"]
     assert isinstance(options, dict)
-    assert options["cwd"] == command.cwd
+    assert options["cwd"] == command.working_directory
     assert options["stdin"] == subprocess.DEVNULL
     assert options["stderr"] == subprocess.STDOUT
     if platform_name == "nt":

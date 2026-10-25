@@ -44,6 +44,8 @@ class RegisteredToolSetProducer:
         ):
             raise ValueError("受信工具注册目录必须具备唯一工具名与完整 policy metadata")
         self._metadata = dict(metadata)
+        self._default_model_visibility: dict[str, bool] = {}
+        self._last_snapshot: tuple[tuple[str, bool, bool], ToolSetSnapshot] | None = None
         self._schemas_json = canonical_json_bytes(
             [convert_to_openai_tool(tool) for tool in tools]
         )
@@ -83,45 +85,70 @@ class RegisteredToolSetProducer:
     ) -> ToolSetSnapshot:
         if self._structured_tools_json is None:
             raise RuntimeError("ToolSet producer 尚未绑定图结构化输出注册表")
-        selection = self._selection_reader.snapshot(self._agent_id)
+        selection_snapshot = self._selection_reader.snapshot(self._agent_id)
         if (
-            not isinstance(selection, ToolSelectionSnapshot)
-            or selection.agent_id != self._agent_id
+            not isinstance(selection_snapshot, ToolSelectionSnapshot)
+            or selection_snapshot.agent_id != self._agent_id
         ):
             raise TypeError("ToolSelectionReader 返回了不匹配的原子选择快照")
+        selection_revision = selection_snapshot.revision
+        snapshot_key = (
+            selection_revision,
+            include_structured_output,
+            tools_enabled,
+        )
+        cached_snapshot = self._last_snapshot
+        if cached_snapshot is not None and cached_snapshot[0] == snapshot_key:
+            return cached_snapshot[1]
         if not tools_enabled:
-            return ToolSetSnapshot(
-                selection_revision=selection.revision, tools=(), policy_keys=()
+            snapshot = ToolSetSnapshot(
+                selection_revision=selection_revision,
+                tools=(),
+                policy_keys=(),
             )
-        execution = selection.execution_overrides
-        visibility = selection.model_visibility_overrides
-        visible = []
+            self._last_snapshot = (snapshot_key, snapshot)
+            return snapshot
+        execution_overrides = selection_snapshot.execution_overrides
+        model_visibility_overrides = selection_snapshot.model_visibility_overrides
+        visible_tool_schemas = []
         for schema in self._schema_templates:
-            name = schema["function"]["name"]
+            tool_name = schema["function"]["name"]
             # 固定扩展信封不依赖内部 target 的数量或开关。
-            if name == EXTENSION_TOOL_INVOKER_NAME:
-                visible.append(schema)
+            if tool_name == EXTENSION_TOOL_INVOKER_NAME:
+                visible_tool_schemas.append(schema)
                 continue
-            policy = self._policy_resolver.resolve(
-                self._metadata[name],
-                execution_override=execution.get(name),
-                model_visibility_override=visibility.get(name),
-            )
-            if policy.model_visible:
-                visible.append(schema)
-        # 普通工具维持既有 sealed wire 的稳定顺序，再由框架追加结构化工具。
-        visible.sort(key=lambda schema: schema["function"]["name"])
+            execution_override = execution_overrides.get(tool_name)
+            model_visibility_override = model_visibility_overrides.get(tool_name)
+            if execution_override is None and model_visibility_override is None:
+                model_visible = self._default_model_visibility.get(tool_name)
+                if model_visible is None:
+                    model_visible = self._policy_resolver.resolve(
+                        self._metadata[tool_name]
+                    ).model_visible
+                    self._default_model_visibility[tool_name] = model_visible
+            else:
+                model_visible = self._policy_resolver.resolve(
+                    self._metadata[tool_name],
+                    execution_override=execution_override,
+                    model_visibility_override=model_visibility_override,
+                ).model_visible
+            if model_visible:
+                visible_tool_schemas.append(schema)
+        # 普通工具维持既有 sealed wire 的稳定名称顺序，再由框架追加结构化工具。
+        visible_tool_schemas.sort(key=lambda schema: schema["function"]["name"])
         policy_keys = build_toolset_policy_keys(
-            [schema["function"]["name"] for schema in visible]
+            [schema["function"]["name"] for schema in visible_tool_schemas]
         )
         if include_structured_output:
             # 输出 schema 不属于可执行工具 policy，沿用图注册顺序与框架策略。
-            visible.extend(self._structured_tool_templates)
-        return ToolSetSnapshot(
-            selection_revision=selection.revision,
-            tools=visible,
+            visible_tool_schemas.extend(self._structured_tool_templates)
+        snapshot = ToolSetSnapshot(
+            selection_revision=selection_revision,
+            tools=visible_tool_schemas,
             policy_keys=policy_keys,
         )
+        self._last_snapshot = (snapshot_key, snapshot)
+        return snapshot
 
 
 __all__ = ["RegisteredToolSetProducer"]

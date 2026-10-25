@@ -73,7 +73,7 @@ def test_plan_and_selection_version_are_exact_integers(
         ContextAssemblySnapshot.from_dict(raw)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def prompt_contribution() -> ContextContribution:
     return ContextContribution(
         contribution_id="contribution-strict",

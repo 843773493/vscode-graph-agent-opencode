@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
-from app.abstractions.terminal_resources import TerminalRequestError
+from app.abstractions.terminal.resources import TerminalRequestError
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient

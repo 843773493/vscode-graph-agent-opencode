@@ -5,7 +5,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from stat import S_ISREG
 from uuid import UUID, uuid4
+
+from app.core.atomic_fs import native_io_path
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
 
@@ -37,7 +40,7 @@ def validate_workspace_id(workspace_id: str, *, source: Path | None = None) -> s
 
 def _read_workspace_id(identity_path: Path) -> str:
     try:
-        payload = json.loads(identity_path.read_text(encoding="utf-8"))
+        payload = json.loads(native_io_path(identity_path).read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise RuntimeError(
             f"Workspace 后端身份文件不是有效 JSON: {identity_path}"
@@ -61,7 +64,7 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
     workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(uuid4())
     try:
         descriptor = os.open(
-            identity_path,
+            native_io_path(identity_path),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
         )
@@ -81,16 +84,23 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
     return workspace_id
 
 
+def _read_existing_workspace_id(identity_path: Path) -> str | None:
+    try:
+        identity_stat = native_io_path(identity_path).stat()
+    except FileNotFoundError:
+        return None
+    if not S_ISREG(identity_stat.st_mode):
+        raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
+    return _read_workspace_id(identity_path)
+
+
 def load_or_create_workspace_id(workspace_root: Path) -> str:
     """为工作区创建一次后端 UUID，并在后续启动中复用它。"""
 
     identity_path = workspace_identity_path(workspace_root)
-    identity_path.parent.mkdir(parents=True, exist_ok=True)
-    if identity_path.is_file():
-        return _read_workspace_id(identity_path)
-    if identity_path.exists():
-        raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
-    return _create_workspace_id(identity_path)
+    native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
+    existing_id = _read_existing_workspace_id(identity_path)
+    return existing_id if existing_id is not None else _create_workspace_id(identity_path)
 
 
 def bind_workspace_id(workspace_root: Path, workspace_id: str) -> str:
@@ -98,17 +108,16 @@ def bind_workspace_id(workspace_root: Path, workspace_id: str) -> str:
 
     expected_id = validate_workspace_id(workspace_id)
     identity_path = workspace_identity_path(workspace_root)
-    identity_path.parent.mkdir(parents=True, exist_ok=True)
-    if identity_path.is_file():
-        actual_id = _read_workspace_id(identity_path)
+    native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
+    existing_id = _read_existing_workspace_id(identity_path)
+    if existing_id is not None:
+        actual_id = existing_id
         if actual_id != expected_id:
             raise RuntimeError(
                 "挂载工作区 UUID 与工作区身份文件不一致: "
                 f"expected={expected_id}, actual={actual_id}, identity={identity_path}"
             )
         return actual_id
-    if identity_path.exists():
-        raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
     actual_id = _create_workspace_id(identity_path, expected_id)
     if actual_id != expected_id:
         raise RuntimeError(

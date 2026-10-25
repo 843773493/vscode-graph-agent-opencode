@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { readLauncherLock } from "./process/instance-lock.mjs";
+import { readLauncherLock } from "./instance-lock.mjs";
 
 export function buildDoctorReport({ runtime, boxteamHome }) {
   return {

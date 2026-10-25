@@ -1,11 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import type { TimelineItem } from "../timeline/timelineTypes";
 import {
-  formatToolCardContent,
+  deriveToolRowDisplay,
   isRoutineInternalToolItem,
   isSkillInternalToolItem,
-  toolCollapsedText,
 } from "./toolDisplay";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
@@ -53,12 +52,13 @@ function newProtocolToolItem(
 
 test("exec_command 使用持久终端专用展示", () => {
   const item = toolItem("exec_command");
+  const display = deriveToolRowDisplay(item, true);
 
-  expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
-  expect(formatToolCardContent(item)).toContain("term_exec_command");
-  expect(formatToolCardContent(item)).toContain("终端关闭");
-  expect(formatToolCardContent(item)).toContain("/workspace");
-  expect(formatToolCardContent(item)).toContain("10000");
+  expect(display.previewText).toBe("命令已完成，终端仍可打开");
+  expect(display.detailsContent).toContain("term_exec_command");
+  expect(display.detailsContent).toContain("终端关闭");
+  expect(display.detailsContent).toContain("/workspace");
+  expect(display.detailsContent).toContain("10000");
 });
 
 test("exec_command 优先使用新协议的参数和结果字段，并识别 exit_code 为 0", () => {
@@ -72,11 +72,38 @@ test("exec_command 优先使用新协议的参数和结果字段，并识别 exi
       status: "success",
     },
   );
+  const display = deriveToolRowDisplay(item, true);
 
-  expect(toolCollapsedText(item)).toBe("命令已完成，终端仍可打开");
-  expect(formatToolCardContent(item)).toContain("ls -la");
-  expect(formatToolCardContent(item)).toContain("README.md");
-  expect(formatToolCardContent(item)).toContain("命令已完成");
+  expect(display.previewText).toBe("命令已完成，终端仍可打开");
+  expect(display.detailsContent).toContain("ls -la");
+  expect(display.detailsContent).toContain("README.md");
+  expect(display.detailsContent).toContain("命令已完成");
+});
+
+test("展开终端工具行时预览和详情共用一次参数与结果解析", () => {
+  const item = newProtocolToolItem(
+    "exec_command",
+    { cmd: "bun run dev", workdir: "/workspace" },
+    { output: "x".repeat(100_000), exit_code: 0 },
+  );
+  const observation = (() => {
+    const parse = spyOn(JSON, "parse");
+    try {
+      return {
+        display: deriveToolRowDisplay(item, true),
+        parsedPayloads: parse.mock.calls.map(([payload]) => payload),
+      };
+    } finally {
+      parse.mockRestore();
+    }
+  })();
+
+  expect(observation.parsedPayloads).toHaveLength(2);
+  expect(observation.parsedPayloads.filter((payload) => payload === item.inputText)).toHaveLength(1);
+  expect(observation.parsedPayloads.filter((payload) => payload === item.resultText)).toHaveLength(1);
+  expect(observation.display.previewText).toBe("命令已完成，终端仍可打开");
+  expect(observation.display.detailsContent).toContain("bun run dev");
+  expect(observation.display.detailsContent).toContain("x".repeat(100_000));
 });
 
 test("后台 exec_command 只返回 session_id 时显示仍在运行", () => {
@@ -88,10 +115,11 @@ test("后台 exec_command 只返回 session_id 时显示仍在运行", () => {
       output: "服务已启动",
     },
   );
+  const display = deriveToolRowDisplay(item, true);
 
-  expect(toolCollapsedText(item)).toBe("命令仍在运行，终端可 attach");
-  expect(formatToolCardContent(item)).toContain("命令运行中");
-  expect(formatToolCardContent(item)).toContain("term_background");
+  expect(display.previewText).toBe("命令仍在运行，终端可 attach");
+  expect(display.detailsContent).toContain("命令运行中");
+  expect(display.detailsContent).toContain("term_background");
 });
 
 test("已移除的 filesystem execute 不再属于常规内部工具", () => {
@@ -110,17 +138,18 @@ test("write_stdin 使用模型熟悉的 session_id 展示持续终端", () => {
     output: "yes",
     wall_time_seconds: 0.25,
   };
+  const display = deriveToolRowDisplay(item, true);
 
-  expect(toolCollapsedText(item)).toBe("已写入，命令仍在运行");
-  expect(formatToolCardContent(item)).toContain("term_running");
-  expect(formatToolCardContent(item)).toContain("yes");
+  expect(display.previewText).toBe("已写入，命令仍在运行");
+  expect(display.detailsContent).toContain("term_running");
+  expect(display.detailsContent).toContain("yes");
 });
 
 test("未知工具结果不使用会误导为成功的折叠文案", () => {
   const item = toolItem("read_file");
   item.outcomeUnknown = true;
 
-  expect(toolCollapsedText(item)).toBe("未确认返回结果");
+  expect(deriveToolRowDisplay(item, false).previewText).toBe("未确认返回结果");
 });
 
 test("普通文件读取不按路径推断 Skill 来源或宣称已加载", () => {
@@ -130,7 +159,7 @@ test("普通文件读取不按路径推断 Skill 来源或宣称已加载", () =
   };
 
   expect(isSkillInternalToolItem(item)).toBe(false);
-  expect(toolCollapsedText(item)).toBe("read_file 处理：.boxteam/bundled-skills/browser-control/SKILL.md");
+  expect(deriveToolRowDisplay(item, false).previewText).toBe("read_file 处理：.boxteam/bundled-skills/browser-control/SKILL.md");
 });
 
 test("Skill 加载工具由明确工具名分类，错误回执保留原结果", () => {
@@ -138,5 +167,5 @@ test("Skill 加载工具由明确工具名分类，错误回执保留原结果",
   item.resultText = '{"status":"error","name":"browser-control"}';
   item.rawEnd.result = item.resultText;
   expect(isSkillInternalToolItem(item)).toBe(true);
-  expect(toolCollapsedText(item)).toContain('"status":"error"');
+  expect(deriveToolRowDisplay(item, false).previewText).toContain('"status":"error"');
 });

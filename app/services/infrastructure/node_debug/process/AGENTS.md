@@ -2,6 +2,22 @@
 
 `app/services/infrastructure/node_debug/process/` 承载 Node 调试进程的基础设施实现：OS 起始身份探测、launch claim 登记与恢复决策、进程生命周期控制、启动编排、Inspector 连接、暂停上下文求值、运行时输出/进程监控，以及进程租约运行时。
 
+## 按职责查找
+
+```text
+process/
+├── process_identity.py     PID与OS起始标记的事实读取；Linux用/proc，其他平台用psutil
+├── launch_claim.py         持久启动claim的阶段迁移与崩溃恢复判定，不直接操作进程
+├── claim_runtime.py        claim文件、状态事件与外部进程租约的owner接线
+├── launch_orchestrator.py  启动流程与配置、claim、Inspector握手的编排
+├── inspector.py            Node Inspector连接、命令和执行状态观察
+├── evaluation.py           暂停态表达式求值与有界历史记录
+├── observation.py          stdout/stderr、诊断输出和运行时终态归集
+└── process_lifecycle.py    POSIX进程组与Windows进程树的终止和退出确认
+```
+
+按责任选择边界：`process_identity.py`只读取PID身份事实，`launch_claim.py`根据事实作恢复判定，`process_lifecycle.py`执行并确认OS清理，`launch_orchestrator.py`连接启动阶段。租约与claim的持久化归`claim_runtime.py`；Inspector协议调用归`inspector.py`，表达式解释归`evaluation.py`。不要让身份读取器顺带决定恢复，也不要让claim判定器直接发信号。
+
 # 可修改内容
 
 - 可以维护进程身份探测、launch claim 状态迁移、进程停止核实、启动编排、Inspector 协议交互与暂停上下文求值。

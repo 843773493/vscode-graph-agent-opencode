@@ -50,7 +50,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
 from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,

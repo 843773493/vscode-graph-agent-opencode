@@ -56,7 +56,7 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from app.services.infrastructure.turn_history.models import InvalidTurnCursorError
-from tests.support.rollout_view_mutations import (
+from tests.support.rollout.view_mutations import (
     mutate_view_members,
     mutate_view_members_many,
 )

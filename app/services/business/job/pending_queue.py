@@ -44,6 +44,23 @@ class JobPendingQueue:
             if thread_id is None or self._entries[job_id].thread_id == thread_id
         )
 
+    def queued_job_position_and_count(
+        self,
+        session_id: str,
+        thread_id: str,
+        job_id: str,
+    ) -> tuple[int | None, int]:
+        """返回目标 Job 的零基队列位置与该 Thread 的排队数。"""
+        position: int | None = None
+        count = 0
+        for queued_job_id in self._waiting.get(session_id, ()):
+            if self._entries[queued_job_id].thread_id != thread_id:
+                continue
+            if queued_job_id == job_id and position is None:
+                position = count
+            count += 1
+        return position, count
+
     def snapshot_version(self, session_id: str) -> int:
         return self._snapshot_versions.get(session_id, 0)
 
@@ -69,27 +86,39 @@ class JobPendingQueue:
         session_id: str,
         job_id: str,
         delivery_policy: DeliveryPolicy,
-        *, thread_id: str, enqueue_sequence: int,
+        *,
+        thread_id: str,
+        enqueue_sequence: int,
     ) -> QueueEntry:
         if not thread_id:
             raise ValueError("队列入队必须携带精确 thread_id")
         if job_id in self._entries:
             raise ValueError(f"Job 已在 FIFO 队列中: job_id={job_id}")
-        if not isinstance(enqueue_sequence, int) or isinstance(enqueue_sequence, bool) or enqueue_sequence < 1:
+        if (
+            not isinstance(enqueue_sequence, int)
+            or isinstance(enqueue_sequence, bool)
+            or enqueue_sequence < 1
+        ):
             raise ValueError("入队顺序必须来自原 admission commit cursor")
-        previous = [self._entries[value].enqueue_sequence for value in self.queued_job_ids(session_id, thread_id)]
-        if previous and enqueue_sequence <= previous[-1]:
+        has_thread_waiting = False
+        last_thread_sequence: int | None = None
+        for queued_job_id in self._waiting.get(session_id, ()):
+            queued_entry = self._entries[queued_job_id]
+            if queued_entry.thread_id != thread_id:
+                continue
+            has_thread_waiting = True
+            last_thread_sequence = queued_entry.enqueue_sequence
+        if (
+            last_thread_sequence is not None
+            and enqueue_sequence <= last_thread_sequence
+        ):
             raise RuntimeError("FIFO 镜像不能改变同 Thread 的准入顺序")
         entry = QueueEntry(
             job_id=job_id,
             thread_id=thread_id,
             enqueue_sequence=enqueue_sequence,
             delivery_policy=delivery_policy,
-            waiting_reason=(
-                _POSITIONAL_WAITING_REASON
-                if self._thread_head_entry(session_id, thread_id) is not None
-                else None
-            ),
+            waiting_reason=_POSITIONAL_WAITING_REASON if has_thread_waiting else None,
         )
         self._entries[job_id] = entry
         self._waiting.setdefault(session_id, deque()).append(job_id)
@@ -115,7 +144,8 @@ class JobPendingQueue:
         seen_threads: set[str] = set()
         for entry in entries:
             JobPendingQueue._sync_positional_waiting_reason(
-                entry, is_head=entry.thread_id not in seen_threads,
+                entry,
+                is_head=entry.thread_id not in seen_threads,
             )
             seen_threads.add(entry.thread_id)
             self._entries[entry.job_id] = entry
@@ -182,9 +212,7 @@ class JobPendingQueue:
         try:
             waiting.remove(job_id)
         except ValueError:
-            raise RuntimeError(
-                f"撤回消息时队列状态不一致: job_id={job_id}"
-            ) from None
+            raise RuntimeError(f"撤回消息时队列状态不一致: job_id={job_id}") from None
         self._entries.pop(job_id, None)
         if not waiting:
             self._waiting.pop(session_id, None)

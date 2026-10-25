@@ -68,9 +68,9 @@ function eventSortTime(item: FrontendReceivedEvent): number {
 
 export function orderedTraceItems(items: FrontendReceivedEvent[]): FrontendReceivedEvent[] {
   return uniqueTraceItems(items)
-    .map((item, index) => ({ item, index }))
+    .map((item, index) => ({ item, index, sortTime: eventSortTime(item) }))
     .sort((left, right) => {
-      const timeDelta = eventSortTime(left.item) - eventSortTime(right.item);
+      const timeDelta = left.sortTime - right.sortTime;
       if (timeDelta !== 0) {
         return timeDelta;
       }

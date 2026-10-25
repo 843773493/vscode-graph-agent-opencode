@@ -6,7 +6,7 @@
 
 `supervisor.test.mjs`验证启动契约、信号和active恢复，`handoff.test.mjs`验证generation切换，`readiness.test.mjs`验证取消及就绪预算，`public-listener.test.mjs`验证真实HTTP流转发。测试中的进程替身不能替代真实Gateway启动；路径模拟不能替代Windows/macOS原生验证。
 
-HTTP代理的客户端响应或底层连接关闭时必须释放上游请求，包含响应头尚未到达和流正文未结束两种情况；监听只属于单次响应，不向keep-alive底层连接追加每次请求的监听器。客户端取消不代表后端业务已回滚或停止执行。断连测试按正式Launcher入口使用Node运行，只连接随机本地端口，不启动用户Gateway或工作区服务；Bun的HTTP shim未转发该关闭事件，不能代替实际运行时。
+HTTP代理的客户端响应在未正常完成时关闭，必须释放上游请求，包含响应头尚未到达和流正文未结束两种情况；完整响应结束后允许复用上游连接。公开代理按target generation独立创建keep-alive Agent；切换target后关闭旧Agent的空闲连接，并禁止旧在途连接完成后重新入池，不能让新generation复用旧连接。监听只属于单次响应，不向keep-alive底层连接追加每次请求的监听器。客户端取消不代表后端业务已回滚或停止执行。断连测试按正式Launcher入口使用Node运行，只连接随机本地端口，不启动用户Gateway或工作区服务；Bun的HTTP shim未转发该关闭事件，不能代替实际运行时。
 
 请求与响应流的上游错误由HTTP owner统一交付：响应开始前返回带原因的502，响应开始后销毁不完整响应，不拼入错误正文或伪造正常结束。目标断流不关闭公开监听器；测试应验证分块和定长正文中断，以及同一代理随后仍可读取健康目标。
 

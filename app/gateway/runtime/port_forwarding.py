@@ -31,7 +31,7 @@ _SCHEMA_VERSION = 1
 _LOCAL_HOST = "127.0.0.1"
 _REMOTE_HOST = "127.0.0.1"
 _READY_TIMEOUT_SECONDS = 10.0
-_LOG_TAIL_LIMIT = 4000
+_LOG_TAIL_MAX_CHARACTERS = 4000
 _RESTORE_CONCURRENCY = 8
 
 logger = logging.getLogger(__name__)
@@ -653,13 +653,13 @@ class SshPortForwardManager:
         if log_path is None or not log_path.exists():
             return ""
         # UTF-8 字符最多占 4 字节；额外读取 3 字节，覆盖尾部起点切入字符的情况。
-        max_tail_bytes = _LOG_TAIL_LIMIT * 4 + 3
+        max_tail_bytes = _LOG_TAIL_MAX_CHARACTERS * 4 + 3
         with log_path.open("rb") as stream:
             stream.seek(0, 2)
             file_size = stream.tell()
             stream.seek(max(0, file_size - max_tail_bytes))
             content = stream.read(max_tail_bytes).decode("utf-8", errors="replace")
-        return content[-_LOG_TAIL_LIMIT:].strip()
+        return content[-_LOG_TAIL_MAX_CHARACTERS:].strip()
 
     def _load(self) -> None:
         payload = read_json_object(

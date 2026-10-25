@@ -687,6 +687,59 @@ async def test_search_literal_by_default_regex_explicit_and_structured_match_can
 
 
 @pytest.mark.asyncio
+async def test_large_search_budget_checks_each_match_without_copying_prior_matches(
+    session_context_service_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _FakeMessageSource()
+    source.records = [
+        {"role": "user", "type": "human", "content": f"needle {index:03d}"}
+        for index in range(200)
+    ]
+    builder = SessionContextQueryService._build_search_result
+    builder_match_counts: list[int] = []
+
+    def observe_builder(**kwargs: object):
+        matches = kwargs["matches"]
+        assert isinstance(matches, list)
+        builder_match_counts.append(len(matches))
+        return builder(**kwargs)
+
+    monkeypatch.setattr(
+        SessionContextQueryService,
+        "_build_search_result",
+        staticmethod(observe_builder),
+    )
+    result = await session_context_service_factory(source).search_context(
+        _session_search_request(
+            query="needle",
+            max_results=200,
+            max_chars=8192,
+        )
+    )
+
+    assert result.total_matches == 200
+    assert result.matches
+    assert result.has_more is True
+    assert result.next_cursor is not None
+    assert result.returned_chars == len(result.model_dump_json())
+    assert result.returned_chars <= 8192
+    assert builder_match_counts[:-1] and set(builder_match_counts[:-1]) == {0}
+    assert builder_match_counts[-1] == len(result.matches)
+
+    next_page = await session_context_service_factory(source).search_context(
+        _session_search_request(
+            query="needle",
+            max_results=200,
+            max_chars=8192,
+            cursor=result.next_cursor,
+        )
+    )
+    assert next_page.total_matches == 200
+    assert next_page.matches[0].record_index == result.matches[-1].record_index + 1
+
+
+@pytest.mark.asyncio
 async def test_inventory_information_and_output_budget(
     session_context_service_factory,
 ):

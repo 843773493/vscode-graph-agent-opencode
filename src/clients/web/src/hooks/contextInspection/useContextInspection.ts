@@ -36,7 +36,7 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
   const projectionRef = useRef(projection);
   const catalogRequest = useRef<AbortController | null>(null);
   const projectionRequest = useRef<AbortController | null>(null);
-  const selectedRef = useRef<ContextItem | null>(null);
+  const selectedAssemblyItemRef = useRef<ContextItem | null>(null);
 
   const loadCatalog = useCallback(async (reset = false) => {
     catalogRequest.current?.abort();
@@ -75,7 +75,7 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
     setSelectedAssembly(item);
     setAssemblyId(selectedAssemblyId);
     setAssemblyRef(selectedAssemblyRef);
-    selectedRef.current = item;
+    selectedAssemblyItemRef.current = item;
     if (reset) { projectionRef.current = previousPage; setProjection(previousPage); }
     setProjectionError(null);
     if (!item) { setProjectionLoading(false); return; }
@@ -106,8 +106,8 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
   useEffect(() => {
     if (active) {
       void loadCatalog(true);
-      if (selectedRef.current) {
-        void loadProjection(selectedRef.current, true);
+      if (selectedAssemblyItemRef.current) {
+        void loadProjection(selectedAssemblyItemRef.current, true);
       }
     } else {
       setCatalogLoading(false);

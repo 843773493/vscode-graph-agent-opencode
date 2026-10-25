@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import uuid
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,7 +21,10 @@ from app.core.workspace_identity import read_workspace_id
 
 DEFAULT_MAX_OUTPUT_LINES = 2_000
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
+_OUTPUT_COMPARISON_CHUNK_BYTES = 64 * 1024
 TOOL_OUTPUT_ARTIFACT_KEY = "tool_output"
+# 与 str.splitlines() 的边界一致，逐行取样时不创建全量行列表。
+_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,8 +218,7 @@ def _line_count(text: str) -> int:
 def _write_exact_output(path: Path, content: bytes, resource_uri: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        existing = path.read_bytes()
-        if existing != content:
+        if not _file_matches_bytes(path, content):
             raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {resource_uri}")
         return
 
@@ -226,11 +230,22 @@ def _write_exact_output(path: Path, content: bytes, resource_uri: str) -> None:
     try:
         os.link(temporary_path, path)
     except FileExistsError:
-        existing = path.read_bytes()
-        if existing != content:
+        if not _file_matches_bytes(path, content):
             raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {resource_uri}")
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _file_matches_bytes(path: Path, expected: bytes) -> bool:
+    if path.stat().st_size != len(expected):
+        return False
+    with path.open("rb") as stream:
+        for offset in range(0, len(expected), _OUTPUT_COMPARISON_CHUNK_BYTES):
+            actual_chunk = stream.read(_OUTPUT_COMPARISON_CHUNK_BYTES)
+            expected_chunk = expected[offset : offset + _OUTPUT_COMPARISON_CHUNK_BYTES]
+            if actual_chunk != expected_chunk:
+                return False
+        return stream.read(1) == b""
 
 
 def _take_prefix_bytes(text: str, limit: int) -> str:
@@ -239,6 +254,18 @@ def _take_prefix_bytes(text: str, limit: int) -> str:
 
 def _take_suffix_bytes(text: str, limit: int) -> str:
     return text.encode("utf-8")[-limit:].decode("utf-8", errors="ignore")
+
+
+def _iter_source_lines(text: str) -> Iterator[str]:
+    """按 splitlines 的边界产出行，避免复制整份文本的行列表。"""
+    if not text:
+        return
+    start = 0
+    for line_break in _LINE_BREAK_PATTERN.finditer(text):
+        yield text[start:line_break.start()]
+        start = line_break.end()
+    if start < len(text):
+        yield text[start:]
 
 
 def _bounded_preview(
@@ -253,12 +280,17 @@ def _bounded_preview(
     if fixed_bytes >= max_bytes:
         raise ValueError("工具输出 marker 超过最大预览字节数")
 
-    source_lines = text.splitlines()
     available_lines = max_lines - marker.count("\n") - 4
     head_line_count = (available_lines + 1) // 2
     tail_line_count = available_lines // 2
-    head = "\n".join(source_lines[:head_line_count])
-    tail = "\n".join(source_lines[-tail_line_count:]) if tail_line_count else ""
+    head_lines: list[str] = []
+    tail_lines: deque[str] = deque(maxlen=max(0, tail_line_count))
+    for line_index, line in enumerate(_iter_source_lines(text)):
+        if line_index < head_line_count:
+            head_lines.append(line)
+        tail_lines.append(line)
+    head = "\n".join(head_lines)
+    tail = "\n".join(tail_lines) if tail_line_count else ""
 
     available_bytes = max_bytes - fixed_bytes
     head = _take_prefix_bytes(head, (available_bytes + 1) // 2)

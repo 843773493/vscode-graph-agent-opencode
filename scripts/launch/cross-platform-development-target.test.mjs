@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -21,6 +21,7 @@ import {
   createWorkspaceSnapshot,
 } from "../../tools/cross-platform-development-targets/snapshot.mjs";
 import {
+  commandForCurrentPlatform,
   runChecked,
   runCheckedWithInput,
 } from "../../tools/cross-platform-development-targets/process.mjs";
@@ -33,16 +34,24 @@ const projectRoot = process.cwd();
 const fixtureRunRoot = path.resolve(
   "out/tests/scripts/launch/cross-platform-development-target/workspace", randomUUID(),
 );
+let fixtureDirectorySequence = 0;
 afterAll(() => rmSync(fixtureRunRoot, { recursive: true, force: true }));
 
 function createFixtureRoot() {
-  const root = path.join(fixtureRunRoot, `${randomUUID()}-目标 fixture`);
+  const root = path.join(fixtureRunRoot, `${++fixtureDirectorySequence}-目标 fixture`);
   mkdirSync(root, { recursive: true });
   return root;
 }
 
+function nativeExecutable(name) {
+  return process.platform === "win32" ? `${name}.exe` : name;
+}
+
 function command(cwd, args) {
-  const result = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(
+    [nativeExecutable(args[0]), ...args.slice(1)],
+    { cwd, stdout: "pipe", stderr: "pipe" },
+  );
   if (result.exitCode !== 0) {
     throw new Error(new TextDecoder().decode(result.stderr));
   }
@@ -138,7 +147,7 @@ function invokeShellCommand(platform, passthrough = []) {
   const knownHostsFile = path.join(root, "fixture known hosts");
   writeFileSync(identityFile, "fixture identity only", "utf8");
   const entryUrl = new URL("./cross-platform-development-target.mjs", import.meta.url).href;
-  const run = spawnSync("node", [
+  const run = spawnSync(nativeExecutable("node"), [
     "--experimental-vm-modules",
     "--input-type=module",
     "--eval",
@@ -178,6 +187,9 @@ async function observeEnvironmentUpload(entryUrl, projectRoot, platform, identit
     initializeImportMeta(meta) { meta.main = false; },
   });
   const dependencies = new Map([
+    ["node:child_process", {
+      execFileSync() {},
+    }],
     ["node:crypto", { createHash: crypto.createHash }],
     ["node:fs", {
       chmodSync: fs.chmodSync,
@@ -281,7 +293,7 @@ function invokeEnvironmentUpload(platform, failures = {}) {
   );
   const entryUrl = new URL("../../tools/cross-platform-development-targets/ssh-target.mjs", import.meta.url).href;
   const localHash = createHash("sha256").update(contents).digest("hex");
-  const run = spawnSync("node", [
+  const run = spawnSync(nativeExecutable("node"), [
     "--experimental-vm-modules",
     "--input-type=module",
     "--eval",
@@ -301,12 +313,15 @@ async function observeDockerProvision(
   existingKnownHosts,
   failKnownHostUpdate = false,
   removedKnownHostLines = [],
+  hostPlatform = process.platform,
 ) {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const { createContext, SourceTextModule, SyntheticModule } = await import("node:vm");
+  const processAdapter = await import(new URL("./process.mjs", entryUrl));
   const clock = { now: 0 };
   const childCalls = [];
+  const spawnedCommands = [];
   const sleeps = [];
   const checkedCommands = [];
   const knownHostsPath = path.join(fixtureRoot, "ssh", "known_hosts");
@@ -318,14 +333,17 @@ async function observeDockerProvision(
     Buffer,
     TextDecoder,
     performance: { now: () => clock.now },
-    process: { env: {}, getuid: () => 1000, getgid: () => 1000 },
+    process: { env: {}, platform: hostPlatform, getuid: () => 1000, getgid: () => 1000 },
     Bun: {
       spawnSync(command, options) {
         const args = Array.from(command);
-        if (args[0] === "docker") {
+        spawnedCommands.push(args);
+        const dockerCommand = hostPlatform === "win32" ? "docker.exe" : "docker";
+        const keyscanCommand = hostPlatform === "win32" ? "ssh-keyscan.exe" : "ssh-keyscan";
+        if (args[0] === dockerCommand) {
           return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
         }
-        if (args[0] !== "ssh-keyscan") throw new Error(`未预期的进程: ${args[0]}`);
+        if (args[0] !== keyscanCommand) throw new Error(`未预期的进程: ${args[0]}`);
         if (!Number.isFinite(options.timeout) || options.timeout <= 0) {
           throw new Error("ssh-keyscan 没有有效的子进程期限");
         }
@@ -377,6 +395,8 @@ async function observeDockerProvision(
     }],
     ["node:path", { default: path.default }],
     ["./process.mjs", {
+      commandForCurrentPlatform: (command) =>
+        processAdapter.commandForCurrentPlatform(command, hostPlatform),
       runChecked(command) {
         const args = Array.from(command);
         checkedCommands.push(args);
@@ -442,6 +462,7 @@ async function observeDockerProvision(
     result,
     error,
     childCalls,
+    spawnedCommands,
     sleeps,
     checkedCommands,
     knownHosts: fs.existsSync(knownHostsPath) ? fs.readFileSync(knownHostsPath, "utf8") : null,
@@ -453,10 +474,11 @@ function invokeDockerProvision(
   existingKnownHosts = null,
   failKnownHostUpdate = false,
   removedKnownHostLines = [],
+  hostPlatform = process.platform,
 ) {
   const root = createFixtureRoot();
   const entryUrl = new URL("../../tools/cross-platform-development-targets/docker-target.mjs", import.meta.url).href;
-  const run = spawnSync("node", [
+  const run = spawnSync(nativeExecutable("node"), [
     "--experimental-vm-modules",
     "--input-type=module",
     "--eval",
@@ -468,6 +490,7 @@ function invokeDockerProvision(
       existingKnownHosts,
       failKnownHostUpdate,
       removedKnownHostLines,
+      hostPlatform,
     ]),
   ], { cwd: root, encoding: "utf8", timeout: 5000 });
   if (run.error || run.status !== 0) {
@@ -490,6 +513,25 @@ function expectShellTransport(observation, remoteCommand) {
 }
 
 describe("runChecked", () => {
+  test("Windows 裸命令补 .exe，其他平台维持原命令", () => {
+    expect(commandForCurrentPlatform(["git", "status"], "win32")).toEqual([
+      "git.exe",
+      "status",
+    ]);
+    expect(commandForCurrentPlatform(["C:\\Tools\\git", "status"], "win32")).toEqual([
+      "C:\\Tools\\git.exe",
+      "status",
+    ]);
+    expect(commandForCurrentPlatform(["git.exe", "status"], "win32")).toEqual([
+      "git.exe",
+      "status",
+    ]);
+    expect(commandForCurrentPlatform(["git", "status"], "darwin")).toEqual([
+      "git",
+      "status",
+    ]);
+  });
+
   test("spawnSync 创建失败时附调用方 label 并保留原始 cause", () => {
     const label = "Docker 目标 fixture 创建阶段";
     const cause = new Error("native spawn failure");
@@ -662,6 +704,26 @@ describe("runCheckedWithInput", () => {
 });
 
 describe("Docker provision SSH host key deadline", () => {
+  test("Windows 宿主机启动 Docker 工具时使用原生 .exe", () => {
+    const observation = invokeDockerProvision([
+      { elapsedMs: 1, exitCode: 0, stdout: "[fixture.invalid]:22222 ssh-ed25519 AAA-fixture-key\n" },
+    ], null, false, [], "win32");
+
+    expect(observation.error).toBeNull();
+    expect(observation.spawnedCommands.map(([executable]) => executable)).toEqual([
+      "docker.exe",
+      "ssh-keyscan.exe",
+    ]);
+    expect(observation.childCalls[0].args).toEqual([
+      "ssh-keyscan.exe",
+      "-p",
+      "22222",
+      "-t",
+      "ed25519",
+      "fixture.invalid",
+    ]);
+  });
+
   test("每次 ssh-keyscan 都收到剩余期限，单调截止后不再启动子进程", () => {
     const observations = Array.from({ length: 60 }, (_, index) => ({
       elapsedMs: 1,
@@ -693,7 +755,17 @@ describe("Docker provision SSH host key deadline", () => {
     expect(observation.error.message).toContain("超过本次剩余子进程期限 30000 ms");
     expect(observation.error.message).toContain("ssh-keyscan timed out");
     expect(observation.childCalls).toEqual([
-      { args: ["ssh-keyscan", "-p", "22222", "-t", "ed25519", "fixture.invalid"], timeout: 30_000 },
+      {
+        args: [
+          commandForCurrentPlatform(["ssh-keyscan"])[0],
+          "-p",
+          "22222",
+          "-t",
+          "ed25519",
+          "fixture.invalid",
+        ],
+        timeout: 30_000,
+      },
     ]);
     expect(observation.sleeps).toEqual([]);
     expect(observation.knownHosts).toBe("existing-host-key\n");
@@ -943,6 +1015,47 @@ describe("平台 adapter 边界", () => {
 
     expect(result).toContain(identityFile);
     expect(statSync(identityFile).mode & 0o777).toBe(0o600);
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows SSH transport 将 identity ACL 限制为当前用户", () => {
+    const root = createFixtureRoot();
+    const identityFile = path.join(root, "id_ed25519");
+    writeFileSync(identityFile, "private-key", "utf8");
+    execFileSync("icacls.exe", [identityFile, "/grant", "*S-1-5-32-545:(R)"], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    const target = {
+      id: "windows-permissions",
+      ssh: {
+        host: "127.0.0.1",
+        port: 22222,
+        user: "boxteam",
+        identityFile,
+        knownHostsFile: path.join(root, "known_hosts"),
+      },
+    };
+
+    const result = sshCommand(target, "echo ready");
+
+    expect(result).toContain(identityFile);
+    const encodedPath = Buffer.from(identityFile, "utf8").toString("base64");
+    const verifyAcl = [
+      "$ErrorActionPreference = 'Stop'",
+      `$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+      "$acl = Get-Acl -LiteralPath $path",
+      "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+      "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
+      "if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or",
+      "    $rules[0].IdentityReference.Value -ne $sid -or",
+      "    $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or",
+      "    $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) { exit 1 }",
+    ].join("\n");
+    execFileSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(verifyAcl, "utf16le").toString("base64")],
+      { encoding: "utf8", timeout: 10_000, windowsHide: true },
+    );
   });
 
   test(".env 哈希不一致时快速失败", () => {

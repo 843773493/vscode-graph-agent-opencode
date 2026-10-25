@@ -66,13 +66,15 @@ def fork_deadlines(request: pytest.FixtureRequest) -> Iterator[ForkDeadlineRegis
 @pytest.fixture
 def frozen_provider_wire() -> Callable[[str, str], dict[str, object]]:
     """为不发送 HTTP 的 Saver 用例显式提供冻结 profile 与语义参数。"""
-    from tests.support.frozen_provider import frozen_provider_wire
+    from tests.support.model_stream.frozen_provider import frozen_provider_wire
 
     return frozen_provider_wire
 @pytest.fixture
 def frozen_provider_activation() -> Callable[..., dict[str, object]]:
     """正式 prepare 的显式冻结前置；只消费测试已建立的真实 admission。"""
-    from tests.support.frozen_provider import create_frozen_provider_activation
+    from tests.support.model_stream.frozen_provider import (
+        create_frozen_provider_activation,
+    )
 
     return create_frozen_provider_activation()
 
@@ -80,7 +82,9 @@ def frozen_provider_activation() -> Callable[..., dict[str, object]]:
 @pytest.fixture
 def frozen_provider_prepare(frozen_provider_wire, frozen_provider_activation):
     """历史 fixture 经真实封存和 ModelCall 登记激活当前 admission，不发送 Provider 请求。"""
-    from tests.support.frozen_provider import create_frozen_provider_prepare
+    from tests.support.model_stream.frozen_provider import (
+        create_frozen_provider_prepare,
+    )
 
     return create_frozen_provider_prepare(frozen_provider_wire, frozen_provider_activation)
 

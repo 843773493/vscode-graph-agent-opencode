@@ -89,7 +89,12 @@ def _public_location(location: tuple[str | int, ...], inputs: Mapping[str, objec
             nodes = declared
             document = document.get(part) if isinstance(document, dict) else None
         elif isinstance(document, dict) and part in document:
-            result.append(f"member[{list(document).index(part)}]")
+            member_index = next(
+                member_index
+                for member_index, key in enumerate(document)
+                if key == part
+            )
+            result.append(f"member[{member_index}]")
             nodes = [(schema["additionalProperties"], root) for schema, root in variants
                      if isinstance(schema.get("additionalProperties"), dict)]
             document = document[part]

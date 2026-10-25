@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -246,7 +246,11 @@ def _sealed_with_activation(sessions_dir: Path, *, internal: bool = False):
     return saver, snapshot, sealed
 
 
-def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bundle_factory) -> None:
+def test_retention_protects_sealed_activation_lineage(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver, snapshot, _sealed = _sealed_with_activation(sessions_dir)
@@ -284,20 +288,71 @@ def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bu
         connection.commit()
 
     # GC 候选包含这两条，但它们被 sealed activation catalog 引用，必须保护。
-    assert saver._storage.assemblies.context_assembly_references_detail(
+    assemblies = saver._storage.assemblies
+    referenced_details = (
+        DetailRef.from_dict(json.loads(lineage_key)),
+        DetailRef.from_dict(json.loads(body_key)),
+    )
+    expired_details = assemblies.list_expired_context_plan_details(
+        SESSION_ID,
+        thread_id,
+        expired_before=datetime.now(UTC),
+    )
+    assert set(referenced_details) <= set(expired_details)
+    read_connection = assemblies._storage.read_connection
+    opened_connections = 0
+    traced_queries: list[str] = []
+
+    @contextmanager
+    def count_read_connection(
+        owner_session_id: str,
+        owner_thread_id: str,
+        checkpoint_ns: str = "",
+    ):
+        nonlocal opened_connections
+        opened_connections += 1
+        with read_connection(owner_session_id, owner_thread_id, checkpoint_ns) as connection:
+            connection.set_trace_callback(traced_queries.append)
+            yield connection
+
+    monkeypatch.setattr(assemblies._storage, "read_connection", count_read_connection)
+    unused_details = tuple(
+        DetailRef(
+            SESSION_ID,
+            thread_id,
+            f"unused-assembly-{index}",
+            f"unused-detail-{index}",
+        )
+        for index in range(205)
+    )
+    candidates = referenced_details + unused_details
+    assert assemblies.find_referenced_context_details(
+        SESSION_ID,
+        thread_id,
+        detail_refs=candidates,
+    ) == frozenset(referenced_details)
+    assert opened_connections == 1
+    reference_queries = [
+        query for query in traced_queries
+        if (
+            "FROM context_plan_details" in query
+            or "FROM resource_activation_snapshots" in query
+            or "FROM resource_activation_bindings" in query
+        )
+    ]
+    assert reference_queries
+    assert len(reference_queries) * 20 <= len(candidates)
+    assert assemblies.context_assembly_references_detail(
         SESSION_ID,
         thread_id,
         assembly_id=snapshot.activation_snapshot_id,
-        detail_ref=DetailRef.from_dict(json.loads(lineage_key)),
+        detail_ref=referenced_details[0],
     )
     with pytest.raises(RuntimeError, match="detail-retention-protected"):
         saver._storage.assemblies.mark_context_plan_details_unavailable(
             SESSION_ID,
             thread_id,
-            detail_refs=(
-                DetailRef.from_dict(json.loads(lineage_key)),
-                DetailRef.from_dict(json.loads(body_key)),
-            ),
+            detail_refs=referenced_details,
         )
     with closing(
         sqlite3.connect(saver._storage.storage.index_path(SESSION_ID, "", thread_id=thread_id))

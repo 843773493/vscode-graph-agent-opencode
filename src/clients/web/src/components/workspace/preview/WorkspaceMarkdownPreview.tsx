@@ -1,14 +1,6 @@
-import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
-import {
-  resolveWorkspaceMarkdownTarget,
-  type WorkspaceMarkdownTarget,
-} from "../../../utils/markdown/workspaceMarkdown";
-import MermaidDiagram from "./MermaidDiagram";
-import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
-import { errorMessage } from "../../../utils/errorMessage";
+import { lazy, Suspense, useState } from "react";
+
+const WorkspaceMarkdownRenderer = lazy(() => import("./WorkspaceMarkdownRenderer"));
 
 interface WorkspaceMarkdownPreviewProps {
   apiPort: number;
@@ -60,69 +52,21 @@ export default function WorkspaceMarkdownPreview({
           </button>
         </div>
       ) : null}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize]}
-        components={{
-          a: ({ children, href, title }) => {
-            if (!href) {
-              return <span>{children}</span>;
-            }
-            let target: WorkspaceMarkdownTarget;
-            try {
-              target = resolveWorkspaceMarkdownTarget(path, href);
-            } catch (resolveError) {
-              const message = errorMessage(resolveError);
-              return <span className="workspace-markdown-link-error" title={message}>{children}</span>;
-            }
-            if (target.kind === "workspace") {
-              return (
-                <a
-                  href={href}
-                  title={title}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void onOpenWorkspacePath(target.path);
-                  }}
-                >
-                  {children}
-                </a>
-              );
-            }
-            return (
-              <a
-                href={target.href}
-                title={title}
-                target={target.kind === "external" ? "_blank" : undefined}
-                rel={target.kind === "external" ? "noopener noreferrer" : undefined}
-              >
-                {children}
-              </a>
-            );
-          },
-          img: ({ src, alt = "图片", title }) => src ? (
-            <WorkspaceMarkdownImage
-              apiPort={apiPort}
-              workspaceId={workspaceId}
-              markdownPath={path}
-              src={src}
-              alt={alt}
-              title={title ?? undefined}
-            />
-          ) : <span className="workspace-markdown-image-error">{alt}: 缺少图片地址</span>,
-          code: ({ className, children }) => {
-            const source = String(children).replace(/\n$/, "");
-            if (className === "language-mermaid") {
-              return <MermaidDiagram source={source} />;
-            }
-            return <code className={className}>{children}</code>;
-          },
-        }}
-      >
-        {documentBounded
-          ? content.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
-          : content}
-      </ReactMarkdown>
+      <Suspense fallback={(
+        <div className="workspace-markdown-preview-loading" role="status">
+          正在加载 Markdown 预览…
+        </div>
+      )}>
+        <WorkspaceMarkdownRenderer
+          apiPort={apiPort}
+          workspaceId={workspaceId}
+          path={path}
+          content={documentBounded
+            ? content.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
+            : content}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
+      </Suspense>
     </div>
   );
 }

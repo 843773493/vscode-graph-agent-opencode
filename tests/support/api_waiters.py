@@ -32,38 +32,37 @@ async def wait_for_jobs_done_concurrently(
     max_attempts: int = 60,
 ) -> dict[str, dict]:
     """等待并发运行的多个 Job，每轮并发查询未完成项；本函数不调度 Job。"""
-    pending_job_ids = set(job_ids)
-    job_results: dict[str, dict] = {}
-    if not pending_job_ids:
-        return job_results
+    unfinished_job_ids = set(job_ids)
+    completed_job_records: dict[str, dict] = {}
+    if not unfinished_job_ids:
+        return completed_job_records
 
-    for poll_round in range(max_attempts):
-        job_ids_to_poll = tuple(pending_job_ids)
-        responses = await gather(
-            *(client.get(f"/api/v1/jobs/{job_id}") for job_id in job_ids_to_poll),
+    for attempt_index in range(max_attempts):
+        poll_batch = tuple(unfinished_job_ids)
+        poll_responses = await gather(
+            *(client.get(f"/api/v1/jobs/{job_id}") for job_id in poll_batch),
             return_exceptions=True,
         )
-        for job_id, response in zip(job_ids_to_poll, responses, strict=True):
-            if isinstance(response, BaseException):
-                raise response
-            assert response.status_code == 200
-            job_data = response.json()["data"]
-            status = job_data["status"]
+        for job_id, response_or_error in zip(poll_batch, poll_responses, strict=True):
+            if isinstance(response_or_error, BaseException):
+                raise response_or_error
+            assert response_or_error.status_code == 200
+            job_record = response_or_error.json()["data"]
+            job_status = job_record["status"]
 
-            if status in {"completed", "succeeded"}:
-                job_results[job_id] = job_data
-                pending_job_ids.remove(job_id)
+            if job_status in {"completed", "succeeded"}:
+                completed_job_records[job_id] = job_record
+                unfinished_job_ids.remove(job_id)
                 continue
-            if status in {"failed", "cancelled", "timed_out"}:
-                pytest.fail(f"Job {job_id} 执行失败: {job_data.get('error_message')}")
+            if job_status in {"failed", "cancelled", "timed_out"}:
+                pytest.fail(
+                    f"Job {job_id} 执行失败: {job_record.get('error_message')}"
+                )
 
-        if not pending_job_ids:
-            return job_results
-        if poll_round + 1 < max_attempts:
+        if not unfinished_job_ids:
+            return completed_job_records
+        if attempt_index + 1 < max_attempts:
             await asyncio.sleep(1)
 
-    if pending_job_ids:
-        pytest.fail(f"Jobs 超时未完成: {sorted(pending_job_ids)}")
-
-    return job_results
+    pytest.fail(f"Jobs 超时未完成: {sorted(unfinished_job_ids)}")
 

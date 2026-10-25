@@ -1,3 +1,5 @@
+import { commandForCurrentPlatform } from "./process.mjs";
+
 export function windowsGitSshArguments([settingsJson, destination, remoteCommand]) {
   const { options, destination: expectedDestination, repository } = JSON.parse(settingsJson);
   const gitQuotedPath = `'${repository.replace(/['!]/g, (character) => `'\\${character}'`)}'`;
@@ -11,9 +13,16 @@ export function windowsGitSshArguments([settingsJson, destination, remoteCommand
   return ["ssh", ...options, destination, `git-receive-pack "${repository}"`];
 }
 
+export function windowsGitSshCommand(argumentsList, platform = process.platform) {
+  return commandForCurrentPlatform(
+    windowsGitSshArguments(argumentsList),
+    platform,
+  );
+}
+
 if (import.meta.main) {
   // 原样继承二进制 Git 协议流，不能通过文本解码或 PowerShell pipeline 中转。
-  const result = Bun.spawnSync(windowsGitSshArguments(process.argv.slice(2)), {
+  const result = Bun.spawnSync(windowsGitSshCommand(process.argv.slice(2)), {
     stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   if (result.signalCode) throw new Error(`Windows Git SSH 被信号终止: ${result.signalCode}`);

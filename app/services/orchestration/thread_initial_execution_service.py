@@ -158,7 +158,7 @@ class ThreadInitialExecutionService:
 
     async def _report(self, session_id: str, job_id: str) -> None:
         control = self._factory.for_owner_session(session_id).control_store
-        intent = next((item for item in control.list_initial_execution_intents() if item.job_id == job_id), None)
+        intent = control.find_initial_execution_intent_by_job_id(job_id)
         if intent is None or intent.initial_state != "running":
             return
         record = control.get_thread_creation_record(intent.creation_idempotency_key)

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.abstractions.terminal_resources import (
+from app.abstractions.terminal.resources import (
     TerminalSnapshot,
     TerminalWorkingDirectories,
 )

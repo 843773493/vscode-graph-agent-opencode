@@ -48,7 +48,7 @@ from app.services.orchestration.communication import (
     observation_service,
 )
 from app.services.orchestration.communication.service import SessionCommunicationService
-from tests.support.communication import (
+from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     TARGET_SESSION,

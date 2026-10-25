@@ -142,12 +142,14 @@ def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
     assert policy.execution_locked is True
 
 
-@pytest.mark.usefixtures("empty_workspace_scope")
-def test_policy_default_names_match_actual_agent_graph_tools(text_mutations_factory, communication_probe,
-    tmp_path: Path,
+def test_policy_default_names_match_actual_agent_graph_tools(
+    text_mutations_factory,
+    communication_probe,
+    empty_workspace_scope: tuple[str, Path],
 ) -> None:
+    workspace_root = empty_workspace_scope[1]
     invocation_context = ToolInvocationContext()
-    direct_tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path),
+    direct_tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root),
         session_id="ses_policy_consistency",
         background_task_registry=MagicMock(),
         background_message_bus=MagicMock(),
@@ -161,15 +163,15 @@ def test_policy_default_names_match_actual_agent_graph_tools(text_mutations_fact
         config_service=MagicMock(),
         terminal_resource_owner=MagicMock(),
         invocation_context=invocation_context,
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         session_communication_service=communication_probe,
         include_team_tools=True,
     )
     model = FakeListChatModel(responses=["ok"])
-    middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(tmp_path),
+    middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(workspace_root),
         model=model,
         backend=StateBackend(),
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
         resource_navigation=MagicMock(),
         artifact_reader=MagicMock(),
         permissions=None,

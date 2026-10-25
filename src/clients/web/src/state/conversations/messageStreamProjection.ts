@@ -207,8 +207,14 @@ export function messageStreamTurnIdForSession(
     const activePending = pending.find((conversation) => conversation.jobId === activeJobId
       && conversation.threadId === (timeline?.threadId ?? state.currentSession?.thread_id));
     if (activePending?.turnId) return activePending.turnId;
-    const activeTurn = Object.values(timeline?.turnsById ?? {}).find((turn) => turn.job_id === activeJobId);
-    return activeTurn?.turn_id ?? null;
+    if (timeline) {
+      for (const turnKey in timeline.turnsById) {
+        if (!Object.prototype.hasOwnProperty.call(timeline.turnsById, turnKey)) continue;
+        const turn = timeline.turnsById[turnKey];
+        if (turn.job_id === activeJobId) return turn.turn_id;
+      }
+    }
+    return null;
   }
 
   const pendingTurnsByThread = new Map<string, Set<string>>();

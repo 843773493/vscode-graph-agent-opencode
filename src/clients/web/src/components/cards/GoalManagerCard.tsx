@@ -85,7 +85,7 @@ export default function GoalManagerCard({
     }
   };
 
-  const canManage = Boolean(sessionId) && !loading;
+  const canManage = Boolean(sessionId) && !loading && !error;
   return (
     <section className="goal-manager" aria-label="当前 Goal">
       <div className="goal-manager-heading">
@@ -167,20 +167,22 @@ export default function GoalManagerCard({
             </button>
           </div>
         </>
+      ) : !sessionId ? (
+        <div className="goal-manager-empty">请先选择会话，再管理该会话的 Goal。</div>
       ) : loading ? (
         <div className="goal-manager-empty">正在读取 Goal...</div>
-      ) : (
+      ) : !error ? (
         <div className="goal-manager-empty">
           <span>当前会话没有 Goal</span>
           <button
             type="button"
-            disabled={!sessionId}
+            disabled={!canManage}
             onClick={() => setEditorMode("create")}
           >
             新建 Goal
           </button>
         </div>
-      )}
+      ) : null}
 
       {operationError ? (
         <div className="goal-manager-error" role="alert">

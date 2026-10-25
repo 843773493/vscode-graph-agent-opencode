@@ -27,7 +27,9 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.session_navigation_http import wait_for_navigation_operation
+from tests.support.session_navigation.http_operations import (
+    wait_for_navigation_operation,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 

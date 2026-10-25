@@ -14,7 +14,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout.fixture_output import commit_fixture_output
 
 
 def seed_deterministic_v2_rollout(

@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from app.agents.agent_factory import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
@@ -47,7 +48,7 @@ def config_service():
 
 
 @pytest.fixture(scope="module")
-def test_model(config_service):
+def live_reasoning_model(config_service):
     """真实 Provider 直连测试由构建入口显式标记用途，不伪造 Agent binding。"""
     runtime_config = config_service.get_agent_runtime_config("default")
     return build_model_from_provider(
@@ -56,9 +57,9 @@ def test_model(config_service):
 
 
 @pytest.fixture(scope="module")
-def test_model_config(test_model):
+def live_reasoning_provider_config(live_reasoning_model):
     """返回模型配置信息"""
-    model = test_model
+    model = live_reasoning_model
     model_name = model.model
     if isinstance(model_name, str) and model_name.startswith("openai/"):
         model_name = model_name.removeprefix("openai/")
@@ -91,6 +92,14 @@ async def _astream_chunks(model, messages):
     return chunks
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def live_reasoning_stream_chunks(live_reasoning_model):
+    """同一输入的流式检查共享一次真实 Provider 响应，避免重复请求。"""
+    return await _astream_chunks(
+        live_reasoning_model, [{"role": "user", "content": "你好"}]
+    )
+
+
 def _content_text(content) -> str:
     if isinstance(content, str):
         return content
@@ -117,11 +126,9 @@ def _blocks_text(chunks, block_type: str, field: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_astream_exposes_reasoning_content(test_model):
+async def test_astream_exposes_reasoning_content(live_reasoning_stream_chunks):
     """OpenAI-compatible provider 应通过 LiteLLM 包装层拿到 reasoning_content。"""
-    messages = [{"role": "user", "content": "你好"}]
-
-    chunks = await _astream_chunks(test_model, messages)
+    chunks = live_reasoning_stream_chunks
 
     total = len(chunks)
     reasoning_chunks = [
@@ -169,7 +176,7 @@ async def test_astream_exposes_reasoning_content(test_model):
 
 
 @pytest.mark.asyncio
-async def test_raw_openai_client_exposes_reasoning(test_model_config):
+async def test_raw_openai_client_exposes_reasoning(live_reasoning_provider_config):
     """验证：原始 OpenAI 客户端可以正确获取 reasoning_content
 
     这证明 API 本身返回了 reasoning，问题出在 LangChain 的封装上。
@@ -177,14 +184,14 @@ async def test_raw_openai_client_exposes_reasoning(test_model_config):
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
-        api_key=test_model_config["api_key"],
-        base_url=test_model_config["base_url"],
+        api_key=live_reasoning_provider_config["api_key"],
+        base_url=live_reasoning_provider_config["base_url"],
     )
 
     messages = [{"role": "user", "content": "你好"}]
 
     stream = await client.chat.completions.create(
-        model=test_model_config["model"],
+        model=live_reasoning_provider_config["model"],
         messages=messages,
         stream=True,
     )
@@ -234,10 +241,10 @@ async def test_raw_openai_client_exposes_reasoning(test_model_config):
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_shows_reasoning_in_metadata(test_model):
+async def test_ainvoke_shows_reasoning_in_metadata(live_reasoning_model):
     """ainvoke 不应依赖 provider 一定返回 usage metadata。"""
     messages = [{"role": "user", "content": "你好"}]
-    result = await test_model.ainvoke(messages)
+    result = await live_reasoning_model.ainvoke(messages)
 
     metadata = result.response_metadata
     token_usage = metadata.get("token_usage", {})
@@ -264,7 +271,7 @@ async def test_ainvoke_shows_reasoning_in_metadata(test_model):
 
 
 @pytest.mark.asyncio
-async def test_new_session_reasoning_only_scenario(test_model):
+async def test_new_session_reasoning_only_scenario(live_reasoning_stream_chunks):
     """复现：新会话/简单问候时，所有 token 都用于 reasoning，导致空响应
 
     当模型在简单问候时决定把所有 token 预算用于 reasoning 时，
@@ -273,9 +280,7 @@ async def test_new_session_reasoning_only_scenario(test_model):
     期望：即使 content 为空，也应该通过某种机制暴露 reasoning 内容
     实际：reasoning 被丢弃，content 为空，最终显示空响应
     """
-    messages = [{"role": "user", "content": "你好"}]
-
-    chunks = await _astream_chunks(test_model, messages)
+    chunks = live_reasoning_stream_chunks
 
     combined_content = "".join(_content_text(c["content"]) for c in chunks)
     combined_reasoning = _blocks_text(chunks, "reasoning", "reasoning")
@@ -294,11 +299,9 @@ async def test_new_session_reasoning_only_scenario(test_model):
 
 
 @pytest.mark.asyncio
-async def test_reasoning_vs_content_chunk_ratio(test_model):
+async def test_reasoning_vs_content_chunk_ratio(live_reasoning_stream_chunks):
     """定量分析：reasoning 被截断后，空 chunk 与有内容 chunk 的比例"""
-    messages = [{"role": "user", "content": "你好"}]
-
-    chunks = await _astream_chunks(test_model, messages)
+    chunks = live_reasoning_stream_chunks
 
     total = len(chunks)
     empty = len([c for c in chunks if not c["content"]])

@@ -166,16 +166,16 @@ class ContextDetailOwnerMixin:
             expired_before=expired_before,
             checkpoint_ns=checkpoint_ns,
         )
+        referenced = self._storage.assemblies.find_referenced_context_details(
+            session_id,
+            thread_id,
+            detail_refs=candidates,
+            checkpoint_ns=checkpoint_ns,
+        )
         removable = tuple(
             detail_ref
-            for detail_ref, assembly_id in candidates
-            if not self._storage.assemblies.context_assembly_references_detail(
-                session_id,
-                thread_id,
-                assembly_id=assembly_id,
-                detail_ref=detail_ref,
-                checkpoint_ns=checkpoint_ns,
-            )
+            for detail_ref in candidates
+            if detail_ref not in referenced
         )
         # 先提交可恢复 tombstone；标记失败时绝不能先删除正文。若进程在
         # 标记后崩溃，registry 的 GC candidates 必须允许重试物理清理。

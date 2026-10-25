@@ -511,7 +511,7 @@ def test_log_tail_reads_bounded_utf8_suffix(
     log_path = tmp_path / "large-ssh.log"
     content = "旧日志🚀\n" * 20_000 + "末尾错误🧭\n" * 1_000
     log_path.write_text(content, encoding="utf-8")
-    max_tail_bytes = port_forwarding._LOG_TAIL_LIMIT * 4 + 3
+    max_tail_bytes = port_forwarding._LOG_TAIL_MAX_CHARACTERS * 4 + 3
     read_sizes: list[int] = []
     real_open = Path.open
 
@@ -546,7 +546,7 @@ def test_log_tail_reads_bounded_utf8_suffix(
 
     actual = SshPortForwardManager._read_log_tail(log_path)
 
-    assert actual == content[-port_forwarding._LOG_TAIL_LIMIT :].strip()
+    assert actual == content[-port_forwarding._LOG_TAIL_MAX_CHARACTERS :].strip()
     assert read_sizes == [max_tail_bytes]
 
 
