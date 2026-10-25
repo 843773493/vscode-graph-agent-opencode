@@ -16,7 +16,7 @@ from app import main
 from app.api.deps import get_session_service, verify_local_token
 from app.api.sessions import router
 from app.container import AppContainer
-from app.core import session_creation
+from app.core import session_creation, sqlite_state
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
@@ -208,3 +208,37 @@ async def test_create_http_error_and_explicit_retry(
                                         headers={"X-Request-ID": "creation-retry-request"})
     assert retried.status_code == 200, retried.text
     assert retried.headers["X-Request-ID"] == retried.json()["request_id"] == "creation-retry-request"
+
+
+async def test_create_http_real_sqlite_budget_rejects_before_publish_and_retries(
+    creation_client: httpx.AsyncClient, startup_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """只收紧 VFS 数值，创建请求沿真实预算校验失败，再用原入口重试。"""
+    catalog = startup_container.session_service.path_resolver.catalog_store
+    sessions = startup_container.session_catalog.creation_service._sessions_root
+    tables = ("nodes", "session_creation_records")
+    before = {table: catalog.connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+    before_paths = sorted(path.relative_to(sessions).as_posix() for path in sessions.rglob("*"))
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite_state, "sqlite_vfs_max_pathname", lambda: 1)
+        response = await creation_client.post(
+            "/api/v1/sessions", json={"title": "真实 SQLite 预算拒绝"},
+            headers={"X-Request-ID": "sqlite-budget-request"},
+        )
+    assert response.status_code == 400, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "sqlite-budget-request"
+    assert "stage=path_budget" in response.text and str(sessions) not in response.text
+    assert {table: catalog.connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables} == before
+    assert sorted(path.relative_to(sessions).as_posix() for path in sessions.rglob("*")) == before_paths
+    runtime_logs = [record for record in caplog.records if record.name == "app.core.sqlite_state"]
+    assert runtime_logs and any("mxPathname=1" in record.getMessage() for record in runtime_logs)
+    assert any(str(sessions) in record.getMessage() for record in runtime_logs)
+    retried = await creation_client.post(
+        "/api/v1/sessions", json={"title": "恢复原 VFS 预算后重试"},
+        headers={"X-Request-ID": "sqlite-budget-retry"},
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.headers["X-Request-ID"] == retried.json()["request_id"] == "sqlite-budget-retry"
+    session_id = retried.json()["data"]["session_id"]
+    assert catalog.get_node(session_id).state == "active"

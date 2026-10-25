@@ -685,3 +685,12 @@
 - FIFO、持锁归属、可重入深度、同步/异步准入、统一期限与取消释放规则保持；13个核心方法AST未变，共享工作区原有队首通知优化和测试fixture迁移独立保留。完整Git archive保留旧生产加最终新增测试，15 failed/1.54秒，精确复现原路径/原生错误出口；最终共享错误及完整Saver回归92 passed/33.31秒，含15项新增同步/异步错误、真实本地/文件锁超时与失败后重取锁证明。候选完整fork retention中断/恢复7 passed/82.39秒。
 - 共享正式matrix的历史入口12 passed/81.91秒：关键历史由产品Session/消息执行入口配合现有受控model_stream生成；在原生打开/加锁/解锁处注入故障，bootstrap/history返回500及原Session身份、必要阶段而无路径，原异常可在诊断核对。句柄关闭、独立写者可重取锁，冷Saver核canonical身份/正文，修复后原Thread/Turn和公开历史一致。HTTP使用进程内ASGI和现有授权fixture，冷重开为Saver对象；不称真实Gateway、后端进程重启、Windows实机或完整Web验收。
 - Ruff/compileall通过。共享历史检查期间仅未加载的 `scripts/install/AGENTS.md` 发生变化，完整源码冻结核验按实拒绝；限定收据核对全部后端/测试/配置输入未变、raw哈希、实际退出码及进程组回收，不为无关文档变化重复长跑。源码版本、准确命令、前后指纹、完整失败/成功原件和主线程自查在 `out/tests/temp/rollout_lock_errors_20261025/artifacts/`；主线程自查不称独立代理审查。全局2.2/7.2仍未勾，Agent团队、成员、委派及协作保持TODO。
+
+
+### 2026-10-25 SQLite 路径预算与原生 VFS 诊断（2.2/7.2 部分收口）
+
+- 在原 `sqlite_state` owner 修正路径预算、路径解析及 VFS 加载/符号/头部/原生探针错误：公开异常保留原类别、阶段、SQLite版本、UTF-8字节数、VFS上限与主库/sidecar类别，系统错误保留errno/winerror，探针错误保留sqlite_errorcode/name。数据库、扩展库和探针位置只写诊断日志，原生异常留cause；不扫描/截断原错误正文，不返回默认VFS、不加载另一份系统SQLite。
+- 主库/rollback journal/WAL/SHM预算算法、当前解释器原生绑定、探针加载关闭顺序、连接/事务/SQL迁移和schema版本保持。新增错误反例随完整Git archive与旧生产组合运行，12 failed/0.83秒；最终共享底层存储/Session和Thread创建169 passed、3 skipped（8.26秒），跳过项均为Windows原生专用，未声称实机通过。既有Session预算测试把路径核对迁入日志，仍保留精确被校验路径、拒绝后无record/staging等断言。
+- 共享真实创建错误与重试22 passed/19.22秒。新增ASGI请求只注入VFS上限数值，执行原产品预算校验，400响应及request_id保持，catalog nodes/creation rows与Session目录清单不变；恢复原VFS上限后，同一创建入口成功发布active Session。HTTP使用现有授权fixture，不称真实Gateway或完整Web。创建日志最终文字改为通用诊断位置，避免对非SQLite预算错误误指；该文字修订后2项定向入口/创建检查通过，其余业务AST未变。
+- 发行源资源复制到隔离目录后，编译真实C探针并经当前Python SQLite extension API核VFS值、WAL写入和重开，删除探针仍明确抛原OperationalError；共享1 passed。此项不是重建/安装完整release，也不替代Windows。Ruff/compileall通过；候选首轮因使用共享迁移后的测试路径而无用例（exit4），第二轮168 passed/1 failed是旧cause路径断言，按上述合同迁齐后169通过，原件全部保留。
+- 准确命令、包括共享未跟踪源码的完整指纹、原始输出/退出码、完整旧实现反例和主线程结构自查在 `out/tests/temp/sqlite_runtime_errors_20261025/artifacts/`。主线程自查不称独立代理审查；共享既有required-tables查重优化、测试目录迁移和暂存内容独立保留。rollout连接形态拒绝及SQLite进程持锁错误仍是后续缺口，2.2/7.2全局门不勾；团队、成员、委派和协作继续TODO。

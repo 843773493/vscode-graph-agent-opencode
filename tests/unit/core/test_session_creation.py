@@ -290,6 +290,7 @@ async def test_deep_sessions_root_rejected_before_record_or_staging(
 async def test_rollout_index_path_budget_checked_before_record_or_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     sessions_root = sessions_root_rollout_beyond_vfs_limit(tmp_path)
     rollout_database = (
@@ -321,7 +322,9 @@ async def test_rollout_index_path_budget_checked_before_record_or_staging(
             await do_create(service)
         assert str(sessions_root) not in str(failure.value)
         assert isinstance(failure.value.__cause__, ValueError)
-        assert str(rollout_database) in str(failure.value.__cause__)
+        assert str(rollout_database) not in str(failure.value.__cause__)
+        assert "component=-journal" in str(failure.value.__cause__)
+        assert str(rollout_database) in caplog.text
         assert validated_rollouts == [rollout_database]
         assert count_rows(store, "session_creation_records") == 0
         assert not sessions_root.exists()

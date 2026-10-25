@@ -651,7 +651,7 @@ class SessionCreationService:
             validate_sqlite_path_budget(self._sessions_root / rollout_database)
         except ValueError as error:
             detail = f"Session 创建路径预算校验失败: workspace_id={self._workspace_id}, stage=path_budget"
-            logger.error("%s；完整预算与位置见异常链", detail, exc_info=error)
+            logger.error("%s；完整预算与位置见诊断日志", detail, exc_info=error)
             raise ValueError(detail) from error
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
