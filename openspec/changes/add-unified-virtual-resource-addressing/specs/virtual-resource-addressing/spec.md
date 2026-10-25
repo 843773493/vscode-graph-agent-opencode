@@ -196,6 +196,11 @@
 - **WHEN** fork 捕获的隔离 SQLite worker 在父进程原生调用处失败、真实子进程非零退出，或超过原30秒预算
 - **THEN** 普通响应与创建记录只带逻辑 artifact、失败阶段及必要退出码/异常类别/errno，不包含解释器或文件路径；父进程原生错误保留类别与直接 cause，子进程非零退出保持原 RuntimeError 并以保存原 command/stdout/stderr/status 的 CalledProcessError 为 cause，完整 stderr 留诊断；超时保持 TimeoutExpired、原期限与原异常 cause，worker 已终止并等待后再清理私有目录。失败不改写来源 canonical 或发布残缺目标；成功仍按原固定读事务/backup和有序文件长度/hash manifest，持 rollout 锁的源页/WAL/SHM不变，session-control 在线读取只允许 SQLite 原有 SHM 读标记变化，不改变持久页/WAL；重试及冷读保持历史检查点、owner、正文和 request_hash
 
+#### Scenario: SQLite 私有目录创建或清理失败
+
+- **WHEN** 隔离 SQLite snapshot 的私有目录创建或清理遇到原生错误，包括worker非零退出后又遇到清理失败
+- **THEN** 原owner保留原生异常类别、errno/winerror与直接cause，普通响应/创建记录只含逻辑artifact和创建/清理阶段，真实位置与完整原错留诊断。创建失败不启动worker，清理失败不能返回成功manifest或声称已释放；原finally仍调用同一TemporaryDirectory的cleanup。组合故障中worker原退出码、stdout/stderr/command与RuntimeError/CalledProcessError在清理失败的原始cause/context及诊断中保留，不得被清理错误覆盖而丢失。失败不改写来源正文或发布残缺目标，故障解除后原产品入口可重试并冷读同一历史身份、检查点、assembly与hash
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

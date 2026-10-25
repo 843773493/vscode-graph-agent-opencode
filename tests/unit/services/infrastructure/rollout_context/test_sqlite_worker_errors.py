@@ -4,8 +4,10 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
+import tempfile
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,3 +146,50 @@ time.sleep(60)
     assert 'stage=sqlite_timeout' in str(caught.value) and str(databases.destination) not in str(caught.value)
     assert str(databases.destination) in caplog.text
     assert databases.source_bytes() == before and not list(databases.destination.glob('.sqlite-copy-*'))
+
+
+@pytest.mark.parametrize('fault', ['create', 'cleanup', 'combined'])
+def test_private_directory_failure_keeps_native_cause_and_retry(databases, monkeypatch, caplog, fault):
+    before = databases.source_bytes()
+    # 在 TemporaryDirectory 实际绑定的删除函数处注入故障。
+    mkdir, rmtree, run = os.mkdir, tempfile._rmtree, subprocess.run
+    errors, private_dirs = [], []
+
+    def denied(path, *args, **kwargs):
+        path = Path(path)
+        if path.name.startswith('.sqlite-copy-'):
+            error = PermissionError(errno.EACCES, f'原生私有目录拒绝 {path}', str(path))
+            errors.append(error)
+            private_dirs.append(path)
+            raise error
+        return mkdir(path, *args, **kwargs) if fault == 'create' else rmtree(path, *args, **kwargs)
+
+    def block_copy(command, **kwargs):
+        private = Path(json.loads(kwargs['input'])['private'])
+        (private / 'index.sqlite').mkdir()
+        return run(command, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os if fault == 'create' else tempfile, 'mkdir' if fault == 'create' else '_rmtree', denied)
+        if fault == 'combined':
+            patch.setattr(worker.subprocess, 'run', block_copy)
+        with pytest.raises(PermissionError) as caught:
+            worker.copy_live_sqlite_snapshot(databases.source, databases.destination, rollout_lock_held=True)
+    assert len(errors) == 1 and caught.value.__cause__ is errors[0]
+    assert caught.value.errno == errno.EACCES and caught.value.filename is None
+    stage = 'sqlite_private_create' if fault == 'create' else 'sqlite_private_cleanup'
+    assert 'artifact=fork_source stage=' + stage in str(caught.value)
+    assert str(databases.destination) not in str(caught.value) and str(private_dirs[0]) in caplog.text
+    if fault == 'combined':
+        failure = errors[0].__context__
+        assert isinstance(failure, RuntimeError) and 'stage=sqlite_worker' in str(failure)
+        assert isinstance(failure.__cause__, subprocess.CalledProcessError)
+        assert failure.__cause__.returncode == 1 and b'IsADirectoryError' in failure.__cause__.stderr
+        assert 'IsADirectoryError' in caplog.text and 'returncode=1' in caplog.text
+    if fault != 'create':
+        assert private_dirs[0].is_dir()
+        rmtree(private_dirs[0])
+    assert databases.source_bytes() == before
+    restored = worker.copy_live_sqlite_snapshot(databases.source, databases.destination, rollout_lock_held=True)
+    assert restored and not list(databases.destination.glob('.sqlite-copy-*'))
+    assert databases.source_bytes() == before

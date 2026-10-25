@@ -88,6 +88,8 @@ fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner �
 
 隔离 SQLite worker 继续使用原独立解释器、固定读事务与 backup，不改变 stdin、成功 manifest 或30秒预算。父进程原生调用失败复用 storage 出口（artifact=fork_source、stage=sqlite_worker），保留原异常类别、errno/winerror和直接 cause；子进程非零退出仍是原 RuntimeError，公开退出码，原 command/stdout/stderr/status 保存在 CalledProcessError cause，完整 stderr 进入诊断，不声称跨进程保留子进程的原生异常对象。超时保留 TimeoutExpired 类别、原30秒与原异常 cause（stage=sqlite_timeout），普通文本不包含解释器或文件路径；原 subprocess.run 负责终止并等待 worker 后才清理私有目录。持 rollout 锁时源页/WAL/SHM均不变，session-control 在线 reader 仍允许 SQLite 更新 SHM 读标记而不改持久页/WAL；不增加另一条复制链。
 
+同一私有目录的创建和清理在各自原生边界复用 storage 出口（stage=sqlite_private_create / sqlite_private_cleanup），原异常类别、errno/winerror与cause保持，位置只留诊断。原 TemporaryDirectory 仍唯一拥有临时目录，以显式 finally 调用原 cleanup；返回成功 manifest 前必须完成清理。非零退出在 finally 之前形成原 RuntimeError/CalledProcessError并记录stderr，使后续清理失败的原生cause/context与诊断保全两项故障；不能因清理异常丢掉worker失败证据。创建失败不启动worker，清理失败不伪报释放或成功，不增加补偿writer或第二清理链。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

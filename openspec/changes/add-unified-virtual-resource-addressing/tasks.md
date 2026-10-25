@@ -768,3 +768,12 @@
 - 正式产品matrix候选2 passed/38.14秒，旧生产2 failed/33.67秒；产品消息执行与model_stream生成来源，真实路由/Depends/TraceMiddleware配合ASGI验证原生spawn拒绝与真实child copyfile失败、请求头体request_id一致、中止/无可见目标/原canonical不变，新key重试后冷Saver按原检查点ID核完整checkpoint、metadata、pending writes、历史assembly全字段/owner及request_hash与原canonical字节。ASGI和冷Saver对象不代替真实Gateway、独立Backend进程重启、Windows或完整Web验收。
 - 完整旧生产、准确命令、源码前后指纹、原始输出/真实退出码及本地结构核对在 `out/tests/temp/fork_sqlite_worker_errors_20261025/artifacts/`；verification001/002核实上述运行源码冻结与进程组回收。AST核原子进程脚本逐字不变，去除本次错误分支后原成功路径一致；结构核对为作者自查，不称独立审查。其余source捕获/复制及TemporaryDirectory创建清理的原生边界仍待后续，2.2/7.2不补勾，团队与协作继续TODO。
 - 最终共享三方合并后6项单测通过（30.63秒）、正式matrix的2项产品入口通过（39.72秒），Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。verification003.json核实本片登记的3780条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码及进程组回收；profile明确排除本片不启动或构建的客户端源码与客户端专项测试，不声称全仓冻结。共享独立suite顺序保留，不纳入本片提交。
+
+
+### 2026-10-25 SQLite 私有目录错误与组合故障（2.2/7.2 部分收口）
+
+- 原TemporaryDirectory仍唯一拥有目录，创建和原cleanup分别复用storage错误出口（sqlite_private_create / sqlite_private_cleanup），保留原生类别、errno/winerror和直接cause，真实位置只留诊断。原cleanup放入显式finally，返回成功manifest前必须完成；worker非零退出先形成原RuntimeError/CalledProcessError并记录stderr，再进入finally，使清理再次失败时原worker证据保留在原始cause/context和日志。不增加writer、复制链、清理链或schema；原子进程脚本、stdin、worker调用/30秒预算、成功manifest逐项AST不变。
+- 首轮单测候选2 failed/7 passed、旧生产3 failed/6 passed；产品候选2 failed/3 passed、旧生产3 failed/2 passed，候选失败均因新增测试只替换shutil.rmtree，而当前Python的TemporaryDirectory使用tempfile模块已绑定的删除函数，未触发预期清理故障。读取实际stdlib实现后改在其真实调用边界注入，保留原失败原件，不放宽任何断言；候选新增3项通过（0.62秒），旧生产3项均失败（0.81秒）。反例为9eda87ff完整Git archive；负例在Ruff前复制测试，仅标准库import顺序不同，comparison001.json核完整测试逻辑AST一致，不声称测试文件字节相同。
+- 正式matrix候选5 passed/62.53秒，旧生产3 failed/2 passed/60.21秒。原产品消息执行与model_stream生成来源，经真实路由/Depends/TraceMiddleware的ASGI HTTP核原spawn/child失败、私有目录创建、清理和真实child IsADirectoryError后再清理失败；错误阶段、头体request_id、中止/无可见副本、canonical原字节、新key重试及冷Saver原检查点/metadata/pending writes、assembly全字段/历史owner/request_hash保持。组合故障的真实worker原始stderr与退出码保留，清理原错的context/cause仍指向同一worker失败；没有伪造业务历史或替代模型实现。
+- 准确命令、原始输出/退出码、完整源码前后指纹、完整旧生产和作者本地结构核对位于 `out/tests/temp/fork_sqlite_private_io_20261025/artifacts/`；verification001/002核实上述运行冻结与进程组回收。不是独立审查，ASGI与冷Saver对象不代替真实Gateway、Backend进程重启、Windows或完整Web。其它source捕获I/O、ignore_errors清理及transfer仍待后续，2.2/7.2不补勾，团队与协作继续TODO。
+- 最终共享三方合并后完整9项单测通过（30.99秒）、正式matrix完整5项产品入口通过（59.07秒），Ruff/compileall通过，候选严格OpenSpec全量45 passed/0 failed。verification003.json核实登记的3780条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码与进程组回收；明确排除本片不启动/构建的客户端源码与专项测试，不声称全仓冻结。

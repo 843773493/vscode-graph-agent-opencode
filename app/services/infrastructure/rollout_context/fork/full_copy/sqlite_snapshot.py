@@ -88,7 +88,10 @@ def copy_live_sqlite_snapshot(
     copyfile/copytree；正文 detail 与密钥不经过该子进程。
     源 manifest 与复制校验也在子进程完成，返回源文件名、长度和 SHA。
     """
-    with TemporaryDirectory(prefix=".sqlite-copy-", dir=native_io_path(destination)) as private:
+    with _storage_io(destination, "source-mismatch: SQLite snapshot 私有目录创建失败", "sqlite_private_create", artifact="fork_source"):
+        directory = TemporaryDirectory(prefix=".sqlite-copy-", dir=native_io_path(destination))
+    private = directory.name
+    try:
         entries = []
         for name in filenames:
             if not name.endswith(".sqlite"):
@@ -119,11 +122,14 @@ def copy_live_sqlite_snapshot(
                 destination, "source-mismatch: SQLite snapshot worker 超时", "sqlite_timeout", error, artifact="fork_source",
             )
             raise subprocess.TimeoutExpired(detail, error.timeout) from error
-    if result.returncode != 0:
-        error = subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
-        logger.error("SQLite snapshot worker 失败原始 stderr: %s", result.stderr.decode(errors="replace"))
-        raise RuntimeError(_storage_failure(
-            destination, f"source-mismatch: 隔离进程复制 SQLite snapshot 失败 returncode={result.returncode}",
-            "sqlite_worker", error, artifact="fork_source",
-        )) from error
+        if result.returncode != 0:
+            error = subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
+            logger.error("SQLite snapshot worker 失败原始 stderr: %s", result.stderr.decode(errors="replace"))
+            raise RuntimeError(_storage_failure(
+                destination, f"source-mismatch: 隔离进程复制 SQLite snapshot 失败 returncode={result.returncode}",
+                "sqlite_worker", error, artifact="fork_source",
+            )) from error
+    finally:
+        with _storage_io(Path(private), "source-mismatch: SQLite snapshot 私有目录清理失败", "sqlite_private_cleanup", artifact="fork_source"):
+            directory.cleanup()
     return tuple((name, size, digest) for name, size, digest in json.loads(result.stdout))

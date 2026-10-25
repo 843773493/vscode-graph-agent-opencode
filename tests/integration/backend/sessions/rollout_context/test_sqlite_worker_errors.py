@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import subprocess
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -38,7 +40,7 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 __all__ = ['fork_execution_message', 'fork_execution_source', 'fork_gateway_request_context', 'production_fork_container']
 
 
-@pytest.mark.parametrize('fault', ['child_exit', 'spawn'])
+@pytest.mark.parametrize('fault', ['child_exit', 'spawn', 'private_create', 'private_cleanup', 'combined'])
 async def test_public_fork_worker_failure_preserves_history_and_retry(
     production_fork_container, fork_execution_source, monkeypatch, caplog, fault,
 ):
@@ -55,19 +57,37 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
     visible = {item.session_id for item in (await container.session_service.list()).items}
     run = subprocess.run
     failures = []
+    private_errors = []
 
     def inject(command, **kwargs):
         if command[-1] == worker._COPY_SCRIPT:
             payload = json.loads(kwargs['input'])
-            if payload['rollout_lock_held'] and not failures:
+            if payload['rollout_lock_held'] and not failures and fault in {'child_exit', 'spawn', 'combined'}:
                 private = Path(payload['private'])
                 assert Path(payload['source']) == node / 'rollout'
                 failures.append(private)
                 if fault == 'spawn':
                     raise PermissionError(errno.EACCES, f'原生启动拒绝 {private}', str(private))
+                if fault == 'combined':
+                    (private / 'index.sqlite').mkdir()
+                    return run(command, **kwargs)
                 # 删除空私有目录后仍启动真实解释器，由真实 copyfile 产生原生 stderr。
                 private.rmdir()
         return run(command, **kwargs)
+
+    # 在 TemporaryDirectory 实际绑定的删除函数处注入故障。
+    mkdir, rmtree = os.mkdir, tempfile._rmtree
+
+    def deny_private(path, *args, **kwargs):
+        path = Path(path)
+        if ('fork-source-captures' in path.parts and path.parent.name == 'rollout'
+                and path.name.startswith('.sqlite-copy-') and not private_errors):
+            error = PermissionError(errno.EACCES, f'原生私有目录拒绝 {path}', str(path))
+            private_errors.append(error)
+            if not failures:
+                failures.append(path)
+            raise error
+        return mkdir(path, *args, **kwargs) if fault == 'private_create' else rmtree(path, *args, **kwargs)
 
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
@@ -78,15 +98,24 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
                                  headers={'X-BoxTeam-Gateway-Id': get_current_gateway_id()}) as client:
         with monkeypatch.context() as patch:
             patch.setattr(worker.subprocess, 'run', inject)
+            if fault in {'private_create', 'private_cleanup', 'combined'}:
+                patch.setattr(os if fault == 'private_create' else tempfile,
+                              'mkdir' if fault == 'private_create' else '_rmtree', deny_private)
             failed = await client.post(f'/api/v1/sessions/{source.session_id}/fork-context', json=request.model_dump(mode='json'))
         assert failed.status_code == 500, failed.text
         assert len(failures) == 1 and not failures[0].exists()
-        assert 'artifact=fork_source stage=sqlite_worker' in failed.text
+        stage = {'private_create': 'sqlite_private_create', 'private_cleanup': 'sqlite_private_cleanup',
+                 'combined': 'sqlite_private_cleanup'}.get(fault, 'sqlite_worker')
+        assert 'artifact=fork_source stage=' + stage in failed.text
         if fault == 'child_exit':
             assert 'returncode=1' in failed.text and 'error_type=CalledProcessError' in failed.text
             assert 'FileNotFoundError' in caplog.text
         else:
             assert 'PermissionError' in failed.text and 'errno=13' in failed.text
+        if fault == 'combined':
+            assert 'IsADirectoryError' in caplog.text and 'returncode=1' in caplog.text
+            assert isinstance(private_errors[0].__context__, RuntimeError)
+            assert isinstance(private_errors[0].__context__.__cause__, subprocess.CalledProcessError)
         assert str(container.workspace_root) not in failed.text and str(failures[0]) in caplog.text
         assert failed.headers['X-Request-ID'] == failed.json()['request_id']
         assert (node / 'rollout/rollout.jsonl').read_bytes() == canonical
