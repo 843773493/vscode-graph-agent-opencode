@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
@@ -252,3 +253,70 @@ async def test_cold_python_owner_keeps_healthy_browser_usable_after_peer_revisio
                     rid, action="delete", expected_revision=record.owner_revision,
                     holder_id=f"request:recovery-cleanup:{rid}", operation_id="recovery-cleanup",
                 )
+
+
+@pytest.mark.parametrize("action", ["stop", "delete"])
+async def test_close_keeps_timed_out_script_unknown_until_its_original_execution_ends(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    blocked_action: tuple[str, asyncio.Event, asyncio.Event], action: str,
+) -> None:
+    client, root, run = browser_client
+    url, arrived, release = blocked_action
+    first, second = (f"browser_{uuid4().hex}" for _ in range(2))
+    for browser_id in (first, second):
+        await client.create_browser(browser_id=browser_id, owner_revision=1, title="原执行核实", url="about:blank")
+    running = asyncio.create_task(client.perform(first, "run", {
+        # 不消费取消signal，原生fetch在工具超时后仍由本次脚本持有。
+        "code": f"await fetch({json.dumps(url)}); return await page.title();",
+        "timeoutMs": 1000,
+    }, actor="agent"))
+    close = client.stop_resource if action == "stop" else client.delete_resource
+    marker = f"verified-close-after-script-{first}"
+    try:
+        await asyncio.wait_for(arrived.wait(), 5)
+        with pytest.raises(BrowserRequestError) as timed_out:
+            await asyncio.wait_for(running, 5)
+        assert timed_out.value.code == "browser_tool_timeout"
+        assert timed_out.value.payload["recovery"] == "page_reset"
+        # 真实页面reset仍允许后续短操作；原脚本等待不能被这一成功掩盖。
+        await client.perform(first, "run", {
+            "code": f"page.once('close', () => console.error({json.dumps(marker)})); return 'reset-ready';",
+        }, actor="agent")
+        started = time.monotonic()
+        with pytest.raises(BrowserRequestError) as blocked:
+            await asyncio.wait_for(close(first), 8)
+        elapsed = time.monotonic() - started
+        assert 4.5 <= elapsed < 8
+        assert blocked.value.code == "browser_close_operation_drain_timeout"
+        assert blocked.value.status == 408
+        assert not release.is_set()
+        unknown = await client.get_resource(first)
+        assert unknown["status"] == "running" and unknown["reconciliation_status"] == "unknown"
+        stored = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in stored["browsers"] if item["browser_id"] == first]
+        assert record["status"] == "running" and record["reconciliation_status"] == "unknown"
+        assert record["transport_owner_revision"] == 1
+        async with httpx.AsyncClient() as http:
+            health = await http.get(f"{client.backend_url}/health")
+        assert health.status_code == 200
+        assert health.json()["browser_runtime"]["context_count"] == 1
+        independent = await asyncio.wait_for(client.perform(second, "read", {}, actor="agent"), 2)
+        assert independent["operation"]["status"] == "completed"
+        diagnostics = "\n".join(p.read_text() for p in run.artifacts_dir.glob("browser-backend-*.stderr.log"))
+        assert diagnostics.count(marker) == 1
+        release.set()
+        verified = (await asyncio.wait_for(close(first), 5))["browser"]
+        expected = "closed" if action == "stop" else "deleted"
+        assert verified["status"] == expected and verified["reconciliation_status"] == "verified"
+        assert verified["browser_id"] == first and verified["transport_owner_revision"] == 1
+        diagnostics = "\n".join(p.read_text() for p in run.artifacts_dir.glob("browser-backend-*.stderr.log"))
+        assert diagnostics.count(marker) == 1
+        run.write_result("passed", {
+            "action": action, "browser_id": first, "close_wait_seconds": elapsed,
+            "scope": "Python传输客户端→真实Node/Chromium/HTTP脚本与原停止/删除入口；不代表Python业务owner挂起接管、强制终止或Gateway/主Web",
+        })
+    finally:
+        release.set()
+        await asyncio.gather(running, return_exceptions=True)
+        await close(first)
+        await client.delete_resource(second)

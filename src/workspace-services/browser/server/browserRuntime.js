@@ -3,14 +3,15 @@ export const NAVIGATION_TIMEOUT_MS = 30000;
 export const TOOL_TIMEOUT_MS = 10000;
 export const DEFAULT_OPERATION_DRAIN_TIMEOUT_MS = 5000;
 
-// 只结束本次等待；原执行和失败仍由发起它的owner持有并处理。
+// 同一预算内复核原集合的新执行句柄；只结束等待，原执行和失败仍由发起方处理。
 export async function drainBrowserExecutions(executions, timeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS) {
   let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); });
   try {
-    return await Promise.race([
-      Promise.allSettled([...executions]).then(() => true),
-      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
-    ]);
+    while (executions.size > 0) {
+      if (!await Promise.race([Promise.allSettled([...executions]).then(() => true), timeout])) return false;
+    }
+    return true;
   } finally {
     clearTimeout(timer);
   }

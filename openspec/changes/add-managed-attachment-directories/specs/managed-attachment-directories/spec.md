@@ -133,6 +133,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Browser 已关闭原 context，但删除检查点或最终终态写盘失败
 - **THEN** 原外部 owner 将该关闭结果保留为 unknown 并明确返回失败，Python 保留原精确 operation lease；下一次显式关闭沿原转换链完成检查点删除与终态落盘，不能凭内存中的 deleted 状态提前返回成功，也不能创建替代 context；关闭与 unknown 写盘都失败时保留两份异常及 cause
 
+#### Scenario: Browser 工具超时后原脚本仍在执行
+
+- **WHEN** 工具等待已经超时、页面已重置，但原脚本或页面恢复尚未结束，用户从原入口发起停止或删除
+- **THEN** 原脚本与恢复句柄继续保存在同一操作队列；关闭context后仍用默认五秒单次预算排空，等待期间新增的执行句柄不遗漏、不重置预算。未排空明确返回408与unknown，不发布已核实终态；原执行结束后同身份/版本重试完成原关闭链，不重复关闭context，也不把超时当作脚本终止证明
+
 #### Scenario: 未知资源由新管理操作核实停止
 
 - **WHEN** 用户从现有资源管理入口对 unknown 或 reconcile_required 的资源显式发起 stop，或对无关联资源显式发起 delete

@@ -92,6 +92,8 @@ runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30
 
 单次 Terminal/Browser operation 关闭时，各占用分别取得原资源锁并通过原账本释放；只有持久释放成功后才移除本次内存引用。单项写盘失败或锁等待不阻断其它资源的释放，全部结果保留原单错或按输入顺序聚合；取消等待时，未释放引用继续由原 operation 保留，后续关闭沿原 lease 重试，未知/已结清占用仍服从既有 owner 判定。这不构成外部终止证明，也不补足整个 operation/shutdown 的总期限。
 
+Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOperationQueue`的同一执行集合持有，不只登记已经超时返回的外层请求。排空每批settle后在原单次预算内继续复核集合，覆盖等待开始后才启动的内部执行；集合大小是句柄数，不是业务操作数。stop/delete在释放原context后仍等待这份集合，默认5秒未排空返回`browser_close_operation_drain_timeout`/408，保持unknown和原身份，不发布verified终态。原执行结束后，同一显式关闭重试完成检查点删除与终态持久化，不重复关闭context。真实Python传输客户端→Node/Chromium/HTTP场景覆盖工具超时、页面reset后的短操作、stop/delete失败后的磁盘unknown、peer可读和迟到结束重试；证据见tasks 5.2。该切片不能强制终止不合作脚本，Python业务owner的版本同步可能先等待同一挂起脚本，整个operation/shutdown期限与backend信号失败后退出协调继续TODO；5.2/5.4/6.2均保持未完成，Agent团队与协作继续暂缓。
+
 ## Conflict Review
 
 本 change 是附件目录修订的后继 owner。以下旧 change 的既有验收只证明对应基线；目录主链已在本变更迁齐，尚未完成的 Web/平台和关闭期限验收继续保留。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。

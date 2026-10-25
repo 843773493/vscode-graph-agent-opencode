@@ -639,7 +639,7 @@ export async function screenshotPage(page, refSelectors, {
   });
 }
 
-export async function runPlaywrightCode({ page, context, browser }, {
+export async function runPlaywrightCode({ page, context, browser, trackExecution }, {
   code,
   timeoutMs = TOOL_TIMEOUT_MS,
 }, { onTimeout } = {}) {
@@ -653,7 +653,8 @@ export async function runPlaywrightCode({ page, context, browser }, {
   const cancellationController = new AbortController();
   const fn = new AsyncFunction("page", "context", "browser", "signal", code);
   const result = await withTimeout(
-    Promise.resolve(fn(page, context, browser, cancellationController.signal)),
+    // 工具超时不代表原脚本已结束；执行句柄始终由原Session队列持有。
+    trackExecution(Promise.resolve(fn(page, context, browser, cancellationController.signal))),
     timeoutMs,
     "Playwright 代码执行",
     {

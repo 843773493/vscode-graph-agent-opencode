@@ -21,7 +21,7 @@ export class BrowserOperationQueue {
     this.operationRevision = Number(operationRevision || 0);
     /** @type {Promise<void>} 仅串行操作的尾部；无论前项成功或失败，后项都可进入。 */
     this.serialOperationTail = Promise.resolve();
-    /** @type {Set<Promise<unknown>>} 已接纳但尚未settle的操作，包含串行排队及并发执行。 */
+    /** @type {Set<Promise<unknown>>} 未结束的执行句柄，包含请求、原脚本及页面恢复，不是业务操作计数。 */
     this.acceptedOperationExecutions = new Set();
   }
 

@@ -1754,7 +1754,8 @@ export class BrowserSession extends EventEmitter {
     return await this.syncAndEmitState();
   }
 
-  async close({ status = "closed", reason = "browser_closed" } = {}) {
+  async close({ status = "closed", reason = "browser_closed",
+    operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS } = {}) {
     this.closingRequested = true;
     return await this.runResourceTransition(async () => {
       if (this.record.status === "deleted" && this.record.reconciliation_status === "verified") return this.snapshot();
@@ -1765,6 +1766,12 @@ export class BrowserSession extends EventEmitter {
         for (const client of this.transports.keys()) client.close(4009, "browser stopped");
         this.transports.clear();
         await this.releaseRuntime();
+        if (!await this.operationQueue.drain(operationDrainTimeoutMs)) {
+          const error = new Error(`Browser context已关闭，但原执行尚未结束: browser_id=${this.id}, pending=${this.operationQueue.acceptedOperationExecutions.size}`);
+          error.code = "browser_close_operation_drain_timeout";
+          error.statusCode = 408;
+          throw error;
+        }
         this.record.status = status;
         this.record.reconciliation_status = "verified";
         this.record.release_reason = reason;
@@ -2726,7 +2733,8 @@ export class BrowserSession extends EventEmitter {
     const modalKind = await this.runPageActionWithModalDetection(async () => {
       try {
         result = await runPlaywrightCode(
-          { page: this.page, context: this.context, browser: this.browserHandle },
+          { page: this.page, context: this.context, browser: this.browserHandle,
+            trackExecution: (promise) => this.operationQueue.track(promise) },
           args,
           {
             onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
@@ -2751,7 +2759,7 @@ export class BrowserSession extends EventEmitter {
 
   async recoverAfterPlaywrightTimeout(execution) {
     if (execution.recovery) return await execution.recovery;
-    execution.recovery = (async () => {
+    execution.recovery = this.operationQueue.track((async () => {
       if (this.page !== execution.page || this.record.status !== "running") {
         return;
       }
@@ -2795,7 +2803,7 @@ export class BrowserSession extends EventEmitter {
     })().catch((cause) => {
       // 后续操作也等待同一屏障；不能让原生异常从这条链重新进入普通响应。
       throw new Error(`浏览器页面恢复失败: browser_id=${this.id}, page_id=${execution.pageId}, stage=reset_page`, { cause });
-    });
+    }));
     this.timeoutRecovery = execution.recovery;
     await execution.recovery;
   }

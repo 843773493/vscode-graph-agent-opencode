@@ -53,6 +53,8 @@ Manager关闭先关闭新创建准入，并等待本次已进入创建链的配�
 
 操作队列显式持有`browserSession`资源宿主；串行等待用`serialOperationTail`，全部已接纳操作的等待用`acceptedOperationExecutions`及`drain()`。两者覆盖范围不同，具体归属见operations目录，不能用含混的owner或tail混指宿主、授权身份和并发排空。
 
+工具超时只结束请求等待。原脚本及页面reset继续由同一队列登记；排空期间新增的执行句柄也在原单次预算内复核。stop/delete关闭context后仍须排空原执行，超时返回`browser_close_operation_drain_timeout`/408并持久保留unknown；原执行结束后显式重试完成原检查点删除和终态发布，context不重复关闭。这不证明不合作脚本可强制终止，也不是整个operation/shutdown期限，Python业务owner的挂起接管仍TODO。
+
 设备与网络仿真参数统一由`browserDeviceProfiles.js`解释，Session负责应用到CDP。`baseViewport/baseScreen`已应用设备方向，但不含自定义覆盖，尺寸为CSS像素；截图物理尺寸还需乘DPR。网络预设的单位及`-1`不限速语义写在`BrowserNetworkThrottleProfile`类型处，不能把字节吞吐当比特率或把响应头延迟当整次页面加载耗时。
 
 浏览器资源的`created_at`来自Manager接纳创建时的`browserCreatedAtIso`，早于该资源的`session.start()`完成；新资源也用该值初始化用户交互的空闲计算基线。下载的同名字段则属于`BrowserSavedDownload`，在`saveAs`成功后组装记录时生成，来源`url`不等于附件访问URI；保存文件成功与下载记录持久化完成是两个时刻。新增时间字段应在产生它的owner及类型处说明观察点，不能仅凭`created_at`推测业务含义。

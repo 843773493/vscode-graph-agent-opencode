@@ -174,7 +174,7 @@ describe("Playwright 代码超时", () => {
     };
 
     const result = await runPlaywrightCode(
-      { page, context: {}, browser: {} },
+      { page, context: {}, browser: {}, trackExecution: (execution) => execution },
       { code: "return 'ok';", timeoutMs: 1000 },
     );
 
@@ -188,7 +188,7 @@ describe("Playwright 代码超时", () => {
   test("触发取消信号并返回可重试的超时错误", async () => {
     let timeoutError = null;
     const run = runPlaywrightCode(
-      { page: {}, context: {}, browser: {} },
+      { page: {}, context: {}, browser: {}, trackExecution: (execution) => execution },
       {
         code: "await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)));",
         timeoutMs: 10,

@@ -138,3 +138,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 关闭沿每个原资源锁独立释放，原账本持久成功后才遗忘本次引用；移除整批锁和先 pop 后释放，单错原样上抛、多错保留顺序聚合，取消后沿原 operation/lease 重试，不新增 writer 或占用账本。
 - 完整原 HEAD 的4项故障/忙锁用例失败且源码前后一致；候选资源、工具及真实 HTTP 取消回归239 passed/8.67秒，覆盖单错/多错、冷账本、忙锁隔离、取消等待和原占用重试。共享资源/工具/真实 HTTP 取消回归240 passed/9.84秒，完整源码前后一致；两处 Ruff/compileall 与 OpenSpec strict 均退出0。准确命令、源码指纹、原始输出和退出码在 `out/tests/temp/resource_operation_close_20261025/artifacts/`。
 - 本切片不证明外部进程终止、同步阻塞隔离或整个 operation/shutdown 的总期限，5.2/5.4/6.2保持未勾；团队、成员、委派与协作继续TODO，不追加实现与专项验证。
+
+### 2026-10-25 Browser 原执行终态核实（5.2/5.4 部分收口）
+
+- 工具超时后的原脚本和页面reset由同一队列持有；排空在原单次预算内继续核对后来登记的执行句柄。stop/delete释放context后仍核实原执行结束，默认5秒未排空返回408并持久保持unknown；同身份/版本重试不重复关闭context，核实后才发布终态。
+- 完整原生产代码加最终关闭单测4项均失败；新增“排空先开始、原执行后登记”的2项反例在修正前均错误返回true。最终候选相关单测190 passed，正式`integration-browser-owner-revision-drain`全部4 passed/42.29秒，真实Manager关闭9场景通过；新场景由原创建/执行/停止/删除HTTP入口驱动真实Node/Chromium，受控HTTP仅暂停原fetch，核对磁盘unknown、context释放、peer可用和原页面只关闭一次。
+- Ruff、compileall和Bun语法解析通过，运行前后源码指纹一致；准确命令、原始输出、实际退出码、结构自查及失败归因在`out/tests/temp/browser_close_executions_20261025/artifacts/`。最初4项失败来自单测装具漏CDP句柄，单列保留，不记产品反例。结构自查未发现本批职责越界，既存大文件未扩大重构，不称独立审查。
+- 尚不支持强制终止不合作脚本，Python业务owner仍可能先等待原版本同步；整个operation/shutdown期限、生产信号入口失败后退出协调、Windows和Gateway/主Web本批未验。5.2/5.4/6.2继续未勾，团队与协作继续TODO。
+- 共享合并后同批单测190 passed、正式Python/Node/Chromium集成4 passed，Ruff及45项OpenSpec strict通过；共享index完整保留。机器收据`verification001.json`核对原始输出hash、前后源码、实际退出码与进程组清空，仅作为运行证据，不替代上述业务断言。
