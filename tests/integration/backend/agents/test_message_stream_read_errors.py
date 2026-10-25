@@ -224,3 +224,66 @@ async def test_product_startup_rejects_corrupt_recovery_then_reopens_history(
         assert response.json()["data"] == expected
         assert canonical.read_bytes() == canonical_bytes
     case.record("startup-recovery-errors", receipts)
+
+
+@pytest.mark.asyncio
+async def test_product_stream_locator_rejects_paths_and_empty_values_without_retargeting(
+    communication_case: CommunicationCase,
+) -> None:
+    case = communication_case
+    session = await create_session(case.client, "消息流标识定位")
+    await case.plan(session, [{"content": "stream-locator-original"}])
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "stream-locator-trigger"},
+        "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert sent.status_code == 200, sent.text
+    accepted = sent.json()["data"]
+    await _completed(case.client, accepted["job_id"])
+    base = f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream"
+    response = await case.client.get(base + "/events")
+    assert response.status_code == 200, response.text
+    expected = response.json()["data"]
+    assert expected[-1]["type"] == "stream.completed"
+    thread = expected[0]["thread_id"]
+    node = await case.session_node(session)
+    index = node / "message_streams/index.json"
+    original_index = index.read_bytes()
+    canonical = case.main_thread_node(session) / "rollout/rollout.jsonl"
+    canonical_bytes = canonical.read_bytes()
+    foreign = case.workspace / "foreign-stream.jsonl"
+    foreign.write_bytes(b"[]\n")
+    values = [str(foreign.with_suffix("")), "../foreign-stream", r"C:\private\foreign-stream",
+              r"\\host\share\foreign-stream", ""]
+    receipts = []
+    for source in ("request", "index"):
+        for value in values:
+            if source == "index":
+                raw = json.loads(original_index)
+                raw["threads"][thread][accepted["turn_id"]] = value
+                index.write_text(json.dumps(raw), encoding="utf-8")
+            damaged_index = index.read_bytes()
+            try:
+                for suffix in ("/snapshot", "/events", ""):
+                    params = {"turn_stream_id": value} if source == "request" else {}
+                    failed = await case.client.get(base + suffix, params=params)
+                    assert failed.status_code == 404, failed.text
+                    assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+                    assert "field=turn_stream_id" in failed.text and f"session_id={session}" in failed.text
+                    if value:
+                        assert value not in failed.text and json.dumps(value)[1:-1] not in failed.text
+                    assert str(case.workspace) not in failed.text
+                    assert index.read_bytes() == damaged_index
+                    assert canonical.read_bytes() == canonical_bytes
+                    receipts.append({"source": source, "response": failed.json()})
+            finally:
+                index.write_bytes(original_index)
+    assert foreign.read_bytes() == b"[]\n"
+    for restart in (False, True):
+        if restart:
+            await case.hard_restart()
+        restored = await case.client.get(base + "/events")
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["data"] == expected
+        assert canonical.read_bytes() == canonical_bytes
+    case.record("stream-locator-errors", receipts)

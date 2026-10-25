@@ -332,3 +332,115 @@ async def test_startup_still_skips_logs_without_committed_events(
     assert await store.reconcile_unfinished_streams() == 0
     assert path.read_bytes() == empty
     assert not store._states and not store._event_ids and not store._event_ids_loaded
+
+
+_INVALID_STREAM_LOCATORS = [
+    "absolute", "../foreign-stream", r"..\foreign-stream", r"C:\private\foreign-stream",
+    "C:foreign-stream", r"\\host\share\foreign-stream", "boxteam://invalid/stream", "",
+    ".", "..", "stream\x00tail", "stream\ntail",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["request", "index"])
+@pytest.mark.parametrize("value", _INVALID_STREAM_LOCATORS)
+async def test_stream_locator_rejects_native_values_before_read_or_fallback(
+    message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch,
+    source: str, value: str,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_locator")
+    await writer.close_completed()
+    await asyncio.gather(*store._snapshot_tasks.values())
+    index = store._index_path(session)
+    original_index = index.read_bytes()
+    foreign = resolver.sessions_root / "foreign-stream.jsonl"
+    foreign.write_bytes(b"[]\n")
+    value = str(foreign.with_suffix("")) if value == "absolute" else value
+    if source == "index":
+        raw = json.loads(original_index)
+        raw["threads"][thread][writer.turn_id] = value
+        index.write_text(json.dumps(raw), encoding="utf-8")
+    damaged_index = index.read_bytes()
+    opened = []
+    original_open = Path.open
+
+    def observe_open(path: Path, *args, **kwargs):
+        if path == foreign:
+            opened.append(path)
+        return original_open(path, *args, **kwargs)
+
+    cold = MessageStreamStore(path_resolver=resolver)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "open", observe_open)
+            for _ in range(2):
+                arguments = {"turn_stream_id": value} if source == "request" else {}
+                with pytest.raises(MessageStreamError) as caught:
+                    await cold.open_existing(session_id=session, thread_id=thread,
+                                             turn_id=writer.turn_id, **arguments)
+                public = str(caught.value)
+                assert "field=turn_stream_id" in public and f"session_id={session}" in public
+                if value:
+                    assert repr(value) not in public and value not in public
+                assert not cold._states and not cold._event_ids
+                assert not opened
+                assert index.read_bytes() == damaged_index
+    finally:
+        index.write_bytes(original_index)
+    assert foreign.read_bytes() == b"[]\n"
+    reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
+    assert reopened.turn_stream_id == writer.turn_stream_id
+
+
+@pytest.mark.parametrize("builder", ["_stream_path", "_state_path", "_applied_event_ids_path"])
+@pytest.mark.parametrize("value", _INVALID_STREAM_LOCATORS)
+def test_all_stream_file_templates_reject_locator_values(
+    message_stream_store: MessageStreamStoreCase, builder: str, value: str,
+) -> None:
+    store, _, session = message_stream_store
+    value = "/private/foreign-stream" if value == "absolute" else value
+    with pytest.raises(MessageStreamError, match="field=turn_stream_id"):
+        getattr(store, builder)(session, value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_id", ["legacy-stream.v4", "stream_custom_label"])
+async def test_existing_opaque_stream_labels_keep_same_storage_and_restore_contract(
+    message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch, stream_id: str,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    generate = stream_module.create_prefixed_id
+    with monkeypatch.context() as patch:
+        patch.setattr(stream_module, "create_prefixed_id", lambda prefix: stream_id if prefix == "strm" else generate(prefix))
+        writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_opaque_label")
+        await writer.close_completed()
+    await asyncio.gather(*store._snapshot_tasks.values())
+    cold = MessageStreamStore(path_resolver=resolver)
+    reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id,
+                                        turn_stream_id=stream_id)
+    assert reopened.turn_stream_id == stream_id
+    assert await cold.get_state(stream_id) == await store.get_state(stream_id)
+    assert await cold.reconcile_unfinished_streams() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_id", ["absolute", ""])
+async def test_generated_invalid_stream_id_is_rejected_before_index_or_cache_publish(
+    message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch, stream_id: str,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    stream_id = str(resolver.sessions_root / "generated-stream") if stream_id == "absolute" else stream_id
+    # 冻结文件前先完成原本必需的Thread查询，包含SQLite读侧的首次WAL/SHM建立。
+    resolver.resolve_thread_node(session, thread)
+    node = resolver.resolve_session_node(session)
+    original = {p: p.read_bytes() for p in node.rglob("*") if p.is_file()}
+    generate = stream_module.create_prefixed_id
+    monkeypatch.setattr(stream_module, "create_prefixed_id", lambda prefix: stream_id if prefix == "strm" else generate(prefix))
+    with pytest.raises(MessageStreamError, match="field=turn_stream_id"):
+        await store.open(session_id=session, thread_id=thread, turn_id="turn_invalid_generated_id")
+    assert not store._states and not store._event_ids
+    assert {p: p.read_bytes() for p in node.rglob("*") if p.is_file()} == original

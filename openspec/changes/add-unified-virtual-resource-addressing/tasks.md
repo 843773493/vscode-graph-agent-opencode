@@ -626,3 +626,13 @@
 - 完整Git archive旧基线：快照错误Thread、超前序号、错误applied owner×completed/lost/resumed共9 failed，空/空白日志2 passed，1.56秒。候选生产代码净减28行，存储143 passed/12.69秒，Ruff通过；新增空日志正例随共享版本通过；真实 Gateway/Backend/model_stream 候选验收1 passed/107.15秒，产品执行生成终态历史，三类故障均在真实进程启动阶段明确失败，修复原件后每次均能重启并逐字段读回原历史，canonical及损坏原件均保全。
 - 原始命令、完整源码前后指纹、退出码及完整反例源码在 `out/tests/temp/message_stream_startup_recovery_20261025/artifacts/`。这是现有持久恢复合同收口，不代替2.2/7.2全局门、Windows实机或完整Web验收；Agent团队与协作继续TODO。
 - 最终共享版本：197 passed/13.74秒，三项真实HTTP/重启产品回归3 passed/216.92秒；Ruff/compileall与strict 45 passed/0 failed。五组源码前后指纹一致，运行组无残留。静态自查仅reconcile_unfinished_streams改变、其余55个方法AST不变，原迭代器/流式裁剪保留，无新源码目录；这是主线程自查，非独立代理审查。共享暂存条目独立保护，本次提交不包含他人的优化。
+
+
+### 2026-10-25 消息流定位参数（2.2/7.2 部分收口）
+
+- 原store的请求、索引、生成端与events/state/applied-event-id三个文件模板统一验证逻辑流ID：非空单一文件名，不接受路径分隔、盘符/URI冒号、ASCII控制字符或点段；不解码、清洗、截断或重定向。显式空值明确拒绝，只有未提供才按原索引选择。正常生成及既有合法不透明标签继续使用原格式，不强制UUID，不扩张或收紧普通文件的原生路径输入合同。公开错误只带稳定Session与字段/阶段，非法值留在原诊断。
+- 候选存储207 passed/20.27秒（含两种既有标签的实际创建/持久化/冷恢复），真实Gateway/Backend/model_stream为1 passed/58.08秒。完整Git archive旧基线的60项请求/索引/文件模板负例均失败，两种合法标签通过；最终生成端隔离路径与空值反例另用完整tree `008406973cb1435a207778efdfdc6a8312e6726f` 运行，2 failed/0.73秒，均精确复现未拒绝。首次生成端绝对路径反例受宿主/private权限影响，不计该项为业务反例；改用正式隔离工作区后确认失败原因。
+- 准确命令、完整源码前后指纹、原始输出和退出码在 `out/tests/temp/message_stream_locator_20261025/artifacts/`。POSIX真实越界读由fixture隔离哨兵与Path.open观察区分，Windows/UNC为词法拒绝，不计Windows实机通过；未跑完整Web，2.2/7.2总门不勾，Agent团队与协作继续TODO。
+
+- 共享版本存储/API合同/投影/运行时269 passed/21.65秒；随后只把两项生成端测试的绝对路径移入隔离工作区，最终2 passed/0.39秒，其余267项及生产代码未变。首次共享2项失败源于捕获文件基线前尚未触发Thread查询的首次SQLite WAL/SHM建立，先完成必需查询后保留完整逐字节断言通过，没有排除sidecar或放宽业务断言。共享真实HTTP为2 passed/131.16秒：请求和损坏索引各5种值×snapshot/events/SSE建流共30次精确404，request_id一致、原索引/外部哨兵/canonical不变，修复后原历史及硬重启一致，并回归原四类持久损坏。
+- 最终Ruff/compileall通过，strict OpenSpec 45 passed/0 failed；主线程差异与AST自查确认唯一ID验证、7处准入调用、旧falsy回退零残留，原迭代器/列表读取/流式裁剪及启动恢复未被改变，无新源码目录。这是主线程自查，非独立代理审查；共享暂存条目和他人优化独立保留。

@@ -389,16 +389,32 @@ class MessageStreamStore:
             / "message_streams"
         )
 
+    @staticmethod
+    def _validate_stream_id(turn_stream_id: str, *, context: str) -> None:
+        """逻辑流标识只作单一文件名，不解释路径、不归一或回退。"""
+        if (
+            not isinstance(turn_stream_id, str)
+            or not turn_stream_id
+            or turn_stream_id in {".", ".."}
+            or any(char in turn_stream_id for char in ("/", "\\", ":"))
+            or any(ord(char) < 32 or ord(char) == 127 for char in turn_stream_id)
+        ):
+            logger.error("消息流标识非法: %s value=%r", context, turn_stream_id)
+            raise MessageStreamError(f"消息流标识必须是单一不透明文件名: {context} field=turn_stream_id")
+
     def _stream_path(self, session_id: str, turn_stream_id: str) -> Path:
+        self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=events")
         return self._stream_dir(session_id) / f"{turn_stream_id}.jsonl"
 
     def _state_path(self, session_id: str, turn_stream_id: str) -> Path:
+        self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=state")
         return self._stream_dir(session_id) / f"{turn_stream_id}.state.json"
 
     def _index_path(self, session_id: str) -> Path:
         return self._stream_dir(session_id) / "index.json"
 
     def _applied_event_ids_path(self, session_id: str, turn_stream_id: str) -> Path:
+        self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=applied_event_ids")
         return self._stream_dir(session_id) / f"{turn_stream_id}.applied-event-ids.json"
 
     def _read_applied_event_ids_file(
@@ -925,12 +941,12 @@ class MessageStreamStore:
                 raise MessageStreamError(f"消息流索引 threads 必须是对象: {context}")
             for thread_id, turns in threads.items():
                 validate_thread_id(thread_id)
-                if not isinstance(turns, dict) or any(
-                    not isinstance(turn_id, str) or not turn_id
-                    or not isinstance(stream_id, str) or not stream_id
-                    for turn_id, stream_id in turns.items()
-                ):
+                if not isinstance(turns, dict):
                     raise MessageStreamError(f"消息流 thread 索引损坏: {context}")
+                for turn_id, stream_id in turns.items():
+                    if not isinstance(turn_id, str) or not turn_id:
+                        raise MessageStreamError(f"消息流 thread 索引损坏: {context}")
+                    self._validate_stream_id(stream_id, context=context)
         except MessageStreamError:
             logger.exception("消息流索引校验失败: path=%s record=%r", path, raw)
             raise
@@ -1069,11 +1085,14 @@ class MessageStreamStore:
     ) -> MessageStreamWriter:
         validate_thread_id(thread_id)
         self._path_resolver.resolve_thread_node(session_id, thread_id)
+        if turn_stream_id is not None:
+            self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=request")
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
-            resolved_stream_id = turn_stream_id or index.get(thread_id, {}).get(turn_id)
+            resolved_stream_id = turn_stream_id if turn_stream_id is not None else index.get(thread_id, {}).get(turn_id)
             if resolved_stream_id is None:
                 resolved_stream_id = create_prefixed_id("strm")
+                self._validate_stream_id(resolved_stream_id, context=f"session_id={session_id} artifact=generated")
                 state = self._empty_state(
                     session_id=session_id,
                     thread_id=thread_id,
@@ -1121,9 +1140,11 @@ class MessageStreamStore:
         """只读取已持久化的消息流，不为历史查询创建空流。"""
         validate_thread_id(thread_id)
         self._path_resolver.resolve_thread_node(session_id, thread_id)
+        if turn_stream_id is not None:
+            self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=request")
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
-            resolved_stream_id = turn_stream_id or index.get(thread_id, {}).get(turn_id)
+            resolved_stream_id = turn_stream_id if turn_stream_id is not None else index.get(thread_id, {}).get(turn_id)
         if resolved_stream_id is None:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: session_id={session_id} turn_id={turn_id}"
