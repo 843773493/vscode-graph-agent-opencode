@@ -306,3 +306,9 @@ Backend的原关闭步骤自然等待这条停止链；整批观察预算到期�
 原`terminalProcessLifecycle`移除同步`spawnSync`，复用模块已有的`execFileAsync`并在唯一Windows调用点等待回执。`taskkill /T /F /PID`、1500毫秒工具上限及后续1500毫秒单调退出核实保持；启动错误、退出码、信号、stderr和原始cause继续可查。非零退出但根已自行消失仍允许后续核实；工具被期限终止则保留失败，不能因根消失丢弃原超时。没有增加另一终止链、进程身份或停止证明。
 
 隔离Node边界替身在工具回执未释放时完成真实loopback HTTP请求，并验证退出核实不会越过回执；它不代替真实taskkill。Windows原生受控父子进程经正式终止入口分别核实退出，Linux原session/僵尸/过期身份回归保持。该切片不证明任意同步存储可抢占、所有后代已逐一核验或整个operation/shutdown有硬期限，5.2/5.4/6.2继续未勾。
+
+### 单次领域列表的总等待预算（5.4 部分收口）
+
+原`WorkspaceResourceOwner.list_resources`从入口取得一次30秒协作式预算，准备、所选资源恢复、唯一外部清单及逐资源锁共同消耗。过滤、完整记录冲突检查、观察、写盘和排序仍是原唯一链路；本次到期排空自己的等待，保留已经持久提交的恢复与观察，不为未开始的读取补造unknown、lease或外部动作。原传输TimeoutError与调用方取消保持归属，无后台重试或清单缓存。
+
+真实Session与ASGI资源创建/列表驱动Node/PTY或Chromium/HTTP，暂停已取得的真实清单回执并推进本次截止，验证HTTP503/request_id、peer继续可读、原持久记录/占用及外部身份不变，以及故障解除后的正式列表重试。阶段预算相加与已提交前项保留由共享owner单测验证；此处不声称真实等待30秒、独立Backend重启或Gateway/Web验收。跨领域聚合API整体预算、同步存储、不合作取消及完整operation/shutdown仍TODO，5.2/5.4/6.2保持未勾。

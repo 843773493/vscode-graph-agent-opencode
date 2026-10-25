@@ -298,3 +298,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原进程树终止owner移除`spawnSync`，复用已有`execFileAsync`并迁齐唯一Windows调用点及系统边界替身；保留参数、1500毫秒工具上限与后续退出核实。启动、退出码、信号、stderr与原cause保留；超时杀掉工具后即使根已消失仍报告失败，不将工具回执视为停止证明。
 - Linux相关Node回归70 passed/4.72秒，包含迁齐原10项及新增超时/并发HTTP的13项Windows边界测试；Linux真实session/僵尸/过期身份4 passed/5.24秒。Windows快照`fc3961e8fce6177af32f91d3379fcb7d60ea3f64`同13项通过/4.78秒，原生受控父子进程经正式终止入口1 passed/0.58秒，分别核根与子进程退出。边界替身在回执未放行时完成真实loopback HTTP请求，不冒称真实taskkill并发验收；原生父子进程不代替完整PTY/Gateway/Web或所有后代场景。
 - Node静态语法、diff检查与OpenSpec strict 45/0通过；每次运行均有进程外期限/4GiB保护及前后源码指纹，原始命令、输出、实际退出码和作者自查在`out/tests/temp/terminal_async_taskkill_20261025/artifacts/`。Windows既有开发服务前后均保持可用，未重启。全operation/shutdown期限、其它同步存储及不合作任务终止仍TODO，5.2/5.4/6.2保持未勾、整体20/23；团队与CIL第9节继续暂缓，原4份CIL规划排除本提交。
+
+### 2026-10-25 单次领域列表总等待预算（5.4 部分收口）
+
+- 原共享owner的`list_resources`入口一次30秒覆盖准备、所选资源恢复、唯一外部清单及逐资源锁，保持原过滤、完整记录冲突校验与持久观察链；到期仅排空本次等待，已提交观察保留，不补造unknown/lease，不后台重试。原传输TimeoutError与调用方取消保持身份。作者AST核对32个其它方法不变，去除预算上下文后原列表函数体一致；无新存储、schema或执行链。
+- Linux最终列表32 passed/1.17秒；相关十文件先319 passed/2 failed，后两项是新增前项保留装具在冷恢复前持第二资源锁，尚未到列表合并，现改为原外部清单取得后占锁，最终列表全文件32项通过。其它319项源码未变，复用原回归，不将两个计数相加。完整旧生产`270a0d7c2`归档中10个有效期限反例失败，另外两项相同装具准备失败明确排除；最终装具仅改变该函数，十个旧期限反例AST仍与最终一致。另一次误写API测试路径导致零用例收集的失败原件保留，改为既有两个API文件后才取得上述回归。
+- 正式`integration-resource-release`完整10 passed/87.09秒，继续原120秒/4GiB保护；包含原8项及新增Terminal/Browser列表2项。正式Session和ASGI创建/列表生成真实Node/PTY或Chromium/HTTP，暂停已取得的清单回执并推进原截止，核HTTP503/request_id、peer可读、记录/lease逐字保留、原进程/页面身份和版本不变及正式重试成功；不代替真实30秒等待、独立进程重启、Gateway/Web或跨领域聚合API总预算。Windows快照`350fdf93b6e3cdedeb9655273e1430c153ece89d`同32项通过/2.79秒，原开发服务未重启。
+- Ruff、compileall及OpenSpec strict原件见`out/tests/temp/resource_list_deadline_20261025/artifacts/`，全部运行有外置保护、源码前后指纹、原始输出和真实退出码。Pyright 1.1.414按项目解释器报告4项旧诊断，与完整旧生产的规则/消息逐项一致；首次未指定解释器的额外Python版本诊断单列保留，不声称类型全绿。跨领域聚合API、同步存储、不合作取消和全operation/shutdown仍TODO，5.2/5.4/6.2继续未勾、整体20/23；团队及CIL第9节仍暂缓，原4份CIL规划排除提交。

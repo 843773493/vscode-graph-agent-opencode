@@ -366,3 +366,86 @@ async def test_real_management_command_total_deadline_preserves_facts_and_reconc
                 "original_external": original_external, "after_timeout_external": external,
                 "scope": "真实Session及ASGI资源创建/管理入口，真实Node/PTY或Chromium/HTTP；暂停原回执并推进本次截止，不代表Gateway/Web或任意不合作执行的终止",
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_real_list_total_deadline_preserves_live_resources_and_peer_access(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext], owner_mount: MountedWorkspace,
+    monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            created = []
+            for index in range(2):
+                response = await client.post(f"/api/v1/resources/{kind}s", json={
+                    "session_id": sid, "retention_scope": "thread", "title": f"list-{index}",
+                })
+                assert response.status_code == 200, response.text
+                created.append(response.json()["data"]["resource_id"])
+            rid, peer = created
+            external = await owner._transport.get_resource(rid)
+            entered, release = asyncio.Event(), asyncio.Event()
+            transport_list = owner._transport.list_resources
+            deadlines: list[asyncio.Timeout] = []
+            calls = 0
+
+            def is_listing() -> bool:
+                return asyncio.current_task().get_name() == "resource-list-under-test"
+
+            def capture(seconds: float) -> asyncio.Timeout:
+                assert seconds == 30
+                context = asyncio.timeout(seconds)
+                if is_listing():
+                    deadlines.append(context)
+                return context
+
+            async def receiving():
+                nonlocal calls
+                result = await transport_list()
+                if is_listing():
+                    calls += 1
+                    entered.set()
+                    await release.wait()
+                return result
+
+            with monkeypatch.context() as patch:
+                patch.setattr(owner_module, "timeout", capture)
+                patch.setattr(owner._transport, "list_resources", receiving)
+                pending = asyncio.create_task(client.get(
+                    f"/api/v1/resources?kind={kind}",
+                    headers={"X-Request-ID": "list-under-test"},
+                ), name="resource-list-under-test")
+                try:
+                    await asyncio.wait_for(entered.wait(), 10)
+                    healthy = await client.get(f"/api/v1/resources/{peer}")
+                    assert healthy.status_code == 200 and healthy.json()["data"]["status"] == "running"
+                    before, ledger = owner._store.path.read_bytes(), owner._leases._state_path.read_bytes()
+                    assert len(deadlines) == calls == 1
+                    deadlines[0].reschedule(asyncio.get_running_loop().time())
+                    failed = await asyncio.wait_for(asyncio.shield(pending), 1)
+                    assert failed.status_code == 503, failed.text
+                    assert failed.headers["X-Request-ID"] == "list-under-test"
+                    assert "TimeoutError" in failed.text and str(root) not in failed.text
+                    assert owner._store.path.read_bytes() == before
+                    assert owner._leases._state_path.read_bytes() == ledger
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                    release.set()
+            await asyncio.sleep(0)
+            assert calls == 1
+            current = await owner._transport.get_resource(rid)
+            identity = "os_pid" if kind == "terminal" else "active_page_id"
+            assert current[identity] == external[identity]
+            assert current["transport_owner_revision"] == external["transport_owner_revision"] == 1
+            assert current["status"] == external["status"] == "running"
+            retried = await client.get(f"/api/v1/resources?kind={kind}")
+            assert retried.status_code == 200, retried.text
+            assert retried.json()["request_id"] == retried.headers["X-Request-ID"]
+            assert {item["resource_id"] for item in retried.json()["data"]["items"]} == set(created)
+            (run.artifacts_dir / f"list-deadline-{kind}.json").write_text(json.dumps({
+                "failure": failed.json(), "retry": retried.json(), "external": current,
+                "scope": "正式Session及ASGI资源创建/列表，真实Node/PTY或Chromium/HTTP；暂停已返回清单并推进本次截止，不代表Gateway/Web或整个聚合API总期限",
+            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

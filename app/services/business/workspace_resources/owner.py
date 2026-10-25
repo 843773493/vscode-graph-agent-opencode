@@ -192,43 +192,55 @@ class WorkspaceResourceOwner:
         source_session_id: str | None = None,
         source_thread_id: str | None = None,
     ) -> list[ResourceSnapshot]:
-        await self.recover(())
-        def matches(record: OwnedResourceRecord) -> bool:
-            refs = record.thread_associations
-            if record.retention_scope == "thread" and not refs:
-                refs = [record.source_thread]
-            return (
-                (retention_scope is None or record.retention_scope == retention_scope)
-                and (source_session_id is None or record.source_thread.session_id == source_session_id)
-                and (source_thread_id is None or record.source_thread.thread_id == source_thread_id)
-                and ((session_id is None and thread_id is None) or any(
-                    (session_id is None or ref.session_id == session_id)
-                    and (thread_id is None or ref.thread_id == thread_id)
-                    for ref in refs
-                ))
-            )
+        # 一次领域列表的恢复、清单和各资源锁共同消耗入口预算。
+        # TODO(5.4)：同步存储与不合作取消仍须由原执行owner核实收敛。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                await self.recover(())
+                def matches(record: OwnedResourceRecord) -> bool:
+                    refs = record.thread_associations
+                    if record.retention_scope == "thread" and not refs:
+                        refs = [record.source_thread]
+                    return (
+                        (retention_scope is None or record.retention_scope == retention_scope)
+                        and (source_session_id is None or record.source_thread.session_id == source_session_id)
+                        and (source_thread_id is None or record.source_thread.thread_id == source_thread_id)
+                        and ((session_id is None and thread_id is None) or any(
+                            (session_id is None or ref.session_id == session_id)
+                            and (thread_id is None or ref.thread_id == thread_id)
+                            for ref in refs
+                        ))
+                    )
 
-        records = tuple(record for record in self._store.all() if matches(record))
-        await self.recover(record.resource_id for record in records)
-        # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
-        records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
-        observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
-        result: list[ResourceSnapshot] = []
-        for before in records:
-            async with self._resource_lock(before.resource_id):
-                record = self._require_owned_resource_record(before.resource_id)
-                if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
-                    continue
-                # 同版本外部状态观察、未知占用等也能改变记录，不能只比较owner_revision。
-                if record != before:
-                    raise ResourceConflict(f"外部资源列表读取期间状态已改变；请刷新: {record.resource_id}")
-                runtime = observed.get(record.resource_id)
-                observe_resource(record, runtime, self.kind)
-                # TODO：逐项持久化仍重写全量JSON，后续测量大清单成本再优化写盘。
-                self._store.save(record)
-                self._sync_ledger(record)
-                result.append(resource_projection(record, runtime, self.kind))
-        return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
+                records = tuple(record for record in self._store.all() if matches(record))
+                await self.recover(record.resource_id for record in records)
+                # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
+                records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
+                observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                result: list[ResourceSnapshot] = []
+                for before in records:
+                    async with self._resource_lock(before.resource_id):
+                        record = self._require_owned_resource_record(before.resource_id)
+                        if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
+                            continue
+                        # 同版本外部状态观察、未知占用等也能改变记录，不能只比较owner_revision。
+                        if record != before:
+                            raise ResourceConflict(f"外部资源列表读取期间状态已改变；请刷新: {record.resource_id}")
+                        runtime = observed.get(record.resource_id)
+                        observe_resource(record, runtime, self.kind)
+                        # TODO：逐项持久化仍重写全量JSON，后续测量大清单成本再优化写盘。
+                        self._store.save(record)
+                        self._sync_ledger(record)
+                        result.append(resource_projection(record, runtime, self.kind))
+                return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源列表等待超过 30 秒: workspace_id={self.workspace_id} "
+                f"kind={self.kind}；保留已提交观察与原占用，未取得完整清单"
+            ) from error
 
     async def get_resource(self, resource_id: str) -> ResourceSnapshot:
         await self.recover((resource_id,))
