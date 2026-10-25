@@ -12,6 +12,7 @@ from app.services.business.workspace_resources.facts import (
     resource_projection,
 )
 from app.services.business.workspace_resources.operations import ResourceOperations
+from app.services.business.workspace_resources.records import OwnedResourceRecord
 
 if TYPE_CHECKING:
     from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -91,7 +92,7 @@ class TerminalOperations(ResourceOperations):
         """命令结束只回收来源 Thread 的临时执行；workspace 记录始终保留。"""
         async with self._resource(terminal_id) as record:
             if record.retention_scope == "workspace":
-                return resource_projection(record, await self._owner._transport.get_resource(terminal_id), self._owner.kind)
+                return await self._call_locked(record, lambda: self._owner._transport.get_resource(terminal_id))
             if record.source_thread != self._thread:
                 raise ValueError("只有来源 Thread 能回收临时命令执行")
             if any(lease.lease_id != self._lease_refs[terminal_id]
@@ -104,16 +105,25 @@ class TerminalOperations(ResourceOperations):
         self, terminal_id: str, call: Callable[[], Awaitable[TerminalSnapshot]],
     ) -> TerminalSnapshot:
         async with self._resource(terminal_id) as record:
-            try:
-                result = await call()
-                runtime = result.get("terminal", result)
-                if not isinstance(runtime, dict):
-                    raise TypeError("Terminal operation 缺少 PTY 完整事实")
-                observe_resource(record, runtime, self._owner.kind)
-                self._owner._store.save(record)
-                self._owner._sync_ledger(record)
-                projection = resource_projection(record, runtime, self._owner.kind)
-                return {**result, "terminal": projection} if "terminal" in result else projection
-            except BaseException as error:
-                self._owner._unknown(record, error, lease_id=self._lease_refs[terminal_id])
-                raise
+            return await self._call_locked(record, call)
+
+    async def _call_locked(
+        self, record: OwnedResourceRecord, call: Callable[[], Awaitable[TerminalSnapshot]],
+    ) -> TerminalSnapshot:
+        # 工作区命令完成与普通工具调用共用回执链；只有已核实终态才能结清受管cwd占用。
+        try:
+            result = await call()
+            runtime = result.get("terminal", result)
+            if not isinstance(runtime, dict):
+                raise TypeError("Terminal operation 缺少 PTY 完整事实")
+            if type(runtime.get("transport_owner_revision")) is not int or runtime["transport_owner_revision"] != record.owner_revision:
+                raise ValueError("Terminal operation 回执版本与本次操作不一致")
+            observe_resource(record, runtime, self._owner.kind)
+            self._owner._verified(record)
+            self._owner._store.save(record)
+            self._owner._sync_ledger(record)
+            projection = resource_projection(record, runtime, self._owner.kind)
+            return {**result, "terminal": projection} if "terminal" in result else projection
+        except BaseException as error:
+            self._owner._unknown(record, error, lease_id=self._lease_refs[record.resource_id])
+            raise

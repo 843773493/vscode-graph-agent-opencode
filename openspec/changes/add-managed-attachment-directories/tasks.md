@@ -329,3 +329,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux新旧owner/API回归337 passed/11.10秒（含新52项）；正式新suite四场景4 passed/23.46秒，原版本撤销/关闭8 passed/61.55秒，原真实HTTP取消/回执54 passed/5.24秒。新场景由正式Session、ASGI创建/管理与原工具operation生成真实Chromium/HTTP动作，先产生页面副作用再失败，仅注入回执版本或首次记录提交故障；核原页面/版本、冷账本精确占用、普通查询不结清，以及原管理停止verified后才settle。完整旧HEAD归档仅叠相同最终新测试/矩阵，单测28 failed/26 passed、产品4 failed；旧失败包括接受错误版本、未知占用已普通释放与缺失处理错误cause，原正式未知转换HTTP合同仍通过。
 - Windows快照`f0e7a1569194f80fa116697cb09125422b5e2bcf`沿原90秒/4GiB Job Object保护，新52项、原Browser owner和API共129 passed/12.37秒；tracked干净，4份相关Python归一LF后与本地相同，原Web/Gateway保持可用，未重启。初轮旧owner测试默认GBK读取UTF-8账本失败，现只显式指定原UTF-8格式，原断言逐字保持；Linux单项补验通过。未重跑Windows真实Chromium、Gateway/主Web或独立Backend重启。
 - 首轮扩大回归引用不存在的API文件，随后更正命令；第二轮发现本次核验把原未知页面转换500改成409，已修复产品错误归属且原两项API断言保持。全部失败原件、准确命令、前后源码指纹、真实退出码、Ruff/compileall、生产文件Pyright 1.1.414零诊断及作者AST/目录自查位于`out/tests/temp/browser_operation_receipts_20261025/artifacts/`。完整旧代操作接管、同步阻塞、不合作取消和全operation/shutdown仍TODO，5.2/5.4/6.2继续未勾、整体20/23；团队及CIL第9节继续暂缓，原4份CIL规划排除本提交。
+
+
+### 2026-10-25 Terminal 普通操作与工作区完成的回执核验（5.2 部分收口）
+
+- 原Terminal工具查询、读写、后台和steering调用，与workspace命令完成查询共用原资源锁内的唯一回执链；严格核本次整数版本、资源/工作区及verified，再提交记录、同步账本和投影。错误或未知回执不再成功或普通释放本次精确lease；真实终态完成查询会提交停止事实并结清受管cwd占用，保留workspace记录与关联。没有新账本、重放链或schema。
+- Linux新旧owner/API/工具/steering/恢复回归336 passed/8.38秒，含新64项；最终正式新suite 7 passed/59.00秒，原附件Shell suite 12 passed/114.50秒。正式Session、上传、创建及原工具operation生成真实Node/PTY/HTTP，读、真实写入与完成的stale/unknown回执均保留冷账本精确占用和到期目录，原管理停止verified后才settle/GC。独立终态场景暂停steering轮询，由完成查询独占提交已真实停止的PTY事实；不代替Gateway/Web或独立Backend重启。
+- Windows原生新suite 7 passed/69.50秒，继续90秒/4GiB保护；新旧owner/API单测122 passed/11.57秒。最终产品快照`ac49a9901b1570c7bc753cb302fde2755fe5d541`的四份Python归一LF指纹与Linux逐项一致、tracked clean；原Web/Gateway前后可用，未重启。首轮文件锁路径261字符而在准备阶段7 errors，去掉新文件名中重复terminal前缀后进入业务；第二轮2 failed/5 passed并触发套件期限，写入探针的换行未提交Windows控制台命令。现改为与产品一致的回车输入，原业务断言保持，未改系统配置或放宽期限。旧owner测试只明确UTF-8读取账本，原断言不变。
+- 完整旧HEAD `e1d28ed604a2e9e4437cc9e6469d98f25424a089`归档仅叠相同最终新测试/矩阵：新单测27 failed/37 passed，真实产品7 failed/58.07秒，分别复现错误回执未拒绝、原占用普通释放及外部已停止却返回running。4427份原文件与archive一致，最终新测试逐字核对；首轮PID类型、同名suite两树端口争用和错误matrix参数的设施失败原件单独保留，不充作产品反例。
+- Ruff和compileall通过；Pyright 1.1.414的5项Terminal专用传输方法诊断在完整旧生产规则/消息逐项相同，不称类型全绿。作者AST自查确认另外9个方法及全部原签名不变，新目录含四节AGENTS；准确命令、源码前后指纹、原始输出/真实退出码、Windows收据与完整旧生产归档见`out/tests/temp/terminal_operation_receipts_20261025/artifacts/verification-056.json`。完整旧代接管、同步阻塞、不合作取消和全operation/shutdown仍TODO，5.2/5.4/6.2继续未勾、整体20/23；团队及CIL第9节继续暂缓，原4份CIL规划排除本提交。

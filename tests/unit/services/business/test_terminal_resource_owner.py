@@ -447,7 +447,7 @@ async def test_unknown_error_preserves_record_without_persisting_absolute_error_
     result = (await terminal_owner.owner.list_resources())[0]
     assert result["reconciliation_status"] == "unknown"
     assert str(terminal_owner.root) not in result["error"]
-    assert str(terminal_owner.root) not in (terminal_owner.root / ".boxteam" / "terminal-resources.json").read_text()
+    assert str(terminal_owner.root) not in (terminal_owner.root / ".boxteam" / "terminal-resources.json").read_text(encoding="utf-8")
 
 @pytest.mark.asyncio
 async def test_lost_transport_grant_receipt_is_discoverable_unknown(terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -245,6 +245,15 @@
       "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/browser/test_browser_operation_receipts.py"]
     },
     {
+      "id": "integration-terminal-operation-receipts",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 90000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/terminal/test_operation_receipts.py"]
+    },
+    {
       "id": "integration-resource-orphan-sweep",
       "layer": "integration",
       "client": null,
