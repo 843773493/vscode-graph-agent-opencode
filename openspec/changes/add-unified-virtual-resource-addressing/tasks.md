@@ -694,3 +694,11 @@
 - 共享真实创建错误与重试22 passed/19.22秒。新增ASGI请求只注入VFS上限数值，执行原产品预算校验，400响应及request_id保持，catalog nodes/creation rows与Session目录清单不变；恢复原VFS上限后，同一创建入口成功发布active Session。HTTP使用现有授权fixture，不称真实Gateway或完整Web。创建日志最终文字改为通用诊断位置，避免对非SQLite预算错误误指；该文字修订后2项定向入口/创建检查通过，其余业务AST未变。
 - 发行源资源复制到隔离目录后，编译真实C探针并经当前Python SQLite extension API核VFS值、WAL写入和重开，删除探针仍明确抛原OperationalError；共享1 passed。此项不是重建/安装完整release，也不替代Windows。Ruff/compileall通过；候选首轮因使用共享迁移后的测试路径而无用例（exit4），第二轮168 passed/1 failed是旧cause路径断言，按上述合同迁齐后169通过，原件全部保留。
 - 准确命令、包括共享未跟踪源码的完整指纹、原始输出/退出码、完整旧实现反例和主线程结构自查在 `out/tests/temp/sqlite_runtime_errors_20261025/artifacts/`。主线程自查不称独立代理审查；共享既有required-tables查重优化、测试目录迁移和暂存内容独立保留。rollout连接形态拒绝及SQLite进程持锁错误仍是后续缺口，2.2/7.2全局门不勾；团队、成员、委派和协作继续TODO。
+
+
+### 2026-10-25 Rollout SQLite 连接路径校验（2.2/7.2 部分收口）
+
+- 四类目录/索引文件形态拒绝与检查时原生错误，复用原存储错误出口；公开原因保留 artifact、阶段、异常类别与 errno/winerror，真实路径及原异常留诊断和 cause。锁调用方全量迁齐后移除旧 helper 名称；不增加连接器、writer、迁移或 schema。AST 对账确认两个锁类在调用改名归一后相同，SQLite 连接、schema 探测、PRAGMA 和清理不变；共享队首通知优化独立保留。
+- 完整 Git archive 的旧实现加新增测试为15 failed/0.66秒；最终共享存储及完整 Saver 107 passed/33.84秒，历史入口正式 matrix 4 passed/29.46秒，Ruff/compileall通过。产品 Session 与消息执行配合现有 model_stream 生成关键历史；bootstrap/history 在连接 owner 检查失败时明确500，原 SQLite 完整 dump、canonical 字节和身份不变，写锁可重取、冷 Saver 及原 API 故障移除后读回原历史。ASGI 与现有授权 fixture 不代表真实 Gateway、进程重启、Windows实机或完整Web。
+- 准确命令、前后指纹、原始输出/退出码、完整反例与主线程结构自查位于 `out/tests/temp/rollout_index_paths_20261025/artifacts/`。共享存储检查期间三个未加载的Web文件被他人修改，完整冻结核验按实拒绝；限定收据核后端、测试、配置输入未变和进程组回收，其余共享检查完整冻结通过。候选 Saver 首次用了不存在的unit路径而exit4，定位真实integration路径后77项通过，保留失败原件。主线程自查不称独立审查。
+- 2.2/7.2全局门仍未勾，SQLite进程持锁及其它存储错误出口另行处理；Agent团队、成员、委派与协作继续TODO。

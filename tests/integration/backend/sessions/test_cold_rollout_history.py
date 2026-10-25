@@ -310,6 +310,73 @@ async def _wait_for_rollout_readers(lock: _RolloutFileLock, size: int) -> None:
 
 
 @pytest.mark.parametrize("entry", ["bootstrap", "history"])
+async def test_public_history_index_inspection_failure_keeps_original_state(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
+    materialized_history_owner: tuple[str, str, str], entry: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """模拟快照预检成功后，连接 owner 再次观察原生路径时权限发生变化。"""
+    session_id, thread_id, turn_id = materialized_history_owner
+    container = runtime_case.runner.container
+    storage = runtime_case.runner.saver._storage.storage
+    index_path = storage.index_path(session_id, thread_id=thread_id)
+    canonical = storage.jsonl_path(session_id, thread_id=thread_id)
+    before = canonical.read_bytes()
+    failure = PermissionError(errno.EACCES, f"原生路径检查失败 {index_path}", str(index_path))
+    original = Path.is_symlink
+    observations = 0
+
+    def is_symlink(path):
+        nonlocal observations
+        if path == index_path:
+            observations += 1
+            if observations == 2:
+                raise failure
+        return original(path)
+
+    def database_state():
+        with storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+            return tuple(connection.iterdump())
+
+    with workspace_context(container.workspace_id, runtime_case.runner.workspace, session_catalog=container.session_catalog):
+        baseline = await _history_request(history_client, session_id, thread_id, entry)
+        assert baseline.status_code == 200, baseline.text
+        original_database = database_state()
+        original_items = storage.read_items(session_id, thread_id)
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "is_symlink", is_symlink)
+            response = await _history_request(history_client, session_id, thread_id, entry)
+        assert observations == 2
+        assert response.status_code == 500, response.text
+        detail = response.json()["detail"]
+        assert detail["session_id"] == session_id
+        assert "artifact=rollout_index stage=path_validation" in detail["message"]
+        assert "error_type=PermissionError errno=13" in detail["message"]
+        assert str(index_path) not in response.text and str(runtime_case.runner.workspace) not in response.text
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert str(index_path) in caplog.text
+        assert canonical.read_bytes() == before and database_state() == original_database
+
+        def probe_writer():
+            with storage._lock(thread_id, "", session_id=session_id):
+                pass
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(probe_writer).result(timeout=2)
+        with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+            assert cold._storage.storage.read_items(session_id, thread_id) == original_items
+        recovered = await _history_request(history_client, session_id, thread_id, entry)
+        assert recovered.status_code == 200, recovered.text
+        data = recovered.json()["data"]
+        assert data["thread_id"] == thread_id
+        if entry == "bootstrap":
+            assert data["latest_turn"]["turn_id"] == turn_id
+        else:
+            assert data["items"] == baseline.json()["data"]["items"]
+        assert canonical.read_bytes() == before and database_state() == original_database
+
+
+@pytest.mark.parametrize("entry", ["bootstrap", "history"])
 @pytest.mark.parametrize("failure_stage", ["open", "file_acquisition", "release"])
 async def test_public_history_lock_failures_preserve_committed_history(
     runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
