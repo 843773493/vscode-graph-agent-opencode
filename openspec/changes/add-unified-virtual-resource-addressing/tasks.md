@@ -133,6 +133,13 @@
 - Ruff/compileall通过，Pyright 1.1.414对产品文件零诊断（首次`uv run pyright`因未安装入口未执行，随后复用uvx工具通过）。准确命令、源码指纹、raw/真实退出码与作者结构自查位于`out/tests/temp/node_debug_native_io_20261025/artifacts/`。本片不代替调试进程、真实Gateway/Web或全局路径不变量总门，2.2/7.2仍未勾。
 - TODO：Windows单测原runtime/tmp深工作区在调试store调用前于`SessionCreationService._prepare_staging`的`main_thread.mkdir`复现WinError3；本片按规定使用正式workspace仍保留长方案路径验收，Session创建/恢复的原生I/O作为后续独立边界，不能声称该缺陷已解决。团队、成员、委派与协作继续暂缓。
 
+### 2026-10-25 Session 创建、冷恢复及中止隔离的原生长路径
+
+- 原创建owner的staging、日期桶和orphaned三个私有目录入口统一取得本机I/O路径，供同一准备、逐文件复验、rename、durability和中止链消费；公开结果和冻结locator不变，不增加writer、schema或恢复链。全仓消费者只在本owner内部，作者AST去除三个转换及说明后原模块一致。
+- Windows旧产品快照`ce6152a420e16420e39a8f6dd83cd4bcedd36a07`新增4场景全部在原`main_thread.mkdir`失败；修复后核心三文件119 passed/1 failed，失败为旧预算装具漏算Windows前缀及目录分隔符。装具改用原生字节预算并精确只让journal超限，原`component=-journal`断言保留；最终定向5 passed/0.92秒。新4项均通过真实prepare/publish生成状态，在staged/renamed边界模拟退出、显式关闭连接后冷建owner发布或中止，原身份、manifest、GraphBinding及单一记录保持；不冒称真实进程崩溃或完整fork验收。
+- Linux核心120 passed/4.95秒、产品创建/启动恢复30 passed/29.82秒；最终预算/长路径5 passed/0.75秒。Windows扩大产品验收初次20 passed/6 failed/4 setup errors：6项分别为测试向盘符绝对路径写损坏输入及日志Path repr分隔符断言，现改为隔离目录内多余条目并核完整posix展示路径；最终创建错误/API回执全文件22 passed/40.53秒，Linux7项相关损坏场景11.48秒通过。原公开无路径、诊断保留位置、原件不变、错误身份及重试断言未放宽。
+- 另4项Windows启动装具错误是失败AppContainer构造留下`.workspace.sqlite.lock`句柄，未由本片解决，作为独立生命周期owner缺陷继续处理。Pyright 1.1.414仍报告原`_creation_access`给OSError.winerror赋值的1条诊断，该完整函数AST与HEAD一致；不声称类型检查全绿。Ruff/compileall与准确命令、源码前后指纹、raw和真实退出码见`out/tests/temp/session_creation_native_io_20261025/artifacts/`，首次误填测试文件名的exit4原件保留。2.2/7.2总门仍未勾，团队与协作继续暂缓。
+
 - [x] 7.1 增加统一构造/解析矩阵：固定 resources/scope_id、身份闭集和大小写 profile、技能根/SKILL.md/多层child、files/root、中文/空格/点号/字面百分号、合法 escape 规范化与只解码一次；拒绝无效 escape/UTF-8/编码分隔符/点段/控制字符/query/fragment，未登记 scope/kind和错误 scope组合显式失败。身份版本的既有编码规则不因文件 profile 改变。
 - [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（普通响应/DTO、业务持久化、系统生成的模型资源引用与解析输出检查点；具名的工作区/原生目录 Gateway root binding 为持久化例外，原生目录选择/注册和普通文件路径按具名请求输入边界核验）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。；检查必须按具名日志管理入口与 Browser 页面 URL 例外逐字段划界，不能扩大到普通错误、资源引用、checkpoint 文件及下载/截图位置。
   - 2026-10-25 原生目录控制回包子边界的反例、218项共享复验与局限见2.2及 `out/tests/temp/native_directory_protocol_errors_20261025/artifacts/verification003.json`；仅集中现有两调用方校验，不据此关闭普通响应与持久化不变量总门。

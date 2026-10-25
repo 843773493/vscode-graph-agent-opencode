@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -203,13 +204,15 @@ def sessions_root_rollout_beyond_vfs_limit(tmp_path: Path) -> Path:
         / "threads" / session_creation._THREAD_ID_PATH_PLACEHOLDER / "rollout/index.sqlite-journal"
     )
     padding_bytes = max(
-        0, sqlite_vfs_max_pathname() + 1 - len(str(rollout_sidecar).encode("utf-8"))
+        0, sqlite_vfs_max_pathname() + 1 - len(str(native_io_path(rollout_sidecar)).encode("utf-8"))
     )
-    for offset in range(0, padding_bytes, 200):
+    # 每插入一个目录还消耗分隔符；余量扩在已有叶名上，精确只让journal超限。
+    while padding_bytes > 201:
         sessions_root = (
-            sessions_root.parent / ("x" * min(200, padding_bytes - offset))
-            / sessions_root.name
+            sessions_root.parent / ("x" * 200) / sessions_root.name
         )
+        padding_bytes -= 201
+    sessions_root = sessions_root.with_name(sessions_root.name + "x" * padding_bytes)
     return sessions_root
 
 
@@ -364,6 +367,71 @@ def service(store: SessionCatalogStore, sessions_root: Path):
 # ----------------------------------------------------------------------
 # 完整流
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", ["staged", "renamed"])
+@pytest.mark.parametrize("outcome", ["publish", "abort"])
+async def test_long_native_paths_resume_or_abort_frozen_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str, outcome: str,
+) -> None:
+    """长路径的真实准备/rename中断后，冷owner只结算原创建记录与目录。"""
+    class CreationInterrupted(BaseException):
+        """模拟物理阶段结束、catalog发布之前退出。"""
+
+    root = tmp_path / ("native-" + "x" * 70) / ".boxteam" / "sessions"
+    database = root.parent / "navigation" / "session-catalog.sqlite"
+    key = f"long-native-{phase}-{outcome}"
+    boundary = "_prepare_staging" if phase == "staged" else "_rename_staging_to_target"
+    original = getattr(SessionCreationService, boundary)
+
+    def interrupt(self: SessionCreationService, *arguments: object) -> None:
+        original(self, *arguments)
+        raise CreationInterrupted(phase)
+
+    with closing(SessionCatalogStore(database, root)) as catalog:
+        service = SessionCreationService(store=catalog, sessions_root=root, workspace_id=WORKSPACE_ID)
+        with monkeypatch.context() as crash:
+            crash.setattr(SessionCreationService, boundary, interrupt)
+            with pytest.raises(CreationInterrupted, match=phase):
+                await do_create(service, key=key)
+        frozen = catalog.get_creation_record(key)
+        assert frozen.state == "preparing"
+        with pytest.raises(KeyError):
+            catalog.get_node(frozen.session_id)
+        physical = (root / ".staging" / frozen.session_id if phase == "staged"
+                    else date_bucket_dir(root, frozen.storage_relative_locator))
+        main = physical / "threads" / frozen.main_thread_id
+        assert len(str(main)) > 260
+        assert native_io_path(main).is_dir()
+        manifest = native_io_path(physical / "session.json").read_bytes()
+
+    with closing(SessionCatalogStore(database, root)) as cold:
+        resumed = SessionCreationService(store=cold, sessions_root=root, workspace_id=WORKSPACE_ID)
+        assert resumed.read_prepared_session_metadata(frozen) == make_metadata()
+        if outcome == "publish":
+            result = await do_create(resumed, key=key)
+            assert result.session_id == frozen.session_id
+            assert result.main_thread_id == frozen.main_thread_id
+            assert result.storage_relative_locator == frozen.storage_relative_locator
+            assert result.record_state == "published"
+            assert await do_create(resumed, key=key) == result
+            final = date_bucket_dir(root, frozen.storage_relative_locator)
+        else:
+            aborted = await resumed.abort_prepared(frozen, "long-native-abort")
+            assert aborted.state == "aborted" and aborted.abort_reason == "long-native-abort"
+            assert aborted.session_id == frozen.session_id
+            assert aborted.main_thread_id == frozen.main_thread_id
+            assert aborted.storage_relative_locator == frozen.storage_relative_locator
+            assert await resumed.abort_prepared(frozen, "long-native-abort") == aborted
+            with pytest.raises(KeyError):
+                cold.get_node(frozen.session_id)
+            final = root.parent / "orphaned" / "session-creation" / frozen.session_id
+        assert native_io_path(final / "session.json").read_bytes() == manifest
+        assert native_io_path(final / "threads" / frozen.main_thread_id).is_dir()
+        assert not native_io_path(root / ".staging" / frozen.session_id).exists()
+        assert str(root) not in str(cold.get_creation_record(key))
+        assert "\\\\?\\" not in str(cold.get_creation_record(key))
+        assert count_rows(cold, "session_creation_records") == 1
 
 
 async def test_create_full_flow_publishes_session(

@@ -63,6 +63,7 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_file as _fsync_file,
 )
+from app.core.atomic_fs import native_io_path
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogNode,
@@ -621,7 +622,8 @@ class SessionCreationService:
     # ------------------------------------------------------------------
 
     def _staging_dir(self, session_id: str) -> Path:
-        return self._sessions_root / _STAGING_DIR_NAME / session_id
+        """仅供本 owner 的原生目录 I/O，冻结 locator 与公开结果不携带扩展路径。"""
+        return native_io_path(self._sessions_root / _STAGING_DIR_NAME / session_id)
 
     def _validate_filesystem_budget(self) -> None:
         """在 creation record 前校验固定形态目录与 SQLite 主库/sidecar。"""
@@ -656,10 +658,10 @@ class SessionCreationService:
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
         relative = storage_relative_locator[len("sessions/"):]
-        return self._sessions_root / relative
+        return native_io_path(self._sessions_root / relative)
 
     def _orphaned_dir(self, session_id: str) -> Path:
-        return (
+        return native_io_path(
             self._sessions_root.parent
             / _ORPHANED_DIR_NAME
             / _ORPHANED_CREATION_DIR_NAME

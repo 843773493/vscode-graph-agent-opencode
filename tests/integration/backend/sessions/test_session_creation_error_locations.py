@@ -122,7 +122,7 @@ async def test_prepared_integrity_errors_preserve_original_files_and_logical_ide
         directory = catalog.sessions_root / ".staging" / record.session_id
         main_thread = directory / "threads" / record.main_thread_id
         if corruption == "entries":
-            (directory / r"C:\private\unexpected.json").write_text("外部条目")
+            (directory / "unexpected.json").write_text("外部条目")
         elif corruption == "threads":
             (directory / "threads" / "unexpected").mkdir()
         elif corruption == "main":
@@ -156,7 +156,7 @@ async def test_prepared_integrity_errors_preserve_original_files_and_logical_ide
         assert isinstance(caught.value.__cause__, sqlite3.DatabaseError)
         assert "sqlite_errorcode=26" in detail
     else:
-        assert str(directory) in caplog.text
+        assert directory.as_posix() in caplog.text
 
 
 @pytest.fixture
