@@ -22,18 +22,28 @@ from app.api.deps import get_text_mutations, get_workspace_service, verify_local
 from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files import operations
+from app.services.infrastructure.workspace_files.paths import (
+    GatewayNativeDirectoryClient,
+)
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 async def file_case(request: pytest.FixtureRequest, integration_workspace_root_path: str):
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
-    root = Path(integration_workspace_root_path)
+    # 每个场景重建完整模板，不能让前一场景的外部目录观察要求下一场景恢复其绑定。
+    root = prepare_default_test_workspace(
+        workspace_root=Path(integration_workspace_root_path),
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=Path.cwd() / "resources/skills",
+    )
     directory = root / ("navigation-" + uuid4().hex)
     directory.mkdir()
     (directory / "seed.txt").write_bytes(b"original\n")
@@ -65,6 +75,78 @@ def file_rows(case):
     with closing(sqlite3.connect(case.root / ".boxteam/navigation/workspace-files.sqlite")) as db:
         return {name: db.execute(f"SELECT * FROM {name}").fetchall()
                 for name in ("owner", "directories", "operations", "events")}
+
+
+@pytest.mark.parametrize("operation", ["bind", "resolve"])
+@pytest.mark.parametrize("invalid", ["data", "json", "extra_key"])
+async def test_native_control_invalid_reply_preserves_files_and_allows_original_request_retry(
+    file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    operation: str, invalid: str,
+):
+    case = file_case
+    external = case.root.parent / ("private-native-root-" + uuid4().hex)
+    external.mkdir()
+    seed = external / "outside.txt"
+    seed.write_bytes(b"external original\n")
+    uri = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001"
+    request_id = "req-native-" + operation + "-" + invalid
+    requests, scanned = [], []
+    broken = True
+
+    def respond(request):
+        requests.append(request)
+        data = {"uri": uri}
+        if request.method == "GET":
+            data["native_root"] = str(external)
+        payload = {"data": data, "request_id": request.headers["X-Request-ID"]}
+        if broken:
+            if invalid == "data":
+                data["uri" if operation == "bind" else "native_root"] = {"private-native-root": str(external)}
+            elif invalid == "extra_key":
+                data[str(external)] = str(external)
+        content = ("invalid-json " + str(external)).encode() if broken and invalid == "json" else json.dumps(payload).encode()
+        return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]}, content=content)
+
+    original_client, scandir = httpx.Client, os.scandir
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original_client(
+        **kwargs, transport=httpx.MockTransport(respond)))
+    case.service.file_paths.bindings = GatewayNativeDirectoryClient(workspace_id=case.service.workspace_id,
+        connection=GatewayTransportConnection(gateway_url="http://127.0.0.1:45123"),
+        local_token_supplier=lambda: "local-token")
+
+    def observe(path):
+        if Path(path) == external:
+            scanned.append(path)
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", observe)
+    params = {"path": str(external) if operation == "bind" else uri}
+    before = file_rows(case)
+    failed = await case.client.get("/api/v1/workspace/files", params=params, headers={"X-Request-ID": request_id})
+    assert failed.status_code == 400, failed.text
+    failure = failed.json()
+    assert failure["request_id"] == failed.headers["X-Request-ID"] == request_id
+    assert "private-native-root" not in failed.text and str(case.root) not in failed.text
+    assert f"operation={operation}" in failure["detail"] and "stage=response" in failure["detail"]
+    assert "error_count=1" in failure["detail"]
+    assert file_rows(case) == before and not scanned
+    assert seed.read_bytes() == b"external original\n"
+    assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+    assert len(requests) == 1 and requests[0].method == ("POST" if operation == "bind" else "GET")
+    assert str(external) in caplog.text
+    broken = False
+    continued = await case.client.get("/api/v1/workspace/files", params=params, headers={"X-Request-ID": request_id})
+    assert continued.status_code == 200, continued.text
+    body = continued.json()
+    assert body["request_id"] == continued.headers["X-Request-ID"] == request_id
+    assert body["data"]["path"] == uri and scanned
+    assert [(item["name"], item["path"]) for item in body["data"]["items"]] == [("outside.txt", uri + "/outside.txt")]
+    assert "private-native-root" not in continued.text and str(case.root) not in continued.text
+    assert seed.read_bytes() == b"external original\n"
+    assert requests[0].url == requests[1].url and requests[0].content == requests[1].content
+    (case.artifacts / f"native-control-{operation}-{invalid}.json").write_text(json.dumps({
+        "failure": failure, "continued": body,
+    }, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_directory_native_messages_stay_in_logs_and_original_listing_survives(

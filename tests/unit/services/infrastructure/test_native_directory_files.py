@@ -15,6 +15,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 import app.services.infrastructure.workspace_service as workspace_service_module
 from app.api import workspace as workspace_api
@@ -45,6 +46,111 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 GATEWAY_ID = "gateway_01900000000070008000000000000001"
+
+
+@pytest.fixture
+def native_reply(monkeypatch):
+    uri = f"boxteam://gateway/{GATEWAY_ID}/resources/files/01900000000070008000000000000001"
+    reply = SimpleNamespace(uri=uri, content=b"", header="req-native-protocol", requests=[])
+
+    def respond(request):
+        reply.requests.append(request)
+        return httpx.Response(200, headers={"X-Request-ID": reply.header}, content=reply.content)
+
+    original = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(
+        **kwargs, transport=httpx.MockTransport(respond)))
+    reply.client = GatewayNativeDirectoryClient(workspace_id="workspace",
+        connection=GatewayTransportConnection(gateway_url="http://127.0.0.1:45123"),
+        local_token_supplier=lambda: "local-token")
+    return reply
+
+
+@pytest.mark.parametrize("operation", ["bind", "resolve"])
+@pytest.mark.parametrize("invalid", ["code", "data", "request_id", "header", "owner", "native"])
+def test_native_reply_preserves_envelope_owner_and_absolute_root_checks(native_reply, operation, invalid):
+    reply = native_reply
+    root = Path("/private-native-root")
+    data = {"uri": reply.uri}
+    if operation == "resolve":
+        data["native_root"] = str(root)
+    payload = {"data": dict(data), "request_id": "req-native-protocol", "message": str(root)}
+    if invalid == "code":
+        payload["code"] = 9
+    elif invalid == "data":
+        payload["data"] = None
+    elif invalid == "request_id":
+        payload["request_id"] = "req-other"
+    elif invalid == "header":
+        reply.header = ""
+    elif invalid == "owner":
+        payload["data"]["uri"] = reply.uri.replace("files/019", "files/018") + "/child"
+    elif operation == "bind":
+        payload["data"]["uri"] = "boxteam://workspace/workspace/resources/files/root"
+    else:
+        payload["data"]["native_root"] = "relative/private-native-root"
+    reply.content = json.dumps(payload).encode()
+
+    def invoke():
+        return reply.client.bind(root) if operation == "bind" else reply.client.resolve(parse_resource_uri(reply.uri))
+
+    with pytest.raises(ValueError) as failure:
+        invoke()
+    assert "private-native-root" not in str(failure.value)
+    assert len(reply.requests) == 1
+    reply.header = "req-native-protocol"
+    reply.content = json.dumps({"data": data, "request_id": reply.header}).encode()
+    assert invoke() == (reply.uri if operation == "bind" else root)
+    assert len(reply.requests) == 2
+
+
+@pytest.mark.parametrize("operation", ["bind", "resolve"])
+@pytest.mark.parametrize("invalid", ["data", "json", "extra_key", "message"])
+@pytest.mark.parametrize("private", [
+    "/private-native-root/secret", r"C:\private-native-root\secret", r"\\host\private-native-root\secret",
+])
+def test_native_reply_validation_keeps_raw_input_in_diagnostics_and_allows_retry(
+    native_reply, caplog, operation, invalid, private,
+):
+    reply = native_reply
+    root = Path("/private-native-root")
+    data = {"uri": reply.uri}
+    if operation == "resolve":
+        data["native_root"] = str(root)
+    payload = {"data": dict(data), "request_id": "req-native-protocol"}
+    if invalid == "data":
+        payload["data"]["uri" if operation == "bind" else "native_root"] = [private]
+        rule = "string_type"
+    elif invalid == "extra_key":
+        payload["data"][private] = private
+        rule = "extra_forbidden"
+    elif invalid == "message":
+        payload["message"] = {"diagnostic": private}
+        rule = "string_type"
+    else:
+        rule = "json_invalid"
+    reply.content = ("invalid-json " + private).encode() if invalid == "json" else json.dumps(payload).encode()
+
+    def invoke():
+        return reply.client.bind(root) if operation == "bind" else reply.client.resolve(parse_resource_uri(reply.uri))
+
+    with pytest.raises(ValueError) as failure:
+        invoke()
+    detail = str(failure.value)
+    assert "private-native-root" not in detail and private not in detail
+    assert f"operation={operation}" in detail and "stage=response" in detail
+    assert "error_count=1" in detail and f"rules={rule}" in detail
+    assert isinstance(failure.value.__cause__, ValidationError)
+    assert any(record.exc_info and record.exc_info[1] is failure.value.__cause__
+               and reply.content in record.args for record in caplog.records)
+    assert len(reply.requests) == 1
+    reply.content = json.dumps({"data": data, "request_id": "req-native-protocol"}).encode()
+    assert invoke() == (reply.uri if operation == "bind" else root)
+    assert len(reply.requests) == 2
+    assert reply.requests[0].method == reply.requests[1].method == ("POST" if operation == "bind" else "GET")
+    assert reply.requests[0].url == reply.requests[1].url
+    assert reply.requests[0].content == reply.requests[1].content
+    assert all(request.headers["X-Local-Token"] == "local-token" for request in reply.requests)
 
 
 @pytest.mark.parametrize("url", [

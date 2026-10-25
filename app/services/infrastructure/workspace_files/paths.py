@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import httpx
+from pydantic import ValidationError
 
 from app.core import resource_uri
 from app.core.exceptions import ForbiddenError
@@ -30,6 +32,9 @@ from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files.filesystem import file_access
 
+logger = logging.getLogger(__name__)
+_NativeReply = TypeVar("_NativeReply", NativeDirectoryBindingDTO, NativeDirectoryResolveDTO)
+
 
 class AttachmentDirectoryPaths(Protocol):
     def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False) -> Path: ...
@@ -49,7 +54,8 @@ class GatewayNativeDirectoryClient:
         self._connection = connection
         self._token = local_token_supplier
 
-    def _request(self, method: str, suffix: str, body: dict[str, str] | None = None) -> httpx.Response:
+    def _request(self, method: str, suffix: str, *, response_type: type[APIResponse[_NativeReply]],
+                 body: dict[str, str] | None = None) -> _NativeReply:
         gateway = httpx.URL(self._connection.resolve_gateway_url())
         if (gateway.scheme not in {"http", "https"}
                 or gateway.host not in {"127.0.0.1", "::1", "localhost"}
@@ -68,25 +74,38 @@ class GatewayNativeDirectoryClient:
         received = response.headers.get("X-Request-ID")
         if not received or (request_id is not None and received != request_id):
             raise ValueError("原生根绑定控制链 request_id 不一致")
-        return response
+        operation = "bind" if method == "POST" else "resolve"
+        try:
+            result = response_type.model_validate_json(response.content)
+        except ValidationError as error:
+            rules = sorted({item["type"] for item in error.errors(
+                include_url=False, include_context=False, include_input=False,
+            )})
+            detail = (f"原生目录控制链回包校验失败: operation={operation}, stage=response, "
+                      f"error_count={error.error_count()}, rules={','.join(rules)}")
+            logger.exception("%s；原始响应=%r", detail, response.content)
+            raise ValueError(detail) from error
+        if result.code != 0 or result.data is None or result.request_id != received:
+            detail = f"原生目录控制链回执无效: operation={operation}, stage=envelope"
+            logger.error("%s；原始响应=%r", detail, response.content)
+            raise ValueError(detail)
+        return result.data
 
     def bind(self, root: Path) -> str:
-        response = self._request("POST", "", {"native_root": str(root)})
-        result = APIResponse[NativeDirectoryBindingDTO].model_validate_json(response.content)
-        if result.code != 0 or result.data is None or result.request_id != response.headers["X-Request-ID"]:
-            raise ValueError("原生根绑定控制链回执无效")
-        parsed = parse_resource_uri(result.data.uri)
+        result = self._request("POST", "", response_type=APIResponse[NativeDirectoryBindingDTO],
+                               body={"native_root": str(root)})
+        parsed = parse_resource_uri(result.uri)
         if parsed.kind != "files" or parsed.scope != "gateway" or len(parsed.tail_segments) != 1 or parsed.gateway_authority is not None:
             raise ValueError("原生根绑定控制链返回了错误资源")
         return parsed.display_uri
 
     def resolve(self, parsed: ParsedResourceUri) -> Path:
         root_uri = resource_uri.file_uri_root(parsed.display_uri)
-        response = self._request("GET", f"/{parsed.scope_id}/{parsed.tail_segments[0]}")
-        result = APIResponse[NativeDirectoryResolveDTO].model_validate_json(response.content)
-        if result.code != 0 or result.data is None or result.request_id != response.headers["X-Request-ID"] or result.data.uri != root_uri:
+        result = self._request("GET", f"/{parsed.scope_id}/{parsed.tail_segments[0]}",
+                               response_type=APIResponse[NativeDirectoryResolveDTO])
+        if result.uri != root_uri:
             raise ValueError("原生根解析控制链 owner 或 request_id 不一致")
-        root = Path(result.data.native_root)
+        root = Path(result.native_root)
         if not root.is_absolute():
             raise ValueError("原生根解析控制链返回了相对路径")
         return root
