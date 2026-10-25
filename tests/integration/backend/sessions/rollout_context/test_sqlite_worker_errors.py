@@ -4,6 +4,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict
@@ -19,9 +20,11 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import TraceMiddleware, get_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint import fork_source
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.fork import source_snapshot
 from app.services.infrastructure.rollout_context.fork.full_copy import (
     sqlite_snapshot as worker,
 )
@@ -40,7 +43,11 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 __all__ = ['fork_execution_message', 'fork_execution_source', 'fork_gateway_request_context', 'production_fork_container']
 
 
-@pytest.mark.parametrize('fault', ['child_exit', 'spawn', 'private_create', 'private_cleanup', 'combined', 'capture_cleanup'])
+CAPTURE_IO_FAULTS = ['source_layout', 'capture_mkdir', 'acl_runtime', 'lock_copy', 'rollout_copy',
+                     'sqlite_snapshot', 'jsonl_open', 'control_read', 'manifest_write', 'manifest_fsync']
+
+
+@pytest.mark.parametrize('fault', ['child_exit', 'spawn', 'private_create', 'private_cleanup', 'combined', 'capture_cleanup', *CAPTURE_IO_FAULTS])
 async def test_public_fork_worker_failure_preserves_history_and_retry(
     production_fork_container, fork_execution_source, monkeypatch, caplog, fault,
 ):
@@ -59,6 +66,53 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
     failures = []
     private_errors = []
     capture_roots = []
+    io_errors, io_paths = [], []
+    capture_snapshot = source_snapshot.capture_fork_rollout_snapshot
+
+    def inject_capture(storage, **kwargs):
+        root = kwargs['captured_root']
+        owner, operation, path = {
+            'source_layout': (Path, 'is_dir', node / 'rollout'),
+            'capture_mkdir': (Path, 'mkdir', root),
+            'acl_runtime': (source_snapshot, 'restrict_private_path_access', root),
+            'lock_copy': (shutil, 'copy2', node / '.rollout.write.lock'),
+            'rollout_copy': (shutil, 'copytree', node / 'rollout'),
+            'sqlite_snapshot': (Path, 'is_file', root / 'rollout/index.sqlite'),
+            'jsonl_open': (Path, 'open', root / 'rollout/rollout.jsonl'),
+            'control_read': (Path, 'open', root / 'session-control.sqlite'),
+            'manifest_write': (os, 'open', root / 'snapshot-manifest.json'),
+            'manifest_fsync': (source_snapshot, 'fsync_directory', root),
+        }[fault]
+        real = getattr(owner, operation)
+
+        def denied(value, *args, **kw):
+            selected = Path(value) == path and not io_errors
+            if fault in {'jsonl_open', 'control_read'}:
+                selected = selected and bool(args) and args[0] == ('r+b' if fault == 'jsonl_open' else 'rb')
+            if selected:
+                native = RuntimeError(f'原生 ACL 运行拒绝 {path}') if fault == 'acl_runtime' else PermissionError(errno.EACCES, f'原生捕获拒绝 {path}', str(path))
+                if fault == 'rollout_copy':
+                    copy = shutil.copy2
+
+                    def deny_copy(source, target):
+                        if Path(source) == node / 'rollout/rollout.jsonl':
+                            io_errors.append(native)
+                            io_paths.append(path)
+                            raise native
+                        return copy(source, target)
+
+                    # 真实 copytree 汇总原生复制失败，不能用假的 Error 回执替代。
+                    return real(value, *args, **kw, copy_function=deny_copy)
+                io_errors.append(native)
+                io_paths.append(path)
+                if fault == 'acl_runtime':
+                    raise native from subprocess.TimeoutExpired(['icacls', str(path)], 10)
+                raise native
+            return real(value, *args, **kw)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(owner, operation, denied)
+            return capture_snapshot(storage, **kwargs)
 
     def inject(command, **kwargs):
         if command[-1] == worker._COPY_SCRIPT:
@@ -109,6 +163,8 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
                                  headers={'X-BoxTeam-Gateway-Id': get_current_gateway_id()}) as client:
         with monkeypatch.context() as patch:
             patch.setattr(worker.subprocess, 'run', inject)
+            if fault in CAPTURE_IO_FAULTS:
+                patch.setattr(fork_source, 'capture_fork_rollout_snapshot', inject_capture)
             if fault in {'private_create', 'private_cleanup', 'combined'}:
                 patch.setattr(os if fault == 'private_create' else tempfile,
                               'mkdir' if fault == 'private_create' else '_rmtree', deny_private)
@@ -116,13 +172,24 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
                 patch.setattr(os, 'rmdir', deny_capture)
             failed = await client.post(f'/api/v1/sessions/{source.session_id}/fork-context', json=request.model_dump(mode='json'))
         assert failed.status_code == 500, failed.text
-        assert len(failures) == 1 and not failures[0].exists()
+        if fault in CAPTURE_IO_FAULTS:
+            assert len(io_errors) == 1
+            diagnosed = io_paths[0]
+        else:
+            assert len(failures) == 1 and not failures[0].exists()
+            diagnosed = failures[0]
         stage = {'private_create': 'sqlite_private_create', 'private_cleanup': 'sqlite_private_cleanup',
-                 'combined': 'sqlite_private_cleanup', 'capture_cleanup': 'cleanup'}.get(fault, 'sqlite_worker')
+                 'combined': 'sqlite_private_cleanup', 'capture_cleanup': 'cleanup',
+                 'source_layout': 'source_layout', 'capture_mkdir': 'preparation', 'acl_runtime': 'preparation',
+                 'lock_copy': 'lock_copy', 'rollout_copy': 'rollout_copy', 'sqlite_snapshot': 'sqlite_snapshot',
+                 'jsonl_open': 'jsonl_snapshot', 'control_read': 'control_snapshot',
+                 'manifest_write': 'manifest_publish', 'manifest_fsync': 'manifest_publish'}.get(fault, 'sqlite_worker')
         assert 'artifact=fork_source stage=' + stage in failed.text
         if fault == 'child_exit':
             assert 'returncode=1' in failed.text and 'error_type=CalledProcessError' in failed.text
             assert 'FileNotFoundError' in caplog.text
+        elif fault in {'acl_runtime', 'rollout_copy'}:
+            assert 'error_type=' + ('RuntimeError' if fault == 'acl_runtime' else 'Error') in failed.text
         else:
             assert 'PermissionError' in failed.text and 'errno=13' in failed.text
         if fault in {'combined', 'capture_cleanup'}:
@@ -130,7 +197,7 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
             assert 'returncode=1' in caplog.text and private_errors[0].filename in caplog.text
             assert isinstance(private_errors[0].__context__, RuntimeError)
             assert isinstance(private_errors[0].__context__.__cause__, subprocess.CalledProcessError)
-        assert str(container.workspace_root) not in failed.text and str(failures[0]) in caplog.text
+        assert str(container.workspace_root) not in failed.text and str(diagnosed) in caplog.text
         assert failed.headers['X-Request-ID'] == failed.json()['request_id']
         assert (node / 'rollout/rollout.jsonl').read_bytes() == canonical
         assert {item.session_id for item in (await container.session_service.list()).items} == visible

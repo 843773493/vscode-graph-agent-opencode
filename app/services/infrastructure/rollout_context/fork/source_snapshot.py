@@ -118,40 +118,55 @@ def capture_fork_rollout_snapshot(
         source_session_id,
         thread_id=source_thread_id,
     )
-    if not native_io_path(source_rollout).is_dir() or native_io_path(source_rollout).is_symlink():
-        raise RuntimeError(
-            "source-mismatch: fork source rollout 不存在或不是普通目录"
-        )
+    with _storage_io(source_rollout, "source-mismatch: fork source rollout 检查失败", "source_layout", artifact="fork_source"):
+        if not native_io_path(source_rollout).is_dir() or native_io_path(source_rollout).is_symlink():
+            raise RuntimeError(_storage_failure(
+                source_rollout, "source-mismatch: fork source rollout 不存在或不是普通目录", "source_layout", artifact="fork_source",
+            ))
     if not snapshot_id or Path(snapshot_id).name != snapshot_id:
         raise ValueError("fork source snapshot id 必须是单一路径段")
-    native_io_path(captured_root).mkdir(parents=True, exist_ok=False, mode=0o700)
+    with _storage_io(captured_root, "source-mismatch: fork snapshot 目录创建失败", "preparation", artifact="fork_source"):
+        native_io_path(captured_root).mkdir(parents=True, exist_ok=False, mode=0o700)
     snapshot_rollout = captured_root / "rollout"
 
     source_lock_path = source_rollout.parent / ".rollout.write.lock"
     lock = None
     try:
-        restrict_private_path_access(captured_root, is_directory=True)
+        with _storage_io(captured_root, "source-mismatch: fork snapshot 私有权限限制失败", "preparation", artifact="fork_source"):
+            try:
+                restrict_private_path_access(captured_root, is_directory=True)
+            except RuntimeError as error:
+                # ACL 原语将 Windows 启动/超时错误包装为 RuntimeError，保留该类别与原异常链。
+                raise RuntimeError(_storage_failure(
+                    captured_root, "source-mismatch: fork snapshot 私有权限限制失败", "preparation", error, artifact="fork_source",
+                )) from error
         if not rollout_lock_held:
             lock = _RolloutFileLock(
                 source_lock_path,
                 exclusive=False,
             )
             lock.acquire()
-        if not native_io_path(source_lock_path).is_file() or native_io_path(source_lock_path).is_symlink():
-            raise RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件")
-        # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
-        shutil.copy2(native_io_path(source_lock_path), native_io_path(captured_root / ".rollout.write.lock"))
+        with _storage_io(source_lock_path, "source-mismatch: fork source 写锁复制失败", "lock_copy", artifact="fork_source"):
+            if not native_io_path(source_lock_path).is_file() or native_io_path(source_lock_path).is_symlink():
+                raise RuntimeError(_storage_failure(
+                    source_lock_path, "source-mismatch: fork source 缺少既有普通写锁文件", "lock_copy", artifact="fork_source",
+                ))
+            # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
+            shutil.copy2(native_io_path(source_lock_path), native_io_path(captured_root / ".rollout.write.lock"))
         source_files = _tree_manifest(
             source_rollout,
             excluded_root_entries=frozenset((*SQLITE_COPY_FILES, "context-plan-details")),
         )
-        shutil.copytree(native_io_path(source_rollout), native_io_path(snapshot_rollout), ignore=_copy_ignore)
+        with _storage_io(source_rollout, "source-mismatch: fork rollout 文件复制失败", "rollout_copy", artifact="fork_source"):
+            shutil.copytree(native_io_path(source_rollout), native_io_path(snapshot_rollout), ignore=_copy_ignore)
         sqlite_files = copy_live_sqlite_snapshot(
             source_rollout, snapshot_rollout, rollout_lock_held=True,
         )
         index_path = snapshot_rollout / "index.sqlite"
         committed_offset = None
-        if native_io_path(index_path).is_file():
+        with _storage_io(index_path, "source-mismatch: fork SQLite snapshot 检查失败", "sqlite_snapshot", artifact="fork_source"):
+            has_index = native_io_path(index_path).is_file()
+        if has_index:
             with closing(sqlite3.connect(sqlite_file_uri(index_path) + "?mode=ro&immutable=1", uri=True)) as connection:
                 row = connection.execute("SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1").fetchone()
                 source_files = (*source_files, *_copy_declared_details(
@@ -161,16 +176,19 @@ def capture_fork_rollout_snapshot(
                 raise RuntimeError("source-mismatch: fork snapshot committed JSONL offset 非法")
             committed_offset = row[0]
             jsonl = native_io_path(snapshot_rollout / "rollout.jsonl")
-            if not jsonl.is_file() or jsonl.stat().st_size < committed_offset:
-                raise RuntimeError("source-mismatch: fork snapshot JSONL 短于 committed offset")
-            with jsonl.open("r+b") as stream:
-                stream.truncate(committed_offset)
-                stream.flush()
-                os.fsync(stream.fileno())
-            source_files = tuple(
-                ForkSnapshotFile("rollout.jsonl", committed_offset, _file_sha256(jsonl))
-                if file.relative_path == "rollout.jsonl" else file for file in source_files
-            )
+            with _storage_io(jsonl, "source-mismatch: fork JSONL snapshot 冻结失败", "jsonl_snapshot", artifact="fork_source"):
+                if not jsonl.is_file() or jsonl.stat().st_size < committed_offset:
+                    raise RuntimeError(_storage_failure(
+                        jsonl, "source-mismatch: fork snapshot JSONL 短于 committed offset", "jsonl_snapshot", artifact="fork_source",
+                    ))
+                with jsonl.open("r+b") as stream:
+                    stream.truncate(committed_offset)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                source_files = tuple(
+                    ForkSnapshotFile("rollout.jsonl", committed_offset, _file_sha256(jsonl))
+                    if file.relative_path == "rollout.jsonl" else file for file in source_files
+                )
         # live SQLite 的源 hash 由同一个隔离复制 owner 提供；父进程只读取私有副本。
         source_files = tuple(sorted(
             (*source_files, *(ForkSnapshotFile(name, size, digest) for name, size, digest in sqlite_files)),
@@ -187,17 +205,20 @@ def capture_fork_rollout_snapshot(
                        CONTROL_DATABASE_NAME + "-journal"),
         )
         control_path = captured_root / CONTROL_DATABASE_NAME
-        if not native_io_path(control_path).is_file() or native_io_path(control_path).is_symlink():
-            raise RuntimeError("source-mismatch: fork source 缺少 session-control snapshot")
-        control_digest = hashlib.sha256()
-        for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
-                     CONTROL_DATABASE_NAME + "-journal"):
-            path = native_io_path(captured_root / name)
-            if path.exists():
-                control_digest.update(name.encode())
-                with path.open("rb") as stream:
-                    while chunk := stream.read(1024 * 1024):
-                        control_digest.update(chunk)
+        with _storage_io(control_path, "source-mismatch: fork control snapshot 读取失败", "control_snapshot", artifact="fork_source"):
+            if not native_io_path(control_path).is_file() or native_io_path(control_path).is_symlink():
+                raise RuntimeError(_storage_failure(
+                    control_path, "source-mismatch: fork source 缺少 session-control snapshot", "control_snapshot", artifact="fork_source",
+                ))
+            control_digest = hashlib.sha256()
+            for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
+                         CONTROL_DATABASE_NAME + "-journal"):
+                path = native_io_path(captured_root / name)
+                if path.exists():
+                    control_digest.update(name.encode())
+                    with path.open("rb") as stream:
+                        while chunk := stream.read(1024 * 1024):
+                            control_digest.update(chunk)
         control_sha256 = control_digest.hexdigest()
         with closing(sqlite3.connect(sqlite_file_uri(control_path) + "?mode=ro&immutable=1", uri=True)) as connection:
             owner = connection.execute(
@@ -253,16 +274,17 @@ def capture_fork_rollout_snapshot(
         + "\n"
     ).encode("utf-8")
     manifest_path = captured_root / "snapshot-manifest.json"
-    descriptor = os.open(
-        native_io_path(manifest_path),
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    with os.fdopen(descriptor, "wb") as stream:
-        stream.write(manifest_bytes)
-        stream.flush()
-        os.fsync(stream.fileno())
-    fsync_directory(captured_root)
+    with _storage_io(manifest_path, "source-mismatch: fork snapshot 清单发布失败", "manifest_publish", artifact="fork_source"):
+        descriptor = os.open(
+            native_io_path(manifest_path),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(manifest_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fsync_directory(captured_root)
     return ForkRolloutSourceSnapshot(
         source_session_id=source_session_id,
         source_thread_id=source_thread_id,

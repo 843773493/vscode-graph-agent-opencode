@@ -92,6 +92,8 @@ fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner �
 
 上层 rollout 来源捕获的原失败清理不再使用 rmtree(ignore_errors=True)：仍只删除同一 captured_root，清理成功后抛回原捕获错误，清理原生失败则复用原 storage 出口（artifact=fork_source、stage=cleanup），保留异常类别、errno/winerror与直接cause，真实位置只留诊断。此前的捕获错误通过原生异常context及诊断保留；不把删除失败当作已释放，不新增重试worker或清理链，后续请求仍沿原创建owner/journal协调中止和重试。
 
+rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（artifact=fork_source）：来源布局为 source_layout，目录创建与私有权限为 preparation，锁复制为 lock_copy，正文复制为 rollout_copy，SQLite 副本存在性为 sqlite_snapshot，JSONL 冻结为 jsonl_snapshot，control 文件读取为 control_snapshot，manifest 写入及目录 fsync 为 manifest_publish。原生异常保留类别、errno/winerror 与直接 cause，路径和完整原错留诊断；Windows ACL 原语已有的 RuntimeError 包装仅在该调用处投影，保留其原类别及启动/超时 cause，不扩大捕获范围或改动权限原语。已有 captured_root 的创建碰撞发生在当前请求取得目录所有权之前，明确报错并保留原目录与正文；后续失败仍沿原 owner 清理。仅给原生调用增加错误上下文，SQLite reader/worker、typed detail、复制顺序、锁、manifest 编码/hash、journal 和成功路径保持。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

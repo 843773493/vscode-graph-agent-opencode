@@ -206,6 +206,16 @@
 - **WHEN** rollout 来源捕获已失败，原owner删除同一captured_root又遇到原生文件错误
 - **THEN** 原清理调用明确失败，不使用ignore_errors将未删除目录当作已释放；异常类别、errno/winerror与直接cause保留，此前捕获失败保留在原生context和诊断中，普通响应/创建记录仅含逻辑artifact与cleanup阶段，不含真实位置。清理成功时仍抛原捕获错误，不改变正常复制、锁释放、manifest/hash、journal或来源字节；原创建owner继续协调中止，故障解除后的新请求可重试并按历史身份冷读检查点、assembly及request_hash，不发布半成品或增加清理链
 
+#### Scenario: rollout 来源捕获的直接原生 I/O 失败
+
+- **WHEN** fork 来源布局检查、私有目录准备与权限限制、既有锁复制、rollout 正文复制、SQLite 副本检查、JSONL 冻结、control 读取或 manifest 发布遇到原生错误
+- **THEN** 同一捕获 owner 明确失败，普通错误与创建记录只包含逻辑 artifact、原失败阶段及必要异常类别/errno，不含真实位置；原生错误保留类别与直接 cause，ACL 原语已有的 RuntimeError 及原启动/超时原因链保持，真实位置与完整原错留诊断。失败不改写来源正文或发布残缺目标，故障解除后原产品入口可重试并冷读原检查点、metadata、pending writes、历史 assembly 及 request_hash；原 reader/worker、typed detail、锁、复制顺序、manifest/hash 与 journal 保持
+
+#### Scenario: 来源捕获目标目录已属于既有请求
+
+- **WHEN** 当前请求创建 captured_root 时目录已经存在
+- **THEN** 同一原生创建操作以 FileExistsError 明确失败并保留直接 cause，普通错误不含真实位置；当前请求不删除或改写该既有目录及其正文，不把未取得的目录所有权当成可清理对象
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

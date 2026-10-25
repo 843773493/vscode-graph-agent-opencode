@@ -785,3 +785,13 @@
 - 候选新增2项单测通过（0.26秒），完整63f4897fe Git archive旧生产加相同测试2项均失败（0.47秒）；通过真实os.rmdir拒绝验证缺锁/ACL失败后清理错误不再被忽略、未删除目录仍可观察、此前异常保留、原源文件不变，解除故障后原清理合同恢复。正式matrix候选完整6 passed/73.46秒，旧生产1 failed/5 passed/65.89秒：产品消息执行/model_stream生成来源，真实child copyfile失败后又遇真实rmdir边界错误，核公开错误阶段/无路径、头体request_id一致、原child stderr/退出码及cause/context、中止/无可见半成品、原canonical字节、新key重试和冷Saver原检查点/metadata/pending writes、assembly全字段/历史owner/request_hash。原5项worker场景保持，不累加为新增场景。
 - 原始准确命令、输出/真实退出码、完整源码前后指纹、完整旧生产及作者本地结构核对在 `out/tests/temp/fork_rollout_cleanup_20261025/artifacts/`；verification001.json核实冻结与进程组回收。AST移除本次cleanup错误上下文并恢复ignore_errors参数后整个原模块一致，源码签名不变。首个apply_patch发现既有private_source_snapshot测试仅在共享树未入HEAD，补丁原子拒绝且未改源码；本片新增独立source_snapshot_cleanup测试，不覆盖或纳入他人的既有测试。结构核对不是独立审查，ASGI/冷Saver对象不代替真实Gateway、Backend进程重启、Windows或完整Web。其它source捕获原生I/O与transfer仍待核，2.2/7.2不补勾，团队与协作继续TODO。
 - 最终共享三方合并后4项来源清理单测通过（0.28秒，含共享既有两项未修改测试）、正式matrix完整6项产品入口通过（67.05秒），Ruff/compileall通过，候选严格OpenSpec全量45 passed/0 failed。verification002/003.json核实登记的3781条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码及进程组回收；profile排除本片不启动/构建的客户端源码与专项测试，不声称全仓冻结。既有未跟踪private_source_snapshot测试仅用于关联回归，不纳入本片提交。
+
+
+### 2026-10-25 rollout 来源捕获的直接原生 I/O（2.2/7.2 部分收口）
+
+- 来源布局、准备/权限、锁复制、rollout复制、SQLite副本检查、JSONL冻结、control读取和manifest发布复用原storage错误出口；保留原类别、errno/winerror及直接cause，ACL原RuntimeError保留原启动/超时链。目标目录碰撞不清理既有目录；原worker/reader/typed detail、复制顺序、锁、manifest/hash/journal保持。AST归一化本片错误上下文后整个原模块一致，全部签名未变；这是作者自查，不称独立审查。
+- 候选10项单测通过（0.39秒），完整c5ab6c0a Git archive旧生产的新增6项全失败（0.57秒）。保留并迁移共享树既有private_source_snapshot两项测试，断言公开preparation阶段与原生cause，不覆盖原行为；cleanup组合失败的原始context链同步迁齐。
+- 正式产品matrix候选16 passed/166.46秒，旧生产10 failed/6 passed/142.81秒；产品消息执行/model_stream生成来源，经真实路由/Depends/TraceMiddleware与ASGI核10项新增原生故障及原6项worker/cleanup场景。断言阶段/无路径、头体request_id、中止/无可见半成品、来源canonical原字节、新key重试、冷Saver同一检查点/metadata/pending writes、历史assembly全字段/owner/request_hash；copytree使用真实stdlib汇总失败，不伪造Error回执。matrix预算随场景数扩为360秒，4GiB保护及产品worker30秒/ACL10秒不变。
+- 首轮新增产品测试补在定义模块而非生产已导入的调用绑定，10项未命中故障并正常fork；按实际调用模块修正后得到上述红绿，不改产品或减弱断言。首轮原输出保留；AST自查首轮归一化脚本留下嵌套list/None，修正脚本后通过，未据此修改生产。准确命令、原始输出/真实退出码、源码前后指纹、完整旧生产及自查位于 `out/tests/temp/fork_rollout_capture_io_20261025/artifacts/`；verification001/002核实运行冻结及进程回收。ASGI/冷Saver对象不代替真实Gateway、独立Backend重启、Windows或完整Web；transfer等仍待核，2.2/7.2保持未勾，团队/协作继续TODO。
+
+- 最终共享三方合并后10项单测通过（0.36秒），正式产品matrix 16 passed, 61 warnings in 152.58s (0:02:32)；Ruff/compileall及OpenSpec strict 45 passed/0 failed。verification003/004.json核实登记的3782条后端/协议/harness/config/matrix路径前后未变、原始日志/实际退出码及进程回收；profile明确排除本片不启动或构建的客户端，不声称全仓冻结。共享独立suite顺序及原暂存区保持，既有private_source_snapshot两项仅迁精确错误合同。
