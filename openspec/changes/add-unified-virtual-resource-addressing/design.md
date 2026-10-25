@@ -78,6 +78,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。
 
+调试方案 fork 的文件阶段复用原 rollout 存储错误出口：在 staging 检查/写入、旧 staging 清理、发布和已发布正文验证的原生 I/O 边界保留异常类别、errno/winerror 与 cause；公开文本携带 `artifact=fork_debug` 和原阶段，真实位置与原异常仅留诊断。布局拒绝沿同一出口报告，不在 API 层扫描/脱敏字符串。原文件调用顺序、manifest/configuration hash、prepared→ready→published journal、来源身份和重放规则保持；公开 fork 失败仍按原创建 owner 中止清理，不增加另一个保存链或迁移。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

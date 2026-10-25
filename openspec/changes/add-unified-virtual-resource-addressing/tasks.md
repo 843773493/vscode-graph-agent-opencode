@@ -718,3 +718,13 @@
 - 完整Git archive的旧实现：新增尾部检查5 failed/1 passed（0.60秒，正例核偏移过大拒绝、相等不touch及尾部精确截断），产品历史场景5 failed（46.98秒）。共享尾部/完整Saver/schema拒绝107 passed（39.04秒）；共享历史集成5 passed，耗时及准确命令见原始result。Session/消息执行入口和现有model_stream生成关键历史；两类旧布局、JSONL符号链接/目录和原生检查拒绝后，原canonical字节与完整SQLite dump不变，移除故障后原owner初始化、冷Saver和历史API均返回原Thread/Turn与历史。fsync失败时只允许未提交尾部已截断，已提交前缀不变且可重试。
 - AST对账确认维护类与尾部函数在移除错误上下文和RuntimeError正文参数后与基线相同；Ruff/compileall通过。初次静态检查仅发现新增测试的长import格式，集中整理后通过。源码前后指纹、完整反例源码、原始失败/成功输出、退出码及主线程自查位于 `out/tests/temp/rollout_recovery_paths_20261025/artifacts/`；全部记录运行源码冻结、进程组无残留。不新增源码目录，不称独立代理审查。
 - HTTP使用ASGI及现有授权fixture，冷重开为Saver对象；不称真实Gateway、后端进程重启、Windows实机或完整Web验收。2.2/7.2总门保持未勾，未覆盖的其它存储错误另行处理；Agent团队、成员、委派及协作继续TODO。
+
+
+### 2026-10-25 调试方案 fork 文件发布错误（2.2/7.2 部分收口）
+
+- staging 检查/写入、旧 staging 清理、发布和已发布正文验证复用原存储错误出口。原生错误保留类别、errno/winerror及cause；布局拒绝保留具体原因。真实路径仅留原诊断，普通HTTP响应/创建记录只带原阶段和逻辑事实；不改变hash、journal、文件操作顺序或schema，不新增writer/兼容链。
+- 候选局部发布/源捕获单测11 passed/0.57秒；完整Git archive的旧生产加新增单测8 failed/0.54秒。最终新增公开HTTP产品场景3 passed/49.00秒，另3项发布中断/冷Saver恢复在同一生产源码上通过：产品消息/model_stream生成执行、产品保存调试方案，staging/rename/验证原生错误后核source canonical/方案原件、创建记录中止、无可见半成品，故障解除后的新fork逐字段保全持久方案并冷读。
+- 初次测试路径、URI helper导入、监督预算、遗漏公共订阅器正常启动，以及把摘要/缓存时间戳当持久源正文比较的失败均单列归因保留；未降低身份、次序、字节或错误断言。后续以持久owner的原完整配置为比较基准。准确命令、源码前后指纹、原始输出/退出码与AST对账在 `out/tests/temp/debug_fork_errors_20261025/artifacts/`；主线程结构自查不称独立审查。
+- HTTP使用真实路由/依赖/TraceMiddleware及ASGI传输，冷恢复使用原Saver；不称真实Gateway、Backend进程重启、Windows实机或完整Web。2.2/7.2全局门继续未勾，团队、成员、委派和协作不追加实现或专项验证。
+- TODO（独立既有行为）：调试方案保存时store更新updated_at而registry缓存保留写入前值；本批按持久冻结正文核全字段，不在错误合同切片扩改缓存。另行处理时应让原缓存消费权威保存结果，不能删除updated_at断言或引入第二可变事实源。
+- 最终共享源码复核：11项单测通过（0.61秒）、完整6项fork产品集成通过（65.47秒）、Ruff/compileall通过、严格OpenSpec全量45 passed/0 failed；完整旧生产上的新增公开HTTP反例3 failed（49.10秒），均复现公开错误不符合阶段/真实路径合同。五项共享运行的源码冻结、原始输出、真实退出码及进程组回收由 verification003.json 核实，退出码全部0；反例收据见 verification002.json。此证据仍只覆盖本切片，不代替2.2/7.2全局验收。
