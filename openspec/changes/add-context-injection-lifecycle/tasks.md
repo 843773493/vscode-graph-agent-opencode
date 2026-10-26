@@ -367,3 +367,10 @@
 - 请求字段统一为`requested_mode`，新封存引用使用typed `source_tracking_at_seal`：canonical为None，source明确tracked/untracked；外部skill_load.mode、当前tracking_status和派生tracked不变。全量迁齐生产构造、compiler、summary、严格codec及调用测试，无旧属性别名或双写。原itemized codec对新绑定显式写版本2，旧无标签版本1原样重编码；新prepare hash使用v2，不重写旧封存或SQLite schema。
 - 领域/来源回归1526 passed；最终codec文件42 passed（包含前述已通过节点及新增2项，不累加整文件）。seal/epoch/manifest集成为103 passed、1个既有迁移测试失败；修改前完整HEAD同位置复现current=23/target=24，不放宽断言。正式epoch-copy matrix3 passed。修改前完整4440文件归档经实际准入/CSM/prepare/seal生成tracked、snapshot及canonical旧历史，新代码冷读、原key重试、同epoch追加、真实fork入口复制和来源离线冷读通过，旧sealed字节/request hash/owner均保留。
 - Ruff/compileall及45项strict通过。14文件Pyright基线607项/最终602项，无新增；最后两条错误合同测试的单文件检查仍为基线10项/最终10项，不称类型全绿。作者AST/结构自查通过，未启动团队专项或冒充独审。初轮测试装具及临时探针生命周期/进程组保护失败保留原件，最终复用原owner和matrix保护补验；未替代完整Web、真实Provider、Windows或9.13–9.15总门。准确命令、指纹、raw、失败归因及产物清单见`out/tests/temp/cil_tracking_fields_20261026/artifacts/verification-023.json`；旧代码归档和tar核验后清理，保留历史JSON与运行原件。
+
+### 2026-10-26 9.8 原子刷新与互斥模式子链路
+
+- `load_skill` 经唯一 `activate_skill` 控制决策共同接受冻结版本与 snapshot/tracked；snapshot 停止同名旧追踪，两行更新共用原 SQLite 事务、CAS 与名称唯一性。成功后清理或替换冲突 pending，失败保留原控制、正文与观察队列；同版本复用正文仍切换模式。删除独立 `activate_skill_content` 与其私有 descriptor 入口，调用方和装具全部迁至正式 load，未加 reload/unload 参数或第二 writer。显式刷新采用完整 activation，自动观察继续生成 diff；applied 仍只随真实 seal 推进。
+- 新显式 snapshot 在 pending rewind/compaction 后仍参与原 seal；停止追踪后的未封存自动候选不会在 ToolSet/root 重建时复活。新增合同断言真实封存 frames、引用、控制态、失败重试与旧字节不变；真实 Skill 文件经 watcher/publication、冻结工具调用、刷新、seal 及冷读验收。来源合同202 passed；重建/来源/独立进程恢复39 passed、3 deselected；正式 fork matrix 补齐该3项。最后控制 owner/工具合同57 passed（含前述已跑54项及新增 applied/并发3项，不累加全文件）。相关人工 untrack API 4 passed，装具改用实际工作区 identity，保持原断言；旧固定ID装具的 setup 错误已在完整修改前源码同处复现。
+- Ruff/compileall通过；24文件真实Pyright基线118项/最终105项，无新增（仅规范化类型检查器生成的 `_DataclassT` 序号，不丢弃错误）；API装具补验单列。作者AST/结构自查确认唯一激活入口、无来源I/O、无schema变更，prefix compiler仅新增9.6 TODO、AST不变，不冒充独审。来源/epoch长批运行期间只改变目录指南和该TODO注释，产品逻辑指纹未变。初轮工具同步调用错误、旧模式预期、装具错误及检查命令失败均保留原件。准确命令、源码指纹、raw和退出码见`out/tests/temp/cil_skill_modes_20261026/artifacts/`，总收据`verification-030.json`。
+- 9.8 保持未勾：模型可见的统一来源封装、完整替换及跨来源替代范围仍依赖9.6；9.13的分组/全模式恢复组合验收也未关闭。未替代完整Web、真实Provider或Windows；团队/协作专项继续暂缓。

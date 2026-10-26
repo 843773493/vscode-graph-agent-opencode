@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_session_skill_tracking_service
 from app.api.sessions import router, untrack_session_skill
 from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionSkillUntrackRequest,
@@ -38,14 +39,13 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 
-WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 SKILL_NAME = "debugging"
 SKILL_CONTENT = "v1\n"
 
 
 @pytest.fixture()
 def workspace(tmp_path: Path):
-    ws = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
+    ws = build_catalog_workspace(tmp_path, workspace_id=load_or_create_workspace_id(tmp_path / "workspace"))
     yield ws
     ws.close()
 
@@ -60,7 +60,7 @@ def session_service(sessions_root: Path, workspace, saver: RolloutCheckpointSave
     return SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace.workspace_id,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
 
@@ -126,7 +126,6 @@ async def tracked_skill_session(
     )
     manager = ContextSourceManager(owner=owner, control_state_port=saver)
     manager.register(_descriptor())
-    manager.activate_skill_content(SKILL_NAME, SKILL_CONTENT)
     manager.install_skill_activation_snapshot(_snapshot())
     manager.load_skill(SKILL_NAME, mode="tracked")
     batch = manager.prepare_pending()

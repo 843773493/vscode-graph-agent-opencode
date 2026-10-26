@@ -15,6 +15,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 from tests.unit.services.infrastructure.rollout_context.conftest import (
     source_seal_case as source_seal_case,  # noqa: PLC0414 - 当前测试文件独立正式产物
 )
@@ -87,18 +88,22 @@ async def test_snapshot_mode_appends_frozen_revision_and_safe_receipt(skill_cont
 @pytest.mark.asyncio
 async def test_frozen_call_is_unaffected_by_same_name_new_revision(skill_control_admission):
     manager, binding = _manager_with_binding()
-    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    catalog = manager.frozen_skill_catalog()
+    skill_load = create_skill_load_tool(
+        manager, control_admission=skill_control_admission,
+        activation_snapshot_resolver=lambda: catalog,
+    )
 
     frozen = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
-    # 模拟同名 catalog 发布新 revision:live state 被手工推进到新正文。
-    manager.activate_skill_content("shared", "workspace v2 body\n")
+    # 新版本的显式加载不改变旧冻结调用的输入。
+    load_fixture_skill(manager, "shared", "workspace v2 body\n")
 
     second = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
-    assert second["status"] == "error"
-    assert second["error"]["code"] == "skill-catalog-snapshot-conflict"
-    # 冻结调用的结果不因新 revision 改变。
+    assert second["status"] == "loaded"
+    assert second["error"] is None
+    assert second["revision"] == binding.activation_revision
     assert frozen["revision"] == binding.activation_revision
 
 
@@ -208,17 +213,21 @@ async def test_untrack_freezes_original_registration_not_current_catalog(source_
 
 
 @pytest.mark.asyncio
-async def test_tracked_rebind_requires_explicit_tracked_load(skill_control_admission):
+async def test_explicit_snapshot_supersedes_pending_tracked_revision(skill_control_admission):
     manager, _binding = _manager_with_binding()
     skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
     assert json.loads(await skill_load.ainvoke({"name": "shared", "mode": "tracked"}))[
         "tracked"
     ] is True
-    manager.activate_skill_content("shared", "workspace v2\n")
+    manager.observe("skill:shared", "workspace v2\n").require_tracked()
 
-    # 冻结 binding 与 live state 不一致时,旧 tracked 调用 fail closed,
-    # 不会静默改绑新 entry。
+    # 本次 snapshot 采用调用冻结的旧版本，并停止 tracking、替换未封存候选。
     result = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
-    assert result["status"] == "error"
-    assert result["error"]["code"] == "skill-catalog-snapshot-conflict"
+    assert result["status"] == "loaded"
+    assert result["error"] is None
+    assert result["tracked"] is False
+    assert result["revision"] == _binding.activation_revision
+    pending = manager.prepare_pending()
+    assert pending is not None
+    assert pending.sources[0].content == _binding.body

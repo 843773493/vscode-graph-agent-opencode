@@ -11,6 +11,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 
 DEMO_CONTENT = "# Demo\n\nv1\n"
 OTHER_CONTENT = "# Other\n\nv1\n"
@@ -54,7 +55,6 @@ def _tracked_manager(*names: str) -> ContextSourceManager:
     manager = _manager(*names)
     for name in names:
         body = f"# {name}\n\nv1\n"
-        manager.activate_skill_content(name, f"# {name}\n\nv1\n")
         _install_snapshot(manager, name, body)
         manager.load_skill(name, mode="tracked")
     return manager
@@ -183,7 +183,7 @@ def test_source_observation_state_reports_tracking_and_revision() -> None:
     manager = _manager("demo")
     assert manager.source_observation_state("skill:demo") == ("untracked", None)
 
-    manager.activate_skill_content("demo", DEMO_CONTENT)
+    load_fixture_skill(manager, "demo", DEMO_CONTENT)
     revision = _revision_of(DEMO_CONTENT)
     assert manager.source_observation_state("skill:demo") == ("untracked", revision)
 

@@ -141,7 +141,6 @@ async def test_reactor_marks_pending_observation_from_registry_event(
         # 先按 Skill 既有路径激活并进入 tracked 状态，事件接线只负责后续变化。
         registration = registry.snapshot(SKILL_URI)
         assert registration.revision is not None
-        manager.activate_skill_content("demo", registration.content)
         _install_snapshot(manager, "demo", SKILL_URI, registration.content)
         assert manager.load_skill("demo", mode="snapshot").tracked is False
         assert manager.load_skill("demo", mode="tracked").tracked is True
@@ -185,7 +184,6 @@ async def test_reactor_release_stops_delivery_after_scope_close(tmp_path: Path) 
     try:
         registration = registry.snapshot(SKILL_URI)
         assert registration.revision is not None
-        manager.activate_skill_content("demo", registration.content)
         _install_snapshot(manager, "demo", SKILL_URI, registration.content)
         manager.load_skill("demo", mode="tracked")
         reactor.sync_sources()
@@ -258,7 +256,6 @@ async def test_watcher_event_reaches_csm_pending_observation(tmp_path: Path) -> 
     try:
         registration = registry.snapshot(SKILL_URI)
         assert registration.revision is not None
-        manager.activate_skill_content("demo", registration.content)
         _install_snapshot(manager, "demo", SKILL_URI, registration.content)
         manager.load_skill("demo", mode="tracked")
         reactor.sync_sources()
@@ -340,7 +337,6 @@ def _overflow_fixture(
             )
         )
         snapshot = registry.snapshot(uri)
-        manager.activate_skill_content(name, snapshot.content)
         _install_snapshot(manager, name, uri, snapshot.content)
         manager.load_skill(name, mode="tracked")
         uris.append(uri)

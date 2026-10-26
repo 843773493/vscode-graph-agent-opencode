@@ -478,7 +478,6 @@ class TestMissingTypedFieldsFailClosed:
                 internal_locator="/.boxteam/skills/demo/SKILL.md",
             )
         )
-        manager.activate_skill_content("demo", "v1\n")
         _install_demo_snapshot(manager, "v1\n")
         manager.load_skill("demo", mode="tracked")
         batch = manager.prepare_pending()
@@ -1054,7 +1053,6 @@ class TestSealedTypedFieldConsumption:
             registration = registry.snapshot(
                 "boxteam://workspace/test/resources/skills/demo/SKILL.md",
             )
-            manager.activate_skill_content("demo", registration.content)
             _install_demo_snapshot(manager, registration.content)
             manager.load_skill("demo", mode="tracked")
             baseline = manager.prepare_pending()

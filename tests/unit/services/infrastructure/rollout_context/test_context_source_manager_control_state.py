@@ -72,7 +72,6 @@ def _install_snapshot(manager: ContextSourceManager, content: str = "v1\n") -> N
 
 
 def _track_skill(manager: ContextSourceManager, seal_sources: Callable, content: str = "v1\n") -> None:
-    manager.activate_skill_content("debugging", content)
     _install_snapshot(manager, content)
     manager.load_skill("debugging", mode="tracked")
     seal_sources(manager)
@@ -171,8 +170,8 @@ def test_control_state_round_trip_records_identity_and_revisions(
     assert stored.latest_revision == V1_REVISION
     assert stored.latest_visible_committed_revision == V1_REVISION
     assert stored.binding_revision is None
-    # register/track 与 applied revision 推进各自产生一次持久化写入。
-    assert stored.state_revision == 3
+    # 显式激活共同接受正文与 mode，之后只有 seal 推进 applied。
+    assert stored.state_revision == 2
     assert datetime.fromisoformat(stored.updated_at).tzinfo is not None
 
 
@@ -401,7 +400,7 @@ def test_restart_recovery_allows_tracked_registration_awaiting_first_observation
     assert rebuilt.observe("workspace:rules", "v1\n").status == "accepted"
 
 
-@pytest.mark.parametrize("operation", ["register", "track"])
+@pytest.mark.parametrize("operation", ["register", "track", "activate_skill"])
 def test_competing_skill_tracking_has_one_durable_winner(source_seal_case, operation: ContextSourceControlOperation):
     """不同 source 行不能绕过同一 owner/name 的唯一 tracking；冲突方保持原控制行。"""
     port, owner = source_seal_case.saver, source_seal_case.owner

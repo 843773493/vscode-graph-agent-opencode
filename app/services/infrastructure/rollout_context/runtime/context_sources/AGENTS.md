@@ -14,7 +14,8 @@
 
 # 规范
 
-- snapshot 只读取一次；tracked 的变化通过已注册观察事件或显式 observe 输入进入。
+- snapshot 每次显式加载采用调用冻结版本，并停止同名追踪；不自动观察更新。tracked 的变化通过已注册观察事件或显式 observe 输入进入。
+- Skill 的冻结正文候选与 snapshot/tracked 模式由同一控制事务接受；applied 仍只由 assembly seal 推进，失败不得清理原 pending 或提前切换模式。
 - 同一来源的未发送变化必须从已应用 revision 合并成一个 delta；untrack 不移除已提交上下文。
 - 生命周期机制只返回状态和释放结果，不发布业务事件。
 - observe明确区分unchanged、baseline_restored、not_tracked与accepted，pending单独表示尚未封存的更新；持续更新入口必须核验tracked，禁止用布尔回执推断已生效。

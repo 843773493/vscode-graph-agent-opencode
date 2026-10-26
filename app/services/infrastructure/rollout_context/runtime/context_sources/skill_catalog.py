@@ -13,8 +13,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.delta i
     _revision,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDelta,
     ContextSourceDescriptor,
     ContextSourceTrackingStateConflict,
+    PendingSourceObservation,
+    PublishedContextSourceRevision,
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
     SkillCatalogSnapshotConflict,
@@ -107,6 +110,10 @@ def skill_catalog_from_activation(
 
 
 class SkillCatalogMixin:
+        _pending: dict[str, ContextSourceDelta]
+        _pending_observations: dict[str, PendingSourceObservation]
+        _published_source_revisions: dict[str, PublishedContextSourceRevision]
+
         def frozen_skill_catalog(self) -> SkillCatalogActivationSnapshot:
             if self._skill_activation_snapshot is None:
                 raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 尚无冻结 Skill catalog")
@@ -127,9 +134,8 @@ class SkillCatalogMixin:
             """在 activation boundary 安装冻结的 SkillCatalog activation snapshot。
 
             只能由 source owner（Skill middleware/factory 装配）在边界调用。
-            本方法只冻结当前 catalog 事实，不做 registration 对账；binding 与
-            live 来源的不一致由 load 解析路径 fail closed，同名高优先级覆盖
-            （rebind 前夕）允许安装。
+            本方法只冻结当前 catalog 事实，不做 registration 对账；load 采用
+            调用冻结的 exact binding，同名高优先级覆盖不会自动改绑追踪。
             """
             if not isinstance(snapshot, SkillCatalogActivationSnapshot):
                 raise TypeError(
@@ -243,33 +249,14 @@ class SkillCatalogMixin:
                     "skill-catalog-snapshot-conflict: 冻结 binding 与已登记来源不一致: "
                     f"name={normalized} frozen={binding.display_uri} registered={state.descriptor.resource_uri}"
                 )
-            rebound = None
-            if mode == "tracked":
-                conflicting = [
-                    candidate for candidate in self._sources.values()
-                    if candidate.source_id != source_id and candidate.tracked
-                    and _normalize_skill_name(candidate.name) == normalized
-                ]
-                if conflicting:
-                    rebound = self._rebound_registrations(conflicting, normalized, binding.display_uri)
-            if state.latest_revision is not None and state.latest_revision != binding.activation_revision:
-                raise SkillCatalogSnapshotConflict(
-                    "skill-catalog-snapshot-conflict: 冻结 binding 与 live activation "
-                    f"状态不一致: name={normalized} frozen={binding.activation_revision} "
-                    f"live={state.latest_revision}"
-                )
+            conflicting = [
+                candidate for candidate in self._sources.values()
+                if candidate.source_id != source_id and candidate.tracked
+                and _normalize_skill_name(candidate.name) == normalized
+            ]
+            rebound = self._rebound_registrations(conflicting, normalized, binding.display_uri) if conflicting else None
+            state = self._accept_skill_activation(state, rebound, binding, mode)
             source_rebound = rebound is not None
-            if rebound is not None:
-                state = self._rebind_skill_registration(state, rebound, binding)
-            else:
-                if activation_snapshot is not None:
-                    self._persist_control_state(state, operation="register")
-                    self._install_registration(state)
-                if state.latest_visible_committed_revision != binding.activation_revision:
-                    self.activate_skill_content(normalized, binding.body, revision=binding.activation_revision)
-                    state = self._sources[source_id]
-                if mode == "tracked":
-                    state = self._set_tracking_status(state, "tracked")
             status: SkillLoadStatus
             append_status: SkillLoadAppendStatus
             if source_id in self._pending:
@@ -305,7 +292,7 @@ class SkillCatalogMixin:
             normalized: str,
             effective_identity: str | None,
         ) -> SourceState | None:
-            """机械判定显式 tracked 是否应触发 rebind。
+            """机械判定本次显式加载是否应冻结同名旧 tracking。
 
             判据只有 resolved source identity（registration 的 display/resource
             URI），不使用时间戳或物理路径。返回需要冻结的旧 registration；
@@ -337,70 +324,54 @@ class SkillCatalogMixin:
                 )
             return existing
 
-        def _rebind_skill_registration(
-            self, state: SourceState, old: SourceState, binding: SkillCatalogBinding,
+        def _accept_skill_activation(
+            self, state: SourceState, old: SourceState | None,
+            binding: SkillCatalogBinding, mode: SkillLoadMode,
         ) -> SourceState:
-            """同事务冻结旧 tracking 并提交新完整观察；确认前不安装候选或发事件。"""
-            # 冷恢复只有 observed 控制行；未 applied 的正文仍须从本次冻结 binding 入队。
-            needs_activation = state.latest_visible_committed_revision != binding.activation_revision
-            candidate = (
-                self._source_observation_candidate(state, binding.body, binding.activation_revision)
-                if needs_activation else replace(state)
-            )
-            candidate.tracking_status = "tracked"
-            frozen = replace(old, tracking_status="untracked")
-            self._persist_control_state(candidate, operation="track", replaced_state=frozen)
-            self._sources[old.source_id] = frozen
+            """同一 owner 接受冻结正文与互斥模式；持久确认后才安装候选及清理旧更新。"""
+            for revision, content in (
+                (state.latest_revision, state.latest_content),
+                (state.latest_visible_committed_revision, state.latest_visible_committed_content),
+            ):
+                if revision == binding.activation_revision and content is not None and content != binding.body:
+                    raise SkillCatalogSnapshotConflict(
+                        "skill-catalog-snapshot-conflict: 同一 Skill revision 的正文不一致"
+                    )
+            candidate = self._source_observation_candidate(state, binding.body, binding.activation_revision)
+            # 显式加载采用完整冻结正文；后续自动观察才相对已封存基准生成 diff。
+            candidate.pending_kind = "activation"
+            candidate.tracking_status = "tracked" if mode == "tracked" else "untracked"
+            already_visible = candidate.latest_visible_committed_revision == binding.activation_revision
+            if already_visible:
+                candidate.latest_visible_committed_content = binding.body
+                candidate.pending_kind = None
+                candidate.observed_revisions.clear()
+            frozen = replace(old, tracking_status="untracked") if old is not None else None
+            self._persist_control_state(candidate, operation="activate_skill", replaced_state=frozen)
+            if frozen is not None:
+                frozen.pending_kind = None
+                frozen.observed_revisions = []
+                self._sources[frozen.source_id] = frozen
+                self._pending.pop(frozen.source_id, None)
+                self._pending_observations.pop(frozen.source_id, None)
             self._install_registration(candidate)
-            if needs_activation:
+            self._pending_observations.pop(candidate.source_id, None)
+            if already_visible:
+                self._pending.pop(candidate.source_id, None)
+            else:
                 self._queue_delta(candidate)
-            self._publish_lifecycle_event(
-                source_id=frozen.source_id, source_kind=frozen.source_kind,
-                kind="untracked", revision=frozen.latest_revision,
+            self._published_source_revisions[candidate.source_id] = PublishedContextSourceRevision(
+                candidate.source_id, binding.activation_revision, binding.body,
             )
+            self._rebuild_source_batch = None
+            stopped = frozen if frozen is not None else state if state.tracked and not candidate.tracked else None
+            if stopped is not None:
+                self._publish_lifecycle_event(
+                    source_id=stopped.source_id, source_kind=stopped.source_kind,
+                    kind="untracked", revision=stopped.latest_revision,
+                )
             return candidate
 
-        def descriptor_for_skill(self, name: str) -> ContextSourceDescriptor:
-            """只给受信 source owner 解析内部 descriptor，不进入模型协议。"""
-            source_id = self._source_ids_by_name.get(name)
-            if source_id is None:
-                raise KeyError(f"Skill 不存在: name={name}")
-            descriptor = self._sources[source_id].descriptor
-            if descriptor is None:
-                raise RuntimeError(
-                    "Skill 来源尚未由 source owner 重新注册，不能解析内部 locator: "
-                    f"name={name}"
-                )
-            return descriptor
-
-        def activate_skill_content(
-            self,
-            name: str,
-            content: str,
-            *,
-            revision: str | None = None,
-        ) -> None:
-            """接收 source owner 已验证的正文；CSM 不执行 I/O。"""
-            descriptor = self.descriptor_for_skill(name)
-            state = self._sources[descriptor.source_id]
-            if not isinstance(content, str):
-                raise TypeError(
-                    "ContextSourceManager.activate_skill_content.content 必须是字符串"
-                )
-            if revision is not None and (not isinstance(revision, str) or not revision):
-                raise ValueError("activate_skill_content.revision 必须是非空字符串或 None")
-            effective_revision = _revision(content) if revision is None else revision
-            if state.latest_revision is not None:
-                if (
-                    state.latest_revision == effective_revision
-                    and state.latest_content == content
-                ):
-                    return
-                if state.latest_visible_committed_revision is not None and not state.tracked:
-                    raise RuntimeError(
-                        "snapshot Skill 已激活，变化必须先通过 tracked source observation 提交"
-                    )
-            self._accept_source_observation(state, content, effective_revision)
 
 
 

@@ -452,6 +452,8 @@ skill_load(
 
 同一owner原子接受本次冻结版本的激活候选和模式控制变更，回执不能冒充正文已注入；applied/injected仍仅在assembly seal推进。成功的snapshot转换须清理或替换尚未seal且与本次显式版本冲突的旧tracking候选，不让旧自动增量随后覆盖snapshot；历史sealed内容不变，失败保留原状态。
 
+显式加载由既有 source control owner 的 `activate_skill` 决策共同接受冻结 binding revision、内容 revision 和互斥模式；同名旧 tracking 的冻结也在该事务内完成。接受后才安装内存候选并清理旧 pending，applied 仍由后续 seal 独占推进。显式加载准备完整 activation，普通 tracked observation 才生成相对已封存基准的 diff。transition 建立后明确接受的新 snapshot 必须参与下一次 seal；未追踪且没有 pending 的来源只能携带已封存正文，不能在 ToolSet/root 重建中带回已取消的自动候选。统一模型来源块及跨来源替代范围继续由任务 9.6 收敛，不能只凭控制事务完成勾选整个 9.8。
+
 #### snapshot
 
 CSM 通过当前activation snapshot的SkillCatalog绑定解析名称，取得ResourceRegistry已稳定发布的 `SKILL.md` revision，追加一个完整、不可变、ambient 的 activation item；同来源同版本仍可见时按 4.1 复用正文。由于调用发生在用户消息之后，新 item 投影为 `wire_role=user`，消息分组遵循 4.1。工具调用不读文件、网络或provider。snapshot加载成功后停止该名称已有追踪，与本次加载共同完成；即使正文无需追加，也不能保留原tracked状态。随后不自动检查变化、不维护 active tracking registration，也不检查 rewind 是否移除了该 item，它只依靠 active context 自然保留且不自动到期。再次显式调用可按 4.1 刷新版本，不要求先停止追踪或卸载。

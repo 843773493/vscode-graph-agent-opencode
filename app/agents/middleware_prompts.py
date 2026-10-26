@@ -17,7 +17,7 @@ TODO_TOOL_DESCRIPTION = (
 SKILLS_SYSTEM_PROMPT = """Available skills:
 {skills_list}
 
-When the user's request matches a skill, call `skill_load` with the skill name before acting. The name is resolved by the application; do not ask for or invent a file path. `snapshot` is the default and loads the current skill once. Use `tracked` only when later observed changes should be applied, and `untrack` to stop tracking without removing already injected context. Follow the loaded instructions and do not infer omitted tool names or arguments."""
+When the user's request matches a skill, call `skill_load` with the skill name before acting. The name is resolved by the application; do not ask for or invent a file path. `snapshot` is the default: load or refresh the skill to the version frozen for this call and stop any existing tracking of that name. `tracked` loads or refreshes that version and enables later observed changes. Repeating the same version reuses its content but still applies the requested mode; no reload flag or unload step is needed. Use `untrack` only to stop tracking without removing already injected context. Follow the loaded instructions and do not infer omitted tool names or arguments."""
 
 FILESYSTEM_SYSTEM_PROMPT = (
     "Use the available filesystem tools according to their schemas. Read existing files before "

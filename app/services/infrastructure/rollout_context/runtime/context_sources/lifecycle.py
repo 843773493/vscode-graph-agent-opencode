@@ -187,13 +187,18 @@ class SourceLifecycleMixin:
             if self._rebuild_source_batch is not None:
                 return self._rebuild_source_batch
             self._rebuild_control_states = {state.source_id: state for state in rebuild.states}
-            states = tuple(state for state in self._sources.values() if state.tracked)
+            # 本次显式 snapshot 仍是待封存输入；只排除已停止追踪的历史正文，
+            # 不能把 transition 建立后新接受的激活一起丢掉。
+            states = tuple(
+                state for state in self._sources.values()
+                if state.tracked or state.source_id in self._pending
+            )
             if any(state.descriptor is None for state in states):
                 raise RuntimeError("tracked-source-unavailable: 目标 registration 缺少 source owner binding")
-            descriptors = tuple(state.descriptor for state in states)
             supplier = self._published_revision_supplier
             resource_descriptors = tuple(
-                descriptor for descriptor in descriptors if descriptor.resource_uri is not None
+                state.descriptor for state in states
+                if state.tracked and state.descriptor.resource_uri is not None
             )
             frozen_resources = () if supplier is None else supplier(resource_descriptors)
             published = {source.source_id: source for source in frozen_resources}
@@ -202,6 +207,16 @@ class SourceLifecycleMixin:
             sources, deltas = [], []
             for state in states:
                 descriptor = state.descriptor
+                if not state.tracked:
+                    if state.latest_revision is None or state.latest_content is None:
+                        raise RuntimeError("context-source-rebuild-conflict: 显式激活缺少冻结正文")
+                    sources.append(ContextSourceSnapshot(
+                        descriptor=descriptor, revision=state.latest_revision,
+                        content=state.latest_content,
+                        applied_revision=state.latest_visible_committed_revision, tracked=False,
+                    ))
+                    deltas.append(self._pending[state.source_id])
+                    continue
                 frozen = published.get(state.source_id)
                 if frozen is None and (supplier is None or descriptor.resource_uri is None):
                     if descriptor.source_kind == "skill":
@@ -253,7 +268,12 @@ class SourceLifecycleMixin:
                 return self.prepare_rebuild_sources(current_rebuild)
             sources = []
             for state in self._sources.values():
-                if state.latest_revision is None or state.latest_content is None:
+                revision, content = state.latest_revision, state.latest_content
+                if not state.tracked and state.source_id not in self._pending:
+                    # 停止追踪后的自动候选不是有效上下文；后续 ToolSet/root
+                    # 重建只能携带已经封存的正文，不能重新激活被显式替换的更新。
+                    revision, content = state.latest_visible_committed_revision, state.latest_visible_committed_content
+                if revision is None or content is None:
                     continue
                 if state.descriptor is None:
                     raise RuntimeError(
@@ -261,8 +281,8 @@ class SourceLifecycleMixin:
                     )
                 sources.append(ContextSourceSnapshot(
                     descriptor=state.descriptor,
-                    revision=state.latest_revision,
-                    content=state.latest_content,
+                    revision=revision,
+                    content=content,
                     applied_revision=state.latest_visible_committed_revision,
                     tracked=state.tracked,
                 ))

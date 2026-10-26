@@ -18,6 +18,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def pending_owner_case(source_seal_case):
         source_id="recovery-skill", source_kind="skill", name="recovery",
         description="只读恢复合同", internal_locator="/.boxteam/skills/recovery/SKILL.md",
     ))
-    manager.activate_skill_content("recovery", "沿原工具调用读取冻结上下文。")
+    load_fixture_skill(manager, "recovery", "沿原工具调用读取冻结上下文。")
     receipt, _ = case.seal(manager)
     owner, saver = case.owner, case.saver
     execution = str(case.accepted["initial_execution_id"])

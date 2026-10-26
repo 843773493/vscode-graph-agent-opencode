@@ -270,6 +270,7 @@ def compile_prefix_context(
     frames.extend(canonical_frames)
     selected_identities.extend(("canonical_item", item_id, plan.thread_id) for item_id in canonical_ids)
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
+    # TODO(CIL 9.6): 用统一来源块显式表达完整替换及跨来源替代范围，迁齐历史投影与重放。
     tail_values = (
         [
             (full_source_id(source), source, source.content)

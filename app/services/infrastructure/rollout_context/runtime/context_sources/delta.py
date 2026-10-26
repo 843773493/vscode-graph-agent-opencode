@@ -18,7 +18,7 @@ class SourceDeltaMixin:
         def _queue_delta(self, state: SourceState) -> None:
             if state.latest_revision is None or state.latest_content is None:
                 raise RuntimeError("Context source 缺少 latest revision/content")
-            if state.pending_kind == "rebuild":
+            if state.pending_kind in {"activation", "rebuild"}:
                 self._pending[state.source_id] = ContextSourceDelta(
                     source_id=state.source_id,
                     source_name=state.name,
@@ -27,7 +27,8 @@ class SourceDeltaMixin:
                     previous_revision=state.latest_visible_committed_revision,
                     content=state.latest_content,
                     content_hash=_revision(state.latest_content),
-                    kind="rebuild",
+                    kind=state.pending_kind,
+                    observation_provenance=tuple(state.observed_revisions),
                 )
                 return
             previous_content = state.latest_visible_committed_content

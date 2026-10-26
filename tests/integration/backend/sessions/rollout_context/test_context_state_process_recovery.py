@@ -136,8 +136,6 @@ def test_independent_process_reads_frozen_owner_state_after_live_sources_and_des
     initial_bodies = {"tracked": "初始 tracked source\n", "later-untracked": "冻结的 untracked source\n"}
     for name in initial_bodies:
         manager.register(_skill_descriptor(name))
-    manager.activate_skill_content("tracked", initial_bodies["tracked"])
-    manager.activate_skill_content("later-untracked", initial_bodies["later-untracked"])
     _install_skill_snapshot(manager, initial_bodies)
     manager.load_skill("tracked", mode="tracked")
     manager.load_skill("later-untracked", mode="tracked")

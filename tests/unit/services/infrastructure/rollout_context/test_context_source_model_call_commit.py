@@ -28,6 +28,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
     SourceObservation,
     build_source_lifecycle_decision,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 
 
 def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
@@ -40,7 +41,7 @@ def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
 
 def _activate(manager: ContextSourceManager, source_id: str, name: str, content: str) -> None:
     manager.register(_descriptor(source_id, name))
-    manager.activate_skill_content(name, content)
+    load_fixture_skill(manager, name, content)
 
 
 def _source_owner_snapshot(saver, owner):

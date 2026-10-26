@@ -88,7 +88,6 @@ def _new_manager(
 
 
 def _track_skill(manager: ContextSourceManager, seal_sources: Callable, content: str = "v1\n") -> None:
-    manager.activate_skill_content("debugging", content)
     _install_debugging_snapshot(manager, content)
     manager.load_skill("debugging", mode="tracked")
     batch = manager.prepare_pending()
@@ -207,7 +206,7 @@ def test_control_state_round_trip_persists_through_owner(
     assert stored.name == "debugging"
     assert stored.tracking_status == "tracked"
     assert stored.latest_visible_committed_revision == stored.latest_revision
-    assert stored.state_revision == 3
+    assert stored.state_revision == 2
     assert stored.updated_at is not None
 
 
@@ -465,7 +464,7 @@ def test_write_is_idempotent_and_does_not_advance_state_revision(
     assert second == first
 
 
-@pytest.mark.parametrize("operation", ["register", "observe", "track", "untrack"])
+@pytest.mark.parametrize("operation", ["register", "observe", "track", "untrack", "activate_skill"])
 @pytest.mark.parametrize("existing", [False, True])
 def test_control_mutation_cannot_publish_an_applied_revision(
     control_state_port: RolloutCheckpointSaver,
@@ -474,7 +473,7 @@ def test_control_mutation_cannot_publish_an_applied_revision(
     existing: bool,
 ) -> None:
     state = ContextSourceControlState(
-        owner=owner, source_id="instruction:agent", source_kind="agent_instructions",
+        owner=owner, source_id="instruction:agent", source_kind="skill" if operation == "activate_skill" else "agent_instructions",
         name="Agent 说明", binding_revision=None, tracking_status="untracked",
         latest_revision="revision-1", latest_visible_committed_revision=None,
     )
@@ -505,7 +504,7 @@ def test_control_mutations_keep_observation_and_tracking_separate(
             latest_revision="revision-1", latest_visible_committed_revision=None,
         )),
     ).state
-    changes = (
+    changes: tuple[tuple[ContextSourceControlOperation, ContextSourceControlState], ...] = (
         ("observe", replace(state, tracking_status="untracked")),
         ("track", replace(state, latest_revision="revision-2")),
         ("observe", replace(state, binding_revision="catalog-2")),
@@ -573,7 +572,8 @@ def test_concurrent_control_mutations_share_one_cas_baseline(
     assert control_state_port.load_context_source_control_states(owner) == (winners[0],)
 
 
-def test_rebind_receipt_replay_requires_both_exact_cas_versions(control_state_port, owner):
+@pytest.mark.parametrize("target_changes", [False, True])
+def test_rebind_receipt_replay_requires_both_exact_cas_versions(control_state_port, owner, target_changes):
     old = control_state_port.apply_context_source_control_mutation(ContextSourceControlMutation(
         "register", ContextSourceControlState(
             owner=owner, source_id="skill:old", source_kind="skill", name="demo",
@@ -586,8 +586,14 @@ def test_rebind_receipt_replay_requires_both_exact_cas_versions(control_state_po
         binding_revision="new-catalog", tracking_status="tracked",
         latest_revision="new-revision", latest_visible_committed_revision=None,
     )
-    mutation = ContextSourceControlMutation("track", target, replace(old, tracking_status="untracked"))
+    if not target_changes:
+        target = control_state_port.apply_context_source_control_mutation(ContextSourceControlMutation(
+            "register", replace(target, tracking_status="untracked"),
+        )).state
+    mutation = ContextSourceControlMutation("activate_skill", target, replace(old, tracking_status="untracked"))
     receipt = control_state_port.apply_context_source_control_mutation(mutation)
+    assert receipt.replaced_state is not None
+    assert mutation.replaced_state is not None
     assert receipt.replaced_state == replace(
         old, tracking_status="untracked", state_revision=old.state_revision + 1,
         updated_at=receipt.replaced_state.updated_at,

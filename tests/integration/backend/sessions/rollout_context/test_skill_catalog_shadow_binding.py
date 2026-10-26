@@ -277,9 +277,9 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
             execution_admission_scope(admission, langgraph_thread_id=thread),
         ):
             current_receipt = json.loads(await current_tool.ainvoke({"name": "shared"}))
-        assert current_receipt["status"] == "loaded"
+        assert current_receipt["status"] == "rebound"
         assert current_receipt["display_uri"] == workspace.display_uri
         assert current_receipt["revision"] == workspace.activation_revision
         assert current_receipt["tracked"] is False
-        assert current_receipt["source_rebound"] is False
+        assert current_receipt["source_rebound"] is True
         assert restored_catalog(restarted, sealed) == original_catalog

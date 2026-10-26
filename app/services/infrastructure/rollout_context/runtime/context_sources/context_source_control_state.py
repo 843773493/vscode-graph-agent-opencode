@@ -136,14 +136,14 @@ class ContextSourceRebuildState:
     retained_source_refs: frozenset[tuple[str, str]] = frozenset()
 
 
-ContextSourceControlOperation = Literal["register", "observe", "track", "untrack"]
+ContextSourceControlOperation = Literal["register", "observe", "track", "untrack", "activate_skill"]
 
 
 @dataclass(frozen=True, slots=True)
 class ContextSourceControlMutation:
     """来源控制子端口的决策；state_revision 是本次写入的 CAS 基准。
 
-    只允许注册、观察及跟踪变更，applied 由 assembly seal 独占推进。
+    Skill 显式激活共同接受冻结版本与加载模式，applied 仍由 assembly seal 独占推进。
     owner 在一个事务内读取旧状态、验证决策并写入，CSM 不能提交 applied。
     """
 
@@ -153,7 +153,7 @@ class ContextSourceControlMutation:
     replaced_state: ContextSourceControlState | None = None
 
     def __post_init__(self) -> None:
-        if self.operation not in {"register", "observe", "track", "untrack"}:
+        if self.operation not in {"register", "observe", "track", "untrack", "activate_skill"}:
             raise ValueError("ContextSourceControlMutation.operation 非法")
         if not isinstance(self.state, ContextSourceControlState):
             raise TypeError("ContextSourceControlMutation.state 必须是 ContextSourceControlState")
@@ -161,9 +161,13 @@ class ContextSourceControlMutation:
             "tracked" if self.operation == "track" else "untracked"
         ):
             raise ValueError("ContextSourceControlMutation 与 tracking_status 不一致")
+        if self.operation == "activate_skill" and (
+            self.state.source_kind != "skill" or self.state.latest_revision is None
+        ):
+            raise ValueError("activate_skill 必须携带 Skill 的冻结内容版本")
         old = self.replaced_state
         if old is not None and (
-            self.operation != "track"
+            self.operation != "activate_skill"
             or not isinstance(old, ContextSourceControlState)
             or old.owner != self.state.owner
             or old.source_id == self.state.source_id

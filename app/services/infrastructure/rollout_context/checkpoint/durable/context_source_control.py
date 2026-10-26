@@ -267,7 +267,7 @@ class ContextSourceControlStorageMixin:
                     old_stored.state_revision == replaced.state_revision + 1
                     and old_stored.durable_fields() == replaced.durable_fields()
                     and stored is not None and stored.durable_fields() == state.durable_fields()
-                    and stored.state_revision == state.state_revision + 1
+                    and stored.state_revision in {state.state_revision, state.state_revision + 1}
                 ):
                     return ContextSourceControlReceipt(stored, old_stored)
                 if old_stored is None or old_stored.tracking_status != "tracked" or (
@@ -278,12 +278,12 @@ class ContextSourceControlStorageMixin:
                 if stored is not None and stored.tracking_status != "untracked":
                     raise RuntimeError("context-source-control-state-conflict: rebind 目标已被跟踪")
             if stored is not None:
-                if mutation.operation != "register" and replaced is None and state.binding_revision != stored.binding_revision:
-                    raise RuntimeError("context-source-control-state-conflict: 只有 register 可以更新来源绑定")
+                if mutation.operation not in {"register", "activate_skill"} and state.binding_revision != stored.binding_revision:
+                    raise RuntimeError("context-source-control-state-conflict: 来源绑定变化必须使用 register 或 activate_skill")
                 if mutation.operation in {"register", "observe"} and state.tracking_status != stored.tracking_status:
                     raise RuntimeError("context-source-control-state-conflict: tracking 变化必须使用 track/untrack")
-                if mutation.operation != "observe" and replaced is None and state.latest_revision != stored.latest_revision:
-                    raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe")
+                if mutation.operation not in {"observe", "activate_skill"} and state.latest_revision != stored.latest_revision:
+                    raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe 或 activate_skill")
             # 旧行只从同事务的权威记录派生；两次写入任一失败均整体回滚。
             frozen = None
             if old_stored is not None:

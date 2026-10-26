@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 
 
 def _revision(content: str) -> str:
@@ -68,7 +69,7 @@ def test_real_seal_publishes_committed_event_per_source(source_seal_case):
     sink = RecordingSink()
     manager = source_seal_case.manager(lifecycle_event_sink=sink)
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
+    load_fixture_skill(manager, "demo", "hello world")
     source_seal_case.seal(manager)
     assert len(sink.events) == 1
     event = sink.events[-1]
@@ -85,8 +86,8 @@ def test_real_seal_publishes_one_event_per_delta_with_exact_owner(source_seal_ca
     manager = source_seal_case.manager(lifecycle_event_sink=sink)
     manager.register(_descriptor("src_a", "a"))
     manager.register(_descriptor("src_b", "b"))
-    manager.activate_skill_content("a", "alpha")
-    manager.activate_skill_content("b", "beta")
+    load_fixture_skill(manager, "a", "alpha")
+    load_fixture_skill(manager, "b", "beta")
     source_seal_case.seal(manager)
     assert [(event.source_id, event.kind) for event in sink.events] == [
         ("src_a", "committed"), ("src_b", "committed"),
@@ -99,7 +100,6 @@ def test_untrack_publishes_after_real_seal_with_latest_revision(source_seal_case
     sink = RecordingSink()
     manager = source_seal_case.manager(lifecycle_event_sink=sink)
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
     _install_snapshot(manager, "hello world")
     manager.load_skill("demo", mode="tracked")
     source_seal_case.seal(manager)
@@ -115,7 +115,7 @@ def test_untrack_publishes_after_real_seal_with_latest_revision(source_seal_case
 def test_manager_without_sink_still_confirms_real_seal_and_untracks(source_seal_case):
     manager = source_seal_case.manager()
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
+    load_fixture_skill(manager, "demo", "hello world")
     receipt, _ = source_seal_case.seal(manager)
     assert receipt.deltas[0].revision == _revision("hello world")
     assert manager.load_skill("demo", mode="untrack").tracked is False
@@ -127,7 +127,7 @@ def test_publisher_failure_is_not_silently_swallowed_after_seal(source_seal_case
 
     manager = source_seal_case.manager(lifecycle_event_sink=exploding_sink)
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
+    load_fixture_skill(manager, "demo", "hello world")
     with pytest.raises(RuntimeError, match="channel unavailable"):
         source_seal_case.seal(manager)
     (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
@@ -138,7 +138,7 @@ def test_failed_real_seal_publishes_no_committed_event(source_seal_case):
     sink = RecordingSink()
     manager = source_seal_case.manager(lifecycle_event_sink=sink)
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
+    load_fixture_skill(manager, "demo", "hello world")
     batch = manager.prepare_pending()
     owner, saver = source_seal_case.owner, source_seal_case.saver
     before = saver.load_context_source_control_states(owner)
@@ -159,7 +159,6 @@ def test_untrack_publishes_only_after_persistence_succeeds(source_seal_case, mon
     sink = RecordingSink()
     manager = source_seal_case.manager(lifecycle_event_sink=sink)
     manager.register(_descriptor())
-    manager.activate_skill_content("demo", "hello world")
     _install_snapshot(manager, "hello world")
     manager.load_skill("demo", mode="tracked")
     before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
@@ -223,7 +222,7 @@ def test_failed_observation_preserves_pending_and_same_manager_retries(
     manager = source_seal_case.manager()
     manager.register(_descriptor(), tracking_status="tracked")
     if with_baseline:
-        manager.activate_skill_content("demo", "base\n")
+        load_fixture_skill(manager, "demo", "base\n", mode="tracked")
         source_seal_case.seal(manager)
         manager.observe("src_skill_1", "pending\n")
     before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
@@ -236,7 +235,7 @@ def test_failed_observation_preserves_pending_and_same_manager_retries(
         raise RuntimeError("control state storage unavailable")
 
     accept = (
-        lambda: manager.activate_skill_content("demo", "retry\n")
+        lambda: load_fixture_skill(manager, "demo", "retry\n", mode="tracked")
         if operation == "activate"
         else manager.observe("src_skill_1", "retry\n")
     )

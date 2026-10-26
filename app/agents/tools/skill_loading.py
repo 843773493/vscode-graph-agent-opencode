@@ -8,7 +8,7 @@ snapshot/tracked 从发起调用时已冻结的 Turn/ModelCall SkillCatalog
 activation snapshot 解析 exact binding;工具路径零 I/O,不读当前目录,
 也不读当前 catalog。untrack 按当前 thread 与受校验逻辑 name 定位唯一
 active tracked registration,不解析当前 effective entry,不读 source。
-tracked 命中同 normalized name 的旧 active registration 且 effective entry
+snapshot/tracked 命中同 normalized name 的旧 active registration 且 effective entry
 已变时,返回 status=rebound 且 source_rebound=true(不含路径)。
 """
 
@@ -38,7 +38,7 @@ class SkillLoadInput(BaseModel):
     name: str = Field(min_length=1, description="要激活的 Skill 名称，不是文件路径。")
     mode: SkillLoadMode = Field(
         default="snapshot",
-        description="snapshot 只加载一次；tracked 接收后续已观察 revision；untrack 停止跟踪但保留已注入内容。",
+        description="snapshot（默认）刷新到本次冻结版本并停止已有追踪；tracked 刷新并建立或保持追踪；同版本复用正文仍切换模式。untrack 仅停止追踪，不移除已有内容。",
     )
 
 

@@ -5,6 +5,7 @@
 ```text
 rollout/
 ├── fixture_output.py      经真实执行 owner 提交静态历史输出
+├── skill_catalog.py       局部合同的冻结 Skill 输入，经正式 load 激活
 ├── view_mutations.py      隔离修改 view 成员并重建私有分块索引
 └── web_boundary_seeding.py 生成 Web 边界场景的 canonical 历史
 ```

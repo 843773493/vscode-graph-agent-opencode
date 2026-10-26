@@ -17,6 +17,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
+from tests.support.rollout.skill_catalog import load_fixture_skill
 
 
 @pytest.fixture
@@ -88,7 +89,6 @@ def test_snapshot_load_reads_once_and_exposes_only_metadata(source_seal_case):
 
 def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revision(source_seal_case):
     manager = _manager(source_seal_case)
-    manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="snapshot")
     source_seal_case.seal(manager)
@@ -108,7 +108,6 @@ def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revisi
 
 def test_untrack_stops_observation_without_removing_existing_context(source_seal_case):
     manager = _manager(source_seal_case)
-    manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
     activation = source_seal_case.seal(manager)[0].deltas
@@ -272,7 +271,6 @@ def test_pending_delta_carries_content_hash_and_merged_provenance(source_seal_ca
     """多个 pending observation 合并为唯一 delta:from 基准、载荷 hash、
     provenance 与提交后闭合全部显式(D1 构造合同)。"""
     manager = _manager(source_seal_case)
-    manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
     source_seal_case.seal(manager)
@@ -379,7 +377,7 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
 
 
 @pytest.mark.parametrize("new_visible", [False, True])
-def test_rebind_write_failure_preserves_old_tracking_and_retry(source_seal_case, new_visible):
+def test_mode_write_failure_preserves_old_tracking_and_retry(source_seal_case, new_visible):
     manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
@@ -391,7 +389,7 @@ def test_rebind_write_failure_preserves_old_tracking_and_retry(source_seal_case,
     ))
     _install_snapshot(manager, "debugging", "v2\n", display_uri=uri)
     if new_visible:
-        manager.activate_skill_content("debugging", "v2\n")
+        load_fixture_skill(manager, "debugging", "v2\n")
         source_seal_case.seal(manager)
     saver, owner = source_seal_case.saver, source_seal_case.owner
     before = saver.load_context_source_control_states(owner)
@@ -408,12 +406,12 @@ def test_rebind_write_failure_preserves_old_tracking_and_retry(source_seal_case,
             manager.load_skill("debugging", mode="tracked")
         assert saver.load_context_source_control_states(owner) == before
         assert manager.prepare_sources() == pending
-        assert manager.source_observation_state("skill:debugging")[0] == "tracked"
+        assert manager.source_observation_state("skill:debugging")[0] == ("untracked" if new_visible else "tracked")
         for action in ("INSERT", "UPDATE"):
             connection.execute(f"DROP TRIGGER refuse_rebind_{action}")
         connection.commit()
     receipt = manager.load_skill("debugging", mode="tracked")
-    assert receipt.source_rebound is True
+    assert receipt.source_rebound is (not new_visible)
     assert receipt.status == ("already_active" if new_visible else "rebound")
     controls = {state.source_id: state for state in saver.load_context_source_control_states(owner)}
     assert controls["skill:debugging"].tracking_status == "untracked"
@@ -440,7 +438,7 @@ def test_rebind_frozen_snapshot_registration_is_atomic(source_seal_case, new_vis
     )
     snapshot = SkillCatalogActivationSnapshot(catalog_revision="catalog-new", entries={"debugging": binding})
     if new_visible:
-        manager.load_skill("debugging", activation_snapshot=snapshot)
+        assert manager.load_skill("debugging", activation_snapshot=snapshot).source_rebound is True
         source_seal_case.seal(manager)
         snapshot = SkillCatalogActivationSnapshot(catalog_revision="catalog-next", entries={"debugging": binding})
     saver, owner = source_seal_case.saver, source_seal_case.owner
@@ -466,7 +464,7 @@ def test_rebind_frozen_snapshot_registration_is_atomic(source_seal_case, new_vis
             connection.execute(f"DROP TRIGGER refuse_frozen_{action}")
         connection.commit()
     receipt = manager.load_skill("debugging", mode="tracked", activation_snapshot=snapshot)
-    assert receipt.source_rebound is True
+    assert receipt.source_rebound is (not new_visible)
     states = {state.source_id: state for state in saver.load_context_source_control_states(owner)}
     assert states["skill:debugging"].tracking_status == "untracked"
     assert states["skill:entry:new"].tracking_status == "tracked"
@@ -495,8 +493,9 @@ def test_load_restores_observed_unapplied_activation_after_restart(source_seal_c
 
     receipt = manager.load_skill("debugging", mode=mode, activation_snapshot=snapshot)
 
-    assert receipt.status == ("rebound" if old_tracked else "loaded")
-    assert receipt.source_rebound is old_tracked
+    # 先前成功的 snapshot 已经停止旧 tracking，冷恢复不再重复报告 rebind。
+    assert receipt.status == "loaded"
+    assert receipt.source_rebound is False
     assert receipt.tracked is (mode == "tracked")
     assert receipt.queued is True
     states = {state.source_id: state for state in source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)}
@@ -529,14 +528,8 @@ def test_load_tracked_same_effective_entry_is_idempotent_already_active(source_s
     assert manager.prepare_pending() is None
 
 
-def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(source_seal_case):
-    """6.2-B 组合边界：rebind 成功、但新 entry 已在可见台账。
-
-    两个正交事实维度必须同时如实承载：``status`` 只描述"本次是否追加了
-    context item"（新 entry 已可见时无第二个 item 追加，返回 ``already_active``），
-    ``source_rebound`` 只描述"是否发生了 rebind"（已发生，为 True）。此时 rebind
-    仍须完成：旧 registration 冻结、新 registration 建立。
-    """
+def test_snapshot_rebind_then_tracked_reuses_visible_entry(source_seal_case):
+    """snapshot 已冻结旧 tracking；随后 tracked 复用正文，不重复报告 rebind。"""
     manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
@@ -559,9 +552,9 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
         "v2\n",
         display_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
     )
-    # 新 entry 的当前 revision 已在可见台账：source owner 已交付并提交其正文，
-    # 但此时该 entry 仍未建立 tracked registration。
-    manager.activate_skill_content("debugging", "v2\n")
+    snapshot_receipt = load_fixture_skill(manager, "debugging", "v2\n")
+    assert snapshot_receipt.source_rebound is True
+    assert manager.source_observation_state("skill:debugging")[0] == "untracked"
     source_seal_case.seal(manager)
     # rebind 前：新 entry 已注册但尚未 tracked。
     assert manager._sources["skill:debugging-next"].tracked is False
@@ -572,8 +565,8 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
     assert receipt.status == "already_active"
     assert receipt.append_status == "already_active"
     assert receipt.queued is False
-    # 维度二：rebind 确已发生。
-    assert receipt.source_rebound is True
+    # 维度二：本次只改变 mode；来源切换已由之前的 snapshot 完成。
+    assert receipt.source_rebound is False
     assert receipt.tracked is True
     assert receipt.display_uri == binding.display_uri
     # 旧 registration 冻结为 untracked：不再消费 revision。
