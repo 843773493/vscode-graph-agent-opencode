@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.gateway.runtime.process_logs import ProcessLogStore
+
 RESTART_DELAY_MS = 1_000
 
 
@@ -59,11 +61,10 @@ def resolve_development_restart_command() -> DevelopmentRestartCommand | None:
 def start_development_restart(
     command: DevelopmentRestartCommand,
     *,
-    log_path: Path,
+    log_dir: Path,
     environment: dict[str, str] | None = None,
 ) -> int:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as log_file:
+    with ProcessLogStore(log_dir).open("development-restart") as log_file:
         popen_platform_options: dict[str, object]
         if os.name == "nt":
             popen_platform_options = {

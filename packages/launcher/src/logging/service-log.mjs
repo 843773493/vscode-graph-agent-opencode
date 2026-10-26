@@ -9,13 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { loadRuntimeLogContract, runtimeLogPath, runtimeLogRoot } from "./runtime-contract.mjs";
 
 export const SERVICE_LOG_PATH_ENV = "BOXTEAM_SERVICE_LOG_PATH";
 export const SERVICE_LOG_CAPTURED_ENV = "BOXTEAM_SERVICE_LOG_CAPTURED";
-export const SERVICE_LOG_MAX_BYTES = 64 * 1024 * 1024;
-export const SERVICE_LOG_ROTATIONS = 3;
 
-export function rotateServiceLog(logPath) {
+export function rotateServiceLog(logPath, contract = loadRuntimeLogContract()) {
   let logStat;
   try {
     logStat = statSync(logPath);
@@ -23,8 +22,8 @@ export function rotateServiceLog(logPath) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  if (logStat.size < SERVICE_LOG_MAX_BYTES) return;
-  for (let index = SERVICE_LOG_ROTATIONS - 1; index >= 1; index -= 1) {
+  if (logStat.size < contract.rotation.max_bytes) return;
+  for (let index = contract.rotation.archives - 1; index >= 1; index -= 1) {
     const source = `${logPath}.${index}`;
     const target = `${logPath}.${index + 1}`;
     if (existsSync(source)) renameSync(source, target);
@@ -32,22 +31,17 @@ export function rotateServiceLog(logPath) {
   renameSync(logPath, `${logPath}.1`);
 }
 
-export function resolveServiceLogPath(boxteamHome, environment = process.env) {
-  const configured = environment[SERVICE_LOG_PATH_ENV]?.trim();
+export function resolveServiceLogPath(boxteamHome, environment = process.env, role = "launcher") {
+  const configured = role === "launcher" ? environment[SERVICE_LOG_PATH_ENV]?.trim() : null;
   if (configured) return path.resolve(configured);
-  return path.join(
-    path.resolve(boxteamHome),
-    "state",
-    "launcher",
-    "logs",
-    "services.log",
-  );
+  const contract = loadRuntimeLogContract(environment.BOXTEAM_PROJECT_ROOT);
+  return runtimeLogPath(runtimeLogRoot(boxteamHome, contract), role, null, contract);
 }
 
 /** 打开并初始化日志描述符；成功后由调用方负责关闭。 */
-export function openServiceLogDescriptor(logPath) {
+export function openServiceLogDescriptor(logPath, contract = loadRuntimeLogContract()) {
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
-  rotateServiceLog(logPath);
+  rotateServiceLog(logPath, contract);
   const descriptor = openSync(logPath, "a", 0o600);
   // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
   if (process.platform !== "win32") {
@@ -72,21 +66,24 @@ export function openServiceLogDescriptor(logPath) {
 export function openServiceLog({
   boxteamHome,
   environment = process.env,
+  role = "launcher",
   stdout = process.stdout,
   stderr = process.stderr,
 }) {
-  const logPath = resolveServiceLogPath(boxteamHome, environment);
-  if (environment[SERVICE_LOG_CAPTURED_ENV] === "1") {
+  const logPath = resolveServiceLogPath(boxteamHome, environment, role);
+  const captured = environment[SERVICE_LOG_CAPTURED_ENV] === "1";
+  if (role === "launcher" && captured) {
     return { path: logPath, stdout, stderr, close() {} };
   }
-  const descriptor = openServiceLogDescriptor(logPath);
+  const descriptor = openServiceLogDescriptor(logPath, loadRuntimeLogContract(environment.BOXTEAM_PROJECT_ROOT));
   const tee = (primary) => ({
     write(value) {
       const content = Buffer.isBuffer(value)
         ? value
         : Buffer.from(String(value));
       writeFileSync(descriptor, content);
-      return primary.write(value);
+      // detached 的前台流已落入 Launcher 文件，不能再把 Gateway 输出写入那里。
+      return captured ? true : primary.write(value);
     },
   });
   return {

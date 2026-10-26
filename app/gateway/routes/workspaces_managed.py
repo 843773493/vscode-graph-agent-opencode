@@ -16,6 +16,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
+from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import (
@@ -204,7 +205,7 @@ async def create_gateway_managed_workspace(
             await create_direct_managed_workspace(
                 registry=registry,
                 project_root=get_project_root(),
-                log_dir=_gateway_root() / "logs",
+                log_dir=get_runtime_log_root(),
                 root_path=str(resolve_management_directory(request, payload.root_path)),
                 name=payload.name,
                 create_directory=payload.create_directory,

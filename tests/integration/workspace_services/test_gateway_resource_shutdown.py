@@ -229,8 +229,8 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
                     observed = next(item for item in node_state[f"{kind}s"] if item[f"{kind}_id"] == record["resource_id"])
                     assert observed["transport_owner_revision"] == record["owner_revision"], observed
                 after.append(record)
-        logs = workspace.parent / "boxteam-home/state/gateway/logs"
-        combined = "\n".join(path.read_text(errors="replace") for path in logs.glob("*.log"))
+        logs = workspace.parent / "boxteam-home/state/logs"
+        combined = "\n".join(path.read_text(errors="replace") for path in logs.glob("*/*.log"))
         combined += (workspace / ".boxteam/logs/gateway.stderr.log").read_text()
         assert "Application shutdown failed" not in combined
         assert "ConnectionRefusedError" not in combined

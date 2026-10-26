@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.env import get_project_root
+from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -80,7 +81,7 @@ def _default_workspace_root() -> Path:
 
 
 async def _restore_managed_local_runtimes(
-    *, registry: GatewayWorkspaceRegistry, default_workspace_id: str, gateway_root: Path,
+    *, registry: GatewayWorkspaceRegistry, default_workspace_id: str,
     gateway_config: GatewayConfig | None = None, only_workspace_ids: set[str] | None = None,
     exclude_workspace_ids: set[str] | None = None, preserve_existing_managed_runtimes: bool = False,
 ) -> None:
@@ -100,7 +101,7 @@ async def _restore_managed_local_runtimes(
                 owner.close(timeout_seconds=resolved.gateway_process_connection_drain_timeout_seconds)
                 reusable = {member_id: registry.managed_runtime(member_id) for member_id in ids if registry.has_runtime(member_id)}
                 contract, runtimes = await start_managed_backend_runtime(
-                    owner=owner, registry=registry, project_root=get_project_root(), log_dir=gateway_root / "logs",
+                    owner=owner, registry=registry, project_root=get_project_root(), log_dir=get_runtime_log_root(),
                     reusable_runtimes=reusable,
                     adopt_existing_backend=preserve_existing_managed_runtimes,
                     health_request_timeout_seconds=resolved.gateway_process_health_request_timeout_seconds,
@@ -153,7 +154,6 @@ async def create_registry(
         )
     try:
         return await _complete_registry_startup(
-            gateway_root=gateway_root,
             resolved_gateway_config=resolved_gateway_config,
             registry=registry,
             persisted_targets_by_id=persisted_targets_by_id,
@@ -179,7 +179,6 @@ async def create_registry(
 
 async def _complete_registry_startup(
     *,
-    gateway_root: Path,
     resolved_gateway_config: GatewayConfig,
     registry: GatewayWorkspaceRegistry,
     persisted_targets_by_id: dict[str, WorkspaceTarget],
@@ -222,7 +221,7 @@ async def _complete_registry_startup(
             ))
             registry.register_backend_owner(owner)
         contract, runtimes = await start_managed_backend_runtime(
-            owner=owner, registry=registry, project_root=get_project_root(), log_dir=gateway_root / "logs",
+            owner=owner, registry=registry, project_root=get_project_root(), log_dir=get_runtime_log_root(),
             preferred_backend_port=_default_backend_port(), adopt_existing_backend=preserve_existing_managed_runtimes,
             health_request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
             health_poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
@@ -260,7 +259,7 @@ async def _complete_registry_startup(
     await reconcile_configured_remote_gateways(
         registry=registry,
         configured_workspaces=resolved_gateway_config.workspaces,
-        log_dir=gateway_root / "logs",
+        log_dir=get_runtime_log_root(),
         health_request_timeout_seconds=(
             resolved_gateway_config.gateway_process_health_request_timeout_seconds
         ),
@@ -301,7 +300,7 @@ async def _complete_registry_startup(
             await reconnect_remote_gateway(
                 registry=registry,
                 connection_id=connection.connection_id,
-                log_dir=gateway_root / "logs",
+                log_dir=get_runtime_log_root(),
                 health_request_timeout_seconds=(
                     resolved_gateway_config.gateway_process_health_request_timeout_seconds
                 ),

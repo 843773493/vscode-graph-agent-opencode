@@ -240,12 +240,17 @@ describe("gateway supervisor", () => {
     const child = fakeChild();
     const processObject = new EventEmitter();
     const output = [];
+    const gatewayOutput = [];
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
     const resultPromise = superviseGateway({
       runtime,
       environment: { BOXTEAM_GATEWAY_PORT: "38114" },
       openBrowser: false,
       spawnImpl() {
         setTimeout(() => {
+          child.stdout.emit("data", "gateway original stdout\n");
+          child.stderr.emit("data", "gateway original stderr\n");
           child.exitCode = 0;
           child.emit("exit", 0, null);
           child.emit("close", 0, null);
@@ -265,12 +270,16 @@ describe("gateway supervisor", () => {
       stderr: {
         write() {},
       },
+      gatewayStdout: { write: (value) => gatewayOutput.push(value) },
+      gatewayStderr: { write: (value) => gatewayOutput.push(value) },
       processObject,
     });
 
     expect(await resultPromise).toBe(0);
     expect(output.join("")).toContain("Gateway 已就绪");
     expect(output.join("")).toContain("http://127.0.0.1:38114");
+    expect(output.join("")).not.toContain("gateway original");
+    expect(gatewayOutput).toEqual(["gateway original stdout\n", "gateway original stderr\n"]);
     expect(processObject.listenerCount("SIGTERM")).toBe(0);
   });
 

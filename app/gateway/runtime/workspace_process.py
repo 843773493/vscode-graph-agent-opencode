@@ -263,8 +263,8 @@ def start_local_backend_process(
         ]
     )
     log_store = ProcessLogStore(log_dir)
-    log_path = log_store.path_for(f"local-backend-{port}.log")
-    log_file = log_store.open(log_path.name)
+    log_path = log_store.path_for("backend", port)
+    log_file = log_store.open("backend", port)
     process = _spawn_logged_process(
         command,
         log_file=log_file,
@@ -304,8 +304,8 @@ def start_local_node_service_process(
     if not node_executable:
         raise RuntimeError("启动本地辅助服务必须通过 BOXTEAM_NODE_BIN 显式提供 Node")
     log_store = ProcessLogStore(log_dir)
-    log_path = log_store.path_for(f"local-{service}-{port}.log")
-    log_file = log_store.open(log_path.name)
+    log_path = log_store.path_for(service, port)
+    log_file = log_store.open(service, port)
     env = _local_child_environment()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)

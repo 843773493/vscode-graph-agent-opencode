@@ -223,6 +223,7 @@ async function launchDetachedManager() {
     cwd: projectRoot,
     environment: {
       ...process.env,
+      BOXTEAM_PROJECT_ROOT: projectRoot,
       BOXTEAM_DEV_READY_FILE: readyFile,
     },
     logPath,
@@ -482,6 +483,7 @@ async function main() {
   );
   let gatewayProcess = null;
   if (serviceMode === "backend") {
+    process.stdout.write("[dev] backend 日志: stdout-only（当前入口未托管文件）\n");
     processes.push(
       spawnProcess(
         pythonBin,

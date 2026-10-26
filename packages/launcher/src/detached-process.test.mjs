@@ -73,6 +73,7 @@ describe("detached process", () => {
 
         const launcher = Bun.spawn([process.execPath, launcherPath], {
           cwd: caseWorkspacePath,
+          env: { ...process.env, BOXTEAM_PROJECT_ROOT: process.cwd() },
           stdout: "ignore",
           stderr: "pipe",
         });

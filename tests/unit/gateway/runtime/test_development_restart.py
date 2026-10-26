@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -64,10 +65,11 @@ def test_restart_process_uses_validated_command_and_platform_options(
         captured["options"] = options
         return Process()
 
-    log_path = tmp_path / "logs" / "development-restart.log"
+    log_dir = tmp_path / "logs"
+    log_path = log_dir / "launcher/development-restart.log"
 
     with monkeypatch.context() as platform_patch:
-        platform_patch.setattr(development_restart.os, "name", platform_name)
+        platform_patch.setattr(development_restart, "os", SimpleNamespace(name=platform_name, environ=development_restart.os.environ))
         if platform_name == "nt":
             process_group_flag = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200
@@ -84,7 +86,7 @@ def test_restart_process_uses_validated_command_and_platform_options(
             )
         platform_patch.setattr(subprocess, "Popen", fake_popen)
 
-        assert start_development_restart(command, log_path=log_path) == 24680
+        assert start_development_restart(command, log_dir=log_dir) == 24680
 
     assert captured["argv"] == [
         str(runner),

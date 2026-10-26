@@ -54,7 +54,7 @@ app/gateway/
 # 规范
 
 - Gateway 只做路由、目标生命周期和透明转发。
-- Gateway 自有持久化数据统一位于 `${BOXTEAM_HOME:-~/.boxteams}/state/gateway/`。
+- Gateway 自有控制面持久化数据位于 `${BOXTEAM_HOME:-~/.boxteams}/state/gateway/`；产品诊断日志按共享合同归 `${BOXTEAM_HOME:-~/.boxteams}/state/logs/`。
 - `workspaces.json` 必须保存重启后重建目标所需的来源信息；SSH 工作区须保存主机、端口、用户、远端路径和私钥路径等重连参数，临时 `backend_url` 不能作为重连权威来源。
 - 注册表写入必须原子替换并限制为当前用户可读写；私钥文件内容不得复制进注册表。
 - 恢复目标失败时应保留明确的 `connection_error` 供 API 和前端观察，不得伪装为已连接。

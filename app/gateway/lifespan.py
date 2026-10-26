@@ -17,6 +17,7 @@ from app.core.env import (
     load_boxteam_env,
 )
 from app.core.logging_config import configure_application_logging
+from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import (
     get_boxteam_home,
     get_user_gateway_config_path,
@@ -221,14 +222,14 @@ async def lifespan(app: FastAPI):
         app.state.port_forward_manager = SshPortForwardManager(
             registry=registry,
             storage_path=_gateway_root() / "port-forwards.json",
-            log_dir=_gateway_root() / "logs",
+            log_dir=get_runtime_log_root(),
         )
         await app.state.port_forward_manager.reconcile_workspaces()
         await app.state.port_forward_manager.restore()
         app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(
             registry=registry,
             project_root=get_project_root(),
-            log_dir=_gateway_root() / "logs",
+            log_dir=get_runtime_log_root(),
             on_registry_reconciled=(app.state.port_forward_manager.reconcile_workspaces),
             health_request_timeout_seconds=(
                 gateway_config.gateway_process_health_request_timeout_seconds
@@ -330,7 +331,6 @@ async def lifespan(app: FastAPI):
                 _restore_managed_local_runtimes(
                     registry=registry,
                     default_workspace_id=default_workspace_id,
-                    gateway_root=_gateway_root(),
                     gateway_config=gateway_config,
                     only_workspace_ids={active_workspace_target.workspace_id},
                     preserve_existing_managed_runtimes=startup_candidate_ref is not None,
@@ -343,7 +343,6 @@ async def lifespan(app: FastAPI):
             _restore_managed_local_runtimes(
                 registry=registry,
                 default_workspace_id=default_workspace_id,
-                gateway_root=_gateway_root(),
                 gateway_config=gateway_config,
                 exclude_workspace_ids=(
                     {active_workspace_target.workspace_id}

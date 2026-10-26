@@ -150,7 +150,7 @@ export async function main(args) {
   }
   const [
     { acquireLauncherLock },
-    { openServiceLog },
+    { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
   ] = await Promise.all([
     import("./instance-lock.mjs"),
@@ -162,8 +162,16 @@ export async function main(args) {
     runtime,
   });
   let serviceLog = null;
+  let gatewayLog = null;
   try {
-    serviceLog = openServiceLog({ boxteamHome, environment });
+    const logEnvironment = { ...environment, BOXTEAM_PROJECT_ROOT: runtime.applicationRoot };
+    if (resolveServiceLogPath(boxteamHome, logEnvironment) === resolveServiceLogPath(boxteamHome, logEnvironment, "gateway")) {
+      throw new Error("Launcher 显式日志路径不能占用 Gateway 日志文件");
+    }
+    serviceLog = openServiceLog({ boxteamHome, environment: logEnvironment });
+    if (environment.BOXTEAM_SERVICE_LOG_PATH?.trim()) {
+      environment.BOXTEAM_SERVICE_LOG_PATH = serviceLog.path;
+    }
     serviceLog.stdout.write(`日志: ${serviceLog.path}\n`);
     const bootstrap = initializeUserConfiguration({
       runtime,
@@ -175,12 +183,15 @@ export async function main(args) {
     if (bootstrap.output) {
       serviceLog.stdout.write(`配置: ${bootstrap.output}\n`);
     }
+    gatewayLog = openServiceLog({ boxteamHome, environment: logEnvironment, role: "gateway" });
     const exitCode = await superviseGateway({
       runtime,
       environment: bootstrap.environment,
       openBrowser: !effectiveArgs.includes("--no-open"),
       stdout: serviceLog.stdout,
       stderr: serviceLog.stderr,
+      gatewayStdout: gatewayLog.stdout,
+      gatewayStderr: gatewayLog.stderr,
     });
     process.exitCode = exitCode;
   } catch (error) {
@@ -192,7 +203,11 @@ export async function main(args) {
     throw error;
   } finally {
     try {
-      serviceLog?.close();
+      try {
+        gatewayLog?.close();
+      } finally {
+        serviceLog?.close();
+      }
     } finally {
       lock.release();
     }

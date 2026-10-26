@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from app.gateway.diagnostics import _LogCandidate, _scope_log_candidates
+import pytest
+
+from app.core.logging_contract import load_runtime_log_contract
+from app.gateway.diagnostics import (
+    _candidate_gateway_logs,
+    _launcher_log_path,
+    _LogCandidate,
+    _process_log_path,
+    _scope_log_candidates,
+)
 
 
 def _log_candidate(
@@ -44,3 +53,21 @@ def test_empty_workspace_scope_keeps_all_log_sources() -> None:
     scoped = _scope_log_candidates(gateway_candidates, workspace_candidates, None)
 
     assert scoped == [*gateway_candidates, *workspace_candidates]
+
+
+def test_diagnostics_finds_role_logs_and_launcher_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
+    override = tmp_path / "显式路径/launcher.log"
+    monkeypatch.setenv("BOXTEAM_SERVICE_LOG_PATH", str(override))
+    contract = load_runtime_log_contract()
+    root = contract.root_for(tmp_path)
+    paths = [contract.path_for(root, "gateway"), contract.path_for(root, "backend", 12345), contract.path_for(root, "ssh-port-forward", "pf_test")]
+    for log_path in paths:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("original diagnostics\n")
+    assert _process_log_path("workspace_api", 12345) == paths[1]
+    assert _launcher_log_path() == override
+    candidates = _candidate_gateway_logs({paths[1].name})
+    assert {candidate.log_path for candidate in candidates} == {override, paths[0], paths[2]}

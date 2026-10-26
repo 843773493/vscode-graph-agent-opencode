@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+import os
 import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -38,12 +40,11 @@ class _LogCandidate:
     workspace_name: str | None = None
 
 
-def _gateway_log_dir() -> Path:
-    return get_gateway_root() / "logs"
-
-
 def _launcher_log_path() -> Path:
-    return get_gateway_root().parent / "launcher" / "logs" / "services.log"
+    configured = os.environ.get("BOXTEAM_SERVICE_LOG_PATH", "").strip()
+    if configured:
+        return Path(configured).resolve()
+    return load_runtime_log_contract().path_for(get_runtime_log_root(), "launcher")
 
 
 def _launcher_log_candidate() -> _LogCandidate:
@@ -51,7 +52,7 @@ def _launcher_log_candidate() -> _LogCandidate:
         log_id="gateway:launcher",
         source="gateway",
         service="launcher",
-        label="Launcher 汇总日志",
+        label="Launcher 日志",
         log_path=_launcher_log_path(),
     )
 
@@ -66,35 +67,38 @@ def _port_from_url(url: str | None) -> int | None:
 def _process_log_path(service: str, port: int | None) -> Path | None:
     if port is None:
         return None
-    prefix = {
-        "workspace_api": "local-backend",
-        "terminal_manager": "local-terminal",
-        "browser_manager": "local-browser",
+    role = {
+        "workspace_api": "backend",
+        "terminal_manager": "terminal",
+        "browser_manager": "browser",
     }.get(service)
-    if prefix is None:
+    if role is None:
         raise ValueError(f"不支持的诊断服务: {service}")
-    return _gateway_log_dir() / f"{prefix}-{port}.log"
+    return load_runtime_log_contract().path_for(get_runtime_log_root(), role, port)
 
 
 def _candidate_gateway_logs(known_workspace_files: set[str]) -> list[_LogCandidate]:
     candidates = [_launcher_log_candidate()]
-    log_dir = _gateway_log_dir()
+    log_dir = get_runtime_log_root()
     if not log_dir.exists():
         return candidates
 
     def gateway_log_entries() -> Iterator[tuple[float, str, Path]]:
-        for log_path in log_dir.iterdir():
-            if (
-                not log_path.name.endswith(".log")
-                or log_path.name in known_workspace_files
-            ):
+        directories = {parts[0] for parts in load_runtime_log_contract().paths.values()}
+        launcher_path = load_runtime_log_contract().path_for(log_dir, "launcher")
+        for directory in sorted(directories):
+            role_dir = log_dir / directory
+            if role_dir.is_symlink() or not role_dir.is_dir():
                 continue
-            try:
-                metadata = log_path.stat(follow_symlinks=False)
-            except FileNotFoundError:
-                continue
-            if stat.S_ISREG(metadata.st_mode):
-                yield metadata.st_mtime, log_path.name, log_path
+            for log_path in role_dir.iterdir():
+                if log_path == launcher_path or not log_path.name.endswith(".log") or log_path.name in known_workspace_files:
+                    continue
+                try:
+                    metadata = log_path.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISREG(metadata.st_mode):
+                    yield metadata.st_mtime, log_path.name, log_path
 
     newest_log_entries = heapq.nlargest(
         _MAX_GATEWAY_LOG_ENTRIES,

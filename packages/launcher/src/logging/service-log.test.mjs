@@ -15,9 +15,11 @@ import {
   openServiceLog,
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
-  SERVICE_LOG_MAX_BYTES,
   SERVICE_LOG_PATH_ENV,
 } from "./service-log.mjs";
+import { loadRuntimeLogContract, runtimeLogPath, runtimeLogRoot } from "./runtime-contract.mjs";
+
+const { max_bytes: maxLogBytes } = loadRuntimeLogContract().rotation;
 
 const serviceLogFixtureRunRoot = path.join(
   process.cwd(), "out/tests/packages/launcher/src/logging/service-log/workspace", randomUUID(),
@@ -33,11 +35,59 @@ function temporaryRoot() {
 }
 
 describe("service log", () => {
+  test("Python 和 JS 共用全部角色路径样本", () => {
+    const home = temporaryRoot();
+    const samples = JSON.parse(readFileSync(path.resolve("resources/logging/path-samples.json"), "utf8"));
+    for (const sample of samples) {
+      expect(runtimeLogPath(runtimeLogRoot(home), sample.role, sample.instance)).toBe(
+        path.resolve(home, sample.path),
+      );
+    }
+    for (const instance of ["", "../outside", "C:\\outside", "/etc", "a\\b", ".", "中文"]) {
+      expect(() => runtimeLogPath(home, "backend", instance)).toThrow("进程日志实例");
+    }
+  });
+
+  test("发行资源按显式 application root 定位，不依赖 Launcher 安装目录", () => {
+    const applicationRoot = temporaryRoot();
+    const resources = path.join(applicationRoot, "resources/logging");
+    mkdirSync(resources, { recursive: true });
+    const contract = readFileSync(path.resolve("resources/logging/runtime-contract.json"));
+    writeFileSync(path.join(resources, "runtime-contract.json"), contract);
+    const home = temporaryRoot();
+    expect(resolveServiceLogPath(home, { BOXTEAM_PROJECT_ROOT: applicationRoot })).toBe(
+      path.join(home, "state/logs/launcher/services.log"),
+    );
+    expect(() => resolveServiceLogPath(home, { BOXTEAM_PROJECT_ROOT: path.join(applicationRoot, "missing") })).toThrow();
+  });
+
+  test("detached 的 Gateway 输出只写 Gateway 文件，覆盖只作用于 Launcher", () => {
+    const home = temporaryRoot();
+    const outerPath = path.join(home, "custom-launcher.log");
+    const environment = { [SERVICE_LOG_PATH_ENV]: outerPath, [SERVICE_LOG_CAPTURED_ENV]: "1" };
+    const captured = [];
+    const primary = { write: (value) => captured.push(value) };
+    const launcher = openServiceLog({ boxteamHome: home, environment, stdout: primary, stderr: primary });
+    const gateway = openServiceLog({ boxteamHome: home, environment, role: "gateway", stdout: primary, stderr: primary });
+    try {
+      launcher.stdout.write("launcher only\n");
+      gateway.stdout.write("gateway 中文\n");
+      gateway.stderr.write("gateway error\n");
+      expect(launcher.path).toBe(outerPath);
+      expect(gateway.path).toBe(path.join(home, "state/logs/gateway/gateway.log"));
+      expect(captured).toEqual(["launcher only\n"]);
+      expect(readFileSync(gateway.path, "utf8")).toBe("gateway 中文\ngateway error\n");
+    } finally {
+      gateway.close();
+      launcher.close();
+    }
+  });
+
   test("默认写入 BOXTEAM_HOME 的 Launcher 日志目录", () => {
     const boxteamHome = temporaryRoot();
 
     expect(resolveServiceLogPath(boxteamHome, {})).toBe(
-      path.join(boxteamHome, "state", "launcher", "logs", "services.log"),
+      path.join(boxteamHome, "state", "logs", "launcher", "services.log"),
     );
   });
 
@@ -93,7 +143,7 @@ describe("service log", () => {
     const logPath = resolveServiceLogPath(boxteamHome, {});
     mkdirSync(path.dirname(logPath), { recursive: true });
     writeFileSync(logPath, "");
-    truncateSync(logPath, SERVICE_LOG_MAX_BYTES);
+    truncateSync(logPath, maxLogBytes);
 
     const serviceLog = openServiceLog({
       boxteamHome,
@@ -105,6 +155,6 @@ describe("service log", () => {
     serviceLog.close();
 
     expect(readFileSync(logPath, "utf8")).toBe("new\n");
-    expect(statSync(`${logPath}.1`).size).toBe(SERVICE_LOG_MAX_BYTES);
+    expect(statSync(`${logPath}.1`).size).toBe(maxLogBytes);
   });
 });

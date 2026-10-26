@@ -13,7 +13,7 @@ app/core/
 │   ├── user_identity.py / workspace_identity.py / mounted_workspaces.py
 │   ├── path_utils.py / path_segments.py
 │   ├── user_storage_migration.py
-│   └── logging_config.py
+│   └── logging_config.py / logging_contract.py
 ├── 请求、模型与执行上下文
 │   ├── trace_middleware.py / job_context.py
 │   ├── model_request_context.py / model_delta_context.py

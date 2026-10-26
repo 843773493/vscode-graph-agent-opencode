@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "root": ["state", "logs"],
+  "paths": {
+    "launcher": ["launcher", "services.log"],
+    "gateway": ["gateway", "gateway.log"],
+    "development-restart": ["launcher", "development-restart.log"],
+    "backend": ["backend", "local-backend-{instance}.log"],
+    "terminal": ["terminal", "local-terminal-{instance}.log"],
+    "browser": ["browser", "local-browser-{instance}.log"],
+    "ssh-tunnel": ["ssh", "ssh-tunnel-{instance}.log"],
+    "ssh-port-forward": ["ssh", "ssh-port-forward-{instance}.log"]
+  },
+  "rotation": {"max_bytes": 67108864, "archives": 3},
+  "record": {
+    "required_fields": ["timestamp", "level", "service", "pid", "runtime_instance_id", "message"],
+    "context_fields": ["workspace_id", "session_id", "thread_id", "request_id"],
+    "levels": {"debug": 10, "info": 20, "warning": 30, "error": 40, "critical": 50},
+    "timestamp": "UTC ISO-8601 with milliseconds and Z suffix",
+    "raw_output": "Third-party stdout/stderr, PTY output and page console preserve original bytes."
+  }
+}

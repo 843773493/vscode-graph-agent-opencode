@@ -2,33 +2,54 @@ from __future__ import annotations
 
 import errno
 import io
+import json
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from app.core import file_permissions
+from app.core.logging_contract import load_runtime_log_contract
 from app.gateway.runtime.process_lifecycle import _spawn_logged_process
-from app.gateway.runtime.process_logs import (
-    PROCESS_LOG_MAX_BYTES,
-    ProcessLogStore,
-)
+from app.gateway.runtime.process_logs import ProcessLogStore
+
+
+@pytest.fixture
+def log_path_samples() -> list[dict[str, str | int | None]]:
+    return json.loads((Path.cwd() / "resources/logging/path-samples.json").read_text())
+
+
+def test_shared_log_contract_paths(
+    tmp_path: Path, log_path_samples: list[dict[str, str | int | None]],
+) -> None:
+    contract = load_runtime_log_contract()
+    store = ProcessLogStore(contract.root_for(tmp_path))
+    for sample in log_path_samples:
+        assert store.path_for(str(sample["role"]), sample["instance"]) == tmp_path / str(sample["path"])
+
+
+@pytest.mark.parametrize("instance", ["", "../outside", r"C:\outside", "/etc", r"a\b", ".", "中文"])
+def test_log_instance_cannot_escape_role(tmp_path: Path, instance: str) -> None:
+    with pytest.raises(ValueError, match="进程日志实例"):
+        ProcessLogStore(tmp_path).open("backend", instance)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_process_log_store_appends_and_restricts_permissions(tmp_path: Path) -> None:
     log_root = tmp_path / "gateway" / "logs"
     store = ProcessLogStore(log_root)
 
-    with store.open("local-backend-12345.log") as stream:
+    with store.open("backend", 12345) as stream:
         stream.write("first\n")
-    with store.open("local-backend-12345.log") as stream:
+    with store.open("backend", 12345) as stream:
         stream.write("second\n")
 
-    log_path = log_root / "local-backend-12345.log"
+    log_path = log_root / "backend/local-backend-12345.log"
     assert log_path.read_text(encoding="utf-8") == "first\nsecond\n"
     if os.name == "posix":
-        assert log_root.stat().st_mode & 0o777 == 0o700
+        assert log_path.parent.stat().st_mode & 0o777 == 0o700
         assert log_path.stat().st_mode & 0o777 == 0o600
 
 
@@ -50,30 +71,32 @@ def test_process_log_store_uses_private_windows_acl(
     )
     monkeypatch.setattr(file_permissions.subprocess, "run", run)
 
-    with ProcessLogStore(tmp_path / "logs").open("gateway.log") as stream:
+    with ProcessLogStore(tmp_path / "logs").open("gateway") as stream:
         stream.write("private log\n")
 
     assert [arguments[1] for arguments in calls] == [
-        str(tmp_path / "logs"),
-        str(tmp_path / "logs"),
-        str(tmp_path / "logs" / "gateway.log"),
-        str(tmp_path / "logs" / "gateway.log"),
+        str(tmp_path / "logs/gateway"),
+        str(tmp_path / "logs/gateway"),
+        str(tmp_path / "logs/gateway/gateway.log"),
+        str(tmp_path / "logs/gateway/gateway.log"),
     ]
 
 
 def test_process_log_store_rotates_an_oversized_previous_log(tmp_path: Path) -> None:
     log_root = tmp_path / "logs"
-    log_root.mkdir()
-    log_path = log_root / "local-backend-12345.log"
-    log_path.write_bytes(b"x" * PROCESS_LOG_MAX_BYTES)
+    log_path = log_root / "backend/local-backend-12345.log"
+    log_path.parent.mkdir(parents=True)
+    max_bytes = load_runtime_log_contract().max_bytes
+    with log_path.open("wb") as stream:
+        stream.truncate(max_bytes)
 
-    with ProcessLogStore(log_root).open(log_path.name) as stream:
+    with ProcessLogStore(log_root).open("backend", 12345) as stream:
         stream.write("new\n")
 
     assert log_path.read_text(encoding="utf-8") == "new\n"
     assert (
-        log_root / "local-backend-12345.log.1"
-    ).stat().st_size == PROCESS_LOG_MAX_BYTES
+        log_root / "backend/local-backend-12345.log.1"
+    ).stat().st_size == max_bytes
 
 
 @pytest.mark.parametrize(
@@ -104,13 +127,13 @@ def test_process_log_store_rejects_invalid_file_name(
 @pytest.mark.skipif(os.name != "posix", reason="Windows 符号链接权限模型不同")
 def test_process_log_store_rejects_symbolic_link(tmp_path: Path) -> None:
     log_root = tmp_path / "logs"
-    log_root.mkdir()
+    (log_root / "backend").mkdir(parents=True)
     outside = tmp_path / "outside.log"
     outside.write_text("outside\n", encoding="utf-8")
-    (log_root / "local-backend-12345.log").symlink_to(outside)
+    (log_root / "backend/local-backend-12345.log").symlink_to(outside)
 
     with pytest.raises(RuntimeError, match="符号链接") as failure:
-        ProcessLogStore(log_root).open("local-backend-12345.log")
+        ProcessLogStore(log_root).open("backend", 12345)
     assert str(log_root) not in str(failure.value)
     assert outside.read_text() == "outside\n"
 
@@ -135,7 +158,7 @@ def test_process_log_store_closes_descriptor_when_permission_update_fails(
     monkeypatch.setattr(os, "fchmod", fail_fchmod)
 
     with pytest.raises(PermissionError, match="stage=file_permissions") as failure:
-        ProcessLogStore(tmp_path / "logs").open("gateway.log")
+        ProcessLogStore(tmp_path / "logs").open("gateway")
     assert failure.value.errno == errno.EACCES
     assert str(tmp_path) not in str(failure.value)
     assert "测试权限更新失败" in str(failure.value.__cause__)
@@ -151,19 +174,21 @@ def test_log_filesystem_failure_keeps_location_in_cause_and_diagnostics(
     caplog: pytest.LogCaptureFixture, stage: str,
 ) -> None:
     log_root = tmp_path / "private-log-root"
+    role_dir = log_root / "gateway"
+    contract = load_runtime_log_contract()
     if stage == "create_directory":
         log_root.write_text("obstruction")
     else:
-        log_root.mkdir()
+        role_dir.mkdir(parents=True)
         if stage == "open":
-            (log_root / "gateway.log").mkdir()
+            (role_dir / "gateway.log").mkdir()
         else:
-            monkeypatch.setattr("app.gateway.runtime.process_logs.PROCESS_LOG_MAX_BYTES", 1)
-            (log_root / "gateway.log").write_text("old")
-            (log_root / "gateway.log.2").write_text("previous")
-            (log_root / "gateway.log.3").mkdir()
+            contract = replace(contract, max_bytes=1)
+            (role_dir / "gateway.log").write_text("old")
+            (role_dir / "gateway.log.2").write_text("previous")
+            (role_dir / "gateway.log.3").mkdir()
     with pytest.raises(OSError, match=f"stage={stage}") as failure:
-        ProcessLogStore(log_root).open("gateway.log")
+        ProcessLogStore(log_root, contract=contract).open("gateway")
     original = failure.value.__cause__
     assert isinstance(original, OSError)
     assert type(failure.value) is type(original)
@@ -173,7 +198,7 @@ def test_log_filesystem_failure_keeps_location_in_cause_and_diagnostics(
     assert str(log_root) in str(original)
     assert str(log_root) in caplog.text
     if stage == "rotate":
-        assert (log_root / "gateway.log").read_text() == "old"
+        assert (role_dir / "gateway.log").read_text() == "old"
 
 
 @pytest.mark.parametrize("marker", ["/private/runtime/node", r"C:\private\node.exe", r"\\server\private\node.exe"])

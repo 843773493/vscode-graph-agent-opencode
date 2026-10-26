@@ -2,42 +2,32 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
-from pathlib import Path, PureWindowsPath
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TextIO
 
 from app.core.file_permissions import restrict_private_path_access
+from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
 
 logger = logging.getLogger(__name__)
-
-PROCESS_LOG_MAX_BYTES = 64 * 1024 * 1024
-PROCESS_LOG_ROTATIONS = 3
 
 
 @dataclass(frozen=True, slots=True)
 class ProcessLogStore:
     root: Path
+    contract: RuntimeLogContract = field(default_factory=load_runtime_log_contract)
 
-    def path_for(self, file_name: str) -> Path:
-        if (
-            not file_name
-            or Path(file_name).name != file_name
-            or PureWindowsPath(file_name).name != file_name
-        ):
-            logger.error("进程日志文件名非法: %r", file_name)
-            raise ValueError("进程日志文件名非法")
-        if not file_name.endswith(".log"):
-            logger.error("进程日志后缀非法: %r", file_name)
-            raise ValueError("进程日志必须使用 .log 后缀")
-        return self.root / file_name
+    def path_for(self, role: str, instance: str | int | None = None) -> Path:
+        return self.contract.path_for(self.root, role, instance)
 
-    def open(self, file_name: str) -> TextIO:
-        log_path = self.path_for(file_name)
+    def open(self, role: str, instance: str | int | None = None) -> TextIO:
+        log_path = self.path_for(role, instance)
+        file_name = log_path.name
         stage = "create_directory"
         try:
-            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             stage = "directory_permissions"
-            restrict_private_path_access(self.root, is_directory=True)
+            restrict_private_path_access(log_path.parent, is_directory=True)
             if log_path.is_symlink():
                 logger.error("进程日志文件不允许是符号链接: %s", log_path)
                 raise RuntimeError(f"进程日志文件不允许是符号链接: log={file_name}")
@@ -62,13 +52,12 @@ class ProcessLogStore:
                 detail += f", winerror={error.winerror}"
             raise type(error)(error.errno, detail) from error
 
-    @staticmethod
-    def _rotate_if_needed(log_path: Path) -> None:
+    def _rotate_if_needed(self, log_path: Path) -> None:
         if not log_path.exists():
             return
-        if log_path.stat().st_size < PROCESS_LOG_MAX_BYTES:
+        if log_path.stat().st_size < self.contract.max_bytes:
             return
-        for index in range(PROCESS_LOG_ROTATIONS - 1, 0, -1):
+        for index in range(self.contract.archives - 1, 0, -1):
             source = log_path.with_name(f"{log_path.name}.{index}")
             target = log_path.with_name(f"{log_path.name}.{index + 1}")
             if source.is_symlink() or target.is_symlink():

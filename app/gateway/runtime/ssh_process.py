@@ -55,8 +55,8 @@ def start_ssh_tunnel_process(
         extra_arguments=forward_arguments,
     )
     log_store = ProcessLogStore(log_dir)
-    log_path = log_store.path_for(f"ssh-tunnel-{forwards[0].local_port}.log")
-    log_file = log_store.open(log_path.name)
+    log_path = log_store.path_for("ssh-tunnel", forwards[0].local_port)
+    log_file = log_store.open("ssh-tunnel", forwards[0].local_port)
     process = _spawn_logged_process(
         command,
         log_file=log_file,
@@ -159,8 +159,8 @@ def start_workspace_ssh_port_forward_process(
         extra_arguments=forward_arguments,
     )
     log_store = ProcessLogStore(log_dir)
-    log_path = log_store.path_for(f"ssh-port-forward-{forward_id}.log")
-    log_file = log_store.open(log_path.name)
+    log_path = log_store.path_for("ssh-port-forward", forward_id)
+    log_file = log_store.open("ssh-port-forward", forward_id)
     process = _spawn_logged_process(command, log_file=log_file)
     logger.info(
         "启动工作区 SSH 端口转发: pid=%s destination=%s local_port=%s "

@@ -9,7 +9,7 @@
 
 - [ ] 2.1 统一 Python 应用日志字段、等级与格式，将 Backend、Gateway、Uvicorn 接入唯一 handler 路径，消除重复传播和启动时按工作区比较 logger 的逻辑。
 - [ ] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
-- [ ] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
+- [x] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
 - [ ] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
 - [ ] 2.5 在现有 runtime/config 诊断中展示进程身份、owner、绝对日志路径、来源、applied revision 和实际日志设置；stdout-only 入口明确标记。
 
@@ -42,4 +42,12 @@
 - `runtime/local_workspace.py` 与 registry runtime显式接管、detach仍存活的Backend及辅助进程；新日志owner不得为了迁移路径重启这些进程或轮转其活动文件。
 - 复用 Gateway config `on_runtime_config`／rollback、apply journal及Launcher supervisor控制socket。该socket当前主要承载handoff；日志应用须扩展原通道的消息合同，并补进程实例确认，不能假定已有热更新能力。
 
-优先完成本变更的布局与落盘owner纵向切片，再做配置跨域迁移和进程热应用；它排在当前提示词文件输入切片之后、其余来源扩展之前。团队／协作延期项继续保持TODO。其余21项仍未完成。
+优先完成本变更的布局与落盘owner纵向切片，再做配置跨域迁移和进程热应用；它排在当前提示词文件输入切片之后、其余来源扩展之前。团队／协作延期项继续保持TODO。
+
+### 2.3 日志布局切片（2026-10-26）
+
+- 默认根、角色文件名与64MiB／3份归档只有 `resources/logging/runtime-contract.json` 一处声明，Python／JS读取同一发行资源及路径样本。现有两平台打包共同复制整个 `resources/`；Launcher使用已选择runtime的显式application root，缺资源明确失败。
+- 迁齐初次启动、存量恢复、本机手动注册、联邦管理、SSH隧道／转发与开发重启。开发单Backend入口明确stdout-only；其余业务进程继续只输出流。Launcher与Gateway分别落盘，detached不再次tee Gateway到Launcher捕获流，显式覆盖仍只作用于Launcher。
+- 证据根：`out/tests/temp/unify-product-runtime-logging/artifacts/`。最终定向Python `paths-python-final-012` 67通过，JS `paths-js-final-015` 60通过；真实启动日志查询 `paths-entry-final-014` 1通过；最终真实Launcher `paths-launcher-final-028` 2通过，核同一Gateway文件、无交接轮转、Backend单次启动、两文件分流及冲突路径在轮转前拒绝。`paths-lifecycle-010` 中106项生命周期单测和1项真实双挂载执行通过；当时发现的旧bootstrap路径导致日志查询失败，已迁齐并在014验证，不把该首次运行写为全绿。
+- `paths-routing-017` 29通过、20项fixture准备失败，均引用已删除的 `registry.runtime.resolve_backend_workspace_id`。完整HEAD归档的 `paths-restore-baseline-022` 已复现同一fixture失败，本切片不扩展修复。`static-comparison-019.json`及`static-comparison-031.json`核Ruff46条基线／46条当前、两组Pyright分别7／7及12／12，无新增；10个JS文件语法检查及18个Python文件AST解析通过，不能称全仓静态全绿。
+- 1.2仍缺实际日志记录格式及跨语言输出样本；2.4仍需完成运行实例的日志owner记录、跨Gateway存活接管的实际去向与冲突核验；2.5的进程诊断及第3节配置热应用尚未实现。当前为2／22，未声称完成日志功能、Windows原生或完整4.4／4.5验收。

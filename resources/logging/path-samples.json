@@ -1,0 +1,10 @@
+[
+  {"role": "launcher", "instance": null, "path": "state/logs/launcher/services.log"},
+  {"role": "gateway", "instance": null, "path": "state/logs/gateway/gateway.log"},
+  {"role": "development-restart", "instance": null, "path": "state/logs/launcher/development-restart.log"},
+  {"role": "backend", "instance": 8010, "path": "state/logs/backend/local-backend-8010.log"},
+  {"role": "terminal", "instance": 8012, "path": "state/logs/terminal/local-terminal-8012.log"},
+  {"role": "browser", "instance": 8015, "path": "state/logs/browser/local-browser-8015.log"},
+  {"role": "ssh-tunnel", "instance": 40123, "path": "state/logs/ssh/ssh-tunnel-40123.log"},
+  {"role": "ssh-port-forward", "instance": "pf_a-b_c", "path": "state/logs/ssh/ssh-port-forward-pf_a-b_c.log"}
+]

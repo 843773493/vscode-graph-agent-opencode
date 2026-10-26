@@ -393,6 +393,8 @@ export async function superviseGateway({
   fetchImpl = fetch,
   stdout = process.stdout,
   stderr = process.stderr,
+  gatewayStdout = process.stdout,
+  gatewayStderr = process.stderr,
   processObject = process,
 }) {
   const endpoint = gatewayEndpoint(runtime.distribution, environment);
@@ -433,7 +435,7 @@ export async function superviseGateway({
       port: childPort,
       spawnImpl,
     });
-    const removeOutputForwarding = forwardGatewayOutput(child, stdout, stderr);
+    const removeOutputForwarding = forwardGatewayOutput(child, gatewayStdout, gatewayStderr);
     const removeSignalHandlers = installSignalHandlers
       ? installSignalForwarding(child, processObject, process.platform, {
           stderr,

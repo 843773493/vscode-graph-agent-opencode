@@ -18,6 +18,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
+from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -36,7 +37,6 @@ from app.gateway.registry import (
 from app.gateway.remote_gateway import register_remote_gateway
 from app.gateway.routes._shared import (
     _directory_listing,
-    _gateway_root,
     get_registry,
     get_workspace_runtime_controller,
     resolve_management_directory,
@@ -193,7 +193,7 @@ async def add_local_workspace(
             await create_direct_managed_workspace(
                 registry=registry,
                 project_root=get_project_root(),
-                log_dir=_gateway_root() / "logs",
+                log_dir=get_runtime_log_root(),
                 root_path=str(workspace_root),
                 name=payload.name,
                 create_directory=False,
@@ -279,7 +279,7 @@ async def add_remote_gateway(
         try:
             await register_remote_gateway(
                 registry=registry,
-                log_dir=_gateway_root() / "logs",
+                log_dir=get_runtime_log_root(),
                 name=payload.name,
                 host=connection.host,
                 port=connection.port,

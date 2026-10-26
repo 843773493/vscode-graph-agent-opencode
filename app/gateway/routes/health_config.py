@@ -21,6 +21,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -35,7 +36,6 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (
-    _gateway_root,
     get_gateway_config_reload_service,
     get_registry,
 )
@@ -159,7 +159,7 @@ async def restart_development_runtime(
             }
     helper_process_id = start_development_restart(
         command,
-        log_path=_gateway_root() / "logs" / "development-restart.log",
+        log_dir=get_runtime_log_root(),
         environment=restart_environment,
     )
     return APIResponse(

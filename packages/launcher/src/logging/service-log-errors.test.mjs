@@ -204,7 +204,10 @@ function runServiceLogIo(scenario, platform = process.platform) {
     platform,
   ])}\n`, { flag: "wx" });
   const args = [observerPath, inputPath];
-  const result = spawnSync("node", args, { cwd: fixtureRoot, timeout: 5000 });
+  const result = spawnSync("node", args, {
+    cwd: fixtureRoot, timeout: 5000,
+    env: { ...process.env, BOXTEAM_PROJECT_ROOT: process.cwd() },
+  });
   const stdout = result.stdout ?? Buffer.alloc(0);
   const stderr = result.stderr ?? Buffer.alloc(0);
   writeFileSync(path.join(artifactsRoot, "stdout.raw"), stdout, { flag: "wx" });

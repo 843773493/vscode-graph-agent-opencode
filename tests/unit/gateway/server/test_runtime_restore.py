@@ -137,7 +137,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
     assert registry.has_runtime(defaults[0].workspace_id)
     assert all(not registry.has_runtime(target.workspace_id) for target in running)
     await bootstrap._restore_managed_local_runtimes(
-        registry=registry, default_workspace_id=defaults[0].workspace_id, gateway_root=startup_case.gateway_root,
+        registry=registry, default_workspace_id=defaults[0].workspace_id,
     )
     assert len(startup_case.started) == 2
     restored_owner = registry.backend_owner(running[0].workspace_id)
@@ -167,7 +167,6 @@ async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_ta
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", start)
     await bootstrap._restore_managed_local_runtimes(
         registry=registry, default_workspace_id=defaults[0].workspace_id,
-        gateway_root=startup_case.gateway_root,
     )
     assert all(registry.resolve(target.workspace_id).desired_running for target in unavailable)
     assert all("Backend start rejected" in registry.resolve(target.workspace_id).connection_error for target in unavailable)
@@ -274,7 +273,7 @@ async def test_restore_missing_owner_rejects_without_guessing_url_or_fallback(st
     before = registry._storage_path.read_bytes()
     with pytest.raises(RuntimeError, match="完整成员集合"):
         await bootstrap._restore_managed_local_runtimes(
-            registry=registry, default_workspace_id=defaults[0].workspace_id, gateway_root=startup_case.gateway_root,
+            registry=registry, default_workspace_id=defaults[0].workspace_id,
         )
     assert registry._storage_path.read_bytes() == before
     assert not startup_case.started
@@ -387,7 +386,6 @@ async def test_restore_commit_observer_error_keeps_published_unique_owner(
         with pytest.raises(RuntimeError) as raised:
             await bootstrap._restore_managed_local_runtimes(
                 registry=registry, default_workspace_id=defaults[0].workspace_id,
-                gateway_root=startup_case.gateway_root,
             )
         assert raised.value is failure
         assert graph.owner.contract is not old_contract
@@ -419,7 +417,6 @@ async def test_default_publication_observer_error_defers_cleanup_to_startup_owne
     try:
         with pytest.raises(RuntimeError) as raised:
             await bootstrap._complete_registry_startup(
-                gateway_root=startup_case.gateway_root,
                 resolved_gateway_config=GatewayConfig(), registry=registry,
                 persisted_targets_by_id={target.workspace_id: target},
                 persisted_default=target, persisted_active_workspace_id=target.workspace_id,

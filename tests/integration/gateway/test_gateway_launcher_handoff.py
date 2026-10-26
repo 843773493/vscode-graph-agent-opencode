@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 import commentjson
 
+from app.core.logging_contract import load_runtime_log_contract
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.ports import integration_port_block_for_file
 
@@ -93,6 +94,34 @@ def _wait_for_json(
         f"Gateway 响应在 {timeout_seconds} 秒内未满足条件: "
         f"url={url}, last_payload={last_payload}, last_error={last_error}"
     )
+
+
+def test_launcher_rejects_shared_log_sink_before_rotation(tmp_path: Path) -> None:
+    project_root = Path.cwd()
+    contract = load_runtime_log_contract(project_root)
+    boxteam_home = tmp_path / "home"
+    log_path = contract.path_for(contract.root_for(boxteam_home), "gateway")
+    log_path.parent.mkdir(parents=True)
+    with log_path.open("wb") as stream:
+        stream.truncate(contract.max_bytes)
+    previous_identity = log_path.stat().st_ino
+    result = subprocess.run(
+        ["node", "packages/launcher/bin/boxteam.mjs", "start", "--no-open"],
+        cwd=project_root,
+        env={
+            **os.environ,
+            "BOXTEAM_HOME": str(boxteam_home),
+            "BOXTEAM_RUNTIME_MANIFEST": str(project_root / "out/development-runtime/runtime-manifest.json"),
+            "BOXTEAM_SERVICE_LOG_PATH": str(log_path),
+            "BOXTEAM_SERVICE_LOG_CAPTURED": "0",
+        },
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode != 0
+    assert "Launcher 显式日志路径不能占用 Gateway 日志文件" in result.stderr
+    assert log_path.stat().st_ino == previous_identity
+    assert log_path.stat().st_size == contract.max_bytes
+    assert not log_path.with_name(log_path.name + ".1").exists()
 
 
 def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
@@ -509,6 +538,13 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         gateway_event_cursor = gateway_event_data["cursor"]
         assert isinstance(gateway_event_cursor, int)
 
+        log_contract = load_runtime_log_contract(project_root)
+        log_root = log_contract.root_for(boxteam_home)
+        gateway_log = log_contract.path_for(log_root, "gateway")
+        launcher_log = log_contract.path_for(log_root, "launcher")
+        gateway_log_identity = gateway_log.stat().st_ino
+        assert launcher_log.is_file()
+
         restart_request = Request(
             f"http://127.0.0.1:{port}/api/gateway/runtime/restart-development",
             method="POST",
@@ -626,6 +662,13 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         assert f"Started server process [{new_process_id}]" in log_text
         assert f"Finished server process [{initial_process_id}]" in log_text
         assert log_text.count("启动工作区后端:") == 1
+        persisted_gateway_log = gateway_log.read_text(encoding="utf-8")
+        assert persisted_gateway_log.count(f"Started server process [{initial_process_id}]") == 1
+        assert persisted_gateway_log.count(f"Started server process [{new_process_id}]") == 1
+        assert persisted_gateway_log.count("启动工作区后端:") == 1
+        assert "启动工作区后端:" not in launcher_log.read_text(encoding="utf-8")
+        assert gateway_log.stat().st_ino == gateway_log_identity
+        assert not gateway_log.with_name(gateway_log.name + ".1").exists()
     finally:
         if process is not None and process.poll() is None:
             process.send_signal(signal.SIGTERM)
