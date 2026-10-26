@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from typing import Literal
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import (
@@ -23,6 +24,11 @@ from app.domain.itemized.epoch.root_compilation import (
 from app.domain.itemized.epoch.seal_binding import (
     AppliedSourceRevision,
     ContextSealPreparation,
+)
+from app.domain.itemized.epoch.source_protocol import (
+    SourceModelBlock,
+    parse_source_blocks,
+    render_source_blocks,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import (
@@ -75,6 +81,8 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
             content_hash=contribution_content_hash("notice", delta.content),
             content_length=payload_content_length("structured_content", delta.content),
             source_binding=SourceBinding(source_ref=delta.source_id),
+            root_placement=next(source.descriptor.root_placement for source in batch.sources
+                                if source.descriptor.source_id == delta.source_id),
         )
         for delta in batch.deltas
     )
@@ -212,6 +220,7 @@ def compile_prefix_context(
                     revision=source.source_revision, content=content,
                     source_ordinal=contribution.source_ordinal, root_placement="root_eligible",
                     included_reason="initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild",
+                    source_tracking_at_seal="untracked",
                 ), ("request_only", entry.ref.ref_id, plan.thread_id))
         for source in batch.sources:
             if source.descriptor.root_placement != "root_eligible" or not source.content:
@@ -230,6 +239,7 @@ def compile_prefix_context(
                     "toolset_policy" if source.descriptor.policy_key is not None
                     else "initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild"
                 ),
+                source_tracking_at_seal="tracked" if source.tracked else "untracked",
             ), ("request_only", contribution.contribution_id, plan.thread_id))
         selected_identities.extend(identity for _, identity in candidates.values())
         root = compile_root_item(state, [candidate for candidate, _ in candidates.values()])
@@ -240,6 +250,7 @@ def compile_prefix_context(
                     "source_item", f"root:{root.epoch.token}", "compiled-root",
                     root.frame_hash(), "tracked",
                 ),
+                source_protocol=root.source_protocol,
             ))
     elif previous is not None:
         for entry in previous.selection:
@@ -270,26 +281,32 @@ def compile_prefix_context(
     frames.extend(canonical_frames)
     selected_identities.extend(("canonical_item", item_id, plan.thread_id) for item_id in canonical_ids)
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
-    # TODO(CIL 9.6): 用统一来源块显式表达完整替换及跨来源替代范围，迁齐历史投影与重放。
-    tail_values = (
+    # TODO(CIL 9.6/9.8)：补齐跨来源显式替代的封存引用及同版正文复用时的切换表达。
+    tail_values: list[tuple[str, ContextSourceSnapshot, str, Literal["activate", "update", "replace", "restore"], str | None]] = (
         [
-            (full_source_id(source), source, source.content)
+            (full_source_id(source), source, source.content,
+             "activate" if source.applied_revision is None else "restore", None)
             for source in batch.sources
             if source.descriptor.root_placement == "tail_only" or not source.content
         ]
         if rebuilding else [
             (f"source-update:{delta.source_id}:{delta.revision}:{delta.kind}",
-             source_by_id[delta.source_id], delta.content)
+             source_by_id[delta.source_id], delta.content,
+             "update" if delta.kind == "delta" else "restore" if delta.kind == "rebuild"
+             else "replace" if delta.previous_revision is not None else "activate",
+             delta.previous_revision)
             for delta in batch.deltas
         ]
     )
     current_tail = {(source.descriptor.source_id, source.revision): content
-                    for _, source, content in tail_values} if rebuilding else {}
+                    for _, source, content, _, _ in tail_values} if rebuilding else {}
     ordinal = len(state.frames) + len(frames)
     if rebuilding and retained_source_assembly is not None:
+        root_sources = {source.source_identity for source in (() if root is None else root.sources)}
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_source_assembly.seal_binding.prefix.state.frames:
-            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
+            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *root_sources}:
+                # 新 root 已包含该来源完整有效状态，不再携带它的旧 activation/diff。
                 continue
             ref_identity = ("request_only", frame.item_ref.ref_id, plan.thread_id)
             if ((frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs
@@ -300,7 +317,8 @@ def compile_prefix_context(
             source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
             identity = (frame.item_ref.source_identity, frame.item_ref.source_revision)
             if source is not None and source.contribution_kind == "prompt" and identity in current_tail:
-                if frame.content != current_tail[identity]:
+                retained_body = parse_source_blocks(frame.content)[0].body if frame.source_protocol == 1 else frame.content
+                if retained_body != current_tail[identity]:
                     raise RuntimeError("source-identity-conflict: 同一 tail source revision 的完整正文不一致")
                 # fork 本地化后的旧 ref 与当前完整来源只能贡献一次，异 revision 历史仍携带。
                 continue
@@ -308,17 +326,27 @@ def compile_prefix_context(
             selected_identities.append(ref_identity)
             frames.append(replace(
                 frame, ordinal=ordinal, provider_profile=provider_profile,
+                content=render_source_blocks(tuple(replace(block, source_tracking_at_seal="untracked")
+                    for block in parse_source_blocks(frame.content))) if frame.source_protocol == 1 else frame.content,
                 item_ref=replace(frame.item_ref, source_tracking_at_seal="untracked"),
             ))
-    for ref_id, source, content in tail_values:
+    for ref_id, source, content, operation, base_revision in tail_values:
         ordinal += 1
         selected_identities.append(("request_only", ref_id, plan.thread_id))
         frames.append(ProviderProfileItemFrame(
-            ordinal, provider_profile, "user", "text", content,
+            ordinal, provider_profile, "user", "text", render_source_blocks((SourceModelBlock(
+                source_identity=source.descriptor.source_id, name=source.descriptor.name,
+                source_kind=source.descriptor.source_kind, operation=operation,
+                revision=source.revision, base_revision=base_revision,
+                representation="unified_diff" if operation == "update" and content != source.content else "full",
+                source_tracking_at_seal="tracked" if source.tracked else "untracked",
+                root_placement=source.descriptor.root_placement, body=content,
+            ),)),
             AppendedItemRef(
                 "source_item", ref_id, source.descriptor.source_id, source.revision,
                 "tracked" if source.tracked else "untracked",
             ),
+            source_protocol=1,
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
     inherited = set(selected_identities)
@@ -330,16 +358,26 @@ def compile_prefix_context(
         if ref.availability != "available":
             continue
         contribution = resolve_contribution_for_ref(ref, plan.contributions)
-        if contribution is None or contribution.source_binding is None:
+        if (contribution is None or contribution.source_binding is None
+                or contribution.source_binding.source_ref is None or contribution.source_binding.overlay_id is None):
             raise ValueError("source-mismatch: active overlay 缺少唯一 source binding")
         ordinal += 1
         frames.append(ProviderProfileItemFrame(
-            ordinal, provider_profile, "user", "structured_content",
-            overlay_bodies[ref.ref_id],
+            ordinal, provider_profile, "user", "text",
+            render_source_blocks((SourceModelBlock(
+                source_identity=contribution.source_binding.source_ref,
+                name=contribution.source_binding.overlay_id,
+                source_kind=contribution.source_kind,
+                operation="activate" if ref.base_delta_role == "base" else "update",
+                revision=contribution.source_revision, base_revision=ref.overlay_from_revision,
+                representation="full", source_tracking_at_seal="tracked",
+                root_placement=contribution.root_placement, body=overlay_bodies[ref.ref_id],
+            ),)),
             AppendedItemRef(
                 "source_item", ref.ref_id, contribution.source_binding.source_ref,
                 contribution.source_revision, "tracked",
             ),
+            source_protocol=1,
         ))
     state = append_items(
         state, frames, desired_provider_profile=provider_profile,

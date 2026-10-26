@@ -374,3 +374,10 @@
 - 新显式 snapshot 在 pending rewind/compaction 后仍参与原 seal；停止追踪后的未封存自动候选不会在 ToolSet/root 重建时复活。新增合同断言真实封存 frames、引用、控制态、失败重试与旧字节不变；真实 Skill 文件经 watcher/publication、冻结工具调用、刷新、seal 及冷读验收。来源合同202 passed；重建/来源/独立进程恢复39 passed、3 deselected；正式 fork matrix 补齐该3项。最后控制 owner/工具合同57 passed（含前述已跑54项及新增 applied/并发3项，不累加全文件）。相关人工 untrack API 4 passed，装具改用实际工作区 identity，保持原断言；旧固定ID装具的 setup 错误已在完整修改前源码同处复现。
 - Ruff/compileall通过；24文件真实Pyright基线118项/最终105项，无新增（仅规范化类型检查器生成的 `_DataclassT` 序号，不丢弃错误）；API装具补验单列。作者AST/结构自查确认唯一激活入口、无来源I/O、无schema变更，prefix compiler仅新增9.6 TODO、AST不变，不冒充独审。来源/epoch长批运行期间只改变目录指南和该TODO注释，产品逻辑指纹未变。初轮工具同步调用错误、旧模式预期、装具错误及检查命令失败均保留原件。准确命令、源码指纹、raw和退出码见`out/tests/temp/cil_skill_modes_20261026/artifacts/`，总收据`verification-030.json`。
 - 9.8 保持未勾：模型可见的统一来源封装、完整替换及跨来源替代范围仍依赖9.6；9.13的分组/全模式恢复组合验收也未关闭。未替代完整Web、真实Provider或Windows；团队/协作专项继续暂缓。
+
+### 2026-10-26 9.6 统一来源协议核心子链路
+
+- root、首次激活、完整刷新、自动diff、overlay及恢复共用确定性`boxteam-context-sources:v1`来源块；正文独立转义，显式身份、版本、操作、追踪与原信任资格。R10经正式instruction producer登记解释提示，adapter不补拼。封存codec显式升为v3，v1/v2继续原形重编码；不改SQLite schema、raw contribution/hash或历史owner。最终投影、activation恢复与R02请求校验均迁齐，正文中的伪包头不递归解释。
+- Provider/factory/真实owner回归117 passed；全itemized领域1462 passed；来源与instruction回归105 passed。epoch前轮35 passed/1 failed/3 deselected，唯一失败为旧裸正文断言，改为解析后精确body与source identity后补验1 passed；正式epoch-copy matrix补验3 passed。修改前完整4445文件归档通过实际CSM/prepare/seal/checkpoint生成两份v2历史，新代码冷读、同key重试、同epoch追加、真实fork和来源离线冷读通过，旧sealed bytes、request hash和owner保持不变。均保留准确命令、进程外期限、4GiB保护、前后指纹与原始退出码，不将首次非零改写为通过。
+- Ruff/compileall通过；12产品文件真实Pyright79项均在旧HEAD80项基线内，新产品文件无错误，两个新增测试文件类型检查0错误；不称类型全绿。作者AST与差异自查未发现新增职责冲突，不冒充独审。最终测试后的产品变化仅为EOF空行，另有旧测试断言与OpenSpec说明调整，按实际依赖复用结果。原归档4445文件重新核验后清理，保留生成历史与旧测试原件。收据见`out/tests/temp/cil_source_protocol_20261026/artifacts/verification-029.json`。
+- 9.6、9.8、9.13继续未勾：跨来源具名替代引用及复用旧正文时的显式切回尚缺，9.7聚合与有序多item引用也未实现。本切片不代替完整Web、真实外部Provider、Windows或新增总门；团队/协作专项继续暂缓。

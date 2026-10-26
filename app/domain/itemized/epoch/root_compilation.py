@@ -26,6 +26,10 @@ from app.domain.itemized.epoch.prefix_epoch import (
     PrefixEpoch,
     PrefixEpochState,
 )
+from app.domain.itemized.epoch.source_protocol import (
+    SourceModelBlock,
+    render_source_blocks,
+)
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     contribution_content_hash,
@@ -102,6 +106,7 @@ class RootCandidateSource:
     source_ordinal: int
     root_placement: RootPlacement
     included_reason: IncludedReason
+    source_tracking_at_seal: Literal["tracked", "untracked"] = "tracked"
 
     def __post_init__(self) -> None:
         for field_name in ("source_identity", "source_kind", "name", "revision"):
@@ -110,6 +115,8 @@ class RootCandidateSource:
             )
         _non_empty_string(self.content, "RootCandidateSource.content")
         _non_negative_int(self.source_ordinal, "RootCandidateSource.source_ordinal")
+        if self.source_tracking_at_seal not in {"tracked", "untracked"}:
+            raise ItemSchemaError("RootCandidateSource.source_tracking_at_seal 非法")
         if self.root_placement not in _ROOT_PLACEMENTS:
             raise RootPlacementViolationError(
                 f"未知 root_placement: {self.root_placement!r};"
@@ -171,9 +178,12 @@ class CompiledRootItem:
     tool_compatibility_key: str
     content: str
     sources: tuple[CompiledRootSourceProvenance, ...]
+    source_protocol: Literal[1] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
+        if self.source_protocol is not None and (type(self.source_protocol) is not int or self.source_protocol != 1):
+            raise ItemSchemaError("CompiledRootItem.source_protocol 非法")
         if not isinstance(self.epoch, PrefixEpoch):
             raise RootCompileBoundaryError("CompiledRootItem.epoch 必须是 PrefixEpoch")
         _non_empty_string(self.provider_profile, "CompiledRootItem.provider_profile")
@@ -207,7 +217,7 @@ class CompiledRootItem:
     def frame_manifest(self) -> dict[str, object]:
         """root frame 的规范 manifest;hash 算法固定,不可由调用方覆盖。"""
         return {
-            "kind": "root-system-item:v1",
+            "kind": "root-system-item:v2" if self.source_protocol == 1 else "root-system-item:v1",
             "epoch": self.epoch.token,
             "provider_profile": self.provider_profile,
             "tool_compatibility_key": self.tool_compatibility_key,
@@ -289,7 +299,15 @@ def compile_root_item(
         epoch=state.epoch,
         provider_profile=state.provider_profile,
         tool_compatibility_key=state.tool_compatibility_key,
-        content="\n\n".join(candidate.content for candidate in eligible),
+        content=render_source_blocks(tuple(SourceModelBlock(
+            source_identity=candidate.source_identity, name=candidate.name,
+            source_kind=candidate.source_kind,
+            operation="activate" if state.epoch.reason == EpochReason.INITIAL else "restore",
+            revision=candidate.revision, base_revision=None, representation="full",
+            source_tracking_at_seal=candidate.source_tracking_at_seal,
+            root_placement=candidate.root_placement, body=candidate.content,
+        ) for candidate in eligible)),
+        source_protocol=1,
         sources=tuple(
             CompiledRootSourceProvenance(
                 source_identity=candidate.source_identity,

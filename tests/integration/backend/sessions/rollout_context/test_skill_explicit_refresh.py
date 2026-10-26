@@ -83,7 +83,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     assert frames[:len(first_frames)] == first_frames
     new_source = "skill:" + frozen.entries["shared"].entry_identity
     new_frames = [frame for frame in frames if frame.item_ref.source_identity == new_source]
-    assert len(new_frames) == 1 and WORKSPACE_BODY in new_frames[0].content
+    assert len(new_frames) == 1 and json.loads(new_frames[0].content)["sources"][0]["body"] == WORKSPACE_BODY
     assert new_frames[0].item_ref.source_tracking_at_seal == "untracked"
     enabled = json.loads(await tool.ainvoke({"name": "shared", "mode": "tracked"}))
     assert enabled["tracked"] is True and enabled["append_status"] == "already_active"

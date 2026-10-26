@@ -889,7 +889,7 @@ class TestSealedTypedFieldConsumption:
         )
         (old_frame,) = tuple(frame for frame in first_binding.prefix.state.frames
                              if frame.item_ref.source_identity == "skill:gateway:demo")
-        assert old_frame.content == old_bodies[old_frame.item_ref.ref_id] == "gateway body\n"
+        assert json.loads(old_frame.content)["sources"][0]["body"] == old_bodies[old_frame.item_ref.ref_id] == "gateway body\n"
 
         with saver._storage.storage._connect(
             saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
@@ -941,7 +941,7 @@ class TestSealedTypedFieldConsumption:
         new_bodies = saver._request_content_for_plan(
             owner.session_id, owner.thread_id, "", rebound_snapshot.as_sealed_plan(), None,
         )
-        assert new_frame.content == new_bodies[new_frame.item_ref.ref_id] == "workspace body\n"
+        assert json.loads(new_frame.content)["sources"][0]["body"] == new_bodies[new_frame.item_ref.ref_id] == "workspace body\n"
 
         conn = sqlite3.connect(database_path)
         try:

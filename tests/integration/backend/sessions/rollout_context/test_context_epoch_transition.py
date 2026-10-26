@@ -344,7 +344,7 @@ def test_tracking_contract_survives_provider_retry_and_cold_append(epoch_case):
     prepared = case.prepare("tracking-contract")
     original = case.snapshot(prepared)
     refs = [frame.item_ref for frame in original.seal_binding.prefix.state.frames]
-    assert original.seal_binding.format_version == 2
+    assert original.seal_binding.format_version == 3
     assert {ref.source_tracking_at_seal for ref in refs if ref.ref_type == "source_item"} == {"tracked", "untracked"}
     assert any(ref.ref_type == "canonical_item" for ref in refs)
     assert all(ref.source_tracking_at_seal is None for ref in refs if ref.ref_type == "canonical_item")
@@ -355,7 +355,7 @@ def test_tracking_contract_survives_provider_retry_and_cold_append(epoch_case):
     assert case.selected_rows() == rows
     assert canonical_json_bytes(case.snapshot(prepared).to_dict()) == sealed_bytes
     following = case.snapshot(case.prepare("tracking-following"))
-    assert following.seal_binding.format_version == 2
+    assert following.seal_binding.format_version == 3
     assert following.seal_binding.prefix.state.epoch == original.seal_binding.prefix.state.epoch
     old_frames = original.seal_binding.prefix.state.frames
     assert following.seal_binding.prefix.state.frames[:len(old_frames)] == old_frames
@@ -459,10 +459,11 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_re
     assert case.pending_rows()[0][3:] == ("consumed", snapshot.assembly_id)
     assert case.active_view() == target_view
     assert rebuilt["messages"][0] == SystemMessage(
-        content="基础规则第二版", id="root:" + snapshot.seal_binding.prefix.state.epoch.token,
+        content=snapshot.seal_binding.root.content, id="root:" + snapshot.seal_binding.prefix.state.epoch.token,
     )
+    assert json.loads(rebuilt["messages"][0].content)["sources"][0]["body"] == "基础规则第二版"
     assert isinstance(rebuilt["messages"][-1], HumanMessage)
-    assert rebuilt["messages"][-1].content == "v2\n"
+    assert json.loads(rebuilt["messages"][-1].content)["sources"][0]["body"] == "v2\n"
     assert len([message for message in rebuilt["messages"] if isinstance(message, SystemMessage)]) == 1
     assert all(row[2] == row[3] and row[2].endswith(":2") for row in case.source_rows())
     assert case.publisher.reads == [RULES_URI, SKILL_URI]
@@ -725,7 +726,7 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
             ordinal, "direct", "immutable",
         )
         assert json.loads(row[14]) == {
-            "root_placement": "tail_only",
+            "root_placement": {"workspace:rules": "root_eligible", "skill:debugging": "tail_only"}[delta.source_id],
             "source_binding": SourceBinding(source_ref=delta.source_id).to_dict(),
             "extensions": {},
         }
@@ -818,7 +819,7 @@ def test_snapshot_activation_after_cutoff_is_not_restored_or_refrozen(epoch_case
     case = epoch_case
     binding = case.load_snapshot()
     visible = case.prepare("snapshot-after-cutoff")
-    assert visible["messages"][-1].content == binding.body
+    assert json.loads(visible["messages"][-1].content)["sources"][0]["body"] == binding.body
     old_bytes = canonical_json_bytes(case.snapshot(visible).to_dict())
     case.rewind("checkpoint-first")
     rebuilt = case.prepare("without-post-cutoff-snapshot")
@@ -835,13 +836,13 @@ def test_same_checkpoint_earlier_user_anchor_removes_snapshot_after_restart(epoc
     binding = case.load_snapshot()
     visible = case.prepare("snapshot-before-same-checkpoint-cut")
     original = case.snapshot(visible)
-    assert visible["messages"][-1].content == binding.body
+    assert json.loads(visible["messages"][-1].content)["sources"][0]["body"] == binding.body
     original_frames = tuple(
         frame for frame in original.seal_binding.prefix.state.frames
         if frame.item_ref.source_identity == "skill:one-shot"
     )
     assert len(original_frames) == 1
-    assert (original_frames[0].content, original_frames[0].item_ref.source_revision) == (
+    assert (json.loads(original_frames[0].content)["sources"][0]["body"], original_frames[0].item_ref.source_revision) == (
         binding.body, binding.activation_revision,
     )
     old_bytes = canonical_json_bytes(original.to_dict())
@@ -901,7 +902,7 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
         frame for frame in activated.seal_binding.prefix.state.frames
         if frame.item_ref.source_identity == "skill:one-shot"
     )
-    assert (activation_frame.role, activation_frame.content, activation_frame.item_ref.source_revision) == (
+    assert (activation_frame.role, json.loads(activation_frame.content)["sources"][0]["body"], activation_frame.item_ref.source_revision) == (
         "user", binding.body, binding.activation_revision,
     )
     activation_frontier = case.connection.execute(
@@ -926,7 +927,10 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
     promoted_snapshot = case.snapshot(promoted)
     assert promoted_snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.TOOLSET_CHANGED
     assert promoted_snapshot.seal_binding.prefix.state.epoch.ordinal == activated.seal_binding.prefix.state.epoch.ordinal + 1
-    assert binding.body in promoted["messages"][0].content
+    assert [block["body"] for block in json.loads(promoted["messages"][0].content)["sources"]
+            if block["source_identity"] == "skill:one-shot"] == [binding.body]
+    assert all(frame.item_ref.source_identity != "skill:one-shot"
+               for frame in promoted_snapshot.seal_binding.prefix.state.frames if frame.role == "user")
     (provenance,) = tuple(
         source for source in promoted_snapshot.seal_binding.root.sources
         if source.source_identity == "skill:one-shot"
@@ -970,7 +974,8 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
     assert ("skill:one-shot" in sources) == (cut == "complete")
     if cut == "complete":
         assert sources["skill:one-shot"] == binding.activation_revision
-        assert binding.body in rebuilt["messages"][0].content
+        assert [block["body"] for block in json.loads(rebuilt["messages"][0].content)["sources"]
+                if block["source_identity"] == "skill:one-shot"] == [binding.body]
     else:
         assert all(binding.body not in message.content for message in rebuilt["messages"])
     assert {source.source_id: source.revision for source in snapshot.seal_binding.source_revisions} == {
@@ -1017,7 +1022,7 @@ def test_visible_snapshot_is_carried_from_committed_detail_after_restart(epoch_c
     frames = tuple(frame for frame in snapshot.seal_binding.prefix.state.frames
                    if frame.item_ref.source_identity == "skill:one-shot")
     assert len(frames) == 1
-    assert (frames[0].content, frames[0].item_ref.source_revision) == (binding.body, binding.activation_revision)
+    assert (json.loads(frames[0].content)["sources"][0]["body"], frames[0].item_ref.source_revision) == (binding.body, binding.activation_revision)
     assert all(source.source_id != "skill:one-shot" for source in snapshot.seal_binding.source_revisions)
     assert {row[0]: row[1:4] for row in case.source_rows()}["skill:one-shot"] == ("untracked", "snapshot:1", "snapshot:1")
     assert case.publisher.reads == [RULES_URI, SKILL_URI]
@@ -1093,7 +1098,9 @@ def test_earlier_anchor_retains_only_first_untracked_revision_and_visible_contro
         for frame in snapshot.seal_binding.prefix.state.frames
         if frame.item_ref.source_identity == "skill:debugging"
     )
-    assert retained == ((first_frame.item_ref.ref_id, "skill:1", first_frame.content),)
+    expected = json.loads(first_frame.content)
+    expected["sources"][0]["source_tracking_at_seal"] = "untracked"
+    assert retained == ((first_frame.item_ref.ref_id, "skill:1", canonical_json_bytes(expected).decode()),)
     assert all(frame.item_ref.ref_id != second_frame.item_ref.ref_id for frame in snapshot.seal_binding.prefix.state.frames)
     assert {source.source_id: source.revision for source in snapshot.seal_binding.source_revisions} == {
         "workspace:rules": "rules:2",
@@ -1114,6 +1121,11 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     old_frames = tuple((frame.item_ref.ref_id, frame.item_ref.source_revision, frame.content)
                        for frame in case.snapshot(second).seal_binding.prefix.state.frames
                        if frame.item_ref.source_identity == "skill:debugging")
+    expected_frames = []
+    for ref_id, revision, content in old_frames:
+        expected = json.loads(content)
+        expected["sources"][0]["source_tracking_at_seal"] = "untracked"
+        expected_frames.append((ref_id, revision, canonical_json_bytes(expected).decode()))
     case.checkpoint("checkpoint-tracked")
     binding = SkillCatalogBinding("debugging", "resource:debugging", "entry:debugging", SKILL_URI, "skill:2", "v2\n")
     case.manager.install_skill_activation_snapshot(SkillCatalogActivationSnapshot("catalog:2", {"debugging": binding}))
@@ -1122,7 +1134,7 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     case.rewind("checkpoint-tracked")
     assert {row[0]: row[1] for row in case.source_rows()}["skill:debugging"] == "tracked"
     restored = case.prepare("tracked-again")
-    assert restored["messages"][-1].content == "v2\n"
+    assert json.loads(restored["messages"][-1].content)["sources"][0]["body"] == "v2\n"
     case.rewind("checkpoint-untracked")
     assert {row[0]: row[1] for row in case.source_rows()}["skill:debugging"] == "untracked"
     case.publisher.reads.clear()
@@ -1130,7 +1142,7 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     snapshot = case.snapshot(frozen)
     assert tuple((frame.item_ref.ref_id, frame.item_ref.source_revision, frame.content)
                  for frame in snapshot.seal_binding.prefix.state.frames
-                 if frame.item_ref.source_identity == "skill:debugging") == old_frames
+                 if frame.item_ref.source_identity == "skill:debugging") == tuple(expected_frames)
     assert all(source.source_id != "skill:debugging" for source in snapshot.seal_binding.source_revisions)
     assert case.publisher.reads == [RULES_URI]
     assert case.manager.prepare_pending() is None
@@ -1155,8 +1167,8 @@ def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources
     assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.COMPACTION
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 2
     assert snapshot.seal_binding.prefix.consumed_transition.transition_id == pending[0]
-    assert rebuilt["messages"][0].content == "基础规则第二版"
-    assert rebuilt["messages"][-1].content == "v2\n"
+    assert json.loads(rebuilt["messages"][0].content)["sources"][0]["body"] == "基础规则第二版"
+    assert json.loads(rebuilt["messages"][-1].content)["sources"][0]["body"] == "v2\n"
     assert case.pending_rows()[0][3] == "consumed"
     assert canonical_json_bytes(case.snapshot(second).to_dict()) == old_snapshot
 
@@ -1335,7 +1347,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     assert rebuilt.seal_binding.prefix.state.epoch.ordinal == original.seal_binding.prefix.state.epoch.ordinal + 1
     assert rebuilt.seal_binding.prefix.consumed_transition.transition_id == pending[0]
     assert rebuilt.seal_binding.prefix.consumed_transition.consumed
-    assert rebuilt.seal_binding.root.content == "重放时已发布的基础规则"
+    assert json.loads(rebuilt.seal_binding.root.content)["sources"][0]["body"] == "重放时已发布的基础规则"
     selected = {entry.ref.ref_id for entry in rebuilt.selection
                 if entry.included and entry.ref.ref_type == "canonical_item"}
     assert replay["root_input_item_id"] in selected and source_root not in selected

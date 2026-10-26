@@ -1,5 +1,6 @@
 """显式 Skill 刷新、互斥模式和失败原子性；applied 由真实 seal 推进。"""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -80,6 +81,14 @@ def test_explicit_frozen_revision_replaces_automatic_pending(source_seal_case, s
     assert refreshed.prefix.state.frames[-1].item_ref.source_revision == receipt.revision
     assert "explicit-v2" in refreshed.prefix.state.frames[-1].content
     assert "automatic-v3" not in refreshed.prefix.state.frames[-1].content
+    source = json.loads(refreshed.prefix.state.frames[-1].content)["sources"][0]
+    assert (source["operation"], source["representation"], source["body"]) == (
+        "replace", "full", explicit.entries["demo"].body,
+    )
+    assert (source["base_revision"], source["revision"], source["source_tracking_at_seal"]) == (
+        old.entries["demo"].activation_revision, explicit.entries["demo"].activation_revision,
+        "tracked" if mode == "tracked" else "untracked",
+    )
 
 
 def test_failed_snapshot_keeps_control_pending_and_published_state(source_seal_case, skill_manager, monkeypatch):

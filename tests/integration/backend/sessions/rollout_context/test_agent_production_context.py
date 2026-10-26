@@ -234,7 +234,7 @@ def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request
     snapshot = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     sources = snapshot.seal_binding.root.sources
     assert {source.source_identity for source in sources} == {
-        "instruction:agent-instructions", "instruction:runtime-identity",
+        "instruction:csm-protocol", "instruction:agent-instructions", "instruction:runtime-identity",
         "instruction:team-coordination-policy", "instruction:todo-list",
         "instruction:skill-catalog", "instruction:filesystem-rules",
         "instruction:compact-tool-usage",
@@ -409,7 +409,9 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         assert original_body not in json.dumps(receipt, ensure_ascii=False)
         outbound = dispatch("skill-body-selected")
         texts = [message.content for message in outbound.messages if isinstance(message.content, str)]
-        assert any(original_body in text for text in texts)
+        loaded = json.loads(outbound.messages[-1].content)["sources"][0]
+        assert loaded["source_identity"] == "skill:" + frozen.entries["example"].entry_identity
+        assert loaded["body"] == original_body
         assert all("新的 live 正文" not in text for text in texts)
         before_reads = tuple(reads)
         result = json.loads(asyncio.run(tool.ainvoke({"name": "example", "mode": "untrack"})))

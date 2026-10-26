@@ -18,6 +18,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileItemFrame,
 )
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -93,8 +94,11 @@ def project_sealed_prefix(
     used: set[tuple[str, ...]] = set()
     root = binding.root
     if root is not None:
+        blocks = parse_source_blocks(root.content) if root.source_protocol == 1 else ()
+        if blocks and len(blocks) != len(root.sources):
+            raise ValueError("source-mismatch: compiled root 来源块数量不一致")
         root_bodies = []
-        for provenance in root.sources:
+        for index, provenance in enumerate(root.sources):
             matches = [
                 entry for entry in entries.values()
                 if entry.ref.ref_type == "request_only"
@@ -103,6 +107,7 @@ def project_sealed_prefix(
                 and source.source_binding is not None
                 and source.source_binding.source_ref == provenance.source_identity
                 and source.root_placement == "root_eligible"
+                and source.contribution_kind == "prompt"
             ]
             if len(matches) != 1:
                 raise ValueError("source-mismatch: compiled root 缺少唯一来源 selection")
@@ -110,9 +115,17 @@ def project_sealed_prefix(
             body = resolve_selected_request_body(plan, entry, bodies)
             if not isinstance(body, str) or contribution_content_hash("root_source", body) != provenance.content_hash:
                 raise ValueError("source-mismatch: compiled root 正文与 provenance 不一致")
+            if blocks:
+                block = blocks[index]
+                if (block.source_identity, block.source_kind, block.name, block.revision, block.body,
+                    block.root_placement, block.representation) != (
+                    provenance.source_identity, provenance.source_kind, provenance.name, provenance.revision,
+                    body, "root_eligible", "full",
+                ) or block.operation not in {"activate", "restore"}:
+                    raise ValueError("source-mismatch: compiled root 来源块与 provenance 不一致")
             root_bodies.append(body)
             used.add(selection_ref_identity(entry.ref))
-        if "\n\n".join(root_bodies) != root.content:
+        if not blocks and "\n\n".join(root_bodies) != root.content:
             raise ValueError("source-mismatch: compiled root 正文与来源顺序不一致")
     messages: list[BaseMessage] = []
     groups: dict[tuple[str, ...], tuple[list[dict[str, object]], int]] = {}
@@ -134,7 +147,18 @@ def project_sealed_prefix(
             ):
                 raise ValueError("source-mismatch: source frame identity/revision 不一致")
             body = resolve_selected_request_body(plan, entry, bodies)
-            if canonical_json_bytes(body) != canonical_json_bytes(frame.content):
+            if frame.source_protocol == 1:
+                blocks = parse_source_blocks(frame.content)
+                if len(blocks) != 1:
+                    raise ValueError("source-mismatch: 单来源 frame 必须封存一个来源块")
+                block = blocks[0]
+                if (block.source_identity, block.source_kind, block.revision,
+                    block.source_tracking_at_seal, block.root_placement) != (
+                    ref.source_identity, source.source_kind, ref.source_revision,
+                    ref.source_tracking_at_seal, source.root_placement,
+                ) or canonical_json_bytes(block.body) != canonical_json_bytes(body):
+                    raise ValueError("source-mismatch: source 来源块与 sealed 正文或绑定不一致")
+            elif canonical_json_bytes(body) != canonical_json_bytes(frame.content):
                 raise ValueError("source-mismatch: source wire frame 与 sealed 正文不一致")
             if source.contribution_kind == "model_message":
                 if plan.selection_policy != "summary_candidate" or not isinstance(body, Mapping):
@@ -169,7 +193,8 @@ def project_sealed_prefix(
                 continue
             if frame.role != "user":
                 raise ValueError("source-mismatch: 普通 source frame 必须为 user")
-            content = body if isinstance(body, (str, list)) else [body]
+            wire_body = frame.content
+            content = wire_body if isinstance(wire_body, (str, list)) else [wire_body]
             if frame.provider_profile.startswith("chat_completions:") and isinstance(content, list):
                 for index, block in enumerate(content):
                     if isinstance(block, str):

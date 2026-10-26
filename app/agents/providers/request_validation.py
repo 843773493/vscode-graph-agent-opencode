@@ -8,6 +8,10 @@ from app.agents.middleware_prompts import (
     RUNTIME_IDENTITY_HEADER,
     RUNTIME_WORKSPACE_SCOPE_FIELD,
 )
+from app.domain.itemized.epoch.source_protocol import (
+    SOURCE_PROTOCOL,
+    parse_source_blocks,
+)
 
 
 def reject_sealed_overrides(
@@ -30,6 +34,17 @@ def _validate_runtime_workspace_scope(content: object) -> None:
             if isinstance(text, str):
                 texts.append(text)
         content = "\n".join(texts)
+    if not isinstance(content, str):
+        return
+    # 最终 wire 已有显式协议标识；仅展开这一层软件包头，不递归解释 body。
+    if content.startswith('{"protocol":"' + SOURCE_PROTOCOL + '","sources":'):
+        for source in parse_source_blocks(content):
+            _validate_scope_text(source.body)
+        return
+    _validate_scope_text(content)
+
+
+def _validate_scope_text(content: object) -> None:
     if not isinstance(content, str):
         return
     if RUNTIME_IDENTITY_HEADER not in content and RUNTIME_WORKSPACE_SCOPE_FIELD not in content:

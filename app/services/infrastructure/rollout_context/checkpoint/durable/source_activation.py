@@ -7,6 +7,7 @@ import sqlite3
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
@@ -55,17 +56,23 @@ def _validate_activation_guidance(
     if not frames:
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
     frame = frames[-1]
+    content = frame.content
+    if frame.source_protocol == 1:
+        blocks = parse_source_blocks(content)
+        if len(blocks) != 1 or blocks[0].source_identity != source_id:
+            raise ItemSchemaError("context-source-seal-conflict: guidance 来源块不唯一或身份不一致")
+        content = blocks[0].body
     expected_revision, expected_hash = (
         (rows[0][0], rows[0][1]) if rows else
         (sha256_jcs({"content": ""}), sha256_jcs({"content": ""}))
     )
     if (
         frame.role != "user" or frame.payload_kind != "text"
-        or not isinstance(frame.content, str)
+        or not isinstance(content, str)
         or frame.item_ref.source_revision != expected_revision
-        or sha256_jcs({"content": frame.content}) != expected_hash
+        or sha256_jcs({"content": content}) != expected_hash
         or (rows and rows[0][2] != "available")
-        or (not rows and frame.content != "")
+        or (not rows and content != "")
         or any(source.source_identity == source_id for source in (() if binding.root is None else binding.root.sources))
     ):
         raise ItemSchemaError("context-source-seal-conflict: guidance 正文/revision 与冻结 activation 不一致")

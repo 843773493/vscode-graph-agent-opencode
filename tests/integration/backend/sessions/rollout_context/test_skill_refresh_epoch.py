@@ -1,5 +1,7 @@
 """显式 snapshot 在真实 rewind/compaction transition 期间仍须由同一 seal 接受。"""
 
+import json
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -33,7 +35,7 @@ def test_explicit_snapshot_after_pending_transition_is_sealed_once(epoch_case, b
         if frame.item_ref.source_identity == "skill:one-shot"
     )
     assert len(source_frames) == 1
-    assert source_frames[0].content == binding.body
+    assert json.loads(source_frames[0].content)["sources"][0]["body"] == binding.body
     assert source_frames[0].item_ref.source_tracking_at_seal == "untracked"
     assert sealed.seal_binding.prefix.consumed_transition.transition_id == transition[0]
     assert case.manager.prepare_pending() is None

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.agents.middleware_prompts import (
+    CSM_PROTOCOL_PROMPT,
     RUNTIME_IDENTITY_HEADER,
     RUNTIME_WORKSPACE_SCOPE_FIELD,
 )
@@ -42,8 +43,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
     build_source_lifecycle_decision,
 )
 
-InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07"]
-"""设计表 4.6 列出的初始 instruction producer 身份。"""
+InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R10"]
+"""设计表 4.6 列出的初始 instruction producer 与 CSM 协议身份。"""
 
 
 
@@ -335,6 +336,12 @@ def runtime_instruction_producers(
     )
     return (
         InstructionProducerSpec(
+            producer_id="R10", source_id="instruction:csm-protocol",
+            source_kind="csm_protocol", name="CSM 来源协议",
+            root_placement="root_eligible", content=CSM_PROTOCOL_PROMPT,
+            revision=sha256_jcs({"protocol": "boxteam-context-sources:v1", "content": CSM_PROTOCOL_PROMPT}),
+        ),
+        InstructionProducerSpec(
             producer_id="R01", source_id="instruction:agent-instructions",
             source_kind="agent_instructions", name="Agent 基础说明",
             root_placement="root_eligible", content=content, revision=config_revision,
@@ -352,7 +359,7 @@ def runtime_instruction_producers(
 
 
 _KNOWN_PRODUCER_IDS: frozenset[str] = frozenset(
-    {"R01", "R02", "R03", "R04", "R05", "R06", "R07"}
+    {"R01", "R02", "R03", "R04", "R05", "R06", "R07", "R10"}
 )
 _FORBIDDEN_METADATA_KEYS: frozenset[str] = frozenset(
     {

@@ -86,7 +86,7 @@ class ContextSealPreparation:
     def input_hash(self) -> str:
         """随机 assembly identity 分配前冻结完整准备 preimage。"""
         return sha256_jcs({
-            "schema": "context-seal-preparation:v2",
+            "schema": "context-seal-preparation:v3",
             "prefix_state": self.prefix_state.to_dict(),
             "root": self.root.frame_manifest() if self.root is not None else None,
             "tool_set_snapshot_id": self.tool_set.snapshot_id,
@@ -130,12 +130,17 @@ class ContextSealBinding:
     previous_assembly_id: str | None
     source_revisions: tuple[AppliedSourceRevision, ...] = ()
     notice_acceptance: RuntimeNoticeAcceptanceRef | None = None
-    format_version: Literal[1, 2] = 2
+    format_version: Literal[1, 2, 3] = 3
     """只标识封存引用的编码版本，不改变 Provider frame 或 request hash。"""
 
     def __post_init__(self) -> None:
-        if type(self.format_version) is not int or self.format_version not in {1, 2}:
-            raise ItemSchemaError("ContextSealBinding.format_version 必须是 1 或 2")
+        if type(self.format_version) is not int or self.format_version not in {1, 2, 3}:
+            raise ItemSchemaError("ContextSealBinding.format_version 必须是 1、2 或 3")
+        if self.format_version < 3 and (
+            any(frame.source_protocol is not None for frame in self.prefix.state.frames)
+            or self.root is not None and self.root.source_protocol is not None
+        ):
+            raise ItemSchemaError("旧封存版本不得携带新版来源协议")
         if not isinstance(self.prefix, SealedPrefixAssembly):
             raise ItemSchemaError("ContextSealBinding.prefix 必须是 SealedPrefixAssembly")
         if not self.prefix.state.epoch_applied:

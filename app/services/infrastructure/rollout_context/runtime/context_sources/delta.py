@@ -37,7 +37,9 @@ class SourceDeltaMixin:
                 kind: Literal["activation", "delta", "rebuild"] = state.pending_kind or "activation"
             else:
                 diff = "".join(
-                    difflib.unified_diff(
+                    # difflib 不为缺少行尾的内容补分隔；用标准标记避免 -旧+新粘连。
+                    line if line.endswith(("\n", "\r")) else line + "\n\\ No newline at end of file\n"
+                    for line in difflib.unified_diff(
                         previous_content.splitlines(keepends=True),
                         state.latest_content.splitlines(keepends=True),
                         fromfile=f"{state.name}@{state.latest_visible_committed_revision}",

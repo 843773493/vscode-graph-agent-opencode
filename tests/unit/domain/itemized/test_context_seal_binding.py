@@ -136,13 +136,13 @@ def test_new_seal_distinguishes_source_tracking_from_canonical(binding):
     )
     updated = replace(binding, prefix=seal_assembly(state, assembly_id="new-version"), previous_assembly_id=binding.prefix.assembly_id)
     raw = json.loads(json.dumps(context_seal_binding_to_dict(updated)))
-    assert raw["format_version"] == 2
+    assert raw["format_version"] == 3
     assert [frame["item_ref"]["source_tracking_at_seal"] for frame in raw["prefix"]["state"]["frames"]] == ["tracked", None, "untracked"]
     assert b'"tracking_state"' not in canonical_json_bytes(raw)
     assert context_seal_binding_from_dict(raw) == updated
 
 
-@pytest.mark.parametrize("version", [None, 1, 3, True, "2", 2.0])
+@pytest.mark.parametrize("version", [None, 1, 4, True, "2", 2.0])
 def test_seal_codec_rejects_unknown_explicit_versions(binding, version):
     raw = context_seal_binding_to_dict(binding)
     raw["format_version"] = version

@@ -270,6 +270,7 @@ class ProviderProfileItemFrame:
     payload_kind: str
     content: object
     item_ref: AppendedItemRef
+    source_protocol: Literal[1] | None = None
     _canonical_bytes: bytes = field(init=False, repr=False, compare=False)
 
     def __getattribute__(self, name: str) -> object:
@@ -286,6 +287,11 @@ class ProviderProfileItemFrame:
             raise ItemSchemaError(f"未知 payload_kind: {self.payload_kind}")
         if not isinstance(self.item_ref, AppendedItemRef):
             raise ItemSchemaError("ProviderProfileItemFrame.item_ref 必须是 AppendedItemRef")
+        if self.source_protocol is not None and (
+            type(self.source_protocol) is not int or self.source_protocol != 1
+            or self.item_ref.ref_type != "source_item"
+        ):
+            raise ItemSchemaError("ProviderProfileItemFrame.source_protocol 非法")
         _ensure_json_value(self.content, "ProviderProfileItemFrame.content")
         # 正文已隔离且 frame 不可变；同一 frame 的 JCS v1 编码只生成一次。
         object.__setattr__(self, "_canonical_bytes", canonical_json_bytes(self.frame_manifest()))
@@ -307,7 +313,9 @@ class ProviderProfileItemFrame:
 
     def to_dict(self) -> dict[str, object]:
         """持久 frame 只包含原始合同字段，不暴露派生 JCS 字节。"""
-        return {**self.frame_manifest(), "item_ref": asdict(self.item_ref)}
+        return {**self.frame_manifest(), "item_ref": asdict(self.item_ref), **(
+            {"source_protocol": self.source_protocol} if self.source_protocol is not None else {}
+        )}
 
 
 @dataclass(frozen=True, slots=True)

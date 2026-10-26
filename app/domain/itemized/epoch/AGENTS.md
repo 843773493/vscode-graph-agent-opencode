@@ -18,7 +18,8 @@ epoch/
 │   ├── tool_set.py           工具快照、ToolSetRef 绑定与兼容键
 │   └── seal_binding.py       已应用来源修订与 assembly seal 绑定
 ├── root 投影
-│   └── root_compilation.py   root 候选、来源 provenance 与 wire role
+│   ├── root_compilation.py   root 候选、来源 provenance 与 wire role
+│   └── source_protocol.py    root/tail 共用的模型可见来源块与正文边界
 └── __init__.py               epoch 领域族说明
 ```
 
