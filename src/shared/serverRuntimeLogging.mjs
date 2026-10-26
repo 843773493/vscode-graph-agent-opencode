@@ -81,11 +81,29 @@ export function configureRuntimeLogging({ level, pretty } = {}, contract = loadR
 }
 
 export function runtimeLoggingState(service, contract = loadRuntimeLogContract()) {
-  if (settings === null) configureRuntimeLogging({}, contract);
+  initializeRuntimeLogging(contract);
   return {
     service, pid: process.pid, runtime_instance_id: runtimeInstanceId,
     applied_revision: appliedRevision, ...settings, log_sink: verifiedRuntimeLogSink(),
   };
+}
+
+function initializeRuntimeLogging(contract) {
+  if (settings !== null) return;
+  const serialized = process.env.BOXTEAM_RUNTIME_LOGGING;
+  if (serialized === undefined) {
+    configureRuntimeLogging({}, contract);
+    return;
+  }
+  const payload = JSON.parse(serialized);
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)
+      || Object.keys(payload).length !== 3 || !Object.hasOwn(payload, "level") || !Object.hasOwn(payload, "pretty")
+      || typeof payload.revision !== "string" || !payload.revision.trim()
+      || typeof payload.level !== "string" || typeof payload.pretty !== "boolean") {
+    throw new TypeError("受管进程启动日志设置非法");
+  }
+  configureRuntimeLogging(payload, contract);
+  appliedRevision = payload.revision;
 }
 
 export function applyRuntimeLogging(payload, service, contract = loadRuntimeLogContract(), logger = null) {
@@ -137,7 +155,7 @@ export function formatRuntimeLogRecord(record, pretty, contract = loadRuntimeLog
 export function createRuntimeLogger(service, logger, stream = null, providedContract = null) {
   const write = (level, values, context) => {
     const contract = providedContract ?? loadRuntimeLogContract();
-    if (settings === null) configureRuntimeLogging({}, contract);
+    initializeRuntimeLogging(contract);
     if (contract.record.levels[level] < contract.record.levels[settings.level]) return;
     const record = {
       timestamp: new Date().toISOString(), level, service, logger,

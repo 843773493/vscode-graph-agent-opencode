@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +12,21 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
+from app.core.logging_config import configure_application_logging, runtime_logging_state
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 from app.gateway.runtime_proof import _apply_gateway_runtime_config
+from app.schemas.runtime_logging import (
+    RuntimeLoggingApply,
+    RuntimeLoggingService,
+    RuntimeLoggingStatus,
+)
 from app.services.infrastructure.config.state import ConfigConflictError
 from tests.harness.python.run_context import TestRunContext
+from tests.support.gateway_managed_backends import ProcessProbe
 
 
 @dataclass(frozen=True)
@@ -94,3 +105,173 @@ async def test_reload_persists_real_proofs_and_compensates_the_frozen_consumers(
     assert {proof["consumer_id"] for proof in proofs} == {"federation-policy", "gateway-config-snapshot"}
     assert len({proof["generation"] for proof in proofs}) == 1
     assert all(proof["state"] == "healthy" and len(proof["fencing_token_digest"]) == 64 for proof in proofs)
+
+
+@dataclass
+class LoggingApplicationCase:
+    config: ConfigApplicationCase
+    registry: GatewayWorkspaceRegistry
+    states: dict[int, RuntimeLoggingStatus]
+    calls: list[tuple[int, str]]
+    failure: str | None = None
+
+
+@pytest.fixture
+def logging_application(
+    config_application: ConfigApplicationCase, monkeypatch: pytest.MonkeyPatch, managed_backend_factory,
+) -> Iterator[LoggingApplicationCase]:
+    config = config_application
+    monkeypatch.setenv("BOXTEAM_HOME", str(config.path.parent))
+    monkeypatch.setenv("BOXTEAM_LAUNCHER_CONTROL", json.dumps({"address": "/fixture/socket", "pid": 20}))
+    for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
+        logger = logging.getLogger(name)
+        monkeypatch.setattr(logger, "handlers", [])
+        monkeypatch.setattr(logger, "level", logger.level)
+        monkeypatch.setattr(logger, "propagate", logger.propagate)
+    configure_application_logging(service="gateway", stream=io.StringIO(), revision=config.service.config.revision)
+    registry = GatewayWorkspaceRegistry(
+        storage_path=config.path.parent / "workspaces.json",
+        runtime_logging_config=lambda: {"revision": config.app.state.gateway_config.revision},
+    )
+    targets = tuple(WorkspaceTarget(
+        workspace_id=f"logging-{index}", name=f"workspace-{index}",
+        root_path=str(config.path.parent / f"workspace-{index}"), backend_url="http://127.0.0.1:42000",
+        backend_workspace_id=f"00000000-0000-4000-8000-00000000000{index}",
+        connection_kind="local", managed=True,
+    ) for index in (1, 2))
+    for target in targets:
+        registry.upsert(target)
+    graph = managed_backend_factory(
+        targets, backend_url="http://127.0.0.1:42000", process=ProcessProbe(pid=21),
+        auxiliary_processes={target.workspace_id: {
+            "terminal_manager": ProcessProbe(pid=22 + index * 2),
+            "browser_manager": ProcessProbe(pid=23 + index * 2),
+        } for index, target in enumerate(targets)},
+    )
+    graph.publish(registry)
+    # 即使地址在本机，未受管的外部 Backend 也不参加日志控制。
+    registry.upsert(WorkspaceTarget(
+        "external", "external", str(config.path.parent / "external"), "http://127.0.0.1:49999", "local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000003",
+    ))
+    roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"), (22, "terminal"), (23, "browser"), (24, "terminal"), (25, "browser"))
+    states = {pid: RuntimeLoggingStatus(
+        service=role, pid=pid, runtime_instance_id=f"instance-{pid}",
+        applied_revision=config.service.config.revision, level="info", pretty=True, log_sink=None,
+    ) for pid, role in roles}
+    case = LoggingApplicationCase(config, registry, states, [])
+    config.app.state.registry = registry
+    config.app.state.gateway_state = config.store
+
+    async def status(_self, *, pid: int, **_kwargs) -> RuntimeLoggingStatus:
+        return states[pid]
+
+    async def apply(_self, *, pid: int, request: RuntimeLoggingApply, **_kwargs) -> RuntimeLoggingStatus:
+        assert registry.backend_topology_lock.locked()
+        case.calls.append((pid, request.revision))
+        current = states[pid]
+        if case.failure == "rollback" and pid == 21 and request.revision == config.service.config.revision:
+            raise RuntimeError("真实补偿拒绝")
+        assert current.runtime_instance_id == request.runtime_instance_id
+        assert current.applied_revision in {request.expected_revision, request.revision}
+        if pid == 23 and case.failure == "reject" and request.revision != config.service.config.revision:
+            raise RuntimeError("应用请求被拒绝")
+        states[pid] = current.model_copy(update={"applied_revision": request.revision, "level": request.level, "pretty": request.pretty})
+        if pid == 23 and case.failure in {"replace", "foreign"} and request.revision != config.service.config.revision:
+            states[pid] = states[pid].model_copy(update={"runtime_instance_id": "replacement"} if case.failure == "replace" else {"applied_revision": "external-owner"})
+        if pid == 23 and case.failure in {"timeout", "rollback"} and request.revision != config.service.config.revision:
+            raise TimeoutError("已生效但响应丢失")
+        return states[pid]
+
+    monkeypatch.setattr(RuntimeLoggingProcessControl, "status", status)
+    monkeypatch.setattr(RuntimeLoggingProcessControl, "launcher_status", status)
+    monkeypatch.setattr(RuntimeLoggingProcessControl, "apply", apply)
+    monkeypatch.setattr(RuntimeLoggingProcessControl, "launcher_apply", apply)
+    try:
+        yield case
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "reject", "timeout", "rollback", "cas", "replace", "foreign", "diagnostic"])
+async def test_logging_reload_confirms_shared_processes_and_settles_actual_failures(
+    logging_application: LoggingApplicationCase, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    case = logging_application
+    config = case.config
+    before = dict(case.states)
+    previous = config.service.config
+    active = config.store.get_active_config_snapshot("gateway")
+    case.failure = failure
+    if failure == "diagnostic":
+        case.failure = "timeout"
+
+        def fail_diagnostic(*_args, **_kwargs):
+            raise OSError("产品诊断 sink 无法写入")
+
+        monkeypatch.setattr("app.gateway.config.reload_lifecycle.logger.error", fail_diagnostic)
+    config.path.write_text(json.dumps({"config_version": 3, "logging": {"runtime": {"level": "debug", "pretty": False}}}))
+
+    def reject_promotion(**_kwargs):
+        assert case.registry.backend_topology_lock.locked()
+        assert all(state.level == "debug" for state in case.states.values())
+        assert runtime_logging_state().level == "debug"
+        raise ConfigConflictError("最终 CAS 冲突")
+
+    if failure == "cas":
+        monkeypatch.setattr(config.store, "promote_active_config_snapshot", reject_promotion)
+    if failure is None:
+        await config.service.reload()
+        assert config.service.config.revision != previous.revision
+        assert all(state.applied_revision == config.service.config.revision and state.level == "debug" and not state.pretty for state in case.states.values())
+        assert len(case.calls) == 6
+        assert len([pid for pid, _ in case.calls if pid == 21]) == 1
+    else:
+        with pytest.raises(RuntimeError, match="stage=") as raised:
+            await config.service.reload()
+        if failure == "diagnostic":
+            assert "diagnostic_sink_error=OSError" in str(raised.value)
+            cause = raised.value.__cause__
+            assert cause is not None and "诊断日志输出失败" in str(cause.__notes__)
+        assert config.service.config is previous
+        assert config.app.state.gateway_config is previous
+        assert config.store.get_active_config_snapshot("gateway") == active
+        if failure in {"rollback", "replace", "foreign"}:
+            retained_pid = 21 if failure == "rollback" else 23
+            assert case.states[retained_pid].level == "debug"
+            assert {pid: state for pid, state in case.states.items() if pid != retained_pid} == {pid: state for pid, state in before.items() if pid != retained_pid}
+            if failure == "replace":
+                assert case.states[23].runtime_instance_id == "replacement"
+            elif failure == "foreign":
+                assert case.states[23].applied_revision == "external-owner"
+        else:
+            assert case.states == before
+        assert runtime_logging_state().applied_revision == previous.revision
+    assert not case.registry.backend_topology_lock.locked()
+    event = config.service.list_events()[-1]
+    assert event.apply_id is not None
+    journal = config.store.get_config_apply_journal(apply_id=event.apply_id)
+    assert journal is not None
+    assert journal.state == ("committed" if failure is None else "recovery_required" if failure in {"rollback", "replace", "foreign"} else "compensated")
+    if failure in {"timeout", "rollback", "diagnostic"}:
+        unknown = [item for item in journal.side_effects if item["action"] == "outcome_unknown"]
+        assert len(unknown) == 1 and unknown[0]["current"] is None
+        previous_state = unknown[0]["before"]
+        assert isinstance(previous_state, dict) and previous_state["pid"] == 23
+    startup = case.registry.runtime_logging_startup()
+    assert startup is not None and startup["revision"] == config.app.state.gateway_config.revision
+
+
+@pytest.mark.asyncio
+async def test_mixed_restart_candidate_does_not_apply_logging_early(logging_application: LoggingApplicationCase) -> None:
+    case = logging_application
+    before = dict(case.states)
+    case.config.path.write_text(json.dumps({
+        "config_version": 3, "logging": {"runtime": {"level": "warning"}},
+        "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1.5}}}},
+    }))
+    await case.config.service.reload()
+    assert case.config.service.status().state == "pending_restart"
+    assert case.states == before and case.calls == []
+    assert not case.registry.backend_topology_lock.locked()

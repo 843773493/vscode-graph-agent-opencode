@@ -153,10 +153,29 @@ def configure_application_logging(
     level: str | int | None = None,
     pretty: bool | None = None,
     stream: TextIO | None = None,
+    revision: str | None = None,
 ) -> _RuntimeHandler:
     """配置唯一的产品日志入口；进程托管方负责最终文件和轮转。"""
     with _CONFIGURATION_LOCK:
         contract = load_runtime_log_contract()
+        root_logger = logging.getLogger()
+        handler = next(
+            (candidate for candidate in root_logger.handlers
+             if candidate.name == APPLICATION_LOG_HANDLER_NAME), None,
+        )
+        if level is None and pretty is None and stream is None and revision is None:
+            if isinstance(handler, _RuntimeHandler) and isinstance(handler.formatter, _RuntimeFormatter) and handler.formatter.service == service:
+                level, pretty, revision = handler.level, handler.formatter.pretty, handler.applied_revision
+            elif (startup := os.environ.get("BOXTEAM_RUNTIME_LOGGING")) is not None:
+                payload = json.loads(startup)
+                if (not isinstance(payload, dict) or set(payload) != {"revision", "level", "pretty"}
+                    or not isinstance(payload["level"], str)):
+                    raise ValueError("受管进程启动日志设置非法")
+                level, pretty, revision = payload["level"], payload["pretty"], payload["revision"]
+                if not isinstance(revision, str) or not revision.strip() or type(pretty) is not bool:
+                    raise ValueError("受管进程启动日志设置缺少有效 revision 或格式")
+        if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+            raise ValueError("日志 revision 非法")
         selected_level = contract.default_level if level is None else level
         if isinstance(selected_level, str):
             resolved_level = contract.levels.get(selected_level.strip().lower())
@@ -171,12 +190,6 @@ def configure_application_logging(
         selected_pretty = contract.default_pretty if pretty is None else pretty
         if type(selected_pretty) is not bool:
             raise TypeError("日志 pretty 必须是布尔值")
-        root_logger = logging.getLogger()
-        handler = next(
-            (candidate for candidate in root_logger.handlers
-             if candidate.name == APPLICATION_LOG_HANDLER_NAME),
-            None,
-        )
         if handler is None:
             handler = _RuntimeHandler(stream if stream is not None else _STDERR_PROXY)
             handler.log_sink = _read_runtime_log_sink() if stream is None else None
@@ -191,7 +204,7 @@ def configure_application_logging(
         handler.setFormatter(_RuntimeFormatter(
             service=service, pretty=selected_pretty, contract=contract,
         ))
-        handler.applied_revision = None
+        handler.applied_revision = revision
         root_logger.setLevel(resolved_level)
         for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
             uvicorn_logger = logging.getLogger(name)
@@ -243,9 +256,8 @@ def apply_runtime_logging(
             return current
         if expected_revision != current.applied_revision:
             raise RuntimeLoggingConflictError("日志当前 revision 已变化")
-        handler = configure_application_logging(
-            service=current.service, level=normalized_level, pretty=pretty, stream=None,
+        configure_application_logging(
+            service=current.service, level=normalized_level, pretty=pretty, stream=None, revision=revision,
         )
-        handler.applied_revision = revision
         logging.getLogger(__name__).debug("应用产品日志设置: revision=%s", revision)
         return runtime_logging_state()

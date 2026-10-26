@@ -10,6 +10,10 @@ import pytest
 from fastapi import FastAPI
 
 import app.gateway.lifespan as gateway_lifespan
+from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerStage,
+    GatewayRuntimeHealthProof,
+)
 
 
 class _TrackedTransport(httpx.MockTransport):
@@ -75,7 +79,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
     config = SimpleNamespace(
-        payload={}, revision="pool-lifecycle-config", default_workspace_skill_groups=[],
+        payload={"logging": {"runtime": {"level": "info", "pretty": True}}}, revision="pool-lifecycle-config", default_workspace_skill_groups=[],
         gateway_process_health_poll_interval_seconds=1,
         gateway_process_health_request_timeout_seconds=1,
         gateway_process_connection_drain_timeout_seconds=1,
@@ -94,6 +98,12 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "load_or_create_gateway_id", Mock(return_value="gateway_pool"))
     monkeypatch.setattr(gateway_lifespan, "load_gateway_config", Mock(return_value=config))
     monkeypatch.setattr(gateway_lifespan, "create_registry", AsyncMock(return_value=registry))
+    logging_stage = GatewayRuntimeConsumerStage(
+        consumer_id="runtime-logging", generation="pool-generation", prepare=lambda: None,
+        apply=lambda: None, health=lambda: GatewayRuntimeHealthProof("runtime-logging", "pool-generation", "healthy", {}),
+        promote=lambda: None, rollback=lambda: None,
+    )
+    monkeypatch.setattr(gateway_lifespan, "RuntimeLoggingConsumer", Mock(return_value=SimpleNamespace(stage=lambda: logging_stage)))
     monkeypatch.setattr(gateway_lifespan, "GatewayConfigReloadService", Mock(return_value=service("config")))
     monkeypatch.setattr(gateway_lifespan, "_gateway_federation_policy_payload", Mock(return_value={}))
     monkeypatch.setattr(gateway_lifespan, "FederationControlStore", _ControlStore)

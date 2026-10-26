@@ -16,10 +16,10 @@
 ## 3. 进程级热应用
 
 - [x] 3.1 为真实进程提供受既有本机认证保护的日志设置应用/确认入口，按实例与 revision 幂等处理，不按工作区重复应用共享 Backend。
-- [ ] 3.2 将日志注册为 Gateway 配置 runtime consumer，复用现有 Launcher 控制通道和托管服务管理链，完成 prepare、逐进程 apply、proof 和 promotion。
-- [ ] 3.3 处理新增/退出进程、同端口换代及迟到确认，保证新实例 readiness 前取得有效设置；Launcher bootstrap 设置在 ready 前被权威设置替换。
-- [ ] 3.4 贯通拒绝、超时、最终 CAS 冲突及补偿失败，复用 apply journal 与 recovery_required，逐进程暴露真实状态；日志 sink 错误避免递归和静默吞噬。
-- [ ] 3.5 保留混合候选整体生效规则；移除日志必需重启的旧判断与 schema 文案，MCP 等其它依赖仍按其既有策略生效。
+- [x] 3.2 将日志注册为 Gateway 配置 runtime consumer，复用现有 Launcher 控制通道和托管服务管理链，完成 prepare、逐进程 apply、proof 和 promotion。
+- [x] 3.3 处理新增/退出进程、同端口换代及迟到确认，保证新实例 readiness 前取得有效设置；Launcher bootstrap 设置在 ready 前被权威设置替换。
+- [x] 3.4 贯通拒绝、超时、最终 CAS 冲突及补偿失败，复用 apply journal 与 recovery_required，逐进程暴露真实状态；日志 sink 错误避免递归和静默吞噬。
+- [x] 3.5 保留混合候选整体生效规则；移除日志必需重启的旧判断与 schema 文案，MCP 等其它依赖仍按其既有策略生效。
 
 ## 4. 集中验证与验收
 
@@ -116,3 +116,13 @@
 - `gateway-apply-focused-final-016` 74通过，`gateway-apply-config-regression-021` 71通过，`launcher-startup-control-final-017` 51通过；`launcher-apply-real-handoff-022` 两项真实Launcher／Gateway检查通过，覆盖现有执行、日志控制和交接。新增验收证明最终CAS冲突仍补偿原对象，替换的消费者不被旧回退误改；原始异常身份仍逐对象断言。013首次3项失败暴露补偿异常只剩字符串的问题，已保留异常组后验证；014另有新增测试误写journal终态，按既有SQLite合同改为committed，未放宽业务期限或身份。
 - 015曾暴露深cwd相对socket被展开后超长；已把绝对端点与100字节校验统一在原地址owner，迁齐调用方和测试，017确认。`gateway-apply-pyright-comparison-026.json`核55条基线／54条当前、无新增；Ruff对照8／8无新增，不称全仓静态全绿。证据仍在既有临时artifacts目录，所有运行有进程外保护、源码指纹、raw和实际退出码。
 - 当前仍9／22。尚未注册日志consumer或开放候选自动热更新，3.2／3.3／3.4仍待实现；Windows Python命名管道分支和macOS原生入口未实机验证，未修改Web。本切片不替代完整多进程热更新、失败补偿和双工作区验收。
+
+### 3.2—3.5 真实进程热应用与启动设置（2026-10-26）
+
+- 日志已成为 Gateway runtime consumer：prepare 到最终 SQLite promotion／补偿后持有原 registry 拓扑锁，按实际实例冻结本机受管集合。共享 Backend 只应用一次；未受管的本机 URL 与远端目标不参与。Launcher 复用原 IPC，Gateway 直接使用原 writer，其余进程使用既有认证控制入口。发送前登记副作用，确认后保存实际实例／revision／设置；账本不保存原生日志路径。
+- 启动 owner 在锁内通过当前 Gateway 配置提供者取得 revision／level／pretty，交付新 Backend 和 Node；首次日志前严格解析，后续 lifespan 初始化不覆盖热应用。Gateway 在加载有效配置时登记 revision；普通启动与 pending successor 在 readiness 前确认 Launcher 及已接管进程。最终 CAS 失败仍补偿原对象；进程退出、实例换代和外来 revision 不被迟到确认或回退覆盖。
+- 请求拒绝、响应丢失、最终 CAS 冲突、替换实例、外来修改和补偿失败均有定向验证。超时后查询实际状态，再决定恢复；失败进程保留实际差异并进入 recovery_required，其余进程继续补偿。应用尚未返回 result 的错误也携带已完成的补偿结算，不再一律宣称缺失回退句柄。诊断 sink 失败不递归写入，也不阻止事务结算，原始异常栈保留在异常链。日志策略及 schema 清单已改为 current 热应用；混合重启候选整体保持 pending，未提前修改日志。
+- `hot-focused-final-042` 为159通过；最后新增的诊断 sink 断言由 `hot-failures-final-051` 的50项通过覆盖。此前扩大检查038为288通过／3项旧装具未提供必需 logging payload 的失败，迁齐装具后042通过；033的5项准备错误与034的1项失败分别来自测试装具缺少本地 root binding 和使用 slots 对象的 __dict__，未放宽业务断言。036因误写不存在的测试路径未执行用例，保留原始退出码，不计通过。
+- `hot-real-launcher-final-043` 两项真实产品检查通过：直接修改隔离用户 JSONC，由原 watcher 生成候选，五类进程依次确认 DEBUG、WARNING 和恢复原设置，逐项核 revision、格式、实际输出、PID／实例／文件身份保持；随后真实 pending handoff 继续执行并给存活进程确认新有效 revision。037／039先后暴露验收仍写死 active revision、仍要求存活进程保留旧 revision 的预期；改为精确核候选／promotion 序号及新有效 revision，身份、日志文件和资源保持断言未放宽。
+- `hot-js-regression-final-052` 为264通过／1项平台跳过。`hot-types-comparison-final-053.json` 核同一完整 HEAD 归档的 Pyright109条基线／98条当前、无新增；Ruff11／10、无新增，不称全仓静态全绿。4503份归档 blob 已逐一核验，临时源码树已删除。全部命令、源码指纹、raw与退出码仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`；正式产品现场留在对应测试路径。030因错误调用未安装的 pyright 入口未执行分析，后续改用既有离线 uvx 工具完成，不改环境依赖。
+- 当前13／22。2.5完整诊断、双工作区真实应用、真实进程链故障注入、WARNING 下完整 PTY 字节验收及最终清理仍未完成；单 Backend 的真实检查和进程替身的共享去重证明不代替4.4／4.5完整验收。本切片未修改 Web，不新增 Web 构建；Windows Python IPC／完整热应用与 macOS 原生验收未运行，保留未验证范围。

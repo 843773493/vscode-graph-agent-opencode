@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
   configureRuntimeLogging, createRuntimeLogger, formatRuntimeLogRecord, loadRuntimeLogContract,
   applyRuntimeLogging, runtimeLoggingState,
@@ -8,6 +9,29 @@ import {
 const contract = loadRuntimeLogContract();
 const samples = JSON.parse(readFileSync("resources/logging/record-samples.json", "utf8"));
 afterEach(() => configureRuntimeLogging({}, contract));
+
+test("受管 Node 在首条日志前读取启动 revision，后续读取不重放启动设置", () => {
+  const result = spawnSync(process.env.BOXTEAM_NODE_BIN ?? "node", ["--input-type=module", "--eval", `
+    import { createRuntimeLogger, runtimeLoggingState, applyRuntimeLogging } from ${JSON.stringify(new URL("./serverRuntimeLogging.mjs", import.meta.url).href)};
+    const lines = [];
+    const logger = createRuntimeLogger("terminal", "startup", {write(value) { lines.push(value); }});
+    logger.info("应过滤");
+    const before = runtimeLoggingState("terminal");
+    applyRuntimeLogging({runtime_instance_id: before.runtime_instance_id, expected_revision: before.applied_revision,
+      revision: "hot-r2", level: "error", pretty: true}, "terminal");
+    process.stdout.write(JSON.stringify({before, after: runtimeLoggingState("terminal"), lines}));
+  `], {
+    env: { ...process.env, BOXTEAM_RUNTIME_LOGGING: JSON.stringify({revision: "startup-r1", level: "warning", pretty: false}) },
+    encoding: "utf8", timeout: 5000,
+  });
+  expect(result.status).toBe(0);
+  const { before, after, lines } = JSON.parse(result.stdout);
+  expect(before.applied_revision).toBe("startup-r1");
+  expect(before.level).toBe("warning");
+  expect(before.pretty).toBe(false);
+  expect(after).toEqual({...before, applied_revision: "hot-r2", level: "error", pretty: true});
+  expect(lines).toEqual([]);
+});
 
 for (const pretty of [true, false]) {
   test(`Python 与 JS 共用完整记录样本：pretty=${pretty}`, () => {

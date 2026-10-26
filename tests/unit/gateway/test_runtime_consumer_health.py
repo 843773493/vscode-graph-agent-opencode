@@ -10,6 +10,7 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 class _FakeProcess:
+    pid = 100_001
     def __init__(self, *, alive: bool = True) -> None:
         self.alive = alive
 

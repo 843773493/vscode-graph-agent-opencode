@@ -83,12 +83,14 @@ async def test_gateway_runtime_apply_rolls_back_consumers_on_partial_failure(
         coordinator=SimpleNamespace(),
     )
     initial = GatewayConfig(
+        payload={"logging": {"runtime": {"level": "info", "pretty": True}}},
         session_catalog_refresh_interval_seconds=30,
         session_catalog_max_concurrency=8,
         session_catalog_request_timeout_seconds=30,
         session_generator_poll_interval_seconds=1,
     )
     candidate = GatewayConfig(
+        payload=initial.payload,
         session_catalog_refresh_interval_seconds=5,
         session_catalog_max_concurrency=2,
         session_catalog_request_timeout_seconds=6,
@@ -140,7 +142,7 @@ def test_gateway_runtime_consumer_generation_is_unique_for_same_config(
             workspace_runtime_controller=None,
         )
     )
-    config = GatewayConfig(revision="same-digest")
+    config = GatewayConfig(revision="same-digest", payload={"logging": {"runtime": {"level": "info", "pretty": True}}})
 
     first = _gateway_runtime_consumer_stages(app, config, config)
     second = _gateway_runtime_consumer_stages(app, config, config)
@@ -176,8 +178,8 @@ def test_gateway_runtime_consumer_health_proof_carries_fencing_digest(
 
     stages = _gateway_runtime_consumer_stages(
         app,
-        GatewayConfig(revision="fenced-digest"),
-        GatewayConfig(revision="previous"),
+        GatewayConfig(revision="fenced-digest", payload={"logging": {"runtime": {"level": "info", "pretty": True}}}),
+        GatewayConfig(revision="previous", payload={"logging": {"runtime": {"level": "info", "pretty": True}}}),
         fencing_token="fence-token",
     )
 

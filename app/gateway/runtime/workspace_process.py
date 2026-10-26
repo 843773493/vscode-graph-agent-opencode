@@ -35,6 +35,8 @@ def _local_child_environment() -> dict[str, str]:
         environment.pop(key, None)
     environment.pop("BOXTEAM_RUNTIME_CONTROL_TOKEN", None)
     environment.pop("BOXTEAM_RUNTIME_LOG_SINK", None)
+    environment.pop("BOXTEAM_RUNTIME_LOGGING", None)
+    environment.pop("BOXTEAM_LAUNCHER_CONTROL", None)
     return environment
 
 
@@ -221,6 +223,7 @@ def start_local_backend_process(
     port: int,
     log_dir: Path,
     extra_env: dict[str, str] | None = None,
+    logging_startup: dict[str, object] | None = None,
     debug_port: int | None = None,
     asgi_app: str = "app.main:app",
     connection_drain_timeout_seconds: float = (
@@ -241,6 +244,8 @@ def start_local_backend_process(
     if extra_env:
         env.update(extra_env)
     env["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = get_gateway_local_token()
+    if logging_startup is not None:
+        env["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(logging_startup, separators=(",", ":"))
     command = [str(python_executable)]
     if debug_port is not None:
         command.extend(
@@ -293,6 +298,7 @@ def start_local_node_service_process(
     port: int,
     log_dir: Path,
     workspace_id: str,
+    logging_startup: dict[str, object] | None = None,
 ) -> ManagedProcess:
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
@@ -314,6 +320,8 @@ def start_local_node_service_process(
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = get_gateway_local_token()
+    if logging_startup is not None:
+        env["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(logging_startup, separators=(",", ":"))
     command = [
         node_executable,
         str(backend_path),

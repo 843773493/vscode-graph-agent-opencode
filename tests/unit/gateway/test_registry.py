@@ -272,6 +272,7 @@ class _ConfigAwareHealthClient:
 
 
 class _OrderedCloseProcess:
+    pid = 100_002
     def __init__(self, name: str, events: list[str], process_count: int) -> None:
         self._name = name
         self._events = events

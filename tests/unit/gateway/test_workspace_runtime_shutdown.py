@@ -15,6 +15,7 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 class ProcessProbe:
+    pid = 100_003
     def __init__(self, name: str, events: list[str]) -> None:
         self.name = name
         self.events = events

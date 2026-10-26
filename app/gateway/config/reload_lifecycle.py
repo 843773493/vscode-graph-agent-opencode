@@ -6,9 +6,13 @@ import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from traceback import format_exception
 
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyResult
+from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerApplyError,
+    GatewayRuntimeConsumerApplyResult,
+)
 from app.services.infrastructure.config import ConfigFileWatcher, ConfigReloadStatus
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import (
@@ -38,7 +42,11 @@ def _apply_failure_detail(error: Exception, *, stage: str) -> str:
             detail += f", winerror={winerror}"
     elif isinstance(error, sqlite3.Error):
         detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
-    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+    try:
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+    except Exception as sink_error:  # noqa: BLE001 — 诊断输出失败不能阻止配置事务结算，也不能递归写入同一 sink。
+        error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
+        detail += f", diagnostic_sink_error={type(sink_error).__name__}"
     return detail
 
 
@@ -558,6 +566,7 @@ class ReloadLifecycleMixin:
                     runtime_apply_started=runtime_apply_started,
                     runtime_result=runtime_result,
                     error_detail=error_detail,
+                    error=error,
                 )
                 error_detail = recovery_error or error_detail
                 journal = self._state_store.get_config_apply_journal(
@@ -573,7 +582,10 @@ class ReloadLifecycleMixin:
                         state=("recovery_required" if recovery_required else "failed"),
                         last_error=error_detail,
                     )
-                conflict = isinstance(error, ConfigConflictError)
+                conflict = isinstance(error, ConfigConflictError) or (
+                    isinstance(error, GatewayRuntimeConsumerApplyError)
+                    and isinstance(error.original_error, ConfigConflictError)
+                )
                 self._finish_gateway_candidate(
                     pending,
                     attempt_id=attempt_id,
@@ -646,12 +658,26 @@ class ReloadLifecycleMixin:
         runtime_apply_started: bool,
         runtime_result: GatewayRuntimeConsumerApplyResult | None,
         error_detail: str,
+        error: Exception,
     ) -> tuple[bool, str | None]:
         """在 active promotion 失败时补偿已经发生的 Gateway 运行时变更。"""
 
         if not runtime_apply_started:
             return False, None
         if runtime_result is None:
+            if isinstance(error, GatewayRuntimeConsumerApplyError):
+                self._state_store.update_config_apply_journal(
+                    apply_id=apply_id, expected_state="applying", state="recovery_required", last_error=error_detail,
+                )
+                self._state_store.record_config_apply_compensation(
+                    apply_id=apply_id, compensation={
+                        "resource": "gateway-runtime-config", "action": "rollback",
+                        "status": "failed" if error.recovery_required else "succeeded",
+                        "detail": {"consumer_states": error.consumer_states},
+                        "error": error_detail if error.recovery_required else None,
+                    },
+                )
+                return error.recovery_required, None
             self._state_store.update_config_apply_journal(
                 apply_id=apply_id,
                 expected_state="applying",

@@ -110,9 +110,11 @@ class RegistryCoreMixin:
         *,
         storage_path: Path,
         state_store: GatewayStateStore | None = None,
+        runtime_logging_config: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._storage_path = storage_path
         self._state_store = state_store
+        self._runtime_logging_config = runtime_logging_config
         self._targets: dict[str, WorkspaceTarget] = {}
         self._active_workspace_id: str | None = None
         self._registry_revision = 0
@@ -139,6 +141,10 @@ class RegistryCoreMixin:
     @property
     def active_workspace_id(self) -> str | None:
         return self._active_workspace_id
+
+    def runtime_logging_startup(self) -> dict[str, object] | None:
+        """在生命周期锁内取得当前权威配置，不缓存等待启动期间可能失效的副本。"""
+        return self._runtime_logging_config() if self._runtime_logging_config is not None else None
     @property
     def registry_revision(self) -> int:
         """返回最近一次持久化成功的 registry revision。"""

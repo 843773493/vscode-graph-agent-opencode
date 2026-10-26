@@ -45,6 +45,10 @@ from app.gateway.runtime.consumer_protocol import (
     runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.logging_consumer import (
+    RuntimeLoggingConsumer,
+    logging_progress_recorder,
+)
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 
 logger = logging.getLogger(__name__)
@@ -167,6 +171,16 @@ def _gateway_runtime_consumer_stages(
     generation = f"gateway-runtime:{candidate.revision}:{uuid4().hex}"
     fencing_token_digest = runtime_fencing_token_digest(fencing_token)
     stages: list[GatewayRuntimeConsumerStage] = []
+    if candidate.payload["logging"] != previous.payload["logging"]:
+        registry = app.state.registry
+        state_store = app.state.gateway_state
+        if not isinstance(registry, GatewayWorkspaceRegistry) or not isinstance(state_store, GatewayStateStore):
+            raise RuntimeError("日志热应用缺少 Gateway 生命周期与配置 owner")
+        stages.append(RuntimeLoggingConsumer(
+            registry=registry, candidate=candidate, generation=generation,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+            record=logging_progress_recorder(state_store, fencing_token),
+        ).stage())
     catalog_search_service = getattr(
         app.state,
         "session_catalog_search_service",

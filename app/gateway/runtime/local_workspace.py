@@ -388,6 +388,7 @@ async def _start_member_auxiliary_services(
     runtime: WorkspaceRuntime | None = None,
     preserve_adopted_processes_on_failure: bool = False,
     preserve_mount_urls: bool = False,
+    logging_startup: dict[str, object] | None = None,
 ) -> WorkspaceRuntime:
     runtime = runtime or WorkspaceRuntime(service_urls={}, backend_workspace_id=mount.workspace_id)
     started: list[str] = []
@@ -415,6 +416,7 @@ async def _start_member_auxiliary_services(
                 handle = adopted or start_local_node_service_process(
                     project_root=project_root, workspace_root=mount.workspace_root,
                     service=node_service, port=port, log_dir=log_dir, workspace_id=mount.workspace_id,
+                    logging_startup=logging_startup,
                 )
                 runtime.set_process(service, handle, adopted=adopted is not None)
                 started.append(service)
@@ -501,6 +503,7 @@ async def start_managed_backend_runtime(
                 poll_interval_seconds=health_poll_interval_seconds,
                 preserve_adopted_processes_on_failure=preserve_adopted_processes_on_failure,
                 preserve_mount_urls=preserve_generation or adopted is not None,
+                logging_startup=registry.runtime_logging_startup(),
             )
             mount = replace(
                 mount,
@@ -525,6 +528,7 @@ async def start_managed_backend_runtime(
             owner.set_process(start_local_backend_process(
                 project_root=project_root, mounts=tuple(startup_mounts), backend_generation=contract.generation,
                 port=port, log_dir=log_dir,
+                logging_startup=registry.runtime_logging_startup(),
                 extra_env={"BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(list(default_skill_groups), ensure_ascii=False, separators=(",", ":"))},
                 debug_port=contract.debug_port, connection_drain_timeout_seconds=connection_drain_timeout_seconds,
             ))

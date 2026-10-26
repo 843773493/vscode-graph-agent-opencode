@@ -172,6 +172,9 @@ def _windows_process_is_alive(pid: int) -> bool:
 
 
 class ManagedProcessHandle(Protocol):
+    @property
+    def pid(self) -> int: ...
+
     def is_alive(self) -> bool: ...
 
     def request_terminate(self) -> None: ...
@@ -205,6 +208,10 @@ class ManagedProcess:
             self._windows_root_start_time = _windows_process_start_time(
                 self.process.pid
             )
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
 
     def is_alive(self) -> bool:
         return self.process.poll() is None

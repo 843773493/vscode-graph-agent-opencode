@@ -26,6 +26,7 @@ class ProcessProbe:
     terminate_requested: bool = False
     failure: Exception | None = None
     process: object = field(default_factory=object)
+    pid: int = 100_000
 
     def is_alive(self) -> bool:
         return self.alive

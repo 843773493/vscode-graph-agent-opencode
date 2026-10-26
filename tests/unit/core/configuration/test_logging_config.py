@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,39 @@ def isolated_root_logger() -> Iterator[logging.Logger]:
             logger.handlers = handlers
             logger.setLevel(level)
             logger.propagate = propagate
+
+
+def test_managed_startup_applies_revision_before_first_log_and_does_not_replay_on_lifespan(
+    isolated_root_logger: logging.Logger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = io.StringIO()
+    monkeypatch.setattr("sys.stderr", output)
+    monkeypatch.delenv("BOXTEAM_RUNTIME_LOG_SINK", raising=False)
+    monkeypatch.setenv("BOXTEAM_RUNTIME_LOGGING", json.dumps({"revision": "startup-r1", "level": "warning", "pretty": False}))
+    configure_application_logging(service="backend")
+    initial = runtime_logging_state()
+    assert (initial.applied_revision, initial.level, initial.pretty) == ("startup-r1", "warning", False)
+    logging.getLogger("app.startup").info("首次日志已过滤")
+    assert output.getvalue() == ""
+    apply_runtime_logging(runtime_instance_id=initial.runtime_instance_id, revision="hot-r2", expected_revision="startup-r1", level="error", pretty=True)
+    configure_application_logging(service="backend")
+    current = runtime_logging_state()
+    assert current == replace(initial, applied_revision="hot-r2", level="error", pretty=True)
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"revision": None, "level": "info", "pretty": True},
+    {"revision": "r1", "level": "info", "pretty": "false"},
+    {"revision": "r1", "level": 1, "pretty": False},
+    {"revision": "r1", "level": "warn", "pretty": False},
+    {"revision": "r1", "level": "info", "pretty": False, "extra": 1},
+])
+def test_malformed_managed_logging_startup_is_rejected_before_readiness(
+    isolated_root_logger: logging.Logger, monkeypatch: pytest.MonkeyPatch, payload: dict[str, object],
+) -> None:
+    monkeypatch.setenv("BOXTEAM_RUNTIME_LOGGING", json.dumps(payload))
+    with pytest.raises((ValueError, TypeError)):
+        configure_application_logging(service="backend")
 
 
 @pytest.mark.parametrize("pretty", [True, False])

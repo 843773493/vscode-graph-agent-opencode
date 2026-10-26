@@ -270,8 +270,7 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
         domain="gateway",
         default_policy="restart_gateway",
         rules=(
-            # TODO：接通日志跨进程 apply/proof 后改为热应用；此前不能虚报候选已生效。
-            ConfigPolicyRule("/logging/runtime/*", "restart_gateway", "restart_gateway"),
+            ConfigPolicyRule("/logging/runtime/*", "immediate_read", "current"),
             ConfigPolicyRule("/ui/*", "immediate_read", "current"),
             ConfigPolicyRule("/permissions", "immediate_read", "current"),
             ConfigPolicyRule("/permissions/federation", "immediate_read", "current"),

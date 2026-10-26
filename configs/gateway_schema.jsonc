@@ -4,7 +4,7 @@
   "$id": "https://boxteam.dev/schemas/gateway-config-v3.json",
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
-    { "pattern": "/logging/runtime/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
+    { "pattern": "/logging/runtime/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/ui/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },

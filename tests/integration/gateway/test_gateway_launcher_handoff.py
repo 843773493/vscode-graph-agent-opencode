@@ -18,6 +18,7 @@ import httpx
 from app.core.logging_contract import load_runtime_log_contract
 from tests.integration.gateway.runtime_logging_controls import (
     verify_runtime_logging_controls,
+    verify_runtime_logging_reload,
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.ports import integration_port_block_for_file
@@ -486,6 +487,11 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             if message["role"] == "assistant"
         ] == [(session_id, thread_id, "基础回放")]
 
+        verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts)
+        before_restart_status = _get_json(status_url, token)["data"]
+        assert isinstance(before_restart_status, dict)
+        active_before_restart = before_restart_status["active_revision"]
+        assert isinstance(active_before_restart, int)
         config_path = boxteam_home / "config" / "gateway.jsonc"
         document = config_path.read_text(encoding="utf-8")
         poll_match = re.search(
@@ -512,6 +518,8 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         )
         pending_data = pending["data"]
         assert isinstance(pending_data, dict)
+        assert pending_data["active_revision"] == active_before_restart
+        assert pending_data["pending_revision"] == active_before_restart + 1
         candidate_id = pending_data.get("candidate_id")
         assert isinstance(candidate_id, str)
         candidate_ref = pending_data.get("candidate_ref")
@@ -586,7 +594,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         final_status_data = final_status["data"]
         assert isinstance(final_status_data, dict)
         assert final_status_data["restart_required"] is False
-        assert final_status_data["active_revision"] == 3
+        assert final_status_data["active_revision"] == pending_data["pending_revision"] + 1
         assert candidate_ref not in {final_status_data.get("candidate_ref")}
         replayed_gateway_events = _get_json(gateway_events_url, token)
         replayed_gateway_data = replayed_gateway_events["data"]
@@ -631,7 +639,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             ).fetchone()
             assert intent_record is not None
             assert intent_record[0] == "active"
-            assert snapshot == (3, intent_record[1])
+            assert snapshot == (pending_data["pending_revision"] + 1, intent_record[1])
             registry_metadata_record = database.execute(
                 "SELECT payload_json FROM gateway_config "
                 "WHERE config_key = 'workspace_registry_meta'"
@@ -707,7 +715,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 base = target["services"][service]["local_url"]
                 suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
                 state = client.get(f"{base.rstrip('/')}{suffix}", headers=headers).json()["data"]
-                assert state == logging_states[role], role
+                assert state == logging_states[role] | {"applied_revision": current["applied_revision"]}, role
                 sink = state["log_sink"]
                 path = Path(sink["path"])
                 assert str(path.stat().st_ino) == sink["inode"]

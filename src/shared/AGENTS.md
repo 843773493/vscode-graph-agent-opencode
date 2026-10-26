@@ -10,6 +10,7 @@
 - `sseRuntimeValidators.js`：由协议生成流程维护的校验器。
 - 与上述 JavaScript 实现对应的 `*.d.ts` 类型声明。
 - `serverRuntimeLogging.mjs`：Launcher、Terminal 和 Browser 共用的 Node 产品日志合同、实例身份、等级及文本编码。只在服务端导入，不进入浏览器依赖图。
+- 受管 Node 首次使用日志入口前严格校验 `BOXTEAM_RUNTIME_LOGGING` 的 revision／level／pretty；之后读取实际 writer 状态，不重放启动值覆盖热应用。未受管入口仍使用共享合同默认值。
 - Gateway 交付的 `BOXTEAM_RUNTIME_LOG_SINK` 仅提供冻结文件身份；进程状态同时核对实际 stdout/stderr 与当前文件的 device/inode，不能把环境中的路径当成已验证去向。Launcher 通过 `registerRuntimeLogSink` 登记自己实际持有的日志描述符，登记成功后才提供诊断证明；未交付证明时 `log_sink` 为 null。
 - `serverRuntimeLoggingControl.mjs`：复用 Gateway 私有凭据与既有服务端口／Launcher 控制通道的日志查询和应用。实际设置与 revision 只在日志入口保存；同实例、同 revision 重放幂等，冲突和过期确认明确拒绝。Launcher 应用确认复用其原 Logger 和文件 sink。
 

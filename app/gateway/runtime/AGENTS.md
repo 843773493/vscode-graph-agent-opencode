@@ -20,6 +20,8 @@ runtime/
 ├── ssh_process.py         SSH 隧道进程
 ├── port_forwarding.py     本地与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议
+├── logging_control.py     真实进程的受认证日志状态与应用确认
+├── logging_consumer.py    冻结进程集合、逐进程应用与补偿结算
 ├── development_restart.py 开发运行时重启协调
 └── skill_sources.py       Gateway 到 Workspace 的 Skill 快照来源
 ```
@@ -45,6 +47,8 @@ runtime/
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
+- 日志消费者从 prepare 到最终配置结算持有原 registry 的拓扑锁；共享 Backend 按实际实例确认，不按挂载工作区重复应用。逐进程发送前先登记副作用，超时后查询实际状态再补偿，不能把结果未知当作未生效。
+- 新受管进程通过 `BOXTEAM_RUNTIME_LOGGING` 接收已验证的 revision、level 与 pretty；该值在生命周期锁内从当前 Gateway 配置 owner 读取，不能缓存等待启动前的旧候选。它只交付启动设置，不构成第二个运行期配置来源。
 - 子进程日志在打开／轮转前核对同路径的写入归属；交付中断不能当作空闲。detach 只关闭当前 Gateway 的描述符，存活进程组继续保留归属。完整关闭后才释放；接管通过受认证的进程状态核对实际描述符和文件身份，不重开日志。
 - 辅助服务入口缺失只向普通生命周期响应及持久错误发布 service、stage 和异常类型，安装目录位置完整记录在 Gateway 诊断日志，不进入普通注册表投影。
 - Gateway 把 `runtime.workspace.default_skill_groups` 作为环境变量传给受管 Workspace，并仅观察自身 `${BOXTEAM_HOME}/skills`，向认证且已登记的本机 Workspace 发布无路径的原始 Skill 快照；Skill 语义、工具注册和 Agent 业务逻辑由 Workspace 运行时负责。

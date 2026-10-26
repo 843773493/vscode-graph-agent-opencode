@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from app.core.env import get_project_root
@@ -126,12 +128,20 @@ async def create_registry(
     gateway_config: GatewayConfig | None = None,
     state_store: GatewayStateStore | None = None,
     preserve_existing_managed_runtimes: bool = False,
+    runtime_config_provider: Callable[[], GatewayConfig] | None = None,
 ) -> GatewayWorkspaceRegistry:
     gateway_root = get_gateway_root()
     resolved_gateway_config = gateway_config or load_gateway_config()
+
+    def current_logging_config() -> dict[str, object]:
+        current = runtime_config_provider() if runtime_config_provider is not None else resolved_gateway_config
+        settings = cast(dict[str, object], cast(dict[str, object], current.payload["logging"])["runtime"])
+        return {"revision": current.revision, "level": settings["level"], "pretty": settings["pretty"]}
+
     registry = GatewayWorkspaceRegistry(
         storage_path=gateway_root / "workspaces.json",
         state_store=state_store,
+        runtime_logging_config=current_logging_config,
     )
     persisted_targets = registry.targets()
     persisted_targets_by_id = {
