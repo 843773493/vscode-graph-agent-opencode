@@ -66,7 +66,7 @@ def request_identity():
 
 
 @pytest.fixture
-async def source_case(tmp_path: Path, request_identity: str):
+async def source_case(tmp_path: Path, request_identity: str, request: pytest.FixtureRequest):
     assert get_current_request_id() == request_identity
     home, workspace = tmp_path / "gateway-home", tmp_path / "workspace"
     home.mkdir()
@@ -82,7 +82,7 @@ async def source_case(tmp_path: Path, request_identity: str):
         workspace_id=load_or_create_workspace_id(workspace), connection=GatewayTransportConnection(gateway_url="http://gateway.test"),
         local_token_supplier=lambda: "test-local-token", observation_channel=channel,
         # 本组快照合同使用显式低频轮询；通知行为由独立的事件用例验证。
-        update_policy=SourceUpdatePolicy(mode="poll", poll_interval="1h"),
+        update_policy=getattr(request, "param", SourceUpdatePolicy(mode="poll", poll_interval="1h")),
     )
     try:
         yield owner, source, skill, channel
@@ -451,11 +451,11 @@ async def test_navigation_preserves_file_execution_error_domain(source_case, nav
     assert source._owners == {}
 
 
+@pytest.mark.parametrize("source_case", [SourceUpdatePolicy()], indirect=True)
 async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
     source_case, request_identity: str,
 ):
     owner, source, skill, _channel = source_case
-    source._update_policy = SourceUpdatePolicy()
     extra_context: ContextVar[str | None] = ContextVar("skill_observer_probe", default=None)
     gateway_token = set_current_gateway_id("gateway_e1d881d48d86e50c01f49e43069fc7d1")
     actor_token = set_current_navigation_actor("inherited-actor")
@@ -474,12 +474,14 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
 
     async def reconcile_with_poll_completion(
         *, gateway_id: str, wait_for_connection: bool = False, independent_poll: bool = False,
+        observation_generation=None,
     ) -> None:
         nonlocal completed_polls
         await reconcile(
             gateway_id=gateway_id,
             wait_for_connection=wait_for_connection,
             independent_poll=independent_poll,
+            observation_generation=observation_generation,
         )
         if independent_poll:
             completed_polls += 1

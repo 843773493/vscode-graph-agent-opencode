@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import httpx
 from pydantic import ValidationError
 
+from app.core.lifecycle import LifetimeScope
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
@@ -78,6 +79,14 @@ class _GatewaySkillState:
     bound: bool = False
 
 
+@dataclass(slots=True, eq=False)
+class _ObservationGeneration:
+    policy: SourceUpdatePolicy
+    scope: LifetimeScope
+    activated: asyncio.Event = field(default_factory=asyncio.Event)
+    tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+
+
 class GatewaySkillSources:
     """按真实 Gateway owner 共享来源；请求准备只读取该 owner 的 accepted 事实。"""
 
@@ -91,7 +100,68 @@ class GatewaySkillSources:
         self._local_token_supplier = local_token_supplier
         self._channel = observation_channel
         self._owners: dict[str, _GatewaySkillState] = {}
-        self._update_policy = update_policy if update_policy is not None else SourceUpdatePolicy()
+        self._generation = _ObservationGeneration(
+            policy=update_policy if update_policy is not None else SourceUpdatePolicy(),
+            scope=LifetimeScope("gateway-skill-observation-initial"),
+        )
+        self._generation.activated.set()
+        self._generations = {self._generation}
+
+    def prepare_update_policy(self, policy: SourceUpdatePolicy, scope: LifetimeScope) -> Callable[[], None]:
+        """准备休眠观察任务；配置提交前不触碰当前订阅或 accepted 快照。"""
+        generation = _ObservationGeneration(policy=policy, scope=LifetimeScope("gateway-skill-observation"))
+        self._generations.add(generation)
+
+        async def close_generation() -> None:
+            await self._close_generation(generation)
+
+        scope.register(close_generation, label="gateway-skill-update-policy")
+        for state in self._owners.values():
+            if state.bound:
+                self._prepare_observer(state, generation)
+
+        def activate() -> None:
+            previous = self._generation
+            # 取消先于新任务恢复，旧响应不能在发布后继续接受或发布错误状态。
+            for task in previous.tasks.values():
+                task.cancel()
+            self._generation = generation
+            for state in self._owners.values():
+                if state.bound:
+                    self._prepare_observer(state, generation)
+                    state.task = generation.tasks.get(state.gateway_id)
+            generation.activated.set()
+
+        return activate
+
+    def _prepare_observer(self, state: _GatewaySkillState, generation: _ObservationGeneration) -> None:
+        if generation.policy.mode == "manual" or state.gateway_id in generation.tasks:
+            return
+
+        async def observe() -> None:
+            await generation.activated.wait()
+            await self._observe(state.gateway_id, generation)
+
+        task = asyncio.create_task(
+            observe(), name=f"workspace-gateway-skill-sources:{state.gateway_id}", context=Context(),
+        )
+        generation.tasks[state.gateway_id] = task
+
+        async def stop() -> None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        generation.scope.register(stop, label=f"gateway-skill-observer:{state.gateway_id}")
+
+    async def _close_generation(self, generation: _ObservationGeneration) -> None:
+        await generation.scope.close()
+        for state in self._owners.values():
+            if state.task is not None and state.task is generation.tasks.get(state.gateway_id):
+                state.task = None
+        self._generations.discard(generation)
 
     def _state(self, gateway_id: str) -> _GatewaySkillState:
         if not gateway_id:
@@ -201,11 +271,8 @@ class GatewaySkillSources:
             self.snapshot(gateway_id=gateway_id)
             # 观察是独立 HTTP 请求，由 Gateway TraceMiddleware 创建每轮身份。
             state.bound = True
-            if self._update_policy.mode != "manual":
-                state.task = asyncio.create_task(
-                    self._observe(gateway_id),
-                    name=f"workspace-gateway-skill-sources:{gateway_id}", context=Context(),
-                )
+            self._prepare_observer(state, self._generation)
+            state.task = self._generation.tasks.get(gateway_id)
 
     def _client(self, state: _GatewaySkillState) -> httpx.AsyncClient:
         if state.client is None:
@@ -214,11 +281,14 @@ class GatewaySkillSources:
 
     async def reconcile(
         self, *, gateway_id: str, wait_for_connection: bool = False, independent_poll: bool = False,
+        observation_generation: _ObservationGeneration | None = None,
     ) -> None:
         """唯一接受入口；独立观察由 Gateway 的 HTTP 入口创建请求身份。"""
         state = self._state(gateway_id)
         # 条件请求、验证、接受与错误发布属于同一次 owner 对账，迟到结果不得越过新版。
         async with state.reconcile_lock:
+            if observation_generation is not None and observation_generation is not self._generation:
+                return
             try:
                 request_id = None if independent_poll else require_current_request_id("Gateway Skill source snapshot")
                 headers = {"X-Local-Token": self._local_token_supplier()}
@@ -251,6 +321,8 @@ class GatewaySkillSources:
                             await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
                             continue
                         break
+                if observation_generation is not None and observation_generation is not self._generation:
+                    return
                 if response.status_code != 304:
                     response.raise_for_status()
                 response_request_id = response.headers.get("X-Request-ID")
@@ -277,6 +349,8 @@ class GatewaySkillSources:
                 self._accept_snapshot(snapshot, gateway_id=gateway_id)
                 state.etag = response.headers.get("ETag")
             except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
+                if observation_generation is not None and observation_generation is not self._generation:
+                    return
                 # 内部日志保留详细原因；公开观察只发布 owner 可用性，不泄漏凭据或路径。
                 state.error = type(error).__name__
                 self._notify(state)
@@ -321,27 +395,34 @@ class GatewaySkillSources:
             available=state.error is None and state.snapshot is not None and state.snapshot.available,
         ))
 
-    async def _observe(self, gateway_id: str) -> None:
+    async def _observe(self, gateway_id: str, generation: _ObservationGeneration) -> None:
         state = self._state(gateway_id)
-        interval = self._update_policy.poll_seconds
-        if self._update_policy.mode == "poll":
+        policy = generation.policy
+        interval = policy.poll_seconds
+        if policy.mode == "poll":
             assert interval is not None
-            while True:
+            while generation is self._generation:
                 await asyncio.sleep(interval)
-                await self.reconcile(gateway_id=gateway_id, independent_poll=True)
+                if generation is not self._generation:
+                    return
+                await self.reconcile(gateway_id=gateway_id, independent_poll=True, observation_generation=generation)
         cursor: str | None = None
         next_poll = time.monotonic() + interval if interval is not None else None
-        while True:
+        while generation is self._generation:
             try:
                 remaining = max(0, next_poll - time.monotonic()) if next_poll is not None else None
                 publication = await self._wait_for_publication(state, cursor, remaining=remaining)
+                if generation is not self._generation:
+                    return
                 if publication.changed or state.error is not None or (
                     next_poll is not None and time.monotonic() >= next_poll
                 ):
-                    await self.reconcile(gateway_id=gateway_id, independent_poll=True)
+                    await self.reconcile(gateway_id=gateway_id, independent_poll=True, observation_generation=generation)
                     next_poll = time.monotonic() + interval if interval is not None else None
                 cursor = publication.cursor
             except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
+                if generation is not self._generation:
+                    return
                 state.error = type(error).__name__
                 self._notify(state)
                 logger.error("Gateway Skill 发布通知失败: gateway_id=%s error=%s", gateway_id, error)
@@ -378,16 +459,15 @@ class GatewaySkillSources:
         return publication
 
     async def close(self) -> None:
-        tasks = [state.task for state in self._owners.values() if state.task is not None]
-        for state in self._owners.values():
-            state.task = None
-            state.bound = False
-        for task in tasks:
-            task.cancel()
         try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(
+                *(self._close_generation(generation) for generation in tuple(self._generations)),
+                return_exceptions=True,
+            )
             failures = [result for result in results if isinstance(result, Exception)]
             if failures:
                 raise ExceptionGroup("Gateway Skill source observation 清理失败", failures)
         finally:
+            for state in self._owners.values():
+                state.bound = False
             await asyncio.gather(*(state.client.aclose() for state in self._owners.values() if state.client is not None))

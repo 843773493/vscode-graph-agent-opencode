@@ -24,9 +24,10 @@ def _owner(
     published = published if published is not None else []
     scope_releases: list[str] = []
 
-    async def reconcile_candidate(config, scope) -> None:
+    async def reconcile_candidate(config, scope) -> ConfigPublication:
         reconcile.append(f"generation-candidate:{config['name']}")
         scope.register(lambda: scope_releases.append(config["name"]), label="candidate")
+        return lambda: None
 
     async def publish_candidate(generation: ConfigShadowGeneration, publish: ConfigPublication) -> None:
         if publish_error is not None:

@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.core.lifecycle import LifetimeScope
@@ -62,6 +63,15 @@ class ResourcePlatform:
     state_events: ResourceStateEventPublisher
     gateway_skill_sources: GatewaySkillSources | None
     navigation: ResourceNavigation | None
+
+    async def prepare_config(self, config: Mapping[str, object], scope: LifetimeScope) -> Callable[[], None]:
+        """由已有配置 shadow 持有候选订阅，accepted 来源继续由原 owner 管理。"""
+        resources = cast(Mapping[str, object], config["resources"])
+        skills = cast(Mapping[str, object], resources["skill_sources"])
+        policy = SourceUpdatePolicy.model_validate(skills["gateway_updates"])
+        if self.gateway_skill_sources is None:
+            return lambda: None
+        return self.gateway_skill_sources.prepare_update_policy(policy, scope)
 
     async def close(self) -> None:
         """释放实际持有的进程资源并发布 owner 已确认的轻量状态。"""

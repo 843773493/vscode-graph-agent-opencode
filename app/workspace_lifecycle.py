@@ -312,7 +312,10 @@ class WorkspaceLifespan:
                 )
 
             with _workspace_startup_stage(container, "config_service.start_watching"):
-                await container.config_service.start_watching(candidate_applier=apply_config_candidate)
+                await container.config_service.start_watching(
+                    candidate_applier=apply_config_candidate,
+                    shadow_reconcile=container.resource_platform.prepare_config,
+                )
             with _workspace_startup_stage(container, "trace_event_recorder.start"):
                 await container.trace_event_recorder.start()
             with _workspace_startup_stage(container, "job_event_bus.register_durable_listeners"):

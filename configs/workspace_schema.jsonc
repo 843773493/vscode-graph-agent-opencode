@@ -30,7 +30,7 @@
     { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/connection/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/gateway_updates/*", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
+    { "pattern": "/resources/skill_sources/gateway_updates/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
   ],
   "title": "BoxTeam Workspace Config Schema",
@@ -80,7 +80,7 @@
           "properties": {
             "gateway_updates": {
               "type": "object",
-              "description": "Gateway 快照获取触发策略；对象按配置层递归合并，修改后重启 Workspace 生效，原订阅随旧进程排空。",
+              "description": "Gateway 快照获取触发策略；对象按配置层递归合并，经配置 shadow 提交时切换，原订阅随后排空。",
               "additionalProperties": false,
               "required": ["mode", "poll_interval"],
               "properties": {

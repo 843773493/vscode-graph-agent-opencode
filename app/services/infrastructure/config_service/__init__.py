@@ -41,6 +41,7 @@ from app.services.infrastructure.config.session_defaults import SessionDefaults
 from app.services.infrastructure.config.shadow_adapter import (
     ConfigShadowLifecycleAdapter,
 )
+from app.services.infrastructure.config.shadow_scope import ShadowReconcile
 from app.services.infrastructure.config.state import (
     new_config_id,
 )
@@ -151,6 +152,7 @@ class ConfigService(ConfigSourceLayersMixin,
         )
         self._watcher: ConfigFileWatcher | None = None
         self._candidate_applier: ConfigCandidateApplier | None = None
+        self._shadow_reconcile: ShadowReconcile | None = None
         self._shadow_lifecycle = ConfigShadowLifecycleAdapter(
             validator=self._validate_shadow_config,
             reconcile=self._reconcile_shadow_config,

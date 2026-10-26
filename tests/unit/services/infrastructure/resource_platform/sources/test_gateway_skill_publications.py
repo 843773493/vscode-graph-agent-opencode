@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 
 import app.services.infrastructure.resource_platform.sources.gateway_skill_sources as gateway_sources
+from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import (
     TraceMiddleware,
     reset_current_request_id,
@@ -62,7 +63,7 @@ async def _until(predicate: Callable[[], bool]) -> None:
 
 
 @pytest.fixture
-async def publication_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def publication_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "gateway-home"))
     skill = tmp_path / "gateway-home/skills/demo/SKILL.md"
     skill.parent.mkdir(parents=True)
@@ -84,6 +85,7 @@ async def publication_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = GatewaySkillSources(
         workspace_id=WORKSPACE, connection=GatewayTransportConnection(gateway_url="http://gateway.test", timeout_seconds=1),
         local_token_supplier=lambda: token, observation_channel=ResourceObservationChannel(),
+        update_policy=getattr(request, "param", SourceUpdatePolicy()),
     )
     case = PublicationCase(owner, source, skill, client)
 
@@ -220,9 +222,9 @@ async def test_old_cursor_gap_and_restarted_owner_reconcile_current_publication(
         await restarted.close()
 
 
+@pytest.mark.parametrize("publication_case", [SourceUpdatePolicy(mode="manual")], indirect=True)
 async def test_manual_mode_has_one_initial_fetch_and_only_explicit_reconciliation(publication_case):
     case = publication_case
-    case.source._update_policy = SourceUpdatePolicy(mode="manual")
     await case.source.ensure_bound(GATEWAY)
     await case.source.ensure_bound(GATEWAY)
     old = case.source.snapshot(gateway_id=GATEWAY)
@@ -235,9 +237,9 @@ async def test_manual_mode_has_one_initial_fetch_and_only_explicit_reconciliatio
     assert len(case.requests) == 2 and all(r.method == "GET" for r in case.requests)
 
 
+@pytest.mark.parametrize("publication_case", [SourceUpdatePolicy(mode="poll", poll_interval="1h")], indirect=True)
 async def test_poll_mode_uses_configured_interval_and_same_snapshot_endpoint(publication_case, monkeypatch):
     case = publication_case
-    case.source._update_policy = SourceUpdatePolicy(mode="poll", poll_interval="1h")
     original_sleep = asyncio.sleep
     release = asyncio.Event()
     intervals: list[float] = []
@@ -266,9 +268,9 @@ async def test_poll_mode_uses_configured_interval_and_same_snapshot_endpoint(pub
     assert len(case.requests) == 2 and all(r.url.path == BASE for r in case.requests)
 
 
+@pytest.mark.parametrize("publication_case", [SourceUpdatePolicy(mode="event_poll", poll_interval="5m")], indirect=True)
 async def test_explicit_event_poll_reconciles_on_deadline_without_source_event(publication_case, monkeypatch):
     case = publication_case
-    case.source._update_policy = SourceUpdatePolicy(mode="event_poll", poll_interval="5m")
     clock = SimpleNamespace(value=1000.0)
     monkeypatch.setattr(gateway_sources, "time", SimpleNamespace(monotonic=lambda: clock.value))
     await case.source.ensure_bound(GATEWAY)
@@ -278,3 +280,91 @@ async def test_explicit_event_poll_reconciles_on_deadline_without_source_event(p
     clock.value += 301
     await _until(lambda: len(case.snapshot_requests) == 3)
     assert case.snapshot_requests[-1].headers["If-None-Match"] == '"' + case.source.snapshot(gateway_id=GATEWAY).revision + '"'
+
+
+@pytest.mark.parametrize("bind_after_prepare", [False, True])
+async def test_policy_candidate_rollback_then_manual_and_event_switch_share_accepted_owner(
+    publication_case, bind_after_prepare: bool,
+):
+    case = publication_case
+    aborted = LifetimeScope("aborted-policy")
+    manual = LifetimeScope("manual-policy")
+    event = LifetimeScope("event-policy")
+    try:
+        if not bind_after_prepare:
+            await case.source.ensure_bound(GATEWAY)
+        case.source.prepare_update_policy(SourceUpdatePolicy(mode="manual"), aborted)
+        if bind_after_prepare:
+            await case.source.ensure_bound(GATEWAY)
+        await _until(lambda: len(case.snapshot_requests) == 2)
+        state = case.source._state(GATEWAY)
+        old_task, client = state.task, state.client
+        accepted = case.source.snapshot(gateway_id=GATEWAY)
+        await aborted.close()
+        assert state.task is old_task and old_task is not None and not old_task.done()
+        activate_manual = case.source.prepare_update_policy(SourceUpdatePolicy(mode="manual"), manual)
+        assert state.task is old_task and case.source.snapshot(gateway_id=GATEWAY) is accepted
+        activate_manual()
+        await _until(old_task.done)
+        assert state.task is None and state.client is client and state.bound
+        case.skill.write_text("手动期间的新版本\n")
+        await _until(lambda: case.owner.snapshot(workspace_id=WORKSPACE).revision != accepted.revision)
+        assert case.source.snapshot(gateway_id=GATEWAY) is accepted
+        count = len(case.snapshot_requests)
+        case.source.prepare_update_policy(SourceUpdatePolicy(), event)()
+        await manual.close()
+        await _until(lambda: case.source.snapshot(gateway_id=GATEWAY).revision != accepted.revision)
+        assert len(case.snapshot_requests) == count + 1
+        assert state.client is client and case.source.snapshot(gateway_id=GATEWAY).entries[0].content == case.skill.read_text()
+        await event.close()
+        assert state.task is None and case.owner._publications.subscriber_ids == ()
+    finally:
+        await aborted.close()
+        await manual.close()
+        await event.close()
+
+
+@pytest.mark.parametrize("stage", ["notification", "snapshot"])
+async def test_retired_generation_cannot_publish_late_transport_error(publication_case, monkeypatch, stage: str):
+    case = publication_case
+    entered, release = asyncio.Event(), asyncio.Event()
+    manual = LifetimeScope("manual-after-late-response")
+
+    async def wait_ignoring_cancel() -> None:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # 模拟第三方传输已接收响应后不再响应取消；generation fence 仍必须阻止发布。
+            await release.wait()
+
+    if stage == "notification":
+        async def late_notification(*_args, **_kwargs):
+            await wait_ignoring_cancel()
+            raise ValueError("退役通知的错误")
+
+        monkeypatch.setattr(case.source, "_wait_for_publication", late_notification)
+    else:
+        client = case.source._state(GATEWAY).client
+        get = client.get
+
+        async def late_snapshot(*args, **kwargs):
+            if "X-Request-ID" not in kwargs["headers"]:
+                await wait_ignoring_cancel()
+                return httpx.Response(401, request=httpx.Request("GET", "http://gateway.test" + BASE))
+            return await get(*args, **kwargs)
+
+        monkeypatch.setattr(client, "get", late_snapshot)
+    try:
+        await case.source.ensure_bound(GATEWAY)
+        await asyncio.wait_for(entered.wait(), 2)
+        state = case.source._state(GATEWAY)
+        accepted, old_task, etag = state.snapshot, state.task, state.etag
+        case.source.prepare_update_policy(SourceUpdatePolicy(mode="manual"), manual)()
+        release.set()
+        await _until(old_task.done)
+        assert state.error is None and state.snapshot is accepted and state.etag == etag
+        assert case.source.snapshot(gateway_id=GATEWAY) is accepted
+    finally:
+        release.set()
+        await manual.close()

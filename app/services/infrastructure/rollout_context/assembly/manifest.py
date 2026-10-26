@@ -55,24 +55,27 @@ def _frozen_source_refs(
     if binding is None or snapshot.selection_policy == "summary_candidate":
         return {}, frozenset()
     contributions = {source.contribution_id: source for source in snapshot.contributions}
-    selected = {
-        entry.ref.ref_id: (source.source_binding.source_ref, source.source_revision)
+    selected_sources = {
+        entry.ref.ref_id: ((source.source_binding.source_ref, source.source_revision), source)
         for entry in snapshot.selection
         if entry.included and entry.ref.ref_type == "request_only"
         and entry.availability == "available"
         and (source := contributions.get(entry.contribution_id)) is not None
         and source.source_binding is not None
     }
+    selected = {
+        ref_id: identity for ref_id, (identity, _) in selected_sources.items()
+    }
     sources: dict[str, tuple[str, str]] = {}
     roots = set()
     for provenance in (() if binding.root is None else binding.root.sources):
         matches = [
-            ref_id for ref_id, identity in selected.items()
+            ref_id for ref_id, (identity, source) in selected_sources.items()
             if identity == (provenance.source_identity, provenance.revision)
-            and contributions[next(
-                entry.contribution_id for entry in snapshot.selection
-                if entry.ref.ref_type == "request_only" and entry.ref.ref_id == ref_id
-            )].root_placement == "root_eligible"
+            # A→B→A 的通知可复用内容版本；root 只对应完整 prompt，不对应 notice。
+            and source.source_kind == provenance.source_kind
+            and source.contribution_kind == "prompt"
+            and source.root_placement == "root_eligible"
         ]
         if len(matches) != 1:
             raise RuntimeError("source-cut-frontier-conflict: root 缺少唯一冻结 source selection")

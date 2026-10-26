@@ -261,8 +261,7 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/connection/*", "next_job", "next_job"),
             ConfigPolicyRule("/context/source_messages/grouping", "immediate_read", "current"),
-            # TODO(source-update-generation): 在原配置 shadow 内接通策略热切换及旧订阅排空；当前明确要求重启。
-            ConfigPolicyRule("/resources/skill_sources/gateway_updates/*", "restart_workspace", "restart_workspace"),
+            ConfigPolicyRule("/resources/skill_sources/gateway_updates/*", "immediate_read", "current"),
             ConfigPolicyRule("/mcp", "restart_workspace", "restart_workspace"),
         ),
     )

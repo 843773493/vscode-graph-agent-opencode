@@ -4,7 +4,7 @@
   "resources": {
     "skill_sources": {
       "gateway_updates": {
-        "mode": "event", // 修改后重启 Workspace 生效。
+        "mode": "event", // 经配置 shadow 提交时切换并排空旧订阅。
         "poll_interval": null // poll/event_poll 使用分钟或小时，例如 "5m"、"1h"。
       }
     }

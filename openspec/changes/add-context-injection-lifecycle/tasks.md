@@ -478,3 +478,11 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 当前配置不再接受旧 logger，API 合同夹具迁为 v2 并以已有 ui.max_concurrent_agents 触发类型错误／条件 schema 引用；JSON Pointer、错误归属、路径不泄露、旧快照不变及持久事件断言原样保留，不恢复旧配置兼容入口。075 为28 passed／78.88秒。
 - 072 完整 HEAD 原件在第三次真实 Job 的 helper 8秒等待处复现既存超时；第三轮与本场景第二轮统一采用20秒功能验收预算，业务期限和全部身份／顺序／hash／冷恢复断言不变。076 的 R01／R02 × inline／file 四组完整三轮全部通过，149.23秒；代码保留带原始证据的性能TODO，不将本次功能通过表述为性能优化完成。
 - 078 两测试文件Pyright基线与当前均14条既有诊断、零新增；全 config_service 及两文件Ruff基线／当前均27条TRY004、零新增。命令、前后源码指纹、raw、退出码及完整HEAD逐blob核验见 out/tests/temp/csm-kind-boundary/artifacts/ 的072／075—078；不代替Web、真实外部Provider、Windows或来源策略热切换总门。
+
+### 2026-10-26 Workspace 来源策略热切换
+
+- `gateway_updates` 经原配置 shadow 准备休眠观察任务，在 SQLite／cache／shadow 的同步发布点激活，再排空旧 scope；策略为 immediate_read/current。候选拒绝只关闭候选，accepted 快照、ETag、HTTP client 与来源 identity 由原 owner 继续持有；旧通知、正文及错误均受观察代次约束。发布后的激活异常绕过提交前 journal 拒绝路径，保留已发布事实与原始错误。
+- 真实来源 A→B→A 暴露 root 与 notice 共用内容版本的匹配歧义；封存 manifest 现在按 typed 完整 prompt 身份区分 root 与后续 notice，不改旧 sealed 字节或持久格式。091 两种 Provider 格式均重现旧错误，093 的回归与相邻 source-cut 4项通过；095 扩大验证148 passed，另1项既有旧库测试仅迁至23却用25版reader读取，3项fork装具拒绝非matrix启动；098 正式epoch-copy矩阵3项通过。迁移测试的修正另行提交。
+- 097 仅本切片的完整暂存树隔离验收：配置／来源218 passed，真实Gateway→Workspace→model_stream的策略event→manual→poll→event、in-flight冻结、manual旧正文、事件新正文、不可用阻断与冷重启完整1 passed／120.23秒。094已完成同一业务流程，仅最终计数仍为4而非新增manual轮次后的5，按实际场景修正计数后097全程通过；不削弱身份、顺序、hash或期限断言。完整测试源码逐blob核验后删除，正式输出保留。
+- 096 的15文件Pyright基线120／当前112、零新增，全config_service及受影响文件Ruff均27条既有TRY004、零新增；099 compileall／strict／diff检查通过。作者差异与调用闭包自查未发现新增双轨、第二accepted owner或路径回退；未冒称独审、Web、外部Provider或Windows通过。准确命令、前后指纹、raw、退出码及失败现场位于 out/tests/temp/csm-kind-boundary/artifacts/ 的090—099与staged-policy-097；无新增Web改动。
+- 9.9／9.10仍未完成：Gateway本地观察策略、其它获取能力组合与相应综合验收继续推进；不因该子切片勾选整项。团队／协作专项保持延期。

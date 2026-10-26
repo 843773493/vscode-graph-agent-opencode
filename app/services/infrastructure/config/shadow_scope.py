@@ -17,8 +17,9 @@ from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.config.contracts import ConfigPublication
 
+# 准备阶段完成所有校验／资源登记；返回的激活只做同步内存切换，不执行 I/O。
 ShadowReconcile = Callable[
-    [Mapping[str, object], LifetimeScope], Awaitable[None]
+    [Mapping[str, object], LifetimeScope], Awaitable[ConfigPublication]
 ]
 ShadowPublish = Callable[["ConfigShadowGeneration", ConfigPublication], Awaitable[None]]
 ShadowValidator = Callable[[Mapping[str, object]], None]
@@ -117,7 +118,7 @@ class ConfigShadowLifecycleOwner:
                 self._validator(config)
                 self._validate_bootstrap(config)
                 scope = LifetimeScope("config-generation-bootstrap")
-                await self._reconcile(config, scope)
+                activate = await self._reconcile(config, scope)
                 active = ConfigShadowGeneration(
                     generation=1,
                     revision=sha256_jcs(dict(config)),
@@ -130,6 +131,7 @@ class ConfigShadowLifecycleOwner:
                         raise ConfigShadowLifecycleError("publication_conflict", "bootstrap 重复发布")
                     self._active = active
                     self._readiness = "ready"
+                    activate()
 
                 await self._publish(active, publish)
                 if self._active is not active:
@@ -180,7 +182,7 @@ class ConfigShadowLifecycleOwner:
                 f"config-generation-candidate-{next_generation}"
             )
             try:
-                await self._reconcile(config, candidate_scope)
+                activate = await self._reconcile(config, candidate_scope)
                 candidate = ConfigShadowGeneration(
                     generation=next_generation,
                     revision=revision,
@@ -193,6 +195,7 @@ class ConfigShadowLifecycleOwner:
                         raise ConfigShadowLifecycleError("publication_conflict", "candidate 基线已变化或重复发布")
                     self._active = candidate
                     self._retired.append(active)
+                    activate()
 
                 await self._publish(candidate, publish)
                 if self._active is not candidate:

@@ -199,7 +199,40 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             first_notice = first_publication.json()["data"]
             assert first_notice["revision"] == original["revision"] and first_notice["gap"]
 
+            def switch_policy(mode: str, interval: str | None = None) -> None:
+                with httpx.Client(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, cookies=client.cookies, timeout=6, trust_env=False) as probe:
+                    initial_status = probe.get("/api/v1/config/reload-status")
+                    assert initial_status.status_code == 200, initial_status.text
+                    before = initial_status.json()["data"]
+                    config = commentjson.loads(config_path.read_text())
+                    config.setdefault("resources", {}).setdefault("skill_sources", {})["gateway_updates"] = {
+                        "mode": mode, "poll_interval": interval,
+                    }
+                    candidate = config_path.with_suffix(".candidate")
+                    candidate.write_text(json.dumps(config, ensure_ascii=False))
+                    candidate.replace(config_path)
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        response = probe.get("/api/v1/config/reload-status")
+                        assert response.status_code == 200, response.text
+                        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                        status = response.json()["data"]
+                        if status["revision"] != before["revision"]:
+                            assert status["healthy"] and not status["restart_required"], status
+                            assert not status["deferred_paths"]
+                            events = probe.get("/api/v1/config/events")
+                            assert events.status_code == 200, events.text
+                            event, = [event for event in events.json()["data"]["events"]
+                                      if event["active_revision"] == status["active_revision"]
+                                      and "/resources/skill_sources/gateway_updates/mode" in event["changed_paths"]]
+                            assert event["result"] == "applied" and event["activation_scope"] == "current"
+                            assert event["applied_paths"] == event["changed_paths"] and not event["deferred_paths"]
+                            return
+                        time.sleep(0.05)
+                    raise AssertionError(f"策略未通过真实配置监听发布: {mode}")
+
             def change_after_model_capture() -> None:
+                switch_policy("manual")
                 skill_file.write_bytes((FRONTMATTER + NEW_BODY).encode())
                 with httpx.Client(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=6, trust_env=False) as probe:
                     notified = probe.post(publication_path, json={"after_cursor": first_notice["cursor"]})
@@ -240,6 +273,15 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             assert OLD_BODY.strip() in second_text and NEW_BODY.strip() not in second_text
             tool_messages = [item for item in state.requests[1]["messages"] if item["role"] == "tool"]
             assert tool_messages and "loaded" in json.dumps(tool_messages)
+            # Gateway 已发布新版，但 manual 禁止后台获取；真实下一轮继续消费原 accepted 正文。
+            state.plan(session_id, thread_id, _text_reply("MANUAL_SNAPSHOT_OK"))
+            manual_job = await _job(client, session_id)
+            assert manual_job["status"] in {"completed", "succeeded"}, manual_job
+            manual_wire = json.dumps(state.requests[-1], ensure_ascii=False)
+            assert OLD_BODY.strip() in manual_wire and NEW_BODY.strip() not in manual_wire
+            await asyncio.to_thread(switch_policy, "poll", "1h")
+            await asyncio.to_thread(switch_policy, "event")
+            await asyncio.sleep(1.2)
             state.plan(session_id, thread_id, _text_reply("GATEWAY_SKILL_OK"))
             job = await _job(client, session_id)
             assert job["status"] in {"completed", "succeeded"}, job
@@ -285,7 +327,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             restored = await _job(client, session_id)
             assert restored["status"] in {"completed", "succeeded"}, restored
             assert NEW_BODY.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
-            assert len(state.requests) == len(state.call_ids) == 4
+            assert len(state.requests) == len(state.call_ids) == 5
             receipt = await client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack", json={"name": SKILL_NAME})
             assert receipt.status_code == 200, receipt.text
             assert receipt.json()["data"]["tracked"] is False

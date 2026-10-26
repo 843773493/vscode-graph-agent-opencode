@@ -1064,6 +1064,57 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_source_returning_to_root_revision_preserves_distinct_frozen_selections(
+    production_context, target_format,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    first = prepare("root-return-initial", target_format=target_format)
+    manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
+    second = prepare("root-return-update", target_format=target_format)
+    manager.observe("instruction:R01", "基础规则第一版", revision="instructions:1")
+    third = prepare("root-return-original", target_format=target_format)
+    initial = first["snapshot"]
+    snapshot = third["snapshot"]
+    assert snapshot.seal_binding.root == initial.seal_binding.root
+    prior_frames = second["snapshot"].seal_binding.prefix.state.frames
+    assert snapshot.seal_binding.prefix.state.frames[:len(prior_frames)] == prior_frames
+    assert "基础规则第一版" in third["messages"][-1].content
+    sources = [
+        source for source in snapshot.contributions
+        if source.source_binding is not None and source.source_binding.source_ref == "instruction:R01"
+    ]
+    assert [(source.contribution_kind, source.source_revision) for source in sources] == [
+        ("prompt", "instructions:1"), ("notice", "instructions:2"),
+        ("notice", "instructions:1"),
+    ]
+    ordinals = [connection.execute(
+        "SELECT source_ordinal FROM context_contributions WHERE contribution_id=?",
+        (source.contribution_id,),
+    ).fetchone()[0] for source in sources]
+    assert len(set(ordinals)) == 3
+    assert ordinals[0] == snapshot.seal_binding.root.sources[0].source_ordinal
+    assert connection.execute(
+        "SELECT ref_id,source_cut_position_kind,source_cut_item_id "
+        "FROM context_assembly_selections WHERE assembly_id=? "
+        "AND ref_type='request_only' AND included=1 ORDER BY plan_ordinal",
+        (snapshot.assembly_id,),
+    ).fetchall() == [
+        (source.contribution_id, "after_canonical", initial.refs[-1].ref_id)
+        for source in sources
+    ]
+    assert manager.prepare_pending() is None
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id)
+        assert restored == snapshot
+        assert cold.project_context_plan_for_dispatch(
+            session, thread, restored.as_sealed_plan(), target_format=target_format,
+        ) == ContextProjectionResult(
+            snapshot, third["messages"], third["tools"], third["losses"],
+            third.get("native_projection"), third["resource_refs"],
+        )
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
 async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
     production_context, production_sibling, target_format,
 ):

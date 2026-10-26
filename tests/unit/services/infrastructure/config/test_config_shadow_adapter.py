@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import pytest
 
 from app.core.lifecycle import LifetimeScope
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.shadow_adapter import (
     ConfigShadowLifecycleAdapter,
 )
@@ -37,13 +38,14 @@ def _make_adapter(
         if "name" not in config:
             raise ValueError("缺少 name")
 
-    async def reconcile(config: Mapping[str, object], scope: LifetimeScope) -> None:
+    async def reconcile(config: Mapping[str, object], scope: LifetimeScope) -> ConfigPublication:
         if config.get("name") == "drain-boom":
 
             def _boom() -> None:
                 raise RuntimeError("旧 generation scope 释放失败")
 
             scope.register(_boom, label="drain-boom")
+        return lambda: None
 
     adapter = ConfigShadowLifecycleAdapter(
         validator=validate,

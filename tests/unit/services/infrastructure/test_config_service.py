@@ -330,13 +330,13 @@ def test_gateway_skill_policy_rejects_invalid_effective_combinations(tmp_path: P
         service.get_gateway_skill_update_policy()
 
 
-def test_gateway_skill_update_policy_defaults_to_events_and_reports_restart_policy(tmp_path: Path) -> None:
+def test_gateway_skill_update_policy_defaults_to_events_and_reports_current_scope(tmp_path: Path) -> None:
     from app.services.infrastructure.config.policy import workspace_config_policy
 
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, _base_config()))
     assert service.get_gateway_skill_update_policy().model_dump() == {"mode": "event", "poll_interval": None}
     decision, = workspace_config_policy().classify(("/resources/skill_sources/gateway_updates/mode",))
-    assert not decision.policy_missing and decision.policy == "restart_workspace"
+    assert not decision.policy_missing and decision.policy == "immediate_read" and decision.activation_scope == "current"
 
 
 def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
@@ -1748,6 +1748,69 @@ async def test_candidate_applier_failure_prevents_snapshot_commit(
     assert status.healthy is False
     assert status.reason == "apply_failed"
     assert status.restart_required is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation_fails", [False, True])
+async def test_shadow_resources_activate_with_sqlite_publication_and_rollback_only_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, activation_fails: bool,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=tmp_path / "workspace", workspace_state_store=store)
+    scopes, activated, closed = [], [], []
+
+    async def prepare(candidate, scope):
+        scopes.append(scope)
+        name = candidate["agents"]["default"]["instructions"]["system_prompt"]
+        scope.register(lambda: closed.append(name), label="prepared-source")
+
+        def activate() -> None:
+            assert service.get_snapshot().to_dict() == candidate
+            assert service._shadow_lifecycle.active.config == candidate
+            persisted = store.get_active_config_snapshot("workspace")
+            if len(scopes) == 1:
+                assert persisted is None  # bootstrap 只绑定已有内存配置，没有候选发布事务。
+            else:
+                assert persisted is not None and persisted.effective_digest == service.get_revision()
+            activated.append(name)
+            if activation_fails and len(scopes) > 1:
+                raise RuntimeError("已发布后的激活错误")
+
+        return activate
+
+    async def reject(_previous, _candidate) -> None:
+        raise RuntimeError("拒绝候选")
+
+    try:
+        await service.start_watching(shadow_reconcile=prepare)
+        await service.stop_watching()
+        initial = activated[0]
+        config["agents"]["default"]["instructions"]["system_prompt"] = "新的来源策略配置"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="拒绝候选"):
+            await service.reload(candidate_applier=reject)
+        assert activated == [initial] and closed == ["新的来源策略配置"]
+        assert scopes[0].state == "open" and scopes[1].state == "closed"
+        if activation_fails:
+            with pytest.raises(RuntimeError, match="已发布后的激活错误"):
+                await service.reload()
+            assert not service.get_reload_status().healthy
+            assert scopes[0].state == "open" and closed == ["新的来源策略配置"]
+        else:
+            assert await service.reload()
+            assert closed == ["新的来源策略配置", initial] and scopes[0].state == "closed"
+        assert activated == [initial, "新的来源策略配置"]
+        assert scopes[2].state == "open"
+        persisted = store.get_active_config_snapshot("workspace")
+        assert persisted is not None and service.get_revision() == persisted.effective_digest
+        assert service._shadow_lifecycle.generation == 2
+    finally:
+        await service.close()
+        store.close()
 
 
 @pytest.mark.asyncio

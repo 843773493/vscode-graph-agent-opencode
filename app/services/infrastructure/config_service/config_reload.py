@@ -15,7 +15,10 @@ from app.services.infrastructure.config import (
 )
 from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.policy import workspace_config_policy
-from app.services.infrastructure.config.shadow_scope import ConfigShadowLifecycleError
+from app.services.infrastructure.config.shadow_scope import (
+    ConfigShadowLifecycleError,
+    ShadowReconcile,
+)
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventInput,
@@ -41,6 +44,9 @@ if TYPE_CHECKING:
     from app.services.infrastructure.config.instruction_inputs import (
         InstructionFileInputs,
     )
+    from app.services.infrastructure.config.shadow_adapter import (
+        ConfigShadowLifecycleAdapter,
+    )
     from app.services.infrastructure.config.store import ConfigSnapshotStore
 
 
@@ -48,6 +54,8 @@ class ConfigReloadMixin:
     if TYPE_CHECKING:
         _instruction_inputs: InstructionFileInputs
         _snapshot_store: ConfigSnapshotStore
+        _shadow_reconcile: ShadowReconcile | None
+        _shadow_lifecycle: ConfigShadowLifecycleAdapter
 
     def validate_candidate(
         self,
@@ -70,12 +78,15 @@ class ConfigReloadMixin:
         """
         validate_config_payload(dict(config), schema=self._load_schema())
 
-    @staticmethod
     async def _reconcile_shadow_config(
-        _config: Mapping[str, object],
-        _scope: LifetimeScope,
-    ) -> None:
-        """配置 source 已由 ConfigService 读取；运行时 reconcile 在发布钩子执行。"""
+        self,
+        config: Mapping[str, object],
+        scope: LifetimeScope,
+    ) -> ConfigPublication:
+        """候选只准备资源；同步激活与配置发布共用同一提交点。"""
+        if self._shadow_reconcile is not None:
+            return await self._shadow_reconcile(config, scope)
+        return lambda: None
 
     async def _ensure_shadow_started(self) -> None:
         readiness = self._shadow_lifecycle.readiness
@@ -301,8 +312,6 @@ class ConfigReloadMixin:
                         applied_paths=changed_paths,
                     ),
                 )
-                # 数据库事务成功后立即同步发布 cache／shadow，再清理 claim 和旧 scope。
-                publish()
             except ConfigConflictError as error:
                 if self._workspace_state_store is not None and claim is not None:
                     journal = self._workspace_state_store.get_config_apply_journal(
@@ -351,6 +360,9 @@ class ConfigReloadMixin:
                     changed_paths=changed_paths,
                 )
                 raise
+            else:
+                # 数据库提交后立即同步发布；激活失败不能再把已提交 journal 标为 rejected。
+                publish()
             finally:
                 if claim_renewal_task is not None:
                     claim_renewal_task.cancel()
@@ -638,9 +650,14 @@ class ConfigReloadMixin:
         self,
         *,
         candidate_applier: ConfigCandidateApplier | None = None,
+        shadow_reconcile: ShadowReconcile | None = None,
     ) -> None:
         if self._watcher is not None:
             raise RuntimeError("配置文件监听器不允许重复启动")
+        if shadow_reconcile is not None:
+            if self._shadow_lifecycle.readiness != "cold":
+                raise RuntimeError("配置资源 reconciler 必须在 bootstrap 前绑定")
+            self._shadow_reconcile = shadow_reconcile
         await self._ensure_shadow_started()
         self._candidate_applier = candidate_applier
         directories, candidate_paths = self._config_watch_paths()
