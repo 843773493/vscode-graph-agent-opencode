@@ -41,6 +41,14 @@
 
 `mask install release` 会检查当前平台的本地打包指纹；产物缺失或源码变化时，先重新打包，再从本地 CLI 与 runtime tarball 安装，不从公共 npm registry 获取 BoxTeam 包。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
 
+## 产品诊断日志
+
+在 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc` 中设置 `logging.runtime.level`（`debug/info/warning/error/critical`）与严格布尔值 `logging.runtime.pretty`，默认 `info`、`true`。Gateway 会向本机受管进程应用并核对设置；共享 Backend 只应用一次。“日志与诊断”展示各进程实际设置及日志入口，失败补偿未完成时明确报告恢复状态。Shell 原始输出、会话 Trace、LLM 请求和工具结果继续遵守原合同。
+
+默认日志根为 `${BOXTEAM_HOME:-~/.boxteams}/state/logs/`；显式 `BOXTEAM_SERVICE_LOG_PATH` 仍控制 Launcher 日志去向。只有打开文件时检查 64 MiB 阈值并轮转，最多保留 `.1`—`.3`；运行中的文件没有大小硬上限，Gateway 交接不会轮转存活进程的活动日志。
+
+旧 Workspace `logger` 必须在服务停止后显式迁移。先运行 `uv run python -m configs.boxteam migrate-runtime-logging --preview --migration-workspace /absolute/workspace`；可重复提供 `--migration-workspace` 检查多个明确工作区，再移除 `--preview` 执行迁移。有冲突时先核对预览，使用 `--level info --pretty true` 等参数明确选值。迁移同时处理配置文件、SQLite 来源与 active 快照，保存可恢复备份，不会顺便激活待生效业务配置；未结算候选须先由原 owner 处理。中断后重跑同一迁移，或用 `--restore` 恢复原件；回退旧软件前先恢复配置，后续已产生新配置事实时恢复 CAS 会拒绝覆盖。历史日志原地保留，运行期不双读旧字段。
+
 ## 工作区 API 的显式身份
 
 直接调用 Workspace 后端时，使用 `/api/v1/workspaces/{workspace_id}/...`，例如 `/api/v1/workspaces/{workspace_id}/sessions`。这里的 `workspace_id` 是后端已挂载工作区的稳定 UUID。也可以在 `/api/v1/...` 请求中提供等价的 `X-BoxTeam-Workspace-Id` 请求头；同时提供路径和请求头时，两者必须一致。

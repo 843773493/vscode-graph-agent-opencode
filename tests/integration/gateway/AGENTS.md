@@ -20,3 +20,5 @@
 - 正式产物写入 `out/tests/integration/gateway/`。
 
 `test_gateway_launcher_handoff.py` 通过真实 Launcher、Gateway 和受管工作区运行；`runtime_logging_controls.py` 驱动原服务 HTTP、原 Launcher socket 和真实用户配置 watcher，不准备执行或资源状态。核对五类进程的私有认证、实例／revision 冲突、真实配置热应用、实际 DEBUG 落盘、WARNING 过滤及换代后的旧实例拒绝，观察结果保存到本测试 `artifacts/runtime-logging-*.json`。其 Web 驱动 `clients/web/runtime_logging_diagnostics.mjs` 使用同一现场，经真实 Gateway 初始化并打开日志诊断，产物仍归父测试目录。两个工作区通过真实注册和受控重启共享 Backend，并逐轮核7个实际进程及4个活动资源；这项正常热应用验收不代替真实失败补偿。
+
+`test_gateway_logging.py` 使用显式 `runtime_logging_app.py` 测试组合，仍运行真实 Gateway、受管 Backend／Node、HTTP 校验和 SQLite 事务；故障只让发出的前置条件过期，不替换进程状态或写入业务结果。终端验收通过模型回放驱动真实 `exec_command`，同时核 wire、canonical、用户定点详情与工作区专用记录。测试组合不进入产品启动入口，模型响应复用统一 model_stream 资产与编码。
