@@ -90,6 +90,7 @@ from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
+from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -823,8 +824,16 @@ def create_my_deep_agent(
                     snapshot, parents[0], storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
                 ),
             )
+            execution_scope = None
+            if parents[0].effective_boundary == "turn" and any(target.origin == "mcp" for target in dispatch.binding_ref.targets.values()):
+                turn_scope = get_current_turn_execution_scope()
+                if turn_scope is None:
+                    raise ExtensionTargetResolutionError("MCP Turn 冻结目录缺少原 execution scope")
+                execution_scope = turn_scope.lifetime_scope
             return mcp_catalog_owner.execution_handles.reserve_model_call(
                 dispatch.binding_ref, session_id=session_id, thread_id=thread_id, model_call_id=model_call_id,
+                execution_id=snapshot.execution_id if execution_scope is not None else None,
+                execution_scope=execution_scope,
             )
 
         extension_call_scope = reserve_extension_call

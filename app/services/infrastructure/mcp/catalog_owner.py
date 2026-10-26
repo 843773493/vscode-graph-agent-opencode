@@ -32,6 +32,8 @@ from langchain_core.tools import BaseTool
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
@@ -55,6 +57,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
+from app.services.infrastructure.mcp.retirement import McpConnectionRetirement
 from app.services.infrastructure.mcp.session_runtime import (
     McpChangeNotifyCallback,
     McpServerRuntime,
@@ -250,6 +253,7 @@ class McpCatalogOwner:
             workspace_root=workspace_root,
         )
         self._publisher = McpCatalogEventPublisher(event_service=event_service)
+        self._workspace_root = workspace_root
         self._leases = leases
         self._session_factory: McpSessionFactory = (
             session_factory or production_mcp_session_factory
@@ -267,8 +271,12 @@ class McpCatalogOwner:
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
         self._publication_lock = publication_lock if publication_lock is not None else RLock()
+        self._retirement = McpConnectionRetirement(
+            leases=leases, lock=self._publication_lock, timeout_seconds=sealed_call_timeout_seconds(raw_config),
+        )
         self.execution_handles = McpExecutionHandles(
             leases=leases, lock=self._publication_lock, resolve_active=self._resolve_execution_handle,
+            validate_retained=self._validate_retained_execution,
             timeout_seconds=sealed_call_timeout_seconds(raw_config),
         )
         self._publication: McpCatalogPublication | None = None
@@ -305,7 +313,7 @@ class McpCatalogOwner:
                     generation=generation,
                     session_factory=self._session_factory,
                     on_change=self._make_tools_list_changed_callback(server.server_id, generation),
-                    on_failure=self._handle_session_failure, scope=session_scope,
+                    on_failure=self._handle_session_failure, scope=session_scope.child(f"server:{server.server_id}:{generation}"),
                     on_closed=self._handle_session_closed,
                 )
                 with self._publication_lock:
@@ -379,6 +387,7 @@ class McpCatalogOwner:
                 logger.exception("MCP 生命周期或 publication callback 失败")
                 errors.append(error)
             else:
+                self._retirement.clear_closed()
                 self._session_scope = None
         if errors:
             raise ExceptionGroup("MCP Owner 关闭失败", errors)
@@ -461,8 +470,6 @@ class McpCatalogOwner:
 
     def _resolve_execution_handle(self, binding: ExtensionTargetBinding) -> McpExecutionHandle:
         """只按封存连接及 schema 解析；新同名工具绝不能接管旧调用。"""
-        # TODO(4.4/7.x): 正常配置替换保留并排空获准的旧 runtime；当前重启
-        # 仍关闭原连接，不能凭历史资格从新同名连接恢复执行。
         with self._publication_lock:
             runtime = self._runtimes.get(binding.server_id or "")
             target = self._tools_by_id.get(binding.target_id)
@@ -478,6 +485,129 @@ class McpCatalogOwner:
                     f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
                 )
             return McpExecutionHandle(binding, target, runtime)
+
+    def _validate_retained_execution(self, binding: ExtensionTargetBinding) -> None:
+        """正常替换只放行原有资格；当前目录 relist 仍核 schema 撤换。"""
+        with self._publication_lock:
+            retained = self._retirement.retained(binding.connection_ref)
+            if (self._started and retained is not None and retained.running
+                    and any(server.server_id == binding.server_id and server.enabled for server in self._servers)):
+                return
+            self._resolve_execution_handle(binding)
+
+    async def prepare_config(self, raw_config: object, scope: LifetimeScope) -> tuple[ConfigPublication, frozenset[str]]:
+        """先准备全部 HTTP 候选；只在配置 owner 的同步发布边界激活。"""
+        self._require_started()
+        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root)
+        proposed = {server.server_id: server for server in servers}
+        prepared: dict[str, McpServerRuntime] = {}
+        tools: dict[str, BaseTool] = {}
+        descriptors: dict[str, tuple[McpToolDescriptor, ...]] = {}
+        sequences: dict[str, int] = {}
+        published = False
+        catalog_claimed = False
+
+        def release_catalog() -> None:
+            nonlocal catalog_claimed
+            if catalog_claimed:
+                catalog_claimed = False
+                self._catalog_lock.release()
+
+        async def close_unpublished() -> None:
+            try:
+                if not published:
+                    errors = await asyncio.gather(*(runtime.scope.close() for runtime in prepared.values()), return_exceptions=True)
+                    failures = [error for error in errors if isinstance(error, BaseException)]
+                    if failures:
+                        raise BaseExceptionGroup("MCP 候选连接释放失败", failures)
+            finally:
+                release_catalog()
+
+        scope.register(close_unpublished, label="mcp-unpublished-candidate")
+        # 与原 relist 串行准备，避免未变 Server 在冲突检查后增加同名工具。
+        # 锁随候选 scope 回收或同步提交释放，网络 I/O 不持有 publication 锁。
+        await self._catalog_lock.acquire()
+        catalog_claimed = True
+        with self._publication_lock:
+            self._require_started()
+            previous = {server.server_id: server for server in self._servers}
+            changed = {key for key in previous.keys() | proposed.keys() if previous.get(key) != proposed.get(key)}
+            unchanged_ids = {key for key, tool in self._tools_by_id.items()
+                             if (tool.metadata or {}).get("mcp_server_id") not in changed}
+        # TODO(7.4): 单实例 stdio 的停后再启须在破坏旧连接前写 applying journal，
+        # 并在失败时保留 recovery_required；本切片只开放可先建后换的 HTTP。
+        if any(server.transport == "stdio" for key in changed
+               for server in (previous.get(key), proposed.get(key)) if server is not None):
+            raise ConfigRestartRequiredError("stdio MCP 变更需要重启工作区", changed_sections=("mcp",))
+        assert self._session_scope is not None
+        owner_scope = self._session_scope
+        for key in sorted(changed):
+            server = proposed.get(key)
+            if server is None or not server.enabled:
+                continue
+            self._connection_generation += 1
+            generation = self._connection_generation
+            runtime = McpServerRuntime(
+                server=server, generation=generation, session_factory=self._session_factory,
+                on_change=self._make_tools_list_changed_callback(key, generation),
+                on_failure=self._handle_session_failure, on_closed=self._handle_session_closed,
+                scope=owner_scope.child(f"server:{key}:{generation}"),
+            )
+            prepared[key] = runtime
+            try:
+                await runtime.start()
+                self._leases.register_external(resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace")
+                sequences[key] = runtime.relist_sequence
+                remote_tools = await runtime.session.list_tools()
+                server_tools, descriptors[key] = _adapt_server_tools(
+                    key, remote_tools, connection_ref=self._connection_ref(runtime), foreign_tool_ids=unchanged_ids | tools.keys(),
+                )
+            except Exception as error:
+                logger.exception("MCP 配置候选连接准备失败: server_id=%s", key)
+                raise McpCatalogError(_catalog_failure_text(error, server_id=key, stage="configuration")) from error
+            tools.update(server_tools)
+
+        def publish() -> None:
+            try:
+                activate()
+            finally:
+                release_catalog()
+
+        def activate() -> None:
+            nonlocal published
+            with self._publication_lock:
+                self._require_started()
+                if published or self._servers != tuple(previous.values()):
+                    raise McpCatalogError("MCP 候选的原配置基线已失效")
+                replaced = [runtime for key, runtime in self._runtimes.items() if key in changed]
+                candidate_tools = {key: tool for key, tool in self._tools_by_id.items()
+                                   if (tool.metadata or {}).get("mcp_server_id") not in changed}
+                candidate_tools.update(tools)
+                candidate_descriptors = {key: value for key, value in self._descriptors_by_server.items() if key not in changed}
+                candidate_descriptors.update(descriptors)
+                self._runtimes = {key: value for key, value in self._runtimes.items() if key not in changed} | prepared
+                self._servers = servers
+                self._dirty_servers.difference_update(changed)
+                invalidated = {key for key, runtime in prepared.items()
+                               if not runtime.running or runtime.relist_sequence != sequences[key]}
+                self._dirty_servers.update(invalidated)
+                published = True
+                # 所有权始终属于原 Owner 的每 Server scope；后续任意配置 shadow
+                # 释放只能回收未提交候选，不能关闭未变化的 active 连接。
+                for key in changed:
+                    if key not in proposed or not proposed[key].enabled:
+                        self._retirement.revoke_server(key)
+                for runtime in replaced:
+                    self._retirement.retire(self._connection_ref(runtime), runtime,
+                        admits_sealed=runtime.server.server_id in prepared, owner_scope=owner_scope)
+                self._publish_snapshot_locked(server_id=None, candidate_tools=candidate_tools,
+                                              candidate_descriptors=candidate_descriptors)
+                for key in invalidated:
+                    runtime = prepared[key]
+                    if runtime.running:
+                        self._handle_tools_list_changed(key, runtime.generation)
+
+        return publish, frozenset(unchanged_ids | tools.keys())
 
     def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)
@@ -567,7 +697,6 @@ class McpCatalogOwner:
                     server_id, generation,
                 )
                 return
-            runtime.relist_sequence += 1
             relist_sequence = runtime.relist_sequence
             self._mark_dirty(server_id)
         task = asyncio.create_task(

@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 
+from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,
@@ -33,7 +34,7 @@ from app.services.infrastructure.mcp.invocation import (
 from app.services.infrastructure.mcp.session_runtime import McpServerRuntime
 
 CallRetention = Callable[[Sequence[ToolCall]], None]
-ReservationKey = tuple[str, str, str]
+ReservationKey = tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +51,7 @@ class _Reservation:
     deadline: datetime
     pending_operations: set[str] | None = None
     timer: asyncio.TimerHandle | None = None
+    owner_scope: LifetimeScope | None = None
 
 
 class McpExecutionHandles:
@@ -58,10 +60,12 @@ class McpExecutionHandles:
     def __init__(
         self, *, leases: ExternalResourceLeaseLedger, lock: RLock,
         resolve_active: Callable[[ExtensionTargetBinding], McpExecutionHandle], timeout_seconds: int,
+        validate_retained: Callable[[ExtensionTargetBinding], None],
     ) -> None:
         self._leases = leases
         self._lock = lock
         self._resolve_active = resolve_active
+        self._validate_retained = validate_retained
         self._timeout_seconds = timeout_seconds
         self._reservations: dict[ReservationKey, _Reservation] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -75,12 +79,71 @@ class McpExecutionHandles:
             self.close()
             for resource in self._leases.records_by_kind("mcp_connection"):
                 for lease in self._leases.leases_for_resource(resource.resource_id):
-                    if lease.lease_id.startswith("mcp-prepared:v1:"):
+                    if lease.lease_id.startswith(("mcp-prepared:v1:", "mcp-execution:v1:")):
                         self._leases.release(lease.lease_id)
+
+    def _register_qualification(
+        self, key: ReservationKey, reservation: _Reservation, *, prefix: str,
+        operation_id: str, session_id: str, thread_id: str,
+    ) -> None:
+        self._reservations[key] = reservation
+        lease_ids: list[str] = []
+        try:
+            connection_refs = {handle.binding.connection_ref for handle in reservation.handles.values()}
+            for connection_ref in sorted(ref for ref in connection_refs if ref is not None):
+                lease_id = prefix + payload_digest([*key, connection_ref], context="MCP 封存资格", error_type=ValueError)
+                if self._leases.get_lease(lease_id) is not None:
+                    raise ExtensionTargetResolutionError("MCP 原封存资格已结算或失去 handle，不能重新发放")
+                self._leases.acquire_operation(
+                    resource_id=connection_ref, turn_stream_id=lease_id, operation_id=operation_id,
+                    lease_id=lease_id, holder_session_id=session_id, holder_thread_id=thread_id,
+                    expires_at=reservation.deadline.isoformat(),
+                )
+                lease_ids.append(lease_id)
+                reservation.lease_ids = tuple(lease_ids)
+        except BaseException:
+            self._release(key, reservation)
+            raise
+        if reservation.handles:
+            assert self._loop is not None
+            self._loop.call_soon_threadsafe(self._schedule_expiry, key, reservation)
+
+    def _execution_qualification(
+        self, binding: ExtensionCatalogBindingRef, *, session_id: str, thread_id: str,
+        execution_id: str, scope: LifetimeScope,
+    ) -> _Reservation:
+        """turn-bound 目录在原执行内保留；后继模型调用只继承，不延长期限。"""
+        key = ("execution", session_id, thread_id, execution_id)
+        reservation = self._reservations.get(key)
+        targets = {target.target_id: target for target in binding.targets.values() if target.origin == "mcp"}
+        if reservation is not None:
+            if (reservation.owner_scope is not scope or scope.state != "open"
+                    or datetime.now(UTC) >= reservation.deadline
+                    or {name: handle.binding for name, handle in reservation.handles.items()} != targets):
+                raise ExtensionTargetResolutionError("MCP 原执行的连接资格已到期或冻结目录不一致")
+            for target in targets.values():
+                self._validate_retained(target)
+            return reservation
+        if scope.state != "open":
+            raise ExtensionTargetResolutionError("MCP 原执行 scope 已关闭")
+        reservation = _Reservation(
+            {name: self._resolve_active(target) for name, target in targets.items()}, (),
+            datetime.now(UTC) + timedelta(seconds=self._timeout_seconds), owner_scope=scope,
+        )
+        self._register_qualification(key, reservation, prefix="mcp-execution:v1:",
+                                     operation_id=execution_id, session_id=session_id, thread_id=thread_id)
+
+        def release() -> None:
+            with self._lock:
+                self._release(key, reservation)
+
+        scope.register(release, label=f"mcp-execution:{execution_id}")
+        return reservation
 
     @contextmanager
     def reserve_model_call(
         self, binding: ExtensionCatalogBindingRef, *, session_id: str, thread_id: str, model_call_id: str,
+        execution_id: str | None = None, execution_scope: LifetimeScope | None = None,
     ) -> Iterator[CallRetention]:
         """发请求前保留精确连接；返回时收窄到真实模型输出，包含后续 HITL。"""
         key = (session_id, thread_id, model_call_id)
@@ -89,38 +152,20 @@ class McpExecutionHandles:
         with self._lock:
             if self._loop is None or key in self._reservations:
                 raise ExtensionTargetResolutionError("MCP 原 model-call 资格不可重复发放")
-            handles = {target.target_id: self._resolve_active(target)
-                       for target in binding.targets.values() if target.origin == "mcp"}
-            deadline = datetime.now(UTC) + timedelta(seconds=self._timeout_seconds)
-            lease_ids: list[str] = []
+            if (execution_id is None) != (execution_scope is None):
+                raise ValueError("MCP 执行资格需要完整 execution owner 和 scope")
+            inherited = None
+            if execution_id is not None and execution_scope is not None:
+                inherited = self._execution_qualification(binding, session_id=session_id, thread_id=thread_id,
+                                                          execution_id=execution_id, scope=execution_scope)
+            handles = inherited.handles if inherited is not None else {
+                target.target_id: self._resolve_active(target)
+                for target in binding.targets.values() if target.origin == "mcp"
+            }
+            deadline = inherited.deadline if inherited is not None else datetime.now(UTC) + timedelta(seconds=self._timeout_seconds)
             reservation = _Reservation(handles, (), deadline)
-            self._reservations[key] = reservation
-            try:
-                connection_refs: set[str] = set()
-                for handle in handles.values():
-                    connection_ref = handle.binding.connection_ref
-                    assert connection_ref is not None
-                    connection_refs.add(connection_ref)
-                for connection_ref in sorted(connection_refs):
-                    lease_id = "mcp-prepared:v1:" + payload_digest(
-                        [*key, connection_ref], context="MCP 封存资格", error_type=ValueError,
-                    )
-                    if self._leases.get_lease(lease_id) is not None:
-                        raise ExtensionTargetResolutionError("MCP 原封存资格已结算或失去 handle，不能重新发放")
-                    self._leases.acquire_operation(
-                        resource_id=connection_ref, turn_stream_id=lease_id, operation_id=model_call_id,
-                        lease_id=lease_id, holder_session_id=session_id, holder_thread_id=thread_id,
-                        expires_at=deadline.isoformat(),
-                    )
-                    lease_ids.append(lease_id)
-                    reservation.lease_ids = tuple(lease_ids)
-            except BaseException:
-                self._release(key, reservation)
-                raise
-            # 空 MCP 目录没有跨响应保留的连接；同步准备可在短期事件循环退出后
-            # 继续发送，不应为了不存在的资源向已结束的 loop 登记定时器。
-            if handles:
-                self._loop.call_soon_threadsafe(self._schedule_expiry, key, reservation)
+            self._register_qualification(key, reservation, prefix="mcp-prepared:v1:",
+                                         operation_id=model_call_id, session_id=session_id, thread_id=thread_id)
 
         def retain(calls: Sequence[ToolCall]) -> None:
             with self._lock:
@@ -177,9 +222,7 @@ class McpExecutionHandles:
             if datetime.now(UTC) >= reservation.deadline:
                 self._release(key, reservation)
                 raise ExtensionTargetResolutionError("MCP 原连接的封存执行资格已到期")
-            # TODO(4.4/7.x): 正常热替换的退役 runtime 在共同发布屏障内标记后，
-            # 可只核原 handle；当前仍核活跃目录，不能放宽既有 schema 撤换行为。
-            self._resolve_active(binding)
+            self._validate_retained(binding)
             handle = reservation.handles.get(binding.target_id)
             if (handle is None or handle.binding != binding or not handle.runtime.running
                     or reservation.pending_operations is None

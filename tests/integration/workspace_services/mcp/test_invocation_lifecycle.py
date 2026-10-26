@@ -261,46 +261,55 @@ async def test_progress_writer_failure_is_reported_instead_of_sdk_swallowing_it(
 
 
 @pytest.fixture
-async def http_schema_server_case(request: pytest.FixtureRequest):
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    definitions = context.artifacts_dir / "http-definitions.json"
-    definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
-    receipts = context.artifacts_dir / "http-receipts.jsonl"
-    manager = StreamableHTTPSessionManager(app=build_server(definitions, receipts))
-
+def http_schema_endpoint_factory(request: pytest.FixtureRequest):
     @asynccontextmanager
-    async def lifespan(_app):
-        async with manager.run():
-            yield
+    async def endpoint(label: str):
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        definitions = context.artifacts_dir / f"{label}-definitions.json"
+        definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
+        receipts = context.artifacts_dir / f"{label}-receipts.jsonl"
+        manager = StreamableHTTPSessionManager(app=build_server(definitions, receipts))
 
-    app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        port = listener.getsockname()[1]
-        server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-        task = asyncio.create_task(server.serve(sockets=[listener]))
-        try:
-            for _ in range(100):
-                if server.started:
-                    break
-                if task.done():
-                    await task
-                    raise RuntimeError("HTTP Server 提前退出")
-                await asyncio.sleep(0.01)
-            if not server.started:
-                raise TimeoutError("HTTP Server 未就绪")
-            owner = McpCatalogOwner(
-                leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
-                raw_config={"servers": {"schema": {"enabled": True, "transport": "streamable_http",
-                                                    "url": f"http://127.0.0.1:{port}/mcp/"}}},
-                workspace_root=context.workspace_root, event_service=EventChannelService(),
-            )
-            async with SchemaServerCase(owner, definitions, receipts, context.workspace_root).started() as case:
-                yield case
-        finally:
-            server.should_exit = True
-            await asyncio.wait_for(task, 5)
+        @asynccontextmanager
+        async def lifespan(_app):
+            async with manager.run():
+                yield
+
+        app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+            task = asyncio.create_task(server.serve(sockets=[listener]))
+            try:
+                for _ in range(100):
+                    if server.started:
+                        break
+                    if task.done():
+                        await task
+                        raise RuntimeError("HTTP Server 提前退出")
+                    await asyncio.sleep(0.01)
+                if not server.started:
+                    raise TimeoutError("HTTP Server 未就绪")
+                yield SimpleNamespace(url=f"http://127.0.0.1:{port}/mcp/", context=context,
+                                      definitions=definitions, receipts=receipts)
+            finally:
+                server.should_exit = True
+                await asyncio.wait_for(task, 5)
+    return endpoint
+
+
+@pytest.fixture
+async def http_schema_server_case(http_schema_endpoint_factory):
+    async with http_schema_endpoint_factory("http") as endpoint:
+        owner = McpCatalogOwner(
+            leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.json"),
+            raw_config={"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": endpoint.url}}},
+            workspace_root=endpoint.context.workspace_root, event_service=EventChannelService(),
+        )
+        async with SchemaServerCase(owner, endpoint.definitions, endpoint.receipts, endpoint.context.workspace_root).started() as case:
+            yield case
 
 
 async def test_real_http_progress_cancel_and_following_request(http_schema_server_case, progress_case):

@@ -92,10 +92,16 @@ class McpServerRuntime:
     ) -> None:
         self.server = server
         self.generation = generation
+        self.scope = scope
         self.last_relist_error: str | None = None
         self.relist_sequence = 0
         self._session_factory = session_factory
-        self._on_change = on_change
+        def changed() -> None:
+            # 候选尚未公开时也记录通知；发布不能把过期 relist 伪报为就绪。
+            self.relist_sequence += 1
+            on_change()
+
+        self._on_change = changed
         self._on_failure = on_failure
         self._on_closed = on_closed
         self._session: McpServerSessionPort | None = None

@@ -421,9 +421,8 @@ class ConfigReloadMixin:
                 pending_revision=pending.pending_revision,
                 source="workspace-config-service",
                 result=result,
-                activation_scope=workspace_config_policy().activation_scope_for(
-                    changed_paths
-                ),
+                activation_scope=("restart_workspace" if result == "restart_required" else
+                    workspace_config_policy().activation_scope_for(changed_paths)),
                 changed_paths=changed_paths,
                 deferred_paths=(
                     changed_paths if result == "restart_required" else ()

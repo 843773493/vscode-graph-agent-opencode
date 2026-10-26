@@ -73,6 +73,11 @@
 - **WHEN** 工具通过 typed resource-use 声明继续持有 MCP 连接资源，后续执行仍使用该资源
 - **THEN** 持有和释放沿既有 ExternalResourceLeaseLedger 记录，连接 owner 提供真实状态；调用 handle 的临时排空引用不产生第二份持久占用事实
 
+#### Scenario: 原 Turn 在替换后继续工具循环
+
+- **WHEN** turn-bound 目录的执行已在切换前取得原连接有界资格，工具结果之后还需下一次模型调用
+- **THEN** 后继调用仅继承同一原执行已保留的精确 handle 与原期限，不改写冻结目录、不延长期限，也不向新执行或其它 thread 发放旧代际资格；原 execution scope 关闭后释放其未来资格，结果未知的实际操作仍独立保留
+
 #### Scenario: 人工确认跨越连接替换
 
 - **WHEN** 旧 model call 的工具正在等待确认，连接已被替换

@@ -33,6 +33,10 @@ class ReloadStatusCoordinator:
         )
         if active is None and pending is None:
             return status
+        event = self._store.latest_config_attempt_event(
+            config_domain=self._config_domain, candidate_id=pending.candidate_id,
+            attempt_id=pending.last_attempt_id,
+        ) if pending is not None else None
         pending_state = pending.state if pending is not None else None
         reason = status.reason
         if pending_state == "discarded":
@@ -58,6 +62,8 @@ class ReloadStatusCoordinator:
             attempt_id=pending.last_attempt_id if pending is not None else None,
             apply_id=pending.last_apply_id if pending is not None else None,
             layer_digests=active.layer_digests if active is not None else None,
+            applied_paths=event.applied_paths if event is not None else (),
+            deferred_paths=event.deferred_paths if event is not None else (),
             last_error=(
                 pending.last_error
                 if pending is not None and pending.last_error is not None

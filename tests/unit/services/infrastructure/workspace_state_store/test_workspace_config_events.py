@@ -46,6 +46,10 @@ def test_workspace_config_events_are_durable_replayable_and_idempotent(workspace
         assert replay[0].event_seq == 1
         assert replay[0].deferred_paths == ("/logger",)
         assert replay[0].activation_scope == "restart_workspace"
+        assert store.latest_config_attempt_event(config_domain="workspace", candidate_id="candidate-1", attempt_id="attempt-1") == first
+        assert store.latest_config_attempt_event(config_domain="workspace", candidate_id="candidate-other", attempt_id="attempt-1") is None
+        assert store.latest_config_attempt_event(config_domain="workspace", candidate_id="candidate-1", attempt_id="attempt-other") is None
+        assert store.latest_config_attempt_event(config_domain="gateway", candidate_id="candidate-1", attempt_id="attempt-1") is None
     finally:
         store.close()
 

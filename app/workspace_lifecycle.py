@@ -291,7 +291,7 @@ class WorkspaceLifespan:
             async def apply_config_candidate(
                 previous: ConfigSnapshot,
                 candidate: ConfigSnapshot,
-                _scope: LifetimeScope,
+                scope: LifetimeScope,
             ) -> ConfigPublication:
                 previous_config = container.config_service.config_from_snapshot(previous)
                 candidate_config = container.config_service.config_from_snapshot(candidate)
@@ -303,17 +303,24 @@ class WorkspaceLifespan:
                     if path != "/"
                 ))
                 if restart_sections:
-                    # TODO: MCP 热切换需要专属 supervisor 在原 task 排空旧 generation。
                     raise ConfigRestartRequiredError(
                         "候选配置包含需要重启工作区后端的 section: "
                         + ", ".join(restart_sections),
                         changed_sections=restart_sections,
                     )
-                container.config_service.validate_candidate(
-                    candidate,
-                    mcp_tool_names=container.mcp_catalog_owner.get_tool_ids(),
-                )
-                return lambda: None
+                activate_mcp: ConfigPublication = lambda: None
+                mcp_tool_names = container.mcp_catalog_owner.get_tool_ids()
+                if previous_config.get("mcp") != candidate_config.get("mcp"):
+                    activate_mcp, mcp_tool_names = await container.mcp_catalog_owner.prepare_config(
+                        candidate_config.get("mcp"), scope,
+                    )
+                container.config_service.validate_candidate(candidate, mcp_tool_names=mcp_tool_names)
+
+                def activate() -> None:
+                    activate_mcp()
+                    container.config_service.set_mcp_tool_names(mcp_tool_names)
+
+                return activate
 
             with _workspace_startup_stage(container, "config_service.start_watching"):
                 await container.config_service.start_watching(

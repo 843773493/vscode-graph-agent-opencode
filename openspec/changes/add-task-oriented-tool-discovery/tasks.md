@@ -57,7 +57,7 @@
 ## 7. MCP 配置受控热替换
 
 - [ ] 7.1 在既有 Workspace JSONC 配置族和 schema 内补齐必要授权引用及监督参数，遵守既有覆盖层和新增参数命名；无必要不增加参数，不存储凭据明文。
-- [ ] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
+- [x] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
 - [ ] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
 - [ ] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
 - [ ] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
@@ -138,3 +138,12 @@
 - 143的15个文件Pyright完整HEAD基线174条／当前152条，零新增诊断；包括整个config_service目录的Ruff基线27条／当前27条，零新增，严格OpenSpec校验通过，不宣称全仓静态检查全绿。原始命令、退出码、源码指纹、类型比较和失败／中断说明保存在 `out/tests/temp/csm-kind-boundary/artifacts/staged-config-publication-141/`、`config-publication-mounts-142/` 和 `staged-config-publication-final-143/`；各完整archive的4517个tracked blob均核验未变后清理，只保留正式输出和证据。
 - 交付复查进一步覆盖准备失败后、等待原scope回收期间被取消：owner继续持有closing scope，配置store记录包含取消的原异常组，不丢失释放任务。最终受测tree `cf453d576194779f675ea292cd5eb910e8447448` 的145隔离验收为40 passed／42.44秒，涵盖该新场景和候选、CAS、已提交发布、读取与scope回归；16个文件类型检查及扩大Ruff与完整HEAD相比仍零新增诊断，严格OpenSpec校验通过。该轮仅扩展异常处理并补回归，复用未受影响的191／190项和真实挂载结果；完整source及baseline各4517个tracked blob核验未变后清理，原件保存在同目录 `staged-config-publication-cancel-145/`。
 - 7.3继续未勾选，进度仍15/52：该提交只完成原配置链的准备／共同发布基础，尚未接入逐Server候选、完整MCP准入fence与崩溃／替换对账。7.2／7.4的正常替换、单实例停启和退役排空，以及7.5／7.6验收完成前，保留/mcp现有restart_workspace策略；不将本切片当作MCP热替换交付。
+
+### 7.2 HTTP 候选整体替换验收（2026-10-26）
+
+- 原 Owner 只准备受影响的 HTTP Server，初始化、完整目录、命名和候选工具策略验证后，经既有配置发布锁共同提交。原 relist 锁覆盖准备到提交／候选回收，命名冲突同时检查未变 Server，避免规范化名称覆盖及检查后 relist 漂移；网络准备不持有 publication 锁。正常替换保留已取得的原连接资格，禁用／移除同时撤销更早退役代际的后续准入；退役关闭只根据原 ExternalResourceLeaseLedger 排空，不结清结果未知操作。
+- turn-bound 原执行首次模型发送前取得精确 handle 和原期限，后续工具循环只继承该资格；原 execution scope 关闭时释放，不向其它执行发放旧资格、不续期。model-call 资格与实际外部操作仍分别结算。配置 shadow 只回收未提交候选，后续配置变化不能关闭仍 active 的连接。
+- HTTP Server 路径按真实受支持能力开放热应用；stdio、监督参数及其它需重启字段的混合候选仍整体 pending_restart。状态的 applied_paths／deferred_paths 从当前 candidate／attempt 的原 outbox 读取，不复制状态；动态判定 stdio 待重启时事件正确标记 restart_workspace。
+- 完整暂存 tree `d55d8579197bdabae6442eb4696f3b25d4c12170` archive 验收：正式 integration-mcp-config-replacement 为1 passed／64.39秒，真实双挂载、watcher、Runner 和 HTTP MCP handler 核对旧 Turn 仍请求原连接、新 Turn 请求新连接、多 Server 候选部分失败、stdio 混合整体延后及兄弟工作区隔离；模型复用 model_stream，没有另一套 SSE 实现。integration-extension-discovery 为201 passed／118.80秒，覆盖命名冲突、候选间 relist、原 task 关闭、通知 fencing、资格期限与退役排空。完整配置／事件回归另为112 passed／156.95秒，源码后续仅修改 MCP Owner 候选串行与对应测试，未改变该配置链路。
+- 修改范围 Ruff exit0；12文件 Pyright 基线84条／当前73条，零新增诊断。完整 config_service 目录 Ruff 基线27条／当前27条，未改既有异常合同凑绿。前次产品测试因配置 API 请求漏认证头得到401，已修正测试并完成上述真实后续阶段；失败原件保留。准确命令、tree／基线、raw、退出码及类型比较位于 `out/tests/temp/mcp-http-publication/artifacts/verify-001/`、`verify-002/`；上轮199项等原件仍位于 `out/tests/temp/csm-kind-boundary/artifacts/http-candidate-inheritance-150/`。
+- 仅关闭7.2，当前16/52。7.3的进程崩溃／切换恢复核验、7.4的单实例stdio停启和配置／活动诊断中的退役清理失败、7.6的完整SSE replay等仍未完成；本地连接控制、OAuth、持久等待和真实Web授权入口继续按原任务推进，不将局部产品集成当成完整验收。

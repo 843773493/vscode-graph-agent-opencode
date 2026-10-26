@@ -31,7 +31,9 @@
     { "pattern": "/runtime/gateway/connection/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/gateway_updates/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
+    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
+    { "pattern": "/mcp/servers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null }
   ],
   "title": "BoxTeam Workspace Config Schema",
   "type": "object",
@@ -526,7 +528,7 @@
 
     "mcpConfig": {
       "type": "object",
-      "description": "当前工作区后端连接的 MCP Server。当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。",
+      "description": "当前工作区后端连接的 MCP Server。HTTP Server 变更在全部候选连接初始化和完整目录验证成功后共同切换；stdio 变更及监督参数仍需重启，混合候选整体延后。",
       "additionalProperties": false,
       "properties": {
         "supervision": {

@@ -18,6 +18,8 @@
 - MCP typed member 的 revision 保存 Owner 实例与连接代际组成的精确 connection_ref；目录语义 revision 独立保存。Agent 运行时只经 Owner 解析执行目标，不捕获初始 MCP 工具，也不按同名同 schema 迁投新连接。
 - `execution_handles.py` 属于原目录 Owner，只保留精确连接的短期对象引用；模型发送前经冻结 activation 登记有界资格，响应后保留实际输出的信封调用，既有 HITL edit 仍可选择原封存目录内的目标。期限由同一 MCP 配置族的 `supervision.sealed_call_timeout_seconds` 控制，不在重试中续期。
 - MCP 执行目标沿 `execution_handles.execution_target` 核对原资格并占用唯一 ExternalResourceLeaseLedger；typed resource-use 来自受信调用上下文。SDK 确认结果后才释放，未知操作保留 reconcile_required，资格到期／连接关闭与远端副作用分别核实，禁止自动重放同一 operation。
+- HTTP 配置候选只在原 Owner 内准备，使用其每 Server 子 scope；配置 shadow 只回收未提交候选，不能在后续无关配置更新时关闭 active 连接。stdio 变更仍显式要求重启。
+- `retirement.py` 是原 Owner 的退役排空组件，只保留 runtime 引用并读取原账本；正常替换保留已有资格，禁用／移除同时撤销更早代际的新准入。排空和关闭各自使用原封存资格秒数作为上限；关闭 socket 不结清结果未知操作。
 
 # 不可修改内容
 

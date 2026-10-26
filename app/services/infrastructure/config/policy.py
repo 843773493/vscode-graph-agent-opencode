@@ -263,6 +263,8 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/context/source_messages/grouping", "immediate_read", "current"),
             ConfigPolicyRule("/resources/skill_sources/gateway_updates/*", "immediate_read", "current"),
             ConfigPolicyRule("/mcp", "restart_workspace", "restart_workspace"),
+            ConfigPolicyRule("/mcp/servers", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*", "immediate_read", "current"),
         ),
     )
 

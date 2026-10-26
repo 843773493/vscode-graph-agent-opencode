@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.config.state import (
@@ -36,6 +36,9 @@ from app.services.infrastructure.config.state import (
     ConfigResult,
     dump_json,
 )
+
+if TYPE_CHECKING:
+    from app.core.sqlite_state import SQLiteStateDatabase
 
 __all__ = [
     "WorkspaceConfigEventMixin",
@@ -70,6 +73,8 @@ FROM config_events AS e
 """
 
 class WorkspaceConfigEventMixin:
+    if TYPE_CHECKING:
+        _database: SQLiteStateDatabase
 
     @staticmethod
     def _event_from_row(row: sqlite3.Row | tuple[object, ...]) -> ConfigEventRecord:
@@ -626,6 +631,22 @@ class WorkspaceConfigEventMixin:
             )
         finally:
             connection.close()
+
+    def latest_config_attempt_event(
+        self, *, config_domain: str, candidate_id: str, attempt_id: str | None,
+    ) -> ConfigEventRecord | None:
+        """状态诊断读取原 outbox，不把其它候选或上次失败尝试误归当前操作。"""
+        connection = self._database.connection()
+        try:
+            row = connection.execute(
+                _CONFIG_EVENT_SELECT + """
+                WHERE config_domain = ? AND candidate_id = ? AND attempt_id IS ?
+                ORDER BY event_seq DESC LIMIT 1
+                """, (config_domain, candidate_id, attempt_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        return self._event_from_row(row) if row is not None else None
 
     def ensure_config_event_cursor(self, *, config_domain: str, after: int) -> None:
         if after < 0:

@@ -14,7 +14,7 @@ claim / delivered / failed 投递状态。
   `claim_config_events_for_consumer`、`mark_config_event_delivered_for_consumer`、
   `fail_config_event_for_consumer`、`claim_config_event_relay`、
   `mark_config_event_relay_delivered`、`fail_config_event_relay`、
-  `list_config_events`、`config_event_bounds`、`ensure_config_event_cursor`、
+  `list_config_events`、`config_event_bounds`、`latest_config_attempt_event`、`ensure_config_event_cursor`、
   `prune_config_events`）。
 - 可以维护本族的 `config_events` 行投影常量、consumer 投递状态机与 relay 租约/
   重试语义。

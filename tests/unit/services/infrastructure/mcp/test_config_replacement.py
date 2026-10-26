@@ -1,0 +1,308 @@
+"""候选隔离、共同切换、原连接资格与退役排空。"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+
+import anyio
+import pytest
+from langchain_core.tools import BaseTool, StructuredTool
+
+from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
+from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.mcp import McpCatalogError, McpCatalogOwner
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionTargetResolutionError,
+)
+from app.services.infrastructure.mcp.invocation import McpResourceUse
+from tests.support.mcp.session_doubles import FakeMcpSession, FakeMcpSessionFactory
+
+
+def config(version: str, *, beta: bool = True):
+    return {"servers": {name: {"enabled": True, "transport": "streamable_http",
+                              "url": f"http://localhost/{name}/{version}"}
+                        for name in (("alpha", "beta") if beta else ("alpha",))}}
+
+
+class ReplacementFactory(FakeMcpSessionFactory):
+    def __init__(self):
+        super().__init__({"alpha": ["echo"], "beta": ["echo"]})
+        self.opened = []
+        self.closed = []
+        self.fail_server = None
+        self.notify_during_list = False
+
+    def __call__(self, server, notify):
+        original = super().__call__(server, notify)
+        address = server.connection["url"]
+        session = self.sessions[server.server_id]
+
+        async def list_tools() -> list[BaseTool]:
+            if server.server_id == self.fail_server:
+                raise RuntimeError("第二个候选完整目录失败")
+            if self.notify_during_list:
+                self.notify_during_list = False
+                notify()
+            if session.tool_names != ["echo"]:
+                return await FakeMcpSession.list_tools(session)
+            async def echo(text: str) -> str:
+                return address + ":" + text
+            return [StructuredTool.from_function(coroutine=echo, name="echo", description="echo 工具")]
+
+        session.list_tools = list_tools
+
+        @asynccontextmanager
+        async def connected():
+            async with anyio.create_task_group() as group, original as port:
+                task = asyncio.current_task()
+                self.opened.append((address, task))
+                try:
+                    yield port
+                finally:
+                    self.closed.append((address, asyncio.current_task()))
+                    group.cancel_scope.cancel()
+        return connected()
+
+
+@dataclass
+class ReplacementCase:
+    factory: ReplacementFactory
+    owner: McpCatalogOwner
+    scopes: list[LifetimeScope] = field(default_factory=list)
+
+    async def prepare(self, payload):
+        scope = LifetimeScope("test-config-candidate")
+        self.scopes.append(scope)
+        return await self.owner.prepare_config(payload, scope)
+
+    def reserve(self, model_id: str = "model"):
+        binding = self.owner.binding_snapshot()
+        with self.owner.execution_handles.reserve_model_call(binding, session_id="session", thread_id="thread", model_call_id=model_id) as retain:
+            retain([{"name": "invoke_extension_tool", "id": "call", "args": {"tool_name": "mcp__alpha__echo"}}])
+        operation = software_tool_operation_id("mcp_call", "session", "thread", model_id, "call")
+        return binding.resolve("mcp__alpha__echo"), McpResourceUse("holder", operation, "session", "thread", model_id)
+
+
+@pytest.fixture
+async def replacement_case(tmp_path, event_channel_service, request):
+    factory = ReplacementFactory()
+    payload = {**config("old"), "supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}}
+    owner = McpCatalogOwner(raw_config=payload, workspace_root=tmp_path,
+                            event_service=event_channel_service, leases=ExternalResourceLeaseLedger(), session_factory=factory)
+    case = ReplacementCase(factory, owner)
+    await owner.start()
+    try:
+        yield case
+    finally:
+        for scope in reversed(case.scopes):
+            await scope.close()
+        await owner.shutdown()
+        assert sorted(factory.opened, key=lambda row: row[0]) == sorted(factory.closed, key=lambda row: row[0])
+
+
+async def wait_closed(runtime):
+    async def closing():
+        while not runtime.scope.is_closed:
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(closing(), 3)
+
+
+async def test_all_candidates_switch_together_and_same_schema_changes_only_connection(replacement_case):
+    case = replacement_case
+    owner = case.owner
+    before = owner.binding_snapshot()
+    old_runtimes = dict(owner._runtimes)
+    publications = []
+    unsubscribe = owner.subscribe_publication(publications.append)
+    try:
+        publish, ids = await case.prepare(config("new"))
+        assert owner.binding_snapshot() == before and len(publications) == 1
+        assert owner._runtimes == old_runtimes
+        assert ids == {"mcp__alpha__echo", "mcp__beta__echo"}
+        publish()
+        after = owner.binding_snapshot()
+        assert after.catalog_revision == before.catalog_revision and after.generation == before.generation
+        assert len(publications) == 2
+        for name in ("alpha", "beta"):
+            assert after.resolve(f"mcp__{name}__echo").connection_ref != before.resolve(f"mcp__{name}__echo").connection_ref
+            await wait_closed(old_runtimes[name])
+        await case.scopes[-1].close()
+        assert all(runtime.running for runtime in owner._runtimes.values())
+    finally:
+        unsubscribe()
+
+
+async def test_partial_candidate_failure_keeps_all_old_connections_and_cleans_candidates(replacement_case):
+    case = replacement_case
+    before = case.owner.publication_snapshot()
+    old_runtimes = dict(case.owner._runtimes)
+    case.factory.fail_server = "beta"
+    with pytest.raises(McpCatalogError, match="server_id=beta stage=configuration"):
+        await case.prepare(config("new"))
+    await case.scopes[-1].close()
+    assert case.owner.publication_snapshot() is before and case.owner._runtimes == old_runtimes
+    assert all(runtime.running for runtime in old_runtimes.values())
+    assert {address for address, _ in case.factory.closed} == {"http://localhost/alpha/new", "http://localhost/beta/new"}
+
+
+async def test_candidate_rejects_normalized_name_collision_with_unchanged_server(replacement_case):
+    case = replacement_case
+    before = case.owner.publication_snapshot()
+    case.factory._initial_tools["alpha."] = ["echo"]
+    payload = config("old")
+    payload["servers"]["alpha."] = {"enabled": True, "transport": "streamable_http", "url": "http://localhost/collision"}
+    with pytest.raises(McpCatalogError, match="stage=configuration"):
+        await case.prepare(payload)
+    await case.scopes[-1].close()
+    assert case.owner.publication_snapshot() is before
+    assert case.owner.get_tool_ids() == {"mcp__alpha__echo", "mcp__beta__echo"}
+
+
+async def test_unchanged_server_relist_waits_for_candidate_commit(replacement_case):
+    case = replacement_case
+    payload = config("old")
+    payload["servers"]["alpha"]["url"] = "http://localhost/alpha/new"
+    publish, _ = await case.prepare(payload)
+    case.factory.sessions["beta"].tool_names = ["changed"]
+    case.factory.notify_callbacks["beta"]()
+    await asyncio.sleep(0)
+    assert case.owner.get_tool_ids() == {"mcp__alpha__echo", "mcp__beta__echo"}
+    publish()
+    await asyncio.gather(*tuple(case.owner._pending_relist_tasks))
+    assert case.owner.get_tool_ids() == {"mcp__alpha__echo", "mcp__beta__changed"}
+
+
+async def test_confirmation_crosses_replacement_but_cannot_grant_new_old_generation_qualification(replacement_case):
+    case = replacement_case
+    binding, use = case.reserve()
+    old = case.owner._runtimes["alpha"]
+    old_snapshot = case.owner.binding_snapshot()
+    publish, _ = await case.prepare(config("new"))
+    publish()
+    assert old.running
+    with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.reserve_model_call(
+        old_snapshot, session_id="session", thread_id="thread", model_call_id="late",
+    ):
+        pytest.fail("退役代际不能取得新的资格")
+    with case.owner.execution_handles.execution_target(binding, use) as execution:
+        execution.started = True
+        assert await execution.tool.ainvoke({"text": "confirmed"}) == "http://localhost/alpha/old:confirmed"
+        execution.result_confirmed = True
+    await wait_closed(old)
+    current, use = case.reserve("current-model")
+    with case.owner.execution_handles.execution_target(current, use) as execution:
+        execution.started = True
+        assert await execution.tool.ainvoke({"text": "current"}) == "http://localhost/alpha/new:current"
+        execution.result_confirmed = True
+
+
+async def test_later_disable_revokes_already_retired_generation_and_keeps_unknown_fact(replacement_case):
+    case = replacement_case
+    binding, use = case.reserve()
+    old = case.owner._runtimes["alpha"]
+    publish, _ = await case.prepare(config("new"))
+    publish()
+    payload = config("new")
+    payload["servers"]["alpha"]["enabled"] = False
+    disable, _ = await case.prepare(payload)
+    disable()
+    with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
+        pytest.fail("禁用必须撤销更早原资格")
+    assert old.running
+
+
+async def test_only_changed_server_is_prepared_and_old_notification_cannot_overwrite_new(replacement_case):
+    case = replacement_case
+    old_notify = case.factory.notify_callbacks["alpha"]
+    beta = case.owner._runtimes["beta"]
+    payload = config("old")
+    payload["servers"]["alpha"]["url"] = "http://localhost/alpha/new"
+    publish, _ = await case.prepare(payload)
+    publish()
+    assert case.owner._runtimes["beta"] is beta and beta.running
+    publication = case.owner.publication_snapshot()
+    old_notify()
+    assert case.owner.publication_snapshot() is publication
+    assert len(case.factory.opened) == 3
+
+
+async def test_notification_between_candidate_relist_and_commit_closes_readiness_until_refresh(replacement_case):
+    case = replacement_case
+    publish, _ = await case.prepare(config("new"))
+    case.factory.sessions["alpha"].tool_names = ["changed"]
+    case.factory.notify_callbacks["alpha"]()
+    publish()
+    assert case.owner.publication_snapshot().status == "dirty"
+    await asyncio.gather(*tuple(case.owner._pending_relist_tasks))
+    assert case.owner.publication_snapshot().status == "available"
+    assert case.owner.get_tool_ids() == {"mcp__alpha__changed", "mcp__beta__echo"}
+
+
+@pytest.mark.parametrize("replacement_case", [1], indirect=True)
+async def test_retirement_deadline_closes_socket_without_settling_unknown_operation(replacement_case):
+    case = replacement_case
+    binding, use = case.reserve()
+    old = case.owner._runtimes["alpha"]
+    with case.owner.execution_handles.execution_target(binding, use) as execution:
+        execution.started = True
+        publish, _ = await case.prepare(config("new"))
+        publish()
+        await wait_closed(old)
+        lease, = case.owner._leases.leases_for_resource(binding.connection_ref)
+        assert lease.status == "active" and lease.lease_id.startswith("mcp-invocation:")
+    lease, = case.owner._leases.leases_for_resource(binding.connection_ref)
+    assert lease.status == "reconcile_required"
+    assert case.owner._leases.get(binding.connection_ref).status == "stopped"
+
+
+async def test_stdio_candidate_still_reports_restart_before_touching_active(replacement_case):
+    case = replacement_case
+    before = case.owner.publication_snapshot()
+    payload = config("new")
+    payload["servers"]["beta"] = {"transport": "stdio", "command": "single-instance", "enabled": True}
+    with pytest.raises(ConfigRestartRequiredError, match="stdio"):
+        await case.prepare(payload)
+    assert case.owner.publication_snapshot() is before and len(case.factory.opened) == 2
+
+
+async def test_turn_inherits_original_qualification_without_granting_another_execution(replacement_case):
+    case = replacement_case
+    scope = LifetimeScope("original-execution")
+    case.scopes.append(scope)
+    owner = case.owner
+    binding = owner.binding_snapshot()
+    old = owner._runtimes["alpha"]
+    with owner.execution_handles.reserve_model_call(
+        binding, session_id="session", thread_id="thread", model_call_id="first-model",
+        execution_id="original-execution", execution_scope=scope,
+    ) as retain:
+        retain([])
+    original, = [lease for lease in owner._leases.leases_for_resource(binding.resolve("mcp__alpha__echo").connection_ref)
+                 if lease.lease_id.startswith("mcp-execution:")]
+    publish, _ = await case.prepare(config("new"))
+    publish()
+    with owner.execution_handles.reserve_model_call(
+        binding, session_id="session", thread_id="thread", model_call_id="next-model",
+        execution_id="original-execution", execution_scope=scope,
+    ) as retain:
+        prepared, = [lease for lease in owner._leases.leases_for_resource(original.resource_id)
+                     if lease.lease_id.startswith("mcp-prepared:")]
+        assert prepared.expires_at == original.expires_at
+        retain([])
+    other_scope = LifetimeScope("other-execution")
+    case.scopes.append(other_scope)
+    with pytest.raises(ExtensionTargetResolutionError), owner.execution_handles.reserve_model_call(
+        binding, session_id="session", thread_id="thread", model_call_id="other-model",
+        execution_id="other-execution", execution_scope=other_scope,
+    ):
+        pytest.fail("其它执行不能继承原 Turn 的旧代际资格")
+    assert old.running
+    await scope.close()
+    await wait_closed(old)
+    assert owner._leases.get_lease(original.lease_id).status == "released"

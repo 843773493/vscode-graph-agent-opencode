@@ -157,6 +157,10 @@ stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消
 
 允许并行启动的 Server 先准备新连接；单实例 stdio Server 采用可观察的 stop-then-start，暂时关闭该 Server 的执行准入。前者失败保留旧 active 且明确报告 apply_failed；后者无法恢复旧服务时报告 recovery_required，不伪称旧运行时仍健康。已承诺旧调用的 handle 无法维持时真实结束／失败，绝不迁投新同名工具。
 
+分阶段交付时，先开放 HTTP Server 的候选准备、增删／禁用和共同切换；涉及 stdio、监督参数或其它需重启字段的混合候选仍整体进入 pending_restart。退役连接从切换时开始，最多按原 `sealed_call_timeout_seconds` 排空本地 active 占用，关闭等待另有相同上限；原封存资格继续服从各自更早的期限。账本中的结果未知操作不延长 socket 保留，也不因 socket 关闭而被结算。候选期间或提交前收到新通知时不能发布过期的 available 目录，必须保持明确不可用直至完整刷新。配置状态的 applied_paths／deferred_paths 从当前 candidate／attempt 的原配置事件读取，不维护第二份可变结果。
+
+turn-bound MCP 目录的原执行在首次模型发送前保留精确连接资格，由原 TurnExecutionScope 持有并在原账本登记。后继模型调用只可继承该原执行已经保留的 handle 与原期限，不因切换后产生新的 model_call_id 重新计时或扩大目录；原执行结束、期限到达或禁用／撤权后拒绝继承。model-call-bound 目录继续逐次取得当时 active 连接。此执行持有只管理短期资格，不复制模型正文或创建第二套事实来源；进程重启不能恢复旧 socket。
+
 切换后的旧连接清理失败是可观察的 draining/cleanup failure；不能把已经切换的配置说成「从未应用」，也不能伪报资源已释放。后台 owner 持续记录实际状态并阻止冲突替换，处理结果沿用现有配置／活动事件合同。
 
 新增配置只扩展 Workspace 既有 schema、默认与必要模板，使用功能域／子系统／参数层级；不新增凭据明文字段或平行配置文件。现有配置字段不改名；确有持久契约变化时显式版本化并一次性迁移，不加永久兼容读取。
