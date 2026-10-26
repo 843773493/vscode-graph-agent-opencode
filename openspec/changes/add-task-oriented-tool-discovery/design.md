@@ -6,10 +6,11 @@
 
 - `mcp/catalog_owner.py` 已完整 relist、消费变化通知并发布不可变目录；现有 connection generation 主要约束迟到通知与 relist，尚不是执行调用的完整生命周期。
 - `mcp/tool_guidance.py` 只输出截断描述和参数字段摘要；`catalog_activation.py` 将其作为一个已选正文父行发布，typed members 与 lineage 单独保存。
-- 多处 schema 指纹使用 `tool.args`，它仅包含 `properties`；`model_tool_schema.py` 已有完整公开 schema 导出，但字典参数校验会裁剪字段；信封又无条件拒绝 properties 之外的字段。
+- 完整 schema 切片已完成：`model_tool_schema.py`、目录 v2 身份和信封校验共用完整公开契约，MCP SDK 薄适配保留合法附加参数；旧属性指纹和参数裁剪已移除，任务 2 的完成状态保持不变。
+- 完整定义的冻结正文不能由 schema hash 代替；后续搜索切片应沿现有 Registry 的 definition facet、activation 和 Saver 接入，避免从 live 工具对象重建历史定义。
 - `agent_factory.py` 捕获 initial targets，再按 schema hash 查当前 publication，不能用于连接热替换后保证原执行身份。
 - `/mcp` 当前为 `restart_workspace`；`workspace_lifecycle.py` 明确缺少由原 task 排空旧 generation 的 supervisor。
-- 已有目标级 HITL、工具结果存储、精确 thread 后台消息与内部唤醒。它们可复用，但通用 MCP OAuth、连接操作对账与授权完成接线需要新增实现。
+- 已有 ToolPolicyResolver 的 `model_visibility_locked`、目标级 HITL、ToolOutputStore、BackgroundTask handler／资源展示、精确 thread 邮箱、RuntimeSourceDispatcher 和含 `mcp_connection` 的 ExternalResourceLeaseLedger；应复用这些机制。邮箱 emit 只持久投递并唤醒收集器，不会自动调度 Agent；首次未授权的启动准入、通用 MCP OAuth 和恢复投递接线需要补齐。
 
 参考：[Composio Connect](https://docs.composio.dev/docs/composio-connect#available-mcp-tools) 的任务搜索、完整 schema、连接管理、批量执行和授权等待职责；本地产品不依赖其托管目录或云端控制面。附件中的 `additional_tools` 仅作为 Provider 特定优化的参考，不成为通用协议前提。
 
@@ -35,11 +36,13 @@
 
 `search_tools` 接受两种互斥的只读请求：`query` 按任务搜索，或非空 `tool_ids` 按 ID 获取定义；公共参数为 `limit`、`cursor`、`max_response_bytes`。缺少选择器、同时给出两种选择器、非法范围或失效 cursor 均明确报错。默认一次返回少量候选；精确模式按请求顺序返回逐 ID 结果，不把缺失项伪装为空 schema。
 
-结果统一承载 `tool_id`、origin/group、用途、完整 `input_schema`、schema hash、catalog revision、匹配理由、execution/model-visible 状态、readiness、缺失连接和后续控制目标。匹配理由来自确定性匹配事实，不声称已执行任务或保证工具效果。首期仅聚合已有 MCP、本地扩展及本地连接控制目标；内置直接工具仍由现有 ToolSet 管理，日后纳入搜索也须声明实际调用入口。
+结果统一承载 `tool_id`、origin/group、用途、完整定义的内联值或可读取引用、schema hash、catalog revision、匹配理由、execution/model-visible 状态、readiness、缺失连接和后续控制目标。匹配理由来自确定性匹配事实，不声称已执行任务或保证工具效果。首期仅聚合已有 MCP、本地扩展及本地连接控制目标；内置直接工具仍由现有 ToolSet 管理，日后纳入搜索也须声明实际调用入口。
 
 搜索使用调用所属的冻结目录快照；不在模型请求 preparation 或搜索期间临时访问任意 MCP Server。新发布目录按既有激活边界进入下一可见快照。排序以规范化名称／关键词／描述匹配分数和稳定 ID 决胜；首期不额外调用 LLM 或 embedding 服务。分页绑定目录、策略 revision 和查询身份，变化后返回 snapshot conflict／明确重新搜索指引。
 
-每个返回的 schema 必须完整、自包含，保留 `$defs` 与本地引用；首期不能本地解析的外部引用明确拒绝，不静默访问网络或降为宽松校验。容量不足时少返回候选并给 cursor；单个定义超过上限时返回明确的 definition-too-large 和体积事实，不输出残缺 schema 冒充完整定义。精确请求受同一策略和体积约束。
+每个 schema 必须完整、自包含，保留 `$defs` 与本地引用；首期不能本地解析的外部引用明确拒绝，不静默访问网络或降为宽松校验。容量不足时少返回候选并给 cursor；单个定义无法内联时，经现有 ToolOutputStore／会话 artifact 保存完整定义或包含它的完整工具结果，返回有界 `schema_ref`、`read_path`、`content_sha256`、体积、schema hash 与冻结 provenance，并标记 `schema_state=needs_read`。只有完整内联定义才标记 `inline_complete`，读取引用前不能将预览当作完整契约。引用也无法放入预算、物化失败或内容不可恢复时明确报错，不退回截断 schema。
+
+响应预算必须同时遵守既有工具策略与 ToolOutputMiddleware 的字节／行数限制，不单凭 search 的 max_response_bytes 判断成功。测试应穿过真实输出中间件，证明模型最终收到完整内联定义或明确的可读取引用；物化副本只是派生工具结果，定义权威仍为冻结资源，不新增 schema 数据库、fetch 工具或 artifact writer。精确请求受同一策略和体积约束。
 
 选择新增入口的原因是任务级能力检索与文件 `grep`／历史 `search_context` 的合同不同。底层复用现有资源身份、目录、结果存储和分页习惯，不为减少名称而修改这些工具的业务语义。
 
@@ -49,25 +52,29 @@
 
 采用既有 canonical JSON／JCS 摘要设施，不再为同一契约维护可分歧的属性指纹或 `default=str`／repr 容错。binding/hash 合同变更明确版本化；历史 schema／handle 不可恢复时拒绝执行并保留原件，不用当前同名工具补洞。回放可读与继续执行是不同能力，不能为了恢复执行而重写历史。
 
+完整定义以同一 ResourceRegistry 中每目标的 definition facet 发布，与父目录 typed members、schema hash 和 source lineage 在同一 publication 批次一致捕获，再由既有 activation／Saver 正文存储冻结与恢复。已选 guidance 正文与完整目录定义分离，不把全部 schema 自动塞入模型上下文。首次搜索及进程重启后的精确查询均只读所属冻结正文；只有 hash 而缺少正文时明确失败，不等待第一次搜索结果才保存定义，不读取 live 同名工具补齐。
+
 MCP 输入按其声明的 JSON Schema 方言和完整契约校验；未声明方言按 MCP 支持的默认规则处理，无法支持时明确拒绝目录。properties 外字段仅在 schema 禁止时拒绝，合法扩展字段原样保留。Pydantic 本地工具维持公开模型约定的默认值／转换，不改变已授权的外部行为。JSON Schema 错误作为真实配对参数错误返回，不被宽泛异常吞掉。
 
 底层保留 MCP SDK。若 `langchain_mcp_adapters` 无法保持完整 schema／结果／执行身份，就将现有 MCP 适配路径整体换成 SDK list/call 的薄适配；不同时保留两条生产发现或执行路径，不自行实现协议传输。
 
 ### 3. 自动注入、显式发现与执行权限分离
 
-保留现有两项用户控制：`model_visible` 决定自动注入，`execution_enabled` 决定执行。显式搜索可以返回已允许执行但未自动注入的目标，不修改 selection 或全局开关；硬性执行禁用目标不返回完整定义，不经搜索恢复其能力。
+复用 ToolPolicyResolver 的完整解析结果：`model_visible` 决定自动注入，`execution_enabled` 决定执行；显式搜索可以返回已允许执行、仅关闭自动注入的目标，不修改 selection 或全局开关。`restrictions.model_hidden`／`model_visibility_locked` 是独立硬隐藏，任务搜索、精确查询、能力导航及压缩后定义恢复均不得重新投递其定义；执行禁用目标也不经搜索恢复能力。策略身份复用同一 ToolMetadata，不通过描述猜测分组。历史原件不改写；硬隐藏本身不被扩大解释为执行禁用，真实调用仍独立检查当前执行策略。
 
 默认模型上下文只自动提供有界能力导航和发现用法；用户显式打开 `model_visible` 的目标仍自动获得完整定义。按需搜索结果作为正常 ToolResult 保存，并登记其不可变定义 provenance。CSM／Saver 复用已有资源存储恢复活动定义，原 ToolResult 已在有效上下文中时不重复注入整份正文；压缩后只恢复需要保留的当前定义，来源仍为原冻结资源，不建第二套正文库。
 
 目录与已选定义使用同一个 publication/activation 事实。模型看到旧定义时只能得到旧 binding 对应的执行或明确失败；更新在下一允许边界提供完整替换定义／删除提示，不能只改 dispatcher。schema 切换使用完整定义替换，避免模型靠文本 diff 拼接契约。
 
-沿用 `turn|model_call` 配置，不因搜索、授权完成或通知偷偷突破 `turn` 冻结。授权后连接可用并不等于原 Turn 已获得新工具；如果尚未到激活边界，返回等待激活事实，允许用户或下一合法执行边界推进，不伪造用户 Turn、不重复唤醒空转。搜索发生在已冻结目录上，不单独成为未声明的激活 writer。
+沿用 `turn|model_call` 配置，不因搜索、授权完成或通知改写原冻结。原工具调用先提交配对的等待结果，原执行按既有终态结束，等待事实由 BackgroundTask 承载，不新增 Job 状态；操作验证成功、目录发布且 continuation 仍有效后，经 RuntimeSourceDispatcher.submit 以稳定幂等 key 和 `after_turn` 策略提交独立 internal execution。该执行 `turn_id=None`，按已有 turn 策略针对自身真实 execution 首次冻结新目录，不借用或伪造用户 Turn，不将恢复伪装为旧 Turn retry/resume。由此两种策略均能合法自动继续，无需用户再说“继续”；未就绪或未过准入时保留等待事实，不重复唤醒空转。搜索本身不成为激活 writer，已有 model_call 边界仍按原合同生效。
 
 固定 `search_tools`／信封的 description 不枚举动态 Server 或目标。上线首次加入 `search_tools` 属于真实 Provider ToolSet 变化，沿用既有 epoch 机制；其后目录、连接和已选定义更新不改变 Provider schemas。Provider 执行绑定 hash 与请求正文 hash 继续分离。
 
 ### 4. `connections.manage` 作为本地信封内控制目标
 
 该目标通过现有本地扩展注册链路进入统一目录，凭正常 execution policy 和 HITL 执行；控制 owner 独立于待授权 MCP 连接，确保远端未连接时仍能请求本地授权。
+
+启动及资源冻结必须支持合法的 `authorization_required` 状态：只有 SDK／协议确认且本地支持的授权流程才进入该状态，不能将任意 401、配置或协议异常吞掉。唯一目录仍发布完整的本地控制成员、可用 Server 成员及每 Server 真实 readiness；需授权的远端不被伪报 ready，也不使整个父目录 unavailable。未知远端目录不虚构成员，已知定义不携带可用执行资格。需授权的一个 Server 不得阻断本地控制或其它就绪 Server；非授权故障仍沿明确错误合同处理，不作通用降级。
 
 使用带判别字段的参数模型：
 
@@ -92,11 +99,15 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 等待记录复用现有后台工作存储／handler 和内部执行准入，按 `(session_id, thread_id, operation_id)` 关联到既有会话节点；具体文件由统一路径解析器取得，不手拼日期或全局目录。记录至少包含 deadline、操作／连接引用、最后观察状态、通知／恢复去重身份和待恢复 continuation 引用，不存储可执行代码或复制业务参数作为第二权威。
 
-采用「登记等待 → 读取当前权威状态 → 订阅／消费变化并再核状态」语义，避免授权在登记前完成造成丢唤醒。连接 owner 确认终态并持久提交后，再经已有可恢复投递机制发送最小事件；事件只含操作引用与状态，不能单凭事件把连接标为 ready。
+采用「登记等待 → 读取当前权威状态 → 订阅／消费变化并再核状态」语义，避免授权在登记前完成造成丢唤醒。连接 owner 确认终态并持久提交后，再发送只含操作引用与状态的最小事件；不能单凭事件把连接标为 ready。等待 handler 只观察和对账授权，不重复执行 connect、token 交换或业务写入；复用现有 typed/versioned handler 与原子 mailbox/checkpoint effect，不把观察等待误标为结果未知的外部副作用。
 
-完成通知只进入原 thread 邮箱；仅对仍有效、未超时／取消、通过当前权限及 Session 删除 fence 的 continuation 请求内部唤醒。重复 callback／重启重放至多生成一次逻辑恢复效果；用户输入与唤醒交错仍经现有执行队列。完成授权不会自动重发结果未知的外部写入；需要重新查询真实状态或新的明确执行意图。
+完成通知只进入原 thread 邮箱。在既有 SessionControlStore 事务中原子提交 checkpoint、稳定 message_id 的邮箱消息及 checkpoint 内待投递 continuation 引用，再由可恢复投递步骤调用 RuntimeSourceDispatcher.submit，成功后结算投递阶段；崩溃后用同一幂等 key 重放，不新增第二套唤醒队列。邮箱 emit／collect 不代表 Job 已准入；邮箱消费 ack 仍随 canonical ToolResult 提交，内部 wakeup ack 沿现有执行合同，不能互相代替。
+
+仅对仍有效、未超时／取消、通过当前权限及 Session 删除 fence 的 continuation 请求内部唤醒。重复 callback／重启重放至多生成一次逻辑恢复效果；用户输入与唤醒交错仍经现有执行队列。完成授权不会自动重发结果未知的外部写入；需要重新查询真实状态或新的明确执行意图。
 
 短等待复用既有总工具期限／取消 child scope，不突破其 deadline。长等待不维持长工具调用、不靠模型反复轮询。重启时重建连接而非恢复旧 socket；核实授权操作状态，无法确认时标为 reconcile_required／明确失败，不自动重放历史副作用。
+
+授权等待注册为既有 BackgroundTask 后，复用 BackgroundTaskResourceProvider 的展示、取消和对账入口，不建立独立授权任务清单。活动等待继续遵守现有 thread idle unload blocker；冷重建验收指进程重启后的恢复，不承诺活动任务可无条件卸载，也不新增未定义的 suspended 状态。
 
 ### 6. 唯一 MCP owner 内按 Server 监督连接与调用
 
@@ -109,6 +120,8 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 | catalog revision／目录 generation | 目录语义变化 | 定义冻结与内容版本 |
 | connection generation | session 新建／替换 | 远端执行身份、迟到 callback fencing |
 | invocation lease | 每个已接纳调用 | 排空、期限和取消归属 |
+
+跨 execution／Turn 的持久资源持有复用唯一 ExternalResourceLeaseLedger 的 `mcp_connection` 与 typed resource-use 记录，真实状态仍由连接 owner 更新。owner 内 generation/handle 的短期调用保留只管理本次执行准入与排空，不另建持久资源账本，也不按任意参数名推断资源占用。
 
 目录全量 relist 仍只有一条路径；支持 list_changed 的 Server 消费通知，其余在显式刷新／重连边界更新。无语义变化不推进目录 revision；相同 schema 的连接替换仍推进连接 generation。可调用记录包含 server identity、connection generation、完整 schema hash 与可审计 handle 引用；由 owner 解析，Agent 不再捕获 initial_targets 或回退 live publication。
 
@@ -124,6 +137,8 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 发布与配置 active promotion 使用同一受控准入屏障／提交标识：模型 preparation、API 和工具调用不能观察到 candidate 目录配旧 active 配置的中间状态；不能只依赖两个各自原子的赋值。崩溃后依据持久提交阶段对账，不声称 SQLite 能回滚外部 session。
 
+接线复用既有配置 applying journal、claim 和 promotion owner；当前 ConfigSnapshotStore 的 candidate_applier 返回后才 commit，不能在 applier 中提前公开新连接再把后续 commit 当作共同事务。候选准备与受控发布必须接入同一提交协议并覆盖失败／恢复阶段，不新增配置事实源。
+
 允许并行启动的 Server 先准备新连接；单实例 stdio Server 采用可观察的 stop-then-start，暂时关闭该 Server 的执行准入。前者失败保留旧 active 且明确报告 apply_failed；后者无法恢复旧服务时报告 recovery_required，不伪称旧运行时仍健康。已承诺旧调用的 handle 无法维持时真实结束／失败，绝不迁投新同名工具。
 
 切换后的旧连接清理失败是可观察的 draining/cleanup failure；不能把已经切换的配置说成「从未应用」，也不能伪报资源已释放。后台 owner 持续记录实际状态并阻止冲突替换，处理结果沿用现有配置／活动事件合同。
@@ -138,17 +153,30 @@ Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 re
 
 普通并发以同一轮多个既有信封调用表达，每个保留独立 ID、冻结 binding、HITL、scope 和结果；依赖关系通过后续模型步骤推进。保留既有 `tool_name+arguments` 输入，不引入 batch 数组第二形状或多套 dispatcher。
 
+### 9. 配置规格按明确依赖顺序同步
+
+`unify-product-runtime-logging` 必须先同步主规格并完成归档，本变更随后才能同步／归档。两个配置 capability 的同名 MODIFIED Requirement 使用包含日志和 MCP 合同的完整正文：保留日志归 Gateway `logging.runtime`、仅日志热应用和混合 Gateway 候选整体提交场景，仅将 MCP 重启分类改为按安全替换验收结果判断。
+
+同步前重新读取日志归档结果与最新主规格，核对双方全部场景；日志尚未归档或同名合同又变化时，停止本变更的规格同步／归档并先更新本 delta，不允许逆序覆盖。此依赖只限制规格同步／归档，不阻塞相互隔离的实现切片；本变更不修改日志 change 或 Gateway 日志实现。
+
 ## Risks / Trade-offs
 
 - 信封无法让 Provider 对内部目标参数施加逐工具生成约束 → 提供完整定义与严格本地校验，统计首次成功率再决定是否需要独立 Provider 优化。
 - 任务搜索可能漏选或多一轮 → 确定性排名、精确查询与少量候选；不把建议流程当保证，不自动执行搜索结果。
-- turn 激活延迟影响授权后继续 → 显示等待激活原因，遵守原策略；评估真实工作流后由用户选择现有 model_call 配置，不隐式改变默认。
+- 授权完成与原 Turn 结束交错 → 复用 after_turn 的独立内部执行与新 execution 冻结，未满足准入时显示等待事实，不改原冻结或默认策略，不重复唤醒。
 - 热替换无法保持单实例旧调用 → 明确短暂停用与失败结果；对每种替换方式测真实入口，不承诺无中断。
 - 目录版本相同但远端行为改变 → 本地 generation 只能约束连接身份，不能保证第三方实现语义不变；不自动重试结果未知写入。
 - 授权等待可能被误当一次性执行许可 → 授权与行动确认分离，恢复时检查最新策略与原意图，重复事件不重复副作用。
-- 规划并行归档可能覆盖配置文字 → 本 change 的配置 delta 仅表达 MCP 的变化；实施／归档时与日志 change 按 requirement 合并，保留它的日志结果。
+- 规划并行归档可能覆盖配置文字 → 明确日志先归档、本变更后同步的前置门；本 delta 保留日志完整正文与场景，同步前以最新主规格核对，禁止逆序覆盖。
 
 ## Migration Plan
+
+### 冻结定义与搜索切片的集成边界（2026-10-26）
+
+- 唯一 publisher 在同一 Registry publication 锁中发布 guidance 父行与每目标 definition facet，沿既有 activation／Saver 保存正文、members 和 lineage。搜索恢复时逐项核对来源、完整 schema hash 与原冻结正文；缺失定义明确失败。
+- 固定 search_tools 与信封共同保留在 Provider 工具面。查询排名、精确顺序、逐项错误、目录／有效策略／查询绑定分页和预算在同一搜索链路实现；策略身份由目录和执行共用的 metadata_for_tool 生成，软隐藏可发现，硬隐藏及执行禁用明确拒绝。
+- 响应为单行规范 JSON，字节预算同时受 search_tools 策略及现有 ToolOutputStore 限制。大定义经该 store 的同一不可变写入方法物化，返回 needs_read、普通读取 URI、正文摘要和冻结 provenance；内联完整定义标为 inline_complete。原有大输出预览也复用该写入方法。
+- 定向 matrix 包含真实 stdio、原样参数收据、实际输出中间件、冷 Saver、fork／恢复和两种激活边界；正式 Session／消息入口另以 model_stream 驱动真实调试动作，核对发现结果、ToolSet、request_hash 和前缀。连接控制、默认有界导航、自动完整定义注入及压缩后的活动定义恢复继续按 3.1、3.4–3.7 和后续切片推进。
 
 ### 完整 schema 切片的调用与集成边界（2026-10-26）
 
@@ -161,9 +189,9 @@ Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 re
 
 1. 先全仓核对 schema、工具目录、信封目标解析、确认、恢复与测试消费者，建立受影响调用清单；不修改其他进行中变更的源码或规划。
 2. 单切片完成完整 schema 和校验迁移，移除属性摘要身份与合法字段裁剪；确定历史 binding 的显式不可执行处理。
-3. 单切片实现 search_tools、冻结发现结果、策略与压缩恢复，替换默认全量摘要；保留用户显式自动注入和 Skill 调用。
+3. 单切片先将完整定义 facet 接入既有冻结正文，再实现 search_tools、硬隐藏策略、结果物化与压缩恢复，替换默认全量摘要；保留用户显式自动注入和 Skill 调用。
 4. 单切片将执行 handle／generation／lease 收归 MCP owner，删除 initial/live 两段 resolver，验证延迟调用与 HITL。
-5. 单切片实现本地连接控制、标准授权、UI 和持久等待恢复，复用单一信封、结果、后台与执行准入链路。
+5. 单切片打通首次需授权时的启动／目录准入，再实现本地连接控制、标准授权、UI 和持久等待恢复；使用 checkpoint／邮箱的可靠投递和独立内部执行，复用单一信封、结果、后台资源管理与执行准入链路。
 6. 单切片接入 Server 级热替换、配置提交和故障对账；验收通过后才修改对应字段 policy，并同时更新配置相关消费者／测试。
 7. 完成实际 Gateway／目标工作区／浏览器授权与真实 MCP Server 验收，再运行针对性回归和差异审查。每个切片的证据与命令按仓库规范保留。
 

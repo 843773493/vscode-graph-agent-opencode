@@ -29,5 +29,5 @@ app/agents/tools/
 - 工具失败时直接抛出明确错误，不返回虚假默认值。
 - 工具所需运行时依赖通过 factory 参数显式传入。
 - `invoke_extension_tool` 有意只作为固定扩展工具入口暴露给模型，不得把所有扩展工具名称和参数 schema 展开到该入口描述或模型 tools 列表中；这样可避免扩展工具数量增长时持续膨胀每次 LLM 请求。
-- 扩展工具只有在模型先从当前工作区的 `AGENTS.md`、Skill 元数据或普通说明文档获知目标工具名称与参数，并通过 `skill_load(name=...)` 加载完整 Skill 后才应调用；新增扩展工具必须同时提供或更新对应文档，并用 E2E 覆盖“先加载 Skill、再通过 `invoke_extension_tool` 调用”的行为。
+- `search_tools` 是统一的只读扩展发现入口，按任务或精确 ID 读取调用所属的冻结完整定义。它与信封的 Provider schema 固定，不枚举动态目标，也不通过当前同名工具补齐历史定义；参数和策略身份与信封共用。扩展可由发现结果、Skill 或明确文档提供调用契约；使用 Skill 的流程仍须通过 `skill_load(name=...)` 激活正文。
 - 动态工具文档的规范格式是每个目标工具的 `tool_name` + `arguments_schema` JSON 对象；不需要重复写固定入口的完整调用示例。参数 schema 应由工具的模型可见 schema 生成或校验，不能只维护一份口语化表格。

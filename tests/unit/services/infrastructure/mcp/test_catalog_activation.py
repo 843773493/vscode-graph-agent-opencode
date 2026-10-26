@@ -291,7 +291,10 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
         assert resource.members[0].server_id is None
         assert dict(resource.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID] == owner.catalog_revision()
         assert dict(resource.source_lineage)[EXTENSION_CATALOG_SOURCE_ID].startswith("sha256:")
-        assert len(registry.capture().descriptors) == 1
+        assert {descriptor.facet for descriptor in registry.capture().descriptors} == {"activation", "definition"}
+        definition, = (snapshot for snapshot in registry.capture().snapshots if snapshot.facet == "definition")
+        assert definition.members == resource.members
+        assert definition.payload["input_schema"]["properties"]["text"]["type"] == "string"
     finally:
         await owner.shutdown()
 
@@ -450,7 +453,10 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     changed = next(binding for binding in after.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent.revision == changed.revision
     assert parent.content_hash == changed.content_hash
-    assert before.bindings_hash == after.bindings_hash
+    before_definition, = (binding for binding in before.bindings if binding.facet == "definition")
+    after_definition, = (binding for binding in after.bindings if binding.facet == "definition")
+    assert before_definition.revision != after_definition.revision
+    assert before.bindings_hash != after.bindings_hash
     assert parent.members[0].schema_hash != changed.members[0].schema_hash
     assert saver.read_resource_activation_payload(
         after, changed, storage_owner=(session, thread),

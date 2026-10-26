@@ -83,33 +83,12 @@ class ToolOutputStore:
         if line_count <= self._max_lines and len(encoded) <= self._max_bytes:
             return message
 
-        content_sha256 = hashlib.sha256(encoded).hexdigest()
-        output_path = self._output_path(
-            session_id=session_id,
-            tool_call_id=tool_call_id,
-        )
-        resource_uri = session_artifact_uri(
-            read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
-            gateway_authority=get_current_gateway_id(),
-        )
-        try:
-            _write_exact_output(output_path, encoded, resource_uri)
-        except OSError as error:
-            raise type(error)(
-                error.errno,
-                f"工具结果 write 失败: uri={resource_uri}, error={type(error).__name__}, errno={error.errno}",
-            ) from error
-        reference = ToolOutputReference(
-            type="tool_output",
-            path=resource_uri,
-            read_path=resource_uri,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            byte_count=len(encoded),
-            line_count=line_count,
-            content_sha256=content_sha256,
+        reference = self._materialize(
+            session_id=session_id, tool_name=tool_name, tool_call_id=tool_call_id,
+            encoded=encoded, line_count=line_count, output_key=tool_call_id,
             truncated=True,
         )
+        resource_uri = reference.read_path
         marker = (
             f"... 工具输出过大，完整内容已保存到 {resource_uri} ...\n"
             "请先用 grep 搜索该路径，再用 read_file 按行分段读取。"
@@ -125,11 +104,56 @@ class ToolOutputStore:
         }
         if message.artifact is not None:
             artifact["original_tool_artifact"] = message.artifact
-        return message.model_copy(
-            update={
-                "content": preview,
-                "artifact": artifact,
-            }
+        return message.model_copy(update={"content": preview, "artifact": artifact})
+
+    @property
+    def inline_byte_limit(self) -> int:
+        """自带有界结构的工具在生成结果前使用相同的最终输出上限。"""
+        return self._max_bytes
+
+    def materialize(
+        self, *, session_id: str, tool_name: str, tool_call_id: str,
+        text: str, output_key: str,
+    ) -> ToolOutputReference:
+        """保存完整的不可变工具正文供普通资源读取，不生成截断预览。
+
+        output_key 区分同一调用内的多个派生正文；同 key 的重放仍须逐字节一致。
+        """
+        return self._materialize(
+            session_id=session_id, tool_name=tool_name, tool_call_id=tool_call_id,
+            encoded=text.encode("utf-8"), line_count=_line_count(text),
+            output_key=output_key, truncated=False,
+        )
+
+    def _materialize(
+        self, *, session_id: str, tool_name: str, tool_call_id: str,
+        encoded: bytes, line_count: int, output_key: str, truncated: bool,
+    ) -> ToolOutputReference:
+        output_path = self._output_path(
+            session_id=session_id,
+            tool_call_id=output_key,
+        )
+        resource_uri = session_artifact_uri(
+            read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
+            gateway_authority=get_current_gateway_id(),
+        )
+        try:
+            _write_exact_output(output_path, encoded, resource_uri)
+        except OSError as error:
+            raise type(error)(
+                error.errno,
+                f"工具结果 write 失败: uri={resource_uri}, error={type(error).__name__}, errno={error.errno}",
+            ) from error
+        return ToolOutputReference(
+            type="tool_output",
+            path=resource_uri,
+            read_path=resource_uri,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            byte_count=len(encoded),
+            line_count=line_count,
+            content_sha256=hashlib.sha256(encoded).hexdigest(),
+            truncated=truncated,
         )
 
     async def abound(

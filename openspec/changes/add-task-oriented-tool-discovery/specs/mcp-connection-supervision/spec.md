@@ -8,6 +8,8 @@
 
 系统 MUST 在每个工作区维持唯一的连接监督与目录发现链路，不因 thread 或 Agent 重建重复建立同一连接。完整分页目录经过验证后整体发布；变化通知、显式刷新、重连及配置替换 MUST 收敛到同一路径，不发布半目录。不具备变化通知的 Server MUST 只在可观察刷新边界承诺更新，不在模型请求准备时联网刷新。
 
+受支持的待授权状态 MUST 按 Server 发布 readiness，保持同一目录中的本地控制和其它就绪 Server 可达，不因预期授权需求整体阻断启动或必需资源冻结；未知目录不发布虚构工具，配置／协议故障仍明确报错。
+
 #### Scenario: 同进程多工作区使用同名 Server
 
 - **WHEN** 两个工作区配置相同 server_id 并分别调用
@@ -17,6 +19,11 @@
 
 - **WHEN** 第一页读取成功而后续页或 schema 验证失败
 - **THEN** 系统报告目录不可用或刷新失败，不发布已读取部分作为新有效目录
+
+#### Scenario: 单个 Server 首次需要授权
+
+- **WHEN** Server 经协议确认需要受支持授权，尚不能读取其目录
+- **THEN** 唯一 owner 保留该 Server 真实未授权状态，并发布完整本地控制和其它可用成员，不将整个父目录标记不可用
 
 ### Requirement: 目录语义版本与连接执行代际必须分离
 
@@ -36,6 +43,8 @@
 
 配置变更 MUST 只替换受影响的 Server；同一候选的所有变更 MUST 在初始化、完整目录验证与冲突检查成功后统一可见，并与 active 配置提交边界保持一致。候选未生效时模型 preparation、API 和调用 MUST 不观察到新目录配旧 active 配置。连接生命周期 MUST 由其所属监督上下文创建和关闭。
 
+提交 MUST 复用现有配置 applying journal、claim 和 active promotion，并将候选准备与 publication 纳入同一受控准入协议；不得在 candidate_applier 返回前提前公开新目录，再将之后独立发生的 snapshot commit 声称为原子切换。
+
 #### Scenario: 多 Server 候选部分失败
 
 - **WHEN** 同一候选的第一个 Server 准备成功，第二个失败
@@ -49,6 +58,13 @@
 ### Requirement: 旧调用必须在有界租约内真实收敛
 
 正常替换 MUST 停止向旧代际分配新的执行资格，但在有界期限内保留切换前已接纳或已封存并保留资格的调用，包括人工确认等待。禁用、断开与执行撤权 MUST 在执行点拒绝尚未开始的调用；进行中调用按明确策略取消或收敛。资源关闭只有真实核实后才能报告；取消、断线或超时不能证明远端未执行时 MUST 返回结果未确认，不自动重试副作用。
+
+跨 execution／Turn 的持久资源持有 MUST 复用 ExternalResourceLeaseLedger 的 mcp_connection 和 typed resource-use 合同，状态证据由实际连接 owner 提供；owner 内短期 generation／handle 保留 MUST 不成为第二套持久租约账本，也不得按参数名称推测资源使用。
+
+#### Scenario: 同一连接跨执行被持有
+
+- **WHEN** 工具通过 typed resource-use 声明继续持有 MCP 连接资源，后续执行仍使用该资源
+- **THEN** 持有和释放沿既有 ExternalResourceLeaseLedger 记录，连接 owner 提供真实状态；调用 handle 的临时排空引用不产生第二份持久占用事实
 
 #### Scenario: 人工确认跨越连接替换
 

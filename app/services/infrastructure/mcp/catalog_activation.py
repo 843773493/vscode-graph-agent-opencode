@@ -1,7 +1,8 @@
 """MCP Owner publication 到同一 runtime ResourceRegistry 的纯内存适配。
 
-父行 payload 只承载实际选中的工具指引正文。目录 revision、generation 与
-typed members 只进入独立 lineage/member 通道；冻结与持久化归既有 Coordinator/Saver。
+父行 payload 只承载实际选中的工具指引正文；完整定义使用同批 definition facet。
+目录 revision、generation 与 typed members 进入独立 lineage/member 通道；
+冻结与持久化归既有 Coordinator/Saver。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.agents.policy.tool_capability import ToolMetadata, metadata_for_tool
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -25,6 +27,11 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_catalog_binding_from_members,
     payload_digest,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
+    DEFINITION_FACET,
+    definition_payload,
+    definition_resource_id,
 )
 from app.services.infrastructure.mcp.tool_guidance import McpToolGuidanceProducer
 from app.services.infrastructure.resource_platform.derivation.types import (
@@ -55,12 +62,18 @@ class McpCatalogResourcePublisher:
     def __init__(
         self, *, registry: ResourceRegistry, custom_tools: Sequence[BaseTool] = (),
         tool_enabled: Callable[[BaseTool], bool] | None = None,
+        custom_metadata: Mapping[str, ToolMetadata] | None = None,
     ) -> None:
         self._tool_enabled = tool_enabled
         self._registry = registry
         entries = tuple(sorted(custom_tools, key=lambda tool: tool.name))
+        self._custom_tools = {tool.name: tool for tool in entries}
+        self._custom_metadata = dict(custom_metadata or {})
+        self._definition_ids: set[str] = set()
         self._custom_revision = payload_digest(
-            [[tool.name, export_model_tool_json_schema(tool)] for tool in entries],
+            [[tool.name, definition_payload(
+                tool, self._custom_metadata.get(tool.name) or metadata_for_tool(tool, origin="custom"),
+            )] for tool in entries],
             context="工作区 custom extension typed members",
             error_type=ExtensionCatalogBindingError,
         )
@@ -127,7 +140,43 @@ class McpCatalogResourcePublisher:
                 available=False, error=publication.error, error_code="source-unavailable",
                 retained_revision=retained, members=tuple(members),
             )
-        self._registry.publish(resource)
+        definitions = []
+        if publication.status == "available":
+            tools = {**selected_tools, **self._custom_tools}
+            for member in members:
+                tool = tools[member.member_id]
+                metadata = self._custom_metadata.get(tool.name) or metadata_for_tool(tool, origin=member.member_kind)
+                body = definition_payload(tool, metadata)
+                definitions.append(ResourceSnapshot(
+                    resource_id=definition_resource_id(tool.name), resource_kind="mcp_tool_catalog",
+                    facet=DEFINITION_FACET, display_uri=None, revision=sha256_jcs(body), payload=body,
+                    source_lineage=lineage, generation=publication.binding_ref.generation,
+                    members=(member,),
+                ))
+        else:
+            for resource_id in self._definition_ids:
+                previous = self._registry.last_valid_snapshot(resource_id)
+                definitions.append(ResourceSnapshot(
+                    resource_id=resource_id, resource_kind="mcp_tool_catalog", facet=DEFINITION_FACET,
+                    display_uri=None, revision=previous.revision, payload=None,
+                    source_lineage=lineage, generation=publication.binding_ref.generation,
+                    available=False, error=publication.error, error_code="source-unavailable",
+                    retained_revision=previous.revision, members=previous.members,
+                ))
+        # 构造全批后一次发布；完整定义与 guidance/members 不得被分次捕获。
+        with self._registry.publication():
+            current_ids = {definition.resource_id for definition in definitions}
+            for resource_id in self._definition_ids - current_ids:
+                self._registry.withdraw(resource_id)
+            for definition in definitions:
+                self._registry.register_descriptor(SemanticResourceDescriptor(
+                    resource_id=definition.resource_id, resource_kind="mcp_tool_catalog",
+                    facet=DEFINITION_FACET, display_uri=None,
+                    source_ids=(MCP_OWNER_CATALOG_SOURCE_ID, CUSTOM_CATALOG_SOURCE_ID, EXTENSION_CATALOG_SOURCE_ID),
+                ))
+                self._registry.publish(definition)
+            self._registry.publish(resource)
+            self._definition_ids = current_ids
 
 
 def extension_dispatch_from_activation(

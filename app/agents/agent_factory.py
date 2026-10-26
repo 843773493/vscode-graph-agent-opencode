@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +62,7 @@ from app.agents.policy import (
     parse_custom_tool_specs,
     validate_tool_dependencies,
 )
+from app.agents.policy.tool_capability import metadata_for_tool
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
 from app.agents.skill_runtime import (
@@ -68,7 +71,7 @@ from app.agents.skill_runtime import (
     build_workspace_skill_catalog,
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
-from app.agents.tool_identity import tool_definition_name
+from app.agents.tool_identity import TOOL_DISCOVERY_NAME, tool_definition_name
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
@@ -81,13 +84,14 @@ from app.agents.tools.custom_invocation import (
     seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
+from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -101,8 +105,14 @@ from app.services.infrastructure.mcp.catalog_activation import (
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
+    ExtensionCatalogUnavailableError,
     ExtensionTargetResolutionError,
     extension_schema_hash,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
+    FrozenToolCatalog,
+    FrozenToolDefinition,
+    tool_catalog_from_activation,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
@@ -157,37 +167,6 @@ PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers", "no_proxy"}
 logger = logging.getLogger(__name__)
 
 
-def _tool_metadata(
-    tool: BaseTool,
-    *,
-    origin: str,
-    group_id: str | None = None,
-) -> ToolMetadata:
-    """把运行时工具映射到策略使用的稳定元数据。"""
-
-    tool_name = tool.name
-    metadata = dict(getattr(tool, "metadata", None) or {})
-    mcp_server_id = metadata.get("mcp_server_id")
-    if origin == "mcp" and isinstance(mcp_server_id, str) and mcp_server_id:
-        return ToolMetadata(
-            tool_id=tool_name,
-            origin="mcp",
-            kind="extension",
-            group_id=f"mcp:{mcp_server_id}",
-        )
-    group = catalog_group_for_tool(tool_name)
-    return ToolMetadata(
-        tool_id=tool_name,
-        origin=origin,
-        kind=(
-            group.kind
-            if group.kind != "default"
-            else ("default" if origin == "builtin" else "extension")
-        ),
-        group_id=group_id or group.group_id,
-    )
-
-
 def _resolve_tool_policy(
     resolver: ToolPolicyResolver,
     tool: BaseTool,
@@ -198,7 +177,7 @@ def _resolve_tool_policy(
     group_id: str | None = None,
 ):
     return resolver.resolve(
-        _tool_metadata(tool, origin=origin, group_id=group_id),
+        metadata_for_tool(tool, origin=origin, group_id=group_id),
         execution_override=execution_overrides.get(tool.name),
         model_visibility_override=model_visibility_overrides.get(tool.name),
     )
@@ -587,6 +566,7 @@ def create_my_deep_agent(
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, object] = {}
+    custom_metadata: dict[str, ToolMetadata] = {}
     extension_tools: list[BaseTool] = []
     custom_tools: list[BaseTool] = []
     extension_invoker: BaseTool | None = None
@@ -696,6 +676,7 @@ def create_my_deep_agent(
                 execution_overrides=resolved_execution_overrides,
                 model_visibility_overrides=resolved_model_visibility_overrides,
             )
+            custom_metadata[tool.name] = metadata_for_tool(tool, origin="custom", group_id=group_id)
             extension_policies[tool.name] = policy
             if policy.execution_enabled:
                 custom_tools.append(tool)
@@ -730,6 +711,10 @@ def create_my_deep_agent(
     # 封存目录与执行准入，不改变 Provider 工具面。
     target_resolver = None
     skill_snapshot_resolver = None
+
+    def discovery_catalog_resolver() -> FrozenToolCatalog:
+        raise ExtensionCatalogUnavailableError("search_tools 需要调用所属的冻结完整目录")
+
     if resource_activation is not None:
         if not isinstance(checkpointer, RolloutCheckpointSaver) or mcp_catalog_owner is None:
             raise RuntimeError("正式 runtime 需要唯一 Saver 与真实 MCP Owner")
@@ -740,15 +725,16 @@ def create_my_deep_agent(
             metadata = target.metadata or {}
             origin = "mcp" if metadata.get("mcp_server_id") else "custom"
             selection = tool_selection_reader.snapshot(agent_id)
+            group_id = custom_metadata[target.name].group_id if target.name in custom_metadata else None
             return target.name not in resolved_tool_denylist and _resolve_tool_policy(
-                policy_resolver, target, origin=origin,
+                policy_resolver, target, origin=origin, group_id=group_id,
                 execution_overrides=selection.execution_overrides,
                 model_visibility_overrides=selection.model_visibility_overrides,
             ).execution_enabled
 
         publisher = McpCatalogResourcePublisher(
             registry=resource_registry, custom_tools=custom_tools,
-            tool_enabled=enabled_extension,
+            tool_enabled=enabled_extension, custom_metadata=custom_metadata,
         )
         unsubscribe = mcp_catalog_owner.subscribe_publication(publisher.publish)
         try:
@@ -778,6 +764,18 @@ def create_my_deep_agent(
             return frozen_catalog
 
         skill_snapshot_resolver = resolve_skill_snapshot
+
+        def discovery_catalog_resolver() -> FrozenToolCatalog:
+            snapshot, model_call_id = checkpointer.load_tool_call_resource_activation(
+                session_id, thread_id=thread_id,
+                tool_call_id=tool_invocation_context.require_tool_call_id(),
+                model_call_id=tool_invocation_context.require_model_call_id(),
+            )
+            return tool_catalog_from_activation(
+                snapshot, lambda frozen, binding: checkpointer.read_resource_activation_payload(
+                    frozen, binding, storage_owner=(session_id, thread_id),
+                ), model_call_id=model_call_id,
+            )
 
         def resolve_catalog():
             return checkpointer.resolve_extension_dispatch_for_tool_call(
@@ -814,6 +812,39 @@ def create_my_deep_agent(
         invocation_context=tool_invocation_context,
     )
     resolved_tools.append(extension_invoker)
+
+    def discovery_policies(catalog: FrozenToolCatalog):
+        selection = tool_selection_reader.snapshot(agent_id)
+        execution_overrides = selection.execution_overrides
+        visibility_overrides = selection.model_visibility_overrides
+        policies = {}
+        for definition in catalog.definitions:
+            name = definition.metadata.tool_id
+            policy = policy_resolver.resolve(
+                definition.metadata, execution_override=execution_overrides.get(name),
+                model_visibility_override=visibility_overrides.get(name),
+            )
+            if name in resolved_tool_denylist:
+                policy = replace(policy, execution_enabled=False, model_visible=False)
+            policies[name] = policy
+        return policies
+
+    async def write_discovered_definition(definition: FrozenToolDefinition, entry: dict[str, object]):
+        call_id = tool_invocation_context.require_tool_call_id()
+        return await asyncio.to_thread(
+            tool_output_store.materialize, session_id=session_id, tool_name=TOOL_DISCOVERY_NAME,
+            tool_call_id=call_id, text=canonical_json_bytes(entry).decode("utf-8"),
+            output_key=f"{call_id}:{definition.provenance.resource_id}:{definition.provenance.revision}",
+        )
+
+    discovery_tool = create_search_tools_tool(
+        catalog_resolver=discovery_catalog_resolver, policy_resolver=discovery_policies,
+        definition_writer=write_discovered_definition,
+        response_byte_limit=min(tool_output_store.inline_byte_limit, policy_resolver.resolve(
+            ToolMetadata(TOOL_DISCOVERY_NAME, "builtin", "default", "default"),
+        ).max_result_bytes),
+    )
+    resolved_tools.append(discovery_tool)
     if (
         context_source_manager is not None
         and (tools is not None or "skill_load" not in resolved_tool_denylist)
@@ -835,8 +866,9 @@ def create_my_deep_agent(
         )
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
-        if extension_invoker is not None and extension_invoker not in resolved_tools:
-            resolved_tools.append(extension_invoker)
+        for fixed_tool in (extension_invoker, discovery_tool):
+            if fixed_tool not in resolved_tools:
+                resolved_tools.append(fixed_tool)
     resolved_interrupt_on = dict(interrupt_on or {})
     resolved_interrupt_on.update(
         {tool_name: True for tool_name in direct_confirmation_names}

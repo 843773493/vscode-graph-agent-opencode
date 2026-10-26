@@ -9,7 +9,7 @@ import pytest
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.policy import ToolPolicyResolver
-from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -123,7 +123,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
     create_invoker.assert_called_once()
     assert create_invoker.call_args.args[0] == []
     provider_tools = create_agent.call_args.kwargs["tools"]
-    assert [tool.name for tool in provider_tools] == [EXTENSION_TOOL_INVOKER_NAME]
+    assert [tool.name for tool in provider_tools] == [EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME]
 
 
 def test_agent_factory_omits_all_csm_ports_without_durable_owner(

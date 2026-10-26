@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-extension-discovery` 复用正式 fork watchdog，覆盖 Owner 发布、冻结完整定义、搜索／分页／策略、实际输出中间件、冷恢复及真实 stdio 信封调用，固定 180 秒/4GiB；不替代完整 Agent、授权或主 Web 验收。
+
 - 所有 JavaScript 使用 ESM 并通过 Bun 执行。
 - 矩阵显式声明层级、客户端、运行面、命令和真实前置条件。
 - `unit-workspace-services` 递归发现 Browser、Terminal 的服务端、attach 页面纯逻辑及协议 JS 单测；它不启动实际辅助服务，不能代替真实进程 Integration 验收。

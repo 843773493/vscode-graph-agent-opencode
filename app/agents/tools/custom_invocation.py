@@ -230,7 +230,7 @@ def create_extension_tool_invoker_tool(
         "调用工作区配置的扩展工具。"
         "当需要执行未直接出现在 tools 列表中的目标扩展工具时，必须真实调用本工具，"
         "不要在正文里复述或伪造调用。"
-        "目标工具名称和参数来自当前已生效的扩展目录、AGENTS.md、SKILL.md 或普通说明文档。"
+        "目标工具名称和参数来自 search_tools 返回的完整定义、当前已生效的扩展目录、AGENTS.md、SKILL.md 或普通说明文档。"
         '调用参数只有 tool_name 和 arguments，例如 {"tool_name": "<目标工具名>", "arguments": {}}。'
     )
     return StructuredTool.from_function(

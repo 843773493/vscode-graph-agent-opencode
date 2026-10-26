@@ -84,7 +84,7 @@ def scripted_model_replay(integration_workspace_root_path: str) -> Iterator[Scri
         yield ScriptedModelState(replay.control, replay.config_path, replay.artifacts)
 
 
-def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str) -> None:
+def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str, *, discover: bool = False) -> None:
     scripted_calls = (
         ("list_debug_configurations", {}, None),
         ("list_breakpoints", {}, None),
@@ -137,6 +137,11 @@ def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str
         ("continue_execution", {}, None),
         ("list_breakpoints", {}, None),
     )
+    if discover:
+        scripted_calls = (("search_tools", {
+            "tool_ids": list(dict.fromkeys(name for name, _arguments, _text in scripted_calls)),
+            "limit": 20,
+        }, None), *scripted_calls)
     interactions: list[dict[str, object]] = []
     for index in range(len(scripted_calls) + 2):
         if index == 0:
@@ -144,8 +149,8 @@ def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str
             text = None
         elif index <= len(scripted_calls):
             name, arguments, text = scripted_calls[index - 1]
-            call = _tool_call(call_index=index, name="invoke_extension_tool",
-                              arguments={"tool_name": name, "arguments": arguments})
+            call = _tool_call(call_index=index, name="search_tools" if name == "search_tools" else "invoke_extension_tool",
+                              arguments=arguments if name == "search_tools" else {"tool_name": name, "arguments": arguments})
         else:
             call = None
             text = "两个断点均已解释并完成 counter 加一，目标程序已正常退出。DEBUG_PROMPT_FLOW_OK"

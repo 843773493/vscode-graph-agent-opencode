@@ -2,7 +2,7 @@
 
 ### Requirement: 有效配置优先级
 
-Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工作区配置的优先级，并且仅在最终有效配置发生变化时触发重载操作；Gateway 配置不参与该合并。已由连接监督支持的 MCP 变更 SHALL（必须）通过统一候选流水线准备和热应用，不能仅因属于 MCP 段就要求重启；未支持安全替换的路径 SHALL（必须）保留真实重启分类。
+Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工作区配置的优先级，并且仅在最终有效配置发生变化时触发重载操作；Gateway 配置不参与该合并。产品诊断日志迁移后 SHALL 从 Gateway `logging.runtime` 获取进程设置，不再作为 Workspace 的配置层。已由连接监督支持的 MCP 变更 SHALL（必须）通过统一候选流水线准备和热应用，不能仅因属于 MCP 段就要求重启；未支持安全替换的路径 SHALL（必须）保留真实重启分类。
 
 #### Scenario: 迁移旧 SSH 直连 Gateway 配置
 
@@ -19,6 +19,16 @@ Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工�
 - **WHEN** 按当前生效策略判定需要重启的有效配置发生变化
 - **THEN** 后端报告需要重启，而不是部分应用候选配置
 
+#### Scenario: 仅修改产品日志设置
+
+- **WHEN** 有效 Gateway 候选仅改变日志等级或格式
+- **THEN** 候选经真实进程确认后热生效，不进入 Workspace pending_restart
+
+#### Scenario: 日志与需重启的 Gateway 字段一起修改
+
+- **WHEN** 一个 Gateway 候选同时包含日志设置和需要 Gateway 重启的字段
+- **THEN** 系统保持候选整体应用规则，不提前热应用日志部分后宣称整个候选已经生效
+
 #### Scenario: 受支持 MCP 候选生效
 
 - **WHEN** MCP 候选的全部受影响连接准备成功且完成受控切换和 active 提交
@@ -27,6 +37,8 @@ Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工�
 ### Requirement: 候选配置提交必须原子且可区分待重启状态
 
 系统 SHALL（必须）在配置提交时保持 active snapshot、持久化来源和运行时应用结果的一致性。包含需要重启的配置变化时，系统 MUST（必须）保存已校验的 pending revision，保持旧 active snapshot 继续服务，并明确报告 restart_required；不得把同一候选的一部分应用、另一部分丢弃。全部路径可热应用时 MUST（必须）在所有必要副作用准备成功、受控切换与 active promotion 确认后报告 applied。MCP 目录、连接准入和 active 配置 MUST（必须）具有共同可观察的提交边界；准备失败且旧运行态可保留时报告 apply_failed，无法恢复时报告 recovery_required。
+
+MCP 提交 SHALL 复用现有配置 applying journal、claim 与 promotion owner；candidate_applier 内提前切换、返回后再独立 commit MUST 不被视为共同提交。受控准入 MUST 覆盖 publication 和 active promotion 之间的可观察窗口，恢复 MUST 依据持久阶段核实连接事实，而不是新增配置存储或假定外部 session 可由 SQLite 回滚。
 
 #### Scenario: 候选同时包含可热更新和需重启字段
 
@@ -42,6 +54,11 @@ Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工�
 
 - **WHEN** 全可热应用候选中的某个 MCP Server 初始化失败，而旧连接仍可用
 - **THEN** 旧 active 和旧目录保持有效，返回应用失败及具体原因，不部分发布其他已准备 Server
+
+#### Scenario: 连接准备完成但 active 尚未提交
+
+- **WHEN** candidate_applier 或其准备参与方已完成新连接初始化，而 active promotion 尚未确认
+- **THEN** preparation、API 和工具调用不能观察候选目录配旧 active 配置；进程在该窗口崩溃后依据现有 journal 和 claim 对账，不宣称候选已应用
 
 #### Scenario: 不可恢复的外部副作用
 

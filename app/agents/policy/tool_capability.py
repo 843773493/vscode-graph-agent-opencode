@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from langchain_core.tools import BaseTool
+
+from app.agents.policy.tool_groups import catalog_group_for_tool
+
 
 @dataclass(frozen=True, slots=True)
 class ToolMetadata:
@@ -12,6 +16,18 @@ class ToolMetadata:
     origin: str
     kind: str
     group_id: str
+
+
+def metadata_for_tool(
+    tool: BaseTool, *, origin: str, group_id: str | None = None,
+) -> ToolMetadata:
+    """目录、发现和执行共用的策略身份；展示描述不参与策略匹配。"""
+    server_id = (tool.metadata or {}).get("mcp_server_id")
+    if origin == "mcp" and isinstance(server_id, str) and server_id:
+        return ToolMetadata(tool.name, origin, "extension", f"mcp:{server_id}")
+    group = catalog_group_for_tool(tool.name)
+    kind = group.kind if group.kind != "default" else ("default" if origin == "builtin" else "extension")
+    return ToolMetadata(tool.name, origin, kind, group_id or group.group_id)
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,7 +10,8 @@
 - MCP Tool 名称映射和 LangChain 适配。
 - `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
-- MCP 工具指引派生，以及经 `McpCatalogOwner` 的唯一发布回调把同 revision 的目录、指引和 typed members 组成单一 `mcp_tool_catalog` payload，发布到既有 ResourceRegistry。
+- MCP 工具指引派生，以及经 `McpCatalogOwner` 的唯一发布回调，把同 revision 的指引父行、typed members 与完整定义 facets 原子发布到既有 ResourceRegistry；父行正文不混入目录正文或 provenance。
+- `tool_definitions.py` 只从原 activation 恢复完整定义；`tool_search.py` 负责确定性匹配、逐项结果与有界分页，不访问当前网络目录或执行候选。定义正文和来源沿现有资源 body store/Saver 保存，不增设 schema 库。
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
 
 # 不可修改内容

@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 EXTENSION_TOOL_INVOKER_NAME = "invoke_extension_tool"
+TOOL_DISCOVERY_NAME = "search_tools"
 
 ToolDefinitionLike = BaseTool | Callable[..., Any] | dict[str, Any]
 

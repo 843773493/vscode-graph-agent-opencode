@@ -14,6 +14,7 @@ from app.agents.instruction_producers import build_toolset_policy_keys
 from app.agents.policy import ToolMetadata, ToolPolicyResolver
 from app.agents.tool_identity import (
     EXTENSION_TOOL_INVOKER_NAME,
+    TOOL_DISCOVERY_NAME,
     ToolDefinitionLike,
     tool_definition_name,
 )
@@ -114,7 +115,7 @@ class RegisteredToolSetProducer:
         for schema in self._schema_templates:
             tool_name = schema["function"]["name"]
             # 固定扩展信封不依赖内部 target 的数量或开关。
-            if tool_name == EXTENSION_TOOL_INVOKER_NAME:
+            if tool_name in {EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME}:
                 visible_tool_schemas.append(schema)
                 continue
             execution_override = execution_overrides.get(tool_name)

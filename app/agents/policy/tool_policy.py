@@ -13,6 +13,7 @@ DEFAULT_AGENT_TOOL_NAMES = frozenset(
     {
         "apply_patch",
         "python_exec",
+        "search_tools",
         "emit_system_time_messages",
         "collect_background_messages",
         "exec_command",

@@ -2,7 +2,7 @@
 
 ### Requirement: Workspace 配置按生效范围分类
 
-Workspace SHALL（必须）为有效配置路径声明可观察的生效范围。模型、Agent 和开发运行参数的变化 MUST（必须）至少对后续 Job 生效；默认 Agent 的变化 MUST（必须）只影响后续新会话；UI 和按请求读取的配置变化 MUST（必须）对后续读取生效；当前 Job、当前会话的既有绑定和已经建立的请求 MUST（必须）保持原语义。已完成安全替换验收的 MCP Server 连接字段 SHALL（必须）按工作区受控热应用，通过目录激活边界影响后续模型调用，不重建正在运行的 Agent 或改投已封存调用；未覆盖的依赖 MUST（必须）继续明确分类为需重启，不得将未知字段一律当作可热应用。
+Workspace SHALL（必须）为有效配置路径声明可观察的生效范围。模型、Agent 和开发运行参数的变化 MUST（必须）至少对后续 Job 生效；默认 Agent 的变化 MUST（必须）只影响后续新会话；UI 和按请求读取的配置变化 MUST（必须）对后续读取生效；当前 Job、当前会话的既有绑定和已经建立的请求 MUST（必须）保持原语义。产品诊断日志 SHALL 属于 Gateway 的 `logging.runtime`，不再由 Workspace logger 决定，日志等级与格式不属于 Workspace 必须重启的配置。已完成安全替换验收的 MCP Server 连接字段 SHALL（必须）按工作区受控热应用，通过目录激活边界影响后续模型调用，不重建正在运行的 Agent 或改投已封存调用；未覆盖的依赖 MUST（必须）继续明确分类为需重启，不得将未知字段一律当作可热应用。
 
 #### Scenario: 修改模型或 Agent 配置
 
@@ -18,6 +18,11 @@ Workspace SHALL（必须）为有效配置路径声明可观察的生效范围�
 
 - **WHEN** 修改按当前有效策略仍不能安全替换的 Workspace 运行时依赖
 - **THEN** 系统报告 Workspace backend restart required，并不得声称该配置已经即时生效
+
+#### Scenario: 修改产品日志等级
+
+- **WHEN** 用户修改 Gateway 有效 `logging.runtime.level`
+- **THEN** 系统走产品进程日志热应用，不要求重启 Workspace，也不改变工作区业务配置的合并顺序
 
 #### Scenario: 修改受支持的 MCP 连接配置
 

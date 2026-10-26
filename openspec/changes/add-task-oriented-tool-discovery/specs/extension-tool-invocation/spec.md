@@ -26,7 +26,7 @@
 
 ### Requirement: 扩展工具的详细 schema 可选择暴露
 
-扩展工具执行能力开启时，固定入口 MUST 始终保留最小的调用 schema；`model_visible=true` SHALL 控制目标名称、描述及完整参数 schema 的自动上下文注入。`model_visible=false` SHALL 只关闭自动注入，不禁止模型通过 Skill、普通明确上下文或显式 search_tools 获得定义后调用固定入口。显式发现 MUST 不改变 selection，不把完整目标定义注入 Provider 原生 tools，不绕过执行策略。
+扩展工具执行能力开启时，固定入口 MUST 始终保留最小的调用 schema；`model_visible=true` SHALL 控制目标名称、描述及完整参数 schema 的自动上下文注入。仅因普通可见性设置产生的 `model_visible=false` SHALL 只关闭自动注入，不禁止模型通过 Skill、普通明确上下文或显式 search_tools 获得定义后调用固定入口。restrictions.model_hidden／model_visibility_locked MUST 继续阻止自动注入、显式发现、精确查询和定义恢复重新投递目标定义；不能只根据 model_visible=false 判断可发现。显式发现 MUST 不改变 selection，不把完整目标定义注入 Provider 原生 tools，不绕过执行策略。
 
 #### Scenario: 扩展工具默认隐藏详细定义
 
@@ -40,12 +40,17 @@
 
 #### Scenario: 模型显式发现隐藏定义
 
-- **WHEN** 模型通过 search_tools 请求允许执行但关闭自动注入的目标
+- **WHEN** 模型通过 search_tools 请求允许执行、仅关闭自动注入且未命中 model_hidden 的目标
 - **THEN** 工具结果可提供完整定义，原 model_visible 值不变，不在后续请求自动注入全部目录
+
+#### Scenario: 硬隐藏不被精确查询绕过
+
+- **WHEN** 目标仍允许执行但被 restrictions.model_hidden 锁定，模型显式请求其定义
+- **THEN** 查询不投递该定义，且不会修改原执行权限或已保存的历史原件
 
 ### Requirement: 扩展工具调用必须遵守统一有效策略
 
-固定扩展入口 MUST 使用与工具目录相同的 ToolPolicyResolver 结果。策略关闭目标工具执行能力时，入口不得继续路由到该工具；策略仅隐藏模型定义时，入口仍可在 Skill、显式发现或其它明确上下文提供目标工具名后执行。执行 MUST 按产生调用的已封存目录及连接身份解析，再检查最新执行权限，不得由当前同名工具补位。
+固定扩展入口 MUST 使用与工具目录相同的 ToolPolicyResolver 结果。策略关闭目标工具执行能力时，入口不得继续路由到该工具；策略仅关闭自动注入时，入口仍可在 Skill、显式发现或其它明确上下文提供目标工具名后执行。硬隐藏约束定义投递，本身不等同 execution_disabled；模型已知目标名的真实调用仍按当前执行权限独立判定，不能通过调用结果重新投递硬隐藏定义。执行 MUST 按产生调用的已封存目录及连接身份解析，再检查最新执行权限，不得由当前同名工具补位。
 
 #### Scenario: 隐藏 schema 不影响扩展工具执行
 

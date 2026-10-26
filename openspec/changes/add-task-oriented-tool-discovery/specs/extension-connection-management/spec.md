@@ -8,10 +8,22 @@
 
 系统 SHALL 在统一扩展目录注册本地 connections.manage，支持 list、connect、status 和 disconnect；status SHALL 支持有界 wait_timeout_ms。该目标 MUST 在待授权 MCP 未连接时仍可由本地 owner 使用，经过既有执行策略、真实参数校验和必要人工确认。模型 MUST 不通过该工具任意新增 Server、改写配置或获取凭据。
 
+首次启动及资源冻结 MUST 将经受支持协议确认的 authorization_required 表达为连接领域状态，保持本地控制成员及其它就绪 Server 在唯一目录中可冻结和执行；不得将该状态变为整个目录不可用或启动失败。远端未授权目标 MUST 无可用执行资格，未知目录不得虚构。未知授权方式、配置错误和协议故障 MUST 仍明确报错，不将任意 401 当作可交互授权。
+
 #### Scenario: 未连接 Server 发起授权
 
 - **WHEN** 模型根据信息完整的搜索结果经信封 connect 一个已配置连接
 - **THEN** 后端返回持久操作 ID、真实状态和产品授权入口，不要求先连接远端才能使用本地控制工具
+
+#### Scenario: 首次启动已有 Server 需要 OAuth
+
+- **WHEN** 工作区首次启动，一个已配置 Server 按支持的协议请求授权，尚无远端工具目录
+- **THEN** 工作区允许正常进入本地连接控制流程，模型可发现并调用 connections.manage；未知远端不产生伪造工具或 ready 状态
+
+#### Scenario: 多 Server 中仅一个尚未授权
+
+- **WHEN** 一个 Server 处于 authorization_required，另一个 Server 已验证就绪
+- **THEN** 同一冻结目录保持本地控制及就绪 Server 可用，未授权状态只阻止相应远端执行，不使整个必需目录不可用
 
 #### Scenario: connect 工具调用重放
 
@@ -44,11 +56,15 @@
 #### Scenario: 连接已可用但当前目录仍冻结
 
 - **WHEN** 授权成功而当前 turn 级目录尚未到允许激活边界
-- **THEN** 显示连接已就绪但工具等待激活，不突破冻结策略或循环唤醒模型
+- **THEN** 原执行显示真实等待激活事实且冻结不变；有效 continuation 可在原 Turn 结束后经独立 internal execution 冻结新目录，不要求用户额外发送继续或循环唤醒模型
 
 ### Requirement: 长授权等待必须持久化并精确恢复
 
 长等待 MUST 使用持久操作、deadline、精确 session_id/thread_id 和恢复去重身份，复用既有后台通知与内部执行准入，不长期占用普通工具调用。登记与终态观察 MUST 避免丢唤醒；终态提交后通知原 thread，并只恢复仍有效、通过最新权限与删除 fence 的 continuation。短查询超时 MUST 不取消共享连接操作，取消 thread 等待 MUST 不默认断开共享连接。
+
+等待 MUST 复用 BackgroundTask 的 typed/versioned handler、checkpoint 和原子 mailbox effect；观察 handler MUST 不重新执行授权交换或业务副作用。现有控制存储事务 MUST 原子保存 checkpoint、稳定 ID 邮箱消息和 checkpoint 内待投递 continuation 引用；可恢复投递步骤 MUST 用稳定幂等 key 提交 RuntimeSourceDispatcher，并在成功后结算，崩溃后可安全重放。邮箱 emit／collect MUST 不被视为 Agent 已准入；邮箱 ack 与内部 wakeup ack MUST 分别遵守既有 canonical ToolResult 和执行提交合同。
+
+原调用 MUST 先提交配对等待结果，原执行按既有终态结束，等待事实由 BackgroundTask 承载，不新增 Job 状态；授权完成、目录发布且 continuation 有效后 SHALL 通过 after_turn 调度独立 internal execution。该执行 MUST 使用 turn_id=None，按既有 activation 合同针对自身真实 execution 冻结目录，不修改旧 Turn、不伪装成旧执行 retry/resume。等待展示、取消及对账 SHALL 复用 BackgroundTaskResourceProvider，活动任务 MUST 遵守现有 idle unload blocker；进程重启后的恢复不代表活动等待可以无条件卸载。
 
 #### Scenario: 授权在等待登记之前完成
 
@@ -59,6 +75,26 @@
 
 - **WHEN** 同一授权完成重复通知，且工作区进程在投递或恢复阶段重启
 - **THEN** 原 thread 获得可恢复的逻辑完成通知，continuation 至多产生一次逻辑恢复效果，不发往主 thread 或其他工作区
+
+#### Scenario: 邮箱已提交但内部执行尚未提交
+
+- **WHEN** checkpoint 与完成消息已经提交，而进程在 RuntimeSourceDispatcher.submit 前崩溃
+- **THEN** 重启从未结算的投递阶段继续提交相同幂等身份，不能因为邮箱中已有消息而跳过内部执行
+
+#### Scenario: 内部执行已提交但投递阶段尚未结算
+
+- **WHEN** dispatcher 已接受唤醒，进程在记录投递成功前崩溃
+- **THEN** 恢复重投得到同一逻辑内部执行，不重复创建执行；邮箱消息仍按其自身消费合同确认
+
+#### Scenario: turn 策略下授权后自动继续
+
+- **WHEN** 原用户 Turn 使用 turn 激活策略并已提交等待结果，随后授权及目录验证完成
+- **THEN** 有效 continuation 在原 Turn 结束后通过无用户 Turn 的独立执行取得新目录并继续，原冻结不变，不需要改默认策略或用户再次发言
+
+#### Scenario: 活动等待的展示与冷恢复
+
+- **WHEN** 授权等待仍活动，随后用户查看后台资源或进程重启
+- **THEN** 通过已有后台任务资源入口展示和管理；运行中遵守卸载阻挡，重启后按 checkpoint 对账恢复，不重发 connect 或授权交换
 
 #### Scenario: 等待取消或会话已删除
 

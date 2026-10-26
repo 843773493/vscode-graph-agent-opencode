@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import (
     ParentAssemblyRef,
@@ -94,7 +94,7 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     assert create_response.status_code == 200, create_response.text
     session_id = create_response.json()["data"]["session_id"]
     main_thread_id = await _session_main_thread_id(scripted_client, session_id)
-    _plan_debug_calls(state, session_id, main_thread_id)
+    _plan_debug_calls(state, session_id, main_thread_id, discover=True)
     # 本项在执行后核 sealed binding；Skill 正文屏障由同组 prompt 测试单独验收。
     state.control.release(state.call_ids[1], "model.response_ready")
     prompt = (
@@ -129,6 +129,22 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     assert len(set(provider_tool_sets)) == 1
     exposed = _tool_names(requests[0])
     assert EXTENSION_TOOL_INVOKER_NAME in exposed
+    assert TOOL_DISCOVERY_NAME in exposed
+    discovered_message, = (
+        message for message in requests[2]["messages"]
+        if message.get("role") == "tool" and message.get("tool_call_id") == "debug-e2e-call-1"
+    )
+    discovered = json.loads(discovered_message["content"])
+    assert discovered["results"] and discovered["next_cursor"] is None
+    assert all(entry["status"] == "available" and entry["input_schema"]
+               and entry["effective_policy"]["execution_enabled"]
+               and not entry["effective_policy"]["model_visible"]
+               and entry["provenance"]["activation_snapshot_id"]
+               and entry["provenance"]["revision"] for entry in discovered["results"])
+    assert {entry["tool_id"] for entry in discovered["results"]} == {
+        "list_debug_configurations", "list_breakpoints", "create_debug_configuration",
+        "add_breakpoint", "start_debugging", "evaluate_expression", "continue_execution",
+    }
     assert not {
         "list_debug_configurations",
         "create_debug_configuration",

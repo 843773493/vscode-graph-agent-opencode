@@ -13,14 +13,39 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.agents.policy.tool_capability import ToolPolicyResolver
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     sealed_extension_catalog_binding_resolver,
 )
+from app.agents.tools.tool_discovery import create_search_tools_tool
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.lifecycle import LifetimeScope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    McpCatalogResourcePublisher,
+    extension_dispatch_from_activation,
+)
 from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+from app.services.infrastructure.mcp.tool_definitions import (
+    tool_catalog_from_activation,
+)
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.tool_output_store import ToolOutputStore
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径的 Saver fixture
+)
 
 
 @dataclass
@@ -28,6 +53,7 @@ class SchemaServerCase:
     owner: McpCatalogOwner
     definitions: Path
     receipts: Path
+    workspace_root: Path
 
     @asynccontextmanager
     async def started(self) -> AsyncIterator[SchemaServerCase]:
@@ -68,7 +94,7 @@ def schema_server_case(request: pytest.FixtureRequest) -> SchemaServerCase:
         }}},
         workspace_root=context.workspace_root, event_service=EventChannelService(),
     )
-    return SchemaServerCase(owner, definitions, receipts)
+    return SchemaServerCase(owner, definitions, receipts, context.workspace_root)
 
 
 @pytest.mark.parametrize("schema, valid, invalid", [
@@ -164,3 +190,89 @@ async def test_invalid_schema_refresh_fails_without_partial_publication(
             await case.owner.relist_servers_without_notifications()
         assert case.owner.catalog_revision() == revision
         assert case.received() == []
+
+
+@pytest.mark.parametrize("large_schema", [False, True])
+async def test_search_frozen_full_definition_then_execute_real_stdio(
+    schema_server_case: SchemaServerCase, registry_db, frozen_provider_activation, large_schema: bool,
+) -> None:
+    async with schema_server_case.started() as case:
+        schema = {
+            "type": "object", "$defs": {"mode": {"enum": ["read", "write"]}},
+            "properties": {"mode": {"$ref": "#/$defs/mode"}}, "required": ["mode"],
+            "additionalProperties": {"type": "string"},
+        }
+        if large_schema:
+            schema["$defs"]["mode"]["description"] = "完整大定义" * 6000
+        case.publish(schema)
+        await case.owner.relist_servers_without_notifications()
+        registry = ResourceRegistry(publication_lock=case.owner.publication_lock, capture_validator=case.owner.validate_resource_capture)
+        publisher = McpCatalogResourcePublisher(registry=registry)
+        scope = LifetimeScope("stdio-discovery")
+        scope.register(case.owner.subscribe_publication(publisher.publish), label="stdio-publication")
+        try:
+            saver, session, _connection, accepted = registry_db
+            thread = saver._storage.storage.main_thread_id(session)
+            admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
+            with (session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+                  execution_admission_scope(admission, langgraph_thread_id=thread)):
+                activation = frozen_provider_activation(saver, registry=registry, plan_creation_idempotency_key="stdio-discovery")
+            frozen = activation["activation_snapshot"]
+
+            def catalog(owner):
+                return tool_catalog_from_activation(
+                    frozen, lambda snapshot, binding: owner.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread)),
+                    model_call_id=activation["model_call_id"],
+                )
+
+            resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
+            store = ToolOutputStore(workspace_root=case.workspace_root)
+
+            async def materialize(definition, entry):
+                return store.materialize(
+                    session_id=session, tool_name="search_tools", tool_call_id="search-stdio",
+                    text=canonical_json_bytes(entry).decode(),
+                    output_key=f"search-stdio:{definition.provenance.resource_id}:{definition.provenance.revision}",
+                )
+
+            search = create_search_tools_tool(
+                catalog_resolver=lambda: catalog(saver),
+                policy_resolver=lambda frozen_catalog: {
+                    definition.metadata.tool_id: resolver.resolve(definition.metadata) for definition in frozen_catalog.definitions
+                },
+                definition_writer=materialize, response_byte_limit=store.inline_byte_limit,
+            )
+            found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
+                                         "args": {"query": "probe"}})
+            assert isinstance(found, ToolMessage) and found.tool_call_id == "search-stdio"
+            entry, = json.loads(found.content)["results"]
+            target = case.owner.get_tools()[0]
+            if large_schema:
+                assert entry["schema_state"] == "needs_read" and "input_schema" not in entry
+                full = json.loads(store.read(session, entry["read_path"], entry["byte_count"]).data)
+            else:
+                assert entry["schema_state"] == "inline_complete"
+                full = entry
+            assert full["input_schema"] == export_model_tool_json_schema(target)
+            assert entry["schema_hash"] == case.owner.binding_snapshot().resolve(target.name).schema_hash
+            assert entry["effective_policy"]["model_visible"] is False
+            assert case.received() == []
+            parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+            dispatch = extension_dispatch_from_activation(
+                snapshot=frozen, binding=parent, model_call_id=activation["model_call_id"],
+                payload=saver.read_resource_activation_payload(frozen, parent, storage_owner=(session, thread)),
+            )
+            invoker = create_extension_tool_invoker_tool(
+                case.owner.get_tools(), catalog_binding_resolver=sealed_extension_catalog_binding_resolver(dispatch.binding_ref),
+            )
+            result = await invoker.ainvoke({
+                "type": "tool_call", "id": "invoke-after-search", "name": entry["invocation"]["entry_point"],
+                "args": {"tool_name": entry["tool_id"], "arguments": {"mode": "read", "runtime": "原样传递", "extra": "保留"}},
+            })
+            assert isinstance(result, ToolMessage) and result.status == "success"
+            assert result.tool_call_id == "invoke-after-search"
+            assert case.received() == [{"name": "probe", "arguments": {"mode": "read", "runtime": "原样传递", "extra": "保留"}}]
+            with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+                assert catalog(cold) == catalog(saver)
+        finally:
+            await scope.close()
