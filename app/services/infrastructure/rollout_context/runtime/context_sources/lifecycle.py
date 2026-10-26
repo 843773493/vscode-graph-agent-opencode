@@ -22,6 +22,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
         PendingContextSourceBatch,
         PendingSourceObservation,
         PublishedContextSourceRevision,
+        SourceObservationResult,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.state import (
         SourceState,
@@ -29,8 +30,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceLifecycleMixin:
-        def observe(self, source_id: str, content: str, *, revision: str | None = None) -> bool:
-            """接收已登记来源的新快照；未跟踪来源不会改变上下文。"""
+        _pending: dict[str, ContextSourceDelta]
+
+        def observe(self, source_id: str, content: str, *, revision: str | None = None) -> SourceObservationResult:
+            """接收已登记来源快照；处理结果与待封存状态分别返回，不推进 applied。"""
             self.refresh_context_rebuild_state()
             state = self._sources.get(source_id)
             if state is None:
@@ -38,7 +41,7 @@ class SourceLifecycleMixin:
             if not isinstance(content, str):
                 raise TypeError("ContextSourceManager.observe.content 必须是字符串")
             if not state.tracked:
-                return False
+                return SourceObservationResult(source_id, "not_tracked", source_id in self._pending)
             if revision is not None and (not isinstance(revision, str) or not revision):
                 raise ValueError("ContextSourceManager.observe.revision 必须是非空字符串或 None")
             effective_revision = _revision(content) if revision is None else revision
@@ -50,7 +53,13 @@ class SourceLifecycleMixin:
             self._published_source_revisions[source_id] = PublishedContextSourceRevision(
                 source_id, effective_revision, content,
             )
-            return not unchanged and not restored
+            pending = source_id in self._pending
+            if restored or (
+                not unchanged and not pending
+                and effective_revision == state.latest_visible_committed_revision
+            ):
+                return SourceObservationResult(source_id, "baseline_restored", pending)
+            return SourceObservationResult(source_id, "unchanged" if unchanged else "accepted", pending)
 
         def _accept_source_observation(
             self, state: SourceState, content: str, revision: str,

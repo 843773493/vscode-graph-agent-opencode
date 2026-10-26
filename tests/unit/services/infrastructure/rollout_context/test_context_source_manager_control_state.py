@@ -199,7 +199,7 @@ def test_restart_recovery_does_not_reinject_tracked_source(
     _track_skill(manager, seal_sources)
     rebuilt = _new_manager(owner, control_state_port)
 
-    assert rebuilt.observe("skill:debugging", "v1\n") is False
+    assert rebuilt.observe("skill:debugging", "v1\n").status == "baseline_restored"
     assert rebuilt.prepare_pending() is None
     assert rebuilt.metadata() == (
         {"name": "debugging", "description": "调试工作流"},
@@ -221,7 +221,7 @@ def test_restart_recovery_keeps_untrack_state(
 
     assert stored.tracking_status == "untracked"
     assert rebuilt.load_skill("debugging").tracked is False
-    assert rebuilt.observe("skill:debugging", "v2\n") is False
+    assert rebuilt.observe("skill:debugging", "v2\n").status == "not_tracked"
     assert rebuilt.prepare_pending() is None
 
 
@@ -232,7 +232,7 @@ def test_activation_refresh_accepts_external_untrack_without_losing_pending_or_v
     seal_sources,
 ) -> None:
     _track_skill(manager, seal_sources)
-    assert manager.observe("skill:debugging", "v2\n") is True
+    assert manager.observe("skill:debugging", "v2\n").status == "accepted"
     pending = manager.prepare_pending()
     assert pending is not None
     frozen = manager.prepare_sources()
@@ -247,7 +247,7 @@ def test_activation_refresh_accepts_external_untrack_without_losing_pending_or_v
         (item.content, item.revision, item.applied_revision) for item in frozen.sources
     ]
     assert all(item.tracked is False for item in refreshed.sources)
-    assert manager.observe("skill:debugging", "v3\n") is False
+    assert manager.observe("skill:debugging", "v3\n").status == "not_tracked"
     manager.refresh_control_states()
     assert manager.prepare_sources() == refreshed
     assert control_state_port.load_context_source_control_states(owner) == committed
@@ -267,7 +267,7 @@ def test_seal_cas_sync_rejects_external_tracking_change(
         manager._sync_persisted_control_states({"skill:debugging"})
     assert control_state_port.load_context_source_control_states(owner) == committed
     manager.refresh_control_states()
-    assert manager.observe("skill:debugging", "v2\n") is False
+    assert manager.observe("skill:debugging", "v2\n").status == "not_tracked"
 
 
 def test_restart_recovery_rebuilds_diff_baseline_from_latest_visible_committed_revision(
@@ -280,8 +280,8 @@ def test_restart_recovery_rebuilds_diff_baseline_from_latest_visible_committed_r
     rebuilt = _new_manager(owner, control_state_port)
 
     # 首帧同一 revision 只重建基准；下一 revision 仍按 applied revision 合并 delta。
-    assert rebuilt.observe("skill:debugging", "v1\n") is False
-    assert rebuilt.observe("skill:debugging", "v2\n") is True
+    assert rebuilt.observe("skill:debugging", "v1\n").status == "baseline_restored"
+    assert rebuilt.observe("skill:debugging", "v2\n").status == "accepted"
     (delta,) = seal_sources(rebuilt)[0].deltas
 
     assert delta.kind == "delta"
@@ -316,7 +316,7 @@ def test_cold_baseline_restoration_preserves_control_and_uses_applied_content(
     assert control_state_port.load_context_source_control_states(owner) == before
     assert rebuilt.prepare_pending() is None
     assert rebuilt.source_observation_state("skill:debugging") == ("tracked", before[0].latest_revision)
-    assert rebuilt.observe("skill:debugging", current_body) is True
+    assert rebuilt.observe("skill:debugging", current_body).status == "accepted"
     batch = rebuilt.prepare_pending()
     assert batch is not None
     rebuilt.restore_committed_baseline("skill:debugging", read_committed)
@@ -373,8 +373,8 @@ def test_different_threads_do_not_share_control_state(
     assert main_state.latest_visible_committed_revision == V1_REVISION
     assert child_state.latest_visible_committed_revision == CHILD_REVISION
     rebuilt_child = _new_manager(child_owner, control_state_port)
-    assert rebuilt_child.observe("skill:debugging", "child\n") is False
-    assert rebuilt_child.observe("skill:debugging", "v1\n") is True
+    assert rebuilt_child.observe("skill:debugging", "child\n").status == "baseline_restored"
+    assert rebuilt_child.observe("skill:debugging", "v1\n").status == "accepted"
 
 
 def test_restart_recovery_allows_tracked_registration_awaiting_first_observation(source_seal_case):
@@ -398,7 +398,7 @@ def test_restart_recovery_allows_tracked_registration_awaiting_first_observation
     status, latest = rebuilt.source_observation_state("workspace:rules")
     assert status == "tracked"
     assert latest is None
-    assert rebuilt.observe("workspace:rules", "v1\n") is True
+    assert rebuilt.observe("workspace:rules", "v1\n").status == "accepted"
 
 
 @pytest.mark.parametrize("operation", ["register", "track"])

@@ -94,8 +94,8 @@ def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revisi
     source_seal_case.seal(manager)
     manager.load_skill("debugging", mode="tracked")
 
-    assert manager.observe("skill:debugging", "v2\n") is True
-    assert manager.observe("skill:debugging", "v3\n") is True
+    assert manager.observe("skill:debugging", "v2\n").status == "accepted"
+    assert manager.observe("skill:debugging", "v3\n").status == "accepted"
     deltas = source_seal_case.seal(manager)[0].deltas
 
     assert len(deltas) == 1
@@ -103,7 +103,7 @@ def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revisi
     assert "v1" in deltas[0].content
     assert "v3" in deltas[0].content
     assert "v2" not in deltas[0].content
-    assert manager.observe("skill:debugging", "v3\n") is False
+    assert manager.observe("skill:debugging", "v3\n").status == "unchanged"
 
 
 def test_untrack_stops_observation_without_removing_existing_context(source_seal_case):
@@ -115,7 +115,7 @@ def test_untrack_stops_observation_without_removing_existing_context(source_seal
     receipt = manager.load_skill("debugging", mode="untrack")
 
     assert receipt.tracked is False
-    assert manager.observe("skill:debugging", "v2\n") is False
+    assert manager.observe("skill:debugging", "v2\n").status == "not_tracked"
     assert manager.prepare_pending() is None
     assert activation[0].content == "v1\n"
 
@@ -250,7 +250,7 @@ async def test_skill_load_untrack_stops_tracking_without_reading_source(source_s
     assert result["status"] == "loaded"
     assert result["tracked"] is False
     # untrack 不重新解析 entry、不读取 source。
-    assert manager.observe("skill:debugging", "v2\n") is False
+    assert manager.observe("skill:debugging", "v2\n").status == "not_tracked"
 
 
 @pytest.mark.asyncio
@@ -277,8 +277,8 @@ def test_pending_delta_carries_content_hash_and_merged_provenance(source_seal_ca
     manager.load_skill("debugging", mode="tracked")
     source_seal_case.seal(manager)
 
-    assert manager.observe("skill:debugging", "v2\n") is True
-    assert manager.observe("skill:debugging", "v3\n") is True
+    assert manager.observe("skill:debugging", "v2\n").status == "accepted"
+    assert manager.observe("skill:debugging", "v3\n").status == "accepted"
     batch = manager.prepare_pending()
     assert batch is not None
     (delta,) = batch.deltas
@@ -288,7 +288,7 @@ def test_pending_delta_carries_content_hash_and_merged_provenance(source_seal_ca
     assert delta.observation_provenance == (_sha("v2\n"), _sha("v3\n"))
 
     source_seal_case.seal(manager)
-    assert manager.observe("skill:debugging", "v4\n") is True
+    assert manager.observe("skill:debugging", "v4\n").status == "accepted"
     batch2 = manager.prepare_pending()
     assert batch2 is not None
     (delta2,) = batch2.deltas
@@ -319,7 +319,7 @@ def test_same_normalized_name_register_overrides_index_and_untrack_stops_old(sou
     assert receipt.status == "loaded"
     assert receipt.tracked is False
     # 停止的是原 active registration(skill:debugging),不是新 catalog entry。
-    assert manager.observe("skill:debugging", "v2\n") is False
+    assert manager.observe("skill:debugging", "v2\n").status == "not_tracked"
 
     again = manager.load_skill("debugging", mode="untrack")
     assert again.status == "not_tracked"
@@ -365,7 +365,7 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
     assert receipt.tracked is True
     assert receipt.display_uri == binding.display_uri
     # 旧 registration 冻结为 untracked：不再消费 revision。
-    assert manager.observe("skill:debugging", "v3\n") is False
+    assert manager.observe("skill:debugging", "v3\n").status == "not_tracked"
     # 新 effective entry 追加完整 activation（非 delta），正文逐字为 v2。
     batch = manager.prepare_pending()
     assert batch is not None
@@ -577,7 +577,7 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
     assert receipt.tracked is True
     assert receipt.display_uri == binding.display_uri
     # 旧 registration 冻结为 untracked：不再消费 revision。
-    assert manager.observe("skill:debugging", "v3\n") is False
+    assert manager.observe("skill:debugging", "v3\n").status == "not_tracked"
     # 新 registration 由本次 rebind 建立且为 tracked（此前为 untracked）。
     assert manager._sources["skill:debugging-next"].tracked is True
     # 无第二个 item 追加。
@@ -664,7 +664,7 @@ def test_register_tracked_source_consumes_event_observations(source_seal_case):
     )
     manager.register(descriptor, tracking_status="tracked")
 
-    assert manager.observe("workspace:rules", "# 指令\n") is True
+    assert manager.observe("workspace:rules", "# 指令\n").status == "accepted"
     batch = manager.prepare_pending()
     assert batch is not None
     delta = batch.deltas[0]
@@ -676,3 +676,53 @@ def test_register_tracked_source_consumes_event_observations(source_seal_case):
     status, latest = manager.source_observation_state("workspace:rules")
     assert status == "tracked"
     assert latest is not None
+
+
+def test_observation_results_distinguish_pending_and_restore_sealed_baseline(source_seal_case):
+    manager = _manager(source_seal_case)
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    receipt, _binding = source_seal_case.seal(manager)
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    before = saver.get_context_assembly(owner.session_id, owner.thread_id, assembly_id=receipt.assembly_id)
+    applied = saver.load_context_source_control_states(owner)[0].latest_visible_committed_revision
+
+    unchanged = manager.observe("skill:debugging", "v1\n")
+    assert unchanged.status == "unchanged" and not unchanged.pending
+    accepted = manager.observe("skill:debugging", "v2\n")
+    assert accepted.status == "accepted" and accepted.pending
+    repeated = manager.observe("skill:debugging", "v2\n")
+    assert repeated.status == "unchanged" and repeated.pending
+    assert saver.load_context_source_control_states(owner)[0].latest_visible_committed_revision == applied
+
+    restored = manager.observe("skill:debugging", "v1\n")
+    assert restored.status == "baseline_restored" and not restored.pending
+    assert manager.prepare_pending() is None
+    assert saver.load_context_source_control_states(owner)[0].latest_visible_committed_revision == applied
+    assert saver.get_context_assembly(owner.session_id, owner.thread_id, assembly_id=receipt.assembly_id) == before
+
+    cold = source_seal_case.manager()
+    recovered = cold.observe("skill:debugging", "v1\n")
+    assert recovered.status == "baseline_restored" and not recovered.pending
+    recovered.require_tracked()
+    assert cold.prepare_pending() is None
+    assert cold.observe("skill:debugging", "v1\n").status == "unchanged"
+    with pytest.raises(TypeError, match="显式读取 status 或 pending"):
+        bool(recovered)
+
+    manager.load_skill("debugging", mode="untrack")
+    ignored = manager.observe("skill:debugging", "v3\n")
+    assert ignored.status == "not_tracked" and not ignored.pending
+    with pytest.raises(RuntimeError, match="context-source-not-tracked: source_id=skill:debugging"):
+        ignored.require_tracked()
+    assert manager.prepare_pending() is None
+
+
+def test_untracked_observation_preserves_existing_snapshot_candidate(source_seal_case):
+    manager = _manager(source_seal_case)
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="snapshot")
+    frozen = manager.prepare_pending()
+    result = manager.observe("skill:debugging", "v2\n")
+    assert result.status == "not_tracked" and result.pending
+    assert manager.prepare_pending() == frozen

@@ -23,5 +23,6 @@
 - 每个已启用 suite 都带数据段内存上限与硬超时；被上限或超时中止的套件必须以 TIMEOUT 或非零退出码报出，不得记成通过。
 - `integration-resource-operation-admission`经正式创建及原工具operation验证真实PTY/Chromium资源锁等待到期和显式重试，固定90秒/4GiB；不代表整个工具执行、Gateway/Web或Backend重启验收。
 - `integration-resource-thread-admission`经正式资源入口和导航worker验证短Session准入、同Session独立资源并行及原holder退出后的删除排空，固定90秒/4GiB；不代表整个工具operation的截止或终止核实。
+- `integration-context-source-epoch-copy`复用正式fork watchdog，核待消费、已消费和继续执行后的来源版本、epoch transition与封存前缀复制，固定120秒/4GiB；不替代完整上下文或Web验收。
 - POSIX套件在独立进程组中运行，根进程退出后仍回收组内后代；覆盖正常、失败、超时和中断路径。Windows suite 通过 `tests/support/processes/windows_job.py` 在独立 Job Object 中启动，挂起根进程直到完成绑定，覆盖整个进程树的内存上限，并在根进程退出或监督器关闭时回收后代；Windows开发目标测试也复用这套实现。
 - 首次SIGINT/SIGTERM请求终止套件，保留30秒升级宽限；再次中断立即强杀，原套件强杀期限不重置。POSIX按信号终止进程组；Windows用 `taskkill /T` 终止监督器进程树，并在升级阶段加 `/F`。等待监督器退出后才返回，中断仍为130，超时仍为3及原TIMEOUT回执。

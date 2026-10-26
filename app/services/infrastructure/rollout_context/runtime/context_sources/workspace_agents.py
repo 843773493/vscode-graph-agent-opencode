@@ -62,4 +62,4 @@ def install_frozen_workspace_agents(
         return agents_content(read_payload(frozen, committed))
 
     manager.restore_committed_baseline(WORKSPACE_AGENTS_SOURCE_ID, read_committed_content)
-    manager.observe(WORKSPACE_AGENTS_SOURCE_ID, content, revision=binding.revision)
+    manager.observe(WORKSPACE_AGENTS_SOURCE_ID, content, revision=binding.revision).require_tracked()

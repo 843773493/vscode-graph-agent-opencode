@@ -179,6 +179,8 @@ CSM解释提示本身是已登记、版本化的instruction来源，不由adapte
 - **操作、当前状态和封存状态分别表达。** `skill_load.mode` 保留为外部操作；`SourceObservation.tracking_mode` 改为 `requested_mode`，运行态与持久控制态保留 `tracking_status`，来源 item／绑定的 `tracking_state` 改为 `source_tracking_at_seal`，派生属性及回执 `tracked` 保留。canonical 引用不适用 tracking，来源引用可处于未跟踪状态，两者由类型合同区分，不能只替换字符串。`observe()` 返回明确的处理结果，区分未变化、基准恢复、未跟踪与接受新观察；是否存在 pending 增量另行表达，回到已提交基准可取消 pending，不能用接受观察或 queued 代替成功 seal。要求 tracked 的调用入口遇到状态不符应报错。
 - **来源 owner 统一发布有效正文。** R01 默认提示词保留唯一权威入口，清理代码中的重复兜底并核清缺省行为。R02 将可覆盖说明与软件身份事实分离，移除项目特定示例，区分配置中的首选／fallback 与实际调用身份；覆盖说明不改变权威事实。外部提示词文件作为可选正文输入，默认使用inline，显式文件替换正文而非拼接；有效配置确定唯一正文输入，由 owner 读取并发布有效正文和 revision，正文变化须反映到 revision，显式读取失败报错；CSM 不读文件、不承担覆盖解析，模型请求路径只消费冻结版本。
 
+`observe()` 的实现合同为 `SourceObservationResult(source_id, status, pending)`，status 闭合为 `unchanged`、`baseline_restored`、`not_tracked`、`accepted`。`baseline_restored`同时涵盖冷恢复补齐同版正文及seal前回到已提交基准；后者取消净增量。`pending`只反映该来源现有待封存更新，因此重复观察可为`unchanged + pending`，未跟踪来源也可能保留先前显式snapshot候选。持续更新入口调用结果的`require_tracked()`核验，`not_tracked`明确报`context-source-not-tracked`；结果禁止隐式布尔解释。此回执不写入sealed历史，不改变持久结构，applied仍只由原seal事务推进。
+
 ### 5. Resource Observation Platform、URI 与 SkillCatalog
 
 SkillCatalog 按四层优先级选择同名来源，由高到低为：

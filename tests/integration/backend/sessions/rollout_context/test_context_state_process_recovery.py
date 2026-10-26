@@ -201,7 +201,7 @@ def test_independent_process_reads_frozen_owner_state_after_live_sources_and_des
 
     # 正式 CSM API 更新当前来源：一个 source 解除 tracking，另一个形成未封存 pending candidate。
     assert manager.load_skill("later-untracked", mode="untrack").tracked is False
-    assert manager.observe("skill:tracked", "父进程中新观察的 source revision\n") is True
+    assert manager.observe("skill:tracked", "父进程中新观察的 source revision\n").status == "accepted"
     pending = manager.prepare_pending()
     assert pending is not None
     assert pending.deltas[0].source_id == "skill:tracked"

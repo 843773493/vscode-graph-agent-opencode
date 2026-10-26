@@ -51,6 +51,7 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
     ]
     assert len(before_workspace_sources) == 1
     before_workspace_source = before_workspace_sources[0]
+    # TODO(9.15)：核清装具已发布workspace来源与此未发布前置条件的冲突；未核清前保留断言。
     assert source_store.get_source_layer(workspace_source_key) is None
     assert (
         before_workspace_source.precedence,

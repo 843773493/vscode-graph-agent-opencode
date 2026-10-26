@@ -222,7 +222,7 @@ def test_restart_recovery_does_not_reinject_tracked_source(
     # 重启后的新 CSM 只依赖 owner 端口恢复，不看进程内 cache。
     rebuilt = _new_manager(owner, control_state_port)
 
-    assert rebuilt.observe("skill:debugging", "v1\n") is False
+    assert rebuilt.observe("skill:debugging", "v1\n").status == "baseline_restored"
     assert rebuilt.prepare_pending() is None
     assert rebuilt.metadata() == ({"name": "debugging", "description": "调试工作流"},)
     # 新 storage 实例读回同一事实，证明状态在 SQLite 而不是内存。
@@ -250,7 +250,7 @@ def test_restart_recovery_keeps_untrack_state(
 
     assert stored.tracking_status == "untracked"
     assert rebuilt.load_skill("debugging").tracked is False
-    assert rebuilt.observe("skill:debugging", "v2\n") is False
+    assert rebuilt.observe("skill:debugging", "v2\n").status == "not_tracked"
     assert rebuilt.prepare_pending() is None
 
 
@@ -286,8 +286,8 @@ def test_restart_recovery_keeps_threads_isolated(
     )
     assert main_state.tracking_status == child_state.tracking_status == "tracked"
     rebuilt_child = _new_manager(child_owner, control_state_port)
-    assert rebuilt_child.observe("skill:debugging", "child\n") is False
-    assert rebuilt_child.observe("skill:debugging", "v1\n") is True
+    assert rebuilt_child.observe("skill:debugging", "child\n").status == "baseline_restored"
+    assert rebuilt_child.observe("skill:debugging", "v1\n").status == "accepted"
 
 
 def test_owner_rejects_bare_session_id_as_thread(

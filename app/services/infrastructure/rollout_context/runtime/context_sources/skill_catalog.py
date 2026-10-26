@@ -150,7 +150,7 @@ class SkillCatalogMixin:
                     raise RuntimeError("tracked-source-unavailable: 冻结 Skill 来源不存在: " + state.source_id)
                 observations.append((state.source_id, binding))
             for source_id, binding in observations:
-                self.observe(source_id, binding.body, revision=binding.activation_revision)
+                self.observe(source_id, binding.body, revision=binding.activation_revision).require_tracked()
 
         def load_skill(self, name: str, mode: SkillLoadMode = "snapshot", *, activation_snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillLoadReceipt:
             if not isinstance(name, str) or not name.strip():

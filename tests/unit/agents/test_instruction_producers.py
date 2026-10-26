@@ -163,6 +163,19 @@ def test_registration_uses_unique_csm_and_rejects_control_metadata(
     assert descriptor.resource_uri is None
 
 
+def test_registration_rejects_untracked_instruction_source(
+    instruction_context_source_manager: ContextSourceManager,
+) -> None:
+    manager = instruction_context_source_manager
+    spec = _instruction_producer_spec()
+    manager.register(instruction_producer_descriptor(spec))
+    before = manager.source_observation_state(spec.source_id)
+    with pytest.raises(RuntimeError, match="context-source-not-tracked"):
+        register_instruction_producer(manager, spec)
+    assert manager.source_observation_state(spec.source_id) == before
+    assert manager.prepare_pending() is None
+
+
 def test_toolset_policy_keys_are_deterministic_and_content_free() -> None:
     keys = build_toolset_policy_keys(
         ("grep", "write_todos", "create_team", "compact_conversation", "skill_load")

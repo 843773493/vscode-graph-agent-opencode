@@ -1105,8 +1105,7 @@ class TestSealedTypedFieldConsumption:
                     observations[0].source_id,
                     reactor.content_for(observations[0]),
                     revision=observations[0].revision,
-                )
-                is True
+                ).status == "accepted"
             )
             batch = manager.prepare_pending()
             assert batch is not None

@@ -167,7 +167,7 @@ def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(
             root_placement="root_eligible",
         ), tracking_status="tracked",
     )
-    assert manager.observe("instruction:R01", "第一版说明", revision="agent-config-revision:7")
+    assert manager.observe("instruction:R01", "第一版说明", revision="agent-config-revision:7").status == "accepted"
     batch = manager.prepare_pending()
     assert batch.deltas[0].revision == "agent-config-revision:7"
     assert batch.deltas[0].content_hash != batch.deltas[0].revision
@@ -177,7 +177,7 @@ def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(
     assert stored.latest_visible_committed_revision is None
     _, binding = source_seal_case.seal(manager)
     assert binding.source_revisions[0].revision == "agent-config-revision:7"
-    assert manager.observe("instruction:R01", "第二版说明", revision="agent-config-revision:8")
+    assert manager.observe("instruction:R01", "第二版说明", revision="agent-config-revision:8").status == "accepted"
     second = manager.prepare_pending().deltas[0]
     assert second.revision == "agent-config-revision:8"
     assert second.previous_revision == "agent-config-revision:7"

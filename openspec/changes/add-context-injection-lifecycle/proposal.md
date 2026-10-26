@@ -99,4 +99,4 @@
 - 影响 workspace backend、文件工具与模型提示：新增 `boxteam://` URI parser/resolver、typed capability dispatch 和安全 display URI projection，删除旧 `/.boxteam/...` Skill 虚拟挂载对模型的暴露及通用读取激活入口。
 - 需要增加 CSM 追踪控制状态、resource descriptor/snapshot/activation snapshot、URI/resource provenance、source revision/detail、稳定前缀 epoch/reason/hash/length、desired/applied ToolSet revision、Skill metadata/activation provenance 及 `skill_load` 工具 schema。
 - 需要更新 Python 单元/集成测试、真实 Provider request projection、snapshot/tracked/untrack、rewind、compaction、restart 场景；跨change Web验收统一写入`tests/e2e/clients/web/test_basic_chat_tool_loop.py`，保留基础两轮item/time/order断言并增加main/child、cold runtime和跨workspace/session协作，不创建第二套E2E owner。
-- 本 change 只修订规划；实现阶段继续由单一 Saver/ContextStore owner 持久化，不建立第二个 SQLite/JSONL writer。
+- 本 change 已具备实施计划，按 tasks 中边界明确的独立切片推进实现与验收；持久化继续由单一 Saver/ContextStore owner 负责，不建立第二个 SQLite/JSONL writer。团队／协作专项按已登记延期范围处理，不阻塞其它独立切片。

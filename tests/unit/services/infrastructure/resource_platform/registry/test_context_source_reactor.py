@@ -562,7 +562,7 @@ async def test_optional_file_reactor_and_rebuild_consume_only_published_revision
                 assert manager.observe(
                     observed[0].source_id, reactor.content_for(observed[0]),
                     revision=observed[0].revision,
-                )
+                ).status == "accepted"
                 assert manager.source_observation_state("workspace-guide") == (
                     "tracked", published.revision,
                 )
@@ -636,7 +636,7 @@ async def cold_file_source_case(
         for observation in reactor.drain():
             assert manager.observe(
                 observation.source_id, reactor.content_for(observation), revision=observation.revision,
-            )
+            ).status == "accepted"
         _receipt, binding = source_seal_case.seal(manager)
         assert [(item.source_id, item.previous_revision, item.revision) for item in binding.source_revisions] == [
             (descriptor.source_id, None, baseline.revision),
@@ -702,7 +702,7 @@ async def test_cold_file_first_binding_reconciles_published_snapshot(
         patch.setattr(case.registry, "refresh", forbid_source_io)
         observed = tuple(case.reactor.drain())
         assert len(observed) == 1 and observed[0].revision == published.revision
-        changed = case.manager.observe(
+        result = case.manager.observe(
             source_id, case.reactor.content_for(observed[0]), revision=observed[0].revision,
         )
         batch = case.manager.prepare_sources()
@@ -713,11 +713,13 @@ async def test_cold_file_first_binding_reconciles_published_snapshot(
         assert pending_control[0].latest_visible_committed_revision == case.baseline_revision
         assert pending_control[0].latest_revision == published.revision
         if published.revision == case.baseline_revision:
-            assert not changed and batch.deltas == ()
+            assert result.status == "baseline_restored" and not result.pending
+            assert batch.deltas == ()
             assert case.manager.prepare_pending() is None
             assert pending_control == before
         else:
-            assert changed and len(batch.deltas) == 1
+            assert result.status == "accepted" and result.pending
+            assert len(batch.deltas) == 1
             delta = batch.deltas[0]
             assert (delta.kind, delta.previous_revision, delta.revision, delta.content) == (
                 "delta", case.baseline_revision, published.revision, published.content,

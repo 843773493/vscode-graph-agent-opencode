@@ -17,6 +17,23 @@ SkillLoadMode = Literal["snapshot", "tracked", "untrack"]
 
 
 @dataclass(frozen=True, slots=True)
+class SourceObservationResult:
+    """本次观察的处理结果；pending 只表示该来源有待封存更新，不表示已生效。"""
+
+    source_id: str
+    status: Literal["unchanged", "baseline_restored", "not_tracked", "accepted"]
+    pending: bool
+
+    def require_tracked(self) -> None:
+        """持续更新的生产入口不得把未跟踪误当作没有变化。"""
+        if self.status == "not_tracked":
+            raise RuntimeError(f"context-source-not-tracked: source_id={self.source_id}")
+
+    def __bool__(self) -> bool:
+        raise TypeError("SourceObservationResult 必须显式读取 status 或 pending")
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedContextSourceRevision:
     """来源 owner 在准备边界冻结的已发布完整 revision；没有 locator 或控制状态。"""
 
@@ -327,4 +344,5 @@ __all__ = [
     "PendingSourceObservation", "SkillCatalogActivationSnapshot",
     "SkillCatalogBinding", "SkillCatalogSnapshotConflict",
     "SkillLoadAppendStatus", "SkillLoadMode", "SkillLoadReceipt", "SkillLoadStatus",
+    "SourceObservationResult",
 ]

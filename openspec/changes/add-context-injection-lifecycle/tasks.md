@@ -1,6 +1,6 @@
 当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作设计待调整，暂停继续扩展该部分实现与专项验收。4.7/4.9/6.8 及总验收中涉及团队、成员、委派与会话协作通信的剩余内容保留 TODO 和未完成状态，待新设计确定后重新规划；通用来源注入、执行恢复、fork、资源和 URI 链路继续推进。已有证据保留，不能据此将延期部分勾选完成。
 
-本轮规划补齐（2026-10-25）：第 9 节跟踪 CSM 模型可见协议、消息分组、显式刷新与模式转换、来源能力组合和四层 SkillCatalog 等新增要求，全部保持未完成。第 1–8 节的已勾选任务及收据仅证明各自历史基线，不覆盖本轮增量；其中旧逐来源消息、三来源目录与重复加载的基线按第 9 节迁移，不保留并行实现。团队／协作延期范围不因本轮文档补齐重新启动。
+本轮增量（2026-10-25登记，2026-10-26进入可实施状态）：第 9 节跟踪 CSM 模型可见协议、消息分组、显式刷新与模式转换、来源能力组合和四层 SkillCatalog 等新增要求，按实际实现与验收证据更新完成状态。第 1–8 节的已勾选任务及收据仅证明各自历史基线，不覆盖本轮增量；其中旧逐来源消息、三来源目录与重复加载的基线按第 9 节迁移，不保留并行实现。团队／协作专项继续暂缓，不阻塞边界明确的独立切片。
 
 当前验收坐标（2026-10-19）：A01–A03 已接受范围沿原具名收据复用；4.6 已由 instruction generation、条件来源与 Skill metadata 的具名验收收口，见本节对应收据。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
 
@@ -219,7 +219,7 @@
   - 2026-10-24 真实外部 Provider 限定复核：完整候选 `49c19d3658e867aa9bd64816199b878e831cd797` 修正旧验收要求普通日志响应返回真实 `file_path` 的断言，改为验证当前 DTO 不暴露该字段，仍逐字段核原请求/响应。`product-001` 为1 failed/50.46秒、exit1：Gateway真实初始化、公开Session/消息→真实Provider被既有CCTQ凭据拒绝为`Invalid token`；失败日志/dispatch/assembly/selection/ToolSet/checkpoint/hash及backend重启后的history/log/assembly不变均已核对，最终成功门明确失败，未放宽预期、改配置/凭据或重试相同环境。原件与SHA清单、源码指纹及独立只读复核在 `out/tests/temp/provider_provenance_contract_20261024/artifacts/`；不把失败链路、冷读取当成功Provider执行，也不覆盖动态source Delta或跨checkpoint版本复用专项。本次发现当时HEAD缺此前release已测fallback切片，已由下列成功验收补齐；该失败原件继续保留，7.4总门保持未勾。
   - 2026-10-22 后台恢复请求接线补齐：固定完整 tree `6c193bf44c319ddc4b0f895f3fcae80862db409b` 将既有 `background_mailbox` 场景加入同一审计枚举，不复制 Provider、SSE 或封存解析链。正式 matrix `background-sealed-product-002` 为1 passed/209.22秒、exit0；真实 Gateway/Chromium 后台任务硬重启恢复后，两Thread的8个实际model_stream请求全部通过日志/dispatch/assembly/selection/checkpoint审计，provenance 的 covered=8、outside_scope=0。Ruff `background-sealed-static-001` exit0，全profile源码前后一致，无残留；41份产品原件与SHA清单封存于该run/product-evidence，非作者只读复核终态无阻断。首轮product-001仅因隔离副本缺已有Web依赖链接在构建前置失败，原件保留，不计业务通过；后仅链接已有依赖/.env，无源码或用户配置变更。旧产品历史只读诊断 `background-sealed-diagnosis-002` 另核同样2 owner/8请求；该诊断不代替本次正式入口。此收据仅闭合后台恢复场景的审计接线，不替完整default及7.4其它合同，整项保持未勾。
   - 2026-10-21 provenance 审计切片：新增只读 helper，复用权威 registry/canonical/state-value reader，将封存 dispatch ref、ModelCall/execution/Job owner、实际 model_stream 请求、Provider attempt 日志冻结参数和历史 request_hash preimage 逐字节核对，并检查 selection 的 canonical 正文及 checkpoint/view/source assembly 引用。旧 default 的冻结真实产品历史经 `sealed-provenance-product-history-003` 审计15个 owner、99个请求、213个 canonical item、863个状态值引用和857条 checkpoint，exit0/28.75秒；另有1041份历史产物在范围外，未宣称已审。此前002只审7个 main owner的70请求、606个状态值引用和601条 checkpoint，不能将后两数混称。五种 ref/log/transport/Job/缺日志变异均由 `sealed-provenance-mutations-001` 拒绝。最终 Ruff `sealed-provenance-static-003` exit0；非作者只读独审无确定缺陷。E2E接线对六个具名场景的Session枚举全部实际请求线程，含child parent与team members，逐Session断言capture完整覆盖并明确列出范围外请求；default-002启动时已加载较早接线，尚不以其或旧失败default勾选本项。原命令/raw/前后源码指纹位于同名 artifacts/runs，完整default及最终接线的当前产品证据继续补齐。
-- [ ] 7.5 运行OpenSpec strict validation、本台账未勾选项逐条计数（不写死数字，按当时实测）、git diff/status和架构/import audit；确认本change与`add-itemized-rollout-context`的ResourceActivationSnapshot/ResourceProvenance、SessionThread/GraphBinding、main/child capability、runtime residency、Session内部状态和跨Session无状态协作边界清晰后才进入apply/implementation。
+- [ ] 7.5 在受影响实施切片及交付时运行OpenSpec strict validation、本台账未勾选项逐条计数（不写死数字，按当时实测）、git diff/status和架构/import audit；核对本change与`add-itemized-rollout-context`的ResourceActivationSnapshot/ResourceProvenance、SessionThread/GraphBinding、main/child capability、runtime residency、Session内部状态和跨Session无状态协作边界。已明确边界的独立切片可进入实施，不以团队／协作延期任务或全change验收尚未完成作为其前置阻塞。
 
 ## Verification ledger
 
@@ -336,11 +336,11 @@
 
 ## 9. CSM 模型协议、来源更新策略与 Skill 刷新增量（2026-10-25）
 
-本节于2026-10-25登记规划，按用户2026-10-26最新要求转入优先实施；团队／协作专项继续暂缓。语义以 specs 为准；标签拼写、配置键及typed结构在对应切片实施前收敛，不能改变已定默认值、互斥模式、来源优先级或稳定前缀合同。涉及itemized封存映射及统一寻址的部分复用其唯一owner，不在此复制第二份合同。
+本节为可直接进入实施的任务清单，按依赖关系逐切片实现并验收；团队／协作专项继续暂缓，不阻塞本节独立任务。语义以 specs 为准；标签拼写、配置键及typed结构由对应实施切片收敛，不作为整节停留在规划阶段的理由，也不能改变已定默认值、互斥模式、来源优先级或稳定前缀合同。涉及itemized封存映射及统一寻址的部分复用其唯一owner，不在此复制第二份合同；任务完成须有对应实现与验收证据。
 
 - [ ] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
 - [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
-- [ ] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
+- [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
 - [ ] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
 - [ ] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
 - [ ] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
@@ -354,3 +354,10 @@
 - [ ] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
 - [ ] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
 - [ ] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
+
+### 2026-10-26 9.3 明确观察处理结果
+
+- `observe()`改为唯一typed回执`SourceObservationResult`，区分unchanged、baseline_restored、not_tracked、accepted，pending独立表达；删除布尔返回并拒绝隐式布尔解释。instruction、AGENTS、冻结Skill与事件消费四个生产入口均显式核验tracked。A→B→A取消净增量，冷恢复同版只补齐基准；接受观察不推进applied，未跟踪也可保留先前snapshot候选。不修改持久结构或旧sealed字节。
+- 来源、控制状态、Skill回执与事件回归181 passed；最终新增合同3 passed（包含于前述181项，不累加）。恢复/dispatch 24 passed，正式matrix的fork首次请求6 passed；epoch前33项通过，余下完整复制3项经新增`integration-context-source-epoch-copy`正式watchdog补验通过。均有进程外期限与4GiB保护；不代替完整Web、真实Provider或9.13–9.15新增总门。
+- R01真实reload测试在首次执行前的workspace来源前置断言失败，完整旧HEAD归档同位置复现，未放宽断言，代码登记9.15 TODO。初轮组合120秒到期，原始非零保留；epoch初轮在full-copy装具处拒绝非matrix启动；尝试通用integration-python时因其8GiB默认上限高于外层4GiB而在启动前失败，最终使用具名4GiB suite，不修改默认保护。所有失败与最终补验均保留原件。
+- Ruff/compileall及45项OpenSpec strict通过。Pyright最终73项诊断全部在完整旧HEAD的76项中，无新增，移除3项既有pending字段诊断；不称类型全绿。四处调用方AST核查与作者结构自查无新增职责问题，未启动团队专项。部分运行期间仅规划文档或无关R01 TODO注释变化，实际产品依赖指纹未变。准确命令、前后指纹、raw、退出码、类型对照、失败归因与产物清单见`out/tests/temp/cil_observation_results_20261026/artifacts/verification-023.json`；旧树与tar核验后删除。9.3完成，其余第9节按未完成任务继续推进。

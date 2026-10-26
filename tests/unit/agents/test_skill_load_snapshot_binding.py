@@ -203,7 +203,7 @@ async def test_untrack_freezes_original_registration_not_current_catalog(source_
     assert result["append_status"] == "none"
     # 未向上下文追加任何新 item,也未读取 source。
     assert manager.prepare_pending() is None
-    assert manager.observe("skill:shared", "workspace body\n") is False
+    assert manager.observe("skill:shared", "workspace body\n").status == "not_tracked"
     assert binding.display_uri in json.dumps(result)
 
 

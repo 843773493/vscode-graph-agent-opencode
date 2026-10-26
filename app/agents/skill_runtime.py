@@ -326,7 +326,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                     descriptor_by_source_id=descriptor_by_source_id,
                 ),
                 revision=typed_observation.revision,
-            )
+            ).require_tracked()
 
     def _activation_body(self, raw_content: str) -> str:
         """activation/tracked 只消费 frontmatter 之后的精确正文。"""

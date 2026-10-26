@@ -2021,7 +2021,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
     request_content = "来自 typed registry 的 request-only 正文"
     assert manager.observe(
         source_id, request_content, revision=source_revision
-    )
+    ).status == "accepted"
     adversarial_controls = {
         "source_ordinal": 999,
         "replaceable_source": True,
@@ -2400,7 +2400,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     )
     for descriptor, content in zip(descriptors, ("源共享规则第一版", "保留规则第一版", "仅尾部正文"), strict=True):
         manager.register(descriptor, tracking_status="tracked")
-        assert manager.observe(descriptor.source_id, content, revision=descriptor.source_id + ":1")
+        assert manager.observe(descriptor.source_id, content, revision=descriptor.source_id + ":1").status == "accepted"
     overlay_base = "已封存 overlay base"
     overlay_delta = "已封存 overlay delta"
     saver.register_source_overlay(
@@ -2417,7 +2417,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     )
     first = fork_provider_prepare(fork_context, source.session_id, str(accepted["initial_execution_id"]), manager, "source-first", attempt=1)
     assert first["messages"][0].content == "源共享规则第一版\n\n保留规则第一版"
-    assert manager.observe("instruction:retained", "保留规则第二版", revision="instruction:retained:2")
+    assert manager.observe("instruction:retained", "保留规则第二版", revision="instruction:retained:2").status == "accepted"
     second = fork_provider_prepare(fork_context, source.session_id, str(accepted["initial_execution_id"]), manager, "source-second", attempt=2)
     assert second["messages"][0].content == first["messages"][0].content
     delta = second["messages"][-1].content
@@ -2507,11 +2507,11 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     target_manager = ContextSourceManager(owner=target_owner, control_state_port=cold)
     if local_override:
         target_manager.register(descriptors[0], tracking_status="tracked")
-        assert target_manager.observe("instruction:shared", "目标共享规则第三版", revision="instruction:shared:3")
+        assert target_manager.observe("instruction:shared", "目标共享规则第三版", revision="instruction:shared:3").status == "accepted"
         target_manager.register(descriptors[2], tracking_status="tracked")
         # 原 owner 的控制事实保持历史身份；目标 registration 独立产生首次 observation。
         observed_tail = target_manager.observe("instruction:tail", "仅尾部正文", revision="instruction:tail:1")
-        assert observed_tail is True
+        assert observed_tail.status == "accepted"
     cold_context = replace(fork_context, saver=cold)
     target_accepted = cold.accept_turn(
         target.session_id, thread_id=cold._storage.storage.main_thread_id(target.session_id), accepted_ingress_id="typed-target-ingress", acceptance_idempotency_key="typed-target-accept",
@@ -2615,7 +2615,7 @@ async def test_prefix_selected_required_detail_rejects_corruption_before_publica
         "source-owner://tail", root_placement="tail_only",
     )
     manager.register(descriptor, tracking_status="tracked")
-    assert manager.observe(descriptor.source_id, "必须保留的尾部正文", revision="instruction:tail:1")
+    assert manager.observe(descriptor.source_id, "必须保留的尾部正文", revision="instruction:tail:1").status == "accepted"
     prepared = fork_provider_prepare(
         fork_context, source.session_id, str(accepted["initial_execution_id"]),
         manager, "required-detail-source", attempt=1,
@@ -2944,7 +2944,7 @@ async def test_successor_fork_keeps_original_a_and_b_history_after_both_sources_
         )
         manager = ContextSourceManager(owner=ContextSourceOwnerKey(session_id, thread_id), control_state_port=saver)
         manager.register(descriptor, tracking_status="tracked")
-        assert manager.observe(descriptor.source_id, f"规则 {key}", revision=f"successor-{key}-revision")
+        assert manager.observe(descriptor.source_id, f"规则 {key}", revision=f"successor-{key}-revision").status == "accepted"
         resource_payload = {"content": f"{key} 的冻结资源正文"}
         registry = ResourceRegistry()
         registry.publish(ResourceSnapshot(
@@ -3929,7 +3929,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         "instruction:compaction", "agent_instructions", "压缩规则", "压缩规则",
         "source-owner://compaction-rule", root_placement="root_eligible",
     ), tracking_status="tracked")
-    assert manager.observe("instruction:compaction", "保留真实压缩规则", revision="compaction-rule:1")
+    assert manager.observe("instruction:compaction", "保留真实压缩规则", revision="compaction-rule:1").status == "accepted"
     old = saver.accept_turn(
         source.session_id, thread_id=source_thread, accepted_ingress_id="compaction-old-user",
         acceptance_idempotency_key="compaction-old-accept", job_id="compaction-old-job",

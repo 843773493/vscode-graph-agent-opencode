@@ -308,7 +308,7 @@ def register_instruction_producer(
     if not isinstance(manager, ContextSourceManager):
         raise TypeError("register_instruction_producer 需要唯一 ContextSourceManager")
     manager.register(instruction_producer_descriptor(spec), tracking_status="tracked")
-    manager.observe(spec.source_id, spec.content, revision=spec.revision_token())
+    manager.observe(spec.source_id, spec.content, revision=spec.revision_token()).require_tracked()
 
 
 def runtime_instruction_producers(
