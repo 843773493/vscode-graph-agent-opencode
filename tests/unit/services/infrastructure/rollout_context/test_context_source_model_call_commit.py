@@ -156,7 +156,7 @@ def test_real_lifecycle_preserves_descriptor_root_policy(source_seal_case, root_
         assert binding.root is not None
         assert [source.source_identity for source in binding.root.sources] == ["instruction:R06"]
     else:
-        assert any(frame.item_ref.source_identity == "instruction:R06" for frame in binding.prefix.state.frames)
+        assert any(ref.source_identity == "instruction:R06" for frame in binding.prefix.state.frames for ref in frame.item_refs)
 
 
 def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(source_seal_case):

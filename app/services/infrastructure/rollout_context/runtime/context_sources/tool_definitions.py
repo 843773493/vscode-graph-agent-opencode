@@ -125,31 +125,34 @@ def definition_source_values(
     if assembly is None or assembly.seal_binding is None:
         return
     for frame in assembly.seal_binding.prefix.state.frames:
-        if not is_tool_definition_source(frame.item_ref.source_identity):
-            continue
-        if retained is not None and (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained:
+        if not any(is_tool_definition_source(ref.source_identity) for ref in frame.item_refs):
             continue
         blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol)
-        if (len(blocks) != 1 or blocks[0].source_kind != TOOL_DEFINITION_SOURCE_KIND
-                or frame.role != "user" or frame.payload_kind != "text"
-                or blocks[0].root_placement != "tail_only"
-                or frame.item_ref.source_tracking_at_seal != "untracked"):
-            raise ExtensionCatalogUnavailableError("活动定义缺少唯一封存来源块")
-        if not isinstance(blocks[0].body, str):
-            raise ExtensionCatalogUnavailableError("活动定义来源必须是 JSON 文本")
-        try:
-            value = DefinitionSourceValue.model_validate_json(blocks[0].body)
-        except ValidationError as error:
-            raise ExtensionCatalogUnavailableError("活动定义来源正文损坏") from error
-        if (value.discovered_from.resource_id != definition_resource_id(value.tool_id)
-                or value.tool_id != value.discovered_from.tool_id
-                or frame.item_ref.source_identity != definition_resource_id(value.tool_id)
-                or frame.item_ref.source_revision != sha256_jcs({"content": blocks[0].body})
-                or (value.status == "available") != (value.definition is not None)
-                or (value.status == "unavailable") != (value.reason is not None)):
-            raise ExtensionCatalogUnavailableError("活动定义来源正文或身份冲突")
-        assert frame.item_ref.source_revision is not None
-        yield value, frame.item_ref.source_revision
+        for ref, block in zip(frame.item_refs, blocks, strict=True):
+            if not is_tool_definition_source(ref.source_identity):
+                continue
+            if retained is not None and (ref.ref_id, ref.source_revision) not in retained:
+                continue
+            if (block.source_kind != TOOL_DEFINITION_SOURCE_KIND
+                    or frame.role != "user" or frame.payload_kind != "text"
+                    or block.root_placement != "tail_only"
+                    or ref.source_tracking_at_seal != "untracked"):
+                raise ExtensionCatalogUnavailableError("活动定义缺少唯一封存来源块")
+            if not isinstance(block.body, str):
+                raise ExtensionCatalogUnavailableError("活动定义来源必须是 JSON 文本")
+            try:
+                value = DefinitionSourceValue.model_validate_json(block.body)
+            except ValidationError as error:
+                raise ExtensionCatalogUnavailableError("活动定义来源正文损坏") from error
+            if (value.discovered_from.resource_id != definition_resource_id(value.tool_id)
+                    or value.tool_id != value.discovered_from.tool_id
+                    or ref.source_identity != definition_resource_id(value.tool_id)
+                    or ref.source_revision != sha256_jcs({"content": block.body})
+                    or (value.status == "available") != (value.definition is not None)
+                    or (value.status == "unavailable") != (value.reason is not None)):
+                raise ExtensionCatalogUnavailableError("活动定义来源正文或身份冲突")
+            assert ref.source_revision is not None
+            yield value, ref.source_revision
 
 
 def tool_definition_batch(

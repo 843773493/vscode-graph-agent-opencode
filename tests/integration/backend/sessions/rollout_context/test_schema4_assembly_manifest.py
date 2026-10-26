@@ -367,13 +367,13 @@ def _with_admission_root_binding(
         role="user",
         payload_kind="structured_content",
         content=contribution.body,
-        item_ref=AppendedItemRef(
+        item_refs=(AppendedItemRef(
             "source_item",
             source_entry.ref.ref_id,
             source_binding.source_ref,
             source_entry.ref.source_revision,
             "tracked",
-        ),
+        ),),
     )
     state = append_items(
         state,

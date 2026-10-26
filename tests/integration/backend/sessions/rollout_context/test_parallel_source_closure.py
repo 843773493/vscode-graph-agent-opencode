@@ -128,8 +128,8 @@ async def test_parallel_skill_and_team_sources_wait_for_all_paired_results(
         registry = case.resource_registries[0]
         before_revision = registry.snapshot(TEAM_RESOURCE_IDS["tasks"]).revision
         initial_frames = case.model_dispatches[0].snapshot.seal_binding.prefix.state.frames
-        assert any(frame.item_ref.source_identity == TEAM_SOURCE_IDS["tasks"]
-                   and frame.item_ref.source_revision == before_revision for frame in initial_frames)
+        assert any(ref.source_identity == TEAM_SOURCE_IDS["tasks"]
+                   and ref.source_revision == before_revision for frame in initial_frames for ref in frame.item_refs)
 
         task = await container.team_service.assign_task(
             requester_session_id=session, requester_thread_id=thread, team_id=board.team_id,
@@ -187,15 +187,15 @@ async def test_parallel_skill_and_team_sources_wait_for_all_paired_results(
     assert len(results) == len(streamed_results) + len(projection_results) == 4
     final_snapshot = case.model_dispatches[-1].snapshot
     frames = final_snapshot.seal_binding.prefix.state.frames
-    assert any(frame.item_ref.source_identity == TEAM_SOURCE_IDS["tasks"]
-               and frame.item_ref.source_revision == team_revision for frame in frames)
+    assert any(ref.source_identity == TEAM_SOURCE_IDS["tasks"]
+               and ref.source_revision == team_revision for frame in frames for ref in frame.item_refs)
     final_controls = saver.load_context_source_control_states(owner)
     final_skills = [state for state in final_controls if state.source_kind == "skill"]
     assert {state.name for state in final_skills} == set(names)
     for state in final_skills:
         assert state.latest_visible_committed_revision == state.latest_revision
-        assert any(frame.item_ref.source_identity == state.source_id
-                   and frame.item_ref.source_revision == state.latest_revision for frame in frames)
+        assert any(ref.source_identity == state.source_id
+                   and ref.source_revision == state.latest_revision for frame in frames for ref in frame.item_refs)
     final_pending = manager.prepare_pending()
     assert final_pending is None or not any(delta.source_kind == "skill" for delta in final_pending.deltas)
     assert saver.list_context_assemblies(session, thread)[0].to_dict() == original_assemblies[0]

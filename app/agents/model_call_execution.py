@@ -7,7 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast, overload
 from uuid import UUID
 
 from langchain.agents.middleware import ModelRequest, ModelResponse
@@ -237,6 +237,7 @@ class ModelCallExecution:
         context_source_manager: ContextSourceManager,
         tool_set_producer: RegisteredToolSetProducer,
         resource_activation: ResourceActivationCoordinator | None,
+        source_message_grouping_supplier: Callable[[], Literal["aggregate", "separate"]] = lambda: "aggregate",
         extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
         context_read_admission: Callable[[], AbstractAsyncContextManager[None]],
         context_control_admission: Callable[[str, Mapping[str, object], str], AbstractAsyncContextManager[None]],
@@ -250,6 +251,7 @@ class ModelCallExecution:
         self._context_source_manager = context_source_manager
         self._tool_set_producer = tool_set_producer
         self._resource_activation = resource_activation
+        self._source_message_grouping_supplier = source_message_grouping_supplier
         self._extension_policy_resolver = extension_policy_resolver
         self._context_read_admission = context_read_admission
         self._context_control_admission = context_control_admission
@@ -526,6 +528,7 @@ class ModelCallExecution:
             summary_candidate=candidate,
             sealed_context=sealed,
             allow_provider_reprojection=context.allow_provider_reprojection,
+            source_message_grouping=self._source_message_grouping_supplier() if sealed is None else "aggregate",
         )
         prepared = dict(prepared)
         prepared["bound_model"] = context.bound_model

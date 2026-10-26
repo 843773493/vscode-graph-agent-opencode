@@ -46,7 +46,7 @@ def test_root_diff_and_cold_projection_share_source_protocol(production_context,
     frames = second["snapshot"].seal_binding.prefix.state.frames
     assert frames[:len(first["snapshot"].seal_binding.prefix.state.frames)] == first["snapshot"].seal_binding.prefix.state.frames
     assert frames[-1].source_protocol == 2
-    assert second["snapshot"].seal_binding.format_version == 3
+    assert second["snapshot"].seal_binding.format_version == 4
     assert prepare("protocol-diff", target_format=target_format)["messages"] == second["messages"]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         snapshot = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])

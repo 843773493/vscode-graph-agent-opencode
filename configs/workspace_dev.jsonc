@@ -2,6 +2,9 @@
   "$schema": "./workspace_schema.jsonc",
   "config_version": 2,
   "context": {
+    "source_messages": {
+      "grouping": "aggregate" // aggregate 聚合本批来源；separate 逐来源消息，仅影响新封存批次。
+    },
     "resource_activation": {
       "default_boundary": "turn",
       "overrides": {

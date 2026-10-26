@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal
 
 
 class ConfigRuntimeAccessorsMixin:
+    _get_effective_config: Callable[[], dict[str, Any]]
+
     def list_config_events(
         self,
         *,
@@ -40,6 +43,13 @@ class ConfigRuntimeAccessorsMixin:
 
     def ensure_config_event_cursor(self, *, after: int) -> None:
         self._event_cursor.ensure_config_event_cursor(after=after)
+
+    def get_source_message_grouping(self) -> Literal["aggregate", "separate"]:
+        """读取本次准备使用的分组；sealed assembly 不读取当前配置。"""
+        value = self._get_effective_config()["context"]["source_messages"]["grouping"]
+        if value not in {"aggregate", "separate"}:
+            raise ValueError("context.source_messages.grouping 必须是 aggregate 或 separate")
+        return value
 
     def get_agent_run_timeout_seconds(self) -> float:
         """返回单个 Agent Job 的总执行上限。"""

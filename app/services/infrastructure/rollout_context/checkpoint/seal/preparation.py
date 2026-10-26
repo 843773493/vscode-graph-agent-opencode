@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from functools import cache
+from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
@@ -114,8 +115,8 @@ def _activation_guidance_batch(
         parents = tuple(binding for binding in activation.bindings if binding.resource_id == resource_id)
         if len(parents) > 1:
             raise ValueError("resource-activation-snapshot-conflict: guidance parent 不唯一")
-        previous_revision = next((frame.item_ref.source_revision for frame in reversed(previous_frames)
-                                  if frame.item_ref.source_identity == source_id), None)
+        previous_revision = next((ref.source_revision for frame in reversed(previous_frames) for ref in reversed(frame.item_refs)
+                                  if ref.source_identity == source_id), None)
         if not parents and previous_revision is None:
             continue
         content = read_content(owner.read_resource_activation_payload(
@@ -161,6 +162,7 @@ def prepare_registered_context(
     summary_candidate: SummaryCandidateScope | None = None,
     sealed_context: ContextPlanRegistration | None = None,
     allow_provider_reprojection: bool = False,
+    source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -426,8 +428,8 @@ def prepare_registered_context(
             transition = rebuild.transition if rebuild is not None else None
             if notice_acceptance is not None and summary_candidate is None:
                 applied_ids = set() if previous is None or previous.seal_binding is None else {
-                    frame.item_ref.ref_id for frame in previous.seal_binding.prefix.state.frames
-                    if frame.item_ref.ref_type == "canonical_item"
+                    frame.item_refs[0].ref_id for frame in previous.seal_binding.prefix.state.frames
+                    if frame.item_refs[0].ref_type == "canonical_item"
                 }
                 if transition is not None:
                     transition = replace(transition, notice_acceptance=notice_acceptance)
@@ -444,6 +446,7 @@ def prepare_registered_context(
                 ))
             plan, preparation = compile_prefix_context(
                 compile_plan, () if summary_candidate is not None else items, batch, tool_set, overlay_bodies=overlay_bodies,
+                source_message_grouping=source_message_grouping,
                 previous=None if summary_candidate is not None else previous,
                 initial_assembly=initial_assembly if summary_candidate is None else False,
                 transition=transition,

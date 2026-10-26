@@ -66,7 +66,7 @@ def _source_protocol(raw: Mapping[str, object]) -> Literal[1, 2] | None:
     return cast(Literal[1, 2], value)
 
 
-def _item_ref(value: object, version: Literal[1, 2, 3]) -> AppendedItemRef:
+def _item_ref(value: object, version: Literal[1, 2, 3, 4]) -> AppendedItemRef:
     tracking_field = "tracking_state" if version == 1 else "source_tracking_at_seal"
     raw = _object(
         value,
@@ -95,7 +95,7 @@ def _item_ref(value: object, version: Literal[1, 2, 3]) -> AppendedItemRef:
     )
 
 
-def _item_ref_to_dict(ref: AppendedItemRef, version: Literal[1, 2, 3]) -> dict[str, object]:
+def _item_ref_to_dict(ref: AppendedItemRef, version: Literal[1, 2, 3, 4]) -> dict[str, object]:
     fields = asdict(ref)
     # TODO：按读取时的版本复现旧封存，不能把历史引用重写为新字段。
     if version == 1:
@@ -104,15 +104,16 @@ def _item_ref_to_dict(ref: AppendedItemRef, version: Literal[1, 2, 3]) -> dict[s
     return fields
 
 
-def _state_to_dict(state: PrefixEpochState, version: Literal[1, 2, 3]) -> dict[str, object]:
+def _state_to_dict(state: PrefixEpochState, version: Literal[1, 2, 3, 4]) -> dict[str, object]:
     fields = state.to_dict()
-    # TODO：旧版重编码只存在于此 codec，运行态和新 prepare 均使用新版引用。
-    if version == 1:
+    # TODO：v1—v3 只重编码原历史合同；新准备与所有消费者共用有序 item_refs。
+    if version < 4:
         fields["frames"] = tuple(
-            {**frame.frame_manifest(), "item_ref": _item_ref_to_dict(frame.item_ref, version)}
-            for frame in state.frames
+            {**frame.frame_manifest(), "item_ref": _item_ref_to_dict(frame.item_refs[0], version), **(
+                {"source_protocol": frame.source_protocol} if frame.source_protocol is not None else {}
+            )} for frame in state.frames
         )
-        fields["appended_refs"] = tuple(_item_ref_to_dict(ref, version) for ref in state.appended_refs)
+    fields["appended_refs"] = tuple(_item_ref_to_dict(ref, version) for ref in state.appended_refs)
     return fields
 
 
@@ -164,11 +165,11 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
     if not isinstance(payload, Mapping):
         raise ItemSchemaError("ContextSealBinding 必须是 object")
     # TODO：无版本标签唯一对应已封存的 v1；不按局部字段猜测或兼容混合格式。
-    version: Literal[1, 2, 3] = 1
+    version: Literal[1, 2, 3, 4] = 1
     if "format_version" in payload:
-        if type(payload["format_version"]) is not int or payload["format_version"] not in {2, 3}:
+        if type(payload["format_version"]) is not int or payload["format_version"] not in {2, 3, 4}:
             raise ItemSchemaError("未知 ContextSealBinding.format_version")
-        version = cast(Literal[2, 3], payload["format_version"])
+        version = cast(Literal[2, 3, 4], payload["format_version"])
     raw = _object(
         payload,
         {
@@ -197,14 +198,18 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
     for value in _array(state["frames"], "PrefixEpochState.frames"):
         frame = _object(
             value,
-            {"ordinal", "provider_profile", "role", "payload_kind", "content", "item_ref"}
-            | ({"source_protocol"} if version == 3 and isinstance(value, Mapping) and "source_protocol" in value else set()),
+            {"ordinal", "provider_profile", "role", "payload_kind", "content"}
+            | {"item_refs" if version >= 4 else "item_ref"}
+            | ({"source_protocol"} if version >= 3 and isinstance(value, Mapping) and "source_protocol" in value else set()),
             "ProviderProfileItemFrame",
         )
         frames.append(ProviderProfileItemFrame(
             ordinal=frame["ordinal"], provider_profile=frame["provider_profile"],
             role=frame["role"], payload_kind=frame["payload_kind"],
-            content=frame["content"], item_ref=_item_ref(frame["item_ref"], version),
+            content=frame["content"], item_refs=(
+                tuple(_item_ref(ref, version) for ref in _array(frame["item_refs"], "frame.item_refs"))
+                if version >= 4 else (_item_ref(frame["item_ref"], version),)
+            ),
             source_protocol=_source_protocol(frame),
         ))
     transition = prefix["consumed_transition"]
@@ -247,7 +252,7 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
             root,
             {
                 "epoch", "provider_profile", "tool_compatibility_key", "content", "sources",
-            } | ({"source_protocol"} if version == 3 and isinstance(root, Mapping) and "source_protocol" in root else set()),
+            } | ({"source_protocol"} if version >= 3 and isinstance(root, Mapping) and "source_protocol" in root else set()),
             "CompiledRootItem",
         )
         sources = []

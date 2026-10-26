@@ -132,9 +132,11 @@ def test_dispatch_projects_pending_source_to_chat_and_responses(frozen_provider_
 
     prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='pending-source-chat:create', seal_idempotency_key='pending-source-chat:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='pending-source-chat:create'))
 
-    frame = next(frame for frame in prepared["snapshot"].seal_binding.prefix.state.frames
-                 if frame.item_ref.source_identity == "skill:debugging")
-    assert parse_source_blocks(frame.content)[0].body == source_body
+    (frame, block), = [(frame, block) for frame in prepared["snapshot"].seal_binding.prefix.state.frames
+                       if frame.role == "user" and frame.source_protocol is not None
+                       for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                       if ref.source_identity == "skill:debugging"]
+    assert block.body == source_body
     assert any(message.type == "human" and message.content == frame.content
                for message in prepared["messages"])
     native = saver.project_context_plan_to_native(session_id, saver._storage.storage.main_thread_id(session_id), prepared['plan'])
@@ -407,19 +409,19 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt( frozen_provide
         for entry in original.selection
     )
     assert any(
-        frame.item_ref.ref_id == "source-full:agents:dispatch:current-prompt"
-        for frame in original.seal_binding.prefix.state.frames
+        ref.ref_id == "source-full:agents:dispatch:current-prompt"
+        for frame in original.seal_binding.prefix.state.frames for ref in frame.item_refs
     )
     if target_format == "responses":
         first_native = saver.project_context_plan_to_native(session_id, thread_id, plan)
         second_native = restarted.project_context_plan_to_native(session_id, thread_id, next_plan)
         assert first_native["request"] == second_native["request"]
-        assert first_native["request"]["input"][-2:] == [
+        assert first_native["request"]["input"][-1:] == [
             {"role": "user", "content": [{"type": "input_text", "text": frame.content}]}
-            for frame in original.seal_binding.prefix.state.frames[-2:]
+            for frame in original.seal_binding.prefix.state.frames[-1:]
         ]
-        assert [parse_source_blocks(frame.content)[0].body
-                for frame in original.seal_binding.prefix.state.frames[-2:]] == [
+        assert [block.body for block in parse_source_blocks(original.seal_binding.prefix.state.frames[-1].content)] == [
+            "current-prompt",
             [{"type": "text", "text": "基础规则"}],
             [{"type": "text", "text": "本轮规则变化"}],
         ]

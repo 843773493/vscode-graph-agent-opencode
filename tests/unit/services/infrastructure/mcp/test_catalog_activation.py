@@ -461,17 +461,16 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     )
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     assert [tool["function"]["name"] for tool in first["tools"]] == ["invoke_extension_tool"]
-    guidance = tuple(
-        frame for frame in original.seal_binding.prefix.state.frames
-        if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
+    (guidance, block), = (
+        (frame, block) for frame in original.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.source_identity == MCP_GUIDANCE_SOURCE_ID
     )
-    assert len(guidance) == 1
-    assert guidance[0].role == "user"
-    block, = parse_source_blocks(guidance[0].content)
     assert (block.source_identity, block.revision, block.body, block.source_kind, block.root_placement) == (
         MCP_GUIDANCE_SOURCE_ID, parent.revision, original_body["content"], "mcp_tool_catalog", "tail_only",
     )
-    assert any(message.content == guidance[0].content for message in first["messages"])
+    assert any(message.content == guidance.content for message in first["messages"])
 
     factory.session.minimum = 5
     factory.changed()
@@ -564,9 +563,10 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
             assert preparation.transition is not None
             preparation = replace(preparation, prefix_state=replace(preparation.prefix_state, frames=tuple(
                 replace(frame, content=render_source_blocks(tuple(
-                    replace(block, body="同 revision 的伪造指引正文") for block in parse_source_blocks(frame.content)
+                    replace(block, body="同 revision 的伪造指引正文") if block.source_identity == MCP_GUIDANCE_SOURCE_ID else block
+                    for block in parse_source_blocks(frame.content)
                 )))
-                if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID else frame
+                if any(ref.source_identity == MCP_GUIDANCE_SOURCE_ID for ref in frame.item_refs) else frame
                 for frame in preparation.prefix_state.frames
             )))
         return plan, preparation

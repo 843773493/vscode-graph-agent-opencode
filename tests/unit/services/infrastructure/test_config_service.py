@@ -326,6 +326,28 @@ def test_config_reads_agent_run_mode(tmp_path: Path) -> None:
     assert service.get_agent_run_mode() == "team"
 
 
+@pytest.mark.parametrize("grouping", [None, "aggregate", "separate"])
+def test_source_message_grouping_uses_workspace_layers(tmp_path: Path, grouping: str | None) -> None:
+    config = _base_config()
+    if grouping is not None:
+        config["context"] = {"source_messages": {"grouping": grouping}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
+    )
+    assert service.get_source_message_grouping() == (grouping or "aggregate")
+    assert service.get_snapshot().to_dict()["config_version"] == 2
+
+
+def test_source_message_grouping_rejects_unknown_mode(tmp_path: Path) -> None:
+    config = _base_config()
+    config["context"] = {"source_messages": {"grouping": "auto"}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
+    )
+    with pytest.raises(ValueError, match="配置验证失败"):
+        service.validate_workspace_config()
+
+
 def test_config_rejects_unknown_agent_run_mode(tmp_path: Path) -> None:
     config = _base_config()
     config["runtime"] = {"agent": {"run": {"mode": "unexpected"}}}

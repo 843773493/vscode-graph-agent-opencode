@@ -78,7 +78,7 @@ def test_explicit_frozen_revision_replaces_automatic_pending(source_seal_case, s
         assert manager.observe("skill:demo", "ignored-v5").status == "not_tracked"
     _, refreshed = source_seal_case.seal(manager)
     assert refreshed.prefix.state.frames[:len(sealed.prefix.state.frames)] == sealed.prefix.state.frames
-    assert refreshed.prefix.state.frames[-1].item_ref.source_revision == receipt.revision
+    assert refreshed.prefix.state.frames[-1].item_refs[0].source_revision == receipt.revision
     assert "explicit-v2" in refreshed.prefix.state.frames[-1].content
     assert "automatic-v3" not in refreshed.prefix.state.frames[-1].content
     source = json.loads(refreshed.prefix.state.frames[-1].content)["sources"][0]

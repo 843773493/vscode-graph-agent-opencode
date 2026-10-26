@@ -81,9 +81,11 @@ class ContextSourceVersionsStorageMixin:
                 for source in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
                     if source.source_kind == "skill" and _normalize_skill_name(source.name) == _normalize_skill_name(name):
                         selected = source.source_identity
-            elif frame.role == "user" and frame.item_ref.source_identity in source_ids:
+            elif frame.role == "user":
                 # 统一来源协议之前的封存帧已有 typed 来源身份，不能重读当前文件补名。
-                selected = frame.item_ref.source_identity
+                for ref in frame.item_refs:
+                    if ref.source_identity in source_ids:
+                        selected = ref.source_identity
         return selected
 
     def consume_context_epoch_rebuild_intent(
@@ -619,11 +621,11 @@ class ContextSourceVersionsStorageMixin:
         if binding.previous_assembly_id != (None if previous is None else previous.assembly_id):
             raise RuntimeError("context-epoch-transition-conflict: seal predecessor 与同事务最新 assembly 不一致")
         prior_ids = set() if previous is None or previous.seal_binding is None else {
-            frame.item_ref.ref_id for frame in previous.seal_binding.prefix.state.frames
-            if frame.item_ref.ref_type == "canonical_item"
+            frame.item_refs[0].ref_id for frame in previous.seal_binding.prefix.state.frames
+            if frame.item_refs[0].ref_type == "canonical_item"
         }
-        current_ids = {frame.item_ref.ref_id for frame in binding.prefix.state.frames
-                       if frame.item_ref.ref_type == "canonical_item"}
+        current_ids = {frame.item_refs[0].ref_id for frame in binding.prefix.state.frames
+                       if frame.item_refs[0].ref_type == "canonical_item"}
         removed = (prior_ids & frozen_ids) - current_ids
         confirm_notice = notice_ref is not None and bool(removed) and confirmation is None
         consumed = binding.prefix.consumed_transition if binding is not None else None

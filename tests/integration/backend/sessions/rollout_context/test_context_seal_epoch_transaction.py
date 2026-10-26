@@ -164,7 +164,7 @@ def seal_inputs(registry_db):
         if previous is None or reason is not None:
             frames.append(ProviderProfileItemFrame(
                 1, state.provider_profile, "system", "text", root.content,
-                AppendedItemRef("source_item", "root:" + name, "root:" + name, root.frame_hash(), "tracked"),
+                (AppendedItemRef("source_item", "root:" + name, "root:" + name, root.frame_hash(), "tracked"),),
             ))
         else:
             inherited = {
@@ -535,7 +535,7 @@ def test_tail_source_delta_applies_the_exact_prior_revision_with_same_root(regis
     frame = ProviderProfileItemFrame(
         len(preparation.prefix_state.frames) + 1, preparation.prefix_state.provider_profile,
         "user", "text", delta_content,
-        AppendedItemRef("source_item", "source:delta", stored.source_id, revision, "tracked"),
+        (AppendedItemRef("source_item", "source:delta", stored.source_id, revision, "tracked"),),
     )
     state = append_items(
         preparation.prefix_state, (frame,),

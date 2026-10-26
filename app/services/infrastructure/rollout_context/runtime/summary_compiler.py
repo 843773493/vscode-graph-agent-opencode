@@ -94,7 +94,7 @@ def compile_summary_candidate(
             len(preparation.prefix_state.frames) + len(frames) + 1, profile,
             {"human": "user", "ai": "assistant", "tool": "tool"}[message.type],
             "structured_content", body,
-            AppendedItemRef("source_item", ref_id, ref_id, source.source_revision, "untracked"),
+            (AppendedItemRef("source_item", ref_id, ref_id, source.source_revision, "untracked"),),
         ))
     if pending_calls:
         raise ValueError("摘要候选包含未闭合 tool calls")

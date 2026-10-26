@@ -28,6 +28,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_hash,
 )
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.plan_hash import context_plan_hash
@@ -386,7 +387,7 @@ class TestAdversarialControlKeys:
                 role="user",
                 payload_kind="text",
                 content="body",
-                item_ref=item_ref,
+                item_refs=(item_ref,),
             )
 
         # frame/ref 的 typed 合同结构上不携带 metadata/extensions：对抗 key
@@ -887,9 +888,11 @@ class TestSealedTypedFieldConsumption:
         old_bodies = saver._request_content_for_plan(
             owner.session_id, owner.thread_id, "", first_snapshot.as_sealed_plan(), None,
         )
-        (old_frame,) = tuple(frame for frame in first_binding.prefix.state.frames
-                             if frame.item_ref.source_identity == "skill:gateway:demo")
-        assert json.loads(old_frame.content)["sources"][0]["body"] == old_bodies[old_frame.item_ref.ref_id] == "gateway body\n"
+        (old_frame, old_ref, old_block), = ((frame, ref, block) for frame in first_binding.prefix.state.frames
+                             if frame.role == "user" and frame.source_protocol is not None
+                             for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                             if ref.source_identity == "skill:gateway:demo")
+        assert old_block.body == old_bodies[old_ref.ref_id] == "gateway body\n"
 
         with saver._storage.storage._connect(
             saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
@@ -901,7 +904,7 @@ class TestSealedTypedFieldConsumption:
         try:
             old_rows = conn.execute(
                 "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
-                (first_snapshot.assembly_id, old_frame.item_ref.ref_id),
+                (first_snapshot.assembly_id, old_ref.ref_id),
             ).fetchall()
         finally:
             conn.close()
@@ -936,22 +939,24 @@ class TestSealedTypedFieldConsumption:
         rebound_snapshot = saver.get_context_assembly(
             owner.session_id, owner.thread_id, assembly_id=rebound_binding.prefix.assembly_id,
         )
-        (new_frame,) = tuple(frame for frame in rebound_binding.prefix.state.frames
-                             if frame.item_ref.source_identity == "skill:workspace:demo")
+        (new_ref, new_block), = ((ref, block) for frame in rebound_binding.prefix.state.frames
+                             if frame.role == "user" and frame.source_protocol is not None
+                             for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                             if ref.source_identity == "skill:workspace:demo")
         new_bodies = saver._request_content_for_plan(
             owner.session_id, owner.thread_id, "", rebound_snapshot.as_sealed_plan(), None,
         )
-        assert json.loads(new_frame.content)["sources"][0]["body"] == new_bodies[new_frame.item_ref.ref_id] == "workspace body\n"
+        assert new_block.body == new_bodies[new_ref.ref_id] == "workspace body\n"
 
         conn = sqlite3.connect(database_path)
         try:
             after_old_rows = conn.execute(
                 "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
-                (first_snapshot.assembly_id, old_frame.item_ref.ref_id),
+                (first_snapshot.assembly_id, old_ref.ref_id),
             ).fetchall()
             new_rows = conn.execute(
                 "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
-                (rebound_snapshot.assembly_id, new_frame.item_ref.ref_id),
+                (rebound_snapshot.assembly_id, new_ref.ref_id),
             ).fetchall()
         finally:
             conn.close()

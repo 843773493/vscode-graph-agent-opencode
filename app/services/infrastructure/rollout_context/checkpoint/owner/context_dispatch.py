@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, cast
 
 from langchain_core.messages import BaseMessage
 
@@ -254,6 +254,7 @@ class ContextDispatchOwnerMixin:
         summary_candidate: SummaryCandidateScope | None = None,
         sealed_context: ContextPlanRegistration | None = None,
         allow_provider_reprojection: bool = False,
+        source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
     ) -> ContextDispatchPayload:
         """最终过滤后显式注册；稳定请求 key 必须由 execution owner 提供。
 
@@ -282,6 +283,7 @@ class ContextDispatchOwnerMixin:
                 summary_candidate=summary_candidate,
                 sealed_context=sealed_context,
                 allow_provider_reprojection=allow_provider_reprojection,
+                source_message_grouping=source_message_grouping,
             )
             snapshot = prepared["snapshot"]
             if not isinstance(snapshot, ContextAssemblySnapshot):

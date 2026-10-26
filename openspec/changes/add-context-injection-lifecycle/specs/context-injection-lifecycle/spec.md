@@ -311,6 +311,8 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 逻辑item SHALL继续作为管理、选择和封存追踪单位。聚合消息 MUST保留各item的引用、顺序、来源绑定、revision和封存时追踪状态，允许同一消息同时含tracked和snapshot来源，不能形成一份消息级tracking状态。分组结果 MUST随assembly封存；配置切换只作用于后续尚未封存批次，不得重新合并、拆分或格式化旧消息。Provider adapter MUST只消费已封存分组，重试和历史恢复复用原结果。
 
+配置键 SHALL为`context.source_messages.grouping`，仅接受`aggregate`与`separate`，默认为`aggregate`。新封存的Provider frame SHALL以非空有序`item_refs`保存全部成员，并使用seal binding格式版本4；只有已封装的user来源frame允许多成员，canonical及system frame保持单引用。历史版本1、2、3的单引用格式 MUST仅由同一codec读取并按原版本精确重编码，运行态统一使用有序引用。此编码调整不改变SQLite schema版本；历史frame bytes、request hash及owner身份不变。
+
 #### Scenario: 多来源与混合追踪状态默认聚合
 
 - **WHEN** 同一安全追加批次包含tracked来源A的增量和snapshot来源B的完整激活

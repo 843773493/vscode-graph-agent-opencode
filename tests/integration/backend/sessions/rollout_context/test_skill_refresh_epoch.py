@@ -5,6 +5,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     SkillCatalogActivationSnapshot,
@@ -35,13 +36,12 @@ def test_explicit_snapshot_after_pending_transition_is_sealed_once(epoch_case, b
     assert any(source.descriptor.source_id == "skill:one-shot" and not source.tracked for source in pending.sources)
     prepared = case.prepare("explicit-snapshot-during-" + boundary)
     sealed = case.snapshot(prepared)
-    source_frames = tuple(
-        frame for frame in sealed.seal_binding.prefix.state.frames
-        if frame.item_ref.source_identity == "skill:one-shot"
-    )
-    assert len(source_frames) == 1
-    assert json.loads(source_frames[0].content)["sources"][0]["body"] == binding.body
-    assert source_frames[0].item_ref.source_tracking_at_seal == "untracked"
+    (ref, block), = ((ref, block) for frame in sealed.seal_binding.prefix.state.frames
+                    if frame.role == "user" and frame.source_protocol is not None
+                    for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                    if ref.source_identity == "skill:one-shot")
+    assert block.body == binding.body
+    assert ref.source_tracking_at_seal == "untracked"
     assert sealed.seal_binding.prefix.consumed_transition.transition_id == transition[0]
     assert case.manager.prepare_pending() is None
     assert {row[0]: row[1:4] for row in case.source_rows()}["skill:one-shot"] == (

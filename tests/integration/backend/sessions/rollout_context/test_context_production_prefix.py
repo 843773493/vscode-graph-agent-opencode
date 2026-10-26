@@ -98,7 +98,7 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
 
     def prepare(
         key, *, supplier=None, target_format="chat_completions",
-        request_messages=(), summary_candidate=None,
+        request_messages=(), summary_candidate=None, source_message_grouping="aggregate",
     ):
         with (
             session_thread_owner_scope(
@@ -112,6 +112,7 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
                 plan_creation_idempotency_key="create:" + key,
                 seal_idempotency_key="seal:" + key,
                 request_messages=request_messages, summary_candidate=summary_candidate,
+                source_message_grouping=source_message_grouping,
                 context_source_manager=manager,
                 tool_set_supplier=supplier or (lambda: selected),
                 **frozen_provider_wire("production-provider", target_format),

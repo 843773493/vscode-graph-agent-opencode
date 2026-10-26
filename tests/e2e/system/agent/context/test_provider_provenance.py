@@ -24,6 +24,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_digest,
 )
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -574,12 +575,14 @@ def _audit_agents_versions(
         assert root_source.revision == revisions[0]
         assert root_source.content_hash == contribution_content_hash("root_source", _AGENTS_VERSIONS[0])
         assert _AGENTS_VERSIONS[0] in binding.root.content
-        frames = [frame for frame in binding.prefix.state.frames
-                  if frame.item_ref.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
-        assert [(frame.item_ref.source_revision, frame.role, frame.content) for frame in frames] == [
+        members = [(frame, ref, block) for frame in binding.prefix.state.frames
+                   if frame.role == "user" and frame.source_protocol is not None
+                   for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                   if ref.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
+        assert [(ref.source_revision, frame.role, block.body) for frame, ref, block in members] == [
             (revisions[index + 1], "user", deltas[index]) for index in range(ordinal - 1)
         ]
-        frames_by_assembly[snapshot.assembly_id] = [frame.to_dict() for frame in frames]
+        frames_by_assembly[snapshot.assembly_id] = [frame.to_dict() for frame, _ref, _block in members]
         for revision in binding.source_revisions:
             if revision.source_id == WORKSPACE_AGENTS_SOURCE_ID:
                 assert revision.revision == revisions[ordinal - 1]

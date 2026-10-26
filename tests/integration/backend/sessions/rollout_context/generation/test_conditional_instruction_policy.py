@@ -145,8 +145,8 @@ def test_conditional_source_follows_visible_tool_policy_and_preserves_sealed_ret
         assert (source_id in root_source_ids) is visible
         assert (policy_key in enabled_policy_keys) is visible
         assert not any(
-            frame.item_ref.source_identity == source_id
-            for frame in binding.prefix.state.frames if frame.role == "user"
+            ref.source_identity == source_id
+            for frame in binding.prefix.state.frames for ref in frame.item_refs if frame.role == "user"
         )
 
         if step == 0:

@@ -12,6 +12,7 @@ from app.agents.skill_runtime import (
     build_workspace_skill_catalog,
 )
 from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
@@ -128,11 +129,12 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert registry.snapshot_reads == reads_after_load + 2
         receipt, binding = source_seal_case.seal(manager)
         assert receipt.deltas == first.deltas
-        frames = [frame for frame in binding.prefix.state.frames
-                  if frame.item_ref.source_identity == "skill:demo"]
-        assert len(frames) == 1 and frames[0].role == "user"
-        assert frames[0].content == first_delta.content
-        assert frames[0].item_ref.source_revision == first_delta.revision
+        (ref, block), = [(ref, block) for frame in binding.prefix.state.frames
+                        if frame.role == "user" and frame.source_protocol is not None
+                        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                        if ref.source_identity == "skill:demo"]
+        assert block.body == first_delta.content
+        assert ref.source_revision == first_delta.revision
         assert manager.prepare_pending() is None
         reads_after_first = registry.snapshot_reads
 
@@ -155,11 +157,11 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert registry.snapshot_reads == reads_after_first + 2
         receipt, second_binding = source_seal_case.seal(manager)
         assert receipt.deltas == second.deltas
-        frames = [frame for frame in second_binding.prefix.state.frames
-                  if frame.item_ref.source_identity == "skill:demo"
-                  and frame.item_ref.source_revision == second_delta.revision]
-        assert len(frames) == 1 and frames[0].role == "user"
-        assert frames[0].content == second_delta.content
+        block, = [block for frame in second_binding.prefix.state.frames
+                  if frame.role == "user" and frame.source_protocol is not None
+                  for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                  if ref.source_identity == "skill:demo" and ref.source_revision == second_delta.revision]
+        assert block.body == second_delta.content
         assert manager.prepare_pending() is None
         reads_after_second = registry.snapshot_reads
 

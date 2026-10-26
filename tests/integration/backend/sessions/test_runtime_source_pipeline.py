@@ -2070,12 +2070,12 @@ async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
     assert [snapshot.seal_binding.prefix.state.epoch.ordinal for snapshot in assemblies] == [1, 1, 2, 3]
     guidance_revision = None
     for ordinal, snapshot in enumerate(assemblies):
-        guidance = [frame for frame in snapshot.seal_binding.prefix.state.frames
-                    if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID]
+        guidance = [ref for frame in snapshot.seal_binding.prefix.state.frames for ref in frame.item_refs
+                    if ref.source_identity == MCP_GUIDANCE_SOURCE_ID]
         assert len(guidance) == 1
         if ordinal == 0:
-            guidance_revision = guidance[0].item_ref.source_revision
-        assert guidance[0].item_ref.source_revision == guidance_revision
+            guidance_revision = guidance[0].source_revision
+        assert guidance[0].source_revision == guidance_revision
         applied = [source for source in snapshot.seal_binding.source_revisions
                    if source.source_id == MCP_GUIDANCE_SOURCE_ID]
         assert len(applied) == (1 if ordinal == 0 else 0)

@@ -173,7 +173,7 @@ def _frame(
         role=role,
         payload_kind=payload_kind,
         content=content,
-        item_ref=item_ref,
+        item_refs=(item_ref,),
     )
 
 

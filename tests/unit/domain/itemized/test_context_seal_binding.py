@@ -29,6 +29,10 @@ from app.domain.itemized.epoch.seal_binding import (
     AppliedSourceRevision,
     ContextSealBinding,
 )
+from app.domain.itemized.epoch.source_protocol import (
+    SourceModelBlock,
+    render_source_blocks,
+)
 from app.domain.itemized.epoch.tool_set import (
     ToolSetSnapshot,
 )
@@ -80,7 +84,7 @@ def binding(tool_set: ToolSetSnapshot) -> ContextSealBinding:
     ),))
     frame = ProviderProfileItemFrame(
         1, state.provider_profile, "system", "text", root.content,
-        AppendedItemRef("source_item", "root:1", "root:1", root.frame_hash(), "tracked"),
+        (AppendedItemRef("source_item", "root:1", "root:1", root.frame_hash(), "tracked"),),
     )
     state = append_items(
         state, (frame,), desired_provider_profile=state.provider_profile,
@@ -116,11 +120,72 @@ def test_historical_seal_reencodes_without_rewriting_bytes(historical_binding_pa
     assert hashlib.sha256(before).hexdigest() == historical_binding_payload["canonical_sha256"]
     restored = context_seal_binding_from_dict(raw)
     assert restored.format_version == 1
-    refs = [frame.item_ref for frame in restored.prefix.state.frames]
+    refs = [frame.item_refs[0] for frame in restored.prefix.state.frames]
     assert {ref.source_tracking_at_seal for ref in refs if ref.ref_type == "source_item"} == {"tracked", "untracked"}
     assert all(ref.source_tracking_at_seal is None for ref in refs if ref.ref_type == "canonical_item")
     assert any(ref.ref_type == "canonical_item" for ref in refs)
     assert canonical_json_bytes(context_seal_binding_to_dict(restored)) == before
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_historical_single_reference_versions_keep_their_original_encoding(historical_binding_payload, version):
+    raw = deepcopy(historical_binding_payload["sealed_binding"])
+    raw["format_version"] = version
+    prefix = raw["prefix"]
+    refs = [frame["item_ref"] for frame in prefix["state"]["frames"]]
+    refs.extend(prefix["state"]["appended_refs"])
+    refs.extend(prefix["appended_refs"])
+    for ref in refs:
+        tracking = ref.pop("tracking_state")
+        ref["source_tracking_at_seal"] = (
+            None if ref["ref_type"] == "canonical_item" else "tracked" if tracking == "tracked" else "untracked"
+        )
+    before = canonical_json_bytes(raw)
+    restored = context_seal_binding_from_dict(raw)
+    assert restored.format_version == version
+    assert all(len(frame.item_refs) == 1 for frame in restored.prefix.state.frames)
+    assert canonical_json_bytes(context_seal_binding_to_dict(restored)) == before
+
+
+def test_grouped_seal_keeps_order_and_independent_tracking(binding):
+    members = (
+        AppendedItemRef("source_item", "source-a", "tail:a", "v1", "tracked"),
+        AppendedItemRef("source_item", "source-b", "tail:b", "v2", "untracked"),
+    )
+    blocks = []
+    for ref in members:
+        assert ref.source_identity is not None and ref.source_revision is not None
+        assert ref.source_tracking_at_seal is not None
+        blocks.append(SourceModelBlock(
+            source_identity=ref.source_identity, name=ref.ref_id, source_kind="external", operation="activate",
+            revision=ref.source_revision, base_revision=None, representation="full",
+            source_tracking_at_seal=ref.source_tracking_at_seal, root_placement="tail_only", body=ref.ref_id,
+        ))
+    content = render_source_blocks(tuple(blocks))
+    state = binding.prefix.state
+    frame = ProviderProfileItemFrame(2, state.provider_profile, "user", "text", content, members, source_protocol=2)
+    state = append_items(state, (frame,), desired_provider_profile=state.provider_profile,
+                         desired_tool_compatibility_key=state.tool_compatibility_key)
+    grouped = replace(binding, prefix=seal_assembly(state, assembly_id="grouped"), previous_assembly_id=binding.prefix.assembly_id)
+    restored = context_seal_binding_from_dict(json.loads(json.dumps(context_seal_binding_to_dict(grouped))))
+    assert restored.prefix.state.frames[-1].item_refs == members
+    assert restored.prefix.appended_refs == members
+    assert restored.prefix.state.appended_refs == ()
+    assert restored.prefix.prefix_hash == grouped.prefix.prefix_hash
+    with pytest.raises(ItemSchemaError, match="旧封存版本"):
+        replace(grouped, format_version=3)
+
+
+@pytest.mark.parametrize("role,protocol,members", [
+    ("user", 2, ()),
+    ("user", 2, (AppendedItemRef("canonical_item", "a"), AppendedItemRef("canonical_item", "b"))),
+    ("system", 2, (AppendedItemRef("source_item", "a", "a", "v1", "tracked"), AppendedItemRef("source_item", "b", "b", "v1", "untracked"))),
+    ("user", None, (AppendedItemRef("source_item", "a", "a", "v1", "tracked"), AppendedItemRef("source_item", "b", "b", "v1", "untracked"))),
+    ("user", 2, (AppendedItemRef("source_item", "a", "a", "v1", "tracked"), AppendedItemRef("source_item", "a", "a", "v1", "tracked"))),
+])
+def test_invalid_group_cannot_be_sealed(role, protocol, members):
+    with pytest.raises(ItemSchemaError):
+        ProviderProfileItemFrame(1, "chat_completions:test", role, "text", "正文", members, source_protocol=protocol)
 
 
 def test_new_seal_distinguishes_source_tracking_from_canonical(binding):
@@ -128,21 +193,21 @@ def test_new_seal_distinguishes_source_tracking_from_canonical(binding):
     state = append_items(
         state,
         (
-            ProviderProfileItemFrame(2, state.provider_profile, "user", "text", "用户输入", AppendedItemRef("canonical_item", "user:2")),
-            ProviderProfileItemFrame(3, state.provider_profile, "user", "text", "一次快照", AppendedItemRef("source_item", "snapshot:1", "skill:once", "v1", "untracked")),
+            ProviderProfileItemFrame(2, state.provider_profile, "user", "text", "用户输入", (AppendedItemRef("canonical_item", "user:2"),)),
+            ProviderProfileItemFrame(3, state.provider_profile, "user", "text", "一次快照", (AppendedItemRef("source_item", "snapshot:1", "skill:once", "v1", "untracked"),)),
         ),
         desired_provider_profile=state.provider_profile,
         desired_tool_compatibility_key=state.tool_compatibility_key,
     )
     updated = replace(binding, prefix=seal_assembly(state, assembly_id="new-version"), previous_assembly_id=binding.prefix.assembly_id)
     raw = json.loads(json.dumps(context_seal_binding_to_dict(updated)))
-    assert raw["format_version"] == 3
-    assert [frame["item_ref"]["source_tracking_at_seal"] for frame in raw["prefix"]["state"]["frames"]] == ["tracked", None, "untracked"]
+    assert raw["format_version"] == 4
+    assert [frame["item_refs"][0]["source_tracking_at_seal"] for frame in raw["prefix"]["state"]["frames"]] == ["tracked", None, "untracked"]
     assert b'"tracking_state"' not in canonical_json_bytes(raw)
     assert context_seal_binding_from_dict(raw) == updated
 
 
-@pytest.mark.parametrize("version", [None, 1, 4, True, "2", 2.0])
+@pytest.mark.parametrize("version", [None, 1, 5, True, "2", 2.0])
 def test_seal_codec_rejects_unknown_explicit_versions(binding, version):
     raw = context_seal_binding_to_dict(binding)
     raw["format_version"] = version
@@ -155,7 +220,7 @@ def test_seal_codec_rejects_unknown_explicit_versions(binding, version):
 def test_seal_codec_rejects_mixed_reference_versions(binding, historical_binding_payload, historical, location):
     raw = deepcopy(historical_binding_payload["sealed_binding"]) if historical else json.loads(json.dumps(context_seal_binding_to_dict(binding)))
     prefix = raw["prefix"]
-    ref = prefix["state"]["frames"][0]["item_ref"]
+    ref = prefix["state"]["frames"][0]["item_ref"] if historical else prefix["state"]["frames"][0]["item_refs"][0]
     if location == "state_refs":
         ref = deepcopy(ref)
         prefix["state"]["appended_refs"] = [ref]
@@ -229,7 +294,7 @@ def test_same_epoch_reuses_root_and_extends_parent_bytes(binding):
         binding.prefix.state,
         (ProviderProfileItemFrame(
             2, binding.prefix.state.provider_profile, "user", "text", "继续",
-            AppendedItemRef("canonical_item", "user-1"),
+            (AppendedItemRef("canonical_item", "user-1"),),
         ),),
         desired_provider_profile=binding.prefix.state.provider_profile,
         desired_tool_compatibility_key=binding.prefix.state.tool_compatibility_key,
@@ -400,7 +465,7 @@ def tampered_binding(binding):
     raw["prefix"]["state"]["tool_compatibility_key"] = changed_key
     raw["root"]["tool_compatibility_key"] = changed_key
     root = replace(binding.root, tool_compatibility_key=changed_key)
-    raw["prefix"]["state"]["frames"][0]["item_ref"]["source_revision"] = root.frame_hash()
+    raw["prefix"]["state"]["frames"][0]["item_refs"][0]["source_revision"] = root.frame_hash()
     # compatibility key 不进入 frame bytes；重算 root provenance 足以通过
     # binding 自身校验，assembly 必须用真正的 ToolSet manifest 拒绝它。
     return context_seal_binding_from_dict(raw)

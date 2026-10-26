@@ -130,12 +130,14 @@ class ContextSealBinding:
     previous_assembly_id: str | None
     source_revisions: tuple[AppliedSourceRevision, ...] = ()
     notice_acceptance: RuntimeNoticeAcceptanceRef | None = None
-    format_version: Literal[1, 2, 3] = 3
+    format_version: Literal[1, 2, 3, 4] = 4
     """只标识封存引用的编码版本，不改变 Provider frame 或 request hash。"""
 
     def __post_init__(self) -> None:
-        if type(self.format_version) is not int or self.format_version not in {1, 2, 3}:
-            raise ItemSchemaError("ContextSealBinding.format_version 必须是 1、2 或 3")
+        if type(self.format_version) is not int or self.format_version not in {1, 2, 3, 4}:
+            raise ItemSchemaError("ContextSealBinding.format_version 必须是 1、2、3 或 4")
+        if self.format_version < 4 and any(len(frame.item_refs) != 1 for frame in self.prefix.state.frames):
+            raise ItemSchemaError("旧封存版本不得携带多 item 分组")
         if self.format_version < 3 and (
             any(frame.source_protocol is not None for frame in self.prefix.state.frames)
             or self.root is not None and self.root.source_protocol is not None
@@ -205,7 +207,7 @@ class ContextSealBinding:
             len(system_frames) != 1
             or system_frames[0] != prefix.state.frames[0]
             or system_frames[0].content != self.root.content
-            or system_frames[0].item_ref.source_revision != self.root.frame_hash()
+            or system_frames[0].item_refs[0].source_revision != self.root.frame_hash()
         ):
             raise ItemSchemaError("唯一 root 必须与 epoch 首个 system frame 精确绑定")
         if not isinstance(self.source_revisions, tuple) or not all(

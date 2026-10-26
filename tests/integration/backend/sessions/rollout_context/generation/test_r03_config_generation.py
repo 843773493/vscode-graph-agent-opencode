@@ -18,6 +18,7 @@ from app.core.execution_admission_context import (
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.business.resource_derivations.team import (
@@ -251,8 +252,8 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
         assert binding.root.epoch == binding.prefix.state.epoch
         assert binding.root.tool_compatibility_key == binding.prefix.state.tool_compatibility_key
         assert not any(
-            frame.item_ref.source_identity == r03_source_id
-            for frame in binding.prefix.state.frames if frame.role == "user"
+            ref.source_identity == r03_source_id
+            for frame in binding.prefix.state.frames if frame.role == "user" for ref in frame.item_refs
         )
 
         generation = case.tracker.snapshot(session_id, thread_id).generation
@@ -297,11 +298,12 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                     storage_owner=(session_id, thread_id),
                     checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
                 ))
-                frames = [frame for frame in binding.prefix.state.frames
-                          if frame.item_ref.source_identity == revision.source_id
-                          and frame.item_ref.source_revision == revision.revision]
-                assert len(frames) == 1 and frames[0].role == "user"
-                assert frames[0].content == content
+                blocks = [block for frame in binding.prefix.state.frames
+                          if frame.role == "user" and frame.source_protocol is not None
+                          for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                          if ref.source_identity == revision.source_id and ref.source_revision == revision.revision]
+                assert len(blocks) == 1
+                assert blocks[0].body == content
                 assert revision.source_id not in control
             elif revision.source_id in TEAM_SOURCE_IDS.values():
                 facet = next(facet for facet, source_id in TEAM_SOURCE_IDS.items()
@@ -327,11 +329,12 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                     content = ""
                 assert revision.revision == sha256_jcs({"content": content})
                 assert revision.expected_control_revision is None
-                frames = [frame for frame in binding.prefix.state.frames
-                          if frame.item_ref.source_identity == revision.source_id
-                          and frame.item_ref.source_revision == revision.revision]
-                assert len(frames) == 1 and frames[0].role == "user"
-                assert frames[0].content == content
+                blocks = [block for frame in binding.prefix.state.frames
+                          if frame.role == "user" and frame.source_protocol is not None
+                          for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                          if ref.source_identity == revision.source_id and ref.source_revision == revision.revision]
+                assert len(blocks) == 1
+                assert blocks[0].body == content
                 assert revision.source_id not in control
             else:
                 assert control[revision.source_id].latest_visible_committed_revision == revision.revision

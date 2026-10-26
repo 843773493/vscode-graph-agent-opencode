@@ -262,6 +262,7 @@ class ProviderProfileItemFrame:
 
     frame_bytes 是 RFC 8785 JCS 无空白 UTF-8 编码,是稳定前缀的最小拼接
     单元;hash 算法固定为 sha256:jcs:v1,不可由调用方覆盖。
+    item_refs 按模型正文中的来源块顺序冻结，每个成员独立保留追踪事实。
     """
 
     ordinal: int
@@ -269,7 +270,7 @@ class ProviderProfileItemFrame:
     role: str
     payload_kind: str
     content: object
-    item_ref: AppendedItemRef
+    item_refs: tuple[AppendedItemRef, ...]
     source_protocol: Literal[1, 2] | None = None
     _canonical_bytes: bytes = field(init=False, repr=False, compare=False)
 
@@ -285,11 +286,19 @@ class ProviderProfileItemFrame:
             raise ItemSchemaError(f"未知 wire role: {self.role}")
         if self.payload_kind not in {item.value for item in PayloadKind}:
             raise ItemSchemaError(f"未知 payload_kind: {self.payload_kind}")
-        if not isinstance(self.item_ref, AppendedItemRef):
-            raise ItemSchemaError("ProviderProfileItemFrame.item_ref 必须是 AppendedItemRef")
+        object.__setattr__(self, "item_refs", tuple(self.item_refs))
+        if not self.item_refs or any(not isinstance(ref, AppendedItemRef) for ref in self.item_refs):
+            raise ItemSchemaError("ProviderProfileItemFrame.item_refs 必须是非空 typed 引用序列")
+        if len({(ref.ref_type, ref.ref_id) for ref in self.item_refs}) != len(self.item_refs):
+            raise ItemSchemaError("ProviderProfileItemFrame 不得重复引用同一 item")
+        if len(self.item_refs) > 1 and (
+            self.role != "user" or self.source_protocol is None
+            or any(ref.ref_type != "source_item" for ref in self.item_refs)
+        ):
+            raise ItemSchemaError("只有封装后的 user 来源 frame 可以包含多个 item")
         if self.source_protocol is not None and (
             type(self.source_protocol) is not int or self.source_protocol not in {1, 2}
-            or self.item_ref.ref_type != "source_item"
+            or any(ref.ref_type != "source_item" for ref in self.item_refs)
         ):
             raise ItemSchemaError("ProviderProfileItemFrame.source_protocol 非法")
         _ensure_json_value(self.content, "ProviderProfileItemFrame.content")
@@ -313,7 +322,7 @@ class ProviderProfileItemFrame:
 
     def to_dict(self) -> dict[str, object]:
         """持久 frame 只包含原始合同字段，不暴露派生 JCS 字节。"""
-        return {**self.frame_manifest(), "item_ref": asdict(self.item_ref), **(
+        return {**self.frame_manifest(), "item_refs": tuple(asdict(ref) for ref in self.item_refs), **(
             {"source_protocol": self.source_protocol} if self.source_protocol is not None else {}
         )}
 
@@ -489,23 +498,23 @@ def _check_source_conflicts(frames: Sequence[ProviderProfileItemFrame]) -> None:
     """同一 prefix epoch 内同一 tracked source revision 至多一个 body。"""
     seen: dict[tuple[str, str], str] = {}
     for frame in frames:
-        ref = frame.item_ref
-        if ref.ref_type != "source_item" or ref.source_tracking_at_seal != "tracked":
-            continue
-        key = (ref.source_identity or "", ref.source_revision or "")
-        prior_hash = seen.get(key)
-        if prior_hash is None:
-            seen[key] = frame.frame_hash()
-            continue
-        if prior_hash != frame.frame_hash():
+        for ref in frame.item_refs:
+            if ref.ref_type != "source_item" or ref.source_tracking_at_seal != "tracked":
+                continue
+            key = (ref.source_identity or "", ref.source_revision or "")
+            prior_hash = seen.get(key)
+            if prior_hash is None:
+                seen[key] = frame.frame_hash()
+                continue
+            if prior_hash != frame.frame_hash():
+                raise SourceIdentityConflictError(
+                    f"source identity {key[0]!r} revision {key[1]!r} 被以不一致正文"
+                    "重复贡献,返回 source identity conflict"
+                )
             raise SourceIdentityConflictError(
-                f"source identity {key[0]!r} revision {key[1]!r} 被以不一致正文"
-                "重复贡献,返回 source identity conflict"
+                f"source identity {key[0]!r} revision {key[1]!r} 在同一 prefix epoch"
+                "内被重复选择"
             )
-        raise SourceIdentityConflictError(
-            f"source identity {key[0]!r} revision {key[1]!r} 在同一 prefix epoch"
-            "内被重复选择"
-        )
 
 
 def initial_epoch_state(
@@ -639,7 +648,7 @@ def append_items(
     return replace(
         state,
         frames=combined,
-        appended_refs=state.appended_refs + tuple(frame.item_ref for frame in new_frames),
+        appended_refs=state.appended_refs + tuple(ref for frame in new_frames for ref in frame.item_refs),
     )
 
 

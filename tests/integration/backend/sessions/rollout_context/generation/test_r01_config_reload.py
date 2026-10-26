@@ -338,8 +338,8 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     assert second_binding.previous_assembly_id == first_snapshot.assembly_id
     changed_frames = [
         frame for frame in second_binding.prefix.state.frames
-        if frame.item_ref.source_identity == source_id
-        and frame.item_ref.source_revision == produced[1].revision_token()
+        if any(ref.source_identity == source_id and ref.source_revision == produced[1].revision_token()
+               for ref in frame.item_refs)
     ]
     assert len(changed_frames) == 1 and changed_frames[0].role == "user"
     assert changed_frames[0].ordinal > first_binding.prefix.state.frames[-1].ordinal
@@ -389,7 +389,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     second_sealed_source_ids = (
         {revision.source_id for revision in second_binding.source_revisions}
         | {source.source_identity for source in second_binding.root.sources}
-        | {frame.item_ref.source_identity for frame in second_binding.prefix.state.frames}
+        | {ref.source_identity for frame in second_binding.prefix.state.frames for ref in frame.item_refs}
     )
     for delta in second_pending.deltas:
         pending_source = pending_sources[delta.source_id]
@@ -420,9 +420,8 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         stable_prefix_bytes(second_binding.prefix.state.frames)
     )
     assert sum(
-        frame.item_ref.source_identity == source_id
-        and frame.item_ref.source_revision == produced[1].revision_token()
-        for frame in third_binding.prefix.state.frames
+        ref.source_identity == source_id and ref.source_revision == produced[1].revision_token()
+        for frame in third_binding.prefix.state.frames for ref in frame.item_refs
     ) == 1
     assert all(revision.source_id != source_id for revision in third_binding.source_revisions)
     assert source_state() == applied_state
@@ -448,7 +447,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     third_sealed_source_ids = (
         {revision.source_id for revision in third_binding.source_revisions}
         | {source.source_identity for source in third_binding.root.sources}
-        | {frame.item_ref.source_identity for frame in third_binding.prefix.state.frames}
+        | {ref.source_identity for frame in third_binding.prefix.state.frames for ref in frame.item_refs}
     )
     assert pending_source_ids.isdisjoint(third_sealed_source_ids)
     for revision in third_binding.source_revisions:

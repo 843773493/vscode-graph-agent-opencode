@@ -260,6 +260,7 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/runtime/agent/run/mode", "next_session", "next_session"),
             ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/connection/*", "next_job", "next_job"),
+            ConfigPolicyRule("/context/source_messages/grouping", "immediate_read", "current"),
             ConfigPolicyRule("/mcp", "restart_workspace", "restart_workspace"),
         ),
     )

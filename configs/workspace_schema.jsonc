@@ -29,6 +29,7 @@
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/connection/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
   ],
   "title": "BoxTeam Workspace Config Schema",
@@ -72,6 +73,18 @@
       "additionalProperties": false,
       "required": ["resource_activation"],
       "properties": {
+        "source_messages": {
+          "type": "object",
+          "description": "来源消息分组；按已有配置层覆盖，只影响后续新 preparation，不重组历史封存。",
+          "additionalProperties": false,
+          "properties": {
+            "grouping": {
+              "type": "string",
+              "enum": ["aggregate", "separate"],
+              "default": "aggregate"
+            }
+          }
+        },
         "resource_activation": {
           "type": "object",
           "description": "资源上下文 activation 边界；修改后只在下一个 Turn active slot 冻结。",

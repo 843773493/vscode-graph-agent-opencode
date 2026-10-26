@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -85,19 +86,21 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     frames = updated.seal_binding.prefix.state.frames
     assert frames[:len(first_frames)] == first_frames
     new_source = "skill:" + frozen.entries["shared"].entry_identity
-    new_frames = [frame for frame in frames if frame.item_ref.source_identity == new_source]
-    assert len(new_frames) == 1 and json.loads(new_frames[0].content)["sources"][0]["body"] == WORKSPACE_BODY
-    switched = json.loads(new_frames[0].content)["sources"][0]
+    (new_frame, new_ref, new_block), = [(frame, ref, block) for frame in frames if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.source_identity == new_source]
+    assert new_block.body == WORKSPACE_BODY
+    switched, = [block for block in json.loads(new_frame.content)["sources"] if block["source_identity"] == new_source]
     assert (switched["source_identity"], switched["revision"], switched["operation"]) == (
         new_source, refreshed["revision"], "replace",
     )
-    previous = next(frame for frame in first_frames if frame.item_ref.source_identity is not None
-                    and frame.item_ref.source_identity.startswith("skill:"))
+    previous = next(ref for frame in first_frames for ref in frame.item_refs if ref.source_identity is not None
+                    and ref.source_identity.startswith("skill:"))
     assert switched["replaces"] == [{
-        "source_identity": previous.item_ref.source_identity,
+        "source_identity": previous.source_identity,
         "revision": first["revision"],
     }]
-    assert new_frames[0].item_ref.source_tracking_at_seal == "untracked"
+    assert new_ref.source_tracking_at_seal == "untracked"
     enabled = json.loads(await tool.ainvoke({"name": "shared", "mode": "tracked"}))
     assert enabled["tracked"] is True and enabled["append_status"] == "already_active"
     assert manager.prepare_pending() is None
@@ -116,7 +119,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     reselected = json.loads(await tool.ainvoke({"name": "shared"}))
     assert reselected["revision"] == first["revision"]
     assert reselected["queued"] is True and reselected["append_status"] == "appended"
-    gateway_source = previous.item_ref.source_identity
+    gateway_source = previous.source_identity
     assert isinstance(gateway_source, str)
     pending = {state.source_id: state for state in saver.load_context_source_control_states(owner)}[gateway_source]
     assert pending.selection_sequence > pending.latest_visible_selection_sequence

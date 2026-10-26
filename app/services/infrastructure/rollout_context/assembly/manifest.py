@@ -79,13 +79,13 @@ def _frozen_source_refs(
         roots.add(matches[0])
         sources[matches[0]] = selected[matches[0]]
     for frame in binding.prefix.state.frames:
-        ref = frame.item_ref
-        if ref.ref_type != "source_item" or frame.role == "system":
-            continue
-        identity = (ref.source_identity, ref.source_revision)
-        if frame.role != "user" or selected.get(ref.ref_id) != identity or ref.ref_id in sources:
-            raise RuntimeError("source-cut-frontier-conflict: source frame 与冻结 selection 不一致")
-        sources[ref.ref_id] = selected[ref.ref_id]
+        for ref in frame.item_refs:
+            if ref.ref_type != "source_item" or frame.role == "system":
+                continue
+            identity = (ref.source_identity, ref.source_revision)
+            if frame.role != "user" or selected.get(ref.ref_id) != identity or ref.ref_id in sources:
+                raise RuntimeError("source-cut-frontier-conflict: source frame 与冻结 selection 不一致")
+            sources[ref.ref_id] = selected[ref.ref_id]
     if set(sources) != set(selected):
         raise RuntimeError("source-cut-frontier-conflict: 存在没有真实注入的 source selection")
     return sources, frozenset(roots)

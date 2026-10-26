@@ -101,6 +101,7 @@ def compile_prefix_context(
     batch: PendingContextSourceBatch,
     tool_set: ToolSetSnapshot,
     *,
+    source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
     overlay_bodies: Mapping[str, object],
     previous: ContextAssemblySnapshot | None,
     provider_profile: str,
@@ -153,16 +154,16 @@ def compile_prefix_context(
         # 当前 owner 的有效上下文。复用真实 selection/frame，不重新观察来源。
         retained_source_assembly = previous
         retained_source_refs = frozenset(
-            (frame.item_ref.ref_id, frame.item_ref.source_revision)
-            for frame in previous_binding.prefix.state.frames
-            if frame.role == "user" and frame.item_ref.ref_type == "source_item"
-            and frame.item_ref.source_tracking_at_seal == "untracked"
+            (ref.ref_id, ref.source_revision)
+            for frame in previous_binding.prefix.state.frames for ref in frame.item_refs
+            if frame.role == "user" and ref.ref_type == "source_item"
+            and ref.source_tracking_at_seal == "untracked"
         )
         if transition is not None and transition.reason == EpochReason.RUNTIME_NOTICE_CONSUMED:
             retained_source_refs |= frozenset(
-                (frame.item_ref.ref_id, frame.item_ref.source_revision)
-                for frame in previous_binding.prefix.state.frames
-                if frame.role == "user" and frame.item_ref.ref_type == "source_item"
+                (ref.ref_id, ref.source_revision)
+                for frame in previous_binding.prefix.state.frames for ref in frame.item_refs
+                if frame.role == "user" and ref.ref_type == "source_item"
             )
             prior_roots = {(source.source_identity, source.revision) for source in (
                 () if previous_binding.root is None else previous_binding.root.sources
@@ -187,9 +188,9 @@ def compile_prefix_context(
             root = replace(root, epoch=state.epoch, provider_profile=provider_profile)
         state = replace(state, frames=tuple(replace(
             frame, provider_profile=provider_profile,
-            item_ref=AppendedItemRef(
+            item_refs=(AppendedItemRef(
                 "source_item", f"root:{root.epoch.token}", "compiled-root", root.frame_hash(), "tracked",
-            ) if frame.role == "system" and root is not None else frame.item_ref,
+            ),) if frame.role == "system" and root is not None else frame.item_refs,
         ) for frame in previous_binding.prefix.state.frames))
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
@@ -253,10 +254,10 @@ def compile_prefix_context(
         if root is not None:
             frames.append(ProviderProfileItemFrame(
                 1, provider_profile, "system", "text", root.content,
-                AppendedItemRef(
+                (AppendedItemRef(
                     "source_item", f"root:{root.epoch.token}", "compiled-root",
                     root.frame_hash(), "tracked",
-                ),
+                ),),
                 source_protocol=root.source_protocol,
             ))
     elif previous is not None:
@@ -316,7 +317,8 @@ def compile_prefix_context(
         # owner 本次提供的完整版本才覆盖此前全部更新，不能按 source ID 一刀切。
         root_cutoffs = {
             identity: max((frame.ordinal for frame in retained_frames
-                           if (frame.item_ref.source_identity, frame.item_ref.source_revision) == (identity, revision)), default=0)
+                           for ref in frame.item_refs
+                           if (ref.source_identity, ref.source_revision) == (identity, revision)), default=0)
             for identity, revision in root_revisions.items() if identity not in materialized
         }
         # 新 epoch 只携带每个 Skill 最后一次完整选择及其后续 diff；
@@ -329,41 +331,49 @@ def compile_prefix_context(
         }
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_frames:
-            identity = frame.item_ref.source_identity
-            if (is_tool_definition_source(identity)
-                    or identity in deselected_source_ids
-                    or identity in skill_cutoffs and frame.ordinal < skill_cutoffs[identity]
-                    or identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
-                    or identity in root_cutoffs and frame.ordinal <= root_cutoffs[identity]):
+            if frame.role != "user" or frame.item_refs[0].ref_type != "source_item":
                 continue
-            ref_identity = ("request_only", frame.item_ref.ref_id, plan.thread_id)
-            if ((frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs
-                    or frame.role != "user" or ref_identity in inherited):
-                continue
-            if ref_identity not in by_identity:
-                raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
-            source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
-            identity = (frame.item_ref.source_identity, frame.item_ref.source_revision)
-            if source is not None and source.contribution_kind == "prompt" and identity in current_tail:
-                retained_body = parse_source_blocks(frame.content, expected_version=frame.source_protocol)[0].body if frame.source_protocol is not None else frame.content
-                if retained_body != current_tail[identity]:
-                    raise RuntimeError("source-identity-conflict: 同一 tail source revision 的完整正文不一致")
-                # fork 本地化后的旧 ref 与当前完整来源只能贡献一次，异 revision 历史仍携带。
-                continue
-            ordinal += 1
-            selected_identities.append(ref_identity)
-            frames.append(replace(
-                frame, ordinal=ordinal, provider_profile=provider_profile,
-                content=render_source_blocks(tuple(replace(block, source_tracking_at_seal="untracked")
-                    for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)),
-                    version=frame.source_protocol) if frame.source_protocol is not None else frame.content,
-                item_ref=replace(frame.item_ref, source_tracking_at_seal="untracked"),
-            ))
+            blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol) if frame.source_protocol is not None else ()
+            kept_refs, kept_blocks = [], []
+            for index, ref in enumerate(frame.item_refs):
+                identity = ref.source_identity
+                if (is_tool_definition_source(identity)
+                        or identity in deselected_source_ids
+                        or identity in skill_cutoffs and frame.ordinal < skill_cutoffs[identity]
+                        or identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
+                        or identity in root_cutoffs and frame.ordinal <= root_cutoffs[identity]):
+                    continue
+                ref_identity = ("request_only", ref.ref_id, plan.thread_id)
+                if ((ref.ref_id, ref.source_revision) not in retained_source_refs or ref_identity in inherited):
+                    continue
+                if ref_identity not in by_identity:
+                    raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
+                source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
+                revision_identity = (ref.source_identity, ref.source_revision)
+                if source is not None and source.contribution_kind == "prompt" and revision_identity in current_tail:
+                    retained_body = blocks[index].body if blocks else frame.content
+                    if retained_body != current_tail[revision_identity]:
+                        raise RuntimeError("source-identity-conflict: 同一 tail source revision 的完整正文不一致")
+                    continue
+                selected_identities.append(ref_identity)
+                kept_refs.append(replace(ref, source_tracking_at_seal="untracked"))
+                if blocks:
+                    kept_blocks.append(replace(blocks[index], source_tracking_at_seal="untracked"))
+            if kept_refs:
+                if blocks:
+                    assert frame.source_protocol is not None
+                ordinal += 1
+                frames.append(replace(
+                    frame, ordinal=ordinal, provider_profile=provider_profile,
+                    content=render_source_blocks(tuple(kept_blocks), version=frame.source_protocol) if frame.source_protocol is not None else frame.content,
+                    item_refs=tuple(kept_refs),
+                ))
     replacements = SourceReplacementIndex()
     for frame in (*state.frames, *frames):
         if frame.source_protocol is not None:
             for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
                 replacements.record(block)
+    new_source_start = len(frames)
     for ref_id, source, content, operation, base_revision in tail_values:
         block = SourceModelBlock(
             source_identity=source.descriptor.source_id, name=source.descriptor.name,
@@ -382,10 +392,10 @@ def compile_prefix_context(
         selected_identities.append(("request_only", ref_id, plan.thread_id))
         frames.append(ProviderProfileItemFrame(
             ordinal, provider_profile, "user", "text", render_source_blocks((block,)),
-            AppendedItemRef(
+            (AppendedItemRef(
                 "source_item", ref_id, source.descriptor.source_id, source.revision,
                 "tracked" if source.tracked else "untracked",
-            ),
+            ),),
             source_protocol=2,
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
@@ -416,12 +426,26 @@ def compile_prefix_context(
                     SourceVersionRef(contribution.source_binding.source_ref, ref.overlay_from_revision),
                 ),
             ),)),
-            AppendedItemRef(
+            (AppendedItemRef(
                 "source_item", ref.ref_id, contribution.source_binding.source_ref,
                 contribution.source_revision, "tracked",
-            ),
+            ),),
             source_protocol=2,
         ))
+    # 仅合并本次新增的来源；继承或携带的封存 frame 保持自己的消息边界。
+    if source_message_grouping not in {"aggregate", "separate"}:
+        raise ValueError("context.source_messages.grouping 必须是 aggregate 或 separate")
+    new_sources = frames[new_source_start:]
+    if source_message_grouping == "aggregate" and len(new_sources) > 1:
+        grouped = replace(
+            new_sources[0],
+            content=render_source_blocks(tuple(
+                block for frame in new_sources
+                for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)
+            )),
+            item_refs=tuple(ref for frame in new_sources for ref in frame.item_refs),
+        )
+        frames[new_source_start:] = [grouped]
     state = append_items(
         state, frames, desired_provider_profile=provider_profile,
         desired_tool_compatibility_key=compatibility_key,

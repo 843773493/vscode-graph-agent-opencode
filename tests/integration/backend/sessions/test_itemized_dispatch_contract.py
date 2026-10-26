@@ -289,11 +289,11 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
         "content": [{"type": "input_text", "text": root.content}],
     }
     assert sum(item.get("role") == "system" for item in body["input"]) == 1
-    overlay_frames = restored.seal_binding.prefix.state.frames[-2:]
-    assert [item["content"][0]["text"] for item in body["input"][-2:]] == [frame.content for frame in overlay_frames]
-    assert [parse_source_blocks(frame.content)[0].body for frame in overlay_frames] == [
-        [{"type": "text", "text": "HTTP overlay base"}],
-        [{"type": "text", "text": "HTTP overlay delta"}],
+    overlay_frame = restored.seal_binding.prefix.state.frames[-1]
+    assert body["input"][-1] == {"role": "user", "content": [{"type": "input_text", "text": overlay_frame.content}]}
+    assert [(ref.ref_id, block.body) for ref, block in zip(overlay_frame.item_refs, parse_source_blocks(overlay_frame.content), strict=True)] == [
+        ("z-base", [{"type": "text", "text": "HTTP overlay base"}]),
+        ("a-delta", [{"type": "text", "text": "HTTP overlay delta"}]),
     ]
     assert body["tools"][0]["name"] == "inspect_file"
     assert body["tools"][0]["parameters"]["type"] == "object"
@@ -1230,12 +1230,13 @@ print('restarted-dispatch-ok')
                 ]
                 assert [source["ref_id"] for source in sources] == ["z-base", "a-delta"]
                 overlay_inputs.append([
-                    projection["request"]["input"][source["input_index"]] for source in sources
+                    projection["request"]["input"][index]
+                    for index in dict.fromkeys(source["input_index"] for source in sources)
                 ])
             assert overlay_inputs[0] == overlay_inputs[1]
             assert [item["content"][0]["text"] for item in overlay_inputs[0]] == [
                 frame.content for frame in first.seal_binding.prefix.state.frames
-                if frame.item_ref.ref_id in {"z-base", "a-delta"}
+                if any(ref.ref_id in {"z-base", "a-delta"} for ref in frame.item_refs)
             ]
         else:
             overlay_inputs = []
@@ -1251,19 +1252,21 @@ print('restarted-dispatch-ok')
                 positions = [
                     index for index, message in enumerate(messages) if message.id in {"z-base", "a-delta"}
                 ]
-                assert [messages[index].id for index in positions] == ["z-base", "a-delta"]
+                assert [messages[index].id for index in positions] == ["z-base"]
                 overlay_inputs.append([wire[index] for index in positions])
                 assert wire[0] == {"role": "system", "content": snapshot.seal_binding.root.content}
             assert overlay_inputs[0] == overlay_inputs[1] == [
                 {"role": "user", "content": frame.content}
                 for frame in first.seal_binding.prefix.state.frames
-                if frame.item_ref.ref_id in {"z-base", "a-delta"}
+                if any(ref.ref_id in {"z-base", "a-delta"} for ref in frame.item_refs)
             ]
-        assert [parse_source_blocks(frame.content)[0].body
+        assert [(ref.ref_id, block.body)
                 for frame in first.seal_binding.prefix.state.frames
-                if frame.item_ref.ref_id in {"z-base", "a-delta"}] == [
-            [{"type": "text", "text": "HTTP overlay base"}],
-            [{"type": "text", "text": "HTTP overlay delta"}],
+                if frame.role == "user" and frame.source_protocol is not None
+                for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                if ref.ref_id in {"z-base", "a-delta"}] == [
+            ("z-base", [{"type": "text", "text": "HTTP overlay base"}]),
+            ("a-delta", [{"type": "text", "text": "HTTP overlay delta"}]),
         ]
         old_overlay = [entry for entry in first.selection if entry.base_delta_role != "none"]
         new_overlay = [entry for entry in second.selection if entry.base_delta_role != "none"]
@@ -2180,11 +2183,13 @@ async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_b
         assert stable_prefix_bytes(new.frames[:len(old.frames)]) == stable_prefix_bytes(old.frames)
         assert current.seal_binding.root == initial.seal_binding.root
     frames = delta.seal_binding.prefix.state.frames
-    tail = [frame for frame in frames if frame.item_ref.source_identity == "prefix-chain:tail"]
-    assert [(frame.role, parse_source_blocks(frame.content)[0].body) for frame in tail] == [
+    tail = [(frame, block) for frame in frames if frame.role == "user" and frame.source_protocol is not None
+            for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+            if ref.source_identity == "prefix-chain:tail"]
+    assert [(frame.role, block.body) for frame, block in tail] == [
         ("user", "完整来源 A\n"), ("user", expected_delta),
     ]
-    full_tail_index = frames.index(tail[0])
+    full_tail_index = frames.index(tail[0][0])
     assert [frame.role for frame in frames[full_tail_index - 3:full_tail_index]] == [
         "assistant", "tool", "tool",
     ]
@@ -2211,7 +2216,7 @@ async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_b
     assert [entry for entry in wire_items if entry.get("role") == "user"][-2:] == [
         {"role": "user", "content": [{"type": "input_text", "text": text}]
          if case.target_format == "responses" else text}
-        for text in (frame.content for frame in tail)
+        for text in (frame.content for frame, _block in tail)
     ]
 
 

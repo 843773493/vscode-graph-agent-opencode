@@ -19,6 +19,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
@@ -147,8 +148,8 @@ def notice_case(request, session_bundle_factory, frozen_provider_wire, frozen_pr
 
 
 def _wire_ids(snapshot):
-    return tuple(frame.item_ref.ref_id for frame in snapshot.seal_binding.prefix.state.frames
-                 if frame.item_ref.ref_type == "canonical_item")
+    return tuple(frame.item_refs[0].ref_id for frame in snapshot.seal_binding.prefix.state.frames
+                 if frame.item_refs[0].ref_type == "canonical_item")
 
 
 def test_acceptance_freezes_ordered_notice_outputs_cut_and_replay(notice_case):
@@ -413,6 +414,7 @@ def test_notice_rebase_preserves_applied_untracked_root_and_tail_after_restart(n
             description=identity, internal_locator=f"runtime:{identity}", root_placement=placement), tracking_status="tracked")
         manager.observe(identity, content, revision="snapshot:1")
     previous = case.prepare(internal, "sources-internal", manager=manager)
+    previous_bytes = canonical_json_bytes(previous.to_dict())
     for name in ("snapshot-root", "snapshot-tail"):
         manager.load_skill(name, mode="untrack")
     _accepted, user = case.user("sources-user")
@@ -420,9 +422,22 @@ def test_notice_rebase_preserves_applied_untracked_root_and_tail_after_restart(n
     sealed = case.prepare(user, "sources-user-first")
     assert sealed.seal_binding.prefix.state.epoch.reason == EpochReason.RUNTIME_NOTICE_CONSUMED
     assert {source.source_identity for source in sealed.seal_binding.root.sources} == {"snapshot-root"}
-    assert [frame.content for frame in sealed.seal_binding.prefix.state.frames].count("已封存尾部来源") == 1
+    assert [(ref.source_identity, block.body) for frame in sealed.seal_binding.prefix.state.frames
+            if frame.role == "user" and frame.source_protocol is not None
+            for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)] == [
+        ("snapshot-tail", "已封存尾部来源"),
+    ]
     assert sealed.seal_binding.source_revisions == ()
-    assert previous.seal_binding.root.content == sealed.seal_binding.root.content
+    before, = parse_source_blocks(previous.seal_binding.root.content)
+    restored, = parse_source_blocks(sealed.seal_binding.root.content)
+    assert (before.source_identity, before.revision, before.body) == (
+        restored.source_identity, restored.revision, restored.body,
+    ) == ("snapshot-root", "snapshot:1", "已封存根来源")
+    assert (before.operation, before.source_tracking_at_seal) == ("activate", "tracked")
+    assert (restored.operation, restored.source_tracking_at_seal) == ("restore", "untracked")
+    assert canonical_json_bytes(case.saver.get_context_assembly(
+        case.session, case.thread, assembly_id=previous.assembly_id,
+    ).to_dict()) == previous_bytes
 
 
 @pytest.mark.asyncio

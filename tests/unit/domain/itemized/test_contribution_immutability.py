@@ -195,10 +195,10 @@ def test_prefix_frames_isolate_content_and_container_inputs() -> None:
     body = {"parts": [{"text": "原始正文"}]}
     frame = ProviderProfileItemFrame(
         1, "provider", "user", "structured_content", body,
-        AppendedItemRef("canonical_item", "item"),
+        (AppendedItemRef("canonical_item", "item"),),
     )
     frames = [frame]
-    refs = [frame.item_ref]
+    refs = [frame.item_refs[0]]
     state = replace(initial_epoch_state(
         provider_profile="provider", tool_compatibility_key="sha256:jcs:v1:" + "0" * 64,
     ), frames=frames, appended_refs=refs)
@@ -211,4 +211,4 @@ def test_prefix_frames_isolate_content_and_container_inputs() -> None:
     refs.clear()
     assert frame.frame_bytes() == before
     assert state.frames == (frame,)
-    assert state.appended_refs == (frame.item_ref,)
+    assert state.appended_refs == (frame.item_refs[0],)

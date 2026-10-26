@@ -23,6 +23,7 @@ from app.core.path_utils import get_boxteam_home
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -205,14 +206,15 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
     )
     sealed = seal("gateway-tracked")
     assert sealed.seal_binding is not None
-    gateway_frames = tuple(
-        frame for frame in sealed.seal_binding.prefix.state.frames
-        if frame.item_ref.source_identity == f"skill:{gateway.entry_identity}"
+    gateway_members = tuple(
+        (frame, ref, block) for frame in sealed.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.source_identity == f"skill:{gateway.entry_identity}"
     )
-    assert len(gateway_frames) == 1
-    assert gateway_frames[0].item_ref.source_revision == gateway.activation_revision
-    assert isinstance(gateway_frames[0].content, str)
-    assert json.loads(gateway_frames[0].content)["sources"][0]["body"] == GATEWAY_BODY
+    assert len(gateway_members) == 1
+    assert gateway_members[0][1].source_revision == gateway.activation_revision
+    assert gateway_members[0][2].body == GATEWAY_BODY
     original_catalog = restored_catalog(saver, sealed)
     assert original_catalog.entries["shared"] == gateway
 
@@ -243,9 +245,11 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
     )
     assert current.seal_binding is not None
     assert tuple(
-        frame for frame in current.seal_binding.prefix.state.frames
-        if frame.item_ref.source_identity == f"skill:{gateway.entry_identity}"
-    ) == gateway_frames
+        (frame, ref, block) for frame in current.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.source_identity == f"skill:{gateway.entry_identity}"
+    ) == gateway_members
 
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         historical = restored_catalog(restarted, sealed)

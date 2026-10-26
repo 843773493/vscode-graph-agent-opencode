@@ -189,6 +189,9 @@
     ]
   },
   "context": {
+    "source_messages": {
+      "grouping": "aggregate" // aggregate 聚合本批来源；separate 逐来源消息，仅影响新封存批次。
+    },
     "resource_activation": {
       "default_boundary": "turn", // active execution slot 冻结，Turn 内不可漂移。
       "overrides": {

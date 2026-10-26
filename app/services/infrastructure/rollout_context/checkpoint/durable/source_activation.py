@@ -57,22 +57,23 @@ def _validate_activation_guidance(
     if len(rows) > 1:
         raise ItemSchemaError("context-source-seal-conflict: MCP activation parent 不唯一")
     binding = snapshot.seal_binding
-    frames = tuple(frame for frame in binding.prefix.state.frames if frame.item_ref.source_identity == source_id)
+    frames = tuple((frame, ref) for frame in binding.prefix.state.frames for ref in frame.item_refs if ref.source_identity == source_id)
     previous_frames = () if previous is None or previous.seal_binding is None else tuple(
-        frame for frame in previous.seal_binding.prefix.state.frames
-        if frame.item_ref.source_identity == source_id
+        (frame, ref) for frame in previous.seal_binding.prefix.state.frames for ref in frame.item_refs
+        if ref.source_identity == source_id
     )
     if not rows and not previous_frames and not frames:
         return
     if not frames:
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
-    frame = frames[-1]
+    frame, ref = frames[-1]
     content = frame.content
     if frame.source_protocol is not None:
         blocks = parse_source_blocks(content, expected_version=frame.source_protocol)
-        if len(blocks) != 1 or blocks[0].source_identity != source_id:
+        matches = tuple(block for block in blocks if block.source_identity == source_id)
+        if len(matches) != 1:
             raise ItemSchemaError("context-source-seal-conflict: guidance 来源块不唯一或身份不一致")
-        content = blocks[0].body
+        content = matches[0].body
     expected_revision, expected_hash = (
         (rows[0][0], rows[0][1]) if rows else
         (sha256_jcs({"content": ""}), sha256_jcs({"content": ""}))
@@ -80,14 +81,14 @@ def _validate_activation_guidance(
     if (
         frame.role != "user" or frame.payload_kind != "text"
         or not isinstance(content, str)
-        or frame.item_ref.source_revision != expected_revision
+        or ref.source_revision != expected_revision
         or sha256_jcs({"content": content}) != expected_hash
         or (rows and rows[0][2] != "available")
         or (not rows and content != "")
         or any(source.source_identity == source_id for source in (() if binding.root is None else binding.root.sources))
     ):
         raise ItemSchemaError("context-source-seal-conflict: guidance 正文/revision 与冻结 activation 不一致")
-    previous_revision = previous_frames[-1].item_ref.source_revision if previous_frames else None
+    previous_revision = previous_frames[-1][1].source_revision if previous_frames else None
     applied = tuple(source for source in binding.source_revisions if source.source_id == source_id)
     # 新 epoch 复用相同 activation revision 时仍校验完整指引帧，
     # 但它没有推进来源 revision，不得伪造一份重复 applied 回执。
@@ -318,9 +319,9 @@ class ContextSourceActivationMixin:
                 and provenance.revision == source.revision
                 for provenance in (() if binding.root is None else binding.root.sources)
             ) or any(
-                frame.item_ref.source_identity == source.source_id
-                and frame.item_ref.source_revision == source.revision
-                for frame in binding.prefix.state.frames
+                ref.source_identity == source.source_id
+                and ref.source_revision == source.revision
+                for frame in binding.prefix.state.frames for ref in frame.item_refs
             )
             if not selected_source:
                 raise ItemSchemaError(

@@ -145,9 +145,10 @@ def project_native_request(
     if seal_binding is not None:
         for frame in seal_binding.prefix.state.frames:
             if frame.role != "system":
-                ids = frame.content.get("item_ids", [frame.item_ref.ref_id]) if isinstance(frame.content, Mapping) and frame.item_ref.ref_type == "canonical_item" else [frame.item_ref.ref_id]
-                for ref_id in ids:
-                    frame_by_ref[("canonical_item" if frame.item_ref.ref_type == "canonical_item" else "request_only", ref_id, plan.thread_id)] = frame
+                for ref in frame.item_refs:
+                    ids = frame.content.get("item_ids", [ref.ref_id]) if isinstance(frame.content, Mapping) and ref.ref_type == "canonical_item" else [ref.ref_id]
+                    for ref_id in ids:
+                        frame_by_ref[("canonical_item" if ref.ref_type == "canonical_item" else "request_only", ref_id, plan.thread_id)] = frame
         root_source_refs = {
             selection_ref_identity(entry.ref) for entry in entries
             if entry.included and entry.ref.ref_type != "tool_set"
@@ -158,6 +159,7 @@ def project_native_request(
         entries.sort(key=lambda entry: (
             frame_by_ref[selection_ref_identity(entry.ref)].ordinal if selection_ref_identity(entry.ref) in frame_by_ref else -1
         ))
+    emitted_source_frames: dict[int, int] = {}
     for entry in entries:
         losses.extend(entry.loss)
         if not entry.included:
@@ -191,7 +193,13 @@ def project_native_request(
                 content = _text_blocks(body, role=role)
                 # 原始正文仍须能编码；已封存来源只发送 frame 中确定的模型正文。
                 if seal_binding is not None:
-                    content = _text_blocks(frame_by_ref[selection_ref_identity(ref)].content, role=role)
+                    frame = frame_by_ref[selection_ref_identity(ref)]
+                    content = _text_blocks(frame.content, role=role)
+                    if frame.ordinal in emitted_source_frames:
+                        wire_sources.append({"input_index": emitted_source_frames[frame.ordinal],
+                                             "plan_ordinal": entry.plan_ordinal, "ref_id": ref.ref_id})
+                        continue
+                    emitted_source_frames[frame.ordinal] = len(inputs)
                 inputs.append({"role": role, "content": content})
         else:
             item = resolve_selected_item(entry, items)

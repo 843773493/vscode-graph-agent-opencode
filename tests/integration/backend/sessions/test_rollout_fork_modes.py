@@ -1181,19 +1181,19 @@ def _assert_fork_provider_history(
         prepared["snapshot"].session_id, prepared["snapshot"].thread_id, "user_input",
     )
     source_frames = [frame.content for frame in source_prepared["snapshot"].seal_binding.prefix.state.frames
-                     if frame.item_ref.ref_type == "canonical_item"
+                     if frame.item_refs[0].ref_type == "canonical_item"
                      and set(frame.content["item_ids"]) <= selected_ids]
     assert {item_id for frame in source_frames for item_id in frame["item_ids"]} == selected_ids
     business_frames = [frame for frame in source_frames if by_id[frame["item_ids"][0]].semantic_kind != "runtime_notice"]
     notice_frames = [frame for frame in source_frames if by_id[frame["item_ids"][0]].semantic_kind == "runtime_notice"]
     expected_frames = business_frames + notice_frames
     target_frames = [frame.content for frame in prepared["snapshot"].seal_binding.prefix.state.frames
-                     if frame.item_ref.ref_type == "canonical_item" and frame.content["item_ids"] != [new_root_item_id]]
+                     if frame.item_refs[0].ref_type == "canonical_item" and frame.content["item_ids"] != [new_root_item_id]]
     assert target_frames == expected_frames
     # 不按写前消息 ID 过滤；每个真实 canonical carrier 都必须完整进入实际 Provider 返回值。
     for request in (source_prepared, prepared):
         canonical_messages = [frame.content["message"] for frame in request["snapshot"].seal_binding.prefix.state.frames
-                              if frame.item_ref.ref_type == "canonical_item"]
+                              if frame.item_refs[0].ref_type == "canonical_item"]
         actual_messages = [message_to_dict(message) for message in request["messages"]]
         assert [message for message in actual_messages if message in canonical_messages] == canonical_messages
     expected_calls = [call["id"] for frame in expected_frames for call in frame["message"]["data"].get("tool_calls", [])]
@@ -2136,9 +2136,11 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
     assert sealed_contribution.extensions == extensions
     assert source_selection.contribution_ordinal == sealed_contribution.contribution_ordinal
     assert sealed_contribution.assembly_id == source_snapshot.assembly_id
-    (source_frame,) = [frame for frame in source_snapshot.seal_binding.prefix.state.frames
-                       if frame.item_ref.ref_id == source_selection.ref.ref_id]
-    assert [(block.source_identity, block.body) for block in parse_source_blocks(source_frame.content)] == [(source_id, request_content)]
+    (source_frame, source_block), = [(frame, block) for frame in source_snapshot.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.ref_id == source_selection.ref.ref_id]
+    assert (source_block.source_identity, source_block.body) == (source_id, request_content)
     assert any(
         isinstance(message, HumanMessage) and message.content == source_frame.content
         for message in prepared["messages"]
@@ -2291,16 +2293,18 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         target_contribution.replacement_policy,
         target_contribution.source_ordinal,
     ) == (extensions, "tail_only", "direct", "immutable", None)
-    (target_tail_frame,) = [
-        frame
+    (target_tail_frame, target_tail_ref, target_tail_block), = [
+        (frame, ref, block)
         for frame in target_snapshot.seal_binding.prefix.state.frames
-        if frame.item_ref.ref_id == target_selection.ref.ref_id
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.ref_id == target_selection.ref.ref_id
     ]
     assert (
         target_tail_frame.role,
-        target_tail_frame.item_ref.source_identity,
-        target_tail_frame.item_ref.source_revision,
-        parse_source_blocks(target_tail_frame.content)[0].body,
+        target_tail_ref.source_identity,
+        target_tail_ref.source_revision,
+        target_tail_block.body,
     ) == ("user", source_id, source_revision, request_content)
     assert target_snapshot.seal_binding.root is None
     (target_registered,) = [
@@ -2550,19 +2554,25 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 1
     assert snapshot.seal_binding.prefix.state.epoch.turn_id == target_accepted["turn_id"]
     assert snapshot.seal_binding.prefix.parent is None
-    (tail_frame,) = [frame for frame in snapshot.seal_binding.prefix.state.frames
-                     if frame.item_ref.source_identity == "instruction:tail"]
-    assert (tail_frame.role, tail_frame.item_ref.source_revision, parse_source_blocks(tail_frame.content)[0].body) == ("user", "instruction:tail:1", "仅尾部正文")
+    (tail_frame, tail_ref, tail_block), = [(frame, ref, block) for frame in snapshot.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if ref.source_identity == "instruction:tail"]
+    assert (tail_frame.role, tail_ref.source_revision, tail_block.body) == ("user", "instruction:tail:1", "仅尾部正文")
     assert sum(isinstance(message, HumanMessage) and message.content == tail_frame.content for message in result["messages"]) == 1
-    (retained_delta,) = [frame for frame in snapshot.seal_binding.prefix.state.frames
-                        if (frame.item_ref.source_identity, frame.item_ref.source_revision) == ("instruction:retained", "instruction:retained:2")]
-    assert retained_delta.role == "user" and retained_delta.item_ref.source_tracking_at_seal == "untracked"
-    assert parse_source_blocks(retained_delta.content)[0].body == parse_source_blocks(delta)[0].body
+    (retained_delta, retained_ref, retained_block), = [(frame, ref, block) for frame in snapshot.seal_binding.prefix.state.frames
+        if frame.role == "user" and frame.source_protocol is not None
+        for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+        if (ref.source_identity, ref.source_revision) == ("instruction:retained", "instruction:retained:2")]
+    assert retained_delta.role == "user" and retained_ref.source_tracking_at_seal == "untracked"
+    assert retained_block.body == parse_source_blocks(delta)[0].body
     assert any(isinstance(message, HumanMessage) and message.content == retained_delta.content for message in result["messages"])
     (copied_overlay,) = cold.list_source_overlays(target.session_id, target_thread)
-    assert [(frame.role, frame.item_ref.source_identity, frame.item_ref.source_revision, parse_source_blocks(frame.content)[0].body)
+    assert [(frame.role, ref.source_identity, ref.source_revision, block.body)
             for frame in snapshot.seal_binding.prefix.state.frames
-            if frame.item_ref.source_identity in {copied_overlay["base_ref"], copied_overlay["delta_ref"]}] == [
+            if frame.role == "user" and frame.source_protocol is not None
+            for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+            if ref.source_identity in {copied_overlay["base_ref"], copied_overlay["delta_ref"]}] == [
         ("user", copied_overlay["base_ref"], "policy-v1", overlay_base),
         ("user", copied_overlay["delta_ref"], "policy-v2", overlay_delta),
     ]

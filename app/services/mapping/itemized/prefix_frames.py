@@ -71,7 +71,7 @@ def project_canonical_prefix_frames(
                 {"human": "user", "ai": "assistant", "tool": "tool"}[message.type],
                 "structured_content",
                 {"item_ids": [item.item_id for item in group], "message": message_to_dict(message)},
-                AppendedItemRef("canonical_item", group[0].item_id),
+                (AppendedItemRef("canonical_item", group[0].item_id),),
             ))
     return tuple(frames), tuple(selected_ids)
 
@@ -137,36 +137,41 @@ def project_sealed_prefix(
         if frame.source_protocol is not None:
             for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
                 replacements.record(block)
-        ref = frame.item_ref
+        ref = frame.item_refs[0]
         if frame.role == "system":
             if root is None or frame.content != root.content:
                 raise ValueError("source-mismatch: system frame 缺少精确 compiled root")
             messages.append(SystemMessage(content=root.content, id=ref.ref_id))
             continue
         if ref.ref_type == "source_item":
-            entry = entries.get(("request_only", ref.ref_id, plan.thread_id))
-            if entry is None or entry.ref.ref_type != "request_only":
-                raise ValueError("source-mismatch: source frame 缺少独立 user selection")
-            source = contributions.get(entry.contribution_id)
-            if source is None or source.source_binding is None or (
-                source.source_binding.source_ref != ref.source_identity
-                or entry.ref.source_revision != ref.source_revision
-            ):
-                raise ValueError("source-mismatch: source frame identity/revision 不一致")
-            body = resolve_selected_request_body(plan, entry, bodies)
-            if frame.source_protocol is not None:
-                blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol)
-                if len(blocks) != 1:
-                    raise ValueError("source-mismatch: 单来源 frame 必须封存一个来源块")
-                block = blocks[0]
-                if (block.source_identity, block.source_kind, block.revision,
-                    block.source_tracking_at_seal, block.root_placement) != (
-                    ref.source_identity, source.source_kind, ref.source_revision,
-                    ref.source_tracking_at_seal, source.root_placement,
-                ) or canonical_json_bytes(block.body) != canonical_json_bytes(body):
-                    raise ValueError("source-mismatch: source 来源块与 sealed 正文或绑定不一致")
-            elif canonical_json_bytes(body) != canonical_json_bytes(frame.content):
-                raise ValueError("source-mismatch: source wire frame 与 sealed 正文不一致")
+            blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol) if frame.source_protocol is not None else ()
+            if blocks and len(blocks) != len(frame.item_refs):
+                raise ValueError("source-mismatch: 来源块与有序 item 引用数量不一致")
+            validated = []
+            for index, member in enumerate(frame.item_refs):
+                entry = entries.get(("request_only", member.ref_id, plan.thread_id))
+                if entry is None or entry.ref.ref_type != "request_only":
+                    raise ValueError("source-mismatch: source frame 缺少独立 user selection")
+                source = contributions.get(entry.contribution_id)
+                if source is None or source.source_binding is None or (
+                    source.source_binding.source_ref != member.source_identity
+                    or entry.ref.source_revision != member.source_revision
+                ):
+                    raise ValueError("source-mismatch: source frame identity/revision 不一致")
+                body = resolve_selected_request_body(plan, entry, bodies)
+                if blocks:
+                    block = blocks[index]
+                    if (block.source_identity, block.source_kind, block.revision,
+                        block.source_tracking_at_seal, block.root_placement) != (
+                        member.source_identity, source.source_kind, member.source_revision,
+                        member.source_tracking_at_seal, source.root_placement,
+                    ) or canonical_json_bytes(block.body) != canonical_json_bytes(body):
+                        raise ValueError("source-mismatch: source 来源块与 sealed 正文或绑定不一致")
+                elif canonical_json_bytes(body) != canonical_json_bytes(frame.content):
+                    raise ValueError("source-mismatch: source wire frame 与 sealed 正文不一致")
+                used.add(("request_only", member.ref_id, plan.thread_id))
+                validated.append((source, body))
+            source, body = validated[0]
             if source.contribution_kind == "model_message":
                 if plan.selection_policy != "summary_candidate" or not isinstance(body, Mapping):
                     raise ValueError("source-mismatch: model_message 只能属于摘要候选")

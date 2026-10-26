@@ -21,7 +21,7 @@ def test_render_preserves_config_values_and_normalizes_local_schema() -> None:
 
     assert json.loads(rendered) == {
         "$schema": "./workspace_schema.jsonc",
-        "config_version": 1,
+        "config_version": 2,
         "model": {"name": "测试模型", "options": [1, 2]},
     }
     assert "测试模型" in rendered
