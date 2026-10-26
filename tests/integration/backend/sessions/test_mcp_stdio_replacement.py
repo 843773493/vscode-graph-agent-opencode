@@ -35,30 +35,6 @@ from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 共用真实 HTTP MCP handler
 )
 
-_SERVER = r'''
-import asyncio, json, os, sqlite3, sys
-from pathlib import Path
-import portalocker
-from tests.integration.workspace_services.mcp.schema_server import serve
-
-lock, lifecycle, definitions, receipts, database = map(Path, sys.argv[1:])
-version = os.environ["MCP_TEST_VERSION"]
-def record(phase):
-    effects = []
-    if database.exists():
-        with sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True) as connection:
-            for row in connection.execute("SELECT side_effects_json FROM config_apply_journal WHERE state = 'applying'"):
-                effects.extend(json.loads(row[0]))
-    with lifecycle.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"phase":phase, "version":version, "pid":os.getpid(), "cwd":str(Path.cwd()), "effects":effects}) + "\n")
-with portalocker.Lock(lock, timeout=0):
-    record("start")
-    try:
-        asyncio.run(serve(definitions, receipts))
-    finally:
-        record("stop")
-'''
-
 
 @pytest.fixture
 def uv_executable() -> str:
@@ -74,10 +50,10 @@ async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_ca
     replay, controller = inprocess_model_replay
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir
-    script, lock, lifecycle, definitions, receipts = (
-        artifacts / name for name in ("single_instance.py", "single.lock", "lifecycle.jsonl", "definitions.json", "receipts.jsonl")
+    script = Path.cwd() / "tests/integration/workspace_services/mcp/single_instance_server.py"
+    lock, lifecycle, definitions, receipts = (
+        artifacts / name for name in ("single.lock", "lifecycle.jsonl", "definitions.json", "receipts.jsonl")
     )
-    script.write_text(_SERVER, encoding="utf-8")
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     root, sibling_root = mounted_case.roots.values()
     database = root / ".boxteam/state/workspace.sqlite"

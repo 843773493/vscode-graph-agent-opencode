@@ -61,7 +61,7 @@
 - [x] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
 - [x] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
 - [x] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
-- [ ] 7.6 验证低优先级遮蔽、多 Server 部分失败、配置与模型调用交错、切换中崩溃、旧连接排空、共享 Backend 工作区隔离和配置 SSE replay；完成静态分析。
+- [x] 7.6 验证低优先级遮蔽、多 Server 部分失败、配置与模型调用交错、切换中崩溃、旧连接排空、共享 Backend 工作区隔离和配置 SSE replay；完成静态分析。
 
 ## 8. Web 与真实产品链路验收
 
@@ -194,3 +194,11 @@
 - `config-regression-003`配置基础设施、ConfigService、API合同及Gateway诊断／验收矩阵263 passed／280.40秒，含低优先级遮蔽、来源、pending及日志既有行为。25项策略短检查另通过；范围有重叠不累加。初次60秒组合检查完成44项后保护退出124，完整范围扩大至必要预算后通过；HTTP初次失败是新测试误把schema拒绝当作已进入候选状态，依据既有invalid_config合同改为严格核原active／事件不变，未改产品状态机或放宽原断言。
 - Ruff通过，5文件Pyright完整HEAD基线8项／当前4项，零新增，保留共享协议测试的4项既有诊断；单一default_policy类型及重复规则测试的非法scope字面量已修正。命令、前后源码指纹、原始输出、退出码、类型对照和结构检查位于`out/tests/temp/mcp-config-policy/artifacts/`。最终验证均无源码漂移；无Web源码变化，未重跑Web构建或外部Provider。
 - 关闭7.5，当前19/52。7.6继续未勾选：非合作真实stdio关闭期限、stdio停止窗口中的OS崩溃尚须专门验证；OAuth、连接控制、持久等待、HITL完整产品恢复和Gateway／Web授权仍按原任务推进，团队／协作保持TODO。
+
+### 7.6 stdio 强制关闭与停止窗口崩溃验收（2026-10-26）
+
+- 单实例进程资产统一到原 MCP 测试目录，继续复用同一 schema_server handler。真实进程收到 stdin EOF 后仍存活、记录并忽略 SIGTERM，由官方 SDK 升级 SIGKILL；10秒期限内核实旧 PID 消失和锁释放后才启动新实例。1秒期限明确 recovery_required、旧 active 与原 journal 保留，原 scope 继续持有实际关闭；关闭完成前后均不偷偷启动失败候选，用户修正配置后由同一 watcher 重验提交。没有新增生产终止协议或另一套 MCP Server 实现。
+- 在原 scope.close 实际完成后、候选实例尚未启动时 OS 硬退出；只观察产品生成的停止意图、journal、pending 和 claim，不预写关键状态。重启先按旧 active 重建新连接，未到期 claim 的 fencing 保持，随后沿原到期对账重验提交候选；原 attempt 保持 recovery_required，唯一 applied 事件，三次真实启动均持单实例锁且无业务工具重放。配置快照 healthy 与 MCP 目录 readiness 分别核对：破坏动作后目录 unavailable，不能把仍有效的配置快照等同于在线连接。
+- 正式 `integration-mcp-stdio-recovery` 为3 passed／87.37秒，外层收据 `recovery-matrix-final-004` exit0／91.56秒，源码前后无漂移。原单实例 watcher／Runner／model_stream 替换、失败修复及 stdio→HTTP 产品回归 `replacement-final-002` 为1 passed／73.14秒；HTTP promotion 前后崩溃、claim 冷恢复、清理失败及 SSE replay `http-recovery-regression-002` 为4 passed／159.99秒，均 exit0、源码前后无漂移。最终对共享 report 的唯一后续修改是增加只读 catalog_status，正式 stdio 套件覆盖该新增字段；不重复未受影响的 HTTP 长检查。
+- 低优先级遮蔽、多Server部分失败、模型交错、旧资格排空和双工作区隔离沿7.2—7.5及4.4的具名证据按未变产品依赖复用。四文件 Ruff／Pyright 最终均零诊断，严格 OpenSpec 校验通过；原始命令、源码指纹、raw、退出码及失败现场在 `out/tests/temp/mcp-stdio-faults/artifacts/`。保留初轮 Pyright 入口缺失、类型收窄、导入格式与新崩溃断言混淆配置 healthy／目录 readiness 的失败原件，修正测试合同后才完成最终正式验收。没有改动数据库或Web源码；Windows Job Object、OAuth、完整HITL、持久等待和Gateway／Web授权不由本切片证明。
+- 关闭7.6，当前20/52；连接管理／授权进入下一纵向切片，团队／协作专项继续TODO。

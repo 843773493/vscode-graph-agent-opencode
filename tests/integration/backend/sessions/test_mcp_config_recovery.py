@@ -54,10 +54,12 @@ async def run():
 
         def report(name):
             status = service.get_reload_status()
+            configuration = service.get_snapshot().to_dict()["mcp"]["servers"]["schema"]
             temporary = report_dir / (name + ".tmp")
             temporary.write_text(json.dumps({
-                "pid": os.getpid(), "url": service.get_snapshot().to_dict()["mcp"]["servers"]["schema"]["url"],
-                "connection_ref": owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref,
+                "pid": os.getpid(), "url": configuration.get("url"), "server": configuration,
+                "connection_ref": owner._connection_ref(owner._runtimes["schema"]),
+                "catalog_status": owner.publication_snapshot().status,
                 "state": status.state, "healthy": status.healthy, "active_revision": status.active_revision,
             }), encoding="utf-8")
             temporary.replace(report_dir / name)
@@ -84,6 +86,13 @@ async def run():
                     channel.unsubscribe(subscription)
 
             asyncio.create_task(record_cleanup_event())
+        elif mode == "after_stdio_stop":
+            close = owner._runtimes["schema"].scope.close
+            async def exit_after_stdio_stop():
+                await close()
+                report("fault.json")
+                os._exit(83)
+            owner._runtimes["schema"].scope.close = exit_after_stdio_stop
         elif mode != "recover":
             persist = service._persist_active_snapshot
             def exit_at_promotion(*args, **kwargs):
