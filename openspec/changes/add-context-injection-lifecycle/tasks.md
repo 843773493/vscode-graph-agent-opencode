@@ -486,3 +486,8 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 097 仅本切片的完整暂存树隔离验收：配置／来源218 passed，真实Gateway→Workspace→model_stream的策略event→manual→poll→event、in-flight冻结、manual旧正文、事件新正文、不可用阻断与冷重启完整1 passed／120.23秒。094已完成同一业务流程，仅最终计数仍为4而非新增manual轮次后的5，按实际场景修正计数后097全程通过；不削弱身份、顺序、hash或期限断言。完整测试源码逐blob核验后删除，正式输出保留。
 - 096 的15文件Pyright基线120／当前112、零新增，全config_service及受影响文件Ruff均27条既有TRY004、零新增；099 compileall／strict／diff检查通过。作者差异与调用闭包自查未发现新增双轨、第二accepted owner或路径回退；未冒称独审、Web、外部Provider或Windows通过。准确命令、前后指纹、raw、退出码及失败现场位于 out/tests/temp/csm-kind-boundary/artifacts/ 的090—099与staged-policy-097；无新增Web改动。
 - 9.9／9.10仍未完成：Gateway本地观察策略、其它获取能力组合与相应综合验收继续推进；不因该子切片勾选整项。团队／协作专项保持延期。
+
+### 2026-10-26 旧库迁移验收对齐当前 reader
+
+- 095 的唯一断言失败在现行 reader 读取前的 schema 校验：测试只升级18→23，当前 reader明确要求25。保留23中间状态断言，再经生产登记的 execution_queue 与 skill_selection SQL显式升级24／25；冷读改为核对整个封存快照，不仅比较refs。迁移实现与支持范围未改，其它历史身份损坏的拒绝断言不变。
+- 100 定向六项全部通过；101 完整HEAD基线／当前该文件Pyright均8条、零新增，Ruff零新增。完整基线逐blob核验后清理，正式测试输出保留。命令、指纹、raw和退出码保存在 out/tests/temp/csm-kind-boundary/artifacts/assembly-migration-current-reader-100 与 assembly-migration-static-comparison-101，未将前轮失败改写为通过。

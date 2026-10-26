@@ -78,8 +78,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     bind_captured_namespace,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    EXECUTION_QUEUE_SCHEMA_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     ROLLOUT_SCHEMA_VERSION,
+    SKILL_SELECTION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
@@ -737,14 +739,23 @@ def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(
     snapshot = _seal(case, "schema18-migration")
     _restore_schema18(case)
     _migrate_ref_threads(case)
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (23, "active")
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=24,
+        migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL,
+    )
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=25,
+        migration_name="skill_selection_024_025", migration_sql=SKILL_SELECTION_MIGRATION_SQL,
+    )
     cold = RolloutCheckpointSaver(case.sessions)
-    assert cold.get_context_assembly(case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id).refs == snapshot.refs
+    assert cold.get_context_assembly(case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id).to_dict() == snapshot.to_dict()
     for table in ("assembly_item_refs", "context_assembly_selections"):
         unique_columns = [tuple(row[2] for row in case.connection.execute(f"PRAGMA index_info({index[1]})"))
                           for index in case.connection.execute(f"PRAGMA index_list({table})") if index[2]]
         assert ("assembly_id", "ref_type", "ref_id", "ref_thread_id") in unique_columns
         assert ("assembly_id", "ref_type", "ref_id") not in unique_columns
-    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (23, "active")
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (ROLLOUT_SCHEMA_VERSION, "active")
 
 
 def test_schema18_migration_preserves_foreign_ref_thread_from_frozen_snapshot(assembly_case):
