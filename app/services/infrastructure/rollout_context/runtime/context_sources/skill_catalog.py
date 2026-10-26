@@ -110,6 +110,8 @@ def skill_catalog_from_activation(
 
 
 class SkillCatalogMixin:
+        _sources: dict[str, SourceState]
+        _queue_delta: Callable[[SourceState], None]
         _pending: dict[str, ContextSourceDelta]
         _pending_observations: dict[str, PendingSourceObservation]
         _published_source_revisions: dict[str, PublishedContextSourceRevision]
@@ -151,7 +153,7 @@ class SkillCatalogMixin:
                 if state.source_kind != "skill" or not state.tracked:
                     continue
                 descriptor = state.descriptor
-                binding = snapshot.sources.get(descriptor.resource_uri) if descriptor is not None else None
+                binding = snapshot.sources.get(descriptor.resource_uri) if descriptor is not None and descriptor.resource_uri is not None else None
                 if binding is None or state.source_id != f"skill:{binding.entry_identity}":
                     raise RuntimeError("tracked-source-unavailable: 冻结 Skill 来源不存在: " + state.source_id)
                 observations.append((state.source_id, binding))
@@ -341,19 +343,29 @@ class SkillCatalogMixin:
             # 显式加载采用完整冻结正文；后续自动观察才相对已封存基准生成 diff。
             candidate.pending_kind = "activation"
             candidate.tracking_status = "tracked" if mode == "tracked" else "untracked"
-            already_visible = candidate.latest_visible_committed_revision == binding.activation_revision
+            frozen = replace(old, tracking_status="untracked") if old is not None else None
+            self._persist_control_state(candidate, operation="activate_skill", replaced_state=frozen)
+            already_visible = (
+                candidate.latest_visible_committed_revision == binding.activation_revision
+                and candidate.selection_sequence == candidate.latest_visible_selection_sequence
+            )
             if already_visible:
                 candidate.latest_visible_committed_content = binding.body
                 candidate.pending_kind = None
                 candidate.observed_revisions.clear()
-            frozen = replace(old, tracking_status="untracked") if old is not None else None
-            self._persist_control_state(candidate, operation="activate_skill", replaced_state=frozen)
             if frozen is not None:
                 frozen.pending_kind = None
                 frozen.observed_revisions = []
                 self._sources[frozen.source_id] = frozen
                 self._pending.pop(frozen.source_id, None)
                 self._pending_observations.pop(frozen.source_id, None)
+            # 后一次显式选择取代同名尚未封存的候选，不能在 seal 时重新激活旧来源。
+            for other in self._sources.values():
+                if other.source_id != candidate.source_id and other.source_kind == "skill" and (
+                    _normalize_skill_name(other.name) == _normalize_skill_name(candidate.name)
+                ):
+                    other.pending_kind = None
+                    self._pending.pop(other.source_id, None)
             self._install_registration(candidate)
             self._pending_observations.pop(candidate.source_id, None)
             if already_visible:
@@ -371,6 +383,23 @@ class SkillCatalogMixin:
                     kind="untracked", revision=stopped.latest_revision,
                 )
             return candidate
+
+        def restore_frozen_skill_selections(self) -> None:
+            """恢复已接受但尚未封存的选择，只消费同一 execution 冻结的正文版本。"""
+            snapshot = self.frozen_skill_catalog()
+            for state in self._sources.values():
+                if state.source_kind != "skill" or state.selection_sequence <= state.latest_visible_selection_sequence:
+                    continue
+                if any(other.source_kind == "skill" and _normalize_skill_name(other.name) == _normalize_skill_name(state.name)
+                       and other.selection_sequence > state.selection_sequence for other in self._sources.values()):
+                    continue
+                descriptor = state.descriptor
+                binding = snapshot.sources.get(descriptor.resource_uri) if descriptor is not None and descriptor.resource_uri is not None else None
+                if binding is None or binding.activation_revision != state.latest_revision:
+                    raise SkillCatalogSnapshotConflict("skill-selection-unavailable: 待封存选择缺少精确冻结正文")
+                state.latest_content = binding.body
+                state.pending_kind = "activation"
+                self._queue_delta(state)
 
 
 

@@ -44,7 +44,7 @@ class AppliedSourceRevision:
         if self.expected_control_revision is not None and (
             type(self.expected_control_revision) is not int or self.expected_control_revision < 1
         ):
-            raise ItemSchemaError("source rebuild 必须冻结合法 control revision")
+            raise ItemSchemaError("source seal 必须冻结合法 control revision")
 
 
 @dataclass(frozen=True, slots=True)

@@ -279,17 +279,35 @@ class ContextSourceActivationMixin:
                     "context-source-seal-conflict: source 未由 owner 登记: " + source.source_id
                 )
             stored = _state_from_row(tuple(row))
-            rebuilding_source = source.expected_control_revision is not None
-            if rebuilding_source and binding.prefix.consumed_transition is None:
+            consumed_transition = binding.prefix.consumed_transition
+            rebuilding_source = consumed_transition is not None and source.decision_id.startswith("source-rebuild:")
+            if stored.source_kind == "skill":
+                siblings = connection.execute(
+                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                    "WHERE session_id=? AND thread_id=? AND source_kind='skill'",
+                    (snapshot.session_id, snapshot.thread_id),
+                ).fetchall()
+                if any(value.name.strip() == stored.name.strip() and value.selection_sequence > stored.selection_sequence
+                       for value in map(_state_from_row, siblings)):
+                    raise ItemSchemaError("skill-selection-conflict: 待封存来源已被同名新选择取代")
+                if consumed_transition is not None and rebuilding_source and stored.selection_sequence > 0 and source.decision_id != (
+                    f"source-rebuild:{consumed_transition.transition_id}:{source.source_id}:{stored.selection_sequence}"
+                ):
+                    raise ItemSchemaError("skill-selection-conflict: rebuild 选择次序与封存来源不一致")
+                if not rebuilding_source and stored.selection_sequence > 0 and (
+                    not any(source.decision_id.startswith(
+                        f"source-update:{source.source_id}:{source.revision}:{kind}:{stored.selection_sequence}:"
+                    ) for kind in ("activation", "delta", "rebuild"))
+                ):
+                    raise ItemSchemaError("skill-selection-conflict: 选择次序与封存来源 item 不一致")
+            if rebuilding_source and source.expected_control_revision is None:
                 raise ItemSchemaError(
-                    "context-source-seal-conflict: rebuild CAS 缺少真实 consumed transition"
+                    "context-source-seal-conflict: rebuild 缺少冻结 control CAS"
                 )
             if (
                 stored.latest_visible_committed_revision != source.previous_revision
-                or (
-                    (stored.state_revision != source.expected_control_revision or not stored.tracking_status == "tracked")
-                    if rebuilding_source else stored.latest_revision != source.revision
-                )
+                or (source.expected_control_revision is not None and stored.state_revision != source.expected_control_revision)
+                or (not rebuilding_source and stored.latest_revision != source.revision)
             ):
                 raise RuntimeError(
                     "context-source-seal-conflict: observed/applied revision 已变化: "
@@ -311,6 +329,7 @@ class ContextSourceActivationMixin:
                 )
             cursor = connection.execute(
                 f"UPDATE {_TABLE_NAME} SET latest_visible_committed_revision = ?, latest_revision = ?, "
+                "latest_visible_selection_sequence = selection_sequence, "
                 "state_revision = state_revision + 1, updated_at = ? "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
                 "AND state_revision = ?",

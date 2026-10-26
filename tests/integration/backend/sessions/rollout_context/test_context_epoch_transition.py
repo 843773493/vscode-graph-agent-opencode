@@ -667,12 +667,14 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     ).fetchone()[0]
     frozen = case.manager.prepare_pending()
     expected_drafts = {
-        f"source-update:{delta.source_id}:{delta.revision}:rebuild": delta
+        (f"source-update:{delta.source_id}:{delta.revision}:rebuild"
+         + (f":{delta.selection_sequence}:{delta.control_revision}" if delta.source_kind == "skill" else "")): delta
         for delta in frozen.deltas
     }
+    state_revisions = {row[0]: row[4] for row in case.source_rows()}
     assert set(expected_drafts) == {
         "source-update:workspace:rules:rules:2:rebuild",
-        "source-update:skill:debugging:skill:2:rebuild",
+        f"source-update:skill:debugging:skill:2:rebuild:0:{state_revisions['skill:debugging']}",
     }
     seal_queries = (
         ("SELECT * FROM item_catalog ORDER BY item_sequence", ()),

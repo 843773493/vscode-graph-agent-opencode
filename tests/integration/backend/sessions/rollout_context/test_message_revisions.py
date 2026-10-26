@@ -30,6 +30,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
+    SKILL_SELECTION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
@@ -277,11 +278,15 @@ def test_schema20_upgrade_preserves_all_locators_then_allows_explicit_revision(r
         admission.thread_id, session_id=SESSION_ID, to_version=24,
         migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL,
     )
+    saver._storage.storage.migrate_schema(
+        admission.thread_id, session_id=SESSION_ID, to_version=25,
+        migration_name="skill_selection_024_025", migration_sql=SKILL_SELECTION_MIGRATION_SQL,
+    )
     assert index.with_name("rollout.jsonl").read_bytes() == before
     with sqlite3.connect(index) as connection:
         assert connection.execute("SELECT * FROM messages ORDER BY message_sequence").fetchall() == rows_before
-        assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (24, "active")
-        assert connection.execute("SELECT from_version,to_version,status FROM schema_migrations ORDER BY migration_id").fetchall() == [(0, 20, "completed"), (20, 21, "completed"), (21, 22, "completed"), (22, 23, "completed"), (23, 24, "completed")]
+        assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (25, "active")
+        assert connection.execute("SELECT from_version,to_version,status FROM schema_migrations ORDER BY migration_id").fetchall() == [(0, 20, "completed"), (20, 21, "completed"), (21, 22, "completed"), (22, 23, "completed"), (23, 24, "completed"), (24, 25, "completed")]
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     with _execution_scope(admission):
         cold.append_items(SESSION_ID, (revision,), thread_id=admission.thread_id)

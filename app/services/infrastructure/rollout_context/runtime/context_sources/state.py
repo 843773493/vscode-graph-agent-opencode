@@ -47,6 +47,8 @@ class SourceState:
     pending_kind: Literal["activation", "delta", "rebuild"] | None = None
     persisted_state_revision: int = 0
     persisted_fields: tuple[object, ...] | None = None
+    selection_sequence: int = 0
+    latest_visible_selection_sequence: int = 0
 
     @property
     def tracked(self) -> bool:
@@ -103,6 +105,8 @@ class SourceState:
             latest_revision=stored.latest_revision,
             persisted_state_revision=stored.state_revision,
             persisted_fields=stored.durable_fields(),
+            selection_sequence=stored.selection_sequence,
+            latest_visible_selection_sequence=stored.latest_visible_selection_sequence,
         )
 
 __all__ = ["SourceState"]

@@ -38,6 +38,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
+    SKILL_SELECTION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
     initialize_rollout_schema,
 )
@@ -249,6 +250,8 @@ class RolloutMaintenanceOwner(
                         raise ValueError("schema migration 22→23 必须使用登记的view成员SQL")
                     if (current_version, to_version) == (23, 24) and migration_sql != EXECUTION_QUEUE_SCHEMA_SQL:
                         raise ValueError("schema migration 23→24 必须使用登记的执行队列 SQL")
+                    if (current_version, to_version) == (24, 25) and migration_sql != SKILL_SELECTION_MIGRATION_SQL:
+                        raise ValueError("schema migration 24→25 必须使用登记的 Skill 选择 SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
                     if (current_version, to_version) == (21, 22):
                         migrate_assembly_content(connection)

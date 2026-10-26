@@ -17,6 +17,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 使用当前文件的正式隔离工作区
 )
@@ -102,8 +105,38 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     assert controls[new_source].tracking_status == "tracked"
     assert controls[new_source].latest_visible_committed_revision == refreshed["revision"]
     assert canonical_json_bytes(before.to_dict()) == old_bytes
+    assert json.loads(await tool.ainvoke({"name": "shared", "mode": "untrack"}))["tracked"] is False
+    old_catalog = registry.snapshot(catalog_id).revision
+    (files.workspace_root / ".boxteam" / "skills" / "shared" / "SKILL.md").unlink()
+    async with asyncio.timeout(5):
+        while registry.snapshot(catalog_id).revision == old_catalog:
+            await asyncio.sleep(0.01)
+    seal("gateway-catalog-again")
+    frozen = manager.frozen_skill_catalog()
+    reselected = json.loads(await tool.ainvoke({"name": "shared"}))
+    assert reselected["revision"] == first["revision"]
+    assert reselected["queued"] is True and reselected["append_status"] == "appended"
+    gateway_source = previous.item_ref.source_identity
+    assert isinstance(gateway_source, str)
+    pending = {state.source_id: state for state in saver.load_context_source_control_states(owner)}[gateway_source]
+    assert pending.selection_sequence > pending.latest_visible_selection_sequence
+    # 接受后丢弃驻留 CSM；下一次 preparation 必须从原 owner 控制行和冻结版本恢复。
+    manager = ContextSourceManager(owner=owner, control_state_port=saver)
+    returned = seal("gateway-body-again")
+    returned_block = json.loads(returned.seal_binding.prefix.state.frames[-1].content)["sources"][0]
+    assert (returned_block["source_identity"], returned_block["revision"], returned_block["operation"]) == (
+        gateway_source, first["revision"], "replace",
+    )
+    assert returned_block["replaces"] == [{"source_identity": new_source, "revision": refreshed["revision"]}]
+    assert returned.seal_binding.prefix.state.frames[:-1] == seal("gateway-catalog-again").seal_binding.prefix.state.frames
+    selected = {state.source_id: state for state in saver.load_context_source_control_states(owner)}[gateway_source]
+    assert selected.selection_sequence == selected.latest_visible_selection_sequence == pending.selection_sequence
+    tool = create_skill_load_tool(manager, control_admission=lambda _name, _mode: nullcontext(),
+                                  activation_snapshot_resolver=lambda: frozen)
+    assert json.loads(await tool.ainvoke({"name": "shared"}))["append_status"] == "already_active"
+    assert manager.prepare_pending() is None
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        for sealed in (before, updated):
+        for sealed in (before, updated, returned):
             restored = cold.get_context_assembly(session, thread, assembly_id=sealed.assembly_id)
             assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(sealed.to_dict())
             assert restored.request_hash == sealed.request_hash

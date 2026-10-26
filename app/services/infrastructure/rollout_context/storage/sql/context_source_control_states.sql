@@ -12,6 +12,9 @@
         state_revision INTEGER NOT NULL CHECK(state_revision >= 1),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        selection_sequence INTEGER NOT NULL DEFAULT 0 CHECK(selection_sequence >= 0),
+        latest_visible_selection_sequence INTEGER NOT NULL DEFAULT 0
+            CHECK(latest_visible_selection_sequence >= 0 AND latest_visible_selection_sequence <= selection_sequence),
         PRIMARY KEY(session_id, thread_id, source_id),
         CHECK (binding_revision IS NULL OR length(binding_revision) > 0),
         CHECK (latest_visible_committed_revision IS NULL OR length(latest_visible_committed_revision) > 0),

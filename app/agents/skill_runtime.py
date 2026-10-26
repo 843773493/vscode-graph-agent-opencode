@@ -381,6 +381,7 @@ def install_frozen_skill_catalog(
     for binding in snapshot.entries.values():
         manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
         metadata.append({"name": binding.name, "description": binding.description})
+    manager.restore_frozen_skill_selections()
     manager.observe_frozen_tracked_skills()
     if not include_instructions or (not metadata and not any(
         descriptor.source_id == "instruction:skill-catalog" for descriptor in manager.descriptors()

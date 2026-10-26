@@ -64,6 +64,10 @@ class ContextSourceControlState:
     latest_revision: str | None
     state_revision: int = 0
     updated_at: str | None = None
+    # 同名 Skill 的显式选择次序由唯一 owner 分配；不能用各行 CAS 版本比较先后。
+    selection_sequence: int = 0
+    # 只有 assembly seal 可推进；内容版本相同也可能存在尚未封存的来源切回。
+    latest_visible_selection_sequence: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.owner, ContextSourceOwnerKey):
@@ -102,6 +106,12 @@ class ContextSourceControlState:
             raise ValueError(
                 "ContextSourceControlState.updated_at 必须是非空字符串或 null"
             )
+        if any(type(value) is not int or value < 0 for value in (
+            self.selection_sequence, self.latest_visible_selection_sequence,
+        )) or self.latest_visible_selection_sequence > self.selection_sequence:
+            raise ValueError("ContextSourceControlState 的选择次序非法")
+        if self.source_kind != "skill" and self.selection_sequence != 0:
+            raise ValueError("只有 Skill 可以持有显式选择次序")
         if (
             self.latest_visible_committed_revision is not None
             and self.latest_revision is None
@@ -123,6 +133,8 @@ class ContextSourceControlState:
             self.tracking_status,
             self.latest_visible_committed_revision,
             self.latest_revision,
+            self.selection_sequence,
+            self.latest_visible_selection_sequence,
         )
 
 

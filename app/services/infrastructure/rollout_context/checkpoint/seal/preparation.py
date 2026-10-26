@@ -453,6 +453,7 @@ def prepare_registered_context(
                 provider_profile=f"{target_format}:{provider_version}", turn_id=turn_id,
                 notice_acceptance=notice_acceptance,
                 allow_provider_reprojection=allow_provider_reprojection,
+                deselected_source_ids=context_source_manager.deselected_skill_source_ids(),
             )
             omitted = ()
             if summary_candidate is not None:

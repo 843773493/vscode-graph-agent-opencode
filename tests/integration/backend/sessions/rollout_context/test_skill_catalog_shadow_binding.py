@@ -212,7 +212,7 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
     assert len(gateway_frames) == 1
     assert gateway_frames[0].item_ref.source_revision == gateway.activation_revision
     assert isinstance(gateway_frames[0].content, str)
-    assert GATEWAY_BODY in gateway_frames[0].content
+    assert json.loads(gateway_frames[0].content)["sources"][0]["body"] == GATEWAY_BODY
     original_catalog = restored_catalog(saver, sealed)
     assert original_catalog.entries["shared"] == gateway
 

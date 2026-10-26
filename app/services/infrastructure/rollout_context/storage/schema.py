@@ -20,8 +20,9 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 24
+ROLLOUT_SCHEMA_VERSION = 25
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "sql/execution_queue.sql")
+SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "sql/skill_selection_024_025.sql")
 
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2

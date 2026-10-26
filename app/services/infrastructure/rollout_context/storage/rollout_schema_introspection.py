@@ -274,7 +274,7 @@ class RolloutSchemaIntrospectionMixin:
         if schema_version < expected_version:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
-                "18/19/20/21/22/23版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24；其余旧实验库不支持转换，原始数据保留；"
+                "18/19/20/21/22/23/24版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24→25；其余旧实验库不支持转换，原始数据保留；"
                 f"current={schema_version}, target={expected_version}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:

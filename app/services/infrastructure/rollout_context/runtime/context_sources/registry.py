@@ -15,6 +15,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
         ContextSourceDescriptor,
         ContextSourceTrackingStateConflict,
         _normalize_skill_name,
+        next_skill_selection_sequence,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.state import (
         SourceState,
@@ -22,6 +23,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceRegistryMixin:
+        _sources: dict[str, SourceState]
+
         def refresh_control_states(self) -> None:
             """初始化及新 activation 边界从唯一 owner 对齐已提交控制状态。
 
@@ -61,7 +64,10 @@ class SourceRegistryMixin:
                     if old.latest_visible_committed_revision == state.latest_visible_committed_revision:
                         state.latest_visible_committed_content = old.latest_visible_committed_content
                     pending = self._pending.get(stored.source_id)
-                    if pending is not None and pending.revision == state.latest_revision and state.latest_revision != state.latest_visible_committed_revision:
+                    if pending is not None and pending.revision == state.latest_revision and (
+                        state.latest_revision != state.latest_visible_committed_revision
+                        or state.selection_sequence != state.latest_visible_selection_sequence
+                    ):
                         state.pending_kind = old.pending_kind
                 refreshed[stored.source_id] = state
 
@@ -201,6 +207,12 @@ class SourceRegistryMixin:
             """唯一 owner 确认候选；rebind 的新观察和旧冻结同事务提交。"""
             port, owner = self._control_state_port, self._owner
             if port is None or owner is None or not state.has_durable_interest():
+                if operation == "activate_skill":
+                    state.selection_sequence = next_skill_selection_sequence(
+                        state.source_id, tuple((value.source_id, value.selection_sequence)
+                            for value in self._sources.values()
+                            if value.source_kind == "skill" and _normalize_skill_name(value.name) == _normalize_skill_name(state.name)),
+                    )
                 return
             durable_states = {
                 stored.source_id: stored
@@ -212,7 +224,7 @@ class SourceRegistryMixin:
                 self._control_state_snapshot(replaced_state, durable_states.get(replaced_state.source_id))
                 if replaced_state is not None else None
             )
-            if replaced is None and durable is not None and durable.durable_fields() == snapshot.durable_fields():
+            if operation != "activate_skill" and replaced is None and durable is not None and durable.durable_fields() == snapshot.durable_fields():
                 state.persisted_state_revision = durable.state_revision
                 state.persisted_fields = durable.durable_fields()
                 return
@@ -230,6 +242,8 @@ class SourceRegistryMixin:
             for candidate, stored in pairs:
                 candidate.persisted_state_revision = stored.state_revision
                 candidate.persisted_fields = stored.durable_fields()
+                candidate.selection_sequence = stored.selection_sequence
+                candidate.latest_visible_selection_sequence = stored.latest_visible_selection_sequence
 
         def _control_state_snapshot(
             self, state: SourceState, durable: ContextSourceControlState | None,
@@ -243,6 +257,7 @@ class SourceRegistryMixin:
                 # 不吸收其它 writer 的 observed/tracking 漂移。
                 before_seal = replace(
                     durable, latest_visible_committed_revision=state.latest_visible_committed_revision,
+                    latest_visible_selection_sequence=state.latest_visible_selection_sequence,
                 )
                 # 真实 rebuild seal 同时提交 frozen observed/applied；确认前晚到的
                 # observation 只吸收这一精确 receipt 的 CAS，不覆盖其它控制变化。
@@ -277,6 +292,8 @@ class SourceRegistryMixin:
                 ),
                 latest_revision=state.latest_revision,
                 state_revision=durable.state_revision if durable is not None else state.persisted_state_revision,
+                selection_sequence=state.selection_sequence,
+                latest_visible_selection_sequence=(durable.latest_visible_selection_sequence if durable is not None else 0),
             )
 
         def _sync_persisted_control_states(self, source_ids: set[str]) -> None:
@@ -309,6 +326,7 @@ class SourceRegistryMixin:
                     )
                 state.persisted_state_revision = stored.state_revision
                 state.persisted_fields = stored.durable_fields()
+                state.latest_visible_selection_sequence = stored.latest_visible_selection_sequence
 
 
 __all__ = ["SourceRegistryMixin"]

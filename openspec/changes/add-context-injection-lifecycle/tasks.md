@@ -343,9 +343,9 @@
 - [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
 - [x] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
 - [x] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
-- [ ] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
+- [x] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
 - [ ] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
-- [ ] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
+- [x] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
 - [ ] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
 - [ ] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
 - [ ] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
@@ -411,3 +411,12 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 来源／epoch92项、正式source-wire matrix22项通过；真实Skill文件发布、冻结工具加载、seal及冷投影断言具名替代范围，旧bytes不变。完整旧HEAD归档通过真实准入／CSM／seal／checkpoint生成v1历史，当前代码冷读、同key重试、同epoch追加v2及正式matrix保护下fork、源目录离线冷恢复通过，历史bytes／request hash／owner保持。最终定向14项与OpenSpec strict通过；Ruff和compileall通过，15个改动Python文件Pyright基线／当前均81项，无新增，不称类型全绿。归档4496个tracked文件逐blob核验后清理；唯一预期修改为临时matrix套件，生成历史和原始证据保留。
 
 命令、源码指纹、raw、实际退出码和失败归因保存在`out/tests/temp/cil_source_replacement_20261026/artifacts/verification-013.json`及具名运行目录。初轮新增测试类型／空值、导入格式和探针启动错误原件保留；探针未由matrix启动的失败不计fork通过。最终广域测试后的产品修改仅为Literal类型收窄、导入格式及TODO，最终14项覆盖已调整测试。9.6／9.8继续未勾：复用旧正文时的显式切回仍待补齐；9.7分组及9.13组合门未关闭。本切片未运行Web、外部Provider或Windows，不代替团队／协作专项。
+
+
+### 2026-10-26 9.6／9.8 显式切回与持久选择收口
+
+- 同名Skill的已接受／已封存选择使用原source控制行的owner次序；A→B→A复用A原revision仍封存具名替代B，连续未seal选择只留下最后候选。选择及CAS迁齐checkpoint、冷恢复、rewind、compaction和ToolSet重建；新epoch只保留所选来源最后完整状态与其后续diff，旧assembly不变。
+- 实际结构变更登记24→25 SQL，并迁齐18起维护升级及旧fixture；SQLite内部ADD CHECK校验仅在当前ALTER放行，脚本显式PRAGMA及事务逃逸继续拒绝。真实Skill文件发布、工具调用、冷CSM切回通过；来源／epoch最终140 passed，schema与消费者50 passed，正式wire matrix22 passed、epoch-copy matrix3 passed。各组有重叠，不相加成独立场景数。
+- 完整旧代码归档生成无统一来源协议的真实历史；当前升级25后5份assembly与JSONL字节不变，当前来源already_active、切回旧来源queued。前一切片已证明v1／v2继承与fork，本轮不重编码旧封装。最终Ruff／compileall通过；30文件Pyright基线222／当前186，无新增，不称全仓类型绿。
+- 最终广域运行期间仅新增Callable类型导入／类注解及OpenSpec文字；按运行起始SHA精确还原核验，没有产品逻辑漂移。初轮迁移授权拒绝、旧CAS候选、压缩重复A、旧裸正文测试及旧delta CAS预期失败原件保留，均有新原因证据与定向补验。准确命令、源码指纹、raw、实际退出码、复用边界与产物索引见`out/tests/temp/cil_skill_selection_20261026/artifacts/verification-029.json`。
+- 本收据关闭9.6／9.8，不替代9.7分组、9.13组合门、完整Web、外部Provider或Windows；团队／协作专项继续TODO。

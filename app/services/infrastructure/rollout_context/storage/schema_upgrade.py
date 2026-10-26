@@ -54,7 +54,18 @@ def execute_atomic_schema_sql(connection: sqlite3.Connection, script: str) -> No
     if not connection.in_transaction:
         raise RuntimeError("schema migration 必须在既有事务内执行")
 
-    def authorize(action: int, *_args: object) -> int:
+    altered_table: str | None = None
+
+    def authorize(action: int, first: str | None, second: str | None, database: str | None, _source: str | None) -> int:
+        nonlocal altered_table
+        if action == sqlite3.SQLITE_ALTER_TABLE and first == "main":
+            altered_table = second
+        # SQLite 为 ADD COLUMN CHECK 内部发起当前表的 quick_check；只在这条
+        # ALTER statement 中允许该只读检查，脚本自己的 PRAGMA 仍被拒绝。
+        if action == sqlite3.SQLITE_PRAGMA and first == "quick_check" and (
+            altered_table is not None and second == altered_table and database == "main"
+        ):
+            return sqlite3.SQLITE_OK
         if action in {
             sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_SAVEPOINT,
             sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_PRAGMA,
@@ -68,10 +79,12 @@ def execute_atomic_schema_sql(connection: sqlite3.Connection, script: str) -> No
         for character in script:
             pending.append(character)
             if character == ";" and sqlite3.complete_statement("".join(pending)):
+                altered_table = None
                 connection.execute("".join(pending))
                 pending.clear()
         remainder = "".join(pending).strip()
         if remainder:
+            altered_table = None
             connection.execute(remainder)
     finally:
         connection.set_authorizer(None)

@@ -164,3 +164,55 @@ def test_source_switch_does_not_promote_cancelled_candidate_on_tool_rebase(sourc
     contents = [frame.content for frame in sealed.prefix.state.frames]
     assert all("cancelled-auto" not in content for content in contents if isinstance(content, str))
     assert any("new-body" in content for content in contents if isinstance(content, str))
+
+
+@pytest.mark.parametrize("rebase", [False, True])
+def test_last_explicit_selection_wins_before_seal_and_after_cold_restore(source_seal_case, rebase):
+    case = source_seal_case
+    manager = case.manager()
+    original = _catalog("original-A\n")
+    a = original.entries["demo"]
+    b = replace(a, entry_identity="alternate", resource_id="alternate:activation",
+                display_uri=a.display_uri.replace("/demo/", "/alternate/"),
+                activation_revision=_revision("alternate-B\n"), body="alternate-B\n")
+    alternate = SkillCatalogActivationSnapshot("catalog:alternate", {"demo": b})
+    manager.load_skill("demo", activation_snapshot=original)
+    _, first = case.seal(manager)
+    before = canonical_json_bytes(context_seal_binding_to_dict(first))
+    manager.load_skill("demo", activation_snapshot=alternate)
+    manager.load_skill("demo", activation_snapshot=original)
+    pending = manager.prepare_pending()
+    assert pending is not None and [delta.source_id for delta in pending.deltas] == ["skill:demo"]
+    manager = case.manager()
+    manager.install_skill_activation_snapshot(original)
+    manager.register_skill_binding(a, catalog_revision=original.catalog_revision)
+    manager.restore_frozen_skill_selections()
+    tools = ToolSetSnapshot(selection_revision=sha256_jcs({"changed": True}), tools=(
+        {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
+    )) if rebase else None
+    _, selected = case.seal(manager, tool_set=tools)
+    frames = selected.prefix.state.frames if rebase else selected.prefix.state.frames[len(first.prefix.state.frames):]
+    blocks = [block for frame in frames if frame.source_protocol is not None
+              for block in json.loads(frame.content)["sources"]]
+    assert [(block["source_identity"], block["revision"], block["body"]) for block in blocks] == [
+        ("skill:demo", a.activation_revision, a.body),
+    ]
+    assert canonical_json_bytes(context_seal_binding_to_dict(first)) == before
+    controls = {state.source_id: state for state in case.saver.load_context_source_control_states(case.owner)}
+    assert controls["skill:demo"].selection_sequence == controls["skill:demo"].latest_visible_selection_sequence == 3
+    assert controls["skill:alternate"].latest_visible_selection_sequence == 0
+
+
+def test_catalog_rebind_keeps_pending_tracked_update_sealable(source_seal_case):
+    case = source_seal_case
+    manager = case.manager()
+    catalog = _catalog("v1\n")
+    manager.load_skill("demo", "tracked", activation_snapshot=catalog)
+    case.seal(manager)
+    manager.observe("skill:demo", "v2\n").require_tracked()
+    manager.register_skill_binding(catalog.entries["demo"], catalog_revision="catalog:metadata-only")
+    _, sealed = case.seal(manager)
+    block = json.loads(sealed.prefix.state.frames[-1].content)["sources"][0]
+    assert block["revision"] == _revision("v2\n")
+    assert block["base_revision"] == catalog.entries["demo"].activation_revision
+    assert block["representation"] == "unified_diff"

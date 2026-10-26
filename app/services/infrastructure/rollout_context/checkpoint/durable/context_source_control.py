@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind
@@ -21,6 +21,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     ContextSourceTrackingStateConflict,
     _normalize_skill_name,
+    next_skill_selection_sequence,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
@@ -45,6 +46,8 @@ _COLUMNS = (
     "state_revision",
     "created_at",
     "updated_at",
+    "selection_sequence",
+    "latest_visible_selection_sequence",
 )
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
 
@@ -70,6 +73,8 @@ def _state_from_row(row: tuple[object, ...]) -> ContextSourceControlState:
         state_revision,
         _created_at,
         updated_at,
+        selection_sequence,
+        latest_visible_selection_sequence,
     ) = row
     state = ContextSourceControlState(
         owner=ContextSourceOwnerKey(
@@ -94,6 +99,10 @@ def _state_from_row(row: tuple[object, ...]) -> ContextSourceControlState:
             state_revision, field=f"{_TABLE_NAME}.state_revision"
         ),
         updated_at=strict_text(updated_at, field=f"{_TABLE_NAME}.updated_at"),
+        selection_sequence=strict_non_negative_int(selection_sequence, field=f"{_TABLE_NAME}.selection_sequence"),
+        latest_visible_selection_sequence=strict_non_negative_int(
+            latest_visible_selection_sequence, field=f"{_TABLE_NAME}.latest_visible_selection_sequence",
+        ),
     )
     if state.state_revision < 1:
         raise RuntimeError(
@@ -117,6 +126,12 @@ class ContextSourceControlStorageMixin:
       Turn 进行中取锁会与在途提交交错并改变 item 提交顺序（详见
       ``apply_context_source_control_mutation`` 的说明）。读取复用统一只读快照。
     """
+
+    if TYPE_CHECKING:
+        def _sealed_skill_selection(
+            self, connection: sqlite3.Connection, owner: ContextSourceOwnerKey, name: str,
+            source_ids: frozenset[str],
+        ) -> str | None: ...
 
     def _context_source_rollout_owner(
         self,
@@ -266,7 +281,7 @@ class ContextSourceControlStorageMixin:
                 if old_stored is not None and old_stored.tracking_status == "untracked" and (
                     old_stored.state_revision == replaced.state_revision + 1
                     and old_stored.durable_fields() == replaced.durable_fields()
-                    and stored is not None and stored.durable_fields() == state.durable_fields()
+                    and stored is not None and replace(stored, selection_sequence=state.selection_sequence).durable_fields() == state.durable_fields()
                     and stored.state_revision in {state.state_revision, state.state_revision + 1}
                 ):
                     return ContextSourceControlReceipt(stored, old_stored)
@@ -278,12 +293,34 @@ class ContextSourceControlStorageMixin:
                 if stored is not None and stored.tracking_status != "untracked":
                     raise RuntimeError("context-source-control-state-conflict: rebind 目标已被跟踪")
             if stored is not None:
+                if state.selection_sequence != stored.selection_sequence and not (
+                    mutation.operation == "activate_skill"
+                    and replace(stored, selection_sequence=state.selection_sequence).durable_fields() == state.durable_fields()
+                    and stored.state_revision == state.state_revision + 1
+                ):
+                    raise RuntimeError("context-source-control-state-conflict: 选择次序只能由 owner 分配")
                 if mutation.operation not in {"register", "activate_skill"} and state.binding_revision != stored.binding_revision:
                     raise RuntimeError("context-source-control-state-conflict: 来源绑定变化必须使用 register 或 activate_skill")
                 if mutation.operation in {"register", "observe"} and state.tracking_status != stored.tracking_status:
                     raise RuntimeError("context-source-control-state-conflict: tracking 变化必须使用 track/untrack")
                 if mutation.operation not in {"observe", "activate_skill"} and state.latest_revision != stored.latest_revision:
                     raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe 或 activate_skill")
+            if mutation.operation == "activate_skill":
+                rows = connection.execute(
+                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                    "WHERE session_id=? AND thread_id=? AND source_kind='skill' AND latest_revision IS NOT NULL",
+                    (owner.session_id, owner.thread_id),
+                ).fetchall()
+                siblings = tuple(value for value in map(_state_from_row, rows)
+                                 if _normalize_skill_name(value.name) == _normalize_skill_name(state.name))
+                sequence = next_skill_selection_sequence(
+                    state.source_id, tuple((value.source_id, value.selection_sequence) for value in siblings),
+                    fallback_source_id=self._sealed_skill_selection(
+                        connection, owner, state.name, frozenset(value.source_id for value in siblings),
+                    )
+                    if not any(value.selection_sequence for value in siblings) else None,
+                )
+                state = replace(state, selection_sequence=sequence)
             # 旧行只从同事务的权威记录派生；两次写入任一失败均整体回滚。
             frozen = None
             if old_stored is not None:
@@ -305,6 +342,8 @@ class ContextSourceControlStorageMixin:
             raise RuntimeError("source control mutation 需要活动 ContextStore 事务")
         if state.latest_visible_committed_revision != (
             stored.latest_visible_committed_revision if stored is not None else None
+        ) or state.latest_visible_selection_sequence != (
+            stored.latest_visible_selection_sequence if stored is not None else 0
         ):
             raise RuntimeError("context-source-control-state-conflict: applied 只能由 assembly seal 推进")
         if stored is not None and (state.source_kind, state.name) != (stored.source_kind, stored.name):
@@ -341,7 +380,7 @@ class ContextSourceControlStorageMixin:
                 f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
                 "binding_revision = ?, tracking_status = ?, "
                 "latest_revision = ?, "
-                "state_revision = ?, updated_at = ? "
+                "state_revision = ?, updated_at = ?, selection_sequence = ? "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
                 "AND state_revision = ?",
                 (
@@ -352,6 +391,7 @@ class ContextSourceControlStorageMixin:
                     state.latest_revision,
                     next_revision,
                     timestamp,
+                    state.selection_sequence,
                     owner.session_id,
                     owner.thread_id,
                     state.source_id,
@@ -376,7 +416,7 @@ class ContextSourceControlStorageMixin:
             cursor = connection.execute(
                 f"INSERT INTO {_TABLE_NAME} "
                 f"({_SELECT_COLUMNS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     owner.session_id,
                     owner.thread_id,
@@ -390,6 +430,8 @@ class ContextSourceControlStorageMixin:
                     next_revision,
                     timestamp,
                     timestamp,
+                    state.selection_sequence,
+                    state.latest_visible_selection_sequence,
                 ),
             )
             if cursor.rowcount != 1:

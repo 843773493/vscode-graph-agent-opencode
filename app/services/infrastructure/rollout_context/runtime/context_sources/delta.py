@@ -29,6 +29,8 @@ class SourceDeltaMixin:
                     content_hash=_revision(state.latest_content),
                     kind=state.pending_kind,
                     observation_provenance=tuple(state.observed_revisions),
+                    selection_sequence=state.selection_sequence,
+                    control_revision=state.persisted_state_revision,
                 )
                 return
             previous_content = state.latest_visible_committed_content
@@ -69,6 +71,8 @@ class SourceDeltaMixin:
                 content_hash=_revision(content),
                 observation_provenance=tuple(state.observed_revisions),
                 kind=kind,
+                selection_sequence=state.selection_sequence,
+                control_revision=state.persisted_state_revision,
             )
 def _adopt_restored_baseline(
     state: SourceState,

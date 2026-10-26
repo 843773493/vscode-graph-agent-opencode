@@ -678,6 +678,8 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 一次snapshot/tracked加载 SHALL原子接受相应激活候选和模式控制变更；失败保留原registration、pending候选及有效正文，不产生先停止旧tracking后加载失败的半完成状态。成功的snapshot转换 MUST清理或替换未seal且与本次显式冻结版本冲突的旧tracking候选，不能在停止追踪后又自动注入该候选。成功接受不等于injected；真正提交版本仍由后续assembly seal确立。新版本生效 MUST通过不可变更新表达与旧版的替代关系，保留历史sealed字节；同版本复用正文不得跳过模式切换。
 
+同名 Skill SHALL由唯一 thread owner 在原控制行分配显式选择次序，并分别保存已接受与已封存的选择次序；后者只能由 assembly seal 推进。当前选择 MUST NOT仅根据某来源 revision 曾经可见判定。preparation 冻结当前控制 CAS，已冻结 plan 按原 CAS 校验；目录重绑、模式变更、重启和失败重试不得绕过此边界。选择状态 MUST随 checkpoint 保存及 rewind 恢复；旧库通过具名24→25维护迁移新增字段，以原封存来源确定零次序基准，不能重编码历史。
+
 #### Scenario: 默认 snapshot 加载
 
 - **WHEN** 模型调用 `skill_load(name)` 或显式使用 `mode="snapshot"`
@@ -685,13 +687,23 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 #### Scenario: 重复 snapshot 不产生同 revision 重影
 
-- **WHEN**同一source revision的snapshot activation仍在active view，模型再次调用`skill_load(name, snapshot)`
+- **WHEN**同一source revision的snapshot activation仍是当前选择并在active view，模型再次调用`skill_load(name, snapshot)`
 - **THEN** 复用原安全identity、不追加第二个item，并确保该名称无active tracking；正文已存在不掩盖实际模式切换，回执表达最终snapshot与未追踪状态
 
 #### Scenario: 一次调用刷新snapshot到新版
 
 - **WHEN** A版snapshot仍在active view，而本次调用冻结快照已发布同来源B版，模型再次调用`skill_load(name)`
 - **THEN** 一次调用接受B版activation并明确其取代A版，无需先unload或untrack；旧sealed A版不变，随后仍处于snapshot模式
+
+#### Scenario: 复用旧版本显式切回与重启
+
+- **WHEN** A来源原版本已经封存，显式切换并封存同名B来源，随后再次选择A的相同原版本，在接受后、seal前重启runtime
+- **THEN** owner保留尚未封存的A选择，使用原execution冻结正文恢复并追加具名替代B的更新；seal后重复加载A不再追加，A和B原sealed bytes及历史owner不变
+
+#### Scenario: 连续选择及epoch重建不复活旧来源
+
+- **WHEN** 一次seal前连续选择同名A、B、A，或已封存A→B→A后进行compaction／rewind
+- **THEN** pending只保留最后接受的选择；新epoch只携带目标checkpoint所选来源的最后完整状态及后续diff，被取代来源不复活，旧assembly和请求hash保持原样
 
 #### Scenario: tracked显式切换为snapshot
 

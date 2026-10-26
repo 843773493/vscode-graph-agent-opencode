@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -124,10 +124,31 @@ class ContextSourceDelta:
     observation_provenance: tuple[str, ...] = ()
     wire_role: Literal["user"] = "user"
     kind: Literal["activation", "delta", "rebuild"] = "activation"
+    # 选择次序区分 A→B→A；控制 CAS 只用作同来源重复版本更新的不可变 item 身份。
+    selection_sequence: int = 0
+    control_revision: int = 0
 
 
 SkillLoadStatus = Literal["loaded", "already_active", "not_tracked", "rebound"]
 SkillLoadAppendStatus = Literal["appended", "already_active", "none"]
+
+
+def next_skill_selection_sequence(
+    source_id: str, sequences: Sequence[tuple[str, int]], *, fallback_source_id: str | None = None,
+) -> int:
+    """同名选择只比较 owner 分配的次序，不比较各来源的 CAS 或时间戳。"""
+    maximum = max((sequence for _, sequence in sequences), default=0)
+    current = [identity for identity, sequence in sequences if sequence == maximum and sequence > 0]
+    if len(current) > 1:
+        raise RuntimeError("skill-selection-conflict: 同名来源具有重复选择次序")
+    selected = current[0] if current else fallback_source_id
+    return maximum if selected == source_id else maximum + 1
+
+
+def source_delta_id(delta: ContextSourceDelta) -> str:
+    """一次冻结更新的身份；允许同正文版本在后续真实选择中再次生效。"""
+    identity = f"source-update:{delta.source_id}:{delta.revision}:{delta.kind}"
+    return f"{identity}:{delta.selection_sequence}:{delta.control_revision}" if delta.source_kind == "skill" else identity
 
 
 class ContextSourceTrackingStateConflict(RuntimeError):
@@ -278,6 +299,7 @@ class ContextSourceSnapshot:
     applied_revision: str | None
     tracked: bool
     expected_control_revision: int | None = None
+    selection_sequence: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ContextSourceDescriptor):

@@ -11,7 +11,19 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 
 
+def restore_schema24(connection: sqlite3.Connection) -> None:
+    """还原选择次序引入前的结构；业务内容仍由真实产品写入方生成。"""
+    for table in ("context_source_control_states", "checkpoint_context_source_states"):
+        connection.execute(f"ALTER TABLE {table} DROP COLUMN latest_visible_selection_sequence")
+        connection.execute(f"ALTER TABLE {table} DROP COLUMN selection_sequence")
+    connection.execute("UPDATE database_meta SET schema_version=24")
+    connection.execute("UPDATE schema_migrations SET to_version=24,migration_name='rollout_sqlite_v24',migration_checksum=? WHERE from_version=0",
+                       (hashlib.sha256(b"rollout_sqlite_v24").hexdigest(),))
+    connection.commit()
+
+
 def restore_schema22(connection: sqlite3.Connection) -> None:
+    restore_schema24(connection)
     rows = connection.execute("SELECT * FROM context_view_items").fetchall()
     connection.executescript("""
         DROP VIEW context_view_items;

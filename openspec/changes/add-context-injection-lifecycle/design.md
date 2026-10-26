@@ -374,6 +374,10 @@ activation registration绑定`name + catalog_entry_identity + resolved_source_id
 
 Metadata 与 activation 独立生效：metadata 让模型知道可选 Skill；activation 是 `skill_load` 后实际进入上下文的 Skill 正文。首次组装已有 metadata 可进入 root system item，运行中 metadata 变化只能追加 user-role delta，不能改写 root item。
 
+同名 Skill 的“曾经封存可见”与“当前显式选择”分别管理。现有 source control 行增加 owner 分配的 `selection_sequence` 和仅由 assembly seal 推进的 `latest_visible_selection_sequence`；同名来源按选择次序比较，不能拿各来源独立的 `state_revision` 或时间戳排序。A→B→A 即使复用 A 的原正文 revision，也必须封存一次新的选择并具名替代 B。后一次选择清理同名旧 pending；重启只从控制事实和同一 execution 冻结的精确 Skill 版本恢复候选，缺失或版本冲突明确失败，不读当前文件补齐。普通 preparation 冻结当前控制 CAS，使合法目录重绑或模式转换后的 pending 可以封存；已冻结 plan 仍按原 CAS 拒绝并发漂移。
+
+该结构实际提升 rollout schema 至25，并登记24→25 SQL；现有18起的显式维护迁移继续逐版本衔接，runtime不自动升级。两个选择字段同时进入 checkpoint source state；rewind 恢复目标选择，移出的未追踪来源清零且不自动复活。新 epoch 排除已被同名选择取代的来源，只携带所选 Skill 最后一次完整状态及其后续 diff；旧前缀、sealed bytes、request hash 与历史 owner 不变。旧库两字段初值为零，首次选择从当前 view 的原 sealed root／tail 身份确定基准，支持原有无来源协议帧及v1／v2帧，不改写旧封装或正文。
+
 #### 5.3 目标源码目录与依赖边界
 
 以下是实施后的**目标目录**，不是当前文件系统已存在清单；新建的每个源码子目录都必须同时提供四段式`AGENTS.md`。文件名仅示意owner，不要求为同一职责再造第二套入口：

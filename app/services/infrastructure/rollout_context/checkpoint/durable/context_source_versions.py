@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.mutation_intents import RebuildContextEpochIntent
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import json_text
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    _normalize_skill_name,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     is_tool_definition_source,
 )
@@ -28,15 +36,55 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
+
 _SOURCE_COLUMNS = (
     "session_id, thread_id, source_id, source_kind, name, binding_revision, "
     "tracking_status, latest_visible_committed_revision, latest_revision, "
-    "state_revision, created_at, updated_at"
+    "state_revision, created_at, updated_at, selection_sequence, latest_visible_selection_sequence"
 )
 
 
 class ContextSourceVersionsStorageMixin:
     """只参加调用方已有 SQLite 事务，不自行提交、不追加 source 正文。"""
+
+    _context: RolloutContextStore
+
+    def _sealed_skill_selection(
+        self, connection: sqlite3.Connection, owner: ContextSourceOwnerKey, name: str,
+        source_ids: frozenset[str],
+    ) -> str | None:
+        """旧库选择次序为零时，从当前 view 的封存来源取得唯一基准。"""
+        pending = self._pending_context_epoch_row(connection, "")
+        row = None if pending is None else connection.execute(
+            "SELECT source_assembly_id FROM checkpoint_context_source_snapshots WHERE checkpoint_id=?",
+            (pending[3],),
+        ).fetchone()
+        assembly = (
+            self._context.assemblies._read_context_assembly_connection(
+                connection, owner.session_id, owner.thread_id, assembly_id=row[0], checkpoint_ns="",
+            )[0] if row is not None and row[0] is not None else
+            self._context.assemblies._latest_context_assembly_connection(
+                connection, owner.session_id, owner.thread_id, checkpoint_ns="",
+            ) if pending is None else None
+        )
+        if assembly is None or assembly.seal_binding is None:
+            return None
+        binding = assembly.seal_binding
+        selected = None
+        for source in (() if binding.root is None else binding.root.sources):
+            if source.source_kind == "skill" and _normalize_skill_name(source.name) == _normalize_skill_name(name):
+                selected = source.source_identity
+        for frame in binding.prefix.state.frames:
+            if frame.role == "user" and frame.source_protocol is not None:
+                for source in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
+                    if source.source_kind == "skill" and _normalize_skill_name(source.name) == _normalize_skill_name(name):
+                        selected = source.source_identity
+            elif frame.role == "user" and frame.item_ref.source_identity in source_ids:
+                # 统一来源协议之前的封存帧已有 typed 来源身份，不能重读当前文件补名。
+                selected = frame.item_ref.source_identity
+        return selected
 
     def consume_context_epoch_rebuild_intent(
         self,
@@ -229,7 +277,9 @@ class ContextSourceVersionsStorageMixin:
         }
         restored = [
             (session_id, thread_id, *row[2:7],
-             visible.get(row[2]) if row[6] == "untracked" else row[7], *row[8:])
+             visible.get(row[2]) if row[6] == "untracked" else row[7], *row[8:12],
+             row[12] if row[6] == "tracked" or row[2] in visible else 0,
+             row[13] if row[6] == "tracked" or row[2] in visible else 0)
             for row in states
         ]
         # 目标 checkpoint 之后建立的 registration 冻结为不跟踪，保留单调 CAS，
@@ -237,6 +287,7 @@ class ContextSourceVersionsStorageMixin:
         connection.execute(
             "UPDATE context_source_control_states SET tracking_status = 'untracked', "
             "latest_visible_committed_revision = NULL, latest_revision = NULL, "
+            "selection_sequence = 0, latest_visible_selection_sequence = 0, "
             "state_revision = state_revision + 1, updated_at = ? "
             "WHERE session_id = ? AND thread_id = ? AND source_id NOT IN "
             "(SELECT source_id FROM checkpoint_context_source_states WHERE checkpoint_id = ?)",
@@ -244,13 +295,15 @@ class ContextSourceVersionsStorageMixin:
         )
         connection.executemany(
             "INSERT INTO context_source_control_states "
-            f"({_SOURCE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            f"({_SOURCE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(session_id, thread_id, source_id) DO UPDATE SET "
             "source_kind = excluded.source_kind, name = excluded.name, "
             "binding_revision = excluded.binding_revision, "
             "tracking_status = excluded.tracking_status, "
             "latest_visible_committed_revision = excluded.latest_visible_committed_revision, "
             "latest_revision = excluded.latest_revision, "
+            "selection_sequence = excluded.selection_sequence, "
+            "latest_visible_selection_sequence = excluded.latest_visible_selection_sequence, "
             "state_revision = max(context_source_control_states.state_revision, excluded.state_revision) + 1, "
             "updated_at = ?",
             ((*row, timestamp) for row in restored),

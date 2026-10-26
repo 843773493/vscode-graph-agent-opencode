@@ -50,6 +50,7 @@ from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOUR
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     ContextSourceSnapshot,
     PendingContextSourceBatch,
+    source_delta_id,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     is_tool_definition_source,
@@ -78,7 +79,7 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
     ]
     contributions.extend(
         ContextContribution(
-            contribution_id=f"source-update:{delta.source_id}:{delta.revision}:{delta.kind}",
+            contribution_id=source_delta_id(delta),
             source_kind=delta.source_kind,
             source_revision=delta.revision,
             contribution_kind="notice",
@@ -111,6 +112,7 @@ def compile_prefix_context(
     retained_source_bodies: Mapping[str, object] | None = None,
     notice_acceptance: RuntimeNoticeAcceptanceRef | None = None,
     allow_provider_reprojection: bool = False,
+    deselected_source_ids: frozenset[str] = frozenset(),
 ) -> tuple[ContextRequestPlan, ContextSealPreparation]:
     """同 epoch 精确继承已封存 prefix，只在真实边界重编 root。"""
     tool_ref = plan.tool_set_refs[0]
@@ -192,7 +194,7 @@ def compile_prefix_context(
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
         candidates: dict[str, tuple[RootCandidateSource, tuple[str, ...]]] = {}
-        observed = {source.descriptor.source_id for source in batch.sources}
+        observed = {source.descriptor.source_id for source in batch.sources} | deselected_source_ids
         if retained_source_assembly is not None:
             retained_binding = retained_source_assembly.seal_binding
             if retained_binding is None:
@@ -228,7 +230,7 @@ def compile_prefix_context(
                     source_tracking_at_seal="untracked",
                 ), ("request_only", entry.ref.ref_id, plan.thread_id))
         for source in batch.sources:
-            if source.descriptor.root_placement != "root_eligible" or not source.content:
+            if source.descriptor.source_id in deselected_source_ids or source.descriptor.root_placement != "root_eligible" or not source.content:
                 continue
             contribution = by_contribution[full_source_id(source)]
             if contribution.source_ordinal is None:
@@ -286,16 +288,16 @@ def compile_prefix_context(
     frames.extend(canonical_frames)
     selected_identities.extend(("canonical_item", item_id, plan.thread_id) for item_id in canonical_ids)
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
-    # TODO(CIL 9.8)：复用旧正文时仍需封存显式切回；不能把历史可见等同于当前选择。
     tail_values: list[tuple[str, ContextSourceSnapshot, str, Literal["activate", "update", "replace", "restore"], str | None]] = (
         [
             (full_source_id(source), source, source.content,
              "activate" if source.applied_revision is None else "restore", None)
             for source in batch.sources
-            if source.descriptor.root_placement == "tail_only" or not source.content
+            if source.descriptor.source_id not in deselected_source_ids
+            and (source.descriptor.root_placement == "tail_only" or not source.content)
         ]
         if rebuilding else [
-            (f"source-update:{delta.source_id}:{delta.revision}:{delta.kind}",
+            (source_delta_id(delta),
              source_by_id[delta.source_id], delta.content,
              "update" if delta.kind == "delta" else "restore" if delta.kind == "rebuild"
              else "replace" if delta.previous_revision is not None else "activate",
@@ -317,10 +319,20 @@ def compile_prefix_context(
                            if (frame.item_ref.source_identity, frame.item_ref.source_revision) == (identity, revision)), default=0)
             for identity, revision in root_revisions.items() if identity not in materialized
         }
+        # 新 epoch 只携带每个 Skill 最后一次完整选择及其后续 diff；
+        # A→B→A 的旧 A 帧仍留在历史 assembly，不在新上下文中形成重影。
+        skill_cutoffs = {
+            block.source_identity: frame.ordinal
+            for frame in retained_frames if frame.source_protocol is not None
+            for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)
+            if block.source_kind == "skill" and block.representation == "full"
+        }
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_frames:
             identity = frame.item_ref.source_identity
             if (is_tool_definition_source(identity)
+                    or identity in deselected_source_ids
+                    or identity in skill_cutoffs and frame.ordinal < skill_cutoffs[identity]
                     or identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
                     or identity in root_cutoffs and frame.ordinal <= root_cutoffs[identity]):
                 continue
@@ -435,17 +447,19 @@ def compile_prefix_context(
             # revision 真正变化时推进 applied，完整帧已由新 epoch 独立封存。
             tuple(AppliedSourceRevision(
                 source.descriptor.source_id, source.revision,
-                f"source-rebuild:{transition.transition_id}:{source.descriptor.source_id}",
+                f"source-rebuild:{transition.transition_id}:{source.descriptor.source_id}:{source.selection_sequence}",
                 source.applied_revision,
                 expected_control_revision=source.expected_control_revision,
             ) for source in batch.sources if (
                 source.expected_control_revision is not None
                 or source.revision != source.applied_revision
+                or any(delta.source_id == source.descriptor.source_id for delta in batch.deltas)
             ))
             if source_rebuild else tuple(AppliedSourceRevision(
                 delta.source_id, delta.revision,
-                f"source-seal:{delta.source_id}:{delta.revision}:{delta.kind}",
+                source_delta_id(delta),
                 delta.previous_revision,
+                expected_control_revision=delta.control_revision if delta.source_kind == "skill" and delta.control_revision > 0 else None,
             ) for delta in batch.deltas)
         ),
         transition=transition,

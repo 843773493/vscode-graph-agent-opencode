@@ -25,8 +25,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
+    SKILL_SELECTION_MIGRATION_SQL,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
+    restore_schema24,
+)
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -198,6 +202,7 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(store_c
     # 模拟已支持的上版结构；历史内容仍来自真实 acceptance。
     import hashlib
     with storage._connect(case.thread, session_id=case.session) as connection:
+        restore_schema24(connection)
         connection.executescript("DROP TRIGGER execution_queue_terminal; DROP TRIGGER execution_queue_insert_revision; "
             "DROP TRIGGER execution_queue_update_revision; DROP TABLE execution_queue; DROP TABLE execution_queue_revision;")
         connection.execute("UPDATE database_meta SET schema_version=23")
@@ -206,6 +211,8 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(store_c
         connection.commit()
     storage.migrate_schema(case.thread, session_id=case.session, to_version=24,
                            migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL)
+    storage.migrate_schema(case.thread, session_id=case.session, to_version=25,
+                           migration_name="skill_selection_024_025", migration_sql=SKILL_SELECTION_MIGRATION_SQL)
     await case.store.migrate_schema(case.session)
     assert not path.exists() and storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original
     recovered, = await case.store.records()

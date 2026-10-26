@@ -241,7 +241,12 @@ def test_activation_refresh_accepts_external_untrack_without_losing_pending_or_v
 
     manager.refresh_control_states()
     refreshed = manager.prepare_sources()
-    assert refreshed.deltas == frozen.deltas
+    by_source = {state.source_id: state for state in committed}
+    assert refreshed.deltas == tuple(
+        replace(delta, control_revision=by_source[delta.source_id].state_revision)
+        for delta in frozen.deltas
+    )
+    assert refreshed.deltas[0].control_revision > frozen.deltas[0].control_revision
     assert [(item.content, item.revision, item.applied_revision) for item in refreshed.sources] == [
         (item.content, item.revision, item.applied_revision) for item in frozen.sources
     ]

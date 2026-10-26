@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS checkpoint_context_source_states (
     state_revision INTEGER NOT NULL CHECK(state_revision >= 1),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    selection_sequence INTEGER NOT NULL DEFAULT 0 CHECK(selection_sequence >= 0),
+    latest_visible_selection_sequence INTEGER NOT NULL DEFAULT 0
+        CHECK(latest_visible_selection_sequence >= 0 AND latest_visible_selection_sequence <= selection_sequence),
     PRIMARY KEY(checkpoint_id, source_id)
 );
 CREATE TABLE IF NOT EXISTS context_epoch_transitions (
