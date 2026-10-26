@@ -10,12 +10,13 @@ from app.gateway.diagnostics import (
     _process_log_path,
     _scope_log_candidates,
 )
+from app.schemas.gateway.diagnostics import GatewayDiagnosticLogSource
 
 
 def _log_candidate(
     log_id: str,
     *,
-    source: str,
+    source: GatewayDiagnosticLogSource,
     workspace_id: str | None = None,
 ) -> _LogCandidate:
     return _LogCandidate(

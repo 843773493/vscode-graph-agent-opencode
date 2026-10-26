@@ -179,6 +179,34 @@ export interface GatewayDiagnosticWorkspaceDTO {
   connection_error?: string | undefined;
 }
 
+/** 管理入口使用日志选择 ID 与文件身份，真实路径仅保留在原始日志中。 */
+export interface GatewayDiagnosticLogSinkDTO {
+  log_id?: string | undefined;
+  owner_id: string;
+  role: string;
+  source: string;
+  device: string;
+  inode: string;
+}
+
+export interface GatewayDiagnosticLoggingStateDTO {
+  service: string;
+  pid: number;
+  runtime_instance_id: string;
+  applied_revision?: string | undefined;
+  level: string;
+  pretty: boolean;
+  log_sink?: GatewayDiagnosticLogSinkDTO | undefined;
+}
+
+export interface GatewayDiagnosticProcessDTO {
+  service: string;
+  workspace_ids: string[];
+  state?: GatewayDiagnosticLoggingStateDTO | undefined;
+  output_mode: string;
+  error?: string | undefined;
+}
+
 export interface GatewayDiagnosticsDTO {
   gateway_id: string;
   gateway_name: string;
@@ -190,6 +218,7 @@ export interface GatewayDiagnosticsDTO {
   selected_log_id?: string | undefined;
   workspaces: GatewayDiagnosticWorkspaceDTO[];
   logs: GatewayDiagnosticLogDTO[];
+  processes: GatewayDiagnosticProcessDTO[];
 }
 
 export interface GatewayDirectoryEntryDTO {
@@ -1941,6 +1970,186 @@ export const GatewayDiagnosticWorkspaceDTO: MessageFns<GatewayDiagnosticWorkspac
   },
 };
 
+function createBaseGatewayDiagnosticLogSinkDTO(): GatewayDiagnosticLogSinkDTO {
+  return { log_id: undefined, owner_id: "", role: "", source: "", device: "", inode: "" };
+}
+
+export const GatewayDiagnosticLogSinkDTO: MessageFns<GatewayDiagnosticLogSinkDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogSinkDTO {
+    return {
+      log_id: isSet(object.log_id) ? globalThis.String(object.log_id) : undefined,
+      owner_id: isSet(object.owner_id) ? globalThis.String(object.owner_id) : "",
+      role: isSet(object.role) ? globalThis.String(object.role) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      device: isSet(object.device) ? globalThis.String(object.device) : "",
+      inode: isSet(object.inode) ? globalThis.String(object.inode) : "",
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogSinkDTO): unknown {
+    const obj: any = {};
+    if (message.log_id !== undefined) {
+      obj.log_id = message.log_id;
+    }
+    if (message.owner_id !== "") {
+      obj.owner_id = message.owner_id;
+    }
+    if (message.role !== "") {
+      obj.role = message.role;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.device !== "") {
+      obj.device = message.device;
+    }
+    if (message.inode !== "") {
+      obj.inode = message.inode;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogSinkDTO>, I>>(base?: I): GatewayDiagnosticLogSinkDTO {
+    return GatewayDiagnosticLogSinkDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogSinkDTO>, I>>(object: I): GatewayDiagnosticLogSinkDTO {
+    const message = createBaseGatewayDiagnosticLogSinkDTO();
+    message.log_id = object.log_id ?? undefined;
+    message.owner_id = object.owner_id ?? "";
+    message.role = object.role ?? "";
+    message.source = object.source ?? "";
+    message.device = object.device ?? "";
+    message.inode = object.inode ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLoggingStateDTO(): GatewayDiagnosticLoggingStateDTO {
+  return {
+    service: "",
+    pid: 0,
+    runtime_instance_id: "",
+    applied_revision: undefined,
+    level: "",
+    pretty: false,
+    log_sink: undefined,
+  };
+}
+
+export const GatewayDiagnosticLoggingStateDTO: MessageFns<GatewayDiagnosticLoggingStateDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLoggingStateDTO {
+    return {
+      service: isSet(object.service) ? globalThis.String(object.service) : "",
+      pid: isSet(object.pid) ? globalThis.Number(object.pid) : 0,
+      runtime_instance_id: isSet(object.runtime_instance_id) ? globalThis.String(object.runtime_instance_id) : "",
+      applied_revision: isSet(object.applied_revision) ? globalThis.String(object.applied_revision) : undefined,
+      level: isSet(object.level) ? globalThis.String(object.level) : "",
+      pretty: isSet(object.pretty) ? globalThis.Boolean(object.pretty) : false,
+      log_sink: isSet(object.log_sink) ? GatewayDiagnosticLogSinkDTO.fromJSON(object.log_sink) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLoggingStateDTO): unknown {
+    const obj: any = {};
+    if (message.service !== "") {
+      obj.service = message.service;
+    }
+    if (message.pid !== 0) {
+      obj.pid = Math.round(message.pid);
+    }
+    if (message.runtime_instance_id !== "") {
+      obj.runtime_instance_id = message.runtime_instance_id;
+    }
+    if (message.applied_revision !== undefined) {
+      obj.applied_revision = message.applied_revision;
+    }
+    if (message.level !== "") {
+      obj.level = message.level;
+    }
+    if (message.pretty !== false) {
+      obj.pretty = message.pretty;
+    }
+    if (message.log_sink !== undefined) {
+      obj.log_sink = GatewayDiagnosticLogSinkDTO.toJSON(message.log_sink);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLoggingStateDTO>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLoggingStateDTO {
+    return GatewayDiagnosticLoggingStateDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLoggingStateDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLoggingStateDTO {
+    const message = createBaseGatewayDiagnosticLoggingStateDTO();
+    message.service = object.service ?? "";
+    message.pid = object.pid ?? 0;
+    message.runtime_instance_id = object.runtime_instance_id ?? "";
+    message.applied_revision = object.applied_revision ?? undefined;
+    message.level = object.level ?? "";
+    message.pretty = object.pretty ?? false;
+    message.log_sink = (object.log_sink !== undefined && object.log_sink !== null)
+      ? GatewayDiagnosticLogSinkDTO.fromPartial(object.log_sink)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticProcessDTO(): GatewayDiagnosticProcessDTO {
+  return { service: "", workspace_ids: [], state: undefined, output_mode: "", error: undefined };
+}
+
+export const GatewayDiagnosticProcessDTO: MessageFns<GatewayDiagnosticProcessDTO> = {
+  fromJSON(object: any): GatewayDiagnosticProcessDTO {
+    return {
+      service: isSet(object.service) ? globalThis.String(object.service) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      state: isSet(object.state) ? GatewayDiagnosticLoggingStateDTO.fromJSON(object.state) : undefined,
+      output_mode: isSet(object.output_mode) ? globalThis.String(object.output_mode) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticProcessDTO): unknown {
+    const obj: any = {};
+    if (message.service !== "") {
+      obj.service = message.service;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.state !== undefined) {
+      obj.state = GatewayDiagnosticLoggingStateDTO.toJSON(message.state);
+    }
+    if (message.output_mode !== "") {
+      obj.output_mode = message.output_mode;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticProcessDTO>, I>>(base?: I): GatewayDiagnosticProcessDTO {
+    return GatewayDiagnosticProcessDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticProcessDTO>, I>>(object: I): GatewayDiagnosticProcessDTO {
+    const message = createBaseGatewayDiagnosticProcessDTO();
+    message.service = object.service ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.state = (object.state !== undefined && object.state !== null)
+      ? GatewayDiagnosticLoggingStateDTO.fromPartial(object.state)
+      : undefined;
+    message.output_mode = object.output_mode ?? "";
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
 function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
   return {
     gateway_id: "",
@@ -1953,6 +2162,7 @@ function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
     selected_log_id: undefined,
     workspaces: [],
     logs: [],
+    processes: [],
   };
 }
 
@@ -1976,6 +2186,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
         : [],
       logs: globalThis.Array.isArray(object?.logs)
         ? object.logs.map((e: any) => GatewayDiagnosticLogDTO.fromJSON(e))
+        : [],
+      processes: globalThis.Array.isArray(object?.processes)
+        ? object.processes.map((e: any) => GatewayDiagnosticProcessDTO.fromJSON(e))
         : [],
     };
   },
@@ -2012,6 +2225,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     if (message.logs?.length) {
       obj.logs = message.logs.map((e) => GatewayDiagnosticLogDTO.toJSON(e));
     }
+    if (message.processes?.length) {
+      obj.processes = message.processes.map((e) => GatewayDiagnosticProcessDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -2030,6 +2246,7 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     message.selected_log_id = object.selected_log_id ?? undefined;
     message.workspaces = object.workspaces?.map((e) => GatewayDiagnosticWorkspaceDTO.fromPartial(e)) || [];
     message.logs = object.logs?.map((e) => GatewayDiagnosticLogDTO.fromPartial(e)) || [];
+    message.processes = object.processes?.map((e) => GatewayDiagnosticProcessDTO.fromPartial(e)) || [];
     return message;
   },
 };

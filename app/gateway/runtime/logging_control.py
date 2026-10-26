@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import httpx
 
-from app.core.logging_config import RuntimeLoggingConflictError
+from app.core.logging_config import (
+    RuntimeLoggingConflictError,
+    apply_runtime_logging,
+    runtime_logging_state,
+)
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
     RuntimeLoggingHttpService,
@@ -17,12 +25,89 @@ from app.schemas.runtime_logging import (
     RuntimeLoggingStatus,
 )
 
+if TYPE_CHECKING:
+    from app.gateway.registry import GatewayWorkspaceRegistry
+    from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
+
 _CONTROL_PATHS: dict[RuntimeLoggingHttpService, str] = {
     "gateway": "/api/gateway/internal/runtime-logging",
     "backend": "/api/v1/internal/runtime-logging",
     "terminal": "/internal/runtime-logging",
     "browser": "/internal/runtime-logging",
 }
+
+
+@dataclass(slots=True)
+class RuntimeLoggingProcess:
+    service: RuntimeLoggingService
+    workspace_ids: tuple[str, ...]
+    status: Callable[[], Awaitable[RuntimeLoggingStatus]]
+    apply: Callable[[RuntimeLoggingApply], Awaitable[RuntimeLoggingStatus]]
+    alive: Callable[[], bool]
+
+    async def read(self) -> RuntimeLoggingStatus:
+        if not self.alive():
+            raise RuntimeError("日志目标进程已退出")
+        state = await self.status()
+        if not self.alive():
+            raise RuntimeError("日志目标进程在确认期间退出")
+        return state
+
+
+def runtime_logging_processes(
+    registry: GatewayWorkspaceRegistry, control: RuntimeLoggingProcessControl,
+) -> list[RuntimeLoggingProcess]:
+    """调用方持有拓扑锁；热应用与管理诊断共用同一份真实进程发现。"""
+    async def gateway_status() -> RuntimeLoggingStatus:
+        return control._validated_status(asdict(runtime_logging_state()), "gateway", os.getpid())
+
+    async def gateway_apply(request: RuntimeLoggingApply) -> RuntimeLoggingStatus:
+        return RuntimeLoggingStatus.model_validate(asdict(apply_runtime_logging(**request.model_dump())))
+
+    processes = [RuntimeLoggingProcess("gateway", (), gateway_status, gateway_apply, lambda: True)]
+    launcher = os.environ.get("BOXTEAM_LAUNCHER_CONTROL")
+    if launcher is not None:
+        endpoint = json.loads(launcher)
+        if (not isinstance(endpoint, dict) or set(endpoint) != {"address", "pid"}
+            or not isinstance(endpoint["address"], str) or type(endpoint["pid"]) is not int
+            or endpoint["pid"] <= 0):
+            raise ValueError("Launcher 交付的日志控制端点非法")
+        address, pid = endpoint["address"], endpoint["pid"]
+        processes.append(RuntimeLoggingProcess(
+            "launcher", (), lambda: control.launcher_status(address=address, pid=pid),
+            lambda request: control.launcher_apply(address=address, pid=pid, request=request), lambda: True,
+        ))
+
+    http_processes: dict[tuple[str, int], RuntimeLoggingProcess] = {}
+
+    def add_http(handle: ManagedProcessHandle, service: RuntimeLoggingHttpService, url: str, workspace_ids: tuple[str, ...]) -> None:
+        key = (service, handle.pid)
+        if key in http_processes:
+            process = http_processes[key]
+            process.workspace_ids = tuple(dict.fromkeys((*process.workspace_ids, *workspace_ids)))
+            return
+        process = RuntimeLoggingProcess(
+            service, workspace_ids,
+            lambda: control.status(base_url=url, service=service, pid=handle.pid),
+            lambda request: control.apply(base_url=url, service=service, pid=handle.pid, request=request),
+            handle.is_alive,
+        )
+        http_processes[key] = process
+        processes.append(process)
+
+    for owner in registry.backend_owners():
+        if owner.process is not None and owner.process.is_alive():
+            add_http(owner.process, "backend", owner.contract.backend_url, owner.contract.workspace_ids)
+    for target in registry.targets():
+        if target.connection_kind != "local" or not target.managed or not registry.has_runtime(target.workspace_id):
+            continue
+        runtime = registry.managed_runtime(target.workspace_id)
+        roles: dict[str, RuntimeLoggingHttpService] = {"terminal_manager": "terminal", "browser_manager": "browser"}
+        for name, role in roles.items():
+            handle = runtime.processes.get(name)
+            if handle is not None and handle.is_alive():
+                add_http(handle, role, registry.runtime_service_urls(target.workspace_id)[name], (target.workspace_id,))
+    return processes
 
 
 class RuntimeLoggingProcessControl:

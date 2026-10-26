@@ -11,7 +11,7 @@
 - [x] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
 - [x] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
 - [x] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
-- [ ] 2.5 在现有 runtime/config 诊断中展示进程身份、owner、绝对日志路径、来源、applied revision 和实际日志设置；stdout-only 入口明确标记。
+- [x] 2.5 在现有 runtime/config 诊断中展示进程身份、owner、日志入口 ID 与文件身份、来源、applied revision 和实际日志设置；stdout-only 入口明确标记。
 
 ## 3. 进程级热应用
 
@@ -126,3 +126,12 @@
 - `hot-real-launcher-final-043` 两项真实产品检查通过：直接修改隔离用户 JSONC，由原 watcher 生成候选，五类进程依次确认 DEBUG、WARNING 和恢复原设置，逐项核 revision、格式、实际输出、PID／实例／文件身份保持；随后真实 pending handoff 继续执行并给存活进程确认新有效 revision。037／039先后暴露验收仍写死 active revision、仍要求存活进程保留旧 revision 的预期；改为精确核候选／promotion 序号及新有效 revision，身份、日志文件和资源保持断言未放宽。
 - `hot-js-regression-final-052` 为264通过／1项平台跳过。`hot-types-comparison-final-053.json` 核同一完整 HEAD 归档的 Pyright109条基线／98条当前、无新增；Ruff11／10、无新增，不称全仓静态全绿。4503份归档 blob 已逐一核验，临时源码树已删除。全部命令、源码指纹、raw与退出码仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`；正式产品现场留在对应测试路径。030因错误调用未安装的 pyright 入口未执行分析，后续改用既有离线 uvx 工具完成，不改环境依赖。
 - 当前13／22。2.5完整诊断、双工作区真实应用、真实进程链故障注入、WARNING 下完整 PTY 字节验收及最终清理仍未完成；单 Backend 的真实检查和进程替身的共享去重证明不代替4.4／4.5完整验收。本切片未修改 Web，不新增 Web 构建；Windows Python IPC／完整热应用与 macOS 原生验收未运行，保留未验证范围。
+
+### 2.5 实际进程诊断与 URI 边界（2026-10-26）
+
+- 热应用与管理诊断共用唯一受管进程发现；按真实 Backend owner 和辅助进程去重，保留完整挂载工作区集合，不枚举未受管 URL。诊断实时读取实例、PID、revision、等级、格式、sink owner／source／文件身份，明确区分 file、stdout-only 与 unknown。单个进程读取失败时显示所属服务和异常类型，原异常仍写入原始日志，其他入口可继续排障；只读诊断不触发日志应用。
+- 对齐此前用户明确的路径输出裁定：结构化诊断仅交付日志入口 ID 和文件身份，不复制内部控制合同中的绝对路径；原始日志／堆栈继续沿用具名管理例外。修正本变更的设计、任务与对应场景，未扩大 URI 例外。新增公开字段从 proto 生成，并迁齐 Pydantic、Web null 约定和页面显示。
+- `diagnostics-unit-056` 为61项通过，覆盖消费者既有失败结算及新诊断的共享 owner、工作区筛选、stdout-only、文件身份和异常路径不外泄；补充类型声明后 `diagnostics-unit-final-068` 为16项通过。`diagnostics-web-unit-059` 为8项通过。`diagnostics-web-types-final-065` 真实 TypeScript 检查通过，`diagnostics-web-build-058` 构建通过；后续只修正类型适配的 null 声明，无运行时代码变化。
+- `diagnostics-real-061` 为2项通过：真实 Launcher／Gateway 热切换及后续 handoff 保持通过，诊断结果与五类进程的内部实际确认逐字段一致；Chromium 经真实 Gateway 初始化、打开日志诊断并核对实例／PID／revision、owner、文件身份及 stdout-only，未拦截 API。JSON、截图与 raw 保留于 `out/tests/integration/gateway/test_gateway_launcher_handoff/artifacts/runtime-logging-diagnostics*`。驱动随后将页面创建纳入浏览器释放作用域，并独立保留执行与清理异常；健康场景业务步骤不变。
+- `diagnostics-ruff-final-067` 无诊断；Pyright 当前8个文件的12条诊断均为此前已存在的两份集成测试诊断，`diagnostics-types-comparison-069.json` 对照此前原始分析，并逐文件确认对应基线源码与提交 `054dcdf56` 一致，新增0条，产品模块无诊断。Buf 格式、生成、lint／build 及基于真实提交 `054dcdf56` 的 breaking 检查通过，OpenSpec strict validate 与差异检查通过。
+- 保留失败原件：057将 TypeScript 运行在 Bun 引擎内，触发4 GiB进程外内存保护；060改走既有 TypeScript CLI 后，指出新增 JSON null 适配遗漏，补齐后065通过。063指出导入排序与多余 noqa，修正后067通过。未放宽业务断言。证据根仍为 `out/tests/temp/unify-product-runtime-logging/artifacts/`，本批指纹包含 Python、协议、Web 类型／源码／样式；所有检查使用原进程外保护。当前14／22，双工作区、真实进程故障链与原始 PTY 完整验收仍待完成。

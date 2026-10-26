@@ -63,7 +63,20 @@ export type GatewayConfigSourcesDTO = Omit<
 };
 export type GatewayDiagnosticLogDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticLogDTO>;
 export type GatewayDiagnosticWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticWorkspaceDTO>;
-export type GatewayDiagnosticsDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>;
+type GatewayDiagnosticLogSinkDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticLogSinkDTO>, "log_id"> & {
+  log_id: string | null;
+};
+type GatewayDiagnosticLoggingStateDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticLoggingStateDTO>, "applied_revision" | "log_sink"> & {
+  applied_revision: string | null;
+  log_sink: GatewayDiagnosticLogSinkDTO | null;
+};
+type GatewayDiagnosticProcessDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticProcessDTO>, "state" | "error"> & {
+  state: GatewayDiagnosticLoggingStateDTO | null;
+  error: string | null;
+};
+export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes"> & {
+  processes: GatewayDiagnosticProcessDTO[];
+};
 export type GatewayDirectoryEntryDTO = OptionalFields<GatewayProtocol.GatewayDirectoryEntryDTO>;
 export type GatewayDirectoryListDTO = OptionalFields<GatewayProtocol.GatewayDirectoryListDTO>;
 export type GatewayHealthDTO = OptionalFields<GatewayProtocol.GatewayHealthDTO>;

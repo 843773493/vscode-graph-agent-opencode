@@ -18,6 +18,7 @@ import httpx
 from app.core.logging_contract import load_runtime_log_contract
 from tests.integration.gateway.runtime_logging_controls import (
     verify_runtime_logging_controls,
+    verify_runtime_logging_diagnostics_ui,
     verify_runtime_logging_reload,
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
@@ -170,6 +171,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         "BOXTEAM_PROJECT_ROOT": str(project_root),
         "BOXTEAM_RUNTIME_MANIFEST": str(runtime_manifest),
         "BOXTEAM_PYTHON_BIN": str(python_executable),
+        "BOXTEAM_WEB_ASSETS": str(project_root / "src/clients/web/dist"),
         "BOXTEAM_NODE_BIN": node_executable,
         "BOXTEAM_GATEWAY_PORT": str(port),
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace_root),
@@ -488,6 +490,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         ] == [(session_id, thread_id, "基础回放")]
 
         verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts)
+        verify_runtime_logging_diagnostics_ui(f"http://127.0.0.1:{port}", artifacts=artifacts)
         before_restart_status = _get_json(status_url, token)["data"]
         assert isinstance(before_restart_status, dict)
         active_before_restart = before_restart_status["active_revision"]

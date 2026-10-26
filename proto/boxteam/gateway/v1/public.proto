@@ -183,6 +183,34 @@ message GatewayDiagnosticWorkspaceDTO {
   optional string connection_error = 8;
 }
 
+// 管理入口使用日志选择 ID 与文件身份，真实路径仅保留在原始日志中。
+message GatewayDiagnosticLogSinkDTO {
+  optional string log_id = 1;
+  string owner_id = 2;
+  string role = 3;
+  string source = 4;
+  string device = 5;
+  string inode = 6;
+}
+
+message GatewayDiagnosticLoggingStateDTO {
+  string service = 1;
+  int64 pid = 2;
+  string runtime_instance_id = 3;
+  optional string applied_revision = 4;
+  string level = 5;
+  bool pretty = 6;
+  optional GatewayDiagnosticLogSinkDTO log_sink = 7;
+}
+
+message GatewayDiagnosticProcessDTO {
+  string service = 1;
+  repeated string workspace_ids = 2;
+  optional GatewayDiagnosticLoggingStateDTO state = 3;
+  string output_mode = 4;
+  optional string error = 5;
+}
+
 message GatewayDiagnosticsDTO {
   string gateway_id = 1;
   string gateway_name = 2;
@@ -194,6 +222,7 @@ message GatewayDiagnosticsDTO {
   optional string selected_log_id = 8;
   repeated GatewayDiagnosticWorkspaceDTO workspaces = 9;
   repeated GatewayDiagnosticLogDTO logs = 10;
+  repeated GatewayDiagnosticProcessDTO processes = 11;
 }
 
 message GatewayDirectoryEntryDTO {

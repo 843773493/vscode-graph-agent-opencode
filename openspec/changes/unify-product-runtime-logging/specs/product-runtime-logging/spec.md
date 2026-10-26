@@ -30,7 +30,7 @@
 
 #### Scenario: Gateway 托管 Python 和 Node 服务
 - **WHEN** Gateway 启动 Backend、Terminal 和 Browser
-- **THEN** 三者获得按统一合同分配的日志去向，诊断可查绝对路径、服务、运行实例与 owner，业务进程无需读取文件布局配置
+- **THEN** 三者获得按统一合同分配的日志去向，结构化诊断可查日志入口 ID、文件身份、服务、运行实例与 owner；真实路径仅限既有具名原始日志/堆栈管理入口，不进入结构化诊断或持久应用账本，业务进程无需读取文件布局配置
 
 #### Scenario: detached 输出已经被捕获
 - **WHEN** 后续启动环节处理已由上游捕获的输出

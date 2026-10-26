@@ -249,6 +249,25 @@ export default function GatewayDiagnosticsPanel({
             </div>
           </section>
 
+          <details className="gateway-diagnostics-runtime" open>
+            <summary>进程日志设置</summary>
+            {diagnostics.processes.map((process) => (
+              <div key={`${process.service}:${process.state?.runtime_instance_id ?? process.workspace_ids.join(",")}`}>
+                <strong>{process.service}</strong>
+                {process.state ? (
+                  <>
+                    <p>PID {process.state.pid} · 实例 {process.state.runtime_instance_id}</p>
+                    <p>Revision {process.state.applied_revision ?? "bootstrap"} · {process.state.level.toUpperCase()} · {process.state.pretty ? "易读格式" : "JSON 格式"}</p>
+                    {process.state.log_sink ? (
+                      <><p>日志入口：{process.state.log_sink.log_id ?? "当前范围未提供日志文件"}</p><p>Owner：{process.state.log_sink.owner_id} · 来源：{process.state.log_sink.source}</p><p>文件身份：{process.state.log_sink.device}:{process.state.log_sink.inode}</p></>
+                    ) : <p>stdout-only：由启动环境接收输出</p>}
+                  </>
+                ) : <p role="alert">{process.error}</p>}
+                {process.workspace_ids.length ? <p>挂载工作区：{process.workspace_ids.join(", ")}</p> : null}
+              </div>
+            ))}
+          </details>
+
           <section className="gateway-diagnostics-log-layout" aria-label="日志查看器">
             <aside className="gateway-diagnostics-log-list">
               <header><div><strong>日志入口</strong><span>{diagnostics.logs.length} 个</span></div><small>选择一项查看最新尾部</small></header>

@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from app.core.logging_config import configure_application_logging, runtime_logging_state
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.diagnostics import _LogCandidate, _logging_process_diagnostics
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
@@ -22,6 +23,7 @@ from app.gateway.runtime_proof import _apply_gateway_runtime_config
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
     RuntimeLoggingService,
+    RuntimeLoggingSink,
     RuntimeLoggingStatus,
 )
 from app.services.infrastructure.config.state import ConfigConflictError
@@ -191,6 +193,48 @@ def logging_application(
         yield case
     finally:
         registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_logging_diagnostics_uses_shared_owners_and_keeps_paths_in_raw_logs(
+    logging_application: LoggingApplicationCase, monkeypatch: pytest.MonkeyPatch, failed: bool,
+) -> None:
+    case = logging_application
+    path = case.config.path.parent / "private-backend.log"
+    case.states[21] = case.states[21].model_copy(update={"log_sink": RuntimeLoggingSink(
+        path=str(path), owner_id="test-log-owner", role="backend", source="gateway", device="1", inode="2",
+    )})
+    if failed:
+        original = RuntimeLoggingProcessControl.status
+
+        async def reject_backend(self, *, pid: int, **kwargs) -> RuntimeLoggingStatus:
+            if pid == 21:
+                raise OSError(f"cannot read private sink {path}")
+            return await original(self, pid=pid, **kwargs)
+
+        monkeypatch.setattr(RuntimeLoggingProcessControl, "status", reject_backend)
+    candidates = [_LogCandidate("backend-log", "workspace", "workspace_api", "Backend", path)]
+    processes = await _logging_process_diagnostics(case.registry, None, candidates)
+    assert len(processes) == 7
+    backend, = [process for process in processes if process.service == "backend"]
+    assert backend.workspace_ids == ["logging-1", "logging-2"]
+    public = json.dumps([process.model_dump(mode="json") for process in processes])
+    assert str(case.config.path.parent) not in public
+    if failed:
+        assert backend.state is None and backend.output_mode == "unknown"
+        assert backend.error is not None and "OSError" in backend.error
+    else:
+        assert backend.error is None and backend.output_mode == "file"
+        assert backend.state is not None and backend.state.log_sink is not None
+        assert backend.state.log_sink.log_id == "backend-log"
+        assert backend.state.log_sink.owner_id == "test-log-owner"
+    assert all(process.output_mode == "stdout-only" for process in processes if process.service != "backend")
+    assert not case.calls, "只读诊断不能应用或补偿设置"
+    scoped = await _logging_process_diagnostics(case.registry, "logging-2", candidates)
+    assert len(scoped) == 5
+    assert all(not process.workspace_ids or "logging-2" in process.workspace_ids for process in scoped)
+    assert not case.registry.backend_topology_lock.locked()
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -48,7 +50,25 @@ def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, a
                 ):
                     for role, state in actual.items():
                         assert state == before[role] | {"applied_revision": last["revision"], "level": level, "pretty": pretty}, role
-                    observed.append({"revision": last["revision"], "processes": actual})
+                    diagnostic_response = client.get(f"{gateway_url}/api/gateway/diagnostics").raise_for_status()
+                    diagnostic_envelope = diagnostic_response.json()
+                    assert diagnostic_response.headers["X-Request-ID"] == diagnostic_envelope["request_id"]
+                    diagnostic = diagnostic_envelope["data"]
+                    assert diagnostic["status"] == "ready", diagnostic
+                    assert len(diagnostic["processes"]) == len(actual)
+                    for process in diagnostic["processes"]:
+                        assert process["error"] is None
+                        state = actual[process["service"]]
+                        assert process["state"] | {"log_sink": state["log_sink"]} == state
+                        if state["log_sink"] is None:
+                            assert process["output_mode"] == "stdout-only"
+                        else:
+                            assert process["output_mode"] == "file"
+                            sink = process["state"]["log_sink"]
+                            assert sink | {"path": state["log_sink"]["path"]} == state["log_sink"] | {"log_id": sink["log_id"]}
+                            assert sink["log_id"] in {log["log_id"] for log in diagnostic["logs"]}
+                    assert str(home) not in json.dumps(diagnostic["processes"])
+                    observed.append({"revision": last["revision"], "processes": actual, "diagnostics": diagnostic["processes"]})
                     return
                 time.sleep(0.05)
             raise AssertionError(f"产品日志热应用未结算: {last}")
@@ -92,6 +112,21 @@ def _launcher_control(home: Path, payload: dict[str, object]) -> dict[str, objec
         capture_output=True, text=True, check=True, timeout=10,
     )
     return json.loads(result.stdout)
+
+
+def verify_runtime_logging_diagnostics_ui(gateway_url: str, *, artifacts: Path) -> None:
+    """真实页面走 Gateway 初始化与管理入口；不拦截或伪造 API。"""
+    chromium = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("chromium-browser")
+    if chromium is None:
+        raise RuntimeError("日志诊断 Web 验收需要 Chromium")
+    result = subprocess.run(
+        ["bun", "tests/integration/clients/web/runtime_logging_diagnostics.mjs"],
+        env=os.environ | {"BOXTEAM_BROWSER_BASE_URL": gateway_url, "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts),
+                          "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    (artifacts / "runtime-logging-web.raw").write_text(result.stdout + result.stderr, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def verify_runtime_logging_controls(

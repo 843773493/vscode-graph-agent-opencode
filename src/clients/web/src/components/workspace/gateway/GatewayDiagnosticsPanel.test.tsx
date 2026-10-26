@@ -76,6 +76,7 @@ function diagnostics(): GatewayDiagnostics {
     selected_workspace_id: null,
     selected_log_id: "log_gateway",
     workspaces: [],
+    processes: [],
     logs: [
       {
         log_id: "log_gateway",
@@ -156,6 +157,33 @@ test("非安全上下文下复制日志仍走兼容复制，而不是直接报�
 
   expect(execCommandCalls).toBe(1);
   expect(JSON.stringify(renderer.toJSON())).not.toContain("Cannot read properties of undefined");
+  renderer.unmount();
+});
+
+test("展示实际日志进程、stdout-only 与逐进程失败", async () => {
+  const snapshot = diagnostics();
+  snapshot.processes = [
+    { service: "gateway", workspace_ids: [], output_mode: "stdout-only", error: null,
+      state: { service: "gateway", pid: 123, runtime_instance_id: "gateway-instance", applied_revision: "actual-revision",
+        level: "warning", pretty: false, log_sink: null } },
+    { service: "backend", workspace_ids: [workspace.workspace_id, "another-workspace"], output_mode: "file", error: null,
+      state: { service: "backend", pid: 456, runtime_instance_id: "backend-instance", applied_revision: "actual-revision",
+        level: "warning", pretty: true, log_sink: { log_id: "backend-log", owner_id: "actual-owner", role: "backend",
+          source: "gateway", device: "1", inode: "2" } } },
+    { service: "browser", workspace_ids: [workspace.workspace_id], output_mode: "unknown", state: null,
+      error: "日志状态读取失败: browser" },
+  ];
+  installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
+    ? Response.json({ data: snapshot, request_id: "req_processes" }) : undefined, { token: "diag-token" });
+  let renderer!: ReactTestRenderer;
+  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8021} workspaces={[workspace]} />); });
+  await flush();
+  const output = JSON.stringify(renderer.toJSON());
+  for (const value of ["gateway-instance", "backend-instance", "actual-revision", "stdout-only", "backend-log",
+    "actual-owner", "another-workspace", "日志状态读取失败: browser", "WARNING"]) {
+    expect(output).toContain(value);
+  }
+  expect(renderer.root.findAllByProps({ role: "alert" }).some((node) => node.children.includes("日志状态读取失败: browser"))).toBe(true);
   renderer.unmount();
 });
 

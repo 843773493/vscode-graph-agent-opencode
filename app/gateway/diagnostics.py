@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import heapq
+import logging
 import os
 import stat
 from collections.abc import Iterator
@@ -9,19 +11,33 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
+
 from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
 from app.core.path_utils import get_gateway_root
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.logging_control import (
+    RuntimeLoggingProcess,
+    RuntimeLoggingProcessControl,
+    runtime_logging_processes,
+)
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogDTO,
+    GatewayDiagnosticLoggingStateDTO,
+    GatewayDiagnosticLogSinkDTO,
+    GatewayDiagnosticLogSource,
+    GatewayDiagnosticProcessDTO,
     GatewayDiagnosticsDTO,
     GatewayDiagnosticStatus,
     GatewayDiagnosticWorkspaceDTO,
 )
+from app.schemas.gateway.workspaces import GatewayConnectionKind
 
 _MAX_READ_BYTES = 256 * 1024
 _MAX_GATEWAY_LOG_ENTRIES = 120
+logger = logging.getLogger(__name__)
 _SERVICE_LABELS = {
     "workspace_api": "Workspace API",
     "terminal_manager": "Terminal Manager",
@@ -32,7 +48,7 @@ _SERVICE_LABELS = {
 @dataclass(frozen=True, slots=True)
 class _LogCandidate:
     log_id: str
-    source: str
+    source: GatewayDiagnosticLogSource
     service: str
     label: str
     log_path: Path | None
@@ -258,13 +274,45 @@ def _scope_log_candidates(
     return [*global_candidates, *selected_workspace_candidates]
 
 
+async def _logging_process_diagnostics(
+    registry: GatewayWorkspaceRegistry, selected_workspace_id: str | None, candidates: list[_LogCandidate],
+) -> list[GatewayDiagnosticProcessDTO]:
+    async def observe(process: RuntimeLoggingProcess) -> GatewayDiagnosticProcessDTO:
+        try:
+            state = await process.read()
+        except Exception as error:  # 管理诊断逐进程显示失败，原始异常仍写入具名日志入口。
+            logger.exception("读取产品进程日志状态失败: service=%s", process.service)
+            return GatewayDiagnosticProcessDTO(
+                service=process.service, workspace_ids=list(process.workspace_ids),
+                output_mode="unknown", error=f"日志状态读取失败: service={process.service}, error={type(error).__name__}；完整诊断见原始服务日志",
+            )
+        sink = state.log_sink
+        public_sink = None if sink is None else GatewayDiagnosticLogSinkDTO(
+            **sink.model_dump(exclude={"path"}),
+            log_id=next((candidate.log_id for candidate in candidates if candidate.log_path == Path(sink.path)), None),
+        )
+        return GatewayDiagnosticProcessDTO(
+            service=process.service, workspace_ids=list(process.workspace_ids),
+            state=GatewayDiagnosticLoggingStateDTO(**state.model_dump(exclude={"log_sink"}), log_sink=public_sink),
+            output_mode="file" if state.log_sink is not None else "stdout-only",
+        )
+
+    async with registry.backend_topology_lock, httpx.AsyncClient(trust_env=False) as client:
+        control = RuntimeLoggingProcessControl(client=client, token=get_gateway_local_token())
+        processes = runtime_logging_processes(registry, control)
+        return list(await asyncio.gather(*(
+            observe(process) for process in processes
+            if selected_workspace_id is None or not process.workspace_ids or selected_workspace_id in process.workspace_ids
+        )))
+
+
 async def collect_gateway_diagnostics(
     registry: GatewayWorkspaceRegistry,
     *,
     gateway_id: str | None = None,
     gateway_name: str = "本机 Gateway",
     gateway_connection_id: str | None = None,
-    connection_kind: str = "local",
+    connection_kind: GatewayConnectionKind = "local",
     selected_workspace_id: str | None = None,
     selected_log_id: str | None = None,
     tail_lines: int = 300,
@@ -361,15 +409,17 @@ async def collect_gateway_diagnostics(
             include_tail=is_selected,
         )
         log_results.append(log_dto)
+    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates)
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,
         gateway_connection_id=gateway_connection_id,
         connection_kind=connection_kind,
-        status=_status(workspace_items),
+        status="degraded" if any(process.error is not None for process in processes) else _status(workspace_items),
         checked_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         selected_workspace_id=selected_workspace_id,
         selected_log_id=selected_log_id,
         workspaces=workspace_items,
         logs=log_results,
+        processes=processes,
     )

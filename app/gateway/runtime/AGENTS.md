@@ -20,7 +20,7 @@ runtime/
 ├── ssh_process.py         SSH 隧道进程
 ├── port_forwarding.py     本地与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议
-├── logging_control.py     真实进程的受认证日志状态与应用确认
+├── logging_control.py     唯一受管进程发现、受认证日志状态与应用确认
 ├── logging_consumer.py    冻结进程集合、逐进程应用与补偿结算
 ├── development_restart.py 开发运行时重启协调
 └── skill_sources.py       Gateway 到 Workspace 的 Skill 快照来源

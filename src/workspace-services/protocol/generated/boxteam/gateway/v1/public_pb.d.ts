@@ -739,6 +739,131 @@ export declare type GatewayDiagnosticWorkspaceDTO = Message<"boxteam.gateway.v1.
 export declare const GatewayDiagnosticWorkspaceDTOSchema: GenMessage<GatewayDiagnosticWorkspaceDTO>;
 
 /**
+ * 管理入口使用日志选择 ID 与文件身份，真实路径仅保留在原始日志中。
+ *
+ * @generated from message boxteam.gateway.v1.GatewayDiagnosticLogSinkDTO
+ */
+export declare type GatewayDiagnosticLogSinkDTO = Message<"boxteam.gateway.v1.GatewayDiagnosticLogSinkDTO"> & {
+  /**
+   * @generated from field: optional string log_id = 1;
+   */
+  logId?: string | undefined;
+
+  /**
+   * @generated from field: string owner_id = 2;
+   */
+  ownerId: string;
+
+  /**
+   * @generated from field: string role = 3;
+   */
+  role: string;
+
+  /**
+   * @generated from field: string source = 4;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string device = 5;
+   */
+  device: string;
+
+  /**
+   * @generated from field: string inode = 6;
+   */
+  inode: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayDiagnosticLogSinkDTO.
+ * Use `create(GatewayDiagnosticLogSinkDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogSinkDTOSchema: GenMessage<GatewayDiagnosticLogSinkDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayDiagnosticLoggingStateDTO
+ */
+export declare type GatewayDiagnosticLoggingStateDTO = Message<"boxteam.gateway.v1.GatewayDiagnosticLoggingStateDTO"> & {
+  /**
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * @generated from field: int64 pid = 2;
+   */
+  pid: bigint;
+
+  /**
+   * @generated from field: string runtime_instance_id = 3;
+   */
+  runtimeInstanceId: string;
+
+  /**
+   * @generated from field: optional string applied_revision = 4;
+   */
+  appliedRevision?: string | undefined;
+
+  /**
+   * @generated from field: string level = 5;
+   */
+  level: string;
+
+  /**
+   * @generated from field: bool pretty = 6;
+   */
+  pretty: boolean;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v1.GatewayDiagnosticLogSinkDTO log_sink = 7;
+   */
+  logSink?: GatewayDiagnosticLogSinkDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayDiagnosticLoggingStateDTO.
+ * Use `create(GatewayDiagnosticLoggingStateDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLoggingStateDTOSchema: GenMessage<GatewayDiagnosticLoggingStateDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayDiagnosticProcessDTO
+ */
+export declare type GatewayDiagnosticProcessDTO = Message<"boxteam.gateway.v1.GatewayDiagnosticProcessDTO"> & {
+  /**
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 2;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: optional boxteam.gateway.v1.GatewayDiagnosticLoggingStateDTO state = 3;
+   */
+  state?: GatewayDiagnosticLoggingStateDTO | undefined;
+
+  /**
+   * @generated from field: string output_mode = 4;
+   */
+  outputMode: string;
+
+  /**
+   * @generated from field: optional string error = 5;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayDiagnosticProcessDTO.
+ * Use `create(GatewayDiagnosticProcessDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticProcessDTOSchema: GenMessage<GatewayDiagnosticProcessDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.GatewayDiagnosticsDTO
  */
 export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v1.GatewayDiagnosticsDTO"> & {
@@ -791,6 +916,11 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v1.GatewayD
    * @generated from field: repeated boxteam.gateway.v1.GatewayDiagnosticLogDTO logs = 10;
    */
   logs: GatewayDiagnosticLogDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewayDiagnosticProcessDTO processes = 11;
+   */
+  processes: GatewayDiagnosticProcessDTO[];
 };
 
 /**

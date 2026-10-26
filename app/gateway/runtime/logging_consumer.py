@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
-from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 
 import httpx
 
-from app.core.logging_config import apply_runtime_logging, runtime_logging_state
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config.values import GatewayConfig
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -19,11 +16,13 @@ from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerStage,
     GatewayRuntimeHealthProof,
 )
-from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
-from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
+from app.gateway.runtime.logging_control import (
+    RuntimeLoggingProcess,
+    RuntimeLoggingProcessControl,
+    runtime_logging_processes,
+)
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
-    RuntimeLoggingHttpService,
     RuntimeLoggingStatus,
 )
 
@@ -47,9 +46,7 @@ def logging_progress_recorder(store: GatewayStateStore, fencing_token: str | Non
 
 @dataclass(slots=True)
 class LoggingTarget:
-    status: Callable[[], Awaitable[RuntimeLoggingStatus]]
-    apply: Callable[[RuntimeLoggingApply], Awaitable[RuntimeLoggingStatus]]
-    alive: Callable[[], bool]
+    process: RuntimeLoggingProcess
     before: RuntimeLoggingStatus | None = None
     current: RuntimeLoggingStatus | None = None
     touched: bool = False
@@ -108,39 +105,7 @@ class RuntimeLoggingConsumer:
         self._client = httpx.AsyncClient(trust_env=False)
         control = RuntimeLoggingProcessControl(client=self._client, token=get_gateway_local_token())
 
-        async def gateway_status() -> RuntimeLoggingStatus:
-            return RuntimeLoggingProcessControl._validated_status(asdict(runtime_logging_state()), "gateway", os.getpid())
-
-        async def gateway_apply(request: RuntimeLoggingApply) -> RuntimeLoggingStatus:
-            return RuntimeLoggingStatus.model_validate(asdict(apply_runtime_logging(**request.model_dump())))
-
-        self._targets.append(LoggingTarget(gateway_status, gateway_apply, lambda: True))
-        launcher = os.environ.get("BOXTEAM_LAUNCHER_CONTROL")
-        if launcher is not None:
-            endpoint = json.loads(launcher)
-            if (not isinstance(endpoint, dict) or set(endpoint) != {"address", "pid"}
-                or not isinstance(endpoint["address"], str) or type(endpoint["pid"]) is not int
-                or endpoint["pid"] <= 0):
-                raise ValueError("Launcher 交付的日志控制端点非法")
-            address, pid = endpoint["address"], endpoint["pid"]
-            self._targets.append(LoggingTarget(
-                lambda: control.launcher_status(address=address, pid=pid),
-                lambda request: control.launcher_apply(address=address, pid=pid, request=request),
-                lambda: True,
-            ))
-
-        for owner in self._registry.backend_owners():
-            if owner.process is not None and owner.process.is_alive():
-                self._add_http_target(control, owner.process, "backend", owner.contract.backend_url)
-        for target in self._registry.targets():
-            if target.connection_kind != "local" or not target.managed or not self._registry.has_runtime(target.workspace_id):
-                continue
-            runtime = self._registry.managed_runtime(target.workspace_id)
-            roles: dict[str, RuntimeLoggingHttpService] = {"terminal_manager": "terminal", "browser_manager": "browser"}
-            for name, role in roles.items():
-                handle = runtime.processes.get(name)
-                if handle is not None and handle.is_alive():
-                    self._add_http_target(control, handle, role, self._registry.runtime_service_urls(target.workspace_id)[name])
+        self._targets = [LoggingTarget(process) for process in runtime_logging_processes(self._registry, control)]
 
         identities: set[tuple[str, int, str]] = set()
         prepared: list[LoggingTarget] = []
@@ -155,22 +120,8 @@ class RuntimeLoggingConsumer:
             self._progress(target, "prepared")
         self._targets = prepared
 
-    def _add_http_target(
-        self, control: RuntimeLoggingProcessControl, handle: ManagedProcessHandle,
-        service: RuntimeLoggingHttpService, url: str,
-    ) -> None:
-        self._targets.append(LoggingTarget(
-            lambda: control.status(base_url=url, service=service, pid=handle.pid),
-            lambda request: control.apply(base_url=url, service=service, pid=handle.pid, request=request),
-            handle.is_alive,
-        ))
-
     async def _read(self, target: LoggingTarget) -> RuntimeLoggingStatus:
-        if not target.alive():
-            raise RuntimeError("日志目标进程已退出")
-        state = await target.status()
-        if not target.alive():
-            raise RuntimeError("日志目标进程在确认期间退出")
+        state = await target.process.read()
         if target.before is not None and (
             (state.service, state.pid, state.runtime_instance_id, state.log_sink)
             != (target.before.service, target.before.pid, target.before.runtime_instance_id, target.before.log_sink)
@@ -194,7 +145,7 @@ class RuntimeLoggingConsumer:
             self._progress(target, "applying")
             target.touched = True
             try:
-                await target.apply(request)
+                await target.process.apply(request)
                 observed = await self._read(target)
                 RuntimeLoggingProcessControl._confirmed_apply(observed, request)
                 target.current = observed
@@ -206,7 +157,7 @@ class RuntimeLoggingConsumer:
             self._progress(target, "applied")
 
     def health(self) -> GatewayRuntimeHealthProof:
-        if any(target.phase != "applied" or not target.alive() for target in self._targets):
+        if any(target.phase != "applied" or not target.process.alive() for target in self._targets):
             raise RuntimeError("日志消费者未取得全部进程确认")
         return GatewayRuntimeHealthProof(
             consumer_id="runtime-logging", generation=self._generation, state="healthy",
@@ -250,7 +201,7 @@ class RuntimeLoggingConsumer:
             revision=before.applied_revision, level=before.level, pretty=before.pretty,
         )
         target.current = None
-        await target.apply(request)
+        await target.process.apply(request)
         target.current = await self._read(target)
         if target.current != before:
             raise RuntimeError("日志补偿后的实际状态与冻结状态不一致")
