@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
+from typing import NoReturn
 
 import jsonschema
 import pytest
@@ -11,10 +14,12 @@ from watchfiles import Change
 
 import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
+from app.core.lifecycle import LifetimeScope
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
@@ -1737,7 +1742,7 @@ async def test_candidate_applier_failure_prevents_snapshot_commit(
     config["agents"]["default"]["instructions"]["system_prompt"] = "candidate"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    async def reject_candidate(*_args) -> None:
+    async def reject_candidate(*_args) -> NoReturn:
         raise RuntimeError("候选运行时应用失败")
 
     with pytest.raises(RuntimeError, match="候选运行时应用失败"):
@@ -1782,7 +1787,7 @@ async def test_shadow_resources_activate_with_sqlite_publication_and_rollback_on
 
         return activate
 
-    async def reject(_previous, _candidate) -> None:
+    async def reject(_previous, _candidate, _scope) -> NoReturn:
         raise RuntimeError("拒绝候选")
 
     try:
@@ -1960,7 +1965,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
         candidate_config["ui"] = {"default_orchestration": "multi_agent"}
         config_path.write_text(json.dumps(candidate_config), encoding="utf-8")
 
-        async def mutate_source_during_apply(*_args: object) -> None:
+        async def mutate_source_during_apply(*_args: object):
             source = store.get_source_layer("workspace_mutable_override")
             assert source is not None
             store.sync_config_source(
@@ -1973,6 +1978,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
                 expected_layer_revision=source.layer_revision,
                 expected_layer_digest=source.layer_digest,
             )
+            return lambda: None
 
         with pytest.raises(ConfigConflictError, match="source .*CAS"):
             await service.reload(candidate_applier=mutate_source_during_apply)
@@ -2055,7 +2061,7 @@ async def test_restart_required_failure_exposes_changed_sections(
     config["mcp"]["servers"]["sample"]["command"] = "debug"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    async def require_restart(*_args) -> None:
+    async def require_restart(*_args) -> NoReturn:
         raise ConfigRestartRequiredError(
             "需要重启工作区后端",
             changed_sections=("mcp",),
@@ -2440,7 +2446,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        async def require_restart(*_args) -> None:
+        async def require_restart(*_args) -> NoReturn:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
                 changed_sections=("mcp",),
@@ -2489,7 +2495,7 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
         config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        async def require_restart(*_args) -> None:
+        async def require_restart(*_args) -> NoReturn:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
                 changed_sections=("mcp",),
@@ -2544,7 +2550,7 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
         config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        async def require_restart(*_args) -> None:
+        async def require_restart(*_args) -> NoReturn:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
                 changed_sections=("mcp",),
@@ -2614,7 +2620,7 @@ async def test_workspace_pending_discard_requires_active_and_source_baseline(
         config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        async def require_restart(*_args) -> None:
+        async def require_restart(*_args) -> NoReturn:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
                 changed_sections=("mcp",),
@@ -2682,7 +2688,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
         config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        async def require_restart(*_args) -> None:
+        async def require_restart(*_args) -> NoReturn:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
                 changed_sections=("mcp",),
@@ -2777,3 +2783,123 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
             ).get_snapshot()
     finally:
         restored_store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "prepare", "cancel", "promotion"])
+async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    scopes: list[LifetimeScope] = []
+    activated: list[str] = []
+    closed: list[str] = []
+    service.validate_workspace_config()
+    previous = service.get_revision()
+    config["agents"]["default"]["instructions"]["system_prompt"] = "prepared-runtime"
+    path.write_text(json.dumps(config), encoding="utf-8")
+
+    async def prepare(_previous, candidate, scope: LifetimeScope) -> ConfigPublication:
+        pending = store.get_pending_config_candidate(config_domain="workspace")
+        assert pending is not None and pending.state == "applying"
+        journal = store.get_config_apply_journal(apply_id=pending.last_apply_id or "")
+        assert journal is not None and journal.state == "applying"
+        assert store.get_config_apply_claim(config_domain="workspace") is not None
+        assert service.get_revision() == previous and not activated
+        scopes.append(scope)
+        scope.register(lambda: closed.append(candidate.revision), label="prepared-runtime")
+        if failure == "prepare":
+            raise RuntimeError("候选准备失败")
+        if failure == "cancel":
+            raise asyncio.CancelledError("候选准备取消")
+
+        def activate() -> None:
+            persisted = store.get_active_config_snapshot("workspace")
+            assert persisted is not None and persisted.effective_digest == candidate.revision
+            assert service.get_revision() == candidate.revision
+            assert service._shadow_lifecycle.active.scope is scope
+            activated.append(candidate.revision)
+
+        return activate
+
+    def reject_promotion(*_args, **_kwargs) -> NoReturn:
+        raise ConfigConflictError("候选提交CAS冲突")
+
+    if failure == "promotion":
+        monkeypatch.setattr(service, "_persist_active_snapshot", reject_promotion)
+    try:
+        if failure is None:
+            assert await service.reload(candidate_applier=prepare)
+            assert activated == [service.get_revision()] and not closed
+            assert scopes[0].state == "open"
+        else:
+            expected = {"prepare": RuntimeError, "cancel": asyncio.CancelledError,
+                        "promotion": ConfigConflictError}[failure]
+            with pytest.raises(expected):
+                await service.reload(candidate_applier=prepare)
+            assert service.get_revision() == previous and not activated
+            assert len(closed) == 1 and scopes[0].state == "closed"
+        assert store.get_config_apply_claim(config_domain="workspace") is None
+        pending = store.get_pending_config_candidate(config_domain="workspace")
+        assert pending is not None
+        assert pending.state == ({None: "active", "prepare": "rejected", "cancel": "rejected",
+                                  "promotion": "recovery_required"}[failure])
+    finally:
+        await service.close()
+        store.close()
+    assert len(closed) == 1
+
+
+@pytest.mark.asyncio
+async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    service.validate_workspace_config()
+    runtime_revision = service.get_revision()
+    readers = []
+    attempted, observed = Event(), Event()
+    original_persist = service._persist_active_snapshot
+
+    def read_runtime() -> tuple[str, str]:
+        attempted.set()
+        revision = service.get_revision()
+        with service.publication_lock:
+            current_runtime = runtime_revision
+        observed.set()
+        return revision, current_runtime
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        def persist_and_probe(*args, **kwargs) -> None:
+            original_persist(*args, **kwargs)
+            readers.append(pool.submit(read_runtime))
+            assert attempted.wait(1)
+            assert not observed.wait(0.05), "配置读取越过了尚未完成的共同发布屏障"
+
+        async def prepare(_previous, candidate, _scope) -> ConfigPublication:
+            def activate() -> None:
+                nonlocal runtime_revision
+                runtime_revision = candidate.revision
+            return activate
+
+        monkeypatch.setattr(service, "_persist_active_snapshot", persist_and_probe)
+        config["agents"]["default"]["instructions"]["system_prompt"] = "publication-barrier"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        try:
+            assert await service.reload(candidate_applier=prepare)
+            assert readers[0].result(timeout=2) == (service.get_revision(), service.get_revision())
+        finally:
+            await service.close()
+            store.close()

@@ -149,6 +149,7 @@ class ConfigShadowLifecycleOwner:
         config: Mapping[str, object],
         *,
         expected_generation: int,
+        prepare: ShadowReconcile | None = None,
     ) -> ConfigShadowApplyResult:
         """在 shadow 中验证 candidate，再按 expected generation fence 发布。"""
 
@@ -171,7 +172,7 @@ class ConfigShadowLifecycleOwner:
                 ) from error
             self._validate_bootstrap(config)
             revision = sha256_jcs(dict(config))
-            if revision == active.revision:
+            if revision == active.revision and prepare is None:
                 return ConfigShadowApplyResult(
                     status="unchanged",
                     generation=active.generation,
@@ -181,14 +182,15 @@ class ConfigShadowLifecycleOwner:
             candidate_scope = LifetimeScope(
                 f"config-generation-candidate-{next_generation}"
             )
+            candidate = ConfigShadowGeneration(
+                generation=next_generation,
+                revision=revision,
+                config=dict(config),
+                scope=candidate_scope,
+            )
             try:
                 activate = await self._reconcile(config, candidate_scope)
-                candidate = ConfigShadowGeneration(
-                    generation=next_generation,
-                    revision=revision,
-                    config=dict(config),
-                    scope=candidate_scope,
-                )
+                activate_runtime = await prepare(config, candidate_scope) if prepare is not None else None
 
                 def publish() -> None:
                     if self._active is not active:
@@ -196,6 +198,8 @@ class ConfigShadowLifecycleOwner:
                     self._active = candidate
                     self._retired.append(active)
                     activate()
+                    if activate_runtime is not None:
+                        activate_runtime()
 
                 await self._publish(candidate, publish)
                 if self._active is not candidate:
@@ -204,7 +208,7 @@ class ConfigShadowLifecycleOwner:
                 if candidate is not None and self._active is candidate:
                     # 已发布的候选不可关闭或冒称旧代次仍有效；旧 scope 继续由本 owner 持有。
                     raise
-                await self._close_candidate_with_error(candidate_scope, error)
+                await self._close_candidate_with_error(candidate, error)
             # 原子发布完成后再排空旧 scope；release 失败必须显式暴露。
             await self._drain_retired()
             return ConfigShadowApplyResult(
@@ -269,15 +273,16 @@ class ConfigShadowLifecycleOwner:
         except Exception as close_error:
             raise RuntimeError("bootstrap scope 回收失败") from close_error
 
-    @staticmethod
     async def _close_candidate_with_error(
-        scope: LifetimeScope, original_error: BaseException
+        self, candidate: ConfigShadowGeneration, original_error: BaseException
     ) -> None:
         """candidate 失败只回收 candidate，不覆盖 active，也不吞掉 close 错误。"""
 
         try:
-            await scope.close()
-        except Exception as close_error:  # noqa: BLE001
+            await candidate.scope.close()
+        except (Exception, asyncio.CancelledError) as close_error:  # noqa: BLE001
+            # 准备失败也不能丢掉尚未核实释放的资源；下次应用先排空它。
+            self._retired.append(candidate)
             raise BaseExceptionGroup(
                 "配置 candidate 失败且 scope 回收失败", [original_error, close_error]
             ) from original_error

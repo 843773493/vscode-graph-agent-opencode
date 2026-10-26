@@ -117,6 +117,7 @@ class ConfigShadowLifecycleAdapter:
         *,
         expected_generation: int,
         publish_hook: ShadowGenerationPublishHook | None = None,
+        prepare: ShadowReconcile | None = None,
     ) -> ConfigShadowApplyResult:
         """按 generation fence 在 shadow 中校验并原子发布 candidate。
 
@@ -129,6 +130,7 @@ class ConfigShadowLifecycleAdapter:
                 result = await self._owner.apply_candidate(
                     config,
                     expected_generation=expected_generation,
+                    prepare=prepare,
                 )
                 if result.status == "unchanged":
                     self._publish_event("unchanged", generation=result.generation)

@@ -39,10 +39,12 @@ if TYPE_CHECKING:
     from app.services.infrastructure.config.instruction_inputs import (
         InstructionFileInputs,
     )
+    from app.services.infrastructure.config.store import ConfigSnapshotStore
 
 
 class ConfigSnapshotMixin:
     if TYPE_CHECKING:
+        _snapshot_store: ConfigSnapshotStore
         _instruction_inputs: InstructionFileInputs
 
     def _build_candidate_snapshot(
@@ -398,7 +400,8 @@ class ConfigSnapshotMixin:
         return self._require_snapshot().revision
 
     def get_reload_status(self) -> ConfigReloadStatus:
-        return self._reload_status.get_reload_status()
+        with self._snapshot_store.publication_lock:
+            return self._reload_status.get_reload_status()
 
     def get_source_details(self) -> tuple[ConfigSource, ...]:
         return self._require_snapshot().source_details

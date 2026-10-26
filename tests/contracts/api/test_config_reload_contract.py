@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NoReturn
 
 import httpx
 import jsonschema
@@ -275,7 +276,7 @@ async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_ev
     config["mcp"]["servers"]["pointer_probe"]["env"]["ROOT/~"] = native_value
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    async def require_restart(*_snapshots: object) -> None:
+    async def require_restart(*_snapshots: object) -> NoReturn:
         raise ConfigRestartRequiredError("配置候选需要重启", changed_sections=("mcp",))
 
     if pending_restart:

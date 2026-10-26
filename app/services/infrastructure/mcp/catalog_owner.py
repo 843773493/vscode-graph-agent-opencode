@@ -242,6 +242,7 @@ class McpCatalogOwner:
         workspace_root: Path,
         event_service: EventChannelService,
         leases: ExternalResourceLeaseLedger,
+        publication_lock: RLock | None = None,
         session_factory: McpSessionFactory | None = None,
     ) -> None:
         self._servers = parse_mcp_server_configs(
@@ -265,7 +266,7 @@ class McpCatalogOwner:
         self._runtimes: dict[str, McpServerRuntime] = {}
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
-        self._publication_lock = RLock()
+        self._publication_lock = publication_lock if publication_lock is not None else RLock()
         self.execution_handles = McpExecutionHandles(
             leases=leases, lock=self._publication_lock, resolve_active=self._resolve_execution_handle,
             timeout_seconds=sealed_call_timeout_seconds(raw_config),

@@ -179,6 +179,9 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(
         assert registry is not None
         containers = [registry.get(identity) for identity in case.roots]
         assert len({id(container) for container in containers}) == 2
+        for container in containers:
+            assert container.config_service.publication_lock is container.mcp_catalog_owner.publication_lock
+        assert containers[0].config_service.publication_lock is not containers[1].config_service.publication_lock
         for field_name in ("job_service", "message_service", "checkpointer", "agent_execution_service", "resource_platform", "mcp_catalog_owner", "workspace_activity_service"):
             assert len({id(getattr(container, field_name)) for container in containers}) == 2
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test") as client:
@@ -485,6 +488,7 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
     mounted_case: MountedCase,
     monkeypatch: pytest.MonkeyPatch,
     writer_failure: bool,
+    inprocess_model_replay,
 ) -> None:
     ready, close_requested = asyncio.Event(), asyncio.Event()
     lifespan_ready = asyncio.Event()
@@ -584,6 +588,7 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
 async def test_double_mount_event_trace_message_background_and_catalog_isolation(
     mounted_case: MountedCase,
     monkeypatch: pytest.MonkeyPatch,
+    inprocess_model_replay,
 ) -> None:
     async with main.lifespan(main.app):
         a, b = mounted_case.containers
@@ -745,7 +750,7 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
 
 @pytest.mark.asyncio
 async def test_double_mount_consumes_each_explicit_candidate_and_ignores_process_candidate(
-    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch, inprocess_model_replay,
 ) -> None:
     mounts = []
     expected = []

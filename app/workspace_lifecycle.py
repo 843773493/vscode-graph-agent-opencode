@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Self
 
+from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
@@ -19,6 +20,7 @@ from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
 
@@ -289,7 +291,8 @@ class WorkspaceLifespan:
             async def apply_config_candidate(
                 previous: ConfigSnapshot,
                 candidate: ConfigSnapshot,
-            ) -> None:
+                _scope: LifetimeScope,
+            ) -> ConfigPublication:
                 previous_config = container.config_service.config_from_snapshot(previous)
                 candidate_config = container.config_service.config_from_snapshot(candidate)
                 changed_paths = changed_json_paths(previous_config, candidate_config)
@@ -310,6 +313,7 @@ class WorkspaceLifespan:
                     candidate,
                     mcp_tool_names=container.mcp_catalog_owner.get_tool_ids(),
                 )
+                return lambda: None
 
             with _workspace_startup_stage(container, "config_service.start_watching"):
                 await container.config_service.start_watching(

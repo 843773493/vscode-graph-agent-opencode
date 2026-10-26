@@ -127,3 +127,14 @@
 - 保留121的共享协议调用方缺少资格、122的资格与实际占用混入断言，以及131的同步CSM空目录向已关闭事件循环登记timer等失败原件；迁齐真实调用方、分别验证两类占用，并修正空目录不登记timer，未放宽配对、归属、schema错误或hash断言。126为25 passed，129为86 passed，132为77 passed，133为9 passed，最终134集中复验。
 - 受影响Ruff与严格OpenSpec校验通过；最终扩大Pyright完整HEAD基线147条／当前133条，零新增诊断，不宣称全仓类型通过。准确命令、源码指纹、raw、退出码及类型比较位于 `out/tests/temp/csm-kind-boundary/artifacts/staged-mcp-reservation-134/`；4517个tracked blob核验未变后已删除完整临时source，保留正式测试产物与integrity证据。
 - 4.2／4.4／4.6继续未勾选：正常配置热替换后的旧runtime保留、退役排空及HITL跨替换依赖7.x共同发布屏障，尚未实现。持久等待的主动继续持有、授权／连接控制和完整产品门仍未完成；HITL拒绝／直接应答及最终执行本地工具后的未用资格提前结算保留代码TODO，目前仍受原期限约束。
+
+### 7.3 共同发布基础切片验收（2026-10-26）
+
+- 候选应用器整体迁为原shadow scope内的资源准备与同步激活回调，删除应用器提前生效再提交的旧合同；Workspace生产调用方及直接／间接测试全部迁齐。applying journal／claim先于候选资源准备建立，取消及准备失败走同一回收／claim释放链路，SQLite CAS、配置快照、shadow及运行时激活使用同一同步发布边界。ConfigService读取、MCP Owner、Registry和调用准入复用同一工作区发布锁，兄弟工作区不共享锁；网络准备及旧scope排空均在锁外。
+- 准备失败但回收未确认的scope继续由原owner持有，下次候选必须先排空，不丢失资源引用；提交后的激活／排空错误保留真实新active。显式候选准备不能因JCS将1与1.0视为同一值而被跳过。生产代码净减少，未增加配置事实源或兼容分路。
+- 暂存tree `c3fb3bcc1d535afcec6083b5e3f96d7509f73c80`完整archive隔离验收：配置、shadow、策略和API合同191 passed／238.37秒，正式integration-extension-discovery 190 passed／117.56秒；真实双工作区编译、请求、失败释放等前4项通过，并核对同工作区共享锁及跨工作区独立锁。新增5项候选准备／取消／CAS／线程读取行为先于此轮通过，23项scope／adapter回归亦通过，范围有重叠不累计。
+- 保留完整失败原件：136在120秒保护期限内完成88项后退出124，141扩大到必要完整配置范围后全部通过；139的3处mixin类型声明问题及141的TYPE_CHECKING import排序问题均已修正。141的3项Goal关闭测试仍在既有ready.wait的8秒业务期限失败，随后SIGINT收取堆栈并登记interruption原件，第四个同组参数未执行。完整HEAD `c2ff15f75`的同一cancelled-active-paused用例亦失败于相同期限（142，45.90秒）；保留原代码TODO及全部期限断言，不宣称完整挂载套件通过，性能长尾按既有范围待测量优化。
+- 142另暴露未接模型回放的取消收尾夹具依赖DEEPSEEK_V41_FLASH_API_KEY；相关挂载测试改用既有inprocess_model_replay，未改凭据环境、业务断言或实现假模型。最终tree `4e0498c3fdb10584633a5fa9c14cfd98c2183d60`的剩余取消收尾、数据隔离及各工作区pending消费4 passed／40.44秒（143）。它与141的源码差异只有TYPE_CHECKING import排序和这3个测试的夹具接线，复用未受影响的191／190项结果，不重复长跑。
+- 143的15个文件Pyright完整HEAD基线174条／当前152条，零新增诊断；包括整个config_service目录的Ruff基线27条／当前27条，零新增，严格OpenSpec校验通过，不宣称全仓静态检查全绿。原始命令、退出码、源码指纹、类型比较和失败／中断说明保存在 `out/tests/temp/csm-kind-boundary/artifacts/staged-config-publication-141/`、`config-publication-mounts-142/` 和 `staged-config-publication-final-143/`；各完整archive的4517个tracked blob均核验未变后清理，只保留正式输出和证据。
+- 交付复查进一步覆盖准备失败后、等待原scope回收期间被取消：owner继续持有closing scope，配置store记录包含取消的原异常组，不丢失释放任务。最终受测tree `cf453d576194779f675ea292cd5eb910e8447448` 的145隔离验收为40 passed／42.44秒，涵盖该新场景和候选、CAS、已提交发布、读取与scope回归；16个文件类型检查及扩大Ruff与完整HEAD相比仍零新增诊断，严格OpenSpec校验通过。该轮仅扩展异常处理并补回归，复用未受影响的191／190项和真实挂载结果；完整source及baseline各4517个tracked blob核验未变后清理，原件保存在同目录 `staged-config-publication-cancel-145/`。
+- 7.3继续未勾选，进度仍15/52：该提交只完成原配置链的准备／共同发布基础，尚未接入逐Server候选、完整MCP准入fence与崩溃／替换对账。7.2／7.4的正常替换、单实例停启和退役排空，以及7.5／7.6验收完成前，保留/mcp现有restart_workspace策略；不将本切片当作MCP热替换交付。

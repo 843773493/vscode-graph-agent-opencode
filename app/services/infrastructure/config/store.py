@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from _thread import RLock
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -24,6 +25,7 @@ class ConfigSnapshotStore:
         self._snapshot: ConfigSnapshot | None = None
         self._status: ConfigReloadStatus | None = None
         self._reload_lock = asyncio.Lock()
+        self.publication_lock = RLock()
 
     def initialize(self, candidate: ConfigSnapshot | None = None) -> None:
         self._commit(candidate or self._candidate_builder())
@@ -32,17 +34,19 @@ class ConfigSnapshotStore:
         return self._snapshot is not None
 
     def current(self) -> ConfigSnapshot:
-        if self._snapshot is None:
-            self.initialize()
-        if self._snapshot is None:
-            raise RuntimeError("配置快照初始化失败")
-        return self._snapshot
+        with self.publication_lock:
+            if self._snapshot is None:
+                self.initialize()
+            if self._snapshot is None:
+                raise RuntimeError("配置快照初始化失败")
+            return self._snapshot
 
     def status(self) -> ConfigReloadStatus:
-        self.current()
-        if self._status is None:
-            raise RuntimeError("配置热重载状态尚未初始化")
-        return self._status
+        with self.publication_lock:
+            self.current()
+            if self._status is None:
+                raise RuntimeError("配置热重载状态尚未初始化")
+            return self._status
 
     async def reload(
         self,
@@ -62,10 +66,11 @@ class ConfigSnapshotStore:
 
             def publish() -> None:
                 nonlocal published
-                if published:
-                    raise RuntimeError("配置候选只能发布一次")
-                self._commit(candidate)
-                published = True
+                with self.publication_lock:
+                    if published:
+                        raise RuntimeError("配置候选只能发布一次")
+                    self._commit(candidate)
+                    published = True
 
             try:
                 if candidate_applier is not None and (changed or apply_unchanged):
@@ -74,7 +79,7 @@ class ConfigSnapshotStore:
                         raise RuntimeError("配置发布器返回时尚未发布候选")
                 else:
                     publish()
-            except Exception as error:
+            except BaseException as error:
                 # 排空发生在发布后；失败诊断必须指向实际 active，而非假装回滚。
                 self._record_failure(error, reason=(
                     "restart_required" if isinstance(error, ConfigRestartRequiredError) else "apply_failed"
@@ -86,7 +91,7 @@ class ConfigSnapshotStore:
 
     def _record_failure(
         self,
-        error: Exception,
+        error: BaseException,
         *,
         reason: ConfigReloadFailureReason,
     ) -> None:

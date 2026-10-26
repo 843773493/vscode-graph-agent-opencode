@@ -153,7 +153,7 @@ stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消
 
 发布与配置 active promotion 使用同一受控准入屏障／提交标识：模型 preparation、API 和工具调用不能观察到 candidate 目录配旧 active 配置的中间状态；不能只依赖两个各自原子的赋值。崩溃后依据持久提交阶段对账，不声称 SQLite 能回滚外部 session。
 
-接线复用既有配置 applying journal、claim 和 promotion owner；当前 ConfigSnapshotStore 的 candidate_applier 返回后才 commit，不能在 applier 中提前公开新连接再把后续 commit 当作共同事务。候选准备与受控发布必须接入同一提交协议并覆盖失败／恢复阶段，不新增配置事实源。
+接线复用既有配置 applying journal、claim 和 promotion owner。候选应用器在原 shadow scope 中准备资源并返回同步激活回调，不在准备阶段公开新连接；applying journal／claim 先于候选资源准备建立，SQLite promotion 与快照、shadow 及运行时激活共用同步发布屏障。配置读取、MCP Owner 和 Registry／调用准入复用同一工作区锁，不在锁内执行网络准备或旧连接排空。候选回收失败保留原 scope 并阻止下一次替换，提交后的激活或清理失败保留实际新 active，不伪称回滚；不新增配置事实源。该共同发布基础仍须接入逐 Server 候选、准入 fence 与退役排空，完成相应真实验收后才能解除 MCP 重启策略。
 
 允许并行启动的 Server 先准备新连接；单实例 stdio Server 采用可观察的 stop-then-start，暂时关闭该 Server 的执行准入。前者失败保留旧 active 且明确报告 apply_failed；后者无法恢复旧服务时报告 recovery_required，不伪称旧运行时仍健康。已承诺旧调用的 handle 无法维持时真实结束／失败，绝不迁投新同名工具。
 

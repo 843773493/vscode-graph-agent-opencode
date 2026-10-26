@@ -674,6 +674,7 @@ def _build_app_container(
         workspace_root=resolved_workspace_root,
         event_service=job_event_bus.event_channel_service,
         leases=external_resource_leases,
+        publication_lock=config_service.publication_lock,
     )
     message_service = MessageService(
         main_thread_resolver=session_path_resolver.main_thread_id,

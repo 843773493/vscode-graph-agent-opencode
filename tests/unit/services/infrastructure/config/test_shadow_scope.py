@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.services.infrastructure.config.contracts import ConfigPublication
@@ -236,3 +238,85 @@ async def test_failed_old_scope_remains_owned_and_repeated_close_reports_failure
         assert current.scope.state == "closed" and old.scope.state == "close_failed"
     # 原 LifetimeScope 对失败的释放项重试；已成功关闭的新 scope 不再重复释放。
     assert attempts == ["release", "release", "release"]
+
+
+@pytest.mark.asyncio
+async def test_failed_candidate_cleanup_remains_owned_and_blocks_next_preparation() -> None:
+    owner = _owner()
+    active = await owner.start({"name": "valid", "context": {}})
+    scopes = []
+    releases = []
+
+    async def prepare(_config, scope):
+        scopes.append(scope)
+        def fail_release() -> None:
+            releases.append("attempt")
+            raise RuntimeError("候选连接关闭未确认")
+        scope.register(fail_release, label="candidate-connection")
+        raise RuntimeError("候选连接准备失败")
+
+    with pytest.raises(ExceptionGroup) as failure:
+        await owner.apply_candidate({"name": "valid", "context": {"version": 2}},
+                                    expected_generation=1, prepare=prepare)
+    assert "候选连接准备失败" in str(failure.value.exceptions[0])
+    assert owner.active is active and scopes[0].state == "close_failed"
+    with pytest.raises(ExceptionGroup):
+        await owner.apply_candidate({"name": "valid", "context": {"version": 3}},
+                                    expected_generation=1, prepare=prepare)
+    assert len(scopes) == 1 and releases == ["attempt", "attempt"]
+    assert owner.active is active
+    with pytest.raises(ExceptionGroup):
+        await owner.close()
+    assert scopes[0].state == "close_failed" and active.scope.state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_explicit_preparation_is_not_skipped_for_same_semantic_revision() -> None:
+    owner = _owner()
+    active = await owner.start({"name": "valid", "context": {"version": 1}})
+    prepared, activated = [], []
+
+    async def prepare(_config, scope):
+        prepared.append(scope)
+        return lambda: activated.append(scope)
+
+    result = await owner.apply_candidate({"name": "valid", "context": {"version": 1.0}},
+                                         expected_generation=1, prepare=prepare)
+    assert result.status == "published" and result.generation == 2
+    assert prepared == activated == [owner.active.scope]
+    assert active.scope.state == "closed"
+    await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_candidate_cleanup_keeps_scope_owned() -> None:
+    owner = _owner()
+    active = await owner.start({"name": "valid", "context": {}})
+    entered, release = asyncio.Event(), asyncio.Event()
+    scopes = []
+
+    async def close_connection() -> None:
+        entered.set()
+        await release.wait()
+
+    async def prepare(_config, scope):
+        scopes.append(scope)
+        scope.register(close_connection, label="candidate-connection")
+        raise RuntimeError("准备失败后仍须排空原连接")
+
+    task = asyncio.create_task(owner.apply_candidate(
+        {"name": "valid", "context": {"version": 2}}, expected_generation=1, prepare=prepare,
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(BaseExceptionGroup) as failure:
+            await task
+        assert isinstance(failure.value.exceptions[1], asyncio.CancelledError)
+        assert owner.active is active and scopes[0].state == "closing"
+        assert len(owner._retired) == 1 and owner._retired[0].scope is scopes[0]
+    finally:
+        release.set()
+        await owner.close()
+        await asyncio.gather(task, return_exceptions=True)
+    assert scopes[0].state == active.scope.state == "closed"

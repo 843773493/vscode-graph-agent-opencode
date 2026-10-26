@@ -120,25 +120,33 @@ class ConfigReloadMixin:
         candidate_applier: ConfigCandidateApplier | None = None,
         idempotency_key: str | None = None,
     ) -> bool:
-        async def persist_candidate(
+        async def apply_through_shadow(
             previous: ConfigSnapshot,
             candidate: ConfigSnapshot,
-            publish: ConfigPublication,
+            publish_snapshot: ConfigPublication,
         ) -> None:
-            pending = self._prepare_candidate(
-                previous,
-                candidate,
-                idempotency_key=idempotency_key,
-            )
+            if self._shadow_lifecycle.readiness == "cold":
+                await self._shadow_lifecycle.bootstrap(previous.to_dict())
+            if candidate.revision == previous.revision:
+                async def refresh_sources(_generation, publish_shadow: ConfigPublication) -> None:
+                    with self._snapshot_store.publication_lock:
+                        publish_snapshot()
+                        publish_shadow()
+
+                await self._shadow_lifecycle.apply_candidate(
+                    candidate.to_dict(),
+                    expected_generation=self._shadow_lifecycle.generation,
+                    publish_hook=refresh_sources,
+                )
+                return
+
+            pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key)
             changed_paths = changed_json_paths(previous.to_dict(), candidate.to_dict())
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")
             active = (
-                self._workspace_state_store.get_active_config_snapshot(
-                    self._CONFIG_DOMAIN
-                )
-                if self._workspace_state_store is not None
-                else None
+                self._workspace_state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
+                if self._workspace_state_store is not None else None
             )
             base_active_revision = active.active_revision if active is not None else None
             claim = None
@@ -154,254 +162,143 @@ class ConfigReloadMixin:
                     target_generation=new_config_id("workspace_generation"),
                     pending_revision=pending.pending_revision,
                     source_baseline=pending.source_baseline,
-                    active_baseline=(
-                        active.source_baseline if active is not None else {}
-                    ),
+                    active_baseline=active.source_baseline if active is not None else {},
                 )
                 claim_renewal_task = asyncio.create_task(
                     self._renew_apply_claim(claim.apply_id, claim.fencing_token)
                 )
-            try:
-                if candidate_applier is not None:
-                    await candidate_applier(previous, candidate)
-                    if self._workspace_state_store is not None and claim is not None:
-                        self._workspace_state_store.append_config_apply_side_effect(
-                            apply_id=claim.apply_id,
-                            side_effect={
-                                "resource": "workspace-config-applier",
-                                "action": "apply",
-                                "candidate_id": pending.candidate_id,
-                                "changed_paths": list(changed_paths),
-                            },
-                        )
-            except ConfigRestartRequiredError as error:
-                self._finish_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state="pending_restart",
-                    result="restart_required",
-                    error=str(error),
-                    changed_paths=changed_paths,
-                    candidate_ref=new_config_id("candidate_ref"),
-                    target_generation=(claim.target_generation if claim else None),
-                    fencing_token=(claim.fencing_token if claim else None),
-                )
-                if self._workspace_state_store is not None and claim is not None:
-                    if claim_renewal_task is not None:
-                        claim_renewal_task.cancel()
-                        await asyncio.gather(
-                            claim_renewal_task,
-                            return_exceptions=True,
-                        )
-                    self._workspace_state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state="failed",
-                        last_error=str(error),
-                    )
-                    self._workspace_state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
-                raise
-            except ConfigConflictError as error:
-                self._finish_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state="conflict",
-                    result="conflict",
-                    error=str(error),
-                    changed_paths=changed_paths,
-                )
-                if self._workspace_state_store is not None and claim is not None:
-                    if claim_renewal_task is not None:
-                        claim_renewal_task.cancel()
-                        await asyncio.gather(
-                            claim_renewal_task,
-                            return_exceptions=True,
-                        )
-                    self._workspace_state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state="failed",
-                        last_error=str(error),
-                    )
-                    self._workspace_state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
-                raise
-            except Exception as error:
-                self._finish_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state="rejected",
-                    result="apply_failed",
-                    error=str(error),
-                    changed_paths=changed_paths,
-                )
-                if self._workspace_state_store is not None and claim is not None:
-                    if claim_renewal_task is not None:
-                        claim_renewal_task.cancel()
-                        await asyncio.gather(
-                            claim_renewal_task,
-                            return_exceptions=True,
-                        )
-                    self._workspace_state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state="failed",
-                        last_error=str(error),
-                    )
-                    self._workspace_state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
-                raise
-            try:
-                pending_layer_revisions = {
-                    str(key): int(detail["layer_revision"])
-                    for key, detail in pending.source_baseline.items()
-                    if isinstance(detail, dict)
-                    and detail.get("layer_revision") is not None
-                }
-                pending_layer_digests = {
-                    str(key): (
-                        str(detail.get("layer_digest"))
-                        if detail.get("layer_digest") is not None
-                        else None
-                    )
-                    for key, detail in pending.source_baseline.items()
-                    if isinstance(detail, dict)
-                    and detail.get("layer_revision") is not None
-                }
-                self._persist_active_snapshot(
-                    candidate,
-                    candidate_id=pending.candidate_id,
-                    expected_active_revision=base_active_revision,
-                    expected_pending_revision=pending.pending_revision,
-                    expected_pending_state="applying",
-                    expected_fencing_token=(claim.fencing_token if claim else None),
-                    expected_source_baseline=pending.source_baseline,
-                    expected_source_generation=pending.source_generation,
-                    expected_layer_revisions=pending_layer_revisions,
-                    expected_layer_digests=pending_layer_digests,
-                    apply_id=apply_id,
-                    event=ConfigEventInput(
-                        event_id=f"config:{pending.candidate_id}:active",
-                        config_domain=self._CONFIG_DOMAIN,
-                        candidate_id=pending.candidate_id,
-                        attempt_id=attempt_id,
-                        apply_id=apply_id,
-                        idempotency_key=pending.idempotency_key,
-                        commit_revision=None,
-                        active_revision=None,
-                        pending_revision=pending.pending_revision,
-                        source="workspace-config-service",
-                        result="applied",
-                        activation_scope=workspace_config_policy().activation_scope_for(
-                            changed_paths
-                        ),
-                        changed_paths=changed_paths,
-                        applied_paths=changed_paths,
-                    ),
-                )
-            except ConfigConflictError as error:
-                if self._workspace_state_store is not None and claim is not None:
-                    journal = self._workspace_state_store.get_config_apply_journal(
-                        apply_id=claim.apply_id
-                    )
-                    recovery_required = bool(journal and journal.side_effects)
-                    self._workspace_state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state=("recovery_required" if recovery_required else "failed"),
-                        last_error=str(error),
-                    )
-                else:
-                    recovery_required = False
-                self._finish_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state=("recovery_required" if recovery_required else "conflict"),
-                    result=("recovery_required" if recovery_required else "conflict"),
-                    error=str(error),
-                    changed_paths=changed_paths,
-                )
-                raise
-            except Exception as error:
-                if self._workspace_state_store is not None and claim is not None:
-                    journal = self._workspace_state_store.get_config_apply_journal(
-                        apply_id=claim.apply_id
-                    )
-                    recovery_required = bool(journal and journal.side_effects)
-                    self._workspace_state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state=("recovery_required" if recovery_required else "failed"),
-                        last_error=str(error),
-                    )
-                else:
-                    recovery_required = False
-                self._finish_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state=("recovery_required" if recovery_required else "rejected"),
-                    result=("recovery_required" if recovery_required else "apply_failed"),
-                    error=str(error),
-                    changed_paths=changed_paths,
-                )
-                raise
-            else:
-                # 数据库提交后立即同步发布；激活失败不能再把已提交 journal 标为 rejected。
-                publish()
-            finally:
-                if claim_renewal_task is not None:
-                    claim_renewal_task.cancel()
-                    await asyncio.gather(
-                        claim_renewal_task,
-                        return_exceptions=True,
-                    )
-                if self._workspace_state_store is not None and claim is not None:
-                    self._workspace_state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
+            committed = False
 
-        async def apply_through_shadow(
-            previous: ConfigSnapshot,
-            candidate: ConfigSnapshot,
-            publish_snapshot: ConfigPublication,
-        ) -> None:
-            # candidate builder 已成功后才启动 shadow；解析/schema 失败仍由
-            # ConfigSnapshotStore 记录本次 reload failure，不能在其外层短路。
-            if self._shadow_lifecycle.readiness == "cold":
-                await self._shadow_lifecycle.bootstrap(previous.to_dict())
+            async def prepare_runtime(_config: Mapping[str, object], scope: LifetimeScope) -> ConfigPublication:
+                if candidate_applier is None:
+                    return lambda: None
+                activate = await candidate_applier(previous, candidate, scope)
+                if not callable(activate):
+                    raise TypeError("配置候选准备必须返回同步激活回调")
+                if self._workspace_state_store is not None and claim is not None:
+                    self._workspace_state_store.append_config_apply_side_effect(
+                        apply_id=claim.apply_id,
+                        side_effect={
+                            "resource": "workspace-config-applier",
+                            "action": "prepare",
+                            "candidate_id": pending.candidate_id,
+                            "changed_paths": list(changed_paths),
+                        },
+                    )
+                return activate
 
             async def publish_candidate(_generation, publish_shadow: ConfigPublication) -> None:
-                def publish() -> None:
+                nonlocal committed
+                # 网络准备及旧 scope 排空均在锁外；SQLite CAS 到全部内存切换
+                # 之间不让配置读取、目录捕获或调用准入观察到半发布。
+                with self._snapshot_store.publication_lock:
+                    pending_layer_revisions = {
+                        str(key): int(detail["layer_revision"])
+                        for key, detail in pending.source_baseline.items()
+                        if isinstance(detail, dict)
+                        and detail.get("layer_revision") is not None
+                    }
+                    pending_layer_digests = {
+                        str(key): (
+                            str(detail.get("layer_digest"))
+                            if detail.get("layer_digest") is not None
+                            else None
+                        )
+                        for key, detail in pending.source_baseline.items()
+                        if isinstance(detail, dict)
+                        and detail.get("layer_revision") is not None
+                    }
+                    self._persist_active_snapshot(
+                        candidate,
+                        candidate_id=pending.candidate_id,
+                        expected_active_revision=base_active_revision,
+                        expected_pending_revision=pending.pending_revision,
+                        expected_pending_state="applying",
+                        expected_fencing_token=(claim.fencing_token if claim else None),
+                        expected_source_baseline=pending.source_baseline,
+                        expected_source_generation=pending.source_generation,
+                        expected_layer_revisions=pending_layer_revisions,
+                        expected_layer_digests=pending_layer_digests,
+                        apply_id=apply_id,
+                        event=ConfigEventInput(
+                            event_id=f"config:{pending.candidate_id}:active",
+                            config_domain=self._CONFIG_DOMAIN,
+                            candidate_id=pending.candidate_id,
+                            attempt_id=attempt_id,
+                            apply_id=apply_id,
+                            idempotency_key=pending.idempotency_key,
+                            commit_revision=None,
+                            active_revision=None,
+                            pending_revision=pending.pending_revision,
+                            source="workspace-config-service",
+                            result="applied",
+                            activation_scope=workspace_config_policy().activation_scope_for(
+                                changed_paths
+                            ),
+                            changed_paths=changed_paths,
+                            applied_paths=changed_paths,
+                        ),
+                    )
+                    committed = True
                     publish_snapshot()
                     publish_shadow()
 
-                if candidate.revision != previous.revision:
-                    await persist_candidate(previous, candidate, publish)
+            try:
+                await self._shadow_lifecycle.apply_candidate(
+                    candidate.to_dict(),
+                    expected_generation=self._shadow_lifecycle.generation,
+                    publish_hook=publish_candidate,
+                    prepare=prepare_runtime,
+                )
+            except BaseException as error:
+                # 提交后的激活或旧 scope 清理失败不能重写已应用的持久事实。
+                if committed:
+                    raise
+                journal = (
+                    self._workspace_state_store.get_config_apply_journal(apply_id=claim.apply_id)
+                    if self._workspace_state_store is not None and claim is not None else None
+                )
+                recovery_required = bool(journal and journal.side_effects)
+                state: ConfigLifecycleState
+                result: ConfigResult
+                if isinstance(error, ConfigRestartRequiredError):
+                    state, result = "pending_restart", "restart_required"
+                elif recovery_required:
+                    state, result = "recovery_required", "recovery_required"
+                elif isinstance(error, ConfigConflictError):
+                    state, result = "conflict", "conflict"
                 else:
-                    publish()
-
-            await self._shadow_lifecycle.apply_candidate(
-                candidate.to_dict(),
-                expected_generation=self._shadow_lifecycle.generation,
-                publish_hook=publish_candidate,
-            )
+                    state, result = "rejected", "apply_failed"
+                self._finish_candidate(
+                    pending,
+                    attempt_id=attempt_id,
+                    apply_id=apply_id,
+                    state=state,
+                    result=result,
+                    error=f"{type(error).__name__}: {error}",
+                    changed_paths=changed_paths,
+                    candidate_ref=new_config_id("candidate_ref") if state == "pending_restart" else None,
+                    target_generation=claim.target_generation if claim else None,
+                    fencing_token=claim.fencing_token if claim else None,
+                )
+                if self._workspace_state_store is not None and claim is not None:
+                    self._workspace_state_store.update_config_apply_journal(
+                        apply_id=claim.apply_id,
+                        expected_state="applying",
+                        state="recovery_required" if recovery_required else "failed",
+                        last_error=f"{type(error).__name__}: {error}",
+                    )
+                raise
+            finally:
+                if claim_renewal_task is not None:
+                    claim_renewal_task.cancel()
+                    await asyncio.gather(claim_renewal_task, return_exceptions=True)
+                if self._workspace_state_store is not None and claim is not None:
+                    self._workspace_state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
 
         try:
             return await self._snapshot_store.reload(

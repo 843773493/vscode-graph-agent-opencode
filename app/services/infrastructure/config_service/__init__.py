@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from _thread import RLock
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,11 @@ class ConfigService(ConfigSourceLayersMixin,
 ):
     _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
     _CONFIG_DOMAIN = "workspace"
+
+    @property
+    def publication_lock(self) -> RLock:
+        """配置、目录、Registry 与执行准入共用同一短期同步屏障。"""
+        return self._snapshot_store.publication_lock
 
     def __init__(
         self,

@@ -93,3 +93,18 @@ async def test_snapshot_publisher_returning_without_commit_is_explicit_failure()
     with pytest.raises(RuntimeError, match="尚未发布候选"):
         await store.reload(candidate_applier=missing_commit)
     assert store.current() is previous and not store.status().healthy
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cleanup_group_is_recorded_without_publishing_candidate() -> None:
+    candidates = iter(build_config_snapshot({"version": value}, source_paths=()) for value in (1, 2))
+    store = ConfigSnapshotStore(candidate_builder=lambda: next(candidates))
+    previous = store.current()
+
+    async def fail_cleanup(_previous, _candidate, _publish) -> None:
+        raise BaseExceptionGroup("候选准备和等待回收取消", [RuntimeError("准备失败"), asyncio.CancelledError()])
+
+    with pytest.raises(BaseExceptionGroup):
+        await store.reload(candidate_applier=fail_cleanup)
+    assert store.current() is previous and not store.status().healthy
+    assert store.status().reason == "apply_failed"
