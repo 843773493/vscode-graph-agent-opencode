@@ -22,7 +22,7 @@ ConfigActivationScope = Literal[
 
 @dataclass(frozen=True, slots=True)
 class ConfigPolicyRule:
-    """一个 JSON Pointer 策略；`*` 只匹配一个显式对象/数组层级。"""
+    """JSON Pointer 策略：`*` 匹配一层，末尾 `**` 匹配后代路径。"""
 
     pattern: str
     policy: ConfigActivationPolicy
@@ -38,7 +38,7 @@ class ConfigPolicyRule:
 def _pointer_pattern_matches(
     pattern_parts: tuple[str, ...], path_parts: tuple[str, ...]
 ) -> bool:
-    if pattern_parts and pattern_parts[-1] == "*":
+    if pattern_parts and pattern_parts[-1] == "**":
         prefix = pattern_parts[:-1]
         return len(path_parts) > len(prefix) and all(
             pattern_part == "*" or pattern_part == path_part
@@ -68,7 +68,7 @@ class ConfigPolicyRegistry:
         rules: tuple[ConfigPolicyRule, ...],
     ) -> None:
         self.domain = domain
-        self.default_policy = default_policy
+        self.default_policy: Literal["restart_workspace", "restart_gateway"] = default_policy
         seen: set[str] = set()
         for rule in rules:
             if not rule.pattern.startswith("/"):
@@ -77,7 +77,9 @@ class ConfigPolicyRegistry:
                 raise ValueError(f"配置策略重复登记: {rule.pattern}")
             seen.add(rule.pattern)
         for rule in rules:
-            _pointer_parts(rule.pattern)
+            parts = _pointer_parts(rule.pattern)
+            if "**" in parts[:-1]:
+                raise ValueError(f"递归配置通配符只能位于末尾: {rule.pattern}")
             if rule.activation_scope not in {
                 "current",
                 "next_job",
@@ -104,7 +106,7 @@ class ConfigPolicyRegistry:
                     "配置策略 policy 与 activation_scope 不一致: "
                     f"{rule.pattern}={rule.policy}/{rule.activation_scope}"
                 )
-            if rule.identity_key is not None and not rule.pattern.endswith("/*"):
+            if rule.identity_key is not None and parts[-1:] not in (("*",), ("**",)):
                 raise ValueError(
                     f"数组 identity key 只能登记在对象通配符路径: {rule.pattern}"
                 )
@@ -187,9 +189,9 @@ class ConfigPolicyRegistry:
         """导出策略声明的数组 identity key，供候选 diff 使用。"""
 
         return {
-            rule.pattern.removesuffix("/*"): rule.identity_key
+            rule.pattern.rsplit("/", 1)[0]: rule.identity_key
             for rule in self.rules
-            if rule.identity_key is not None and rule.pattern.endswith("/*")
+            if rule.identity_key is not None
         }
 
     def policy_manifest(self) -> tuple[dict[str, object], ...]:
@@ -241,7 +243,7 @@ def _patterns_overlap(left: str, right: str) -> bool:
     if len(left_parts) != len(right_parts):
         return False
     return all(
-        left_part == right_part or left_part == "*" or right_part == "*"
+        left_part == right_part or left_part in {"*", "**"} or right_part in {"*", "**"}
         for left_part, right_part in zip(left_parts, right_parts, strict=True)
     )
 
@@ -251,20 +253,30 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
         domain="workspace",
         default_policy="restart_workspace",
         rules=(
-            ConfigPolicyRule("/ui/*", "next_session", "next_session"),
+            ConfigPolicyRule("/ui/**", "next_session", "next_session"),
             ConfigPolicyRule("/llm/providers", "next_job", "next_job"),
-            ConfigPolicyRule("/agents/*/instructions/*", "next_job", "next_job"),
+            ConfigPolicyRule("/agents/*/instructions/**", "next_job", "next_job"),
             ConfigPolicyRule(
                 "/runtime/agent/run/timeout_seconds", "next_job", "next_job"
             ),
             ConfigPolicyRule("/runtime/agent/run/mode", "next_session", "next_session"),
-            ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),
-            ConfigPolicyRule("/runtime/gateway/connection/*", "next_job", "next_job"),
+            ConfigPolicyRule("/runtime/auxiliary_services/**", "next_job", "next_job"),
+            ConfigPolicyRule("/runtime/gateway/connection/**", "next_job", "next_job"),
             ConfigPolicyRule("/context/source_messages/grouping", "immediate_read", "current"),
-            ConfigPolicyRule("/resources/skill_sources/gateway_updates/*", "immediate_read", "current"),
+            ConfigPolicyRule("/resources/skill_sources/gateway_updates/**", "immediate_read", "current"),
             ConfigPolicyRule("/mcp", "restart_workspace", "restart_workspace"),
             ConfigPolicyRule("/mcp/servers", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/enabled", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/transport", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/command", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/args", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/env", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/env/*", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/cwd", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/url", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/headers", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/headers/*", "immediate_read", "current"),
         ),
     )
 
@@ -274,19 +286,19 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
         domain="gateway",
         default_policy="restart_gateway",
         rules=(
-            ConfigPolicyRule("/logging/runtime/*", "immediate_read", "current"),
-            ConfigPolicyRule("/ui/*", "immediate_read", "current"),
+            ConfigPolicyRule("/logging/runtime/**", "immediate_read", "current"),
+            ConfigPolicyRule("/ui/**", "immediate_read", "current"),
             ConfigPolicyRule("/permissions", "immediate_read", "current"),
             ConfigPolicyRule("/permissions/federation", "immediate_read", "current"),
-            ConfigPolicyRule("/permissions/federation/*", "immediate_read", "current"),
-            ConfigPolicyRule("/features/session_catalog/*", "next_job", "next_job"),
-            ConfigPolicyRule("/features/session_generators/*", "next_job", "next_job"),
+            ConfigPolicyRule("/permissions/federation/**", "immediate_read", "current"),
+            ConfigPolicyRule("/features/session_catalog/**", "next_job", "next_job"),
+            ConfigPolicyRule("/features/session_generators/**", "next_job", "next_job"),
             ConfigPolicyRule(
-                "/runtime/gateway/process/*", "restart_gateway", "restart_gateway"
+                "/runtime/gateway/process/**", "restart_gateway", "restart_gateway"
             ),
             ConfigPolicyRule("/workspaces", "restart_gateway", "restart_gateway"),
             ConfigPolicyRule(
-                "/workspaces/*",
+                "/workspaces/**",
                 "restart_gateway",
                 "restart_gateway",
                 identity_key="connection_id",

@@ -151,6 +151,8 @@ stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消
 
 保持 Workspace 有效配置覆盖顺序；只处理最终有效值变化。服务器 command/args/env/cwd、URL/headers/auth 引用、enabled 和增删在 supervisor 验收后按 Server 对账；未覆盖或不能安全替换的依赖仍明确归入 restart policy，不把整个 `/mcp` 无条件改成任意字段热更新。
 
+当前已验收的路径逐项登记 enabled、transport、command、args、env、cwd、url、headers 及 Server 增删，现有凭据引用沿 env／headers 展开。策略的单段 `*` 只匹配一个对象／数组层级，末尾 `**` 显式匹配后代；原来依赖递归的 Workspace 与 Gateway 规则和 schema manifest 同批迁齐，保持其生效范围不变。Server 根规则只处理整个 Server 的增删，不能覆盖未知子字段；env／headers 只接受一层键。尚未登记的路径仍缺省需重启，未知配置先经原 schema 校验明确拒绝，不发布候选或假报应用。schema 校验失败时保留上一份 active 快照及其事件，独立报告 invalid_config，不将上一次 applied_paths 冒充本次未知字段已应用。监督参数及其混合候选继续整体延后。这里只整理策略匹配与已支持字段，不改变用户配置结构或配置版本。
+
 候选步骤：预检并持久 applying → 所属 task 准备变更的连接 → initialize／完整 relist／命名冲突检查 → 在现有配置 owner 的提交协议下切换 runtime 指针与目录 publication → active promotion 确认 → 排空退役连接。多个 Server 同一候选全部准备成功才整体可见；网络准备不持有 publication 锁。
 
 发布与配置 active promotion 使用同一受控准入屏障／提交标识：模型 preparation、API 和工具调用不能观察到 candidate 目录配旧 active 配置的中间状态；不能只依赖两个各自原子的赋值。崩溃后依据持久提交阶段对账，不声称 SQLite 能回滚外部 session。

@@ -28,3 +28,8 @@ Workspace SHALL（必须）为有效配置路径声明可观察的生效范围�
 
 - **WHEN** 有效 MCP Server command、args、env、cwd、URL、headers、auth 引用、enabled 或增删变更通过相应监督替换验收和候选准备
 - **THEN** 在当前工作区受控切换、确认 active 后对后续允许边界生效，其他工作区和旧封存调用保持各自身份
+
+#### Scenario: Server 根路径不能放行未登记字段
+
+- **WHEN** 分类尚未登记的 MCP Server 子字段或监督字段，或者候选包含当前 schema 不接受的字段
+- **THEN** Server 增删规则不递归放行未知子字段，未登记路径保持需重启分类；schema 无效候选明确报告 invalid_config，上一份 active 快照、连接和已提交事件保持原样，不将先前应用路径说成本次字段已应用

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,6 +31,9 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
+from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 共用真实 HTTP MCP handler
+)
 
 _SERVER = r'''
 import asyncio, json, os, sqlite3, sys
@@ -46,7 +50,7 @@ def record(phase):
             for row in connection.execute("SELECT side_effects_json FROM config_apply_journal WHERE state = 'applying'"):
                 effects.extend(json.loads(row[0]))
     with lifecycle.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"phase":phase, "version":version, "pid":os.getpid(), "effects":effects}) + "\n")
+        stream.write(json.dumps({"phase":phase, "version":version, "pid":os.getpid(), "cwd":str(Path.cwd()), "effects":effects}) + "\n")
 with portalocker.Lock(lock, timeout=0):
     record("start")
     try:
@@ -56,8 +60,16 @@ with portalocker.Lock(lock, timeout=0):
 '''
 
 
+@pytest.fixture
+def uv_executable() -> str:
+    executable = shutil.which("uv")
+    assert executable is not None, "真实 command 替换验收需要项目使用的 uv"
+    return executable
+
+
 async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_candidate_requires_recovery(
-    mounted_case: MountedCase, inprocess_model_replay, request: pytest.FixtureRequest,
+    mounted_case: MountedCase, inprocess_model_replay, request: pytest.FixtureRequest, uv_executable: str,
+    http_schema_endpoint_factory,
 ) -> None:
     replay, controller = inprocess_model_replay
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -77,7 +89,7 @@ async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_ca
     path.write_text(json.dumps(payload), encoding="utf-8")
     (sibling_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}), encoding="utf-8")
 
-    async with main.lifespan(main.app):
+    async with http_schema_endpoint_factory("stdio-to-http") as endpoint, main.lifespan(main.app):
         first, sibling = mounted_case.containers
         service, owner = first.config_service, first.mcp_catalog_owner
         original = owner.binding_snapshot()
@@ -86,9 +98,15 @@ async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_ca
         with pytest.raises(portalocker.exceptions.LockException), portalocker.Lock(lock, timeout=0):
             pytest.fail("真实 stdio Server 未持有单实例锁")
         server_config["env"]["MCP_TEST_VERSION"] = "new"
+        server_config["command"] = uv_executable
+        server_config["args"] = ["run", "--project", str(Path.cwd()), "--no-sync", "python", *server_config["args"]]
+        server_config["cwd"] = str(artifacts)
         path.write_text(json.dumps(payload), encoding="utf-8")
         status = await wait_status(service, lambda status: status.healthy and owner.binding_snapshot() != original)
-        assert status.state == "active" and status.applied_paths == ("/mcp/servers/schema/env/MCP_TEST_VERSION",)
+        assert status.state == "active" and status.applied_paths == (
+            "/mcp/servers/schema/args", "/mcp/servers/schema/command", "/mcp/servers/schema/cwd",
+            "/mcp/servers/schema/env/MCP_TEST_VERSION",
+        )
         assert not status.restart_required and old.scope.is_closed and not old.running
         current = owner.binding_snapshot()
         assert current.catalog_revision == original.catalog_revision
@@ -98,6 +116,7 @@ async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_ca
         assert any(effect == {"resource": "mcp_connection", "action": "stop", "server_id": "schema", "connection_ref": original.resolve("mcp__schema__probe").connection_ref}
                    for effect in phases[1]["effects"])
         assert phases[0]["pid"] != phases[2]["pid"]
+        assert phases[0]["cwd"] == str(root) and phases[2]["cwd"] == str(artifacts)
         with workspace_context(first.workspace_id, root, session_catalog=first.session_catalog):
             runner = RunnerCase(first, root)
             session_id, thread_id = await _session(runner)
@@ -136,6 +155,26 @@ async def test_single_instance_stdio_is_stopped_before_replacement_and_failed_ca
             ]
             original_failure = first.workspace_activity_service.store.get_config_apply_journal(apply_id=failed.apply_id)
             assert original_failure is not None and original_failure.state == "recovery_required"
+            fixed = owner.binding_snapshot()
+            fixed_runtime = owner._runtimes["schema"]
+            payload["mcp"]["servers"]["schema"] = {"enabled": True, "transport": "streamable_http", "url": endpoint.url}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            switched = await wait_status(service, lambda status: status.healthy and owner.binding_snapshot() != fixed)
+            assert switched.state == "active" and not switched.deferred_paths and not switched.restart_required
+            assert switched.applied_paths == (
+                "/mcp/servers/schema/args", "/mcp/servers/schema/command", "/mcp/servers/schema/cwd",
+                "/mcp/servers/schema/env", "/mcp/servers/schema/transport", "/mcp/servers/schema/url",
+            )
+            assert fixed_runtime.scope.is_closed and not fixed_runtime.running
+            assert owner._runtimes["schema"].server.transport == "streamable_http"
+            plan_tool_loop(replay, first, session_id, thread_id, "transport-switched")
+            job = await _start_job(runner, "user", session_id, thread_id)
+            await asyncio.wait_for(asyncio.shield(job.task), 30)
+            assert job.status == JobStatus.completed, job.error_message
+            assert [json.loads(line) for line in endpoint.receipts.read_text().splitlines()] == [
+                {"name": "probe", "arguments": {"marker": "transport-switched"}},
+            ]
+            assert controller.transport.call_count == 6
     assert_closed(mounted_case)
     phases = [json.loads(line) for line in lifecycle.read_text().splitlines()]
     assert [(row["phase"], row["version"]) for row in phases] == [

@@ -20,7 +20,7 @@ def test_config_policy_prefers_longest_explicit_path_and_marks_missing_defaults(
         domain="workspace",
         default_policy="restart_workspace",
         rules=(
-            ConfigPolicyRule("/runtime/*", "next_job", "next_job"),
+            ConfigPolicyRule("/runtime/**", "next_job", "next_job"),
             ConfigPolicyRule(
                 "/runtime/agent/run/timeout_seconds",
                 "next_session",
@@ -93,8 +93,8 @@ def test_config_policy_rejects_duplicate_patterns():
             domain="gateway",
             default_policy="restart_gateway",
             rules=(
-                ConfigPolicyRule("/ui/*", "immediate_read", "current_view"),
-                ConfigPolicyRule("/ui/*", "next_job", "next_operation"),
+                ConfigPolicyRule("/ui/*", "immediate_read", "current"),
+                ConfigPolicyRule("/ui/*", "next_job", "next_job"),
             ),
         )
 
@@ -115,3 +115,50 @@ def test_schema_policy_manifest_rejects_drift():
     manifest[0] = {**manifest[0], "policy": "next_job"}
     with pytest.raises(ValueError, match="策略表不一致"):
         validate_policy_manifest(schema, gateway_config_policy())
+
+
+def test_single_level_policy_does_not_admit_unknown_server_fields():
+    single = ConfigPolicyRule("/mcp/servers/*", "immediate_read", "current")
+    assert single.matches("/mcp/servers/alpha")
+    assert not single.matches("/mcp/servers/alpha/unknown")
+    recursive = ConfigPolicyRule("/agents/*/instructions/**", "next_job", "next_job")
+    assert recursive.matches("/agents/coder/instructions/system/path")
+    assert not recursive.matches("/agents/coder/tools/system/path")
+
+
+@pytest.mark.parametrize("field", [
+    "enabled", "transport", "command", "args", "env", "cwd", "url", "headers",
+    "env/ROOT~1~0", "headers/Authorization",
+])
+def test_supported_mcp_connection_changes_use_declared_hot_policy(field):
+    path = f"/mcp/servers/alpha/{field}"
+    decision, = workspace_config_policy().classify((path,))
+    assert decision.policy == "immediate_read" and decision.activation_scope == "current"
+    assert not decision.policy_missing
+
+
+@pytest.mark.parametrize("path", [
+    "/mcp/servers/alpha/unknown", "/mcp/servers/alpha/auth",
+    "/mcp/servers/alpha/url/nested", "/mcp/servers/alpha/env/ROOT/nested",
+    "/mcp/supervision/sealed_call_timeout_seconds",
+])
+def test_unverified_mcp_paths_keep_restart_classification(path):
+    registry = workspace_config_policy()
+    decision, = registry.classify((path,))
+    assert decision.policy == "restart_workspace" and decision.policy_missing
+    assert registry.activation_scope_for(("/mcp/servers/alpha/url", path)) == "restart_workspace"
+
+
+def test_mcp_server_add_remove_uses_the_real_diff_without_recursive_admission():
+    before = {"mcp": {"servers": {"alpha": {"transport": "stdio", "command": "old"}}}}
+    after = {"mcp": {"servers": {"beta": {"transport": "stdio", "command": "new"}}}}
+    paths = changed_json_paths(before, after)
+    assert paths == ("/mcp/servers/alpha", "/mcp/servers/beta")
+    assert workspace_config_policy().restart_paths(paths) == ()
+
+
+def test_recursive_policy_cannot_hide_unmatched_levels():
+    with pytest.raises(ValueError, match="只能位于末尾"):
+        ConfigPolicyRegistry(domain="workspace", default_policy="restart_workspace", rules=(
+            ConfigPolicyRule("/mcp/**/url", "immediate_read", "current"),
+        ))

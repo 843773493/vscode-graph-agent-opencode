@@ -4,16 +4,16 @@
   "$id": "https://boxteam.dev/schemas/gateway-config-v3.json",
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
-    { "pattern": "/logging/runtime/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/ui/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/ui/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/permissions/federation/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/features/session_catalog/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/features/session_generators/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/runtime/gateway/process/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
+    { "pattern": "/permissions/federation/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/features/session_catalog/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/features/session_generators/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/runtime/gateway/process/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
     { "pattern": "/workspaces", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
-    { "pattern": "/workspaces/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": "connection_id" }
+    { "pattern": "/workspaces/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": "connection_id" }
   ],
   "title": "BoxTeam Gateway Config Schema",
   "type": "object",

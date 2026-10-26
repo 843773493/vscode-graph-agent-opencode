@@ -15,6 +15,8 @@ import uvicorn
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from sse_starlette.sse import AppStatus
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.responses import Response
 from starlette.routing import Mount
 
 from app.agents.tool_invocation_context import (
@@ -267,7 +269,7 @@ def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: py
     monkeypatch.setattr(AppStatus, "should_exit", False)
 
     @asynccontextmanager
-    async def endpoint(label: str):
+    async def endpoint(label: str, *, required_headers: dict[str, str] | None = None):
         context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         definitions = context.artifacts_dir / f"{label}-definitions.json"
         definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
@@ -279,7 +281,15 @@ def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: py
             async with manager.run():
                 yield
 
-        app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
+        async def handle_request(scope, receive, send):
+            if scope["type"] == "http" and required_headers is not None:
+                headers = Headers(scope=scope)
+                if any(headers.get(key) != value for key, value in required_headers.items()):
+                    await Response(status_code=401)(scope, receive, send)
+                    return
+            await manager.handle_request(scope, receive, send)
+
+        app = Starlette(routes=[Mount("/mcp", app=handle_request)], lifespan=lifespan)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()

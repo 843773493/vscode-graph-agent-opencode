@@ -60,7 +60,7 @@
 - [x] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
 - [x] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
 - [x] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
-- [ ] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
+- [x] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
 - [ ] 7.6 验证低优先级遮蔽、多 Server 部分失败、配置与模型调用交错、切换中崩溃、旧连接排空、共享 Backend 工作区隔离和配置 SSE replay；完成静态分析。
 
 ## 8. Web 与真实产品链路验收
@@ -185,3 +185,12 @@
 
 - 新断言先复现撤销准入将cleanup_failed／error_type重置为draining／None；原退役组件改为只替换admits_sealed，保留已核实阶段、原期限和错误类型。失败诊断及同Server冲突屏障不因撤权消失，其他Server仍可更新。
 - `out/tests/temp/mcp-retirement-revocation/artifacts/`保留red-001原始失败、green-002的39 passed／7.23秒和static-002的Ruff／Pyright零错误；准确命令、指纹及退出码完整保留，源码前后未变。不将组件单元验收扩大为尚未实现的产品disconnect验收，7.5综合字段分类与7.6仍未完成。
+
+### 7.5 连接字段显式分类与真实替换验收（2026-10-26）
+
+- 唯一配置策略的`*`只匹配一层、尾部`**`显式递归；迁齐全部既有Workspace／Gateway规则及schema manifest，保持非MCP生效范围。Server根规则仅允许增删，已验收的enabled／transport／command／args／env／cwd／url／headers逐项登记，env／headers键保留JSON Pointer转义。未知子字段和监督路径不借根规则热生效，混合候选仍整体pending_restart；不新增配置字段、版本或存储。
+- `product-http-final-002`真实watcher／双挂载／Runner／HTTP MCP为4 passed／136.72秒：Server真实校验环境变量展开后的Authorization，核新增、换URL及凭据引用、禁用、删除、再启用的新代际和兄弟工作区隔离；无效字段保留原active及事件、明确invalid_config。原测试继续覆盖多Server部分失败、sealed请求交错、两种目录策略禁用和混合候选完整deferred_paths。
+- `product-stdio-final-002` 1 passed／73.77秒：实际command由Python改为uv、同时替换args／env／cwd，Server记录真实工作目录、单实例锁、PID及停止journal；保留坏schema后的recovery_required和修复执行，再真实切为HTTP并经Agent执行，逐项核applied_paths。`recovery-sse-final-005` 4 passed／159.45秒覆盖HTTP提升前后真实OS退出、原claim有效／到期后重启、原active重建与两次真实HTTP SSE续读；`http-protocol-regression-004` 9 passed／11.20秒确认共享夹具仍保留取消、进度、unknown及原调用配对。
+- `config-regression-003`配置基础设施、ConfigService、API合同及Gateway诊断／验收矩阵263 passed／280.40秒，含低优先级遮蔽、来源、pending及日志既有行为。25项策略短检查另通过；范围有重叠不累加。初次60秒组合检查完成44项后保护退出124，完整范围扩大至必要预算后通过；HTTP初次失败是新测试误把schema拒绝当作已进入候选状态，依据既有invalid_config合同改为严格核原active／事件不变，未改产品状态机或放宽原断言。
+- Ruff通过，5文件Pyright完整HEAD基线8项／当前4项，零新增，保留共享协议测试的4项既有诊断；单一default_policy类型及重复规则测试的非法scope字面量已修正。命令、前后源码指纹、原始输出、退出码、类型对照和结构检查位于`out/tests/temp/mcp-config-policy/artifacts/`。最终验证均无源码漂移；无Web源码变化，未重跑Web构建或外部Provider。
+- 关闭7.5，当前19/52。7.6继续未勾选：非合作真实stdio关闭期限、stdio停止窗口中的OS崩溃尚须专门验证；OAuth、连接控制、持久等待、HITL完整产品恢复和Gateway／Web授权仍按原任务推进，团队／协作保持TODO。

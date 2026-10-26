@@ -167,6 +167,85 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
     assert_closed(mounted_case)
 
 
+async def test_watcher_add_header_reference_replace_disable_remove_and_reenable_use_real_connections(
+    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch,
+):
+    replay, controller = inprocess_model_replay
+    monkeypatch.setenv("MCP_TEST_OLD_CREDENTIAL", "test-old-credential")
+    monkeypatch.setenv("MCP_TEST_NEW_CREDENTIAL", "test-new-credential")
+    async with (
+        http_schema_endpoint_factory("headers-old", required_headers={"Authorization": "Bearer test-old-credential"}) as old,
+        http_schema_endpoint_factory("headers-new", required_headers={"Authorization": "Bearer test-new-credential"}) as new,
+    ):
+        root, sibling_root = mounted_case.roots.values()
+        for workspace in (root, sibling_root):
+            (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}))
+        path = root / ".boxteam/workspace.jsonc"
+        payload = {"mcp": {"servers": {"schema": {
+            "enabled": True, "transport": "streamable_http", "url": old.url,
+            "headers": {"Authorization": "Bearer ${MCP_TEST_OLD_CREDENTIAL}"},
+        }}}}
+        async with main.lifespan(main.app):
+            first, sibling = mounted_case.containers
+            service, owner = first.config_service, first.mcp_catalog_owner
+            sibling_binding = sibling.mcp_catalog_owner.binding_snapshot()
+            with workspace_context(first.workspace_id, root, session_catalog=first.session_catalog):
+                runner = RunnerCase(first, root)
+                session_id, thread_id = await _session(runner)
+                for marker, endpoint, credential in (
+                    ("header-added", old, "MCP_TEST_OLD_CREDENTIAL"),
+                    ("header-replaced", new, "MCP_TEST_NEW_CREDENTIAL"),
+                ):
+                    previous = owner.binding_snapshot()
+                    server = mcp_servers(payload)["schema"]
+                    server["url"] = endpoint.url
+                    server["headers"] = {"Authorization": "Bearer ${" + credential + "}"}
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    status = await wait_status(service, lambda status, previous=previous:
+                        status.healthy and owner.binding_snapshot() != previous)
+                    assert status.state == "active" and not status.deferred_paths and not status.restart_required
+                    assert status.applied_paths == (("/mcp/servers/schema",) if marker == "header-added" else (
+                        "/mcp/servers/schema/headers/Authorization", "/mcp/servers/schema/url",
+                    ))
+                    plan_tool_loop(replay, first, session_id, thread_id, marker)
+                    job = await _start_job(runner, "user", session_id, thread_id)
+                    await asyncio.wait_for(asyncio.shield(job.task), 30)
+                    assert job.status == JobStatus.completed, job.error_message
+                    assert [json.loads(line) for line in endpoint.receipts.read_text().splitlines()] == [
+                        {"name": "probe", "arguments": {"marker": marker}},
+                    ]
+                generation = owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref
+                mcp_servers(payload)["schema"]["enabled"] = False
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                status = await wait_status(service, lambda status: status.healthy and not owner.get_tool_ids())
+                assert status.applied_paths == ("/mcp/servers/schema/enabled",) and not status.deferred_paths
+                mcp_servers(payload).pop("schema")
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                status = await wait_status(service, lambda status: status.healthy
+                    and "schema" not in service.get_snapshot().to_dict()["mcp"]["servers"])
+                assert status.applied_paths == ("/mcp/servers/schema",) and not status.deferred_paths
+                mcp_servers(payload)["schema"] = {"enabled": True, "transport": "streamable_http", "url": new.url,
+                    "headers": {"Authorization": "Bearer ${MCP_TEST_NEW_CREDENTIAL}"}}
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                status = await wait_status(service, lambda status: status.healthy and bool(owner.get_tool_ids()))
+                assert status.applied_paths == ("/mcp/servers/schema",) and not status.deferred_paths
+                current = owner.binding_snapshot()
+                assert current.resolve("mcp__schema__probe").connection_ref != generation
+                # 未知字段必须在候选校验阶段拒绝，不得借 Server 根规则获得热应用。
+                active_snapshot = service.get_snapshot()
+                events = service.list_config_events()
+                mcp_servers(payload)["schema"]["unknown"] = True
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                invalid = await wait_status(service, lambda status: not status.healthy)
+                assert invalid.reason == "invalid_config" and invalid.state == "active"
+                assert invalid.active_revision == status.active_revision
+                assert service.get_snapshot() is active_snapshot and service.list_config_events() == events
+                assert owner.binding_snapshot() is current
+                assert sibling.mcp_catalog_owner.binding_snapshot() == sibling_binding
+                assert controller.transport.call_count == 4
+    assert_closed(mounted_case)
+
+
 @pytest.mark.parametrize("boundary", ["turn", "model_call"])
 async def test_disabled_sealed_call_commits_failure_and_releases_qualification_before_next_model(
     mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch, boundary,
