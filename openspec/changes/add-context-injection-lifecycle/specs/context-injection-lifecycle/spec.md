@@ -752,6 +752,11 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 - **WHEN**thread已tracked Gateway global Skill，随后workspace出现同名覆盖，模型在尚未rebind前调用`skill_load(name, mode="untrack")`
 - **THEN**系统不读取当前workspace Skill，而是冻结原Gateway registration；之后before-model不再读取原provider，当前覆盖也不会自动变成tracked
 
+#### Scenario: Skill 操作不改变同名 instruction
+
+- **WHEN** 当前 thread 同时登记同名 Skill 与 instruction，或仅有该名称的 instruction
+- **THEN** snapshot／tracked／untrack 只定位 Skill 来源；同名 instruction 的登记、版本和追踪保持不变，仅有 instruction 时返回 skill-not-found。名称索引与冷恢复不得让不同 source_kind 互相覆盖或误报重复 Skill 追踪，已封存字节保持不变
+
 #### Scenario: untrack 非 tracked Skill
 
 - **WHEN** 模型对 snapshot 或不存在的 tracked registration 调用 `mode="untrack"`

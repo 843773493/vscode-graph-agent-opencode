@@ -111,6 +111,7 @@ def skill_catalog_from_activation(
 
 class SkillCatalogMixin:
         _sources: dict[str, SourceState]
+        _source_ids_by_kind_and_name: dict[tuple[str, str], str]
         _queue_delta: Callable[[SourceState], None]
         _pending: dict[str, ContextSourceDelta]
         _pending_observations: dict[str, PendingSourceObservation]
@@ -178,7 +179,7 @@ class SkillCatalogMixin:
                 ), activation_snapshot.catalog_revision)
                 source_id = state.source_id
             else:
-                source_id = self._source_ids_by_name.get(normalized)
+                source_id = self._source_ids_by_kind_and_name.get(("skill", normalized))
                 if source_id is None:
                     raise KeyError(f"Skill 不存在: name={normalized}")
                 state = self._sources[source_id]
@@ -192,7 +193,7 @@ class SkillCatalogMixin:
                 tracked_states = [
                     candidate
                     for candidate in self._sources.values()
-                    if candidate.tracked
+                    if candidate.source_kind == "skill" and candidate.tracked
                     and _normalize_skill_name(candidate.name) == normalized
                 ]
                 if len(tracked_states) > 1:
@@ -253,7 +254,7 @@ class SkillCatalogMixin:
                 )
             conflicting = [
                 candidate for candidate in self._sources.values()
-                if candidate.source_id != source_id and candidate.tracked
+                if candidate.source_kind == "skill" and candidate.source_id != source_id and candidate.tracked
                 and _normalize_skill_name(candidate.name) == normalized
             ]
             rebound = self._rebound_registrations(conflicting, normalized, binding.display_uri) if conflicting else None
@@ -322,7 +323,7 @@ class SkillCatalogMixin:
                 raise ContextSourceTrackingStateConflict(
                     "tracking-state-conflict: 同名同 effective entry 存在重复 "
                     f"active registration: name={normalized} "
-                    f"source_ids={[existing.source_id, self._source_ids_by_name.get(normalized)]}"
+                    f"source_ids={[existing.source_id, self._source_ids_by_kind_and_name.get(('skill', normalized))]}"
                 )
             return existing
 

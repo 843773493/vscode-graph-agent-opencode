@@ -311,7 +311,7 @@ def test_same_normalized_name_register_overrides_index_and_untrack_stops_old(sou
             internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
         )
     )
-    assert manager._source_ids_by_name["debugging"] == "skill:debugging-next"
+    assert manager._source_ids_by_kind_and_name[("skill", "debugging")] == "skill:debugging-next"
 
     receipt = manager.load_skill("debugging", mode="untrack")
     assert receipt.status == "loaded"
@@ -334,7 +334,7 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
     manager.load_skill("debugging", mode="tracked")
     (old_activation,) = source_seal_case.seal(manager)[0].deltas
     assert old_activation.content == "v1\n"
-    assert manager._source_ids_by_name["debugging"] == "skill:debugging"
+    assert manager._source_ids_by_kind_and_name[("skill", "debugging")] == "skill:debugging"
 
     # 同名高优先级 effective entry 出现：不同 source identity / display URI。
     manager.register(
@@ -353,7 +353,7 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
         "v2\n",
         display_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
     )
-    assert manager._source_ids_by_name["debugging"] == "skill:debugging-next"
+    assert manager._source_ids_by_kind_and_name[("skill", "debugging")] == "skill:debugging-next"
 
     receipt = manager.load_skill("debugging", mode="tracked")
 
@@ -457,7 +457,7 @@ def test_rebind_frozen_snapshot_registration_is_atomic(source_seal_case, new_vis
         assert saver.load_context_source_control_states(owner) == before
         assert manager.prepare_sources() == pending
         assert manager.descriptors() == descriptors
-        assert manager._source_ids_by_name["debugging"] == (
+        assert manager._source_ids_by_kind_and_name[("skill", "debugging")] == (
             "skill:entry:new" if new_visible else "skill:debugging"
         )
         for action in ("INSERT", "UPDATE"):
@@ -600,7 +600,7 @@ def test_load_tracked_duplicate_same_effective_entry_fails_closed(source_seal_ca
             resource_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
         )
     )
-    assert manager._source_ids_by_name["debugging"] == "skill:debugging-alias"
+    assert manager._source_ids_by_kind_and_name[("skill", "debugging")] == "skill:debugging-alias"
 
     with pytest.raises(ContextSourceTrackingStateConflict):
         manager.load_skill("debugging", mode="tracked")

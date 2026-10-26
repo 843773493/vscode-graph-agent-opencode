@@ -79,7 +79,7 @@ class ContextSourceManager(
         self._lifecycle_event_sink = lifecycle_event_sink
         self._last_model_call_receipt: CommittedContextSourceBatch | None = None
         self._sources: dict[str, SourceState] = {}
-        self._source_ids_by_name: dict[str, str] = {}
+        self._source_ids_by_kind_and_name: dict[tuple[str, str], str] = {}
         self._pending: dict[str, ContextSourceDelta] = {}
         self._skill_activation_snapshot: SkillCatalogActivationSnapshot | None = None
         self._pending_observations: dict[str, PendingSourceObservation] = {}

@@ -7,6 +7,7 @@ typed observation 复用唯一 CSM 映射、自由 metadata 控制字段拒绝�
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -171,11 +172,13 @@ def test_registration_rejects_untracked_instruction_source(
 ) -> None:
     manager = instruction_context_source_manager
     spec = _instruction_producer_spec()
-    manager.register(instruction_producer_descriptor(spec))
+    manager.register(replace(instruction_producer_descriptor(spec), description="原 owner 已登记的说明"))
     before = manager.source_observation_state(spec.source_id)
+    descriptors = manager.descriptors()
     with pytest.raises(RuntimeError, match="context-source-not-tracked"):
         register_instruction_producer(manager, spec)
     assert manager.source_observation_state(spec.source_id) == before
+    assert manager.descriptors() == descriptors
     assert manager.prepare_pending() is None
 
 

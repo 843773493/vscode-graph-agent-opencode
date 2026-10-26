@@ -431,3 +431,12 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 准确命令、源码指纹、raw、实际退出码及基线对照见`out/tests/temp/cil-source-grouping/artifacts/verification-054.json`和各具名运行目录。临时完整旧代码副本核验后清理，保留运行原件与比较收据。
 
 提交前另将仅本切片的暂存tree完整归档，隔离另一会话未提交的task／fork实现，再跑正式grouping matrix：3 passed／89.01秒。4508份旧HEAD文件逐blob核验不变；暂存快照的全部tracked文件前后hash相同，见`staged-source-proof-059.json`。两份临时源码清理，仅保留各自`out/tests`正式原件及收据。
+
+### 2026-10-26 同名 Skill 与 instruction 的追踪隔离
+
+- CSM 名称索引按 source_kind 隔离；Skill 加载、模式切换和同名唯一追踪校验只消费 Skill。要求 tracked 的重复登记先核对控制状态，再准备 descriptor／绑定，拒绝时不改已有登记。实际 skill_load、seal、冷恢复验证同名 instruction 不被覆盖、停追踪或误判重复，历史 assembly 字节不变。
+- `source-registration-final-014` 为142 passed／121.74秒，`mixed-source-seal-009` 为29 passed／9.04秒；两组覆盖有交集，不累计用例数。扩大回归的旧夹具漏配消息分组及控制版本断言已由完整 HEAD 快照复现；后续4项失败为新发现指引中的“Skill 正文”误中泄漏断言，改用夹具的唯一真实正文标记，未改生产校验或放宽泄漏检查。失败原件保留。
+- `source-registration-delivery-static-015` Ruff通过，8文件Pyright基线32项／当前26项，零新增；不称全仓类型通过。准确命令、源码前后指纹、raw和退出码位于`out/tests/temp/csm-kind-boundary/artifacts/`，原baseline全部4512个tracked blob核验未变后已清理并保留正式输出。此为9.2／9.13的独立子项，完整来源能力与组合门仍未勾选；未运行Web、外部Provider或Windows，团队／协作仍TODO。
+- 准确命令、源码指纹、raw、实际退出码及基线对照见`out/tests/temp/cil-source-grouping/artifacts/verification-054.json`和各具名运行目录。临时完整旧代码副本核验后清理，保留运行原件与比较收据。
+
+提交前另将仅本切片的暂存tree完整归档，隔离另一会话未提交的task／fork实现，再跑正式grouping matrix：3 passed／89.01秒。4508份旧HEAD文件逐blob核验不变；暂存快照的全部tracked文件前后hash相同，见`staged-source-proof-059.json`。两份临时源码清理，仅保留各自`out/tests`正式原件及收据。

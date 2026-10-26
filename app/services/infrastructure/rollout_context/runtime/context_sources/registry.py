@@ -24,6 +24,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 class SourceRegistryMixin:
         _sources: dict[str, SourceState]
+        _source_ids_by_kind_and_name: dict[tuple[str, str], str]
 
         def refresh_control_states(self) -> None:
             """初始化及新 activation 边界从唯一 owner 对齐已提交控制状态。
@@ -73,7 +74,7 @@ class SourceRegistryMixin:
 
             tracked_by_name: dict[str, str] = {}
             for state in (self._sources | refreshed).values():
-                if state.tracked:
+                if state.source_kind == "skill" and state.tracked:
                     normalized = _normalize_skill_name(state.name)
                     previous = tracked_by_name.get(normalized)
                     if previous is not None:
@@ -85,7 +86,7 @@ class SourceRegistryMixin:
                     tracked_by_name[normalized] = state.source_id
             for source_id, state in refreshed.items():
                 if source_id not in self._sources:
-                    self._source_ids_by_name[_normalize_skill_name(state.name)] = source_id
+                    self._source_ids_by_kind_and_name[(state.source_kind, _normalize_skill_name(state.name))] = source_id
                 self._sources[source_id] = state
                 if state.pending_kind is None:
                     self._pending.pop(source_id, None)
@@ -140,6 +141,8 @@ class SourceRegistryMixin:
                     tracking_status=tracking_status,
                 )
             else:
+                if tracking_status == "tracked" and not state.tracked:
+                    raise RuntimeError(f"context-source-not-tracked: source_id={state.source_id}")
                 state = replace(state)
                 state.bind_descriptor(descriptor)
                 if binding_revision is not None:
@@ -148,12 +151,12 @@ class SourceRegistryMixin:
 
         def _install_registration(self, state: SourceState) -> None:
             self._sources[state.source_id] = state
-            # 名称索引保持最近一次 catalog 注册顺序；同名高优先级 entry 覆盖
-            # 索引但不自动改绑既有 active registration（tasks 3.3-A），
+            # 名称只在同一种来源内选择；Skill 不得覆盖同名 instruction。
+            # 同类索引保持最近 catalog 注册顺序，但不自动改绑 active registration，
             # untrack 仍按 active tracked registration 定位原 registration。
-            normalized_name = _normalize_skill_name(state.name)
-            self._source_ids_by_name.pop(normalized_name, None)
-            self._source_ids_by_name[normalized_name] = state.source_id
+            key = (state.source_kind, _normalize_skill_name(state.name))
+            self._source_ids_by_kind_and_name.pop(key, None)
+            self._source_ids_by_kind_and_name[key] = state.source_id
 
         def _set_tracking_status(
             self, state: SourceState, status: ContextSourceTrackingStatus,
@@ -191,7 +194,7 @@ class SourceRegistryMixin:
         def _registered_states(self) -> tuple[SourceState, ...]:
             """按最近一次 register 的 catalog 顺序返回有 descriptor 的状态。"""
             states: list[SourceState] = []
-            for source_id in self._source_ids_by_name.values():
+            for source_id in self._source_ids_by_kind_and_name.values():
                 state = self._sources.get(source_id)
                 if state is not None and state.descriptor is not None:
                     states.append(state)

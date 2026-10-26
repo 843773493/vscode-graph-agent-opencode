@@ -65,6 +65,8 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
     registry_db as registry_db,  # noqa: PLC0414 - 由当前测试路径隔离真实工作区
 )
 
+_SKILL_BODY = "仅显式加载后可见的集成样本正文：production-context-skill-body"
+
 
 @pytest.fixture
 def skill_control_admission():
@@ -79,7 +81,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     skill_file = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)
-    skill_file.write_text("---\nname: example\ndescription: 集成测试 Skill\n---\nSkill 正文\n")
+    skill_file.write_text(f"---\nname: example\ndescription: 集成测试 Skill\n---\n{_SKILL_BODY}\n")
     event_service = EventChannelService()
     owner = McpCatalogOwner(
         raw_config={"servers": {}}, workspace_root=workspace,
@@ -115,6 +117,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     # 由正式 runtime builder 构造真实 Provider；默认回答由下方显式集成桩提供。
     protocol = getattr(request, "param", "chat_completions")
     config.get_revision.return_value = "config:production:1"
+    config.get_source_message_grouping.return_value = "aggregate"
     config.get_agent_runtime_config.return_value = {
         "system_prompt": "配置基础说明",
         "runtime_identity_description": "集成测试的路径说明",
@@ -264,7 +267,7 @@ def test_sealed_skill_metadata_follows_skill_load_without_read_file(
     assert ("skill_load" in tool_names) is skill_enabled
     assert isinstance(outbound.messages[0], SystemMessage)
     assert ("集成测试 Skill" in outbound.messages[0].content) is skill_enabled
-    assert all("Skill 正文" not in message.content for message in outbound.messages)
+    assert all(_SKILL_BODY not in message.content for message in outbound.messages)
     sealed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     assert ("instruction:skill-catalog" in {
         source.source_identity for source in sealed.seal_binding.root.sources

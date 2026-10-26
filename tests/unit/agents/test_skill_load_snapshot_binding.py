@@ -8,7 +8,12 @@ from contextlib import nullcontext
 
 import pytest
 
+from app.agents.instruction_producers import (
+    InstructionProducerSpec,
+    register_instruction_producer,
+)
 from app.agents.tools.skill_loading import create_skill_load_tool
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
@@ -29,6 +34,70 @@ def skill_control_admission():
 
 def _revision(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("mode", ["snapshot", "tracked", "untrack"])
+@pytest.mark.parametrize("instruction_last", [False, True])
+async def test_skill_mode_and_cold_restore_preserve_same_name_instruction(
+    source_seal_case, skill_control_admission, mode, instruction_last,
+):
+    manager, _binding = _manager_with_binding(source_seal_case)
+    skill = manager.descriptors()[0]
+    producer = InstructionProducerSpec(
+        producer_id="R01", source_id="instruction:agent-instructions",
+        source_kind="agent_instructions", name="shared", content="持续生效的 Agent 指令",
+        revision="instruction-owner-v1", root_placement="root_eligible",
+    )
+    register_instruction_producer(manager, producer)
+    if not instruction_last:
+        manager.register(skill)
+    assert len(manager.descriptors()) == 2
+    tool = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    initial = json.loads(await tool.ainvoke({"name": "shared", "mode": "tracked"}))
+    assert initial["status"] == "loaded", initial
+    source_seal_case.seal(manager)
+    sealed = source_seal_case.saver._storage.assemblies.list_context_assemblies(
+        source_seal_case.owner.session_id, source_seal_case.owner.thread_id,
+    )[-1]
+    sealed_bytes = canonical_json_bytes(sealed.to_dict())
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    instruction = next(row for row in before if row.source_id == producer.source_id)
+    result = json.loads(await tool.ainvoke({"name": "shared", "mode": mode}))
+    assert result["error"] is None, result
+    assert result["tracked"] is (mode == "tracked")
+    after = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    assert next(row for row in after if row.source_id == producer.source_id) == instruction
+    cold = source_seal_case.manager()
+    assert cold.source_observation_state(producer.source_id) == ("tracked", producer.revision_token())
+    assert cold.source_observation_state(skill.source_id)[0] == ("tracked" if mode == "tracked" else "untracked")
+    # 冷 owner 重绑 descriptor 后两种来源仍独立，不修改已发布指令或其版本。
+    register_instruction_producer(cold, producer)
+    cold.register(skill)
+    assert {source.source_kind for source in cold.descriptors()} == {"agent_instructions", "skill"}
+    restored = source_seal_case.saver.get_context_assembly(
+        source_seal_case.owner.session_id, source_seal_case.owner.thread_id, assembly_id=sealed.assembly_id,
+    )
+    restored.validate_hashes()
+    assert canonical_json_bytes(restored.to_dict()) == sealed_bytes
+
+
+async def test_public_untrack_cannot_target_instruction_without_a_skill(
+    source_seal_case, skill_control_admission,
+):
+    manager = source_seal_case.manager()
+    producer = InstructionProducerSpec(
+        producer_id="R01", source_id="instruction:agent-instructions",
+        source_kind="agent_instructions", name="Agent 说明", content="持续生效的 Agent 指令",
+        revision="instruction-owner-v1", root_placement="root_eligible",
+    )
+    register_instruction_producer(manager, producer)
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    pending = manager.prepare_sources()
+    tool = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    result = json.loads(await tool.ainvoke({"name": producer.name, "mode": "untrack"}))
+    assert result["status"] == "error" and result["error"]["code"] == "skill-not-found"
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    assert manager.prepare_sources() == pending
 
 
 def _manager_with_binding(

@@ -208,6 +208,7 @@ def test_failed_tracking_preserves_snapshot_and_same_manager_retries(source_seal
     assert receipt.revision == snapshot.revision
     assert manager.prepare_pending() == replace(
         pending, sources=(replace(pending.sources[0], tracked=True),),
+        deltas=(replace(pending.deltas[0], control_revision=before[0].state_revision + 1),),
     )
     (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
     assert stored.tracking_status == "tracked"
