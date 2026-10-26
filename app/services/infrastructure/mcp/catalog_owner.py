@@ -32,8 +32,10 @@ from langchain_core.tools import BaseTool
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
-from app.services.infrastructure.config import ConfigRestartRequiredError
-from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.contracts import (
+    ConfigApplyRecorder,
+    ConfigPublication,
+)
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
@@ -495,8 +497,10 @@ class McpCatalogOwner:
                 return
             self._resolve_execution_handle(binding)
 
-    async def prepare_config(self, raw_config: object, scope: LifetimeScope) -> tuple[ConfigPublication, frozenset[str]]:
-        """先准备全部 HTTP 候选；只在配置 owner 的同步发布边界激活。"""
+    async def prepare_config(
+        self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,
+    ) -> tuple[ConfigPublication, frozenset[str]]:
+        """按 Server 准备；stdio 先记录停止意图，全部验证后共同激活。"""
         self._require_started()
         servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root)
         proposed = {server.server_id: server for server in servers}
@@ -534,14 +538,23 @@ class McpCatalogOwner:
             changed = {key for key in previous.keys() | proposed.keys() if previous.get(key) != proposed.get(key)}
             unchanged_ids = {key for key, tool in self._tools_by_id.items()
                              if (tool.metadata or {}).get("mcp_server_id") not in changed}
-        # TODO(7.4): 单实例 stdio 的停后再启须在破坏旧连接前写 applying journal，
-        # 并在失败时保留 recovery_required；本切片只开放可先建后换的 HTTP。
-        if any(server.transport == "stdio" for key in changed
-               for server in (previous.get(key), proposed.get(key)) if server is not None):
-            raise ConfigRestartRequiredError("stdio MCP 变更需要重启工作区", changed_sections=("mcp",))
         assert self._session_scope is not None
         owner_scope = self._session_scope
-        for key in sorted(changed):
+        # 可以并行准备的连接先验证，尽量在破坏旧 stdio 之前暴露其它候选错误。
+        stop_first = {key for key in changed if (runtime := self._runtimes.get(key)) is not None
+                      and runtime.server.transport == "stdio" and not runtime.scope.is_closed}
+        for key in sorted(changed, key=lambda key: (key in stop_first, key)):
+            if key in stop_first:
+                runtime = self._runtimes[key]
+                record_side_effect({"resource": "mcp_connection", "action": "stop",
+                                    "server_id": key, "connection_ref": self._connection_ref(runtime)})
+                with self._publication_lock:
+                    self._dirty_servers.add(key)
+                    self._retirement.revoke_server(key)
+                    self._publish_readiness_locked("unavailable", f"MCP stdio 正在停后再启: server_id={key}")
+                    runtime.request_close()
+                async with asyncio.timeout(self._retirement.timeout_seconds):
+                    await runtime.scope.close()
             server = proposed.get(key)
             if server is None or not server.enabled:
                 continue
@@ -598,8 +611,9 @@ class McpCatalogOwner:
                     if key not in proposed or not proposed[key].enabled:
                         self._retirement.revoke_server(key)
                 for runtime in replaced:
-                    self._retirement.retire(self._connection_ref(runtime), runtime,
-                        admits_sealed=runtime.server.server_id in prepared, owner_scope=owner_scope)
+                    if not runtime.scope.is_closed:
+                        self._retirement.retire(self._connection_ref(runtime), runtime,
+                            admits_sealed=runtime.server.server_id in prepared, owner_scope=owner_scope)
                 self._publish_snapshot_locked(server_id=None, candidate_tools=candidate_tools,
                                               candidate_descriptors=candidate_descriptors)
                 for key in invalidated:

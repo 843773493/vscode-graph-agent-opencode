@@ -177,7 +177,25 @@ class ConfigReloadMixin:
             async def prepare_runtime(_config: Mapping[str, object], scope: LifetimeScope) -> ConfigPublication:
                 if candidate_applier is None:
                     return lambda: None
-                activate = await candidate_applier(previous, candidate, scope)
+
+                def record_side_effect(effect: dict[str, object]) -> None:
+                    if self._workspace_state_store is None or claim is None:
+                        raise ConfigConflictError("破坏性配置准备必须先取得持久 apply journal／claim")
+                    current_claim = self._workspace_state_store.get_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                    )
+                    if (
+                        current_claim is None
+                        or current_claim.apply_id != claim.apply_id
+                        or current_claim.fencing_token != claim.fencing_token
+                        or current_claim.lease_expires_at <= datetime.now(UTC)
+                    ):
+                        raise ConfigConflictError("破坏性配置准备的 apply claim 已失效")
+                    self._workspace_state_store.append_config_apply_side_effect(
+                        apply_id=claim.apply_id, side_effect=effect,
+                    )
+
+                activate = await candidate_applier(previous, candidate, scope, record_side_effect)
                 if not callable(activate):
                     raise TypeError("配置候选准备必须返回同步激活回调")
                 if self._workspace_state_store is not None and claim is not None:

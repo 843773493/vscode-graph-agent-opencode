@@ -20,7 +20,10 @@ from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
-from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.contracts import (
+    ConfigApplyRecorder,
+    ConfigPublication,
+)
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
 
@@ -292,6 +295,7 @@ class WorkspaceLifespan:
                 previous: ConfigSnapshot,
                 candidate: ConfigSnapshot,
                 scope: LifetimeScope,
+                record_side_effect: ConfigApplyRecorder,
             ) -> ConfigPublication:
                 previous_config = container.config_service.config_from_snapshot(previous)
                 candidate_config = container.config_service.config_from_snapshot(candidate)
@@ -312,7 +316,7 @@ class WorkspaceLifespan:
                 mcp_tool_names = container.mcp_catalog_owner.get_tool_ids()
                 if previous_config.get("mcp") != candidate_config.get("mcp"):
                     activate_mcp, mcp_tool_names = await container.mcp_catalog_owner.prepare_config(
-                        candidate_config.get("mcp"), scope,
+                        candidate_config.get("mcp"), scope, record_side_effect,
                     )
                 container.config_service.validate_candidate(candidate, mcp_tool_names=mcp_tool_names)
 

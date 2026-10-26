@@ -152,9 +152,13 @@ class McpServerRuntime:
             self._ready.set()
             self._on_closed(self, self._failure is None)
 
-    async def close(self) -> None:
+    def request_close(self) -> None:
+        """同一发布屏障内同步撤销准入，SDK 关闭仍由原 task 完成。"""
         self._closing = True
         self._stop.set()
+
+    async def close(self) -> None:
+        self.request_close()
         if self._task is not None:
             if not self._ready.is_set():
                 self._task.cancel()

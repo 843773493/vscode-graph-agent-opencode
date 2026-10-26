@@ -528,7 +528,7 @@
 
     "mcpConfig": {
       "type": "object",
-      "description": "当前工作区后端连接的 MCP Server。HTTP Server 变更在全部候选连接初始化和完整目录验证成功后共同切换；stdio 变更及监督参数仍需重启，混合候选整体延后。",
+      "description": "当前工作区后端连接的 MCP Server。HTTP 候选先准备后共同切换；已有 stdio 实例在记录停止意图后停再启，无法保留旧运行态的失败明确需要恢复。监督参数仍需重启，混合候选整体延后。",
       "additionalProperties": false,
       "properties": {
         "supervision": {

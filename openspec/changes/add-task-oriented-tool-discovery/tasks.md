@@ -156,3 +156,11 @@
 - 修改范围 Ruff通过；5文件 Pyright 基线57条／当前18条，完整 config_service 等扩大 Ruff 基线27条／当前27条，均零新增诊断，不宣称全仓静态检查全绿。严格 OpenSpec 校验通过。受测tree、准确命令、raw、退出码及比较位于 `out/tests/temp/mcp-config-recovery/artifacts/verify-005/result.json`。
 - 保留probe-001的测试配置文件缺失、probe-002的已提交遗留claim、probe-003的立即重启不对账，以及verify-004的全部原件。连续场景还暴露第三方SSE库保留上一测试Server的退出标志；共用HTTP夹具显式重置该测试进程状态后完成上述验收，未改协议或放宽业务断言。
 - 关闭7.3，当前17/52。7.4的单实例stdio停启及退役清理诊断仍待实现；7.5／7.6保留未勾选，直到相应替换范围全部验收。OAuth、连接控制、持久等待和真实Gateway／Web链路继续按原任务推进。
+
+### 2026-10-26 7.4 单实例 stdio 停后再启切片
+
+- 已有 stdio Server 的替换／禁用／移除沿唯一 Owner 停后再启；新 stdio 与 HTTP 候选仍可先准备。停止前由原配置 recorder 核实 apply claim 身份、fencing 和期限并写入精确连接停止意图，同一发布锁内撤销原准入、发布不可用和请求原 task 关闭；核实关闭后才启动候选，不保留 stdio 一律重启的旧分支或旧 applier 签名。可先验证的其它 Server 优先准备，失败时避免无必要地破坏旧 stdio。
+- 候选失败且旧实例已停止时，原 journal／配置状态明确 recovery_required，旧 active 不伪称已经恢复；同一 watcher 可在用户修复配置后重新验证并提交。监督参数等需重启字段仍使整个混合候选 pending_restart，applied_paths／deferred_paths 继续来自原配置事件。
+- 最终暂存 tree `8c98890ef422b274492e000034a1b2d05a1f8ccf` 的完整 archive 验收：真实单实例 OS 锁、stdio SDK、双挂载、watcher、Runner 与 model_stream 产品集成1 passed／56.22秒，核对停止前 journal、原实例退出先于新实例启动、相同 schema 的新 connection_ref、失败及修复后两次业务收据和兄弟工作区隔离；原 HTTP 热切换1 passed／50.82秒，真实 OS 崩溃恢复3 passed／146.33秒，正式 integration-extension-discovery 203 passed／115.84秒，配置／shadow／策略／apply／事件与 API 合同204 passed／233.21秒。过期 claim 拒绝破坏动作的定向用例亦通过，已包含在204项中，各组不累加。
+- 修改范围 Ruff 零诊断；10文件 Pyright 的33个诊断均在 HEAD 基线复现，零新增，检查本身 exit1；整个 config_service 的 Ruff 基线／当前均27个既有诊断，零新增。准确命令、源码tree、raw、实际退出码和正式产物保存在 `out/tests/temp/mcp-stdio-publication/artifacts/verify-008/`；先前 verify-007 的单个新增测试类型诊断原件保留，完成显式类型收窄后才通过本轮对比。最终仅追加 OpenSpec 设计、场景与本收据，源码副本逐 blob 核验后清理。
+- 7.4继续未勾选，进度仍17/52：异步退役清理失败尚未接入产品配置／活动诊断；当前原 LifetimeScope 显式报告且保留失败引用。非合作 stdio 的关闭超时、stdio 停机中的 OS 崩溃、OAuth、连接控制、持久等待与完整 Gateway／Web 授权不由本切片证明，按各自任务继续推进；团队／协作专项仍保持 TODO。

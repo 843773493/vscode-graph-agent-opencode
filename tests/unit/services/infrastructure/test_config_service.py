@@ -1787,7 +1787,7 @@ async def test_shadow_resources_activate_with_sqlite_publication_and_rollback_on
 
         return activate
 
-    async def reject(_previous, _candidate, _scope) -> NoReturn:
+    async def reject(_previous, _candidate, _scope, _record_side_effect) -> NoReturn:
         raise RuntimeError("拒绝候选")
 
     try:
@@ -2805,7 +2805,7 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
     config["agents"]["default"]["instructions"]["system_prompt"] = "prepared-runtime"
     path.write_text(json.dumps(config), encoding="utf-8")
 
-    async def prepare(_previous, candidate, scope: LifetimeScope) -> ConfigPublication:
+    async def prepare(_previous, candidate, scope: LifetimeScope, _record_side_effect) -> ConfigPublication:
         pending = store.get_pending_config_candidate(config_domain="workspace")
         assert pending is not None and pending.state == "applying"
         journal = store.get_config_apply_journal(apply_id=pending.last_apply_id or "")
@@ -2857,6 +2857,50 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
 
 
 @pytest.mark.asyncio
+async def test_expired_apply_claim_prevents_recording_destructive_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    service.validate_workspace_config()
+    previous = service.get_revision()
+    config["agents"]["default"]["instructions"]["system_prompt"] = "expired-claim"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    effects: list[str] = []
+
+    async def prepare(_previous, _candidate, _scope, record_side_effect) -> ConfigPublication:
+        claim = store.get_config_apply_claim(config_domain="workspace")
+        assert claim is not None
+        store.renew_config_apply_claim(
+            config_domain="workspace", apply_id=claim.apply_id,
+            fencing_token=claim.fencing_token, lease_seconds=0.01,
+        )
+        await asyncio.sleep(0.03)
+        record_side_effect({"resource": "mcp_connection", "action": "stop"})
+        effects.append("stopped")
+        return lambda: None
+
+    try:
+        with pytest.raises(ConfigConflictError, match="apply claim 已失效"):
+            await service.reload(candidate_applier=prepare)
+        assert not effects
+        assert service.get_revision() == previous
+        pending = store.get_pending_config_candidate(config_domain="workspace")
+        assert pending is not None and pending.state == "conflict"
+        journal = store.get_config_apply_journal(apply_id=pending.last_apply_id or "")
+        assert journal is not None and journal.state == "failed" and not journal.side_effects
+        assert store.get_config_apply_claim(config_domain="workspace") is None
+    finally:
+        await service.close()
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2888,7 +2932,7 @@ async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
             assert attempted.wait(1)
             assert not observed.wait(0.05), "配置读取越过了尚未完成的共同发布屏障"
 
-        async def prepare(_previous, candidate, _scope) -> ConfigPublication:
+        async def prepare(_previous, candidate, _scope, _record_side_effect) -> ConfigPublication:
             def activate() -> None:
                 nonlocal runtime_revision
                 runtime_revision = candidate.revision

@@ -12,7 +12,6 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
-from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -35,12 +34,13 @@ class ReplacementFactory(FakeMcpSessionFactory):
         super().__init__({"alpha": ["echo"], "beta": ["echo"]})
         self.opened = []
         self.closed = []
+        self.history = []
         self.fail_server = None
         self.notify_during_list = False
 
     def __call__(self, server, notify):
         original = super().__call__(server, notify)
-        address = server.connection["url"]
+        address = server.connection["command"] if server.transport == "stdio" else server.connection["url"]
         session = self.sessions[server.server_id]
 
         async def list_tools() -> list[BaseTool]:
@@ -62,10 +62,12 @@ class ReplacementFactory(FakeMcpSessionFactory):
             async with anyio.create_task_group() as group, original as port:
                 task = asyncio.current_task()
                 self.opened.append((address, task))
+                self.history.append(("open", address))
                 try:
                     yield port
                 finally:
                     self.closed.append((address, asyncio.current_task()))
+                    self.history.append(("close", address))
                     group.cancel_scope.cancel()
         return connected()
 
@@ -75,11 +77,12 @@ class ReplacementCase:
     factory: ReplacementFactory
     owner: McpCatalogOwner
     scopes: list[LifetimeScope] = field(default_factory=list)
+    effects: list[dict[str, object]] = field(default_factory=list)
 
     async def prepare(self, payload):
         scope = LifetimeScope("test-config-candidate")
         self.scopes.append(scope)
-        return await self.owner.prepare_config(payload, scope)
+        return await self.owner.prepare_config(payload, scope, self.effects.append)
 
     def reserve(self, model_id: str = "model"):
         binding = self.owner.binding_snapshot()
@@ -92,7 +95,10 @@ class ReplacementCase:
 @pytest.fixture
 async def replacement_case(tmp_path, event_channel_service, request):
     factory = ReplacementFactory()
-    payload = {**config("old"), "supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}}
+    option = getattr(request, "param", 1800)
+    payload = {**config("old"), "supervision": {"sealed_call_timeout_seconds": 1800 if option == "stdio" else option}}
+    if option == "stdio":
+        payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-old", "enabled": True}
     owner = McpCatalogOwner(raw_config=payload, workspace_root=tmp_path,
                             event_service=event_channel_service, leases=ExternalResourceLeaseLedger(), session_factory=factory)
     case = ReplacementCase(factory, owner)
@@ -261,14 +267,59 @@ async def test_retirement_deadline_closes_socket_without_settling_unknown_operat
     assert case.owner._leases.get(binding.connection_ref).status == "stopped"
 
 
-async def test_stdio_candidate_still_reports_restart_before_touching_active(replacement_case):
+async def test_new_stdio_server_prepares_without_stopping_the_old_http_connection(replacement_case):
     case = replacement_case
     before = case.owner.publication_snapshot()
     payload = config("new")
     payload["servers"]["beta"] = {"transport": "stdio", "command": "single-instance", "enabled": True}
-    with pytest.raises(ConfigRestartRequiredError, match="stdio"):
+    publish, _ = await case.prepare(payload)
+    assert case.owner.publication_snapshot() is before and len(case.factory.opened) == 4
+    assert not case.effects
+    publish()
+    assert case.owner._runtimes["beta"].server.transport == "stdio"
+
+
+@pytest.mark.parametrize("replacement_case", ["stdio"], indirect=True)
+async def test_stdio_stop_is_journaled_before_close_and_replacement_cannot_reuse_old_qualification(replacement_case, monkeypatch):
+    case = replacement_case
+    binding, use = case.reserve()
+    old = case.owner._runtimes["alpha"]
+    old_close = old.scope.close
+
+    async def observe_close():
+        assert case.effects == [{"resource": "mcp_connection", "action": "stop", "server_id": "alpha", "connection_ref": binding.connection_ref}]
+        assert case.owner.publication_snapshot().status == "unavailable"
+        assert not old.running
+        with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
+            pytest.fail("停止准入后不能派发原调用")
+        await old_close()
+
+    # 只观察真实关闭回调的顺序，不代替 scope 或 session 生命周期。
+    payload = config("old")
+    payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-new", "enabled": True}
+    with monkeypatch.context() as patch:
+        patch.setattr(old.scope, "close", observe_close)
+        publish, _ = await case.prepare(payload)
+    assert old.scope.is_closed and case.factory.history.index(("close", "stdio-old")) < case.factory.history.index(("open", "stdio-new"))
+    publish()
+    assert case.owner.publication_snapshot().status == "available"
+    assert case.owner.binding_snapshot().resolve(binding.target_id).connection_ref != binding.connection_ref
+    with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
+        pytest.fail("新 stdio 不能接管原封存调用")
+
+
+@pytest.mark.parametrize("replacement_case", ["stdio"], indirect=True)
+async def test_http_candidate_failure_does_not_stop_unchanged_or_replaced_stdio(replacement_case):
+    case = replacement_case
+    before = case.owner.publication_snapshot()
+    old = case.owner._runtimes["alpha"]
+    case.factory.fail_server = "beta"
+    payload = config("new")
+    payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-new", "enabled": True}
+    with pytest.raises(McpCatalogError, match="server_id=beta"):
         await case.prepare(payload)
-    assert case.owner.publication_snapshot() is before and len(case.factory.opened) == 2
+    await case.scopes[-1].close()
+    assert old.running and case.owner.publication_snapshot() is before and not case.effects
 
 
 async def test_turn_inherits_original_qualification_without_granting_another_execution(replacement_case):

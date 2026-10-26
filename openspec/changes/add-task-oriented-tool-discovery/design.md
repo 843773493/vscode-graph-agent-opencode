@@ -153,11 +153,11 @@ stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消
 
 发布与配置 active promotion 使用同一受控准入屏障／提交标识：模型 preparation、API 和工具调用不能观察到 candidate 目录配旧 active 配置的中间状态；不能只依赖两个各自原子的赋值。崩溃后依据持久提交阶段对账，不声称 SQLite 能回滚外部 session。
 
-接线复用既有配置 applying journal、claim 和 promotion owner。候选应用器在原 shadow scope 中准备资源并返回同步激活回调，不在准备阶段公开新连接；applying journal／claim 先于候选资源准备建立，SQLite promotion 与快照、shadow 及运行时激活共用同步发布屏障。配置读取、MCP Owner 和 Registry／调用准入复用同一工作区锁，不在锁内执行网络准备或旧连接排空。候选回收失败保留原 scope 并阻止下一次替换，提交后的激活或清理失败保留实际新 active，不伪称回滚；不新增配置事实源。该共同发布基础仍须接入逐 Server 候选、准入 fence 与退役排空，完成相应真实验收后才能解除 MCP 重启策略。
+接线复用既有配置 applying journal、claim 和 promotion owner。候选应用器在原 shadow scope 中准备资源并返回同步激活回调，不在准备阶段公开新连接；applying journal／claim 先于候选资源准备建立，SQLite promotion 与快照、shadow 及运行时激活共用同步发布屏障。配置读取、MCP Owner 和 Registry／调用准入复用同一工作区锁，不在锁内执行网络准备或旧连接排空。候选回收失败保留原 scope 并阻止下一次替换，提交后的激活或清理失败保留实际新 active，不伪称回滚；不新增配置事实源。HTTP 与 stdio Server 的候选准备、共同发布和准入 fence 均沿此链路；未支持路径继续保留真实重启分类。
 
-允许并行启动的 Server 先准备新连接；单实例 stdio Server 采用可观察的 stop-then-start，暂时关闭该 Server 的执行准入。前者失败保留旧 active 且明确报告 apply_failed；后者无法恢复旧服务时报告 recovery_required，不伪称旧运行时仍健康。已承诺旧调用的 handle 无法维持时真实结束／失败，绝不迁投新同名工具。
+允许并行启动的 Server 先准备新连接；已有 stdio Server 采用可观察的 stop-then-start，暂时关闭该 Server 的执行准入。原配置 recorder 在破坏动作前核对 apply claim 的身份、fencing 与期限，将精确 connection_ref 的停止意图写入原 journal；无有效 claim 时拒绝执行。Owner 在同一发布锁内撤销旧准入、发布不可用并请求原 task 关闭，按原期限核实关闭后才启动候选。可先准备的其它 Server 优先验证，降低尚无必要时停止旧实例的概率。前者失败保留旧 active 且明确报告 apply_failed；后者无法恢复旧服务时报告 recovery_required，不伪称旧运行时仍健康。已承诺旧调用的 handle 无法维持时真实结束／失败，绝不迁投新同名工具。
 
-分阶段交付时，先开放 HTTP Server 的候选准备、增删／禁用和共同切换；涉及 stdio、监督参数或其它需重启字段的混合候选仍整体进入 pending_restart。退役连接从切换时开始，最多按原 `sealed_call_timeout_seconds` 排空本地 active 占用，关闭等待另有相同上限；原封存资格继续服从各自更早的期限。账本中的结果未知操作不延长 socket 保留，也不因 socket 关闭而被结算。候选期间或提交前收到新通知时不能发布过期的 available 目录，必须保持明确不可用直至完整刷新。配置状态的 applied_paths／deferred_paths 从当前 candidate／attempt 的原配置事件读取，不维护第二份可变结果。
+HTTP 与 stdio Server 的配置、增删／禁用经过真实验收后可热应用；监督参数或其它需重启字段的混合候选仍整体进入 pending_restart。退役连接从切换时开始，最多按原 `sealed_call_timeout_seconds` 排空本地 active 占用，关闭等待另有相同上限；原封存资格继续服从各自更早的期限。账本中的结果未知操作不延长 socket 保留，也不因 socket 关闭而被结算。候选期间或提交前收到新通知时不能发布过期的 available 目录，必须保持明确不可用直至完整刷新。配置状态的 applied_paths／deferred_paths 从当前 candidate／attempt 的原配置事件读取，不维护第二份可变结果。异步退役清理失败接回配置／活动诊断仍按7.4保留待办，原 LifetimeScope 继续明确报告失败及未释放引用。
 
 turn-bound MCP 目录的原执行在首次模型发送前保留精确连接资格，由原 TurnExecutionScope 持有并在原账本登记。后继模型调用只可继承该原执行已经保留的 handle 与原期限，不因切换后产生新的 model_call_id 重新计时或扩大目录；原执行结束、期限到达或禁用／撤权后拒绝继承。model-call-bound 目录继续逐次取得当时 active 连接。此执行持有只管理短期资格，不复制模型正文或创建第二套事实来源；进程重启不能恢复旧 socket。
 

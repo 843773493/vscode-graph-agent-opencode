@@ -53,7 +53,12 @@
 #### Scenario: 单实例 stdio 替换
 
 - **WHEN** 变更的 Server 无法同时启动两个实例
-- **THEN** 系统明确关闭其新执行准入、展示短暂不可用并停止再启动；失败且无法恢复旧运行态时报告 recovery_required
+- **THEN** 系统先由原配置 owner 核对有效 apply claim 并将停止原连接的意图写入原 journal，再明确关闭其新执行准入、展示短暂不可用并停止再启动；核实原实例关闭后才启动候选，失败且无法恢复旧运行态时报告 recovery_required
+
+#### Scenario: 破坏性准备前 apply claim 已失效
+
+- **WHEN** stdio 替换即将停止原连接，但原 apply claim 已到期、丢失或被其它 fencing 身份替换
+- **THEN** 原 journal recorder 明确拒绝，停止意图和破坏动作均不得继续，不将原 active 或连接伪报为已经替换
 
 ### Requirement: 旧调用必须在有界租约内真实收敛
 

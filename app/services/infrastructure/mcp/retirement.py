@@ -30,6 +30,10 @@ class McpConnectionRetirement:
         self._timeout_seconds = timeout_seconds
         self._retired: dict[str, _RetiredConnection] = {}
 
+    @property
+    def timeout_seconds(self) -> int:
+        return self._timeout_seconds
+
     def retire(self, connection_ref: str, runtime: McpServerRuntime, *,
                admits_sealed: bool, owner_scope: LifetimeScope) -> None:
         retired = _RetiredConnection(runtime, monotonic() + self._timeout_seconds, admits_sealed)

@@ -147,13 +147,15 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
             assert owner.binding_snapshot() == current
             assert service.get_snapshot().to_dict()["mcp"]["servers"]["schema"]["url"] == new.url
             assert sibling.mcp_catalog_owner.binding_snapshot() == sibling_binding
-            # 不支持热替换的 stdio 混合候选整体延后，事件不能仍宣称 current。
+            # 仍需重启的监督参数与 HTTP 变更整体延后，不能提前应用连接部分。
             mcp_servers(payload).pop("zz_failure")
-            mcp_servers(payload)["zz_stdio"] = {"enabled": True, "transport": "stdio", "command": "must-not-start"}
+            mcp_config = payload["mcp"]
+            assert isinstance(mcp_config, dict)
+            mcp_config["supervision"] = {"sealed_call_timeout_seconds": 300}
             path.write_text(json.dumps(payload), encoding="utf-8")
             pending = await wait_status(service, lambda status: status.restart_required)
             assert pending.state == "pending_restart" and pending.applied_paths == ()
-            assert pending.deferred_paths == ("/mcp/servers/schema/url", "/mcp/servers/zz_stdio")
+            assert pending.deferred_paths == ("/mcp/servers/schema/url", "/mcp/supervision/sealed_call_timeout_seconds")
             assert pending.candidate_id is not None
             event = first.workspace_activity_service.store.latest_config_attempt_event(
                 config_domain="workspace", candidate_id=pending.candidate_id, attempt_id=pending.attempt_id,
