@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
+
 
 class ConfigRuntimeAccessorsMixin:
     _get_effective_config: Callable[[], dict[str, Any]]
@@ -50,6 +54,11 @@ class ConfigRuntimeAccessorsMixin:
         if value not in {"aggregate", "separate"}:
             raise ValueError("context.source_messages.grouping 必须是 aggregate 或 separate")
         return value
+
+    def get_gateway_skill_update_policy(self) -> SourceUpdatePolicy:
+        return SourceUpdatePolicy.model_validate(
+            self._get_effective_config()["resources"]["skill_sources"]["gateway_updates"]
+        )
 
     def get_agent_run_timeout_seconds(self) -> float:
         """返回单个 Agent Job 的总执行上限。"""

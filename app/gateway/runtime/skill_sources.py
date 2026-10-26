@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,12 +13,18 @@ from pathlib import Path
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationDTO,
+    GatewaySkillPublicationRequest,
     GatewaySkillSourceEntryDTO,
     GatewaySkillSourcesDTO,
 )
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+)
+from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
+    ResourceObservation,
+    ResourceObservationChannel,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
@@ -54,6 +61,9 @@ class GatewaySkillSourceOwner:
             root=skills_root, scope="gateway", scope_id=gateway_id,
         ).directory_id
         self._publication: _GatewaySkillPublication | None = None
+        self._publications = ResourceObservationChannel()
+        self._publication_generation = secrets.token_hex(16)
+        self._publication_sequence = 0
         self._task: asyncio.Task[None] | None = None
 
     def _publish(self) -> None:
@@ -76,7 +86,40 @@ class GatewaySkillSourceOwner:
             "gateway_id": self.gateway_id, "available": available,
             "entries": [(entry.source_id, entry.revision, entry.available) for entry in entries],
         })).hexdigest()
-        self._publication = _GatewaySkillPublication(revision, tuple(entries), available)
+        publication = _GatewaySkillPublication(revision, tuple(entries), available)
+        if publication == self._publication:
+            return
+        self._publication = publication
+        self._publication_sequence += 1
+        # 必须先发布权威快照，再唤醒消费者；通知自身不携带来源正文。
+        self._publications.notify(ResourceObservation(
+            uri=None, directory_id=self._directory_id, revision=revision, available=available,
+        ))
+
+    async def wait_for_publication(
+        self, request: GatewaySkillPublicationRequest, *, workspace_id: str,
+    ) -> GatewaySkillPublicationDTO:
+        subscription = self._publications.subscribe(label="Gateway Skill publication HTTP")
+        try:
+            # 先订阅后检查位置，覆盖获取快照与建立订阅之间的发布窗口。
+            cursor = f"{self._publication_generation}:{self._publication_sequence}"
+            if request.after_cursor == cursor:
+                try:
+                    async with asyncio.timeout(request.wait_ms / 1000):
+                        await subscription.next()
+                except TimeoutError:
+                    pass  # 有界长轮询保活；没有变化时不要求消费者获取正文。
+            snapshot = self.snapshot(workspace_id=workspace_id)
+            cursor = f"{self._publication_generation}:{self._publication_sequence}"
+            changed = request.after_cursor != cursor
+            previous = f"{self._publication_generation}:{self._publication_sequence - 1}"
+            return GatewaySkillPublicationDTO(
+                gateway_id=self.gateway_id, workspace_id=workspace_id, cursor=cursor,
+                revision=snapshot.revision, available=snapshot.available, changed=changed,
+                gap=changed and request.after_cursor != previous,
+            )
+        finally:
+            self._publications.unsubscribe(subscription)
 
     async def navigate(self, request: ResourceNavigationRequest, *, deadline: float | None = None) -> ResourceNavigationResultDTO:
         return await self._navigation.navigate(request, local_gateway_id=self.gateway_id, deadline=deadline)

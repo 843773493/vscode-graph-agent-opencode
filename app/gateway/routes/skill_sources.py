@@ -18,7 +18,11 @@ from app.gateway.federation.skill_sources import (
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
-from app.schemas.gateway.skill_sources import GatewaySkillSourcesDTO
+from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationDTO,
+    GatewaySkillPublicationRequest,
+    GatewaySkillSourcesDTO,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
@@ -45,12 +49,14 @@ async def _source_request(
     if_none_match: str | None = None, navigation: ResourceNavigationRequest | None = None,
     resolve_owner: bool = False,
     deadline: float | None = None,
+    publication: GatewaySkillPublicationRequest | None = None,
 ) -> dict[str, object]:
     port = GatewaySkillSourcePort(owner=owner, registry=registry)
     payload = {
         "gateway_id": gateway_id, "workspace_id": workspace_id,
         "request_id": request_id, "kind": kind, "if_none_match": if_none_match,
         "navigation": navigation.model_dump(mode="json") if navigation is not None else None,
+        "publication": publication.model_dump(mode="json") if publication is not None else None,
     }
     if gateway_id == owner.gateway_id:
         result = await port.execute(payload, deadline=deadline)
@@ -153,6 +159,26 @@ async def skill_sources(
         workspace_id=workspace_id, request_id=request_id, kind="snapshot", if_none_match=if_none_match,
     )
     return _snapshot_response(result, response, request_id)
+
+
+@router.post(
+    "/api/gateway/skill-source-connections/{gateway_id}/workspaces/{workspace_id}/publications/wait",
+    response_model=APIResponse[GatewaySkillPublicationDTO],
+    dependencies=[Depends(verify_gateway_token)],
+)
+async def wait_for_connected_skill_publication(
+    gateway_id: str, workspace_id: str, body: GatewaySkillPublicationRequest,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
+    request_id: str = Depends(get_request_id),
+) -> APIResponse[GatewaySkillPublicationDTO]:
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="publication",
+        publication=body, resolve_owner=True,
+    )
+    return APIResponse(data=GatewaySkillPublicationDTO.model_validate(result["data"]), request_id=request_id)
 
 
 @router.post(

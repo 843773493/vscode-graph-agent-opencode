@@ -304,6 +304,41 @@ def test_source_diagnostics_is_read_only_before_config_initialization(
         store.close()
 
 
+@pytest.mark.parametrize(("policy", "seconds"), [
+    ({"mode": "event", "poll_interval": None}, None),
+    ({"mode": "manual", "poll_interval": None}, None),
+    ({"mode": "poll", "poll_interval": "7m"}, 420),
+    ({"mode": "event_poll", "poll_interval": "2h"}, 7200),
+])
+def test_gateway_skill_policy_loads_through_effective_workspace_config(tmp_path: Path, policy: dict, seconds: int | None) -> None:
+    path = _write_workspace_config(tmp_path, {**_base_config(), "resources": {"skill_sources": {"gateway_updates": policy}}})
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
+    actual = service.get_gateway_skill_update_policy()
+    assert actual.model_dump() == policy and actual.poll_seconds == seconds
+
+
+@pytest.mark.parametrize("policy", [
+    {"mode": "unknown"}, {"mode": "poll"}, {"mode": "event_poll"},
+    {"mode": "event", "poll_interval": "1m"}, {"mode": "manual", "poll_interval": "1h"},
+    *({"mode": "poll", "poll_interval": interval} for interval in ["0m", "-1h", "1s", "1.5m", "1", 60]),
+    {"mode": "event", "protocol": "unknown"},
+])
+def test_gateway_skill_policy_rejects_invalid_effective_combinations(tmp_path: Path, policy: dict) -> None:
+    path = _write_workspace_config(tmp_path, {**_base_config(), "resources": {"skill_sources": {"gateway_updates": policy}}})
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
+    with pytest.raises(ValueError):
+        service.get_gateway_skill_update_policy()
+
+
+def test_gateway_skill_update_policy_defaults_to_events_and_reports_restart_policy(tmp_path: Path) -> None:
+    from app.services.infrastructure.config.policy import workspace_config_policy
+
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, _base_config()))
+    assert service.get_gateway_skill_update_policy().model_dump() == {"mode": "event", "poll_interval": None}
+    decision, = workspace_config_policy().classify(("/resources/skill_sources/gateway_updates/mode",))
+    assert not decision.policy_missing and decision.policy == "restart_workspace"
+
+
 def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
     config = _base_config()
     config["runtime"] = {"agent": {"run": {"timeout_seconds": 12.5}}}

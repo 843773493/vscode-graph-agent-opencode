@@ -1,6 +1,14 @@
 {
   "$schema": "./workspace_schema.jsonc",
   "config_version": 2,
+  "resources": {
+    "skill_sources": {
+      "gateway_updates": {
+        "mode": "event", // 修改后重启 Workspace 生效。
+        "poll_interval": null // poll/event_poll 使用分钟或小时，例如 "5m"、"1h"。
+      }
+    }
+  },
   "context": {
     "source_messages": {
       "grouping": "aggregate" // aggregate 聚合本批来源；separate 逐来源消息，仅影响新封存批次。

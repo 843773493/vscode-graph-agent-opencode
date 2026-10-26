@@ -25,6 +25,9 @@ from app.services.infrastructure.gateway_client_common import GatewayTransportCo
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
 )
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     GatewayResourceNavigation,
 )
@@ -104,6 +107,7 @@ def bootstrap_resource_platform(
     gateway_token_supplier: Callable[[], str] | None = None,
     file_paths: WorkspaceFilePaths | None = None,
     artifact_reader: ResourceFileReader | None = None,
+    gateway_skill_updates: SourceUpdatePolicy | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
 
@@ -146,6 +150,7 @@ def bootstrap_resource_platform(
         gateway_skill_sources = GatewaySkillSources(
             workspace_id=workspace_id, connection=gateway_connection,
             local_token_supplier=gateway_token_supplier, observation_channel=observation_channel,
+            update_policy=gateway_skill_updates,
         )
         scope.register(gateway_skill_sources.close, label="gateway-skill-sources")
     return ResourcePlatform(

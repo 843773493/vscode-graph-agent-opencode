@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from app.gateway.federation.ports import new_origin_nonce
 from app.gateway.federation.protocol import METHOD_SKILL_SOURCES, require_str
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -59,6 +61,12 @@ class GatewaySkillSourcePort:
         if not self.accepts_workspace(workspace_id):
             return {**identity, "status": 403, "detail": "Workspace is outside Gateway Skill source audience"}
         kind = require_str(request, "kind")
+        if kind == "publication":
+            query = GatewaySkillPublicationRequest.model_validate(request.get("publication"))
+            result = await self.owner.wait_for_publication(query, workspace_id=workspace_id)
+            if not self.accepts_workspace(workspace_id):
+                return {**identity, "status": 403, "detail": "Workspace is outside Gateway Skill source audience"}
+            return {**identity, "status": 200, "data": result.model_dump(mode="json")}
         if kind == "snapshot":
             snapshot = self.owner.snapshot(workspace_id=workspace_id)
             etag = '"' + snapshot.revision + '"'
@@ -142,7 +150,9 @@ async def serve_gateway_skill_sources(
     deadline = None
     if request.get("kind") == "navigation":
         deadline = navigation_deadline(ResourceNavigationRequest.model_validate(request.get("navigation")), deadline_at=deadline_at)
-    result = await service.gateway_skill_sources.execute(request, deadline=deadline)
+    # 长轮询和导航都受原 RPC 总期限约束，不能在 owner 内重新获得预算。
+    async with asyncio.timeout(remaining_deadline(deadline_at)):
+        result = await service.gateway_skill_sources.execute(request, deadline=deadline)
     remaining_deadline(deadline_at)
     service._authorize(capability="read", origin=session.peer_gateway_id, session=session)
     return result

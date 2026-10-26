@@ -452,3 +452,12 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 
 - 同一 Gateway owner 的条件请求、正文／身份验证、accepted snapshot、ETag 与错误发布进入同一串行区间，较早响应或认证失败不能在较新结果之后回写；不同 owner 继续独立并行。事件／轮询／手动策略与发布通知尚未完成，9.9／9.10／9.14保持未勾。
 - 新并发测试覆盖旧正文和旧401两条迟到路径，并核对下一请求ETag；同文件既有身份、304、冷启动总期限、双owner并发／失败隔离与关闭回归共68 passed／15.45秒。Ruff、compileall通过，2文件Pyright基线／当前均零错误。准确命令、源码指纹、raw及退出码见`out/tests/temp/csm-kind-boundary/artifacts/`的042—045收据；该切片未改HTTP合同或配置，不代替真实Gateway／Web或来源策略总验收。
+
+### 2026-10-26 Gateway 发布通知与 Workspace 更新策略（9.9／9.10 子切片）
+
+- Gateway 先发布可获取快照，再通过原资源观察 channel 发轻量通知；认证长轮询入口沿同一 Workspace audience 与直连 federation RPC，等待受原总期限约束，取消／超时释放订阅。通知不携正文、路径或凭据；进程代次＋位置只用于比较观察位置，不按内容 hash 排序。首次、获取／订阅窗口、重连及 gap 均回到原快照接口，接受仍受每 owner reconcile lock 串行保护。
+- Workspace 默认 event，删除固定每秒正文轮询；无变化保活不请求快照。新增 `resources.skill_sources.gateway_updates` 的 event／poll／manual／显式 event_poll 与分钟／小时周期，复用同一对账及 accepted 状态；manual 只做初始获取与 owner 显式 reconcile，不把 skill_load 变成联网刷新。默认、开发模板、最终 schema、访问器与容器接线迁齐；非法组合拒绝。策略当前明确登记 restart_workspace，旧进程关闭并排空订阅，不冒称热切换。
+- 未完成：原配置 shadow generation 内策略热切换、Gateway 本地观察配置、获取能力组合及 HTTP Skill／四层目录接线仍待后续切片；代码登记 source-update-generation TODO。9.9／9.10／9.14／9.16 保持未勾，不重启团队／协作延期验收。本 change 仍为 62/76。
+- 验证原件：`out/tests/temp/csm-kind-boundary/artifacts/gateway-publication-*`。049：完整相关单测 188 passed，149.26s；050：真实 Gateway→受管 Workspace→Provider／skill_load、冻结 Turn、新版下轮激活、不可用阻断及进程重启，1 passed，101.72s。059：仅本切片暂存 tree 完整 archive 后，同一产品入口及相关合同共 127 passed，146.10s；逐个校验 4515 个 tracked blob 未变化，源码已清理，正式输出保留在 `staged-publications-059/formal-output/`。三组结果重叠，不相加冒充独立场景数量。
+- 055：14 文件 Pyright 与 HEAD 对照均为 16 条既有错误、零新增，Ruff 对照均为 12 条既有 TRY004、零新增；061：排除该既有规则的全切片 Ruff 通过，057 compileall 通过，060 strict validate 通过。新增通知用例覆盖真实认证路由、先发布后通知、初始窗口、保活零正文获取、断线阻断／恢复、owner／audience／请求身份与游标拒绝、gap／同 revision 重启、轮询周期、手动对账及显式 event_poll。
+- 路由基线核对 058：完整 HEAD 原件实际 111 条、旧测试写 109 条；本切片实际 112 条、仅新增一条 publication POST，无删除。修正计数及本次 OpenAPI hash，新增接口位于通配代理之前；059 已复验，未放宽旧接口形状或顺序断言。054 的配置测试路径拼写错误未运行任何测试，056 的旧计数失败保留原件，由 058 归因和 059 补验闭合。

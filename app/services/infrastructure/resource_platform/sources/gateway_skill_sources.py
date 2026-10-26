@@ -21,7 +21,10 @@ from app.core.resource_uri import (
 )
 from app.core.trace_middleware import require_current_request_id
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.schemas.gateway.skill_sources import GatewaySkillSourcesDTO
+from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationDTO,
+    GatewaySkillSourcesDTO,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
@@ -31,6 +34,9 @@ from app.services.infrastructure.gateway_client_common import GatewayTransportCo
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationChannel,
+)
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
 )
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     send_navigation_request,
@@ -69,6 +75,7 @@ class _GatewaySkillState:
     reconcile_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
     client: httpx.AsyncClient | None = None
+    bound: bool = False
 
 
 class GatewaySkillSources:
@@ -77,12 +84,14 @@ class GatewaySkillSources:
     def __init__(
         self, *, workspace_id: str, connection: GatewayTransportConnection,
         local_token_supplier: Callable[[], str], observation_channel: ResourceObservationChannel,
+        update_policy: SourceUpdatePolicy | None = None,
     ) -> None:
         self._workspace_id = workspace_id
         self._connection = connection
         self._local_token_supplier = local_token_supplier
         self._channel = observation_channel
         self._owners: dict[str, _GatewaySkillState] = {}
+        self._update_policy = update_policy if update_policy is not None else SourceUpdatePolicy()
 
     def _state(self, gateway_id: str) -> _GatewaySkillState:
         if not gateway_id:
@@ -182,19 +191,21 @@ class GatewaySkillSources:
         require_current_request_id("Gateway Skill source binding")
         state = self._state(gateway_id)
         async with state.lock:
-            if state.task is not None:
-                if state.task.done():
+            if state.bound:
+                if state.task is not None and state.task.done():
                     state.task.result()
                     raise RuntimeError("Gateway Skill source observation 意外退出")
                 self.snapshot(gateway_id=gateway_id)
                 return
             await self.reconcile(gateway_id=gateway_id, wait_for_connection=True)
             self.snapshot(gateway_id=gateway_id)
-            # 长驻轮询是独立 HTTP 请求，由 Gateway TraceMiddleware 创建每轮身份。
-            state.task = asyncio.create_task(
-                self._observe(gateway_id),
-                name=f"workspace-gateway-skill-sources:{gateway_id}", context=Context(),
-            )
+            # 观察是独立 HTTP 请求，由 Gateway TraceMiddleware 创建每轮身份。
+            state.bound = True
+            if self._update_policy.mode != "manual":
+                state.task = asyncio.create_task(
+                    self._observe(gateway_id),
+                    name=f"workspace-gateway-skill-sources:{gateway_id}", context=Context(),
+                )
 
     def _client(self, state: _GatewaySkillState) -> httpx.AsyncClient:
         if state.client is None:
@@ -204,7 +215,7 @@ class GatewaySkillSources:
     async def reconcile(
         self, *, gateway_id: str, wait_for_connection: bool = False, independent_poll: bool = False,
     ) -> None:
-        """唯一接受入口；仅独立观察轮询由 Gateway 的 HTTP 入口创建请求身份。"""
+        """唯一接受入口；独立观察由 Gateway 的 HTTP 入口创建请求身份。"""
         state = self._state(gateway_id)
         # 条件请求、验证、接受与错误发布属于同一次 owner 对账，迟到结果不得越过新版。
         async with state.reconcile_lock:
@@ -311,14 +322,66 @@ class GatewaySkillSources:
         ))
 
     async def _observe(self, gateway_id: str) -> None:
+        state = self._state(gateway_id)
+        interval = self._update_policy.poll_seconds
+        if self._update_policy.mode == "poll":
+            assert interval is not None
+            while True:
+                await asyncio.sleep(interval)
+                await self.reconcile(gateway_id=gateway_id, independent_poll=True)
+        cursor: str | None = None
+        next_poll = time.monotonic() + interval if interval is not None else None
         while True:
-            await asyncio.sleep(1)
-            await self.reconcile(gateway_id=gateway_id, independent_poll=True)
+            try:
+                remaining = max(0, next_poll - time.monotonic()) if next_poll is not None else None
+                publication = await self._wait_for_publication(state, cursor, remaining=remaining)
+                if publication.changed or state.error is not None or (
+                    next_poll is not None and time.monotonic() >= next_poll
+                ):
+                    await self.reconcile(gateway_id=gateway_id, independent_poll=True)
+                    next_poll = time.monotonic() + interval if interval is not None else None
+                cursor = publication.cursor
+            except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
+                state.error = type(error).__name__
+                self._notify(state)
+                logger.error("Gateway Skill 发布通知失败: gateway_id=%s error=%s", gateway_id, error)
+                cursor = None
+            if state.error is not None:
+                # 重连只恢复同一通知协议，不静默切成正文轮询。
+                cursor = None
+                await asyncio.sleep(1)
+
+    async def _wait_for_publication(
+        self, state: _GatewaySkillState, cursor: str | None, *, remaining: float | None = None,
+    ) -> GatewaySkillPublicationDTO:
+        timeout = self._connection.resolve_timeout_seconds()
+        wait = min(4, timeout / 2, remaining if remaining is not None else 4)
+        response = await self._client(state).post(
+            self._connection.resolve_gateway_url()
+            + f"/api/gateway/skill-source-connections/{state.gateway_id}/workspaces/{self._workspace_id}/publications/wait",
+            headers={"X-Local-Token": self._local_token_supplier()},
+            json={"after_cursor": cursor, "wait_ms": max(1, int(wait * 1000))},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        request_id = response.headers.get("X-Request-ID")
+        envelope = APIResponse[GatewaySkillPublicationDTO].model_validate_json(response.content)
+        if not request_id or not request_id.strip() or envelope.request_id != request_id:
+            raise ValueError("Gateway Skill 发布通知 request_id 无效或不一致")
+        publication = envelope.data
+        if envelope.code != 0 or publication is None:
+            raise ValueError("Gateway Skill 发布通知缺少有效 data")
+        if publication.gateway_id != state.gateway_id or publication.workspace_id != self._workspace_id:
+            raise ValueError("Gateway Skill 发布通知 owner/audience mismatch")
+        if publication.changed != (publication.cursor != cursor) or (publication.gap and not publication.changed):
+            raise ValueError("Gateway Skill 发布通知 cursor/changed/gap 不一致")
+        return publication
 
     async def close(self) -> None:
         tasks = [state.task for state in self._owners.values() if state.task is not None]
         for state in self._owners.values():
             state.task = None
+            state.bound = False
         for task in tasks:
             task.cancel()
         try:

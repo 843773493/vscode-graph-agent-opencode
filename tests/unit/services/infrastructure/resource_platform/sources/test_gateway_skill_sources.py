@@ -29,10 +29,14 @@ from app.core.trace_middleware import (
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
+)
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
 )
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
@@ -77,6 +81,8 @@ async def source_case(tmp_path: Path, request_identity: str):
     source = GatewaySkillSources(
         workspace_id=load_or_create_workspace_id(workspace), connection=GatewayTransportConnection(gateway_url="http://gateway.test"),
         local_token_supplier=lambda: "test-local-token", observation_channel=channel,
+        # 本组快照合同使用显式低频轮询；通知行为由独立的事件用例验证。
+        update_policy=SourceUpdatePolicy(mode="poll", poll_interval="1h"),
     )
     try:
         yield owner, source, skill, channel
@@ -448,7 +454,8 @@ async def test_navigation_preserves_file_execution_error_domain(source_case, nav
 async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
     source_case, request_identity: str,
 ):
-    owner, source, _skill, _channel = source_case
+    owner, source, skill, _channel = source_case
+    source._update_policy = SourceUpdatePolicy()
     extra_context: ContextVar[str | None] = ContextVar("skill_observer_probe", default=None)
     gateway_token = set_current_gateway_id("gateway_e1d881d48d86e50c01f49e43069fc7d1")
     actor_token = set_current_navigation_actor("inherited-actor")
@@ -458,6 +465,8 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
     observer_contexts: list[tuple[str | None, str | None, str | None, str | None]] = []
     observer_replies: list[httpx.Response] = []
     two_polls = asyncio.Event()
+    first_poll = asyncio.Event()
+    notification_contexts: list[tuple[str | None, str | None, str | None, str | None]] = []
     completed_polls = 0
     reconcile = source.reconcile
     publication = owner.snapshot(workspace_id=source._workspace_id)
@@ -474,6 +483,7 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
         )
         if independent_poll:
             completed_polls += 1
+            first_poll.set()
             if completed_polls == 2:
                 two_polls.set()
 
@@ -481,6 +491,19 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
 
     async def reply(request: httpx.Request) -> httpx.Response:
         request_id = request.headers.get("X-Request-ID")
+        if request.method == "POST":
+            assert request_id is None
+            notification_contexts.append((
+                get_current_request_id(), get_current_gateway_id(),
+                get_current_navigation_actor(), extra_context.get(),
+            ))
+            notice = await owner.wait_for_publication(
+                GatewaySkillPublicationRequest.model_validate_json(request.content),
+                workspace_id=source._workspace_id,
+            )
+            response_id = f"gateway-notification-{len(notification_contexts)}"
+            return httpx.Response(200, json={"data": notice.model_dump(), "request_id": response_id},
+                                  headers={"X-Request-ID": response_id})
         if request_id is None:
             observer_requests.append(request)
             observer_request_ids.append(f"gateway-observer-{len(observer_request_ids) + 1}")
@@ -514,6 +537,8 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
         reset_current_gateway_id(gateway_token)
 
     async with asyncio.timeout(4):
+        await first_poll.wait()
+        skill.write_text("触发独立发布通知\n")
         await two_polls.wait()
 
     assert completed_polls == 2
@@ -523,6 +548,7 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
     assert request_identity not in observer_request_ids
     assert len(set(observer_request_ids)) == 2
     assert observer_contexts == [(None, None, None, None), (None, None, None, None)]
+    assert notification_contexts and all(context == (None, None, None, None) for context in notification_contexts)
     assert all(reply.status_code == 304 and reply.content == b"" for reply in observer_replies)
     assert source.snapshot(gateway_id=GATEWAY_ID) is accepted
     assert accepted.available

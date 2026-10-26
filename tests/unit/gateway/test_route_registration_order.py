@@ -20,10 +20,10 @@ from app.gateway.main import app
 PROJECT_ROOT = Path.cwd()
 
 BASELINE_OPENAPI_SHA256 = (
-    "99efdbd40894c88780e21299b0e6737c1078d4215d96294196e5ba2e9a642b39"
+    "f4a64d047592faede5a9feb98a4ce3422eb4487754f8ce1bba872655258622aa"
 )
-BASELINE_ROUTE_COUNT = 109
-BASELINE_PATH_COUNT = 89
+BASELINE_ROUTE_COUNT = 112
+BASELINE_PATH_COUNT = 90
 BASELINE_DUPLICATE_OPERATION_IDS = (
     "Duplicate Operation ID proxy_auxiliary_http_api_gateway_workspaces__workspace_id___service_path___path__patch",
     "Duplicate Operation ID proxy_workspace_api_api_v1__path__patch",
@@ -61,6 +61,7 @@ def test_route_registration_order_is_stable() -> None:
     assert paths.index("/api/gateway/workspaces") < auxiliary_index
     assert paths.index("/api/gateway/local-directories") < auxiliary_index
     assert paths.index("/api/gateway/resource-navigation/workspaces/{source_workspace_id}") < auxiliary_index
+    assert paths.index("/api/gateway/skill-source-connections/{gateway_id}/workspaces/{workspace_id}/publications/wait") < auxiliary_index
     assert paths.index("/api/v1/{path:path}") > auxiliary_index
 
 

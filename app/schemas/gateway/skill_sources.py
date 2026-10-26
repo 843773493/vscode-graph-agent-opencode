@@ -30,3 +30,26 @@ class GatewaySkillSourcesDTO(BaseModel):
     entries: tuple[GatewaySkillSourceEntryDTO, ...]
     available: bool
     error_code: Literal["source-unavailable"] | None = None
+
+
+class GatewaySkillPublicationRequest(BaseModel):
+    """游标仅标识观察位置；重启或缺口都回到同一个快照接口对账。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    after_cursor: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}:[1-9][0-9]{0,19}$")
+    wait_ms: int = Field(default=4000, strict=True, ge=1, le=4000)
+
+
+class GatewaySkillPublicationDTO(BaseModel):
+    """发布后轻量通知，禁止承载正文、私有地址或凭据。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_id: str
+    workspace_id: str
+    cursor: str = Field(pattern=r"^[0-9a-f]{32}:[1-9][0-9]{0,19}$")
+    revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    available: bool
+    changed: bool
+    gap: bool

@@ -746,6 +746,7 @@ def _build_app_container(
         gateway_token_supplier=get_gateway_local_token,
         file_paths=workspace_service.file_paths,
         artifact_reader=read_artifact,
+        gateway_skill_updates=config_service.get_gateway_skill_update_policy(),
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry

@@ -40,6 +40,10 @@ from app.gateway.federation.workspace_port import (
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationDTO,
+    GatewaySkillSourcesDTO,
+)
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 HUB = "gateway_0123456789abcdef0123456789abcdef"
@@ -173,6 +177,25 @@ async def test_registered_direct_owner_returns_its_bytes_and_conditional_revisio
     second = await relay_gateway_skill_sources(case.hub, case.request(if_none_match=first["etag"]))
     assert second["status"] == 304 and second["etag"] == first["etag"]
     assert case.outbound.requests[0]["nonce"] != case.outbound.requests[1]["nonce"]
+
+
+async def test_publication_notice_uses_same_authenticated_direct_owner_and_deadline(skill_route_case):
+    case = skill_route_case
+    first = await relay_gateway_skill_sources(case.hub, case.request(kind="publication", publication={}))
+    assert first["status"] == 200
+    notice = GatewaySkillPublicationDTO.model_validate(first["data"])
+    assert notice.gateway_id == SPOKE and notice.workspace_id == WORKSPACE_ID
+    assert notice.changed and notice.gap
+    snapshot = await relay_gateway_skill_sources(case.hub, case.request())
+    assert GatewaySkillSourcesDTO.model_validate(snapshot["data"]).revision == notice.revision
+    assert "entries" not in notice.model_dump() and "content" not in notice.model_dump()
+    heartbeat = await relay_gateway_skill_sources(case.hub, case.request(kind="publication",
+        publication={"after_cursor": notice.cursor, "wait_ms": 1}))
+    assert heartbeat["data"] == {**notice.model_dump(), "changed": False, "gap": False}
+    with pytest.raises(TimeoutError):
+        await relay_gateway_skill_sources(case.hub, case.request(kind="publication",
+            publication={"after_cursor": notice.cursor, "wait_ms": 4000}), deadline_at=time.time() + 0.02)
+    assert case.spoke.gateway_skill_sources.owner._publications.subscriber_ids == ()
 
 
 @pytest.mark.parametrize("failure", ["unknown", "duplicate", "connection", "credential", "policy"])

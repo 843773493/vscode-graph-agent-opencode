@@ -179,6 +179,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             (artifacts / "tools-available.json").write_text(json.dumps(tool_catalog, ensure_ascii=False, indent=2) + "\n")
             workspace_id = json.loads((workspace / ".boxteam" / "workspace-identity.json").read_text())["workspace_id"]
             raw_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
+            publication_path = raw_path.replace("/skill-sources/", "/skill-source-connections/") + "/publications/wait"
             for headers in ({}, {"X-Local-Token": "wrong"}, {"X-BoxTeam-Federation-Token": "unrelated"}):
                 async with httpx.AsyncClient(base_url=base_url, headers=headers, trust_env=False) as denied:
                     assert (await denied.get(raw_path)).status_code == 401
@@ -192,20 +193,24 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             assert original["entries"][0]["content"] == FRONTMATTER + OLD_BODY
             assert str(home) not in raw.text and "local-dev-token" not in raw.text
             assert (await client.get(raw_path, headers={"If-None-Match": raw.headers["ETag"]})).status_code == 304
+            first_publication = await client.post(publication_path, json={})
+            assert first_publication.status_code == 200, first_publication.text
+            assert first_publication.headers["X-Request-ID"] == first_publication.json()["request_id"]
+            first_notice = first_publication.json()["data"]
+            assert first_notice["revision"] == original["revision"] and first_notice["gap"]
 
             def change_after_model_capture() -> None:
                 skill_file.write_bytes((FRONTMATTER + NEW_BODY).encode())
-                with httpx.Client(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=2, trust_env=False) as probe:
-                    deadline = time.monotonic() + 6
-                    while time.monotonic() < deadline:
-                        publication = probe.get(raw_path).json()["data"]
-                        if publication["revision"] != original["revision"]:
-                            assert publication["entries"][0]["content"] == FRONTMATTER + NEW_BODY
-                            # Workspace 共享观察器在下一次真实工具调用前接受这个 live revision。
-                            time.sleep(1.2)
-                            return
-                        time.sleep(0.05)
-                raise AssertionError("Gateway watcher 未接受新 raw revision")
+                with httpx.Client(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=6, trust_env=False) as probe:
+                    notified = probe.post(publication_path, json={"after_cursor": first_notice["cursor"]})
+                    assert notified.status_code == 200, notified.text
+                    notice = notified.json()["data"]
+                    assert notice["changed"] and notice["revision"] != original["revision"]
+                    publication = probe.get(raw_path).json()["data"]
+                    assert publication["revision"] == notice["revision"]
+                    assert publication["entries"][0]["content"] == FRONTMATTER + NEW_BODY
+                    # 通知后的后台获取不改变本轮已冻结的 Skill；下一 Turn 使用 accepted 新版。
+                    time.sleep(1.2)
 
             created = await client.post("/api/v1/sessions", json={"title": "Gateway frozen Skill"})
             assert created.status_code == 200, created.text
