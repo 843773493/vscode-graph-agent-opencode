@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 
+from app.core.atomic_fs import native_io_path
 from app.core.phase_observer import observe_phase
 
 from .assets import (
@@ -181,6 +182,7 @@ def _recorded_cassette(
 
 
 def _write_json_atomically(path: Path, payload: Mapping[str, object]) -> None:
+    path = native_io_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     with tempfile.NamedTemporaryFile(
