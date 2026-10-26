@@ -121,6 +121,8 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 每个工作区实例装配一个 MCP owner，内部每 Server 一个拥有 session 上下文的监督 task；同进程多工作区的 server ID 相同也不能共用运行态。task 必须在相同生命周期上下文中创建、排空、关闭 MCP/AnyIO session。用现有 LifetimeScope 管理进程内 task，但连接是否停止由领域 owner 决策。
 
+生命周期实现由 `session_runtime.py` 持有每 Server 的原 task，LifetimeScope 登记其关闭回调并等待原 task 退出，不在 release task 中退出 SDK CancelScope。目录 owner 仍独占完整 relist、通知 fencing 与发布；连接 task 的异常会失效已发布目录，启动取消和部分失败排空实际创建的上下文，释放失败阻止重开并保留原异常。连接代际在同一 Owner 重启时单调推进；该生命周期切片不代替后续调用 handle、持久 lease 或配置共同提交协议。
+
 区分三类身份：
 
 | 身份 | 推进条件 | 用途 |

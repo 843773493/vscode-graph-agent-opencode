@@ -13,7 +13,6 @@ from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogSnapshot,
     McpServerSnapshot,
     McpToolDescriptor,
-    production_mcp_session_factory,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_BINDING_SCHEMA,
@@ -33,6 +32,9 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_schema_hash,
     sha256_token,
+)
+from app.services.infrastructure.mcp.session_runtime import (
+    production_mcp_session_factory,
 )
 
 __all__ = [

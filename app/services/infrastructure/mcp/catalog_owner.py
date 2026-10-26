@@ -21,22 +21,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from _thread import RLock
-from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.sessions import Connection, create_session
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp.config import (
-    McpServerConfig,
     parse_mcp_server_configs,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
@@ -46,9 +44,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
     payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
-from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
-from mcp import types as mcp_types
-from mcp.client.session import ClientSession
+from app.services.infrastructure.mcp.session_runtime import (
+    McpChangeNotifyCallback,
+    McpServerRuntime,
+    McpSessionFactory,
+    production_mcp_session_factory,
+)
 from mcp.shared.exceptions import McpError
 
 if TYPE_CHECKING:
@@ -57,12 +58,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
-McpChangeNotifyCallback: TypeAlias = Callable[[], None]
-McpSessionFactory: TypeAlias = Callable[
-    [McpServerConfig, McpChangeNotifyCallback],
-    AbstractAsyncContextManager["McpServerSessionPort"],
-]
 
 class McpCatalogError(RuntimeError):
     """MCP 目录 owner 的显式错误基类。"""
@@ -121,70 +116,6 @@ class McpCatalogPublication:
 
 
 McpPublicationCallback: TypeAlias = Callable[[McpCatalogPublication], None]
-
-
-class McpServerSessionPort(Protocol):
-    """owner 与具体 MCP client 实现之间的窄端口；测试注入替身。"""
-
-    async def initialize(self) -> None: ...
-
-    async def list_tools(self) -> list[BaseTool]: ...
-
-    def supports_tool_list_changed(self) -> bool: ...
-
-
-class _McpServerSession:
-    """``mcp`` ClientSession 的窄端口包装。"""
-
-    def __init__(self, session: ClientSession) -> None:
-        self._session = session
-
-    async def initialize(self) -> None:
-        await self._session.initialize()
-
-    async def list_tools(self) -> list[BaseTool]:
-        return await list_mcp_tools(self._session)
-
-    def supports_tool_list_changed(self) -> bool:
-        capabilities = self._session.get_server_capabilities()
-        return bool(
-            capabilities is not None
-            and capabilities.tools is not None
-            and capabilities.tools.listChanged
-        )
-
-
-def production_mcp_session_factory(
-    server: McpServerConfig,
-    on_tools_list_changed: McpChangeNotifyCallback,
-) -> AbstractAsyncContextManager[McpServerSessionPort]:
-    """生产 session 工厂：``create_session`` + ``session_kwargs.message_handler``。
-
-    ``MultiServerMCPClient.session()`` 不暴露 message handler，因此直接使用
-    同一个底层 ``create_session`` 工厂，把 ``tools/list_changed`` 通知消费接入
-    ``session_kwargs``；工具发现仍只经唯一 SDK 分页适配。
-    """
-
-    async def _message_handler(message: object) -> None:
-        if isinstance(message, mcp_types.ServerNotification) and isinstance(
-            message.root, mcp_types.ToolListChangedNotification
-        ):
-            on_tools_list_changed()
-
-    # Connection 是 TypedDict；create_session 会把 session_kwargs 透传给 ClientSession。
-    connection: Connection = {
-        **server.connection,
-        "session_kwargs": {"message_handler": _message_handler},
-    }
-
-    @asynccontextmanager
-    async def _session_context() -> AsyncIterator[McpServerSessionPort]:
-        async with create_session(connection) as session:
-            port = _McpServerSession(session)
-            await port.initialize()
-            yield port
-
-    return _session_context()
 
 
 def _catalog_failure_text(
@@ -283,17 +214,6 @@ def _adapt_server_tools(
     return tools, tuple(descriptors)
 
 
-@dataclass(slots=True)
-class _ServerRuntime:
-    """一个 enabled server 的连接运行时：session、generation lease 与错误记录。"""
-
-    server: McpServerConfig
-    generation: int
-    session: McpServerSessionPort
-    last_relist_error: str | None = None
-    relist_sequence: int = 0
-
-
 class McpCatalogOwner:
     """MCP 工具目录唯一 owner。
 
@@ -318,14 +238,15 @@ class McpCatalogOwner:
         self._session_factory: McpSessionFactory = (
             session_factory or production_mcp_session_factory
         )
-        self._session_stack: AsyncExitStack | None = None
+        self._session_scope: LifetimeScope | None = None
         self._started = False
         self._snapshot: McpCatalogSnapshot | None = None
         self._tools_by_id: dict[str, BaseTool] = {}
         self._descriptors_by_server: dict[str, tuple[McpToolDescriptor, ...]] = {}
         # 目录 generation lease：revision 每实际推进一次单调 +1；unchanged 不推进。
         self._catalog_generation = 0
-        self._runtimes: dict[str, _ServerRuntime] = {}
+        self._connection_generation = 0
+        self._runtimes: dict[str, McpServerRuntime] = {}
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
         self._publication_lock = RLock()
@@ -339,30 +260,28 @@ class McpCatalogOwner:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        if self._started:
+        if self._started or self._session_scope is not None:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
-        session_stack = AsyncExitStack()
-        await session_stack.__aenter__()
+        session_scope = LifetimeScope("mcp-sessions")
+        self._session_scope = session_scope
         failed_server_id: str | None = None
         try:
             for server in self._servers:
                 if not server.enabled:
                     continue
                 failed_server_id = server.server_id
-                runtime = _ServerRuntime(
+                self._connection_generation += 1
+                generation = self._connection_generation
+                runtime = McpServerRuntime(
                     server=server,
-                    generation=1,
-                    session=await session_stack.enter_async_context(
-                        self._session_factory(
-                            server,
-                            self._make_tools_list_changed_callback(
-                                server.server_id, 1
-                            ),
-                        )
-                    ),
+                    generation=generation,
+                    session_factory=self._session_factory,
+                    on_change=self._make_tools_list_changed_callback(server.server_id, generation),
+                    on_failure=self._handle_session_failure, scope=session_scope,
                 )
                 with self._publication_lock:
                     self._runtimes[server.server_id] = runtime
+                await runtime.start()
                 await self._apply_relist((runtime,), source="startup")
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
@@ -373,22 +292,34 @@ class McpCatalogOwner:
                             candidate_tools={},
                             candidate_descriptors={},
                         )
-        except Exception as error:
+        except (Exception, asyncio.CancelledError) as error:
             logger.exception("MCP Server 启动或工具目录发现失败: server_id=%s", failed_server_id)
-            await session_stack.aclose()
-            self._runtimes.clear()
+            failure: BaseException = error
+            try:
+                await session_scope.close()
+                self._session_scope = None
+            except ExceptionGroup as cleanup_error:
+                failure = BaseExceptionGroup("MCP 启动与释放均失败", [error, cleanup_error])
+            finally:
+                self._runtimes.clear()
+                self._tools_by_id.clear()
+                self._descriptors_by_server.clear()
+                self._publication = None
+                self._snapshot = None
+                self._dirty_servers.clear()
+            if isinstance(error, asyncio.CancelledError):
+                if failure is error:
+                    raise
+                raise failure
             raise McpCatalogError(
-                _catalog_failure_text(error, server_id=failed_server_id, stage="startup")
-            ) from error
-        self._session_stack = session_stack
+                _catalog_failure_text(failure, server_id=failed_server_id, stage="startup")
+            ) from failure
         self._started = True
 
     async def shutdown(self) -> None:
         errors: list[Exception] = []
         with self._publication_lock:
             self._started = False
-            for runtime in self._runtimes.values():
-                runtime.generation += 1
             if self._publication is not None:
                 try:
                     self._publish_readiness_locked("unavailable", "MCP 目录 owner 已关闭")
@@ -404,13 +335,14 @@ class McpCatalogOwner:
             task.cancel()
         if self._pending_relist_tasks:
             await asyncio.gather(*tuple(self._pending_relist_tasks), return_exceptions=True)
-        if self._session_stack is not None:
+        if self._session_scope is not None:
             try:
-                await self._session_stack.aclose()
+                await self._session_scope.close()
             except Exception as error:
                 logger.exception("MCP 生命周期或 publication callback 失败")
                 errors.append(error)
-            self._session_stack = None
+            else:
+                self._session_scope = None
         if errors:
             raise ExceptionGroup("MCP Owner 关闭失败", errors)
 
@@ -530,6 +462,17 @@ class McpCatalogOwner:
     # 通知与 relist
     # ------------------------------------------------------------------
 
+    def _handle_session_failure(self, runtime: McpServerRuntime, error: BaseException) -> None:
+        logger.error("MCP session 生命周期异常: server_id=%s", runtime.server.server_id, exc_info=error)
+        with self._publication_lock:
+            if self._runtimes.get(runtime.server.server_id) is not runtime:
+                return
+            text = _catalog_failure_text(error, server_id=runtime.server.server_id, stage="session")
+            runtime.last_relist_error = text
+            self._dirty_servers.add(runtime.server.server_id)
+            if self._publication is not None:
+                self._publish_readiness_locked("unavailable", text)
+
     def _make_tools_list_changed_callback(
         self,
         server_id: str,
@@ -546,7 +489,7 @@ class McpCatalogOwner:
             if not self._started:
                 return
             runtime = self._runtimes.get(server_id)
-            if runtime is None or runtime.generation != generation:
+            if runtime is None or not runtime.running or runtime.generation != generation:
                 logger.info(
                     "忽略过期 MCP tools/list_changed: server_id=%s callback_generation=%d",
                     server_id, generation,
@@ -562,7 +505,7 @@ class McpCatalogOwner:
         task.add_done_callback(self._pending_relist_tasks.discard)
 
     async def _apply_relist(
-        self, runtimes: tuple[_ServerRuntime, ...], *, source: str,
+        self, runtimes: tuple[McpServerRuntime, ...], *, source: str,
         relist_sequence: int | None = None,
     ) -> None:
         "同一次刷新只发布一个完整 candidate；失败保留整个旧 valid。"
@@ -590,6 +533,7 @@ class McpCatalogOwner:
             def current() -> bool:
                 return all(
                     self._runtimes.get(runtime.server.server_id) is runtime
+                    and runtime.running
                     and (runtime.generation, runtime.relist_sequence) == leases[runtime.server.server_id]
                     for runtime in runtimes
                 )
@@ -778,13 +722,13 @@ class McpCatalogOwner:
         snapshots: list[McpServerSnapshot] = []
         for server in self._servers:
             runtime = self._runtimes.get(server.server_id)
-            connected = runtime is not None
+            connected = runtime is not None and runtime.running
             snapshots.append(
                 McpServerSnapshot(
                     server_id=server.server_id,
                     transport=server.transport,
                     enabled=server.enabled,
-                    status="ready" if server.enabled and connected else "disabled",
+                    status=("ready" if connected else "failed") if server.enabled else "disabled",
                     tools=self._descriptors_by_server.get(server.server_id, ()),
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,

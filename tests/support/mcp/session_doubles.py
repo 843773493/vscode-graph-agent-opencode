@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
@@ -68,7 +68,7 @@ class FakeMcpSessionFactory:
         self,
         server: McpServerConfig,
         on_tools_list_changed: Callable[[], None],
-    ) -> object:
+    ) -> AbstractAsyncContextManager[FakeMcpSession]:
         session = FakeMcpSession(
             tool_names=list(self._initial_tools.get(server.server_id, [])),
         )

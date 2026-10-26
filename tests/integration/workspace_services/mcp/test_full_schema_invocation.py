@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -57,7 +58,6 @@ class SchemaServerCase:
 
     @asynccontextmanager
     async def started(self) -> AsyncIterator[SchemaServerCase]:
-        # MCP/AnyIO session 的进入、使用和关闭必须属于同一测试 task。
         await self.owner.start()
         try:
             yield self
@@ -95,6 +95,27 @@ def schema_server_case(request: pytest.FixtureRequest) -> SchemaServerCase:
         workspace_root=context.workspace_root, event_service=EventChannelService(),
     )
     return SchemaServerCase(owner, definitions, receipts, context.workspace_root)
+
+
+async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
+    schema_server_case: SchemaServerCase,
+) -> None:
+    case = schema_server_case
+    await asyncio.create_task(case.owner.start())
+    runtimes = tuple(case.owner._runtimes.values())
+    try:
+        case.publish({"type": "object", "required": ["text"]})
+        await asyncio.create_task(case.owner.relist_servers_without_notifications())
+        result = await asyncio.create_task(case.invoker().ainvoke({
+            "tool_name": "mcp__schema__probe", "arguments": {"text": "独立调用 task"},
+        }))
+        assert result
+        assert case.received() == [{"name": "probe", "arguments": {"text": "独立调用 task"}}]
+    finally:
+        await asyncio.create_task(case.owner.shutdown())
+    assert not case.owner.started
+    for runtime in runtimes:
+        assert runtime._task is not None and runtime._task.done() and not runtime.running
 
 
 @pytest.mark.parametrize("schema, valid, invalid", [
