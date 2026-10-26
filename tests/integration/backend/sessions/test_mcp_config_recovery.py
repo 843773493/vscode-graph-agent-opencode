@@ -62,7 +62,29 @@ async def run():
             }), encoding="utf-8")
             temporary.replace(report_dir / name)
 
-        if mode != "recover":
+        if mode == "cleanup_failure":
+            from app.services.infrastructure.events.channel_events import resource_state_channel_name
+
+            def fail_release():
+                raise RuntimeError("/private/transport/path token=must-never-leak")
+
+            owner._runtimes["schema"].scope.register(fail_release, label="injected-transport-cleanup")
+            channel = container.job_event_bus.event_channel_service.channel(resource_state_channel_name("mcp"))
+            subscription = channel.subscribe(label="cleanup product evidence")
+
+            async def record_cleanup_event():
+                try:
+                    delivery = await subscription.next()
+                    event = delivery.event
+                    (report_dir / "cleanup-event.json").write_text(json.dumps({
+                        "owner_domain": event.owner_domain, "resource_id": event.resource_id,
+                        "state": event.state,
+                    }))
+                finally:
+                    channel.unsubscribe(subscription)
+
+            asyncio.create_task(record_cleanup_event())
+        elif mode != "recover":
             persist = service._persist_active_snapshot
             def exit_at_promotion(*args, **kwargs):
                 if kwargs.get("apply_id") is None:
@@ -141,6 +163,67 @@ async def ready(process: subprocess.Popen[str], reports: Path) -> dict[str, obje
             assert process.poll() is None, (reports / "process.raw").read_text()
             await asyncio.sleep(0.05)
     return json.loads((reports / "ready.json").read_text())
+
+
+async def test_real_retirement_failure_keeps_committed_config_and_reports_cleanup(
+    recovery_case: RecoveryCase, http_schema_endpoint_factory,
+) -> None:
+    case = recovery_case
+    async with http_schema_endpoint_factory("old") as old, http_schema_endpoint_factory("new") as new:
+        new.definitions.write_text(json.dumps({"probe": {"type": "object"}, "new_connection": {"type": "object"}}))
+        path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
+        payload = read_jsonc_object(path) if path.exists() else {}
+        payload["mcp"] = {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        async with case.process("cleanup_failure") as (process, reports, base_url):
+            original = await ready(process, reports)
+            payload["mcp"]["servers"]["schema"]["url"] = new.url
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            prefix = f"/api/v1/workspaces/{case.mount.workspace_id}"
+            async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=10) as client:
+                async with asyncio.timeout(25):
+                    while True:
+                        response = await client.get(prefix + "/config/reload-status", headers={"X-Request-ID": "mcp-cleanup-proof"})
+                        assert response.status_code == 200, response.text
+                        status = response.json()["data"]
+                        if status["mcp_cleanup"] and status["mcp_cleanup"][0]["phase"] == "cleanup_failed":
+                            break
+                        await asyncio.sleep(0.05)
+                assert response.headers["x-request-id"] == response.json()["request_id"] == "mcp-cleanup-proof"
+                assert status["healthy"] and status["state"] == "active"
+                assert status["applied_paths"] == ["/mcp/servers/schema/url"]
+                assert not status["restart_required"] and status["deferred_paths"] == []
+                cleanup, = status["mcp_cleanup"]
+                assert cleanup == {"server_id": "schema", "connection_ref": original["connection_ref"],
+                                   "phase": "cleanup_failed", "release_verified": False, "error_type": "ExceptionGroup"}
+                assert "private" not in response.text and "must-never-leak" not in response.text
+                servers = await client.get(prefix + "/mcp/servers")
+                assert servers.status_code == 200, servers.text
+                assert {tool["tool_id"] for server in servers.json()["data"] for tool in server["tools"]} == {
+                    "mcp__schema__probe", "mcp__schema__new_connection",
+                }
+                event = json.loads((reports / "cleanup-event.json").read_text())
+                assert event == {"owner_domain": "mcp", "resource_id": original["connection_ref"], "state": "release_failed"}
+                published = case.facts()
+                assert published["config_apply_journal"][-1]["state"] == "committed"
+                assert published["config_events"][-1]["result"] == "applied"
+                assert len(published["config_events"]) == 1
+                # 失败引用不清除；冲突的新候选不能假装继续替换成功。
+                payload["mcp"]["servers"]["schema"]["url"] = old.url
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                async with asyncio.timeout(20):
+                    while True:
+                        response = await client.get(prefix + "/config/reload-status")
+                        assert response.status_code == 200, response.text
+                        rejected = response.json()["data"]
+                        if rejected["state"] == "rejected":
+                            break
+                        await asyncio.sleep(0.05)
+                assert rejected["applied_paths"] == [] and rejected["mcp_cleanup"] == [cleanup]
+                assert case.facts()["config_active_snapshot"] == published["config_active_snapshot"]
+                (case.context.artifacts_dir / "cleanup-proof.json").write_text(json.dumps({
+                    "committed": status, "rejected": rejected, "event": event,
+                }, indent=2))
 
 
 @pytest.mark.parametrize(("window", "wait_for_expiry"), [

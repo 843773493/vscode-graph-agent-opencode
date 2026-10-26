@@ -493,7 +493,7 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 100 定向六项全部通过；101 完整HEAD基线／当前该文件Pyright均8条、零新增，Ruff零新增。完整基线逐blob核验后清理，正式测试输出保留。命令、指纹、raw和退出码保存在 out/tests/temp/csm-kind-boundary/artifacts/assembly-migration-current-reader-100 与 assembly-migration-static-comparison-101，未将前轮失败改写为通过。
 
 
-### 2026-10-27 9.2 instruction 发布绑定闭合
+### 2026-10-26 9.2 instruction 发布绑定闭合
 
 - 删除默认 wired 标记，真实 producer 显式绑定配置、软件或 SkillCatalog 的发布 revision 与 next_job／epoch／resource_activation 边界；缺失或不符在修改 CSM 前失败，恢复复用原 binding_revision。配置不宣称运行中 model-call 更新，没有新增 watcher、持久格式或团队功能。
 - 完整暂存 tree `8863f4301f3aa402c31d272546ecd873f3d48057`：定向33 passed、相邻50 passed（排除R03专项）、原 Skill／来源入口32 passed；各组有交集。R01／R02 × inline／file 产品检查首次3 passed／1 failed，唯一失败在R02-file首轮8秒helper等待，尚未进入更新断言；相同用例单独运行，HEAD基线1 passed／49.94秒，当前1 passed／47.06秒，未修改等待或业务断言。并行负载敏感性保留性能TODO，不能称首轮整批通过。

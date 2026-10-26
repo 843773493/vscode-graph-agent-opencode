@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from app.agents.custom_tools import load_custom_tool_factory
 from app.agents.policy import (
@@ -14,10 +15,20 @@ from app.agents.policy import (
     resolve_tool_policy,
     resolve_tool_selectors,
 )
+from app.schemas.internal_v2.config import McpCleanupDTO
 from configs.runtime import merge_json_objects
 
 
 class ConfigAgentToolsMixin:
+    if TYPE_CHECKING:
+        _mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None
+
+    def set_mcp_cleanup_provider(self, provider: Callable[[], tuple[McpCleanupDTO, ...]]) -> None:
+        """装配只读诊断端口，原 MCP Owner 仍独占运行态。"""
+        if self._mcp_cleanup_provider is not None:
+            raise RuntimeError("MCP 清理诊断端口不允许重复绑定")
+        self._mcp_cleanup_provider = provider
+
     def get_agent_tool_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._get_effective_config()
         resolved_agent_id = self._normalize_agent_id(agent_id)

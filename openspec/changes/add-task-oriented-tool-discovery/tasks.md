@@ -59,7 +59,7 @@
 - [ ] 7.1 在既有 Workspace JSONC 配置族和 schema 内补齐必要授权引用及监督参数，遵守既有覆盖层和新增参数命名；无必要不增加参数，不存储凭据明文。
 - [x] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
 - [x] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
-- [ ] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
+- [x] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
 - [ ] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
 - [ ] 7.6 验证低优先级遮蔽、多 Server 部分失败、配置与模型调用交错、切换中崩溃、旧连接排空、共享 Backend 工作区隔离和配置 SSE replay；完成静态分析。
 
@@ -164,3 +164,11 @@
 - 最终暂存 tree `8c98890ef422b274492e000034a1b2d05a1f8ccf` 的完整 archive 验收：真实单实例 OS 锁、stdio SDK、双挂载、watcher、Runner 与 model_stream 产品集成1 passed／56.22秒，核对停止前 journal、原实例退出先于新实例启动、相同 schema 的新 connection_ref、失败及修复后两次业务收据和兄弟工作区隔离；原 HTTP 热切换1 passed／50.82秒，真实 OS 崩溃恢复3 passed／146.33秒，正式 integration-extension-discovery 203 passed／115.84秒，配置／shadow／策略／apply／事件与 API 合同204 passed／233.21秒。过期 claim 拒绝破坏动作的定向用例亦通过，已包含在204项中，各组不累加。
 - 修改范围 Ruff 零诊断；10文件 Pyright 的33个诊断均在 HEAD 基线复现，零新增，检查本身 exit1；整个 config_service 的 Ruff 基线／当前均27个既有诊断，零新增。准确命令、源码tree、raw、实际退出码和正式产物保存在 `out/tests/temp/mcp-stdio-publication/artifacts/verify-008/`；先前 verify-007 的单个新增测试类型诊断原件保留，完成显式类型收窄后才通过本轮对比。最终仅追加 OpenSpec 设计、场景与本收据，源码副本逐 blob 核验后清理。
 - 7.4继续未勾选，进度仍17/52：异步退役清理失败尚未接入产品配置／活动诊断；当前原 LifetimeScope 显式报告且保留失败引用。非合作 stdio 的关闭超时、stdio 停机中的 OS 崩溃、OAuth、连接控制、持久等待与完整 Gateway／Web 授权不由本切片证明，按各自任务继续推进；团队／协作专项仍保持 TODO。
+
+
+### 2026-10-26 7.4 退役清理诊断闭合
+
+- 原 retirement 组件持有唯一退役 runtime／阶段，配置 reload-status 通过只读端口投影 `mcp_cleanup`，与配置状态在同一发布锁下读取；独立表达 draining／closing／cleanup_failed、释放核实和异常类型。关闭失败发布原 resource.state 合同的 release_failed，保留原 scope 失败引用及完整诊断；已提交配置／applied 事件不被倒写，同 Server 未核实释放时拒绝冲突替换，其它 Server 可以继续更新。超时后实际完成关闭时，诊断如实标记已核实释放并保留原超时。没有新增持久表、配置参数或后台状态机。
+- 完整暂存 tree `d0f1fb600fdf23f7d53fad269c432ca5efa80d88`：真实 Backend／HTTP MCP／文件 watcher／配置 API 的故障注入1 passed／19.80秒，核对新目录、原 applied 事件、清理失败通知、request_id、拒绝冲突及 active 原件不变；正式 integration-extension-discovery 205 passed／119.70秒，配置／API／合同142 passed／236.74秒。前期定向15项已包含在205项内，不相加；stdio停启及旧HTTP切换的具名产品证据沿上一收据按未变依赖复用。
+- 9文件Pyright基线／当前均13项、Ruff均30项，零新增；全config_service Ruff均27项，检查exit1不称全仓静态全绿。compileall、Buf格式／依赖／相对真实HEAD breaking、前端真实tsc和Web build均通过。002首次遗漏隔离副本的既有Web依赖链接而类型检查失败，另有一项新Python类型诊断及导入格式；003链接已有依赖并修正后才通过，不安装或修改用户环境。源码／原命令／raw／退出码与架构自查在 `out/tests/temp/mcp-retirement-diagnostics/artifacts/` 的 verify-002／verify-003／regression-004／architecture-005；本轮仅追加规划、修正schema陈旧注释和CSM收据日期，不改变受测业务源码。
+- 关闭7.4，当前18/52。7.5／7.6仍按各自逐项验收；非合作真实stdio关闭、stdio停止窗口OS崩溃、OAuth、连接控制、持久等待与Gateway／Web授权尚未由本轮证明，团队／协作专项继续TODO。

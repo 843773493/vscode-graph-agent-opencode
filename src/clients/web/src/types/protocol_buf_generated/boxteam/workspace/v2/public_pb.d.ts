@@ -291,6 +291,11 @@ export declare type ConfigReloadStatusDTO = Message<"boxteam.workspace.v2.Config
    * @generated from field: optional string last_error = 8;
    */
   lastError?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpCleanupDTO mcp_cleanup = 9;
+   */
+  mcpCleanup: McpCleanupDTO[];
 };
 
 /**
@@ -298,6 +303,42 @@ export declare type ConfigReloadStatusDTO = Message<"boxteam.workspace.v2.Config
  * Use `create(ConfigReloadStatusDTOSchema)` to create a new message.
  */
 export declare const ConfigReloadStatusDTOSchema: GenMessage<ConfigReloadStatusDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpCleanupDTO
+ */
+export declare type McpCleanupDTO = Message<"boxteam.workspace.v2.McpCleanupDTO"> & {
+  /**
+   * @generated from field: string server_id = 1;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string connection_ref = 2;
+   */
+  connectionRef: string;
+
+  /**
+   * @generated from field: string phase = 3;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: bool release_verified = 4;
+   */
+  releaseVerified: boolean;
+
+  /**
+   * @generated from field: optional string error_type = 5;
+   */
+  errorType?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCleanupDTO.
+ * Use `create(McpCleanupDTOSchema)` to create a new message.
+ */
+export declare const McpCleanupDTOSchema: GenMessage<McpCleanupDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ConfigSourceDTO

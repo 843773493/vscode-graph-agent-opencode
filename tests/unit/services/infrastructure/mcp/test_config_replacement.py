@@ -12,6 +12,9 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
+from app.services.infrastructure.events.channel_events import (
+    resource_state_channel_name,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -78,6 +81,7 @@ class ReplacementCase:
     owner: McpCatalogOwner
     scopes: list[LifetimeScope] = field(default_factory=list)
     effects: list[dict[str, object]] = field(default_factory=list)
+    cleanup_failed: bool = False
 
     async def prepare(self, payload):
         scope = LifetimeScope("test-config-candidate")
@@ -108,7 +112,11 @@ async def replacement_case(tmp_path, event_channel_service, request):
     finally:
         for scope in reversed(case.scopes):
             await scope.close()
-        await owner.shutdown()
+        if case.cleanup_failed:
+            with pytest.raises(ExceptionGroup, match="MCP Owner 关闭失败"):
+                await owner.shutdown()
+        else:
+            await owner.shutdown()
         assert sorted(factory.opened, key=lambda row: row[0]) == sorted(factory.closed, key=lambda row: row[0])
 
 
@@ -265,6 +273,81 @@ async def test_retirement_deadline_closes_socket_without_settling_unknown_operat
     lease, = case.owner._leases.leases_for_resource(binding.connection_ref)
     assert lease.status == "reconcile_required"
     assert case.owner._leases.get(binding.connection_ref).status == "stopped"
+
+
+async def test_cleanup_failure_is_observable_without_reverting_new_catalog(
+    replacement_case, event_channel_service,
+):
+    case = replacement_case
+    old = case.owner._runtimes["alpha"]
+    binding, use = case.reserve()
+    channel = event_channel_service.channel(resource_state_channel_name("mcp"))
+    subscription = channel.subscribe(label="test retirement failure")
+
+    def fail_release():
+        raise RuntimeError("/private/path token=must-never-leak")
+
+    old.scope.register(fail_release, label="injected-transport-cleanup")
+    case.cleanup_failed = True
+    try:
+        publish, _ = await case.prepare(config("new"))
+        publish()
+        current = case.owner.binding_snapshot()
+        row, = [row for row in case.owner.cleanup_diagnostics() if row.connection_ref == binding.connection_ref]
+        assert row.phase == "draining" and not row.release_verified and row.error_type is None
+        with case.owner.execution_handles.execution_target(binding, use) as execution:
+            execution.started = execution.result_confirmed = True
+        event = await asyncio.wait_for(subscription.next(), 3)
+        assert event.event.resource_id == binding.connection_ref
+        assert event.event.state == "release_failed"
+        row, = [row for row in case.owner.cleanup_diagnostics() if row.connection_ref == binding.connection_ref]
+        assert row.phase == "cleanup_failed" and row.error_type == "ExceptionGroup"
+        assert not row.release_verified and old.scope.state == "close_failed"
+        assert "private" not in row.model_dump_json() and "token" not in row.model_dump_json()
+        assert case.owner.binding_snapshot() is current
+        assert case.owner.publication_snapshot().status == "available"
+        assert case.owner._runtimes["alpha"].running
+        with pytest.raises(RuntimeError, match="拒绝冲突替换"):
+            await case.prepare(config("third"))
+        await case.scopes[-1].close()
+        assert case.owner.binding_snapshot() is current
+        # 不相关 Server 可以更新，不让一个旧资源释放错误封锁整个工作区。
+        payload = config("new")
+        payload["servers"]["beta"]["url"] = "http://localhost/beta/third"
+        publish, _ = await case.prepare(payload)
+        publish()
+        assert case.owner.binding_snapshot().resolve("mcp__alpha__echo") == current.resolve("mcp__alpha__echo")
+    finally:
+        channel.unsubscribe(subscription)
+
+
+@pytest.mark.parametrize("replacement_case", [1], indirect=True)
+async def test_cleanup_timeout_retains_failure_until_release_is_verified(replacement_case):
+    case = replacement_case
+    old = case.owner._runtimes["alpha"]
+    released = asyncio.Event()
+    old.scope.register(released.wait, label="blocked-transport-cleanup")
+    case.cleanup_failed = True
+    publish, _ = await case.prepare(config("new"))
+    publish()
+    try:
+        async with asyncio.timeout(3):
+            while not any(row.phase == "cleanup_failed" for row in case.owner.cleanup_diagnostics()):
+                await asyncio.sleep(0.01)
+        row, = case.owner.cleanup_diagnostics()
+        assert row.error_type == "TimeoutError" and not row.release_verified
+        assert old.scope.state == "closing"
+        with pytest.raises(RuntimeError, match="拒绝冲突替换"):
+            await case.prepare(config("third"))
+        await case.scopes[-1].close()
+    finally:
+        released.set()
+        await wait_closed(old)
+    # 迟到但已核实的关闭不被伪报为仍未释放；原超时事实继续可见。
+    row, = case.owner.cleanup_diagnostics()
+    assert row.phase == "cleanup_failed" and row.release_verified
+    publish, _ = await case.prepare(config("third"))
+    publish()
 
 
 async def test_new_stdio_server_prepares_without_stopping_the_old_http_connection(replacement_case):

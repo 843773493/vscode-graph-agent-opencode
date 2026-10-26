@@ -32,11 +32,15 @@ from langchain_core.tools import BaseTool
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.schemas.internal_v2.config import McpCleanupDTO
 from app.services.infrastructure.config.contracts import (
     ConfigApplyRecorder,
     ConfigPublication,
 )
-from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
+from app.services.infrastructure.events.channel_events import (
+    McpCatalogEventPublisher,
+    ResourceStateEventPublisher,
+)
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -275,6 +279,7 @@ class McpCatalogOwner:
         self._publication_lock = publication_lock if publication_lock is not None else RLock()
         self._retirement = McpConnectionRetirement(
             leases=leases, lock=self._publication_lock, timeout_seconds=sealed_call_timeout_seconds(raw_config),
+            publisher=ResourceStateEventPublisher(event_service=event_service, owner_domain="mcp"),
         )
         self.execution_handles = McpExecutionHandles(
             leases=leases, lock=self._publication_lock, resolve_active=self._resolve_execution_handle,
@@ -536,6 +541,7 @@ class McpCatalogOwner:
             self._require_started()
             previous = {server.server_id: server for server in self._servers}
             changed = {key for key in previous.keys() | proposed.keys() if previous.get(key) != proposed.get(key)}
+            self._retirement.require_replaceable(changed)
             unchanged_ids = {key for key, tool in self._tools_by_id.items()
                              if (tool.metadata or {}).get("mcp_server_id") not in changed}
         assert self._session_scope is not None
@@ -592,6 +598,7 @@ class McpCatalogOwner:
                 self._require_started()
                 if published or self._servers != tuple(previous.values()):
                     raise McpCatalogError("MCP 候选的原配置基线已失效")
+                self._retirement.require_replaceable(changed)
                 replaced = [runtime for key, runtime in self._runtimes.items() if key in changed]
                 candidate_tools = {key: tool for key, tool in self._tools_by_id.items()
                                    if (tool.metadata or {}).get("mcp_server_id") not in changed}
@@ -640,6 +647,10 @@ class McpCatalogOwner:
         with self._publication_lock:
             self._require_started()
             return list(self._build_server_snapshots())
+
+    def cleanup_diagnostics(self) -> tuple[McpCleanupDTO, ...]:
+        """诊断不触发 relist，不影响已提交的配置或新连接 readiness。"""
+        return self._retirement.diagnostics()
 
     def catalog_revision(self) -> str:
         return self.publication_snapshot().binding_ref.catalog_revision

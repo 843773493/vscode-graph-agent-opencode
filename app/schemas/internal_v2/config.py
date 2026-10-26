@@ -71,6 +71,18 @@ class ConfigUpdateRequest(BaseModel):
         return self
 
 
+class McpCleanupDTO(BaseModel):
+    """仅投影原 MCP Owner 持有的退役连接，不保存异常自由正文。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    server_id: str
+    connection_ref: str
+    phase: Literal["draining", "closing", "cleanup_failed"]
+    release_verified: bool
+    error_type: str | None = None
+
+
 class ConfigReloadStatusDTO(BaseModel):
     healthy: bool
     revision: str
@@ -97,6 +109,7 @@ class ConfigReloadStatusDTO(BaseModel):
     layer_digests: dict[str, str | None] = Field(default_factory=dict)
     applied_paths: list[str] = Field(default_factory=list)
     deferred_paths: list[str] = Field(default_factory=list)
+    mcp_cleanup: list[McpCleanupDTO] = Field(default_factory=list)
 
 
 class ConfigStartupContractDTO(BaseModel):

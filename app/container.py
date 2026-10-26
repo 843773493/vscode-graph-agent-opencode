@@ -676,6 +676,7 @@ def _build_app_container(
         leases=external_resource_leases,
         publication_lock=config_service.publication_lock,
     )
+    config_service.set_mcp_cleanup_provider(mcp_catalog_owner.cleanup_diagnostics)
     message_service = MessageService(
         main_thread_resolver=session_path_resolver.main_thread_id,
         checkpointer=checkpointer,

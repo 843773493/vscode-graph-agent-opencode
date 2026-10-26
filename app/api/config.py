@@ -34,7 +34,9 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 
 def _reload_status_dto(config_service: ConfigService) -> ConfigReloadStatusDTO:
-    status = config_service.get_reload_status()
+    with config_service.publication_lock:
+        status = config_service.get_reload_status()
+        cleanup = config_service.get_mcp_cleanup_diagnostics()
     return ConfigReloadStatusDTO(
         healthy=status.healthy,
         revision=status.revision,
@@ -54,6 +56,7 @@ def _reload_status_dto(config_service: ConfigService) -> ConfigReloadStatusDTO:
         layer_digests=status.layer_digests or {},
         applied_paths=list(status.applied_paths),
         deferred_paths=list(status.deferred_paths),
+        mcp_cleanup=list(cleanup),
     )
 
 

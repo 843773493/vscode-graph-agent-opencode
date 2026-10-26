@@ -70,6 +70,15 @@ message ConfigReloadStatusDTO {
   string last_success_at = 6;
   string last_attempt_at = 7;
   optional string last_error = 8;
+  repeated McpCleanupDTO mcp_cleanup = 9;
+}
+
+message McpCleanupDTO {
+  string server_id = 1;
+  string connection_ref = 2;
+  string phase = 3;
+  bool release_verified = 4;
+  optional string error_type = 5;
 }
 
 message ConfigSourceDTO {

@@ -70,6 +70,15 @@ export interface ConfigReloadStatusDTO {
   last_success_at: string;
   last_attempt_at: string;
   last_error?: string | undefined;
+  mcp_cleanup: McpCleanupDTO[];
+}
+
+export interface McpCleanupDTO {
+  server_id: string;
+  connection_ref: string;
+  phase: string;
+  release_verified: boolean;
+  error_type?: string | undefined;
 }
 
 export interface ConfigSourceDTO {
@@ -2999,6 +3008,7 @@ function createBaseConfigReloadStatusDTO(): ConfigReloadStatusDTO {
     last_success_at: "",
     last_attempt_at: "",
     last_error: undefined,
+    mcp_cleanup: [],
   };
 }
 
@@ -3015,6 +3025,9 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
       last_success_at: isSet(object.last_success_at) ? globalThis.String(object.last_success_at) : "",
       last_attempt_at: isSet(object.last_attempt_at) ? globalThis.String(object.last_attempt_at) : "",
       last_error: isSet(object.last_error) ? globalThis.String(object.last_error) : undefined,
+      mcp_cleanup: globalThis.Array.isArray(object?.mcp_cleanup)
+        ? object.mcp_cleanup.map((e: any) => McpCleanupDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -3044,6 +3057,9 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
     if (message.last_error !== undefined) {
       obj.last_error = message.last_error;
     }
+    if (message.mcp_cleanup?.length) {
+      obj.mcp_cleanup = message.mcp_cleanup.map((e) => McpCleanupDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -3060,6 +3076,56 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
     message.last_success_at = object.last_success_at ?? "";
     message.last_attempt_at = object.last_attempt_at ?? "";
     message.last_error = object.last_error ?? undefined;
+    message.mcp_cleanup = object.mcp_cleanup?.map((e) => McpCleanupDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseMcpCleanupDTO(): McpCleanupDTO {
+  return { server_id: "", connection_ref: "", phase: "", release_verified: false, error_type: undefined };
+}
+
+export const McpCleanupDTO: MessageFns<McpCleanupDTO> = {
+  fromJSON(object: any): McpCleanupDTO {
+    return {
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      connection_ref: isSet(object.connection_ref) ? globalThis.String(object.connection_ref) : "",
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      release_verified: isSet(object.release_verified) ? globalThis.Boolean(object.release_verified) : false,
+      error_type: isSet(object.error_type) ? globalThis.String(object.error_type) : undefined,
+    };
+  },
+
+  toJSON(message: McpCleanupDTO): unknown {
+    const obj: any = {};
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.connection_ref !== "") {
+      obj.connection_ref = message.connection_ref;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.release_verified !== false) {
+      obj.release_verified = message.release_verified;
+    }
+    if (message.error_type !== undefined) {
+      obj.error_type = message.error_type;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCleanupDTO>, I>>(base?: I): McpCleanupDTO {
+    return McpCleanupDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCleanupDTO>, I>>(object: I): McpCleanupDTO {
+    const message = createBaseMcpCleanupDTO();
+    message.server_id = object.server_id ?? "";
+    message.connection_ref = object.connection_ref ?? "";
+    message.phase = object.phase ?? "";
+    message.release_verified = object.release_verified ?? false;
+    message.error_type = object.error_type ?? undefined;
     return message;
   },
 };

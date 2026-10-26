@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from _thread import RLock
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from app.core.path_utils import (
     get_user_workspace_config_path,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.schemas.internal_v2.config import ConfigDTO
+from app.schemas.internal_v2.config import ConfigDTO, McpCleanupDTO
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
     ConfigSnapshot,
@@ -149,6 +150,7 @@ class ConfigService(ConfigSourceLayersMixin,
             else {}
         )
         self._mcp_tool_names: frozenset[str] | None = None
+        self._mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None = None
         self._instruction_inputs = InstructionFileInputs(instruction_file_resolver)
         self._snapshot_store = ConfigSnapshotStore(
             candidate_builder=self._build_candidate_snapshot,
@@ -205,6 +207,10 @@ class ConfigService(ConfigSourceLayersMixin,
     def require_instruction_sources_available(self, agent_id: str) -> None:
         """仅新冻结边界检查来源 readiness；历史快照读取不检查当前文件。"""
         self._instruction_inputs.require_available(self._get_effective_config(), self._normalize_agent_id(agent_id))
+
+    def get_mcp_cleanup_diagnostics(self) -> tuple[McpCleanupDTO, ...]:
+        with self.publication_lock:
+            return self._mcp_cleanup_provider() if self._mcp_cleanup_provider is not None else ()
 
     async def get(self) -> ConfigDTO:
         return self._build_public_config()
