@@ -35,6 +35,7 @@ from app.domain.itemized.resource_activation import (
 )
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
+    McpCatalogError,
     McpCatalogOwner,
     McpCatalogRelistError,
     McpCatalogResourcePublisher,
@@ -44,10 +45,15 @@ from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_OWNER_CATALOG_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
+    extension_dispatch_from_activation,
 )
 from app.services.infrastructure.mcp.config import McpServerConfig
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionTargetResolutionError,
+)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+    ResourceRegistryCapture,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -518,6 +524,61 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
         assert restarted.read_resource_activation_payload(
             restored, ref, storage_owner=(session, thread),
         ) == original_body
+
+
+async def test_connection_identity_survives_cold_seal_without_changing_wire_hash(
+    catalog_runtime, registry_db, guidance_prepare,
+):
+    owner, _factory, _registry, _scope = catalog_runtime
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    first, frozen = guidance_prepare("execution-identity-first")
+    assembly = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
+    parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    sealed_member, = parent.members
+    await owner.shutdown()
+    await owner.start()
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.load_sealed_resource_activation(
+            session, thread_id=thread, assembly_id=assembly.assembly_id,
+            plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
+        )
+        restored_parent, = (binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert restored_parent.members == (sealed_member,)
+        dispatch = extension_dispatch_from_activation(
+            snapshot=restored, binding=restored_parent, model_call_id=assembly.model_call_id,
+            payload=cold.read_resource_activation_payload(restored, restored_parent, storage_owner=(session, thread)),
+        )
+        sealed_target = dispatch.binding_ref.resolve(sealed_member.member_id)
+        assert sealed_target.connection_ref == sealed_member.revision
+        with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
+            owner.resolve_execution_target(sealed_target)
+    second, fresh = guidance_prepare("execution-identity-fresh")
+    fresh_parent, = (binding for binding in fresh.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert fresh_parent.members[0].revision != sealed_member.revision
+    later = saver.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+    assert first["messages"] == second["messages"] and first["tools"] == second["tools"]
+    assert later.request_hash == assembly.request_hash
+    assert later.plan_hash == assembly.plan_hash
+    assert later.seal_binding.prefix.state.epoch == assembly.seal_binding.prefix.state.epoch
+    assert fresh.activation_provenance_hash != frozen.activation_provenance_hash
+
+
+async def test_capture_rejects_stale_connection_with_identical_catalog_generation(catalog_runtime):
+    owner, _factory, registry, _scope = catalog_runtime
+    capture = registry.capture()
+    parent = next(snapshot for snapshot in capture.snapshots if snapshot.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    member, = parent.members
+    stale_parent = replace(parent, members=(replace(
+        member, revision="mcp-connection:v1:" + "f" * 32 + ":1",
+    ),))
+    stale_capture = ResourceRegistryCapture(
+        descriptors=capture.descriptors, snapshots=(stale_parent,), resource_kinds=capture.resource_kinds,
+    )
+    assert stale_parent.revision == parent.revision and stale_parent.generation == parent.generation
+    with pytest.raises(McpCatalogError, match="唯一 Owner publication 不一致"):
+        owner.validate_resource_capture(stale_capture)
+    owner.validate_resource_capture(capture)
 
 
 @pytest.mark.parametrize("invalid", ["missing_receipt", "changed_content"])

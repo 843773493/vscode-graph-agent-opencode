@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import weakref
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -434,7 +435,7 @@ async def test_envelope_preserves_original_tool_call_id_pairing() -> None:
     recorded_binding = recorded_bindings[0]
     assert recorded_binding is not None
     assert recorded_binding.target_id == "list_breakpoints"
-    assert recorded_binding.binding_id.startswith("ext-catalog:v2:")
+    assert recorded_binding.binding_id.startswith("ext-catalog:v3:")
     assert recorded_binding.binding_hash.startswith("sha256:")
     assert recorded_binding.target_schema_hash.startswith("sha256:")
 
@@ -458,6 +459,7 @@ def _extension_binding_inputs(tools):
                 origin="mcp" if server_id else "custom",
                 input_schema=export_model_tool_json_schema(tool_item),
                 server_id=server_id,
+                connection_ref=metadata.get("mcp_connection_ref") if server_id else None,
             )
         )
     return inputs
@@ -555,8 +557,9 @@ async def test_sealed_target_missing_registration_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_sealed_mcp_target_requires_matching_server_identity():
-    """封存 server_id 与注册元数据不一致时显式失败；一致时正常执行。"""
+@pytest.mark.parametrize("server_id", ["server-a", "server-b"])
+async def test_sealed_mcp_target_requires_matching_server_and_connection_identity(server_id: str):
+    """同名同 schema 目标也必须匹配原 Server 和精确连接。"""
     from langchain_core.tools import tool
 
     @tool
@@ -565,7 +568,7 @@ async def test_sealed_mcp_target_requires_matching_server_identity():
         return f"status:{value}"
 
     registered = sealed_mcp_status.model_copy(
-        update={"metadata": {"mcp_server_id": "server-a"}}
+        update={"metadata": {"mcp_server_id": "server-a", "mcp_connection_ref": "mcp-connection:v1:" + "a" * 32 + ":1"}}
     )
     resolver, _binding = _sealed_binding_resolver([registered])
     matching_invoker = create_extension_tool_invoker_tool(
@@ -575,7 +578,7 @@ async def test_sealed_mcp_target_requires_matching_server_identity():
     drifted_invoker = create_extension_tool_invoker_tool(
         [
             sealed_mcp_status.model_copy(
-                update={"metadata": {"mcp_server_id": "server-b"}}
+                update={"metadata": {"mcp_server_id": server_id, "mcp_connection_ref": "mcp-connection:v1:" + "b" * 32 + ":1"}}
             )
         ],
         catalog_binding_resolver=resolver,
@@ -590,6 +593,29 @@ async def test_sealed_mcp_target_requires_matching_server_identity():
     )
     assert isinstance(drifted_result, str)
     assert "身份不一致" in drifted_result
+
+
+def test_owner_resolved_invoker_does_not_retain_initial_tools():
+    from langchain_core.tools import tool
+
+    @tool
+    def initial_target(value: str) -> str:
+        """检查 Agent 信封不再长期捕获初始注册。"""
+        return value
+
+    resolver, _binding = _sealed_binding_resolver([initial_target])
+    initial_ref = weakref.ref(initial_target)
+
+    def reject_resolution(_binding):
+        raise AssertionError("本测试不执行工具")
+
+    invoker = create_extension_tool_invoker_tool(
+        [initial_target], catalog_binding_resolver=resolver,
+        target_resolver=reject_resolution,
+    )
+    del initial_target
+    assert initial_ref() is None
+    assert invoker.name == EXTENSION_TOOL_INVOKER_NAME
 
 
 @pytest.mark.asyncio

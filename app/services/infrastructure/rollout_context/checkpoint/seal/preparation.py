@@ -340,13 +340,13 @@ def prepare_registered_context(
 
                 @cache
                 def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
-                    original, original_call = owner.load_tool_call_resource_activation(
+                    original, _original_call = owner.load_tool_call_resource_activation(
                         session_id, thread_id=thread_id, tool_call_id=ref.tool_call_id,
                         model_call_id=ref.model_call_id, checkpoint_ns=checkpoint_ns,
                     )
                     if original.activation_snapshot_id != ref.activation_snapshot_id:
                         raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
-                    catalog = tool_catalog_from_activation(original, read_payload, model_call_id=original_call)
+                    catalog = tool_catalog_from_activation(original, read_payload)
                     definition = next((value for value in catalog.definitions if value.metadata.tool_id == ref.tool_id), None)
                     if (definition is None or definition.provenance.resource_id != ref.resource_id
                             or definition.provenance.revision != ref.revision):
@@ -358,7 +358,7 @@ def prepare_registered_context(
                 automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
                 batch = tool_definition_batch(
                     batch, catalog_supplier=lambda: tool_catalog_from_activation(
-                        activation_snapshot, read_payload, model_call_id=model_call_id,
+                        activation_snapshot, read_payload,
                     ), current_items=items, retained_items=retained_items,
                     previous=previous, retained_assembly=retained if retained is not None else previous,
                     retained_source_refs=retained_refs if retained is not None else None,

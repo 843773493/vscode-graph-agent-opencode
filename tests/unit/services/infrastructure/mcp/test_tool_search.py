@@ -50,7 +50,7 @@ from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
 
 
 @pytest.fixture
-async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
+async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, request, monkeypatch):
     factory = CatalogSessionFactory()
     factory.session.description = "查找 CI 失败记录与日志"
     owner = McpCatalogOwner(
@@ -78,9 +78,14 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
     ))
     await owner.start()
     registry = ResourceRegistry(publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture)
-    publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=extension_catalog_policy_resolver)
     scope = LifetimeScope("tool-discovery")
-    scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
+    # 历史读取测试从 publisher 首次登记起生成 v2 资产，避免改写已登记的 descriptor。
+    with monkeypatch.context() as historical_writer:
+        if getattr(request, "param", None) == "v2":
+            from app.services.infrastructure.mcp import catalog_activation
+            historical_writer.setattr(catalog_activation, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
+        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=extension_catalog_policy_resolver)
+        scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
     try:
         yield owner, factory, registry, scope
         assert calls == [], "发现不得执行候选"
@@ -124,7 +129,7 @@ def discovery_case(guidance_prepare, registry_db, discovery_tool_factory):
     def read(snapshot, binding):
         return saver.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread))
 
-    catalog = tool_catalog_from_activation(frozen, read, model_call_id="discovery-model")
+    catalog = tool_catalog_from_activation(frozen, read)
     policy_resolver = ToolPolicyResolver(
         policy_defaults={"model_visible": False}, policy_rules={},
         restrictions={"execution_disabled": ["notes"], "model_hidden": ["hidden_ci"]},
@@ -255,7 +260,6 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
     def catalog(snapshot):
         return tool_catalog_from_activation(
             snapshot, lambda frozen, binding: saver.read_resource_activation_payload(frozen, binding, storage_owner=(session, thread)),
-            model_call_id=snapshot.model_call_id,
         )
 
     before_wire, before = guidance_prepare("discovery:model-first", boundary="model_call")
@@ -311,14 +315,14 @@ async def test_full_definition_freeze_survives_owner_update_delete_and_cold_save
     assert definition_resource_id("mcp__mini__echo") not in {item.resource_id for item in registry.capture().snapshots}
     _wire, same_turn = guidance_prepare("discovery:same-turn", boundary="turn")
     assert same_turn == frozen
-    assert tool_catalog_from_activation(same_turn, read, model_call_id="next") == original
+    assert tool_catalog_from_activation(same_turn, read) == original
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         restored = tool_catalog_from_activation(
             frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
                 snapshot, binding, storage_owner=(session, thread),
-            ), model_call_id="cold-model",
+            ),
         )
     cold_tool = discovery_tool_factory(catalog_resolver=lambda: restored, policy_resolver=lambda _: _policies)
     assert await cold_tool.ainvoke({"tool_ids": ["mcp__mini__echo"]}) == before
@@ -327,7 +331,7 @@ async def test_full_definition_freeze_survives_owner_update_delete_and_cold_save
         binding for binding in frozen.bindings if binding.resource_id != definition_resource_id("ci_logs")
     ))
     with pytest.raises(ExtensionCatalogUnavailableError, match="完整定义"):
-        tool_catalog_from_activation(without_definition, read, model_call_id="missing")
+        tool_catalog_from_activation(without_definition, read)
 
 
 async def test_snapshot_failure_remains_paired_tool_error(discovery_case, discovery_tool_factory):

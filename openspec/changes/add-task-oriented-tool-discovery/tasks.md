@@ -26,7 +26,7 @@
 
 - [x] 4.1 在唯一 MCP owner 内建立每 Server 所属生命周期 task，统一创建／关闭 SDK session、完整 relist、通知及过期结果 fencing。
 - [ ] 4.2 分离 catalog revision、connection generation 和 invocation lease，冻结精确执行引用；跨 execution／Turn 持有复用 ExternalResourceLeaseLedger 的 mcp_connection 与 typed resource-use，owner 内短期 handle 保留不建第二账本；同名同 schema 新连接不得接管旧调用。
-- [ ] 4.3 将 Agent 长期捕获工具对象及 initial/live 两段 resolver 全量迁移至 owner 解析，物理删除旧解析路径。
+- [x] 4.3 将 Agent 长期捕获工具对象及 initial/live 两段 resolver 全量迁移至 owner 解析，物理删除旧解析路径。
 - [ ] 4.4 实现有界的已封存调用执行资格及 HITL 等待保留，区分普通替换、禁用、断开和最新权限撤销；退役后不授予新的旧代际资格。
 - [ ] 4.5 统一真实 MCP 结果、isError、structuredContent、媒体／artifact、进度和取消处理；必要时整体替换 LangChain MCP 适配路径并删除旧实现。
 - [ ] 4.6 验证同 schema 重连、旧通知、HITL 跨替换、过期 handle、执行撤权、取消、outcome-unknown 和持久 ledger／短期 handle 的持有释放；验证同 Backend 多工作区同名 Server 隔离及静态分析。
@@ -88,3 +88,11 @@
 - SDK 创建、initialize 与退出集中到每 Server 的原 task，LifetimeScope 持有关闭／排空回调；移除外层共享 AsyncExitStack。完整 relist 和原子 publication 仍归原目录 owner，session 子任务失败明确失效目录、保留诊断，关闭失败保留 scope 并拒绝重开。启动与释放同时失败保留两份原始原因；启动取消排空正在 initialize 的 session。
 - 同一 Owner 重启时连接 generation 继续推进，不随关闭改写旧代际；旧通知和过期 relist 不影响新目录。此处只是进程内生命周期 fencing，未宣称完成4.2的持久资源／调用资格或4.3的执行 resolver 迁移。
 - 最终 `session-lifecycle-regression-final-078` 为136 passed／89.67秒，源码前后无变动；包括真实 stdio 从不同 caller task 启动、刷新、信封执行及关闭，以及 AnyIO 多 Server、取消、SDK reader 故障、启动／关闭双失败和旧通知验收。`session-lifecycle-static-complete-079` Ruff及相关模块／新测试Pyright零错误。命令、指纹、raw及退出码保存在现有 `out/tests/temp/task-oriented-tool-discovery/artifacts/`；不代表OAuth、热替换、真实Provider或Web验收。
+
+### 4.3 精确连接执行解析验收（2026-10-26）
+
+- 删除 Agent 初始 MCP 对象捕获与 live 同名回退，统一由 Owner 核对原连接实例／代际、运行状态和完整 schema；信封不再保留未使用的初始工具映射。相同语义目录不等于相同执行身份，activation 捕获逐项验证成员；最新执行权限仍在调用点检查。
+- binding／dispatch 与 lineage 升为 v3，复用现有 member revision 保存 connection_ref，不改数据库结构。v2 完整定义的历史读取与执行校验分离：新增真实 publisher→freeze/seal→发现→压缩→冷 Saver 测试，恢复正文和原 provenance、拒绝旧执行、保留原件；不从旧语义 revision 推断连接。
+- `discovery-history-final-029` 为147 passed／95.70秒（正式 `integration-extension-discovery`，含真实 stdio）；`invoker-history-final-030` 为50 passed。受影响 Ruff通过；5个核心模块 Pyright零错误，Agent factory 的3条错误已由完整 HEAD archive 复现，新增诊断位置为空。证据含准确命令、指纹、raw和退出码，保存在 `out/tests/temp/mcp-execution-identity/artifacts/`；两个完整源码快照已核对全部4509个 tracked blob无变化后清理，只保留正式测试输出。
+- TODO（性能长尾／完整产品门）：正式 Session／消息入口的调试用例在当前源码与隔离 index 快照均未在120轮等待内完成，分别149.90／153.54秒失败；已执行 Skill、发现及多次真实 Node 调试，日志观察到多次 preparation 相隔约15–17秒。保留 `envelope-product-012`、`staged-product-env-022` 与对应正式输出，不延长业务断言或把局部动作成功当完整验收通过；后续需人工分析该工作负载的准备与恢复耗时。
+- 本次仅勾4.3；4.2／4.4的持久 ledger、HITL有界资格与正常替换排空，以及4.6和完整产品门继续未完成。

@@ -76,6 +76,7 @@ class SchemaServerCase:
         return create_extension_tool_invoker_tool(
             self.owner.get_tools(),
             catalog_binding_resolver=sealed_extension_catalog_binding_resolver(self.owner.binding_snapshot()),
+            target_resolver=self.owner.resolve_execution_target,
         )
 
 
@@ -185,6 +186,7 @@ async def test_top_level_contract_change_moves_identity_and_rejects_old_binding(
         assert current.resolve("mcp__schema__probe").schema_hash != old_hash
         invoker = create_extension_tool_invoker_tool(
             case.owner.get_tools(), catalog_binding_resolver=sealed_extension_catalog_binding_resolver(sealed),
+            target_resolver=case.owner.resolve_execution_target,
         )
         result = await invoker.ainvoke({
             "type": "tool_call", "id": "stale-contract", "name": invoker.name,
@@ -244,7 +246,6 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
             def catalog(owner):
                 return tool_catalog_from_activation(
                     frozen, lambda snapshot, binding: owner.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread)),
-                    model_call_id=activation["model_call_id"],
                 )
 
             resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
@@ -286,6 +287,7 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
             )
             invoker = create_extension_tool_invoker_tool(
                 case.owner.get_tools(), catalog_binding_resolver=sealed_extension_catalog_binding_resolver(dispatch.binding_ref),
+                target_resolver=case.owner.resolve_execution_target,
             )
             result = await invoker.ainvoke({
                 "type": "tool_call", "id": "invoke-after-search", "name": entry["invocation"]["entry_point"],
@@ -298,3 +300,31 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
                 assert catalog(cold) == catalog(saver)
         finally:
             await scope.close()
+
+
+async def test_real_stdio_restart_rejects_sealed_old_handle_and_executes_fresh_binding(
+    schema_server_case: SchemaServerCase,
+) -> None:
+    async with schema_server_case.started() as case:
+        sealed = case.owner.binding_snapshot()
+        invoker = case.invoker()
+        await case.owner.shutdown()
+        await case.owner.start()
+        fresh = case.owner.binding_snapshot()
+        assert fresh.catalog_revision == sealed.catalog_revision
+        assert fresh.resolve("mcp__schema__probe").schema_hash == sealed.resolve("mcp__schema__probe").schema_hash
+        rejected = await invoker.ainvoke({
+            "type": "tool_call", "id": "old-connection", "name": invoker.name,
+            "args": {"tool_name": "mcp__schema__probe", "arguments": {"text": "旧调用"}},
+        })
+        assert isinstance(rejected, ToolMessage)
+        assert rejected.tool_call_id == "old-connection" and rejected.status == "error"
+        assert "原连接" in rejected.content
+        assert case.received() == [], "旧调用不能发送到新进程"
+        accepted = await case.invoker().ainvoke({
+            "type": "tool_call", "id": "new-connection", "name": invoker.name,
+            "args": {"tool_name": "mcp__schema__probe", "arguments": {"text": "新调用"}},
+        })
+        assert isinstance(accepted, ToolMessage)
+        assert accepted.tool_call_id == "new-connection" and accepted.status == "success"
+        assert case.received() == [{"name": "probe", "arguments": {"text": "新调用"}}]

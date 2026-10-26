@@ -195,7 +195,7 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     fingerprints = {_binding_fingerprint(action) for action in audited}
     binding_identities = {item[:5] for item in fingerprints}
     assert len(binding_identities) == 1
-    assert all(item[0].startswith("ext-catalog:v2:") for item in fingerprints)
+    assert all(item[0].startswith("ext-catalog:v3:") for item in fingerprints)
     assert all(item[1].startswith("sha256:") for item in fingerprints)
     assert all(item[2].startswith("sha256:") for item in fingerprints)
     assert all(item[5].startswith("sha256:") for item in fingerprints)

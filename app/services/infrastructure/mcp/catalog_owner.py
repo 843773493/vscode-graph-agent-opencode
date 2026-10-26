@@ -31,6 +31,7 @@ from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
@@ -39,8 +40,11 @@ from app.services.infrastructure.mcp.config import (
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
+    ExtensionTargetBinding,
     ExtensionTargetBindingInput,
+    ExtensionTargetResolutionError,
     build_extension_catalog_binding,
+    extension_schema_hash,
     payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
@@ -180,6 +184,7 @@ def _adapt_server_tools(
     server_id: str,
     remote_tools: list[BaseTool],
     *,
+    connection_ref: str,
     foreign_tool_ids: set[str],
 ) -> tuple[dict[str, BaseTool], tuple[McpToolDescriptor, ...]]:
     """把远端工具适配为带 server 命名空间的 LangChain 工具与目录描述。"""
@@ -199,6 +204,7 @@ def _adapt_server_tools(
             **dict(remote_tool.metadata or {}),
             "mcp_server_id": server_id,
             "mcp_remote_tool_name": remote_tool.name,
+            "mcp_connection_ref": connection_ref,
         }
         tools[tool_id] = remote_tool.model_copy(
             update={"name": tool_id, "metadata": metadata}
@@ -246,6 +252,7 @@ class McpCatalogOwner:
         # 目录 generation lease：revision 每实际推进一次单调 +1；unchanged 不推进。
         self._catalog_generation = 0
         self._connection_generation = 0
+        self._instance_id = create_uuid_hex(namespace="mcp-owner")
         self._runtimes: dict[str, McpServerRuntime] = {}
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
@@ -367,10 +374,13 @@ class McpCatalogOwner:
         self, capture: ResourceRegistryCapture,
     ) -> None:
         """拒绝损坏的 stale available；正常 unavailable 保留 Coordinator 边界等待。"""
+        publication = self._publication
+        current_members = {} if publication is None else {
+            member.member_id: member for member in publication.binding_ref.members
+        }
         for snapshot in capture.snapshots:
             if snapshot.resource_kind != "mcp_tool_catalog" or not snapshot.available:
                 continue
-            publication = self._publication
             owner_revision = dict(snapshot.source_lineage).get("mcp-owner-catalog:v1")
             if (
                 not self._started
@@ -378,6 +388,8 @@ class McpCatalogOwner:
                 or publication.status != "available"
                 or snapshot.generation != publication.binding_ref.generation
                 or owner_revision != publication.binding_ref.catalog_revision
+                or any(member.member_kind == "mcp" and current_members.get(member.member_id) != member
+                       for member in snapshot.members)
             ):
                 raise McpCatalogError(
                     "MCP Registry available snapshot 与唯一 Owner publication 不一致: "
@@ -416,6 +428,29 @@ class McpCatalogOwner:
 
     def get_tools(self) -> list[BaseTool]:
         return list(self.publication_snapshot().tools.values())
+
+    def resolve_execution_target(self, binding: ExtensionTargetBinding) -> BaseTool:
+        """只按封存连接及 schema 解析；新同名工具绝不能接管旧调用。"""
+        # TODO(4.2/4.4): 接入调用资格及账本后，在有界排空期保留原 handle；
+        # 当前原连接关闭即明确拒绝，不能用新同名连接补齐历史执行。
+        with self._publication_lock:
+            runtime = self._runtimes.get(binding.server_id or "")
+            target = self._tools_by_id.get(binding.target_id)
+            if (binding.origin != "mcp" or not self._started or runtime is None
+                    or not runtime.running or target is None
+                    or binding.connection_ref != self._connection_ref(runtime)
+                    or (target.metadata or {}).get("mcp_connection_ref") != binding.connection_ref):
+                raise ExtensionTargetResolutionError(
+                    f"sealed target 的原连接执行 handle 已不可用: {binding.target_id}"
+                )
+            if extension_schema_hash(export_model_tool_json_schema(target)) != binding.schema_hash:
+                raise ExtensionTargetResolutionError(
+                    f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
+                )
+            return target
+
+    def _connection_ref(self, runtime: McpServerRuntime) -> str:
+        return f"mcp-connection:v1:{self._instance_id}:{runtime.generation}"
 
     def get_tool_ids(self) -> frozenset[str]:
         return frozenset(self.publication_snapshot().tools)
@@ -562,6 +597,7 @@ class McpCatalogOwner:
                         failed_server_id = server_id
                         server_tools, descriptors = _adapt_server_tools(
                             server_id, remote_by_server[server_id],
+                            connection_ref=self._connection_ref(self._runtimes[server_id]),
                             foreign_tool_ids=set(candidate_tools),
                         )
                         candidate_tools.update(server_tools)
@@ -671,6 +707,7 @@ class McpCatalogOwner:
                     ExtensionTargetBindingInput(
                         target_id=descriptor.tool_id, origin="mcp",
                         server_id=descriptor.server_id,
+                        connection_ref=self._connection_ref(self._runtimes[descriptor.server_id]),
                         input_schema=export_model_tool_json_schema(candidate_tools[descriptor.tool_id]),
                     )
                     for descriptor in descriptors

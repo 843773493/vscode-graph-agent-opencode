@@ -53,7 +53,6 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
 )
-from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import (
     ToolMetadata,
     ToolPolicyResolver,
@@ -106,8 +105,8 @@ from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
+    ExtensionTargetBinding,
     ExtensionTargetResolutionError,
-    extension_schema_hash,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
@@ -788,7 +787,7 @@ def create_my_deep_agent(
         skill_snapshot_resolver = resolve_skill_snapshot
 
         def discovery_catalog_resolver() -> FrozenToolCatalog:
-            snapshot, model_call_id = checkpointer.load_tool_call_resource_activation(
+            snapshot, _model_call_id = checkpointer.load_tool_call_resource_activation(
                 session_id, thread_id=thread_id,
                 tool_call_id=tool_invocation_context.require_tool_call_id(),
                 model_call_id=tool_invocation_context.require_model_call_id(),
@@ -796,7 +795,7 @@ def create_my_deep_agent(
             return tool_catalog_from_activation(
                 snapshot, lambda frozen, binding: checkpointer.read_resource_activation_payload(
                     frozen, binding, storage_owner=(session_id, thread_id),
-                ), model_call_id=model_call_id,
+                ),
             )
 
         def resolve_catalog():
@@ -806,18 +805,17 @@ def create_my_deep_agent(
                 model_call_id=tool_invocation_context.require_model_call_id(),
             ).binding_ref
 
-        initial_targets = {tool.name: tool for tool in extension_tools}
+        local_targets = {tool.name: tool for tool in custom_tools}
 
-        def resolve_target(binding):
-            initial = initial_targets.get(binding.target_id)
-            if initial is not None and extension_schema_hash(export_model_tool_json_schema(initial)) == binding.schema_hash:
-                return initial
-            current = mcp_catalog_owner.publication_snapshot().tools.get(binding.target_id)
-            if current is None or extension_schema_hash(export_model_tool_json_schema(current)) != binding.schema_hash:
+        def resolve_target(binding: ExtensionTargetBinding) -> BaseTool:
+            if binding.origin == "mcp":
+                return mcp_catalog_owner.resolve_execution_target(binding)
+            target = local_targets.get(binding.target_id)
+            if target is None:
                 raise ExtensionTargetResolutionError(
-                    f"sealed target 缺少匹配 schema 的执行 handle: {binding.target_id}"
+                    f"sealed target 缺少本地执行注册: {binding.target_id}"
                 )
-            return current
+            return target
 
         target_resolver = resolve_target
         permission_check = enabled_extension

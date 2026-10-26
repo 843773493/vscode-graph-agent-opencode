@@ -99,6 +99,7 @@ def _dispatch(
                 target_id=TARGET_ID,
                 origin="mcp",
                 server_id="mini",
+                connection_ref="mcp-connection:v1:" + "a" * 32 + ":1",
                 input_schema={"type": "object", "properties": args if args is not None else {"text": {"type": "string"}}},
             )
         ],
@@ -218,7 +219,7 @@ def test_member_schema_change_moves_catalog_and_dispatch_hash() -> None:
     assert replace(base_member, schema_hash=changed_member.schema_hash) == changed_member
     assert base.binding_ref.catalog_revision == schema_changed.binding_ref.catalog_revision
     assert base.binding_ref.generation == schema_changed.binding_ref.generation
-    assert base.binding_ref.binding_id == schema_changed.binding_ref.binding_id
+    assert base.binding_ref.binding_id != schema_changed.binding_ref.binding_id
     assert base_member.schema_hash != changed_member.schema_hash
 
     base_catalog_preimage = base.binding_ref.binding_preimage()
@@ -227,6 +228,7 @@ def test_member_schema_change_moves_catalog_and_dispatch_hash() -> None:
     assert changed_catalog_preimage["members"] == [changed_member.to_dict()]
     assert {
         **base_catalog_preimage,
+        "binding_id": schema_changed.binding_ref.binding_id,
         "members": [changed_member.to_dict()],
     } == changed_catalog_preimage
     assert base.binding_ref.binding_hash != schema_changed.binding_ref.binding_hash
@@ -294,10 +296,11 @@ def test_inner_catalog_change_does_not_move_plan_hash() -> None:
     assert tool_ref.content_hash == sha256_jcs(tool_ref.manifest_preimage())
 
 
-def test_legacy_binding_cannot_be_reinterpreted_as_full_schema_binding() -> None:
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_legacy_binding_cannot_be_reinterpreted_as_full_schema_binding(version: str) -> None:
     dispatch = _dispatch(catalog_revision="sha256:" + "a" * 64, guidance_revision="sha256:" + "b" * 64)
     legacy = dispatch.to_dict()
-    legacy["binding_id"] = str(legacy["binding_id"]).replace("ext-catalog:v2:", "ext-catalog:v1:")
+    legacy["binding_id"] = str(legacy["binding_id"]).replace("ext-catalog:v3:", f"ext-catalog:{version}:")
     original_bytes = canonical_json_bytes(legacy)
     with pytest.raises(ExtensionCatalogUnavailableError, match="历史记录可读"):
         ExtensionDispatchBindingRef.from_sealed_snapshot(legacy)

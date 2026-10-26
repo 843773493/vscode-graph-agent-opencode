@@ -706,7 +706,7 @@ async def test_custom_tool_invoker_rechecks_effective_execution_policy(
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_invoker_rejects_unknown_envelope_and_target_arguments(
+async def test_custom_tool_invoker_preserves_local_extra_policy_and_rejects_unknown_envelope_arguments(
     custom_tool_factory_context: CustomToolFactoryContext,
 ):
     custom_tool = create_test_tool_2(custom_tool_factory_context)
@@ -724,7 +724,9 @@ async def test_custom_tool_invoker_rejects_unknown_envelope_and_target_arguments
         }
     )
     assert isinstance(result, str)
-    assert result == "扩展工具 test_tool_2 包含未知参数: unexpected"
+    # 本地模型的默认 extra=ignore 必须保持；信封自身仍拒绝后端注入字段。
+    assert result == "4568"
+    assert await custom_tool.ainvoke({"unexpected": True}) == result
 
     with pytest.raises(ValidationError):
         invoker.args_schema.model_validate(
@@ -773,7 +775,7 @@ async def test_custom_tool_invoker_executes_mcp_style_target_and_validates_schem
         return f"status:{value}"
 
     mcp_status = mcp_status.model_copy(
-        update={"metadata": {"mcp_server_id": "tui-mcp"}}
+        update={"metadata": {"mcp_server_id": "tui-mcp", "mcp_connection_ref": "mcp-connection:v1:" + "a" * 32 + ":1"}}
     )
     invoker = create_extension_tool_invoker_tool(
         [mcp_status],

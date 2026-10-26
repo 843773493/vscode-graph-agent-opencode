@@ -25,6 +25,7 @@ from app.services.infrastructure.mcp import (
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_BINDING_SCHEMA,
+    ExtensionCatalogUnavailableError,
 )
 from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory as _FakeSessionFactory,
@@ -101,11 +102,13 @@ async def test_binding_snapshot_frozen_and_verifiable(
         ref = owner.binding_snapshot()
         assert ref.catalog_revision == owner.catalog_revision()
         assert ref.generation == owner.catalog_generation() == 1
-        assert ref.binding_id == f"ext-catalog:v2:1:{ref.catalog_revision}"
+        assert ref.binding_id == f"ext-catalog:v3:1:{ref.catalog_revision}:{sha256_jcs([member.to_dict() for member in ref.members])}"
         assert set(ref.targets) == {"mcp__mini__echo"}
         target = ref.targets["mcp__mini__echo"]
         assert target.origin == "mcp"
         assert target.server_id == "mini"
+        assert target.connection_ref == ref.members[0].revision
+        assert target.connection_ref == owner.get_tools()[0].metadata["mcp_connection_ref"]
         assert target.schema_hash.startswith("sha256:")
         # 独立按完整输入契约重算，不能用 properties 摘要冒充身份。
         assert target.schema_hash == (
@@ -251,7 +254,8 @@ async def test_cross_server_same_remote_name_uses_declared_namespace(
 
 def test_builder_rejects_duplicate_targets_and_invalid_inputs() -> None:
     base = ExtensionTargetBindingInput(
-        target_id="mcp__mini__echo", origin="mcp", input_schema={"type": "object", "properties": {"text": {}}}, server_id="mini"
+        target_id="mcp__mini__echo", origin="mcp", input_schema={"type": "object", "properties": {"text": {}}}, server_id="mini",
+        connection_ref="mcp-connection:v1:" + "a" * 32 + ":1",
     )
     with pytest.raises(ExtensionTargetConflictError):
         build_extension_catalog_binding(
@@ -270,4 +274,67 @@ def test_builder_rejects_duplicate_targets_and_invalid_inputs() -> None:
             catalog_revision="not-a-hash",
             generation=1,
             targets=[base],
+        )
+
+
+async def test_restart_same_schema_never_resolves_old_connection(
+    tmp_path: Path, event_channel_service: EventChannelService,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = await _started_owner(tmp_path, factory, event_channel_service)
+    try:
+        sealed = owner.binding_snapshot()
+        old_target = sealed.resolve("mcp__mini__echo")
+        assert owner.resolve_execution_target(old_target) is owner.get_tools()[0]
+        await owner.shutdown()
+        with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
+            owner.resolve_execution_target(old_target)
+        await owner.start()
+        fresh = owner.binding_snapshot()
+        fresh_target = fresh.resolve(old_target.target_id)
+        assert fresh.catalog_revision == sealed.catalog_revision
+        assert fresh_target.schema_hash == old_target.schema_hash
+        assert fresh_target.connection_ref != old_target.connection_ref
+        assert fresh.binding_id != sealed.binding_id
+        assert fresh.binding_hash != sealed.binding_hash
+        with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
+            owner.resolve_execution_target(old_target)
+        assert owner.resolve_execution_target(fresh_target) is owner.get_tools()[0]
+    finally:
+        await owner.shutdown()
+
+
+async def test_same_server_and_generation_are_isolated_between_owner_instances(
+    tmp_path: Path, event_channel_service: EventChannelService,
+) -> None:
+    owners = [await _started_owner(
+        tmp_path / name, _FakeSessionFactory(initial_tools={"mini": ["echo"]}), event_channel_service,
+    ) for name in ("workspace-a", "workspace-b")]
+    try:
+        left, right = (owner.binding_snapshot() for owner in owners)
+        assert left.catalog_revision == right.catalog_revision
+        assert left.generation == right.generation == 1
+        assert left.binding_id != right.binding_id
+        assert left.resolve("mcp__mini__echo").connection_ref != right.resolve("mcp__mini__echo").connection_ref
+        with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
+            owners[1].resolve_execution_target(left.resolve("mcp__mini__echo"))
+        assert owners[0].resolve_execution_target(left.resolve("mcp__mini__echo")) is owners[0].get_tools()[0]
+    finally:
+        for owner in owners:
+            await owner.shutdown()
+
+
+@pytest.mark.parametrize("connection_ref", [None, "sha256:" + "a" * 64,
+    "mcp-connection:v1:" + "a" * 32 + ":0",
+    "mcp-connection:v1:" + "a" * 32 + ":01",
+    "mcp-connection:v1:" + "a" * 32 + ":１",
+])
+def test_mcp_binding_requires_exact_connection_identity(connection_ref: str | None) -> None:
+    with pytest.raises(ExtensionCatalogUnavailableError, match="精确连接身份"):
+        build_extension_catalog_binding(
+            catalog_revision="sha256:" + "a" * 64, generation=1,
+            targets=[ExtensionTargetBindingInput(
+                target_id="mcp__mini__echo", origin="mcp", server_id="mini",
+                input_schema={"type": "object"}, connection_ref=connection_ref,
+            )],
         )

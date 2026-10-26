@@ -45,7 +45,7 @@ def discovery_history(guidance_prepare, registry_db, discovery_tool_factory):
         wire, activation = guidance_prepare("recovery-start", boundary=boundary)
         snapshot = wire["snapshot"]
         catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
-            frozen, binding, storage_owner=(session, thread)), model_call_id=snapshot.model_call_id)
+            frozen, binding, storage_owner=(session, thread)))
         resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
         tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda frozen: {
             definition.metadata.tool_id: resolver.resolve(definition.metadata) for definition in frozen.definitions})
@@ -136,6 +136,49 @@ async def test_restore_after_restart_keeps_original_frozen_provenance(discovery_
         assert restored.definition is not None
         assert restored.definition.provenance.model_dump() == entry["provenance"]
         assert restored.definition.input_schema == entry["input_schema"]
+
+
+@pytest.mark.parametrize("catalog_runtime", ["v2"], indirect=True)
+async def test_v2_history_restores_definition_after_compaction_but_cannot_dispatch(
+    discovery_history, guidance_prepare, registry_db, catalog_runtime,
+):
+    from app.domain.itemized.hashing import canonical_json_bytes
+    from app.services.infrastructure.mcp import catalog_activation
+    from app.services.infrastructure.mcp.extension_catalog import (
+        ExtensionCatalogUnavailableError,
+    )
+    from app.services.infrastructure.rollout_context.checkpoint.saver import (
+        RolloutCheckpointSaver,
+    )
+    del catalog_runtime
+    entry, _scope, _connection = await discovery_history(target="mcp__mini__echo", compact=True)
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+
+    original = saver.read_resource_activation_snapshot(
+        session, thread_id=thread, activation_snapshot_id=entry["provenance"]["activation_snapshot_id"],
+    )
+    model_call_id = original.model_call_id
+    assert model_call_id is not None
+    before = canonical_json_bytes(original.to_dict())
+    parent = next(binding for binding in original.bindings
+                  if binding.resource_id == catalog_activation.MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert "extension-catalog:v2" in dict(parent.source_lineage_ref.sources)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        wire, _activation = guidance_prepare("recovery-v2-cold", context_owner=cold)
+        restored, = [value for value, _ in definition_source_values(wire["snapshot"])]
+        assert restored.definition is not None
+        assert restored.definition.input_schema == entry["input_schema"]
+        assert restored.definition.provenance.model_dump() == entry["provenance"]
+        with pytest.raises(ExtensionCatalogUnavailableError, match="历史可读但不可恢复执行"):
+            catalog_activation.extension_dispatch_from_activation(
+                snapshot=original, binding=parent, model_call_id=model_call_id,
+                payload=cold.read_resource_activation_payload(original, parent, storage_owner=(session, thread)),
+            )
+        retained, _call = cold.load_tool_call_resource_activation(
+            session, thread_id=thread, tool_call_id="discovery-call", model_call_id=model_call_id,
+        )
+        assert canonical_json_bytes(retained.to_dict()) == before
 
 
 async def test_catalog_change_supplies_full_replacement_and_removal(

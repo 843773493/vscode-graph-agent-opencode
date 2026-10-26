@@ -14,6 +14,7 @@
 - 扩展工具的有界分组导航和显式 `model_visible` 完整定义指引，以及经 `McpCatalogOwner` 的唯一发布回调，把同 revision 的指引父行、typed members 与完整定义 facets 原子发布到既有 ResourceRegistry；父行正文不混入完整目录或 provenance。
 - `tool_definitions.py` 只从原 activation 恢复完整定义；`tool_search.py` 负责确定性匹配、逐项结果与有界分页，不访问当前网络目录或执行候选。定义正文和来源沿现有资源 body store/Saver 保存，不增设 schema 库。
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
+- MCP typed member 的 revision 保存 Owner 实例与连接代际组成的精确 connection_ref；目录语义 revision 独立保存。Agent 运行时只经 Owner 解析执行目标，不捕获初始 MCP 工具，也不按同名同 schema 迁投新连接。
 
 # 不可修改内容
 
@@ -33,7 +34,7 @@
 - MCP 工具名称必须带 Server 命名空间，禁止同名工具静默覆盖。
 - 目录 relist 必须完整读取并验证；连续 relist payload 不变时不得推进 revision；增删改发布新 immutable revision，删除以 tombstone 事件标记；目录为空也发布固定 envelope/revision。
 - 目录 generation 只在 revision 实际推进时递增；binding ref 的 binding_id/binding_hash 必须可重算核对。
-- 完整公开 schema（含 required、additionalProperties、组合与本地引用）经统一导出后用于目录、guidance、binding 和信封校验；properties 摘要只作展示。v2 binding 和 lineage 不可由 v1 历史指纹推导执行资格；历史读取保留原件，旧契约恢复执行必须明确拒绝。
+- 完整公开 schema（含 required、additionalProperties、组合与本地引用）经统一导出后用于目录、guidance、binding 和信封校验；properties 摘要只作展示。v3 binding 和 lineage 同时封存完整 schema 与连接身份，不可由 v1/v2 历史指纹推导执行资格；历史读取保留原件，旧契约恢复执行必须明确拒绝。
 - `binding_hash` 与 `extension_dispatch_binding_hash` 必须复用 domain 的 `sha256_jcs` JCS token（`sha256:jcs:v1:<64hex>`），不得自造第二套 canonical 编码或摘要前缀。
 - 指引只从已验证目录派生并保持有界确定性；外部 description 是不可信数据；binding 与指引必须同 revision 原子冻结，relist/派生失败 fail closed，不半发布。
 - 导航、自动完整定义与搜索使用同一 ToolMetadata 和完整有效策略；软隐藏可搜索，硬隐藏与执行禁用不投递定义或导航。工具选择提交后在原 Owner 发布锁内重发指引与 members，不联网刷新；订阅随 Agent generation 的 LifetimeScope 释放。

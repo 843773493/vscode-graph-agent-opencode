@@ -68,22 +68,20 @@ class FrozenToolCatalog:
 def tool_catalog_from_activation(
     snapshot: ResourceActivationSnapshotRef,
     read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],
-    *, model_call_id: str,
 ) -> FrozenToolCatalog:
     """只解析调用所属快照；缺失历史定义时拒绝，不从 live 同名工具补齐。"""
     # 发布模块依赖本模块，读取路径延迟引用以免形成模块初始化环。
     from app.services.infrastructure.mcp.catalog_activation import (
         MCP_TOOL_CATALOG_RESOURCE_ID,
-        extension_dispatch_from_activation,
+        frozen_extension_catalog_revision,
     )
 
     parents = tuple(binding for binding in snapshot.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     if len(parents) != 1:
         raise ExtensionCatalogUnavailableError("冻结扩展目录父行缺失或不唯一")
     parent = parents[0]
-    dispatch = extension_dispatch_from_activation(
+    _lineage_id, revision = frozen_extension_catalog_revision(
         snapshot=snapshot, binding=parent, payload=read_payload(snapshot, parent),
-        model_call_id=model_call_id,
     )
     facets = {binding.resource_id: binding for binding in snapshot.bindings
               if binding.resource_kind == "mcp_tool_catalog" and binding.facet == DEFINITION_FACET}
@@ -108,4 +106,4 @@ def tool_catalog_from_activation(
             schema_hash=member.schema_hash, server_id=member.server_id, provenance=binding,
             _payload_json=canonical_json_bytes(payload),
         ))
-    return FrozenToolCatalog(dispatch.binding_ref.catalog_revision, snapshot.activation_snapshot_id, tuple(definitions))
+    return FrozenToolCatalog(revision, snapshot.activation_snapshot_id, tuple(definitions))

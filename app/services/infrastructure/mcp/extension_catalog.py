@@ -21,6 +21,7 @@ ref，执行点按最新权限校验并返回真实 paired result。binding ref 
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -39,12 +40,12 @@ EXTENSION_TOOL_ENVELOPE_IDENTITY = (
     "invoke_extension_tool@v1:tool_name:str+arguments:object"
 )
 
-_BINDING_ID_PREFIX = "ext-catalog:v2"
-EXTENSION_CATALOG_BINDING_SCHEMA = "extension-catalog-binding:v2"
+_BINDING_ID_PREFIX = "ext-catalog:v3"
+EXTENSION_CATALOG_BINDING_SCHEMA = "extension-catalog-binding:v3"
 # 独立 dispatch binding hash 的版本化 JCS preimage schema；它覆盖 catalog
 # semantic revision/hash、server generation 验证 ref、稳定 target/schema 集合、
 # 绑定指引 revision 与 activation policy revision，与 binding_hash 分离。
-EXTENSION_DISPATCH_BINDING_SCHEMA = "extension-dispatch-binding:v2"
+EXTENSION_DISPATCH_BINDING_SCHEMA = "extension-dispatch-binding:v3"
 # 历史 binding 丢失时的显式错误 code；调用方必须拒绝 dispatch，不得回退当前
 # MCP 目录、当前同名 target 或空目录。
 EXTENSION_CATALOG_UNAVAILABLE_CODE = "extension-catalog-unavailable"
@@ -127,6 +128,7 @@ class ExtensionTargetBinding:
     origin: Literal["mcp", "custom"]
     schema_hash: str
     server_id: str | None = None
+    connection_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.target_id:
@@ -139,13 +141,32 @@ class ExtensionTargetBinding:
             raise ValueError("MCP target 必须携带 server_id")
         if self.origin == "custom" and self.server_id is not None:
             raise ValueError("custom target 不得携带 server_id")
+        if self.origin == "mcp":
+            _validate_connection_ref(self.connection_ref)
+        elif self.connection_ref is not None:
+            raise ValueError("custom target 不得携带 connection_ref")
+
+
+def _validate_connection_ref(value: str | None) -> str:
+    """执行身份包含 Owner 实例和连接代际；不从历史语义 revision 推断。"""
+    if not isinstance(value, str) or re.fullmatch(r"mcp-connection:v1:[0-9a-f]{32}:[1-9][0-9]*", value) is None:
+        raise ExtensionCatalogUnavailableError("MCP target 缺少可核对的精确连接身份；历史定义可读，不能恢复执行")
+    return value
+
+
+def _binding_id(
+    generation: int, catalog_revision: str, members: tuple[ResourceMemberBinding, ...],
+) -> str:
+    # 相同 schema 的重连保持语义 revision，但不能复用旧 binding identity。
+    member_hash = sha256_jcs([member.to_dict() for member in sorted(members, key=lambda member: member.member_id)])
+    return f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}:{member_hash}"
 
 
 @dataclass(frozen=True, slots=True)
 class ExtensionCatalogBindingRef:
     """一次 model-call preparation 封存的扩展目录 binding。
 
-    binding_id 由 generation 与 catalog revision 确定性导出；binding_hash
+    binding_id 由 generation、catalog revision 与完整 members 确定性导出；binding_hash
     以 ``sha256:jcs:v1`` 覆盖本 ref 的全部字段并可重算核对。目录内部 target
     增删改或权限变化不改变已封存 ref；只有 Provider 信封形状变化才更换
     provider_binding_identity 并进入 hard rebase 合同。
@@ -165,10 +186,6 @@ class ExtensionCatalogBindingRef:
             raise ValueError(
                 "ExtensionCatalogBindingRef.catalog_revision 必须是 sha256 revision"
             )
-        if self.binding_id != f"{_BINDING_ID_PREFIX}:{self.generation}:{self.catalog_revision}":
-            raise ExtensionCatalogUnavailableError(
-                "binding 契约版本不支持恢复执行；历史记录可读，必须从新模型调用获取完整定义"
-            )
         if self.generation < 1:
             raise ValueError("ExtensionCatalogBindingRef.generation 必须 >= 1")
         if not self.provider_binding_identity:
@@ -179,9 +196,16 @@ class ExtensionCatalogBindingRef:
             isinstance(member, ResourceMemberBinding) for member in self.members
         ):
             raise TypeError("ExtensionCatalogBindingRef.members 必须是领域成员元组")
+        if self.binding_id != _binding_id(self.generation, self.catalog_revision, self.members):
+            raise ExtensionCatalogUnavailableError(
+                "binding 契约版本不支持恢复执行；历史记录可读，必须从新模型调用获取完整定义"
+            )
         member_ids = [member.member_id for member in self.members]
         if len(member_ids) != len(set(member_ids)):
             raise ExtensionTargetConflictError("extension catalog member_id 必须唯一")
+        for member in self.members:
+            if member.member_kind == "mcp":
+                _validate_connection_ref(member.revision)
         object.__setattr__(
             self, "members", tuple(sorted(self.members, key=lambda member: member.member_id)),
         )
@@ -201,6 +225,7 @@ class ExtensionCatalogBindingRef:
             member.member_id: ExtensionTargetBinding(
                 target_id=member.member_id, origin=member.member_kind,
                 schema_hash=member.schema_hash, server_id=member.server_id,
+                connection_ref=member.revision if member.member_kind == "mcp" else None,
             )
             for member in self.members
         })
@@ -235,6 +260,7 @@ class ExtensionTargetBindingInput:
     origin: Literal["mcp", "custom"]
     input_schema: Mapping[str, object]
     server_id: str | None = None
+    connection_ref: str | None = None
 
 
 def build_extension_catalog_binding(
@@ -247,6 +273,9 @@ def build_extension_catalog_binding(
     """从已验证目录条目构建 sealed binding；同名冲突发布前显式拒绝。"""
     entries: dict[str, ResourceMemberBinding] = {}
     for item in targets:
+        revision = _validate_connection_ref(item.connection_ref) if item.origin == "mcp" else catalog_revision
+        if item.origin != "mcp" and item.connection_ref is not None:
+            raise ValueError("custom target 不得携带 connection_ref")
         if item.target_id in entries:
             raise ExtensionTargetConflictError(
                 "扩展 target 公共名称冲突，发布前必须显式拒绝: "
@@ -257,10 +286,11 @@ def build_extension_catalog_binding(
             member_kind=item.origin,
             schema_hash=extension_schema_hash(item.input_schema),
             server_id=item.server_id,
-            revision=catalog_revision,
+            # typed member revision 表达实际可执行成员版本；目录语义另有独立字段。
+            revision=revision,
         )
     return ExtensionCatalogBindingRef(
-        binding_id=f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}",
+        binding_id=_binding_id(generation, catalog_revision, tuple(entries.values())),
         catalog_revision=catalog_revision,
         generation=generation,
         provider_binding_identity=provider_binding_identity,
@@ -275,7 +305,7 @@ def extension_catalog_binding_from_members(
 ) -> ExtensionCatalogBindingRef:
     """typed members 是唯一集合；restore 不读取 live tools 或重建 schema。"""
     return ExtensionCatalogBindingRef(
-        binding_id=f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}",
+        binding_id=_binding_id(generation, catalog_revision, members),
         catalog_revision=catalog_revision, generation=generation,
         provider_binding_identity=provider_binding_identity, members=members,
     )

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Sequence
-from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, cast
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
@@ -87,14 +87,13 @@ def seal_extension_catalog_binding_from_tools(
     """纯工具面检查与独立 unit 构建；真实 runtime 使用 Saver 的 durable resolver。"""
     entries: list[ExtensionTargetBindingInput] = []
     for tool_item in sorted(tools, key=lambda item: item.name):
-        metadata = getattr(tool_item, "metadata", None)
-        server_id = (
-            metadata.get("mcp_server_id") if isinstance(metadata, dict) else None
-        )
+        metadata = tool_item.metadata or {}
+        server_id = metadata.get("mcp_server_id")
         entries.append(
             ExtensionTargetBindingInput(
                 target_id=tool_item.name, origin="mcp" if server_id else "custom",
                 server_id=server_id, input_schema=export_model_tool_json_schema(tool_item),
+                connection_ref=metadata.get("mcp_connection_ref") if server_id else None,
             )
         )
     binding = build_extension_catalog_binding(
@@ -138,6 +137,10 @@ def _assert_sealed_target_matches_registration(
             f"registered_origin={registered_origin!r} "
             f"registered_server_id={registered_server_id!r}"
         )
+    if sealed_target.connection_ref != (metadata or {}).get("mcp_connection_ref"):
+        raise ExtensionTargetResolutionError(
+            f"sealed target 与可执行注册连接身份不一致: tool_name={sealed_target.target_id!r}"
+        )
 
 
 async def _invoke_target_tool_without_nested_callbacks(
@@ -148,7 +151,7 @@ async def _invoke_target_tool_without_nested_callbacks(
 
     coroutine = getattr(target_tool, "coroutine", None)
     if callable(coroutine):
-        return await coroutine(**call_arguments)
+        return await cast(Awaitable[Any], coroutine(**call_arguments))
 
     func = getattr(target_tool, "func", None)
     if callable(func):
@@ -171,10 +174,13 @@ def create_extension_tool_invoker_tool(
 ) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
+    tool_names: set[str] = set()
     for custom_tool in custom_tools:
-        if custom_tool.name in tools_by_name:
+        if custom_tool.name in tool_names:
             raise ValueError(f"重复的扩展工具: {custom_tool.name}")
-        tools_by_name[custom_tool.name] = custom_tool
+        tool_names.add(custom_tool.name)
+        if target_resolver is None:
+            tools_by_name[custom_tool.name] = custom_tool
     if catalog_binding_resolver is None:
         raise ValueError(
             "extension invoker 必须显式提供 sealed catalog binding resolver；"

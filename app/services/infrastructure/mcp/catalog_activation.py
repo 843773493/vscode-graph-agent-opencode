@@ -51,7 +51,7 @@ MCP_TOOL_CATALOG_RESOURCE_ID = "mcp-tool-catalog:v1"
 MCP_GUIDANCE_SOURCE_ID = "mcp-tool-guidance:v1"
 MCP_OWNER_CATALOG_SOURCE_ID = "mcp-owner-catalog:v1"
 CUSTOM_CATALOG_SOURCE_ID = "custom-extension-catalog:v1"
-EXTENSION_CATALOG_SOURCE_ID = "extension-catalog:v2"
+EXTENSION_CATALOG_SOURCE_ID = "extension-catalog:v3"
 
 
 def mcp_guidance_content(payload: object) -> str:
@@ -185,21 +185,13 @@ def extension_dispatch_from_activation(
     payload: object, model_call_id: str,
 ) -> ExtensionDispatchBindingRef:
     """只由 Saver 恢复的冻结父行/typed members/lineage 重建独立 dispatch 值。"""
-    mcp_guidance_content(payload)
-    if binding.resource_id != MCP_TOOL_CATALOG_RESOURCE_ID or binding.resource_kind != "mcp_tool_catalog" or binding not in snapshot.bindings:
-        raise ExtensionCatalogUnavailableError("sealed activation 缺少唯一 mcp_tool_catalog 父行")
-    if binding.source_lineage_ref is None:
-        raise ExtensionCatalogUnavailableError("sealed extension catalog lineage 缺失")
-    revisions = tuple(
-        revision for identity, revision in binding.source_lineage_ref.sources
-        if identity == EXTENSION_CATALOG_SOURCE_ID
-    )
-    if len(revisions) != 1:
+    lineage_id, revision = frozen_extension_catalog_revision(snapshot=snapshot, binding=binding, payload=payload)
+    if lineage_id != EXTENSION_CATALOG_SOURCE_ID:
         raise ExtensionCatalogUnavailableError(
-            "sealed extension catalog 缺少完整 schema v2 来源；历史可读但不可恢复执行，需新模型调用"
+            "sealed extension catalog 缺少精确执行身份 v3 来源；历史可读但不可恢复执行，需新模型调用"
         )
     catalog = extension_catalog_binding_from_members(
-        catalog_revision=revisions[0], generation=binding.captured_registry_generation,
+        catalog_revision=revision, generation=binding.captured_registry_generation,
         members=binding.members,
     )
     return ExtensionDispatchBindingRef(
@@ -212,10 +204,32 @@ def extension_dispatch_from_activation(
     )
 
 
+def frozen_extension_catalog_revision(
+    *, snapshot: ResourceActivationSnapshotRef, binding: ResourceProvenanceRef, payload: object,
+) -> tuple[str, str]:
+    """完整定义的只读历史合同不要求旧 socket 仍然可执行。"""
+    mcp_guidance_content(payload)
+    if binding.resource_id != MCP_TOOL_CATALOG_RESOURCE_ID or binding.resource_kind != "mcp_tool_catalog" or binding not in snapshot.bindings:
+        raise ExtensionCatalogUnavailableError("sealed activation 缺少唯一 mcp_tool_catalog 父行")
+    if binding.source_lineage_ref is None:
+        raise ExtensionCatalogUnavailableError("sealed extension catalog lineage 缺失")
+    # TODO: 历史 v2 完整 schema 继续沿唯一冻结读取链展示；只允许 v3 恢复执行。
+    revisions = tuple(
+        (identity, revision) for identity, revision in binding.source_lineage_ref.sources
+        if identity in {"extension-catalog:v2", EXTENSION_CATALOG_SOURCE_ID}
+    )
+    if len(revisions) != 1:
+        raise ExtensionCatalogUnavailableError(
+            "sealed extension catalog 缺少唯一完整 schema 来源"
+        )
+    return revisions[0]
+
+
 __all__ = [
     "MCP_GUIDANCE_SOURCE_ID",
     "MCP_TOOL_CATALOG_RESOURCE_ID",
     "McpCatalogResourcePublisher",
     "extension_dispatch_from_activation",
+    "frozen_extension_catalog_revision",
     "mcp_guidance_content",
 ]

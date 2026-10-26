@@ -181,6 +181,14 @@ Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 re
 
 ## Migration Plan
 
+### 精确连接执行身份切片的集成边界（2026-10-26）
+
+- MCP Owner 为每次连接生成包含 Owner 实例与单调连接代际的不可变 connection_ref，写入现有 typed member revision；目录语义 revision 和 catalog generation 仍仅反映完整定义变化。父目录与 definition facets 原子携带相同成员事实，沿原 activation／Saver 持久化，不增加表、writer 或第二份成员集合。
+- binding／dispatch preimage 和 lineage 升为 v3，binding ID 同时覆盖完整成员身份，防止同 schema、同目录代际的新 Owner 与旧封存身份碰撞。Provider ToolSet、实际 wire bytes、request_hash 及 prefix epoch 不因执行身份变化而改变；历史 v1/v2 原件继续可读，缺少精确连接身份时拒绝恢复执行，不从语义版本推导 socket。
+- 完整定义读取不再借构造 dispatch 验证历史；父行、lineage与facets沿同一只读校验恢复。v2完整定义仍用于历史查看和压缩后的恢复，v3才允许解析执行；恢复不改写历史快照，不以旧定义可读推导旧连接可调用。
+- Agent 删除 initial/live 两段 resolver。正式信封不再长期持有初始 MCP 工具，统一由 Owner 核对原连接、完整 schema 和实际运行状态，本地扩展仍走原本地注册；执行点继续读取最新独立权限。Registry 捕获同时核对当前成员身份，不能仅凭相同语义 revision／catalog generation 接受旧连接事实。
+- 本切片只完成精确解析与旧连接明确失败，不提前实现正常热替换的有界资格、HITL 排空或跨 execution 持久占用。这些继续由4.2／4.4及配置替换切片接入原 Owner 和 ExternalResourceLeaseLedger，不以本次拒绝旧连接代替完整替换合同。
+
 ### 有界导航与自动定义切片的集成边界（2026-10-26）
 
 - 删除旧 MCP 全量参数摘要 producer 及其公开符号；统一指引只给有限分组、数量与能力示例，用户显式开启可见性时才投递完整定义。自动定义直接使用同批 definition facet 的规范正文，硬隐藏和执行禁用同时约束导航与自动投递。
