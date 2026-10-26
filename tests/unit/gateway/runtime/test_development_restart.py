@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.gateway.runtime import development_restart
+from app.gateway.runtime import process_lifecycle
 from app.gateway.runtime.development_restart import (
     RESTART_DELAY_MS,
     resolve_development_restart_command,
@@ -69,7 +69,8 @@ def test_restart_process_uses_validated_command_and_platform_options(
     log_path = log_dir / "launcher/development-restart.log"
 
     with monkeypatch.context() as platform_patch:
-        platform_patch.setattr(development_restart, "os", SimpleNamespace(name=platform_name, environ=development_restart.os.environ))
+        platform_patch.setattr(process_lifecycle, "os", SimpleNamespace(name=platform_name, environ=process_lifecycle.os.environ))
+        platform_patch.setattr("app.gateway.runtime.process_logs.ProcessLogOwnership.bind_process", lambda *_: None)
         if platform_name == "nt":
             process_group_flag = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200
@@ -99,13 +100,15 @@ def test_restart_process_uses_validated_command_and_platform_options(
     assert isinstance(options, dict)
     assert options["cwd"] == command.working_directory
     assert options["stdin"] == subprocess.DEVNULL
-    assert options["stderr"] == subprocess.STDOUT
+    assert options["stderr"] is options["stdout"]
+    assert options["stdout"].closed
+    assert options["env"]["BOXTEAM_RUNTIME_LOG_SINK"]
     if platform_name == "nt":
         expected_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200) | getattr(
             subprocess, "DETACHED_PROCESS", 0x8
         )
         assert options["creationflags"] == expected_flags
-        assert "start_new_session" not in options
+        assert options["start_new_session"] is False
     else:
         assert options["start_new_session"] is True
-        assert "creationflags" not in options
+        assert options["creationflags"] == 0

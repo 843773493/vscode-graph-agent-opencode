@@ -70,3 +70,11 @@
 - 最终证据仍位于 `out/tests/temp/unify-product-runtime-logging/artifacts/`：`control-python-final-067` 49通过，`control-js-final-068` 193通过，`control-services-final-071` 为辅助服务完整 matrix（Node175／Bun383通过），`control-syntax-js-072` 8份JS语法检查通过。所有运行有进程外保护、原始输出、源码指纹与退出码。
 - `control-static-final-069` Ruff通过；`control-static-comparison-074.json` 使用完整HEAD归档比较Pyright，11条基线／11条当前，无新增。基线临时树与tar已删除，原始输出保留。未修改Web，不新增Web构建或Windows原生验证。
 - 当前5／22。2.4活动日志owner证明与冲突互斥、2.5完整日志去向诊断、跨域配置迁移及3.2起的候选应用／补偿仍待实现；不能将手动进程控制通过表述为全产品自动热更新完成。
+
+### 2.4 Gateway 托管日志归属切片（2026-10-26）
+
+- Backend、Terminal、Browser、SSH 隧道／转发和开发重启统一由现有启动入口登记日志归属，短临界区同时使用进程内锁与系统文件锁。打开时先核原写入者，控制器退出不释放存活子进程的归属，根退出仍核同组后代；交付中断明确拒绝重开。正常关闭先确认完整进程组退出、关闭父描述符，再释放归属。启动后登记失败会清理实际子进程，清理失败异常保留实际进程和日志句柄。
+- Gateway 交付冻结的文件身份，Python／Node 控制状态同时核实际 stdout/stderr 与当前路径的 device/inode；接管在既有健康／完整组核验后，通过原私有凭据取得证明，不重开或轮转文件。`log_sink=null` 只表示未取得这份证明，不能用它把 Launcher 的真实文件 sink 宣称为 stdout-only。
+- 最终定向 `ownership-python-final-085` 256通过；`ownership-js-078` 193通过；`ownership-real-launcher-final-086` 4通过，覆盖真实 Launcher 交接、受管 Backend／Terminal／Browser 的 PID、实例、revision 和文件身份保持，以及托管终端真实产品入口。原始输出、命令、源码指纹与进程外保护记录仍在既有临时证据根。
+- 扩大的 `ownership-python-077` 为323通过／5失败；完整 HEAD 归档 `ownership-baseline-079` 在相同5项断言复现失败，均为既有测试捕获 httpx INFO 后断言日志全空。本切片不改写这些预期。`ownership-static-final-082` Ruff通过；`ownership-static-comparison-087.json` 核Pyright基线30条／当前8条，无新增；剩余8条不宣称全绿。
+- 2.4仍未勾选：Launcher／detached 自身文件 sink 的同路径互斥与归属尚需迁齐。Windows 原生独占打开分支尚未实机验证；未修改Web页面，不新增Web构建。本切片不代表完整2.5诊断、配置跨域迁移或候选自动热应用完成，当前仍为5／22。

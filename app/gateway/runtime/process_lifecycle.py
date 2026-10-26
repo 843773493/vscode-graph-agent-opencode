@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -16,10 +17,20 @@ from app.gateway.runtime.process_groups import (
     _posix_group_is_alive,
     _wait_until_closed,
 )
+from app.gateway.runtime.process_logs import ProcessLogFile, ProcessLogOwnership
 
 logger = logging.getLogger(__name__)
 
 WindowsProcessStartTimesByPid = dict[int, float]
+
+
+class LoggedProcessCleanupError(RuntimeError):
+    """启动后的回收失败仍携带实际进程和日志句柄，不能仅剩一个 PID。"""
+
+    def __init__(self, process: subprocess.Popen[str], log_file: TextIO):
+        super().__init__(f"受管进程启动失败且未完成回收: pid={process.pid}")
+        self.process = process
+        self.log_file = log_file
 
 
 def _windows_process_start_time(pid: int) -> float | None:
@@ -229,6 +240,8 @@ class ManagedProcess:
         close = getattr(self.log_file, "close", None)
         if callable(close):
             close()
+        if isinstance(self.log_file, ProcessLogFile):
+            self.log_file.release_ownership()
 
     def detach(self) -> None:
         """Gateway 重启时放弃进程所有权，不向独立进程组发送信号。"""
@@ -307,6 +320,7 @@ class AdoptedManagedProcess:
     """新 Gateway 通过已验证的健康接口重新接管存活的辅助服务。"""
 
     pid: int
+    log_ownership: ProcessLogOwnership | None = None
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
     _leader_start_marker: ProcessStartMarker | None = field(
         default=None, init=False, repr=False
@@ -352,6 +366,9 @@ class AdoptedManagedProcess:
             self.request_terminate()
             deadline = time.monotonic() + timeout_seconds
             if _wait_until_closed(self._close_target_is_alive, deadline=deadline):
+                if self.log_ownership is not None:
+                    self.log_ownership.release()
+                    self.log_ownership = None
                 return
             self.close_failure = TimeoutError(
                 "已接管进程组未完成优雅关闭，已进入强制回收: "
@@ -423,25 +440,50 @@ def _spawn_logged_process(
     log_file: TextIO,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    detached: bool = False,
 ) -> subprocess.Popen[str]:
+    process = None
+    stage = "prepare_log"
     try:
-        return subprocess.Popen(
+        child_environment = dict(os.environ if env is None else env)
+        child_environment.pop("BOXTEAM_RUNTIME_LOG_SINK", None)
+        if isinstance(log_file, ProcessLogFile):
+            log_file.begin_spawn()
+            child_environment["BOXTEAM_RUNTIME_LOG_SINK"] = json.dumps(log_file.sink)
+        stage = "spawn"
+        process = subprocess.Popen(
             command,
             cwd=cwd,
-            env=env,
+            env=child_environment,
+            stdin=subprocess.DEVNULL if detached else None,
             stdout=log_file,
             stderr=log_file,
             text=True,
             start_new_session=os.name == "posix",
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
+            if detached and os.name == "nt" else 0,
         )
+        stage = "bind_log"
+        if isinstance(log_file, ProcessLogFile):
+            log_file.ownership.bind_process(process.pid)
+        return process
     except Exception as error:
         # 只记可执行文件和 cwd，不把命令参数或环境中的凭据复制到日志。
-        logger.exception("受管进程启动失败: executable=%s cwd=%s", command[:1], cwd)
+        logger.exception("受管进程启动失败: stage=%s executable=%s cwd=%s", stage, command[:1], cwd)
         cleanup_note = None
         try:
-            log_file.close()
+            if process is not None:
+                ManagedProcess(process=process, log_file=log_file).close()
+            else:
+                if isinstance(log_file, ProcessLogFile):
+                    log_file.release_ownership()
+                log_file.close()
         except Exception as cleanup_error:
             logger.exception("受管进程启动失败后日志关闭失败")
+            if process is not None:
+                raise LoggedProcessCleanupError(process, log_file) from ExceptionGroup(
+                    "受管进程启动与回收失败", [error, cleanup_error],
+                )
             cleanup_note = (
                 "受管进程启动失败后日志关闭失败: "
                 f"error_type={type(cleanup_error).__name__}"
@@ -451,9 +493,10 @@ def _spawn_logged_process(
             error.add_note(cleanup_note)
         if not isinstance(error, OSError):
             raise
-        detail = f"受管进程启动失败: stage=spawn, error_type={type(error).__name__}"
-        if getattr(error, "winerror", None) is not None:
-            detail += f", winerror={error.winerror}"
+        detail = f"受管进程启动失败: stage={stage}, error_type={type(error).__name__}"
+        winerror = getattr(error, "winerror", None)
+        if winerror is not None:
+            detail += f", winerror={winerror}"
         public_error = type(error)(error.errno, detail)
         if cleanup_note is not None:
             public_error.add_note(cleanup_note)

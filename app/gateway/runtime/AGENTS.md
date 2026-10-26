@@ -16,7 +16,7 @@ runtime/
 ├── process_lifecycle.py   POSIX/Windows 进程树关闭与句柄回收
 ├── process_groups.py      POSIX session/process group 身份核验
 ├── process_ports.py       端口占用检查与预留
-├── process_logs.py        子进程日志句柄
+├── process_logs.py        子进程日志句柄、写入归属与接管核验
 ├── ssh_process.py         SSH 隧道进程
 ├── port_forwarding.py     本地与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议
@@ -45,6 +45,7 @@ runtime/
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
+- 子进程日志在打开／轮转前核对同路径的写入归属；交付中断不能当作空闲。detach 只关闭当前 Gateway 的描述符，存活进程组继续保留归属。完整关闭后才释放；接管通过受认证的进程状态核对实际描述符和文件身份，不重开日志。
 - 辅助服务入口缺失只向普通生命周期响应及持久错误发布 service、stage 和异常类型，安装目录位置完整记录在 Gateway 诊断日志，不进入普通注册表投影。
 - Gateway 把 `runtime.workspace.default_skill_groups` 作为环境变量传给受管 Workspace，并仅观察自身 `${BOXTEAM_HOME}/skills`，向认证且已登记的本机 Workspace 发布无路径的原始 Skill 快照；Skill 语义、工具注册和 Agent 业务逻辑由 Workspace 运行时负责。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

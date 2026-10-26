@@ -7,6 +7,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import RLock
 from typing import TextIO
 
@@ -31,6 +32,31 @@ class RuntimeLoggingState:
     applied_revision: str | None
     level: str
     pretty: bool
+    log_sink: dict[str, str] | None
+
+
+def _read_runtime_log_sink() -> dict[str, str] | None:
+    serialized = os.environ.get("BOXTEAM_RUNTIME_LOG_SINK")
+    if serialized is None:
+        return None
+    sink = json.loads(serialized)
+    fields = {"path", "owner_id", "role", "source", "device", "inode"}
+    if not isinstance(sink, dict) or set(sink) != fields or any(
+        not isinstance(value, str) or not value for value in sink.values()
+    ) or not Path(sink["path"]).is_absolute():
+        raise ValueError("受管进程日志去向非法")
+    return sink
+
+
+def _verify_runtime_log_sink(sink: dict[str, str] | None) -> dict[str, str] | None:
+    if sink is None:
+        return None
+    expected = (sink["device"], sink["inode"])
+    # 不能只信环境里的路径：继承的两个实际输出描述符与当前文件都必须一致。
+    identities = [os.fstat(1), os.fstat(2), Path(sink["path"]).stat()]
+    if any((str(identity.st_dev), str(identity.st_ino)) != expected for identity in identities):
+        raise RuntimeError("受管进程实际日志描述符与冻结去向不一致")
+    return dict(sink)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +139,7 @@ class _RuntimeFormatter(logging.Formatter):
 
 class _RuntimeHandler(logging.StreamHandler):
     applied_revision: str | None = None
+    log_sink: dict[str, str] | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         # 标准 emit 会吞掉 sink 异常；此入口直接写入并保留原始失败。
@@ -152,12 +179,14 @@ def configure_application_logging(
         )
         if handler is None:
             handler = _RuntimeHandler(stream if stream is not None else _STDERR_PROXY)
+            handler.log_sink = _read_runtime_log_sink() if stream is None else None
             handler.name = APPLICATION_LOG_HANDLER_NAME
             root_logger.addHandler(handler)
         elif not isinstance(handler, _RuntimeHandler):
             raise RuntimeError(f"日志 handler 名称冲突: {APPLICATION_LOG_HANDLER_NAME}")
         elif stream is not None:
             handler.setStream(stream)
+            handler.log_sink = None
         handler.setLevel(resolved_level)
         handler.setFormatter(_RuntimeFormatter(
             service=service, pretty=selected_pretty, contract=contract,
@@ -189,6 +218,7 @@ def runtime_logging_state() -> RuntimeLoggingState:
             runtime_instance_id=_RUNTIME_INSTANCE_ID,
             applied_revision=handler.applied_revision,
             level=logging.getLevelName(handler.level).lower(), pretty=formatter.pretty,
+            log_sink=_verify_runtime_log_sink(handler.log_sink),
         )
 
 

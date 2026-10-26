@@ -18,12 +18,14 @@ from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
     ManagedBackendOwner,
 )
 from app.gateway.runtime.process_lifecycle import AdoptedManagedProcess
+from app.gateway.runtime.process_logs import ProcessLogOwnership, ProcessLogStore
 from app.gateway.runtime.process_ports import (
     allocate_local_port,
     is_local_port_available,
@@ -239,6 +241,7 @@ async def _adopt_local_node_service(
     service_url: str,
     service_name: str,
     backend_workspace_id: str,
+    log_dir: Path,
 ) -> AdoptedManagedProcess | None:
     _validate_backend_workspace_id(backend_workspace_id)
     parsed = urlparse(service_url)
@@ -273,7 +276,28 @@ async def _adopt_local_node_service(
         raise TypeError(
             f"持久化 {service_name} 健康响应缺少 process_id: url={service_url}"
         )
-    return AdoptedManagedProcess(pid=process_id)
+    role = {"terminal_manager": "terminal", "browser_manager": "browser"}[service_name]
+    ownership = await _adopt_process_log(
+        service_url, role, process_id, parsed.port, log_dir=log_dir,
+    )
+    return AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
+
+
+async def _adopt_process_log(
+    service_url: str, role: str, process_id: int, port: int, *, log_dir: Path,
+) -> ProcessLogOwnership:
+    """健康证明之后核对受认证进程的实际文件去向，不重开存活日志。"""
+    suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
+    async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
+        response = await client.get(
+            f"{service_url.rstrip('/')}{suffix}",
+            headers={"X-Local-Token": get_gateway_local_token()},
+        )
+        response.raise_for_status()
+        proof = response.json().get("data")
+    if not isinstance(proof, dict) or proof.get("pid") != process_id or proof.get("service") != role:
+        raise RuntimeError("接管进程日志身份与健康证明不匹配")
+    return ProcessLogStore(log_dir).adopt(role, port, proof)
 
 
 def _validate_group_health(
@@ -332,6 +356,7 @@ async def verify_managed_backend_group(
 
 async def _adopt_workspace_backend(
     *, contract: ManagedBackendContract, mounts: tuple[MountedWorkspace, ...],
+    log_dir: Path,
 ) -> AdoptedManagedProcess | None:
     parsed = urlparse(contract.backend_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
@@ -353,7 +378,10 @@ async def _adopt_workspace_backend(
             process_id = _validate_group_health(payload, contract, mount, manifest_digest=mounted_workspace_manifest_digest(mounts), process_id=process_id)
     if process_id is None:
         raise RuntimeError("Backend 接管合同没有成员")
-    return AdoptedManagedProcess(pid=process_id)
+    ownership = await _adopt_process_log(
+        contract.backend_url, "backend", process_id, parsed.port, log_dir=log_dir,
+    )
+    return AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
 
 
 async def _start_member_auxiliary_services(
@@ -377,6 +405,7 @@ async def _start_member_auxiliary_services(
             if existing is None:
                 adopted = await _adopt_local_node_service(
                     service_url=url, service_name=service, backend_workspace_id=mount.workspace_id,
+                    log_dir=log_dir,
                 ) if url else None
                 # 同一 generation 的恢复必须保持原完整 manifest 的辅助服务地址。
                 port = urlparse(url).port if url and (adopted is not None or preserve_mount_urls) else allocate_local_port()
@@ -442,7 +471,7 @@ async def start_managed_backend_runtime(
         isinstance(preferred_backend_port, bool) or not 1 <= preferred_backend_port <= 65535
     ):
         raise ValueError(f"Backend 首选端口非法: {preferred_backend_port}")
-    adopted = await _adopt_workspace_backend(contract=previous, mounts=mounts) if previous.backend_url else None
+    adopted = await _adopt_workspace_backend(contract=previous, mounts=mounts, log_dir=log_dir) if previous.backend_url else None
     if adopted is not None and adopt_existing_backend and preferred_backend_port is not None and urlparse(previous.backend_url).port != preferred_backend_port:
         adopted.detach()
         raise RuntimeError(

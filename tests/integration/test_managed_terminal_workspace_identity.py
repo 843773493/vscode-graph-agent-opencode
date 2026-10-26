@@ -23,13 +23,13 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendOwner,
 )
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 
 
 @pytest.mark.asyncio
@@ -79,12 +79,14 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
                 service_name="terminal_manager",
                 service_url=terminal_url,
                 backend_workspace_id="00000000-0000-4000-8000-000000000002",
+                log_dir=artifacts / "managed-runtime-logs",
             )
 
         adopted = await _adopt_local_node_service(
                 service_name="terminal_manager",
             service_url=terminal_url,
             backend_workspace_id=backend_workspace_id,
+            log_dir=artifacts / "managed-runtime-logs",
         )
         assert adopted is not None
         assert adopted.pid == terminal_health["process_id"]

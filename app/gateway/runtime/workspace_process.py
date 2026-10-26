@@ -34,6 +34,7 @@ def _local_child_environment() -> dict[str, str]:
     for key in _GATEWAY_STARTUP_ENVIRONMENT_KEYS:
         environment.pop(key, None)
     environment.pop("BOXTEAM_RUNTIME_CONTROL_TOKEN", None)
+    environment.pop("BOXTEAM_RUNTIME_LOG_SINK", None)
     return environment
 
 

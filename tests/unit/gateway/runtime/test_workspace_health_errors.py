@@ -83,7 +83,7 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
                 controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path)
                 await controller._resolve_pending_restart(target, candidate_ref="pending", request_id="health-test")
             else:
-                await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID)
+                await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID, log_dir=tmp_path / "logs")
         message = str(failure.value)
         assert "backend UUID 不匹配" in message and f"expected={UUID}" in message
         assert "actual=" not in message and "private-health-marker" not in message
@@ -152,6 +152,6 @@ async def test_failed_http_body_remains_in_logs_only(
                 URL, None, backend_workspace_id=UUID, expected_proof={}, poll_interval_seconds=0.03,
             )
         else:
-            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID)
+            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID, log_dir=tmp_path / "logs")
     assert "503" in str(failure.value)
     assert body not in str(failure.value) and body in caplog.text

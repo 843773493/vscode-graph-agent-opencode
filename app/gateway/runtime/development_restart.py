@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.gateway.runtime.process_lifecycle import _spawn_logged_process
 from app.gateway.runtime.process_logs import ProcessLogStore
 
 RESTART_DELAY_MS = 1_000
@@ -65,22 +65,12 @@ def start_development_restart(
     environment: dict[str, str] | None = None,
 ) -> int:
     with ProcessLogStore(log_dir).open("development-restart") as log_file:
-        popen_platform_options: dict[str, object]
-        if os.name == "nt":
-            popen_platform_options = {
-                "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.DETACHED_PROCESS,
-            }
-        else:
-            popen_platform_options = {"start_new_session": True}
-        process = subprocess.Popen(
+        process = _spawn_logged_process(
             command.argv,
             cwd=command.working_directory,
             env={**os.environ, **(environment or {})},
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            **popen_platform_options,
+            log_file=log_file,
+            detached=True,
         )
     if process.pid <= 0:
         raise RuntimeError("源码开发服务重启进程未返回有效 PID")

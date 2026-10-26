@@ -700,6 +700,20 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                          "expected_revision": None, "revision": "stale-generation", "level": "critical", "pretty": False}
             assert client.post(control_url, headers=headers, json=stale).status_code == 409
             assert client.get(control_url, headers=headers).json()["data"] == current
+            targets = client.get(f"http://127.0.0.1:{port}/api/gateway/workspaces", headers=headers).json()["data"]["items"]
+            target = next(item for item in targets if item["active"])
+            retained_logs = {}
+            for role, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
+                base = target["services"][service]["local_url"]
+                suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
+                state = client.get(f"{base.rstrip('/')}{suffix}", headers=headers).json()["data"]
+                assert state == logging_states[role], role
+                sink = state["log_sink"]
+                path = Path(sink["path"])
+                assert str(path.stat().st_ino) == sink["inode"]
+                assert not path.with_name(path.name + ".1").exists()
+                retained_logs[role] = state
+            (artifacts / "retained-process-logs.json").write_text(json.dumps(retained_logs, indent=2) + "\n")
         assert "logger=uvicorn.error" in persisted_gateway_log
         assert gateway_log.stat().st_ino == gateway_log_identity
         assert not gateway_log.with_name(gateway_log.name + ".1").exists()

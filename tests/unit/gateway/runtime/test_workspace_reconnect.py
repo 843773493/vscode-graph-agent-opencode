@@ -768,40 +768,61 @@ async def test_backend_restart_failure_keeps_old_generation(single_workspace_gra
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("service,port", [("terminal_manager", 42001), ("browser_manager", 42002)])
-async def test_gateway_adopts_matching_node_manager(local_http, service, port) -> None:
+async def test_gateway_adopts_matching_node_manager(local_http, service, port, tmp_path, monkeypatch) -> None:
     requests = []
+    ownership = object()
+    role = service.removesuffix("_manager")
+    def adopt_log(store, actual_role, actual_port, proof):
+        assert store.root == tmp_path / "logs"
+        assert (actual_role, actual_port) == (role, port)
+        assert proof == {"service": role, "pid": 43210}
+        return ownership
+    monkeypatch.setattr("app.gateway.runtime.local_workspace.ProcessLogStore.adopt", adopt_log)
     def response(request):
         requests.append(request)
+        if request.url.path == "/internal/runtime-logging":
+            assert request.headers["X-Local-Token"] != "local-dev-token"
+            return httpx.Response(200, json={"data": {"service": role, "pid": 43210}})
         return httpx.Response(200, json={"workspace_id": UUID_A, "process_id": 43210})
     local_http(response)
-    adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, backend_workspace_id=UUID_A)
-    assert adopted.pid == 43210
+    adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
+    assert adopted.pid == 43210 and adopted.log_ownership is ownership
+    assert requests[1].url.path == "/internal/runtime-logging"
     assert requests[0].url.path == "/health"
 
 
 @pytest.mark.asyncio
-async def test_gateway_rejects_persisted_browser_manager_url_without_port() -> None:
+async def test_gateway_rejects_persisted_browser_manager_url_without_port(tmp_path) -> None:
     with pytest.raises(ValueError, match="缺少端口"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1", service_name="browser_manager", backend_workspace_id=UUID_A)
+        await _adopt_local_node_service(service_url="http://127.0.0.1", service_name="browser_manager", backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("service", ["terminal_manager", "browser_manager"])
 @pytest.mark.parametrize("identity", [UUID_B, None, "not-a-uuid"])
-async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_http, service, identity) -> None:
+async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_http, service, identity, tmp_path) -> None:
     local_http(lambda _: httpx.Response(200, json={"workspace_id": identity, "process_id": 43211}))
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1:42001", service_name=service, backend_workspace_id=UUID_A)
+        await _adopt_local_node_service(service_url="http://127.0.0.1:42001", service_name=service, backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [None, "generation", "manifest", "pid"])
-async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch) -> None:
+async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch, tmp_path, monkeypatch) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     contract = graph.owner.contract
     requests = []
+    ownership = object()
+    def adopt_log(store, role, port, proof):
+        assert store.root == tmp_path / "logs"
+        assert role == "backend" and proof == {"service": role, "pid": 43212}
+        return ownership
+    monkeypatch.setattr("app.gateway.runtime.local_workspace.ProcessLogStore.adopt", adopt_log)
     def response(request):
+        if request.url.path == "/api/v1/internal/runtime-logging":
+            assert request.headers["X-Local-Token"] != "local-dev-token"
+            return httpx.Response(200, json={"data": {"service": "backend", "pid": 43212}})
         identity = request.headers["X-BoxTeam-Workspace-Id"]
         requests.append(identity)
         payload = {"workspace_id": identity, "status": "ok", "process_id": 43212,
@@ -815,11 +836,12 @@ async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_contr
         return httpx.Response(200, json=payload)
     local_http(response)
     if mismatch is None:
-        adopted = await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract))
+        adopted = await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract), log_dir=tmp_path / "logs")
         assert adopted.pid == 43212 and requests == [UUID_A, UUID_B]
+        assert adopted.log_ownership is ownership
     else:
         with pytest.raises(RuntimeError, match="完整组"):
-            await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract))
+            await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract), log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio

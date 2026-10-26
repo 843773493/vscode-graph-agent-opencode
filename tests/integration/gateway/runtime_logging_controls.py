@@ -84,6 +84,15 @@ def verify_runtime_logging_controls(
             states[service] = final
             log_path = (contract.path_for(log_root, "gateway") if service == "gateway"
                         else contract.path_for(log_root, service, httpx.URL(url).port))
+            if service != "gateway":
+                sink = before["log_sink"]
+                assert sink["path"] == str(log_path) and sink["source"] == "gateway"
+                assert sink["role"] == service
+                identity = log_path.stat()
+                assert (sink["device"], sink["inode"]) == (str(identity.st_dev), str(identity.st_ino))
+                ownership = json.loads(log_path.with_name(log_path.name + ".owner.json").read_text())
+                assert ownership["owner_id"] == sink["owner_id"]
+                assert ownership["phase"] == "process" and ownership["pid"] == before["pid"]
             text = log_path.read_text(encoding="utf-8")
             assert text.count(f"应用产品日志设置: revision=control-{service}-debug") == 1
             assert f"应用产品日志设置: revision=control-{service}-warning" not in text

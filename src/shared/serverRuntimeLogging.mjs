@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { fstatSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { formatWithOptions } from "node:util";
 
@@ -7,6 +7,28 @@ const contracts = new Map();
 const runtimeInstanceId = randomUUID();
 let settings = null;
 let appliedRevision = null;
+const logSink = readRuntimeLogSink();
+
+function readRuntimeLogSink() {
+  if (process.env.BOXTEAM_RUNTIME_LOG_SINK === undefined) return null;
+  const sink = JSON.parse(process.env.BOXTEAM_RUNTIME_LOG_SINK);
+  const fields = ["path", "owner_id", "role", "source", "device", "inode"];
+  if (sink === null || typeof sink !== "object" || Array.isArray(sink)
+      || Object.keys(sink).length !== fields.length
+      || fields.some((field) => typeof sink[field] !== "string" || !sink[field])
+      || !path.isAbsolute(sink.path)) throw new Error("受管进程日志去向非法");
+  return Object.freeze(sink);
+}
+
+function verifiedRuntimeLogSink() {
+  if (logSink === null) return null;
+  // bigint 避免 inode 在 JSON 数字中丢失精度；始终核验两个实际输出描述符。
+  const identities = [fstatSync(1, { bigint: true }), fstatSync(2, { bigint: true }), statSync(logSink.path, { bigint: true })];
+  if (identities.some((identity) => String(identity.dev) !== logSink.device || String(identity.ino) !== logSink.inode)) {
+    throw new Error("受管进程实际日志描述符与冻结去向不一致");
+  }
+  return { ...logSink };
+}
 
 export class RuntimeLoggingConflictError extends Error {
   statusCode = 409;
@@ -51,7 +73,7 @@ export function runtimeLoggingState(service, contract = loadRuntimeLogContract()
   if (settings === null) configureRuntimeLogging({}, contract);
   return {
     service, pid: process.pid, runtime_instance_id: runtimeInstanceId,
-    applied_revision: appliedRevision, ...settings,
+    applied_revision: appliedRevision, ...settings, log_sink: verifiedRuntimeLogSink(),
   };
 }
 
