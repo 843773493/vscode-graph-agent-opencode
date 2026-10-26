@@ -281,13 +281,15 @@ class WorkspaceStateStoreApplyMixin:
                         for candidate_id in candidate_ids
                     ),
                 )
-                connection.execute(
-                    """
-                    DELETE FROM config_apply_claim
-                    WHERE config_domain = ? AND lease_expires_at <= ?
-                    """,
-                    (config_domain, now),
-                )
+            # promotion 已提交但进程未执行 finally 时，也会留下 claim；
+            # 清理期限已到的 claim 不应依赖仍存在 applying 候选。
+            connection.execute(
+                """
+                DELETE FROM config_apply_claim
+                WHERE config_domain = ? AND lease_expires_at <= ?
+                """,
+                (config_domain, now),
+            )
             return candidate_ids
 
     @staticmethod

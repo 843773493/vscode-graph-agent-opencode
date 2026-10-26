@@ -64,3 +64,13 @@ MCP 提交 SHALL 复用现有配置 applying journal、claim 与 promotion owner
 
 - **WHEN** 单实例连接替换已停止旧实例，候选失败且旧实例无法恢复
 - **THEN** 系统保留候选及实际阶段并报告 recovery_required，不声称数据库回滚已经恢复连接
+
+#### Scenario: 崩溃后在 apply lease 过期前重启
+
+- **WHEN** 进程在 MCP 候选准备后、active promotion 前退出，并在原 apply lease 仍有效时重启
+- **THEN** 系统先从已确认 active 重建连接，不提前抢占原 claim；lease 自然到期后主动对账并通过原候选流水线重新验证和提交，不依赖用户再次修改文件，不将原未提交 attempt 改写为成功
+
+#### Scenario: active 已提交但 claim 尚未释放时退出
+
+- **WHEN** active snapshot、pending 终态、apply journal 和配置事件已在同一事务提交，而进程在运行时激活或 claim 释放前退出
+- **THEN** 重启依据持久 active 建立新连接，保留原已提交事件及其续读游标，按原期限清理遗留 claim，不重复 promotion、伪造旧 socket 恢复或重放业务工具

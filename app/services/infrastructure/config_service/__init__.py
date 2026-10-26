@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from _thread import RLock
 from contextvars import ContextVar
 from pathlib import Path
@@ -157,6 +158,7 @@ class ConfigService(ConfigSourceLayersMixin,
             default=None,
         )
         self._watcher: ConfigFileWatcher | None = None
+        self._apply_recovery_task: asyncio.Task[None] | None = None
         self._candidate_applier: ConfigCandidateApplier | None = None
         self._shadow_reconcile: ShadowReconcile | None = None
         self._shadow_lifecycle = ConfigShadowLifecycleAdapter(

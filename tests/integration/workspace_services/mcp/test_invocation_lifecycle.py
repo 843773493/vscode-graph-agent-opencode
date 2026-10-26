@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 import uvicorn
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from sse_starlette.sse import AppStatus
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -261,7 +262,10 @@ async def test_progress_writer_failure_is_reported_instead_of_sdk_swallowing_it(
 
 
 @pytest.fixture
-def http_schema_endpoint_factory(request: pytest.FixtureRequest):
+def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    # 同一 pytest 进程连续启动独立 Server 时，不能继承上一实例的 SSE 退出标志。
+    monkeypatch.setattr(AppStatus, "should_exit", False)
+
     @asynccontextmanager
     async def endpoint(label: str):
         context = TestRunContext.from_test_file(Path(request.node.path)).prepare()

@@ -58,7 +58,7 @@
 
 - [ ] 7.1 在既有 Workspace JSONC 配置族和 schema 内补齐必要授权引用及监督参数，遵守既有覆盖层和新增参数命名；无必要不增加参数，不存储凭据明文。
 - [x] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
-- [ ] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
+- [x] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
 - [ ] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
 - [ ] 7.5 验收逐项安全替换后更新相应配置 policy、诊断与 applied_paths/deferred_paths；保留未知／不支持字段和混合候选的真实重启分类。
 - [ ] 7.6 验证低优先级遮蔽、多 Server 部分失败、配置与模型调用交错、切换中崩溃、旧连接排空、共享 Backend 工作区隔离和配置 SSE replay；完成静态分析。
@@ -147,3 +147,12 @@
 - 完整暂存 tree `d55d8579197bdabae6442eb4696f3b25d4c12170` archive 验收：正式 integration-mcp-config-replacement 为1 passed／64.39秒，真实双挂载、watcher、Runner 和 HTTP MCP handler 核对旧 Turn 仍请求原连接、新 Turn 请求新连接、多 Server 候选部分失败、stdio 混合整体延后及兄弟工作区隔离；模型复用 model_stream，没有另一套 SSE 实现。integration-extension-discovery 为201 passed／118.80秒，覆盖命名冲突、候选间 relist、原 task 关闭、通知 fencing、资格期限与退役排空。完整配置／事件回归另为112 passed／156.95秒，源码后续仅修改 MCP Owner 候选串行与对应测试，未改变该配置链路。
 - 修改范围 Ruff exit0；12文件 Pyright 基线84条／当前73条，零新增诊断。完整 config_service 目录 Ruff 基线27条／当前27条，未改既有异常合同凑绿。前次产品测试因配置 API 请求漏认证头得到401，已修正测试并完成上述真实后续阶段；失败原件保留。准确命令、tree／基线、raw、退出码及类型比较位于 `out/tests/temp/mcp-http-publication/artifacts/verify-001/`、`verify-002/`；上轮199项等原件仍位于 `out/tests/temp/csm-kind-boundary/artifacts/http-candidate-inheritance-150/`。
 - 仅关闭7.2，当前16/52。7.3的进程崩溃／切换恢复核验、7.4的单实例stdio停启和配置／活动诊断中的退役清理失败、7.6的完整SSE replay等仍未完成；本地连接控制、OAuth、持久等待和真实Web授权入口继续按原任务推进，不将局部产品集成当成完整验收。
+
+### 7.3 进程退出与共同提交恢复验收（2026-10-26）
+
+- 在真实 Backend 的候选准备完成后，通过 OS 硬退出覆盖 promotion 前、SQLite promotion 已提交而内存尚未激活两个窗口。前者保留旧 active 及未提交 journal，后者保留新 active、committed journal 和唯一 applied 事件；重启建立新连接，不恢复旧 socket 或重放业务工具。
+- 实测发现并修复：lease 尚未到期的立即重启会永久停在 applying；promotion 已提交的遗留 claim 又因没有 applying 候选而无法清理。启动对账现在按原持久期限等待、保留有效 fencing，过期后复用原 store 和 reload 流水线建立新的验证／提交 attempt；原未提交 journal 保持 recovery_required。已提交 claim 的到期回收独立于 applying 候选，不改动数据库结构或版本。
+- 正式 integration-mcp-config-recovery 为3 passed／146.94秒，覆盖立即／到期重启、原 claim 未被提前抢占、真实 HTTP 新目录与同 request_id、从原游标两次 SSE 续读、唯一 applied 事件及零业务调用重放；相关配置、apply、事件及真实 stdio／HTTP 调用生命周期140 passed／166.54秒，原双挂载 watcher／Runner 热切换1 passed／51.49秒。均使用完整 Git tree archive、进程外超时和4GiB保护。
+- 修改范围 Ruff通过；5文件 Pyright 基线57条／当前18条，完整 config_service 等扩大 Ruff 基线27条／当前27条，均零新增诊断，不宣称全仓静态检查全绿。严格 OpenSpec 校验通过。受测tree、准确命令、raw、退出码及比较位于 `out/tests/temp/mcp-config-recovery/artifacts/verify-005/result.json`。
+- 保留probe-001的测试配置文件缺失、probe-002的已提交遗留claim、probe-003的立即重启不对账，以及verify-004的全部原件。连续场景还暴露第三方SSE库保留上一测试Server的退出标志；共用HTTP夹具显式重置该测试进程状态后完成上述验收，未改协议或放宽业务断言。
+- 关闭7.3，当前17/52。7.4的单实例stdio停启及退役清理诊断仍待实现；7.5／7.6保留未勾选，直到相应替换范围全部验收。OAuth、连接控制、持久等待和真实Gateway／Web链路继续按原任务推进。

@@ -161,6 +161,8 @@ stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消
 
 turn-bound MCP 目录的原执行在首次模型发送前保留精确连接资格，由原 TurnExecutionScope 持有并在原账本登记。后继模型调用只可继承该原执行已经保留的 handle 与原期限，不因切换后产生新的 model_call_id 重新计时或扩大目录；原执行结束、期限到达或禁用／撤权后拒绝继承。model-call-bound 目录继续逐次取得当时 active 连接。此执行持有只管理短期资格，不复制模型正文或创建第二套事实来源；进程重启不能恢复旧 socket。
 
+快速重启可能早于原配置 apply claim 到期。原 ConfigService 在保持已确认 active 的同时，按该 claim 的持久期限安排启动对账；不提前抢占有效 fencing，也不把一次启动扫描当作完成恢复。到期后由原 store 标记未提交 journal 为 recovery_required、回收过期 claim，再经原 reload 锁与整体候选流水线建立新的验证／提交 attempt，保留原未提交历史。若 promotion 已提交，则从持久 active 建立新连接，原 journal 和配置事件保持 committed／applied；遗留 claim 的到期回收不依赖还有 applying 候选。对账任务归配置生命周期关闭，失败保留日志及原存储事实，不建立第二套恢复队列。
+
 切换后的旧连接清理失败是可观察的 draining/cleanup failure；不能把已经切换的配置说成「从未应用」，也不能伪报资源已释放。后台 owner 持续记录实际状态并阻止冲突替换，处理结果沿用现有配置／活动事件合同。
 
 新增配置只扩展 Workspace 既有 schema、默认与必要模板，使用功能域／子系统／参数层级；不新增凭据明文字段或平行配置文件。现有配置字段不改名；确有持久契约变化时显式版本化并一次性迁移，不加永久兼容读取。

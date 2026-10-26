@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
         ConfigShadowLifecycleAdapter,
     )
     from app.services.infrastructure.config.store import ConfigSnapshotStore
+    from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
 class ConfigReloadMixin:
@@ -56,6 +58,9 @@ class ConfigReloadMixin:
         _snapshot_store: ConfigSnapshotStore
         _shadow_reconcile: ShadowReconcile | None
         _shadow_lifecycle: ConfigShadowLifecycleAdapter
+        _apply_recovery_task: asyncio.Task[None] | None
+        _workspace_state_store: WorkspaceStateStore | None
+        _CONFIG_DOMAIN: str
 
     def validate_candidate(
         self,
@@ -567,6 +572,34 @@ class ConfigReloadMixin:
         await watcher.start()
         self._watcher = watcher
         self._update_config_watch_paths(watcher)
+        if (
+            self._workspace_state_store is not None
+            and self._workspace_state_store.get_config_apply_claim(config_domain=self._CONFIG_DOMAIN) is not None
+        ):
+            # 快速重启时旧 lease 可能尚未过期；不能只做一次启动扫描后
+            # 永久停在 applying，也不能提前抢走仍有效的 fencing claim。
+            self._apply_recovery_task = asyncio.create_task(
+                self._recover_startup_apply(candidate_applier=candidate_applier),
+                name="workspace-config-apply-recovery",
+            )
+            self._apply_recovery_task.add_done_callback(self._report_apply_recovery_failure)
+
+    def _report_apply_recovery_failure(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("workspace 配置启动对账失败", exc_info=(type(error), error, error.__traceback__))
+
+    async def _recover_startup_apply(
+        self, *, candidate_applier: ConfigCandidateApplier | None,
+    ) -> None:
+        store = self._workspace_state_store
+        if store is None:
+            raise RuntimeError("配置启动对账缺少 workspace store")
+        while (claim := store.get_config_apply_claim(config_domain=self._CONFIG_DOMAIN)) is not None:
+            await asyncio.sleep(max(0, (claim.lease_expires_at - datetime.now(UTC)).total_seconds()))
+            store.recover_expired_config_applies(config_domain=self._CONFIG_DOMAIN)
+        # 仍经原 reload 锁、候选 journal 和共同发布边界重建连接；
+        # 不恢复旧 socket，不重放业务工具，也不伪造原 attempt 已提交。
+        await self._reload_from_watcher(candidate_applier=candidate_applier)
 
     def _config_watch_paths(self) -> tuple[set[Path], set[Path]]:
         directories = {self._get_workspace_config_path().parent}
@@ -596,6 +629,13 @@ class ConfigReloadMixin:
         watcher.replace_candidates(directories=directories, candidate_paths=candidates)
 
     async def stop_watching(self) -> None:
+        recovery, self._apply_recovery_task = self._apply_recovery_task, None
+        if recovery is not None:
+            recovery.cancel()
+            try:
+                await recovery
+            except asyncio.CancelledError:
+                pass
         watcher = self._watcher
         self._watcher = None
         if watcher is None:
