@@ -54,10 +54,19 @@ if TYPE_CHECKING:
         RolloutCheckpointIndex,
         RolloutReadSnapshot,
     )
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
 
 
 class RolloutCheckpointQueriesMixin:
     """checkpoint header、active view 和已提交 context query owner。"""
+
+    if TYPE_CHECKING:
+        _storage: RolloutStorage
+
+        @staticmethod
+        def _pending_context_epoch_row(connection: sqlite3.Connection, checkpoint_ns: str) -> tuple[object, ...] | None: ...
 
     def list_checkpoint_owners(self, *, session_id: str | None = None) -> tuple[MutationIntentOwner, ...]:
         """从 catalog 枚举 main/child；精确 Session 读取也覆盖删除排空期。"""
@@ -311,6 +320,33 @@ class RolloutCheckpointQueriesMixin:
             item_ids=selected_ids, snapshot=snapshot,
         )}
         return tuple(by_id[item_id] for item_id in selected_ids)
+
+    def precompaction_context_items(
+        self, snapshot: RolloutReadSnapshot,
+    ) -> tuple[CanonicalItemRecord, ...]:
+        """恢复刚被压缩的实际选集，包括尚未进入上一 assembly 的工具结果。"""
+        pending = self._pending_context_epoch_row(snapshot.connection, snapshot.checkpoint_ns)
+        if pending is None or pending[1] != "compaction":
+            return ()
+        row = snapshot.connection.execute(
+            "SELECT parent_view_id FROM context_views WHERE view_id=? AND view_kind='compaction'",
+            (pending[2],),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("definition-restore-conflict: compaction 缺少真实 view")
+        # parent 的有效成员加本次新提交成员，正是压缩前的选集；不能从完整
+        # messages channel 或展示历史恢复早已压缩掉的发现。
+        ids = tuple(row[0] for row in snapshot.connection.execute(
+            "SELECT member.item_id FROM context_view_items member LEFT JOIN context_view_items parent "
+            "ON parent.view_id=? AND parent.item_id=member.item_id "
+            "WHERE member.view_id=? AND member.visible=1 AND member.source_kind='canonical' "
+            "AND (parent.context_selected=1 AND parent.visible=1 OR parent.item_id IS NULL) "
+            "ORDER BY member.logical_item_ordinal", (row[0], pending[2]),
+        ).fetchall())
+        return tuple(self._storage.read_items(
+            snapshot.session_id, snapshot.thread_id, checkpoint_ns=snapshot.checkpoint_ns,
+            item_ids=ids, snapshot=snapshot,
+        ))
 
     def execution_context_item_ids(
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,

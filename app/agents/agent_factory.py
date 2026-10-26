@@ -968,6 +968,7 @@ def create_my_deep_agent(
         checkpointer=checkpointer, session_id=session_id, thread_id=thread_id,
         context_source_manager=context_source_manager,
         tool_set_producer=tool_set_producer,
+        extension_policy_resolver=extension_context_policies,
         resource_activation=resource_activation,
         context_read_admission=lambda: session_service.session_read_admission(session_id),
         context_control_admission=lambda operation_id, payload, recovery_ref: session_service.session_context_control_admission(

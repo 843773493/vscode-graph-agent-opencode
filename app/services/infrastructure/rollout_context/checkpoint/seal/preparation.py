@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
+from functools import cache
 
 from langchain_core.messages import BaseMessage
 
+from app.agents.policy.tool_capability import ToolCapabilityPolicy, ToolMetadata
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
     WIRE_PROJECTOR_VERSION,
@@ -38,6 +41,13 @@ from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
     mcp_guidance_content,
+)
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogUnavailableError,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
+    FrozenToolDefinition,
+    tool_catalog_from_activation,
 )
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
@@ -71,6 +81,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    DiscoveredToolRef,
+    tool_definition_batch,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.workspace_agents import (
     install_frozen_workspace_agents,
@@ -138,6 +152,7 @@ def prepare_registered_context(
     request_messages: Sequence[BaseMessage],
     context_source_manager: ContextSourceManager,
     tool_set_supplier: Callable[[], ToolSetSnapshot],
+    extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
     provider_version: str, wire_profile: ChatWireProfile | ResponsesWireProfile,
     wire_params: Mapping[str, object],
     target_format: str, checkpoint_ns: str,
@@ -287,9 +302,67 @@ def prepare_registered_context(
                 seed_source = owner.internal_seed_source(session_id, thread_id, execution_id)
                 if seed_source is not None:
                     batch = PendingContextSourceBatch(deltas=batch.deltas, sources=(*batch.sources, seed_source))
+            with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
+                assemblies = owner._storage.assemblies
+                latest_id = assemblies._latest_context_assembly_id_connection(
+                    read_snapshot.connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                )
+                # 不可变 sealed 前驱同 ID 时复用本次已校验值；资格或身份变化
+                # 仍在当前 snapshot 完整读取，writer 再独立校验并执行 CAS。
+                if latest_id != (None if previous is None else previous.assembly_id):
+                    previous = None if latest_id is None else assemblies._read_context_assembly_connection(
+                        read_snapshot.connection, session_id, thread_id,
+                        assembly_id=latest_id, checkpoint_ns=checkpoint_ns,
+                        validated_predecessors=validated_predecessors,
+                    )[0]
+                initial_assembly = previous is not None and (
+                    previous.session_id, previous.thread_id
+                ) != (session_id, thread_id)
+                items = owner._storage.checkpoints.committed_context_items(read_snapshot, predecessor=previous)
+                retained_items = owner._storage.checkpoints.precompaction_context_items(read_snapshot) if summary_candidate is None else ()
+                canonical_manifest = read_snapshot.manifest
+            # 导入 assembly 是目标本地历史，不是目标已 applied 的请求前缀。
+            # 首次请求只携带实际复制并封存的来源，不回读源会话或未复制正文。
+            retained = rebuild.source_assembly if rebuild is not None else previous if initial_assembly else None
+            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset(
+                (ref_id, identity[1]) for ref_id, identity in _frozen_source_refs(retained)[0].items()
+            ) if retained is not None else frozenset()
             batch = _activation_guidance_batch(
                 owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
             )
+            if summary_candidate is None:
+                def read_payload(frozen, binding):
+                    return owner.read_resource_activation_payload(
+                        frozen, binding, storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
+                    )
+
+                @cache
+                def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
+                    original, original_call = owner.load_tool_call_resource_activation(
+                        session_id, thread_id=thread_id, tool_call_id=ref.tool_call_id,
+                        model_call_id=ref.model_call_id, checkpoint_ns=checkpoint_ns,
+                    )
+                    if original.activation_snapshot_id != ref.activation_snapshot_id:
+                        raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
+                    catalog = tool_catalog_from_activation(original, read_payload, model_call_id=original_call)
+                    definition = next((value for value in catalog.definitions if value.metadata.tool_id == ref.tool_id), None)
+                    if (definition is None or definition.provenance.resource_id != ref.resource_id
+                            or definition.provenance.revision != ref.revision):
+                        raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
+                    return definition
+
+                guidance = next((source.content for source in batch.sources
+                                 if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
+                automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
+                batch = tool_definition_batch(
+                    batch, catalog_supplier=lambda: tool_catalog_from_activation(
+                        activation_snapshot, read_payload, model_call_id=model_call_id,
+                    ), current_items=items, retained_items=retained_items,
+                    previous=previous, retained_assembly=retained if retained is not None else previous,
+                    retained_source_refs=retained_refs if retained is not None else None,
+                    resolve_discovery=resolve_discovery, policies_for=extension_policy_resolver,
+                    automatic_tool_ids=automatic, restoring=rebuild is not None or initial_assembly,
+                )
             if summary_candidate is not None and summary_candidate.minimal_system:
                 # 最小摘要只携带本次 owner 产生的受信摘要规则；不沿用常规
                 # Agent 指引、overlay 或尚未 applied 的来源通知。
@@ -313,22 +386,8 @@ def prepare_registered_context(
                 )
                 bodies[contribution.contribution_id] = contribution.body
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                assemblies = owner._storage.assemblies
-                latest_id = assemblies._latest_context_assembly_id_connection(
-                    read_snapshot.connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
-                )
-                # 不可变 sealed 前驱同 ID 时复用本次已校验值；资格或身份变化
-                # 仍在当前 snapshot 完整读取，writer 再独立校验并执行 CAS。
-                if latest_id != (None if previous is None else previous.assembly_id):
-                    previous = None if latest_id is None else assemblies._read_context_assembly_connection(
-                        read_snapshot.connection, session_id, thread_id,
-                        assembly_id=latest_id, checkpoint_ns=checkpoint_ns,
-                        validated_predecessors=validated_predecessors,
-                    )[0]
-                initial_assembly = previous is not None and (
-                    previous.session_id, previous.thread_id
-                ) != (session_id, thread_id)
-                items = owner._storage.checkpoints.committed_context_items(read_snapshot, predecessor=previous)
+                if read_snapshot.manifest != canonical_manifest:
+                    raise RuntimeError("context-prepare-state-conflict: 来源登记期间 canonical/view 已推进，请重新准备")
                 notice_acceptance, _notice_selection = owner._storage.executions.runtime_notice_acceptance(
                     admission, connection=read_snapshot.connection,
                 )
@@ -353,12 +412,6 @@ def prepare_registered_context(
                 contribution = resolve_contribution_for_ref(ref, full_plan.contributions)
                 overlay_bodies[ref.ref_id] = body
                 bodies[contribution.contribution_id] = body
-            # 导入 assembly 是目标本地历史，不是目标已 applied 的请求前缀。
-            # 首次请求只携带实际复制并封存的来源，不回读源会话或未复制正文。
-            retained = rebuild.source_assembly if rebuild is not None else previous if initial_assembly else None
-            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset(
-                (ref_id, identity[1]) for ref_id, identity in _frozen_source_refs(retained)[0].items()
-            ) if retained is not None else frozenset()
             previous_bodies = {} if previous is None else owner._request_content_for_plan(
                 session_id, thread_id, checkpoint_ns, previous.as_sealed_plan(), None,
             )

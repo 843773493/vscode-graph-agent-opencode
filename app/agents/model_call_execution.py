@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableBinding
 
 from app.agents.model_capability_routing import current_selected_provider
+from app.agents.policy.tool_capability import ToolCapabilityPolicy, ToolMetadata
 from app.agents.providers.wire_finalize import (
     ChatWireProfile,
     ResponsesWireProfile,
@@ -236,6 +237,7 @@ class ModelCallExecution:
         context_source_manager: ContextSourceManager,
         tool_set_producer: RegisteredToolSetProducer,
         resource_activation: ResourceActivationCoordinator | None,
+        extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
         context_read_admission: Callable[[], AbstractAsyncContextManager[None]],
         context_control_admission: Callable[[str, Mapping[str, object], str], AbstractAsyncContextManager[None]],
     ) -> None:
@@ -248,6 +250,7 @@ class ModelCallExecution:
         self._context_source_manager = context_source_manager
         self._tool_set_producer = tool_set_producer
         self._resource_activation = resource_activation
+        self._extension_policy_resolver = extension_policy_resolver
         self._context_read_admission = context_read_admission
         self._context_control_admission = context_control_admission
         self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[Runnable[Any, AIMessage], ResponseFormat[Any] | None]] | None = None
@@ -513,6 +516,7 @@ class ModelCallExecution:
                 include_structured_output,
                 tools_enabled=candidate is None or candidate.tools_enabled,
             ),
+            extension_policy_resolver=self._extension_policy_resolver,
             provider_version=context.provider_version,
             wire_profile=context.wire_profile, wire_params=context.wire_params,
             target_format=context.target_format, checkpoint_ns=checkpoint_ns,

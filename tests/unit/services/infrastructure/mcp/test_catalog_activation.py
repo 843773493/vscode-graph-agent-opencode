@@ -323,7 +323,7 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
 
 
 @pytest.fixture
-def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire):
+def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire, extension_catalog_policy_resolver):
     owner, _factory, registry, _scope = catalog_runtime
     saver, session, _connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
@@ -348,7 +348,8 @@ def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, f
 
     def prepare(
         key, *, context_owner=None, boundary: ResourceActivationBoundary = "model_call",
-        checkpoint_ns: str = "",
+        checkpoint_ns: str = "", request_messages=(),
+        policies_for=extension_catalog_policy_resolver,
     ):
         target = saver if context_owner is None else context_owner
         source_manager = manager if target is saver else ContextSourceManager(
@@ -368,7 +369,8 @@ def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, f
             result = target.prepare_context_for_provider(
                 session, thread, turn_id=admission.turn_id, execution_id=admission.execution_id,
                 plan_creation_idempotency_key=key, seal_idempotency_key="seal:" + key,
-                request_messages=(), context_source_manager=source_manager,
+                request_messages=request_messages, context_source_manager=source_manager,
+                extension_policy_resolver=policies_for,
                 tool_set_supplier=producer.snapshot,
                 checkpoint_ns=checkpoint_ns,
                 **frozen_provider_wire("fixture-model", "chat_completions"), **activation,

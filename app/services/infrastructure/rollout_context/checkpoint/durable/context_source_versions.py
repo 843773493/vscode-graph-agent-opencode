@@ -13,6 +13,9 @@ from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import json_text
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    is_tool_definition_source,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
@@ -387,7 +390,8 @@ class ContextSourceVersionsStorageMixin:
             and entry.availability == "available"
             and (source := contributions.get(entry.contribution_id)) is not None
             and source.source_binding is not None
-            and source.source_binding.source_ref in untracked
+            and (source.source_binding.source_ref in untracked
+                 or is_tool_definition_source(source.source_binding.source_ref))
         }
         frontiers = {
             ref_id: (kind, item_id)

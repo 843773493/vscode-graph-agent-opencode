@@ -49,6 +49,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
     ContextSourceSnapshot,
     PendingContextSourceBatch,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    is_tool_definition_source,
+)
 from app.services.mapping.itemized.prefix_frames import project_canonical_prefix_frames
 
 
@@ -315,7 +318,8 @@ def compile_prefix_context(
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_frames:
             identity = frame.item_ref.source_identity
-            if (identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
+            if (is_tool_definition_source(identity)
+                    or identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
                     or identity in root_cutoffs and frame.ordinal <= root_cutoffs[identity]):
                 continue
             ref_identity = ("request_only", frame.item_ref.ref_id, plan.thread_id)

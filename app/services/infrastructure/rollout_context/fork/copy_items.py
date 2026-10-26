@@ -31,6 +31,10 @@ from app.services.infrastructure.rollout_context.checkpoint.durable.message_writ
 from app.services.infrastructure.rollout_context.checkpoint.durable.writes import (
     _pending_write_row,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    DefinitionProvenance,
+    definition_source_values,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
@@ -59,6 +63,44 @@ if TYPE_CHECKING:
 
 _BATCH_SIZE = 256
 _BUFFER_SIZE = 1024 * 1024
+
+
+def _include_discovered_definitions(connection: sqlite3.Connection, assembly: ContextAssemblySnapshot) -> None:
+    """定义来源的历史依赖只作为 backing 复制，不扩大可见前缀或恢复旧调用。"""
+    for value, _revision in definition_source_values(assembly):
+        discovered = value.discovered_from
+        references: list[DefinitionProvenance] = [discovered]
+        if value.definition is not None:
+            references.append(value.definition.provenance)
+        for ref in references:
+            row = connection.execute(
+                "SELECT session_id,thread_id,activation_snapshot_id FROM resource_activation_bindings "
+                "WHERE activation_snapshot_id=? AND resource_id=? AND revision=? "
+                "AND facet='definition' AND resource_kind='mcp_tool_catalog'",
+                (ref.activation_snapshot_id, ref.resource_id, ref.revision),
+            ).fetchone()
+            if row is None:
+                raise ValueError("source-mismatch: 活动定义缺少原冻结资源")
+            require_historical_scope(connection, *row[:2])
+            connection.execute(
+                "INSERT OR IGNORE INTO fork_selected_activations(session_id,thread_id,activation_snapshot_id) VALUES (?,?,?)",
+                row,
+            )
+        call = connection.execute(
+            "SELECT assembly_id FROM model_calls WHERE model_call_id=?", (discovered.model_call_id,),
+        ).fetchone()
+        if call is None or call[0] is None:
+            raise ValueError("source-mismatch: 活动定义缺少原发现请求")
+        connection.execute(
+            "INSERT INTO fork_selected_assemblies(assembly_id,expand_body) VALUES (?,0) "
+            "ON CONFLICT(assembly_id) DO UPDATE SET expand_body=MAX(expand_body,0),"
+            "visited=CASE WHEN expand_body<0 THEN 0 ELSE visited END", (call[0],),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO fork_selected_items(item_id) SELECT item_id FROM item_catalog "
+            "WHERE json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=?",
+            (discovered.model_call_id,),
+        )
 
 # 有效前缀按模型 selection 截止；历史 logical 坐标只负责展示相对序。
 EFFECTIVE_PREFIX_SQL = (
@@ -269,6 +311,7 @@ def select_view_prefix(
                 )
                 assembly.validate_hashes()
                 require_historical_scope(connection, assembly.session_id, assembly.thread_id)
+                _include_discovered_definitions(connection, assembly)
                 if assembly.model_call_id is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO fork_selected_model_calls(model_call_id) VALUES (?)",

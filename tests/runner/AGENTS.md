@@ -29,3 +29,5 @@
 - `integration-context-source-wire`核来源封装经过同步/异步真实HTTP、跨协议fallback、ToolSet切换及冷fork/后继fork时的正文、引用与hash，固定240秒/4GiB并复用正式fork watchdog；外部模型使用现有协议资产，不代表真实Provider或Web验收。
 - POSIX套件在独立进程组中运行，根进程退出后仍回收组内后代；覆盖正常、失败、超时和中断路径。Windows suite 通过 `tests/support/processes/windows_job.py` 在独立 Job Object 中启动，挂起根进程直到完成绑定，覆盖整个进程树的内存上限，并在根进程退出或监督器关闭时回收后代；Windows开发目标测试也复用这套实现。
 - 首次SIGINT/SIGTERM请求终止套件，保留30秒升级宽限；再次中断立即强杀，原套件强杀期限不重置。POSIX按信号终止进程组；Windows用 `taskkill /T` 终止监督器进程树，并在升级阶段加 `/F`。等待监督器退出后才返回，中断仍为130，超时仍为3及原TIMEOUT回执。
+
+- `integration-extension-definition-recovery` 通过真实 Runner 发现、压缩和 fork，使用正式 fork watchdog；不代表外部 Provider 或 Web 验收。

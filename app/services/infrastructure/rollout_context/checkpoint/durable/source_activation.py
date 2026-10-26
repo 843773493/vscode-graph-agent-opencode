@@ -10,6 +10,8 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.business.resource_derivations.team import (
     TEAM_EVENT_SOURCE_ID,
@@ -23,10 +25,19 @@ from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
+from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
 from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_control import (
     _SELECT_COLUMNS,
     _TABLE_NAME,
     _state_from_row,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    DefinitionProvenance,
+    definition_source_values,
+    is_tool_definition_source,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 
 
@@ -88,6 +99,67 @@ def _validate_activation_guidance(
     ):
         raise ItemSchemaError("context-source-seal-conflict: guidance applied revision 与原 assembly 不一致")
 
+
+
+def _validate_definition_sources(
+    connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
+    previous: ContextAssemblySnapshot | None,
+) -> None:
+    """与 assembly 同事务校验冻结定义；不创建或更新 CSM 控制行。"""
+    def require_definition(ref: DefinitionProvenance) -> tuple[str, str]:
+        rows = connection.execute(
+            "SELECT session_id,thread_id FROM resource_activation_bindings "
+            "WHERE activation_snapshot_id=? AND resource_id=? AND revision=? "
+            "AND content_hash=? AND resource_kind='mcp_tool_catalog' AND facet='definition' AND availability='available'",
+            (ref.activation_snapshot_id, ref.resource_id, ref.revision, ref.revision),
+        ).fetchall()
+        if len(rows) != 1:
+            raise ItemSchemaError("definition-source-conflict: 冻结定义缺失或身份不唯一")
+        require_historical_scope(connection, *rows[0], current_owner=(snapshot.session_id, snapshot.thread_id))
+        return tuple(rows[0])
+
+    assert snapshot.seal_binding is not None
+    if any(is_tool_definition_source(source.source_identity) for source in (
+        () if snapshot.seal_binding.root is None else snapshot.seal_binding.root.sources
+    )):
+        raise ItemSchemaError("definition-source-conflict: 外部定义只能作为 tail user 来源")
+    current: dict[str, str] = {}
+    for value, revision in definition_source_values(snapshot):
+        discovered = value.discovered_from
+        original_owner = require_definition(discovered)
+        rows = connection.execute(
+            "SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call "
+            "JOIN resource_activation_assembly_bindings activation ON activation.assembly_id=call.assembly_id "
+            "JOIN item_catalog item ON json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')=call.model_call_id "
+            "JOIN messages message ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
+            "JOIN tool_calls tool ON tool.assistant_message_sequence=message.message_sequence "
+            "WHERE call.model_call_id=? AND call.session_id=? AND call.thread_id=? "
+            "AND activation.activation_snapshot_id=? AND tool.tool_name='search_tools' AND tool.result_message_sequence IS NOT NULL",
+            (discovered.model_call_id, *original_owner, discovered.activation_snapshot_id),
+        ).fetchall()
+        if not any(matches_tool_call_id(
+            ItemProjectionIdentity.from_dict(json.loads(manifest)["projection_identity"]), call_id, discovered.tool_call_id,
+        ) for call_id, manifest in rows):
+            raise ItemSchemaError("definition-source-conflict: 原发现调用不属于所指冻结请求")
+        if value.definition is not None:
+            definition = value.definition
+            require_definition(definition.provenance)
+            if (definition.provenance.resource_id != discovered.resource_id
+                    or sha256_jcs(definition.payload()) != definition.provenance.revision
+                    or extension_schema_hash(definition.input_schema) != definition.schema_hash):
+                raise ItemSchemaError("definition-source-conflict: 完整定义正文与冻结身份不一致")
+        current[discovered.resource_id] = revision
+    if any(is_tool_definition_source(source.source_id) and source.source_id not in current
+           for source in snapshot.seal_binding.source_revisions):
+        raise ItemSchemaError("definition-source-conflict: 活动定义回执缺少真实 selected 来源")
+    prior = {value.discovered_from.resource_id: revision for value, revision in definition_source_values(previous)}
+    for source_id, revision in current.items():
+        applied = tuple(source for source in snapshot.seal_binding.source_revisions if source.source_id == source_id)
+        if len(applied) != int(prior.get(source_id) != revision) or any(
+            source.revision != revision or source.previous_revision != prior.get(source_id)
+            or source.expected_control_revision is not None for source in applied
+        ):
+            raise ItemSchemaError("definition-source-conflict: 活动定义 applied 回执与封存前驱不一致")
 
 
 class ContextSourceActivationMixin:
@@ -189,11 +261,13 @@ class ContextSourceActivationMixin:
         elif binding.prefix.state.epoch.ordinal != 1 or binding.prefix.parent is not None:
             raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
         _validate_activation_guidance(connection, snapshot, previous)
+        _validate_definition_sources(connection, snapshot, previous)
         for facet in TEAM_FACETS:
             _validate_activation_guidance(connection, snapshot, previous,
                                           resource_id=TEAM_RESOURCE_IDS[facet], source_id=TEAM_SOURCE_IDS[facet])
         for source in binding.source_revisions:
-            if source.source_id in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
+            if (is_tool_definition_source(source.source_id)
+                    or source.source_id in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}):
                 continue
             row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "

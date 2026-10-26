@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 from langchain_core.messages import BaseMessage
 
 from app.abstractions.resource_file_content import ResourceFileContent
+from app.agents.policy.tool_capability import ToolCapabilityPolicy, ToolMetadata
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_request_context import SummaryCandidateScope
@@ -48,6 +49,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.preparation imp
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 from app.services.mapping.itemized.selection import resolve_selected_item
 
@@ -179,12 +183,12 @@ class ContextDispatchOwnerMixin:
                 raise RuntimeError(f"tool_call canonical assistant/model_call identity 缺失或歧义: {tool_call_id}")
             resolved_model_call_id = model_call_ids.pop()
             row = connection.execute(
-                "SELECT assembly_id FROM model_calls WHERE session_id = ? "
-                "AND thread_id = ? AND model_call_id = ?",
-                (session_id, thread_id, resolved_model_call_id),
+                "SELECT assembly_id, session_id, thread_id FROM model_calls WHERE model_call_id = ?",
+                (resolved_model_call_id,),
             ).fetchone()
             if row is None or not row[0]:
                 raise RuntimeError(f"tool_call 原 model-call 缺少 sealed assembly: {tool_call_id}")
+            require_historical_scope(connection, row[1], row[2], current_owner=(session_id, thread_id))
             assembly_id = row[0]
         assembly = self._storage.assemblies.get_context_assembly(
             session_id, thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
@@ -238,6 +242,7 @@ class ContextDispatchOwnerMixin:
         request_messages: Sequence[BaseMessage] = (),
         context_source_manager: ContextSourceManager,
         tool_set_supplier: Callable[[], ToolSetSnapshot],
+        extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
         provider_version: str,
         wire_profile: ChatWireProfile | ResponsesWireProfile,
         wire_params: Mapping[str, object],
@@ -267,6 +272,7 @@ class ContextDispatchOwnerMixin:
                 request_messages=request_messages,
                 context_source_manager=context_source_manager,
                 tool_set_supplier=tool_set_supplier,
+                extension_policy_resolver=extension_policy_resolver,
                 provider_version=provider_version,
                 wire_profile=wire_profile,
                 wire_params=wire_params,

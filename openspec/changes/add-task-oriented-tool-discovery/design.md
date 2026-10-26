@@ -70,6 +70,14 @@ MCP 输入按其声明的 JSON Schema 方言和完整契约校验；未声明方
 
 固定 `search_tools`／信封的 description 不枚举动态 Server 或目标。上线首次加入 `search_tools` 属于真实 Provider ToolSet 变化，沿用既有 epoch 机制；其后目录、连接和已选定义更新不改变 Provider schemas。Provider 执行绑定 hash 与请求正文 hash 继续分离。
 
+#### 活动定义恢复的唯一链路
+
+活动集合由实际选中的成功 `search_tools` canonical ToolResult 及已封存的 `extension_tool_definition` 来源派生，不另建可变活动表或 schema 库。每项保存原发现的 model-call、tool-call、activation、resource 与 revision；恢复先按原请求及历史 scope 验证冻结正文，不能只按同名工具或当前目录补齐。原内联结果仍被选中时不重复投递；普通 `needs_read` 续读保持 artifact 引用，压缩或 fork 使原引用不可用时恢复必要完整正文。同版本恢复保留原 provenance，新允许边界的定义更新提供完整替换，删除或禁用提供无旧 schema 的事实。
+
+压缩前选集取真实 compaction view 的父选集及同次新提交的 canonical 成员，不扫描所有展示历史或完整原 messages channel。这样既覆盖搜索刚提交、尚未进入常规模型 assembly 就被压缩的边界，也不会重新激活更早已被压缩掉的发现。rewind 按既有 canonical cut 裁剪已封存定义来源；新 epoch 只接收本次经过硬隐藏过滤的 batch，不直接复制旧定义帧。
+
+来源继续走既有 contribution、prefix 和 assembly seal 事务；同一事务验证原发现请求、资源归属、正文 hash、tail-only user 资格及 applied 前驱，不写 CSM 控制行。fork 的原有正文依赖闭包增加这些 typed 引用，将原发现请求、canonical backing 和 activation 一并复制；它们不扩大目标可见前缀，也不恢复旧调用或在线回读源 thread。来源登记前后核对同一 canonical/view manifest，推进冲突明确失败。结构未变化，不提升数据库 schema 版本。
+
 ### 4. `connections.manage` 作为本地信封内控制目标
 
 该目标通过现有本地扩展注册链路进入统一目录，凭正常 execution policy 和 HITL 执行；控制 owner 独立于待授权 MCP 连接，确保远端未连接时仍能请求本地授权。

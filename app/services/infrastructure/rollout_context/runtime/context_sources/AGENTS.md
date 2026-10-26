@@ -19,3 +19,5 @@
 - 同一来源的未发送变化必须从已应用 revision 合并成一个 delta；untrack 不移除已提交上下文。
 - 生命周期机制只返回状态和释放结果，不发布业务事件。
 - observe明确区分unchanged、baseline_restored、not_tracked与accepted，pending单独表示尚未封存的更新；持续更新入口必须核验tracked，禁止用布尔回执推断已生效。
+
+- `tool_definitions.py` 只从实际 canonical 发现与已封存来源派生活动定义 batch；原 activation 是正文来源，提交与校验仍归 Saver，不登记第二个 CSM 控制 owner。
