@@ -403,3 +403,11 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 `static-final-022` Ruff31基线／31最终、无新增，12个Python文件compileall通过。真实Pyright14个产品文件273基线／272当前，无新增诊断（`type-comparison-020.json`）；最终文件loader单独0错误（`types-helper-023`）。这些是带基线限制的静态结论，不表述为全仓类型全绿。初轮测试误选诊断Agent、扩展故障注入超出旧测试等待、类型整理残留条件导入，以及多Agent顺序不确定的测试错误均保留原始失败输出并已修正；未放宽正文、身份、顺序或hash断言。各检查均有进程外timeout／4GiB内存保护，准确命令、指纹、原始输出和退出码；基线完整归档树已核验删除，原始证据保留。
 
 9.2及9.6—9.14其余来源接线、显式来源切换、分组和网络来源验收仍以未勾选任务为准；不将此切片当作团队／协作或整个change验收完成。统一日志变更 `unify-product-runtime-logging`进入下一功能边界。
+
+### 2026-10-26 9.6 具名替代引用与历史协议继承
+
+新写入统一使用来源协议v2及typed `replaces`，同来源更新列出基准版本，同名Skill来源切换列出旧来源身份与版本；R10、root／tail／overlay、seal恢复与最终Provider校验迁齐。派生索引核可见目标的名称与类型，不形成第二持久选择状态；新epoch保留的历史引用不要求重新注入已压缩正文。旧v1来源块按原版本重放及重编码，seal binding仍为v3，不改SQLite schema。
+
+来源／epoch92项、正式source-wire matrix22项通过；真实Skill文件发布、冻结工具加载、seal及冷投影断言具名替代范围，旧bytes不变。完整旧HEAD归档通过真实准入／CSM／seal／checkpoint生成v1历史，当前代码冷读、同key重试、同epoch追加v2及正式matrix保护下fork、源目录离线冷恢复通过，历史bytes／request hash／owner保持。最终定向14项与OpenSpec strict通过；Ruff和compileall通过，15个改动Python文件Pyright基线／当前均81项，无新增，不称类型全绿。归档4496个tracked文件逐blob核验后清理；唯一预期修改为临时matrix套件，生成历史和原始证据保留。
+
+命令、源码指纹、raw、实际退出码和失败归因保存在`out/tests/temp/cil_source_replacement_20261026/artifacts/verification-013.json`及具名运行目录。初轮新增测试类型／空值、导入格式和探针启动错误原件保留；探针未由matrix启动的失败不计fork通过。最终广域测试后的产品修改仅为Literal类型收窄、导入格式及TODO，最终14项覆盖已调整测试。9.6／9.8继续未勾：复用旧正文时的显式切回仍待补齐；9.7分组及9.13组合门未关闭。本切片未运行Web、外部Provider或Windows，不代替团队／协作专项。

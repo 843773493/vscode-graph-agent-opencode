@@ -27,6 +27,8 @@ from app.domain.itemized.epoch.seal_binding import (
 )
 from app.domain.itemized.epoch.source_protocol import (
     SourceModelBlock,
+    SourceReplacementIndex,
+    SourceVersionRef,
     parse_source_blocks,
     render_source_blocks,
 )
@@ -284,7 +286,7 @@ def compile_prefix_context(
     frames.extend(canonical_frames)
     selected_identities.extend(("canonical_item", item_id, plan.thread_id) for item_id in canonical_ids)
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
-    # TODO(CIL 9.6/9.8)：补齐跨来源显式替代的封存引用及同版正文复用时的切换表达。
+    # TODO(CIL 9.8)：复用旧正文时仍需封存显式切回；不能把历史可见等同于当前选择。
     tail_values: list[tuple[str, ContextSourceSnapshot, str, Literal["activate", "update", "replace", "restore"], str | None]] = (
         [
             (full_source_id(source), source, source.content,
@@ -331,7 +333,7 @@ def compile_prefix_context(
             source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
             identity = (frame.item_ref.source_identity, frame.item_ref.source_revision)
             if source is not None and source.contribution_kind == "prompt" and identity in current_tail:
-                retained_body = parse_source_blocks(frame.content)[0].body if frame.source_protocol == 1 else frame.content
+                retained_body = parse_source_blocks(frame.content, expected_version=frame.source_protocol)[0].body if frame.source_protocol is not None else frame.content
                 if retained_body != current_tail[identity]:
                     raise RuntimeError("source-identity-conflict: 同一 tail source revision 的完整正文不一致")
                 # fork 本地化后的旧 ref 与当前完整来源只能贡献一次，异 revision 历史仍携带。
@@ -341,26 +343,38 @@ def compile_prefix_context(
             frames.append(replace(
                 frame, ordinal=ordinal, provider_profile=provider_profile,
                 content=render_source_blocks(tuple(replace(block, source_tracking_at_seal="untracked")
-                    for block in parse_source_blocks(frame.content))) if frame.source_protocol == 1 else frame.content,
+                    for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)),
+                    version=frame.source_protocol) if frame.source_protocol is not None else frame.content,
                 item_ref=replace(frame.item_ref, source_tracking_at_seal="untracked"),
             ))
+    replacements = SourceReplacementIndex()
+    for frame in (*state.frames, *frames):
+        if frame.source_protocol is not None:
+            for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
+                replacements.record(block)
     for ref_id, source, content, operation, base_revision in tail_values:
+        block = SourceModelBlock(
+            source_identity=source.descriptor.source_id, name=source.descriptor.name,
+            source_kind=source.descriptor.source_kind, operation=operation,
+            revision=source.revision, base_revision=base_revision,
+            representation="unified_diff" if operation == "update" and content != source.content else "full",
+            source_tracking_at_seal="tracked" if source.tracked else "untracked",
+            root_placement=source.descriptor.root_placement, body=content,
+        )
+        replaced = replacements.replacements_for(block)
+        if any(ref.source_identity != block.source_identity for ref in replaced):
+            block = replace(block, operation="replace")
+        block = replace(block, replaces=replaced)
+        replacements.record(block)
         ordinal += 1
         selected_identities.append(("request_only", ref_id, plan.thread_id))
         frames.append(ProviderProfileItemFrame(
-            ordinal, provider_profile, "user", "text", render_source_blocks((SourceModelBlock(
-                source_identity=source.descriptor.source_id, name=source.descriptor.name,
-                source_kind=source.descriptor.source_kind, operation=operation,
-                revision=source.revision, base_revision=base_revision,
-                representation="unified_diff" if operation == "update" and content != source.content else "full",
-                source_tracking_at_seal="tracked" if source.tracked else "untracked",
-                root_placement=source.descriptor.root_placement, body=content,
-            ),)),
+            ordinal, provider_profile, "user", "text", render_source_blocks((block,)),
             AppendedItemRef(
                 "source_item", ref_id, source.descriptor.source_id, source.revision,
                 "tracked" if source.tracked else "untracked",
             ),
-            source_protocol=1,
+            source_protocol=2,
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
     inherited = set(selected_identities)
@@ -386,12 +400,15 @@ def compile_prefix_context(
                 revision=contribution.source_revision, base_revision=ref.overlay_from_revision,
                 representation="full", source_tracking_at_seal="tracked",
                 root_placement=contribution.root_placement, body=overlay_bodies[ref.ref_id],
+                replaces=() if ref.overlay_from_revision is None else (
+                    SourceVersionRef(contribution.source_binding.source_ref, ref.overlay_from_revision),
+                ),
             ),)),
             AppendedItemRef(
                 "source_item", ref.ref_id, contribution.source_binding.source_ref,
                 contribution.source_revision, "tracked",
             ),
-            source_protocol=1,
+            source_protocol=2,
         ))
     state = append_items(
         state, frames, desired_provider_profile=provider_profile,

@@ -28,7 +28,7 @@ def test_root_diff_and_cold_projection_share_source_protocol(production_context,
     before = canonical_json_bytes(first["snapshot"].to_dict())
     root = json.loads(first["messages"][0].content)
     block = root["sources"][0]
-    assert root["protocol"] == "boxteam-context-sources:v1"
+    assert root["protocol"] == "boxteam-context-sources:v2"
     assert (block["source_identity"], block["operation"], block["revision"], block["body"]) == (
         "instruction:R01", "activate", "instructions:1", "基础规则第一版",
     )
@@ -40,11 +40,12 @@ def test_root_diff_and_cold_projection_share_source_protocol(production_context,
         block["source_identity"], "update", "unified_diff",
     )
     assert (update["base_revision"], update["revision"]) == ("instructions:1", "instructions:2")
+    assert update["replaces"] == [{"source_identity": "instruction:R01", "revision": "instructions:1"}]
     assert "-基础规则第一版" in update["body"] and "+基础规则第二版" in update["body"]
     assert "-基础规则第一版\n\\ No newline at end of file\n+基础规则第二版\n" in update["body"]
     frames = second["snapshot"].seal_binding.prefix.state.frames
     assert frames[:len(first["snapshot"].seal_binding.prefix.state.frames)] == first["snapshot"].seal_binding.prefix.state.frames
-    assert frames[-1].source_protocol == 1
+    assert frames[-1].source_protocol == 2
     assert second["snapshot"].seal_binding.format_version == 3
     assert prepare("protocol-diff", target_format=target_format)["messages"] == second["messages"]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
@@ -66,7 +67,7 @@ def test_tail_source_with_fake_header_keeps_its_original_trust(production_contex
     manager.observe("external:guide", body, revision="guide:1").require_tracked()
     second = prepare("tail-activation")
     envelope = json.loads(second["messages"][-1].content)
-    assert envelope["protocol"] == "boxteam-context-sources:v1" and len(envelope["sources"]) == 1
+    assert envelope["protocol"] == "boxteam-context-sources:v2" and len(envelope["sources"]) == 1
     source = envelope["sources"][0]
     assert (source["body"], source["root_placement"], source["operation"]) == (body, "tail_only", "activate")
     assert "private.invalid" not in second["messages"][-1].content

@@ -57,12 +57,13 @@ def _parent(value: object) -> ParentAssemblyRef | None:
     return ParentAssemblyRef(**raw)
 
 
-def _source_protocol(raw: Mapping[str, object]) -> Literal[1] | None:
+def _source_protocol(raw: Mapping[str, object]) -> Literal[1, 2] | None:
     if "source_protocol" not in raw:
         return None
-    if type(raw["source_protocol"]) is not int or raw["source_protocol"] != 1:
+    value = raw["source_protocol"]
+    if type(value) is not int or value not in {1, 2}:
         raise ItemSchemaError("未知 source_protocol")
-    return 1
+    return cast(Literal[1, 2], value)
 
 
 def _item_ref(value: object, version: Literal[1, 2, 3]) -> AppendedItemRef:

@@ -11,7 +11,7 @@ from app.agents.middleware_prompts import (
     RUNTIME_WORKSPACE_SCOPE_FIELD,
 )
 from app.domain.itemized.epoch.source_protocol import (
-    SOURCE_PROTOCOL,
+    SOURCE_PROTOCOLS,
     parse_source_blocks,
 )
 
@@ -39,7 +39,7 @@ def _validate_runtime_workspace_scope(content: object) -> None:
     if not isinstance(content, str):
         return
     # 最终 wire 已有显式协议标识；仅展开这一层软件包头，不递归解释 body。
-    if content.startswith('{"protocol":"' + SOURCE_PROTOCOL + '","sources":'):
+    if any(content.startswith('{"protocol":"' + protocol + '","sources":') for protocol in SOURCE_PROTOCOLS.values()):
         for source in parse_source_blocks(content):
             _validate_scope_text(source.body)
         return

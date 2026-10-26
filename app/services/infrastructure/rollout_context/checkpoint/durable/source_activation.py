@@ -68,8 +68,8 @@ def _validate_activation_guidance(
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
     frame = frames[-1]
     content = frame.content
-    if frame.source_protocol == 1:
-        blocks = parse_source_blocks(content)
+    if frame.source_protocol is not None:
+        blocks = parse_source_blocks(content, expected_version=frame.source_protocol)
         if len(blocks) != 1 or blocks[0].source_identity != source_id:
             raise ItemSchemaError("context-source-seal-conflict: guidance 来源块不唯一或身份不一致")
         content = blocks[0].body

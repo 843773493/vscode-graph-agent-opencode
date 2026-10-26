@@ -129,7 +129,7 @@ def definition_source_values(
             continue
         if retained is not None and (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained:
             continue
-        blocks = parse_source_blocks(frame.content)
+        blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol)
         if (len(blocks) != 1 or blocks[0].source_kind != TOOL_DEFINITION_SOURCE_KIND
                 or frame.role != "user" or frame.payload_kind != "text"
                 or blocks[0].root_placement != "tail_only"

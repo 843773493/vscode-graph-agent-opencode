@@ -18,7 +18,10 @@ from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileItemFrame,
 )
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
-from app.domain.itemized.epoch.source_protocol import parse_source_blocks
+from app.domain.itemized.epoch.source_protocol import (
+    SourceReplacementIndex,
+    parse_source_blocks,
+)
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -94,7 +97,7 @@ def project_sealed_prefix(
     used: set[tuple[str, ...]] = set()
     root = binding.root
     if root is not None:
-        blocks = parse_source_blocks(root.content) if root.source_protocol == 1 else ()
+        blocks = parse_source_blocks(root.content, expected_version=root.source_protocol) if root.source_protocol is not None else ()
         if blocks and len(blocks) != len(root.sources):
             raise ValueError("source-mismatch: compiled root 来源块数量不一致")
         root_bodies = []
@@ -127,9 +130,13 @@ def project_sealed_prefix(
             used.add(selection_ref_identity(entry.ref))
         if not blocks and "\n\n".join(root_bodies) != root.content:
             raise ValueError("source-mismatch: compiled root 正文与来源顺序不一致")
+    replacements = SourceReplacementIndex()
     messages: list[BaseMessage] = []
     groups: dict[tuple[str, ...], tuple[list[dict[str, object]], int]] = {}
     for frame in binding.prefix.state.frames:
+        if frame.source_protocol is not None:
+            for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
+                replacements.record(block)
         ref = frame.item_ref
         if frame.role == "system":
             if root is None or frame.content != root.content:
@@ -147,8 +154,8 @@ def project_sealed_prefix(
             ):
                 raise ValueError("source-mismatch: source frame identity/revision 不一致")
             body = resolve_selected_request_body(plan, entry, bodies)
-            if frame.source_protocol == 1:
-                blocks = parse_source_blocks(frame.content)
+            if frame.source_protocol is not None:
+                blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol)
                 if len(blocks) != 1:
                     raise ValueError("source-mismatch: 单来源 frame 必须封存一个来源块")
                 block = blocks[0]

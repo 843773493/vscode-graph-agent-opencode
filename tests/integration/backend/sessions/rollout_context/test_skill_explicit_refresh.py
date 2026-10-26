@@ -84,6 +84,16 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     new_source = "skill:" + frozen.entries["shared"].entry_identity
     new_frames = [frame for frame in frames if frame.item_ref.source_identity == new_source]
     assert len(new_frames) == 1 and json.loads(new_frames[0].content)["sources"][0]["body"] == WORKSPACE_BODY
+    switched = json.loads(new_frames[0].content)["sources"][0]
+    assert (switched["source_identity"], switched["revision"], switched["operation"]) == (
+        new_source, refreshed["revision"], "replace",
+    )
+    previous = next(frame for frame in first_frames if frame.item_ref.source_identity is not None
+                    and frame.item_ref.source_identity.startswith("skill:"))
+    assert switched["replaces"] == [{
+        "source_identity": previous.item_ref.source_identity,
+        "revision": first["revision"],
+    }]
     assert new_frames[0].item_ref.source_tracking_at_seal == "untracked"
     enabled = json.loads(await tool.ainvoke({"name": "shared", "mode": "tracked"}))
     assert enabled["tracked"] is True and enabled["append_status"] == "already_active"
@@ -97,4 +107,11 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
             restored = cold.get_context_assembly(session, thread, assembly_id=sealed.assembly_id)
             assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(sealed.to_dict())
             assert restored.request_hash == sealed.request_hash
+            projected = cold.project_context_plan_for_dispatch(
+                session, thread, restored.as_sealed_plan(), target_format="chat_completions",
+            )
+            if sealed is updated:
+                content = projected.messages[-1].content
+                assert isinstance(content, str)
+                assert json.loads(content)["sources"][0]["replaces"] == switched["replaces"]
         assert cold.load_context_source_control_states(owner) == saver.load_context_source_control_states(owner)

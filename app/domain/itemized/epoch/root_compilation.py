@@ -178,11 +178,11 @@ class CompiledRootItem:
     tool_compatibility_key: str
     content: str
     sources: tuple[CompiledRootSourceProvenance, ...]
-    source_protocol: Literal[1] | None = None
+    source_protocol: Literal[1, 2] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
-        if self.source_protocol is not None and (type(self.source_protocol) is not int or self.source_protocol != 1):
+        if self.source_protocol is not None and (type(self.source_protocol) is not int or self.source_protocol not in {1, 2}):
             raise ItemSchemaError("CompiledRootItem.source_protocol 非法")
         if not isinstance(self.epoch, PrefixEpoch):
             raise RootCompileBoundaryError("CompiledRootItem.epoch 必须是 PrefixEpoch")
@@ -217,7 +217,7 @@ class CompiledRootItem:
     def frame_manifest(self) -> dict[str, object]:
         """root frame 的规范 manifest;hash 算法固定,不可由调用方覆盖。"""
         return {
-            "kind": "root-system-item:v2" if self.source_protocol == 1 else "root-system-item:v1",
+            "kind": "root-system-item:v2" if self.source_protocol is not None else "root-system-item:v1",
             "epoch": self.epoch.token,
             "provider_profile": self.provider_profile,
             "tool_compatibility_key": self.tool_compatibility_key,
@@ -307,7 +307,7 @@ def compile_root_item(
             source_tracking_at_seal=candidate.source_tracking_at_seal,
             root_placement=candidate.root_placement, body=candidate.content,
         ) for candidate in eligible)),
-        source_protocol=1,
+        source_protocol=2,
         sources=tuple(
             CompiledRootSourceProvenance(
                 source_identity=candidate.source_identity,

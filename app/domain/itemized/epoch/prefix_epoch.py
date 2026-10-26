@@ -270,7 +270,7 @@ class ProviderProfileItemFrame:
     payload_kind: str
     content: object
     item_ref: AppendedItemRef
-    source_protocol: Literal[1] | None = None
+    source_protocol: Literal[1, 2] | None = None
     _canonical_bytes: bytes = field(init=False, repr=False, compare=False)
 
     def __getattribute__(self, name: str) -> object:
@@ -288,7 +288,7 @@ class ProviderProfileItemFrame:
         if not isinstance(self.item_ref, AppendedItemRef):
             raise ItemSchemaError("ProviderProfileItemFrame.item_ref 必须是 AppendedItemRef")
         if self.source_protocol is not None and (
-            type(self.source_protocol) is not int or self.source_protocol != 1
+            type(self.source_protocol) is not int or self.source_protocol not in {1, 2}
             or self.item_ref.ref_type != "source_item"
         ):
             raise ItemSchemaError("ProviderProfileItemFrame.source_protocol 非法")

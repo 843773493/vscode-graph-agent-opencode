@@ -336,7 +336,7 @@ def runtime_instruction_producers(
             producer_id="R10", source_id="instruction:csm-protocol",
             source_kind="csm_protocol", name="CSM 来源协议",
             root_placement="root_eligible", content=CSM_PROTOCOL_PROMPT,
-            revision=sha256_jcs({"protocol": "boxteam-context-sources:v1", "content": CSM_PROTOCOL_PROMPT}),
+            revision=sha256_jcs({"protocol": "boxteam-context-sources:v2", "content": CSM_PROTOCOL_PROMPT}),
         ),
         InstructionProducerSpec(
             producer_id="R01", source_id="instruction:agent-instructions",

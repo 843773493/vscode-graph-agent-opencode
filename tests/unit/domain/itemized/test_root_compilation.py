@@ -86,7 +86,7 @@ def test_compile_initial_epoch_builds_single_system_root() -> None:
     assert item.provider_profile == PROFILE
     assert item.tool_compatibility_key == KEY_A
     assert [block["body"] for block in json.loads(item.content)["sources"]] == ["identity 正文", "AGENTS 正文"]
-    assert item.source_protocol == 1
+    assert item.source_protocol == 2
     assert [p.source_ordinal for p in item.sources] == [0, 1]
     assert [p.source_identity for p in item.sources] == ["identity", "agents"]
     assert item.sources[0].revision == REV_2
