@@ -18,6 +18,7 @@ from urllib.parse import quote
 import portalocker
 
 from app.core.atomic_fs import native_io_path
+from app.core.config_migration_guard import require_settled_config_migration
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 
@@ -283,6 +284,7 @@ class SQLiteStateDatabase:
         if schema_version != len(migrations):
             raise ValueError("SQLite schema_version 必须等于迁移数量")
         self.path = path.expanduser().resolve()
+        require_settled_config_migration(self.path)
         self._schema_version = schema_version
         self._migrations = migrations
         self._ownership = SQLiteProcessOwnership(self.path)

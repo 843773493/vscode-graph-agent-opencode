@@ -29,17 +29,17 @@ def config_workspace_roots(request: pytest.FixtureRequest) -> tuple[Path, Path]:
     return roots
 
 
-def _write_config(path: Path, *, logger_level: str) -> None:
+def _write_config(path: Path, *, model_name: str) -> None:
     path.write_text(
         json.dumps(
             {
-                "config_version": 1,
+                "config_version": 2,
                 "llm": {
                     "providers": [
                         {
                             "id": "primary",
                             "endpoint": "https://example.com/v1",
-                            "model": "model-a",
+                            "model": model_name,
                             "api_key": "${TEST_API_KEY}",
                             "custom_llm_provider": "openai",
                             "api_mode": {
@@ -53,7 +53,6 @@ def _write_config(path: Path, *, logger_level: str) -> None:
                         }
                     ]
                 },
-                "logger": {"level": logger_level, "pretty": True},
                 "default_agent": "default",
                 "agents": {
                     "default": {
@@ -176,7 +175,7 @@ async def test_config_service_materializes_shared_user_source_generation(
     first_workspace_root, second_workspace_root = config_workspace_roots
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = tmp_path / "workspace.jsonc"
-    _write_config(config_path, logger_level="info")
+    _write_config(config_path, model_name="info")
     owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
     first_store = WorkspaceStateStore(workspace_root=first_workspace_root)
     second_store = WorkspaceStateStore(workspace_root=second_workspace_root)
@@ -203,12 +202,12 @@ async def test_config_service_materializes_shared_user_source_generation(
         assert first_store.get_source_layer("workspace_mutable_override").source_generation == 1
         assert second_store.get_source_layer("workspace_mutable_override").source_generation == 1
 
-        _write_config(config_path, logger_level="warning")
+        _write_config(config_path, model_name="warning")
         assert await first_service.reload() is True
         assert await second_service.reload() is True
         assert owner.high_water_mark() == 2
 
-        _write_config(config_path, logger_level="info")
+        _write_config(config_path, model_name="info")
         assert await first_service.reload() is True
         assert await second_service.reload() is True
         assert owner.high_water_mark() == 3
@@ -232,7 +231,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
     workspace_root = config_workspace_roots[0]
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = tmp_path / "workspace.jsonc"
-    _write_config(config_path, logger_level="info")
+    _write_config(config_path, model_name="info")
     owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
@@ -247,7 +246,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
         service.get_revision()
         assert store.get_source_layer("workspace_mutable_override").source_generation == 1
 
-        _write_config(config_path, logger_level="warning")
+        _write_config(config_path, model_name="warning")
         warning_digest = read_stable_config_file(config_path).digest
         assert warning_digest is not None
         owner.observe(
@@ -256,7 +255,7 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
             layer_digest=warning_digest,
             origin="file-watcher",
         )
-        _write_config(config_path, logger_level="info")
+        _write_config(config_path, model_name="info")
         restored_digest = read_stable_config_file(config_path).digest
         assert restored_digest is not None
         owner.observe(

@@ -164,7 +164,7 @@ def _migrate_gateway_connection_ids_in_source(
                 },
             },
         )
-        raw_config["config_version"] = 2
+        raw_config["config_version"] = max(2, cast(int, raw_config.get("config_version", 1)))
         return
     if source_version != 1 or not isinstance(source_workspaces, list):
         return
@@ -210,7 +210,7 @@ def _migrate_gateway_connection_ids_in_source(
         snapshot.digest == migration.get("new_digest")
         and migration.get("state") == "completed"
     ):
-        raw_config["config_version"] = 2
+        raw_config["config_version"] = max(2, cast(int, raw_config.get("config_version", 1)))
         return
     state_store.set_config(
         config_key="gateway_connection_ids",
@@ -268,7 +268,7 @@ def _migrate_gateway_connection_ids_in_source(
         config_version=_CONNECTION_ID_RECORD_VERSION,
         payload=completed_payload,
     )
-    raw_config["config_version"] = 2
+    raw_config["config_version"] = max(2, cast(int, raw_config.get("config_version", 1)))
 def rollback_gateway_connection_id_migration(
     *,
     config_path: Path,
@@ -322,7 +322,8 @@ def _normalize_connection_ids(
     *,
     config_path: Path,
     state_store: GatewayStateStore | None,
-) -> None:
+    previous_entries: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     raw_workspaces = raw_config.get("workspaces")
     if not isinstance(raw_workspaces, list):
         raise TypeError("Gateway workspaces 配置必须是数组")
@@ -332,7 +333,7 @@ def _normalize_connection_ids(
             raise TypeError("Gateway workspaces 元素必须是对象")
         items.append(item)
 
-    previous_entries: list[dict[str, object]] = []
+    previous_entries = list(previous_entries or ())
     if state_store is not None:
         identity_record = _connection_id_record(state_store)
         if identity_record is not None:
@@ -404,3 +405,4 @@ def _normalize_connection_ids(
                 config_version=_CONNECTION_ID_RECORD_VERSION,
                 payload=normalized_payload,
             )
+    return normalized_entries

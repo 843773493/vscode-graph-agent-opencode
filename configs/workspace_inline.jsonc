@@ -1,6 +1,6 @@
 {
   "$schema": "./workspace_schema.jsonc", // ConfigService._resolve_schema_path 读取 schema 引用。
-  "config_version": 1, // configs.legacy_migrations 与 workspace_schema 校验配置版本。
+  "config_version": 2, // configs.legacy_migrations 与 workspace_schema 校验配置版本。
   "llm": {
     "providers": [
       {
@@ -187,10 +187,6 @@
         }
       }
     ]
-  },
-  "logger": {
-    "level": "info", // ConfigService.get_logger_level 与 configure_application_logging 使用。
-    "pretty": true // ConfigService.get_logger_pretty 使用。
   },
   "context": {
     "resource_activation": {

@@ -45,7 +45,7 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
 
 def _base_config() -> dict[str, object]:
     return {
-        "config_version": 1,
+        "config_version": 2,
         "llm": {
             "providers": [
                 {
@@ -57,7 +57,6 @@ def _base_config() -> dict[str, object]:
                 }
             ]
         },
-        "logger": {"level": "info"},
         "default_agent": "default",
         "agents": {
             "default": {
@@ -77,7 +76,7 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
     config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
     local_path = tmp_path / "workspace_local.jsonc"
     local_path.write_text(
-        json.dumps({"logger": {"level": "debug"}}),
+        json.dumps({"development": {"test_tools": True}}),
         encoding="utf-8",
     )
     service = ConfigService(
@@ -209,7 +208,7 @@ async def test_config_endpoint_metadata_never_exposes_real_path(
     config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
     local_path = tmp_path / "workspace_local.jsonc"
     local_path.write_text(
-        json.dumps({"logger": {"level": "debug"}}), encoding="utf-8"
+        json.dumps({"development": {"test_tools": True}}), encoding="utf-8"
     )
     workspace_root = tmp_path / "workspace"
     workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"

@@ -1,6 +1,6 @@
 {
   "$schema": "./workspace_schema.jsonc",
-  "config_version": 1,
+  "config_version": 2,
   "context": {
     "resource_activation": {
       "default_boundary": "turn",
@@ -159,9 +159,6 @@
         }
       }
     ]
-  },
-  "logger": {
-    "level": "info"
   },
   "tooling": {
     "policy_defaults": {

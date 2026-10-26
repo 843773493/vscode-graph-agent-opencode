@@ -60,10 +60,6 @@
       }
     ]
   },
-  "logger": {
-    "level": "info",
-    "pretty": true
-  },
   "default_agent": "coder",
   "agents": {
     "coder": {

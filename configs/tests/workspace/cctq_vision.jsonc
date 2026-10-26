@@ -24,10 +24,6 @@
       }
     ]
   },
-  "logger": {
-    "level": "info",
-    "pretty": true
-  },
   "default_agent": "default",
   "agents": {
     "default": {

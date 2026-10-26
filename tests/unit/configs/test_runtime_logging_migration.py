@@ -9,6 +9,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -16,6 +17,8 @@ from app.core.config_sources import config_revision
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.cli import main
+from configs.runtime import read_jsonc_object
+from configs.runtime_logging_commit import commit_runtime_logging_migration
 from configs.runtime_logging_migration import preview_runtime_logging_migration
 from tests.harness.python.run_context import TestRunContext
 
@@ -273,17 +276,19 @@ def test_cli_uses_selected_gateway_database_and_reports_legacy_layout(
     assert not (migration_home / "config/gateway.jsonc").exists()
 
 
-def test_cli_without_preview_rejects_write_and_preserves_inputs(
-    migration_home: Path, monkeypatch: pytest.MonkeyPatch,
+def test_cli_migrates_and_backs_up_original_bytes(
+    migration_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = migration_home / "config/workspace.jsonc"
     _write(path, {"logger": {"level": "debug"}})
     original = path.read_bytes()
-    with pytest.raises(SystemExit) as error:
-        _cli(monkeypatch)
-    assert error.value.code == 2
-    assert path.read_bytes() == original
-    assert not (migration_home / "state").exists()
+    _cli(monkeypatch)
+    report = json.loads(capsys.readouterr().out)
+    assert report["state"] == "completed"
+    assert "logger" not in json.loads(path.read_text())
+    assert any(item.read_bytes() == original for item in Path(report["backup_root"]).glob("file-*.before"))
+    assert json.loads((migration_home / "config/gateway.jsonc").read_text())["logging"]["runtime"] == {"level": "debug", "pretty": True}
+    assert not (migration_home / "state/gateway/gateway.sqlite").exists()
 
 
 def test_cli_accepts_multiple_explicit_workspaces_and_choices(
@@ -350,3 +355,245 @@ def test_migration_flags_are_not_silently_accepted_by_other_actions(
         main()
     assert error.value.code == 2
     assert not migration_home.exists()
+
+
+def _legacy_payload() -> dict[str, object]:
+    payload = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
+    return {**payload, "config_version": 1, "logger": {"level": "info", "pretty": True}}
+
+
+def test_migration_preserves_active_business_state_and_source_cas(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    from app.services.infrastructure.config_service import ConfigService
+
+    first = migration_workspaces[0]
+    path = first / ".boxteam/workspace.jsonc"
+    active = _legacy_payload()
+    _write(path, active)
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    source = workspace_store.sync_config_source(
+        config_key="workspace_root_mutable_override", uri=None, config_version=1,
+        presence="present", payload=active, layer_digest=original_digest,
+    )
+    baseline: dict[str, object] = {source.config_key: {"uri": None, "presence": "present", "layer_revision": source.layer_revision,
+                                  "layer_digest": source.layer_digest, "source_generation": source.source_generation}}
+    original = workspace_store.ensure_active_config_snapshot(
+        config_domain="workspace", payload=active, source_baseline=baseline, source_generation=source.source_generation,
+        layer_revisions={source.config_key: source.layer_revision}, layer_digests={source.config_key: source.layer_digest},
+        effective_digest=config_revision(active), secret_bindings={}, schema_version=1,
+    )
+    changed = {**active, "development": {"test_tools": True}}
+    _write(path, changed)
+    before = _database_dump(workspace_store.path)
+    workspace_store.close()
+
+    result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    assert result["state"] == "completed"
+    with WorkspaceStateStore(workspace_root=first) as restored:
+        migrated = restored.get_active_config_snapshot("workspace")
+        assert migrated is not None
+        assert migrated.payload == {key: (2 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
+        assert migrated.active_revision > original.active_revision
+        assert migrated.effective_digest == config_revision(migrated.payload)
+        assert migrated.schema_version == 2
+        layer = restored.get_source_layer(source.config_key)
+        assert layer is not None
+        assert layer.layer_revision == source.layer_revision + 1
+        assert migrated.layer_revisions[source.config_key] == layer.layer_revision
+        assert migrated.layer_digests[source.config_key] == layer.layer_digest
+        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, workspace_state_store=restored)
+        assert service.get_snapshot().to_dict()["development"]["test_tools"] is False
+        assert json.loads(path.read_text())["development"]["test_tools"] is True
+    after = _database_dump(workspace_store.path)
+    backup_root = Path(str(result["backup_root"]))
+    backup = next(backup_root.glob("db-*.before.sqlite"))
+    assert _database_dump(backup) == before
+    repeated = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    assert repeated["state"] == "unchanged"
+    assert _database_dump(workspace_store.path) == after
+    # 产品重新启动后会正常写来源观察，原件恢复不能覆盖这些后续事实。
+    with pytest.raises(RuntimeError, match="配置被外部修改"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)
+    assert _database_dump(workspace_store.path) == after
+    assert json.loads(path.read_text()) == {key: (2 if key == "config_version" else value) for key, value in changed.items() if key != "logger"}
+
+
+def test_restore_database_before_restart_returns_exact_original(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    _active(workspace_store, "workspace", _legacy_payload())
+    before = _database_dump(workspace_store.path)
+    workspace_store.close()
+    commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)["state"] == "restored"
+    assert _database_dump(workspace_store.path) == before
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_interrupted_migration_blocks_runtime_and_can_resume_or_restore(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, restore: bool,
+) -> None:
+    import configs.runtime_logging_commit as commit
+
+    first = migration_workspaces[0]
+    path = first / ".boxteam/workspace.jsonc"
+    _write(path, {"config_version": 1, "logger": {"level": "debug"}})
+    original = path.read_bytes()
+    write = commit.atomic_write
+
+    def interrupted(target: Path, content: bytes, mode: int) -> None:
+        if target == path:
+            raise OSError("注入发布中断")
+        write(target, content, mode)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(commit, "atomic_write", interrupted)
+        with pytest.raises(OSError, match="注入发布中断"):
+            commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
+        read_jsonc_object(migration_home / "config/gateway.jsonc")
+    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
+        WorkspaceStateStore(workspace_root=first)
+    with pytest.raises(ValueError, match="不能更换日志选择"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, level="error")
+    assert commit_runtime_logging_migration(boxteam_home=migration_home, level="debug", pretty=True, restore=restore)["state"] == ("restored" if restore else "completed")
+    if restore:
+        assert path.read_bytes() == original
+        assert not (migration_home / "config/gateway.jsonc").exists()
+    else:
+        assert json.loads(path.read_text()) == {"config_version": 2}
+        assert read_jsonc_object(migration_home / "config/gateway.jsonc")["logging"] == {"runtime": {"level": "debug", "pretty": True}}
+
+
+def test_live_owner_blocks_migration_before_publishing_any_configuration(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    first = migration_workspaces[0]
+    path = first / ".boxteam/workspace.jsonc"
+    _write(path, {"logger": {"level": "info"}})
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match="已被另一个进程占用"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    assert path.read_bytes() == before
+    assert not (migration_home / "config/gateway.jsonc").exists()
+
+
+def test_unmigrated_workspace_is_rejected_before_writing_legacy_source(
+    migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    from app.services.infrastructure.config_service import ConfigService
+
+    path = migration_workspaces[0] / ".boxteam/workspace.jsonc"
+    _write(path, {"logger": {"level": "info"}})
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path, workspace_state_store=workspace_store)
+    with pytest.raises(ValueError, match="migrate-runtime-logging"):
+        service.get_snapshot()
+    assert workspace_store.get_source_layer("workspace_mutable_override") is None
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_interrupt_after_database_commit_retains_recoverable_owner_boundary(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+    monkeypatch: pytest.MonkeyPatch, restore: bool,
+) -> None:
+    import configs.runtime_logging_commit as commit
+
+    first = migration_workspaces[0]
+    _active(workspace_store, "workspace", _legacy_payload())
+    before = _database_dump(workspace_store.path)
+    workspace_store.close()
+    write = commit.atomic_write
+
+    def interrupted(path: Path, content: bytes, mode: int) -> None:
+        if path == migration_home / "config/workspace_schema.jsonc":
+            raise OSError("注入数据库发布后中断")
+        write(path, content, mode)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(commit, "atomic_write", interrupted)
+        with pytest.raises(OSError, match="数据库发布后中断"):
+            commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
+        WorkspaceStateStore(workspace_root=first)
+    commit_runtime_logging_migration(boxteam_home=migration_home, restore=restore)
+    if restore:
+        assert _database_dump(workspace_store.path) == before
+    else:
+        with WorkspaceStateStore(workspace_root=first) as store:
+            active = store.get_active_config_snapshot("workspace")
+            assert active is not None and active.schema_version == 2 and "logger" not in active.payload
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_gateway_connection_ids_are_frozen_once_and_reuse_existing_identity(
+    migration_home: Path, gateway_store: GatewayStateStore, registered: bool,
+) -> None:
+    path = migration_home / "config/gateway.jsonc"
+    connection = {"kind": "remote_gateway", "host": "example.test", "username": "developer", "private_key_path": "~/.ssh/key"}
+    _write(path, {"config_version": 1, "workspaces": [connection]})
+    if registered:
+        gateway_store.set_config(config_key="gateway_connection_ids", config_version=4, payload={"entries": [
+            {"connection_id": "connection_original", "fingerprint": ["example.test", 22, "developer", "~/.ssh/key", None, 8014]},
+        ]})
+    gateway_store.close()
+    commit_runtime_logging_migration(boxteam_home=migration_home)
+    migrated = json.loads(path.read_text())
+    identity = migrated["workspaces"][0]["connection_id"]
+    assert identity
+    if registered:
+        assert identity == "connection_original"
+    assert migrated["config_version"] == 3
+    assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
+    assert json.loads(path.read_text())["workspaces"][0]["connection_id"] == identity
+
+
+def test_shared_source_pending_fanout_blocks_explicit_migration(migration_home: Path) -> None:
+    from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
+
+    owner = WorkspaceSourceOwner(path=migration_home / "config/workspace-source.sqlite")
+    owner.observe(uri=None, presence="present", layer_digest="old", origin="test")
+    owner.prepare_fanout(workspace_id="workspace_awaiting", after_generation=0)
+    report = preview_runtime_logging_migration(boxteam_home=migration_home).report()
+    unsettled = cast(list[dict[str, str]], report["unsettled"])
+    assert unsettled[0]["kind"] == "source_fanout"
+    with pytest.raises(ValueError, match="未结算配置"):
+        commit_runtime_logging_migration(boxteam_home=migration_home)
+    assert not (migration_home / "config/gateway.jsonc").exists()
+
+
+@pytest.mark.asyncio
+async def test_shared_source_owner_resumes_existing_generation_after_migration(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    from app.core.workspace_identity import load_or_create_workspace_id
+    from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
+    from app.services.infrastructure.config_service import ConfigService
+
+    first = migration_workspaces[0]
+    workspace_id = load_or_create_workspace_id(first)
+    path = migration_home / "config/workspace.jsonc"
+    payload = _legacy_payload()
+    _write(path, payload)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    layer = workspace_store.sync_config_source(config_key="workspace_mutable_override", uri=None,
+        config_version=1, presence="present", payload=payload, layer_digest=digest)
+    _active(workspace_store, "workspace", payload)
+    owner = WorkspaceSourceOwner(path=migration_home / "config/workspace-source.sqlite")
+    observed = owner.observe(uri=None, presence="present", layer_digest=digest, origin="historical-runtime")
+    owner.prepare_fanout(workspace_id=workspace_id, after_generation=0)
+    owner.record_fanout(source_generation=observed.source_generation, workspace_id=workspace_id,
+        status="applied", layer_revision=layer.layer_revision, layer_digest=digest)
+    history = owner.list_journal()
+    workspace_store.close()
+    commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    assert owner.list_journal() == history
+    with WorkspaceStateStore(workspace_root=first) as store:
+        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, config_path=path,
+            workspace_state_store=store, source_owner=owner, source_owner_workspace_id=workspace_id)
+        service.validate_workspace_config()
+        assert await service.reload() is False
+        current = store.get_source_layer("workspace_mutable_override")
+        assert current is not None and current.source_generation == observed.source_generation + 1
+        assert owner.list_journal()[0] == history[0]
+        assert owner.list_journal()[-1].layer_digest == hashlib.sha256(path.read_bytes()).hexdigest()

@@ -259,7 +259,7 @@ class ReloadLifecycleMixin:
             layer_revisions=revisions,
             layer_digests=digests,
             effective_digest=self._config.revision,
-            schema_version=2,
+            schema_version=3,
             promoted_generation="gateway-bootstrap",
             secret_bindings=build_secret_binding_summary(self._config.payload),
         )
@@ -507,7 +507,7 @@ class ReloadLifecycleMixin:
                     layer_revisions=revisions,
                     layer_digests=digests,
                     effective_digest=candidate.revision,
-                    schema_version=2,
+                    schema_version=3,
                     expected_active_revision=active.active_revision,
                     expected_pending_revision=pending.pending_revision,
                     expected_source_baseline=pending.source_baseline,

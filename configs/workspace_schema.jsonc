@@ -13,14 +13,13 @@
   //   已经运行中的 Job 会继续使用启动时的配置快照。
   // - default_agent 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。
   // - ui 配置支持热重载，后续配置读取使用新值。
-  // - logger 当前不会动态调整运行中的日志系统，需要重启工作区后端。
   // - mcp 当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。
   // - 用户级配置与工作区级配置深度合并；被高优先级值遮蔽的低优先级变化
   //   不会触发有效配置 revision 变化。
   // ============================================================
 
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://boxteam.dev/schemas/workspace-config-v1.json",
+  "$id": "https://boxteam.dev/schemas/workspace-config-v2.json",
   "x-boxteam-config-domain": "workspace",
   "x-boxteam-policy-manifest": [
     { "pattern": "/ui/*", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
@@ -30,8 +29,7 @@
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/connection/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
-    { "pattern": "/logger", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
+    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null }
   ],
   "title": "BoxTeam Workspace Config Schema",
   "type": "object",
@@ -39,7 +37,6 @@
   "required": [
     "config_version",
     "llm",
-    "logger",
     "default_agent",
     "agents"
   ],
@@ -49,8 +46,8 @@
     },
     "config_version": {
       "type": "integer",
-      "const": 1,
-      "description": "配置格式版本；程序会在加载旧版本时按顺序迁移。"
+      "const": 2,
+      "description": "配置格式版本；旧 logger 必须通过 migrate-runtime-logging 显式迁移。"
     },
     "llm": {
       "type": "object",
@@ -66,29 +63,6 @@
           "items": {
             "$ref": "#/$defs/provider"
           }
-        }
-      }
-    },
-    "logger": {
-      "type": "object",
-      "description": "日志配置。修改后需要重启工作区后端。",
-      "additionalProperties": false,
-      "properties": {
-        "level": {
-          "type": "string",
-          "enum": [
-            "debug",
-            "info",
-            "warning",
-            "error",
-            "critical"
-          ],
-          "default": "info"
-        },
-        "pretty": {
-          "type": "boolean",
-          "description": "是否使用带 UTC 时间戳的本地易读格式；false 使用不带时间戳的紧凑文本格式。进程日志始终是文本流，不承诺 JSONL。修改后需要重启工作区后端。",
-          "default": true
         }
       }
     },

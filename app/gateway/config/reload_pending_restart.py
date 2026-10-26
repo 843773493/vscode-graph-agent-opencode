@@ -308,7 +308,7 @@ class ReloadPendingRestartMixin:
             layer_revisions=layer_revisions,
             layer_digests=layer_digests,
             effective_digest=pending.effective_digest,
-            schema_version=2,
+            schema_version=3,
             expected_active_revision=(
                 active.active_revision if active is not None else None
             ),

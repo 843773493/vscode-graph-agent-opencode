@@ -561,7 +561,7 @@ class ConfigReloadMixin:
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
             secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=1,
+            schema_version=2,
             promoted_generation="bootstrap",
         )
 
@@ -599,7 +599,7 @@ class ConfigReloadMixin:
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
             secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=1,
+            schema_version=2,
             promoted_generation="workspace-runtime",
             promoted_apply_id=apply_id,
             expected_active_revision=expected_active_revision,

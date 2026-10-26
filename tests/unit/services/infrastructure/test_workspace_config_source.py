@@ -301,13 +301,13 @@ def test_source_layer_sync_get_and_cas(workspace_root: Path):
             uri=None,
             config_version=1,
             presence="present",
-            payload={"logger": {"level": "info"}},
+            payload={"ui": {"default_model": "info"}},
             layer_digest="ld1",
         )
         assert (layer.config_key, layer.layer_revision, layer.layer_digest) == (
             "workspace", 1, "ld1"
         )
-        assert layer.payload == {"logger": {"level": "info"}}
+        assert layer.payload == {"ui": {"default_model": "info"}}
         assert store.get_source_layer("missing") is None
 
         absent = store.sync_config_source(
@@ -326,7 +326,7 @@ def test_source_layer_sync_get_and_cas(workspace_root: Path):
                 uri=None,
                 config_version=2,
                 presence="present",
-                payload={"logger": {"level": "warn"}},
+                payload={"ui": {"default_model": "warn"}},
                 layer_digest="ld9",
                 expected_layer_revision=99,
                 expected_layer_digest="ld1",
@@ -603,7 +603,7 @@ def test_persisted_source_records_never_hold_real_path(workspace_root: Path):
             uri="boxteam://workspace/ws-1/resources/config/workspace_root_mutable_override",
             config_version=1,
             presence="present",
-            payload={"logger": {"level": "info"}},
+            payload={"ui": {"default_model": "info"}},
             layer_digest="ld1",
             journal_origin="loader",
         )
@@ -642,7 +642,7 @@ def test_source_layer_uri_round_trips_and_sqlite_layer_is_unaddressable(workspac
             uri="boxteam://inline/source-development-0_0_2/resources/config/workspace_inline",
             config_version=1,
             presence="present",
-            payload={"logger": {"level": "info"}},
+            payload={"ui": {"default_model": "info"}},
             layer_digest="ld1",
         )
         assert addressable.uri == (
@@ -653,7 +653,7 @@ def test_source_layer_uri_round_trips_and_sqlite_layer_is_unaddressable(workspac
             uri=None,
             config_version=1,
             presence="present",
-            payload={"logger": {"level": "debug"}},
+            payload={"ui": {"default_model": "debug"}},
             layer_digest="ld2",
         )
         assert unaddressable.uri is None

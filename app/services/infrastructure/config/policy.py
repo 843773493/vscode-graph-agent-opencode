@@ -261,7 +261,6 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/connection/*", "next_job", "next_job"),
             ConfigPolicyRule("/mcp", "restart_workspace", "restart_workspace"),
-            ConfigPolicyRule("/logger", "restart_workspace", "restart_workspace"),
         ),
     )
 
@@ -271,6 +270,8 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
         domain="gateway",
         default_policy="restart_gateway",
         rules=(
+            # TODO：接通日志跨进程 apply/proof 后改为热应用；此前不能虚报候选已生效。
+            ConfigPolicyRule("/logging/runtime/*", "restart_gateway", "restart_gateway"),
             ConfigPolicyRule("/ui/*", "immediate_read", "current"),
             ConfigPolicyRule("/permissions", "immediate_read", "current"),
             ConfigPolicyRule("/permissions/federation", "immediate_read", "current"),

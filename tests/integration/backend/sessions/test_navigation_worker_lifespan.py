@@ -106,8 +106,6 @@ def _isolate_non_navigation_services(
 
     for owner, method_name, result in (
         (container.config_service, "validate_workspace_config", None),
-        (container.config_service, "get_logger_level", "INFO"),
-        (container.config_service, "get_logger_pretty", False),
         (container.config_service, "set_mcp_tool_names", None),
         (container.mcp_catalog_owner, "get_tool_ids", []),
         (container.workspace_activity_service, "prune", 0),

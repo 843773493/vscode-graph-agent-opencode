@@ -2,12 +2,12 @@
 
 - [x] 1.1 全仓检索日志路径、轮转、旧 logger 配置、环境覆盖及其直接/间接消费者，核对当前 Backend 多工作区生命周期基线。
 - [x] 1.2 建立唯一的日志布局与默认轮转合同资源及跨语言样本，明确角色文件名、实例身份、pretty/compact 字段和 raw output 边界。
-- [ ] 1.3 在 Gateway inline/schema/dev 配置加入 `logging.runtime.level/pretty`，Gateway 从已持久化的 v2 推进至 v3，Workspace 从 v1 推进至 v2，迁齐策略声明并保持现有来源层次。
-- [ ] 1.4 实现显式跨域迁移的预览、备份、冲突选择、原子替换与中断恢复，覆盖用户级、local、明确指定工作区的文件、SQLite 来源层及 active snapshot，保留待结算状态与既有 CAS；删除旧 Workspace logger 运行期读写、schema 与 accessor。
+- [x] 1.3 在 Gateway inline/schema/dev 配置加入 `logging.runtime.level/pretty`，Gateway 从已持久化的 v2 推进至 v3，Workspace 从 v1 推进至 v2，迁齐策略声明并保持现有来源层次。
+- [x] 1.4 实现显式跨域迁移的预览、备份、冲突选择、原子替换与中断恢复，覆盖用户级、local、明确指定工作区的文件、SQLite 来源层及 active snapshot，保留待结算状态与既有 CAS；删除旧 Workspace logger 运行期读写、schema 与 accessor。
 
 ## 2. 唯一日志输出与路径归属
 
-- [ ] 2.1 统一 Python 应用日志字段、等级与格式，将 Backend、Gateway、Uvicorn 接入唯一 handler 路径，消除重复传播和启动时按工作区比较 logger 的逻辑。
+- [x] 2.1 统一 Python 应用日志字段、等级与格式，将 Backend、Gateway、Uvicorn 接入唯一 handler 路径，消除重复传播和启动时按工作区比较 logger 的逻辑。
 - [x] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
 - [x] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
 - [x] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
@@ -100,3 +100,11 @@
 - 接管和后续热应用共用严格的进程日志状态合同；只向本机管理根地址发送既有私有凭据，拒绝重定向。响应必须核对服务与 PID；应用确认还核对运行实例、revision 和实际设置，不能以 HTTP 成功替代确认。删除接管入口的裸 dict 身份判断。
 - `process-control-contract-144` 为128通过；`process-control-real-handoff-146` 两项真实 Launcher／Gateway 验证通过，包含受管服务接管和原文件去向保持。新控制模块／schema／定向测试 Pyright147零错误，相关 Ruff通过。扩大Pyright145的两条 `GatewayServiceName` 诊断与既有归档基线084一致，不称整体类型全绿。
 - 原始命令、源码指纹、输出与退出码保留在上述证据目录。当前仍6／22；此切片未完成候选协调、跨域迁移或完整诊断，不勾选3.2。
+
+### 1.3／1.4／2.1 配置跨域迁移完成（2026-10-26）
+
+- Gateway 模板／schema／来源／active 使用 v3，Workspace 使用 v2，旧 logger schema、accessor 和挂载工作区间的进程日志争用均已删除。显式命令现在支持预览、字段选择、原字节／一致 SQLite 备份、owner 排他、全配置账本 CAS、原子发布、中断继续及 `--restore`。中断标记覆盖尚未存在的来源与数据库，运行期拒绝读取未结算迁移，不自动恢复或双读旧字段。
+- active 按原 active 独立转换，文件里的未生效业务变更不被提升；来源 revision／digest 与匹配的 active baseline 同步推进。共享 Workspace 来源仍由既有 owner 接续 generation；connection_id 复用既有算法和持久身份。已有 pending／claim／恢复事实阻断迁移，历史事件不改写。重复迁移不变，产品恢复后新增配置事实会使原件恢复 CAS 明确拒绝。
+- 证据仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`：最终迁移 `migration-complete-012` 50通过；此前迁移／安装／布局 `migration-final-010` 67通过，后续中断重放及共享owner接续由012补验；Gateway `gateway-final-002` 120通过，Workspace配置消费者 `config-consumers-final-004` 89通过。`typecheck-comparison-006.json` 与 `ruff-comparison-002.json` 核对受影响文件均无新增诊断，整组静态仍有既存错误，不称全绿。
+- 扩大真实生命周期 `migration-mounted-runtime-001` 为10通过／4项模型请求前等待超时；完整提交前源码 `mounted-goal-baseline-001` 在其中同一项、同一等待点复现超时，其余三项未逐项跑基线。保留原始失败与期限，并在该等待点登记性能测量 TODO。4498项归档源码已逐blob核对后删除，基线正式测试产物单独保留。
+- 当前9／22。日志路径策略已登记，但暂按 Gateway pending_restart 处理，避免在3.2尚未接通时虚报热生效；逐进程 prepare／apply／proof／promotion、热更新补偿与新增实例处理仍未完成。未修改Web，不新增Web构建；本切片未进行Windows／macOS产品验收。

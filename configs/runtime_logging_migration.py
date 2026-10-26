@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -84,6 +85,7 @@ class RuntimeLoggingMigrationPlan:
     unsettled: tuple[dict[str, str], ...]
     choices: dict[str, str | bool]
     contract: RuntimeLogContract
+    databases: tuple[tuple[ConfigDomain, Path], ...] = ()
 
     def report(self) -> dict[str, object]:
         # 只输出日志字段与来源身份，不能把模型密钥或完整业务配置带入预览。
@@ -172,9 +174,28 @@ def _read_database(
             "SELECT apply_id FROM config_apply_claim WHERE config_domain = ?", (domain,),
         ):
             unsettled.append({"source": str(path), "kind": "claim", "id": apply_id[0], "state": "claimed"})
+        if domain == "gateway":
+            row = connection.execute("SELECT payload_json FROM gateway_config WHERE config_key='gateway_connection_ids'").fetchone()
+            if row is not None:
+                migration = _json_payload(row[0], source=str(path)).get("migration")
+                if isinstance(migration, dict) and migration.get("state") == "planned":
+                    unsettled.append({"source": str(path), "kind": "connection_id_migration", "id": "gateway_connection_ids", "state": "planned"})
     finally:
         connection.close()
     return inputs, unsettled
+
+
+def _read_shared_source_owner(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as connection:
+        return [
+            {"source": str(path), "kind": "source_fanout", "id": f"{key}:{generation}:{workspace_id}", "state": state}
+            for key, generation, workspace_id, state in connection.execute(
+                "SELECT source_key,source_generation,workspace_id,status FROM config_source_fanout "
+                "WHERE status NOT IN ('applied','superseded') ORDER BY source_key,source_generation,workspace_id"
+            )
+        ]
 
 
 def preview_runtime_logging_migration(
@@ -219,6 +240,7 @@ def preview_runtime_logging_migration(
         stored, pending = _read_database(path, domain)
         inputs.extend(stored)
         unsettled.extend(pending)
+    unsettled.extend(_read_shared_source_owner(home / "config/workspace-source.sqlite"))
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
         versions = [item.config_version] if item.payload is not None else []
@@ -243,4 +265,7 @@ def preview_runtime_logging_migration(
                 conflicts.append({"field": field, "sources": [{"source": source, "value": value} for source, value in values]})
             elif values:
                 settings[field] = values[0][1]
-    return RuntimeLoggingMigrationPlan(tuple(inputs), settings, tuple(conflicts), tuple(unsettled), choices, contract)
+    return RuntimeLoggingMigrationPlan(
+        tuple(inputs), settings, tuple(conflicts), tuple(unsettled), choices, contract,
+        tuple(databases),
+    )

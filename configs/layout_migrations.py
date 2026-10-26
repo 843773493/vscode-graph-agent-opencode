@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import cast
 
 import commentjson
 import jsonschema
 
+from app.core.logging_contract import load_runtime_log_contract
 from configs.installer import atomic_write
 from configs.legacy_migrations import read_and_migrate_config
 
@@ -35,7 +37,20 @@ def _validate_candidate(
     source_path: Path,
 ) -> None:
     try:
-        jsonschema.validate(payload, _load_schema(schema_path))
+        schema = _load_schema(schema_path)
+        # 布局拆分的历史产物仍是 v1；下一步日志迁移负责跨域选择和版本推进。
+        # 这里仅还原该历史输入的校验合同，运行时不加载旧 logger。
+        properties = cast(dict[str, object], schema["properties"])
+        properties["config_version"] = {"const": 1}
+        if schema.get("x-boxteam-config-domain") == "workspace":
+            contract = load_runtime_log_contract()
+            properties["logger"] = {
+                "type": "object", "additionalProperties": False,
+                "properties": {"level": {"enum": list(contract.levels)}, "pretty": {"type": "boolean"}},
+            }
+        else:
+            schema["required"] = [key for key in cast(list[str], schema["required"]) if key != "logging"]
+        jsonschema.validate(payload, schema)
     except jsonschema.ValidationError as error:
         location = ".".join(str(item) for item in error.absolute_path) or "<root>"
         raise ValueError(

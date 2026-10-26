@@ -33,7 +33,7 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
-from configs.runtime import validate_config_payload
+from configs.runtime import require_current_workspace_config, validate_config_payload
 
 if TYPE_CHECKING:
     from app.services.infrastructure.config.instruction_inputs import (
@@ -51,6 +51,7 @@ class ConfigSnapshotMixin:
         validate_schema: bool = True,
     ) -> ConfigSnapshot:
         config, source_paths, source_details, schema_path = self._read_effective_config()
+        require_current_workspace_config(config)
         schema = self._load_schema(schema_path)
         if validate_schema:
             validate_config_payload(config, schema=schema)

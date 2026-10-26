@@ -56,7 +56,7 @@ def test_shadow_schema_validation_rejects_without_echoing_config(validation_file
     service.validate_workspace_config()
     snapshot = service.get_snapshot()
     config = snapshot.to_dict()
-    config["logger"]["level"] = str(directory / "secret-marker")
+    config["llm"]["providers"][0]["api_mode"]["protocol"] = str(directory / "secret-marker")
     with pytest.raises(ValueError, match="stage=config") as failure:
         service._validate_shadow_config(config)
     assert "secret-marker" not in str(failure.value)

@@ -80,7 +80,6 @@ async def lifespan(application: FastAPI):
         application.state.workspace_container_registry = registry
         logger.info("Backend 启动阶段 end: stage=workspace_registry workspace_ids=%s elapsed=%.3fs",
                     registry.workspace_ids, time.monotonic() - startup_started)
-        logger_config: tuple[str, bool] | None = None
         for workspace_id in registry.workspace_ids:
             mount = mounted.resolve(workspace_id)
             mount_started = time.monotonic()
@@ -94,20 +93,6 @@ async def lifespan(application: FastAPI):
             await workspace.start()
             logger.info("Workspace 挂载 ready: workspace_id=%s elapsed=%.3fs",
                         workspace_id, time.monotonic() - mount_started)
-            candidate = (
-                container.config_service.get_logger_level(),
-                container.config_service.get_logger_pretty(),
-            )
-            if logger_config is not None and candidate != logger_config:
-                raise RuntimeError(
-                    "同一 Backend 进程的已挂载工作区必须使用相同日志配置: "
-                    f"workspace_id={workspace_id}, expected={logger_config}, actual={candidate}"
-                )
-            logger_config = candidate
-        assert logger_config is not None
-        configure_application_logging(
-            service="backend", level=logger_config[0], pretty=logger_config[1]
-        )
         logger.info("已启动全部挂载工作区: workspace_ids=%s elapsed=%.3fs",
                     registry.workspace_ids, time.monotonic() - startup_started)
         yield

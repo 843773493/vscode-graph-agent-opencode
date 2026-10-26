@@ -201,37 +201,6 @@ class ConfigPublicMixin:
     def get_default_agent_runtime_config(self) -> dict[str, Any]:
         return self.get_agent_runtime_config(self.get_default_agent_id())
 
-    def get_logger_level(self) -> str:
-        config = self._get_effective_config()
-        logger_config = config.get("logger", {})
-        if not isinstance(logger_config, dict):
-            raise ValueError("logger 配置必须是对象")
-        level = logger_config.get("level", "info")
-        if not isinstance(level, str):
-            raise ValueError("logger.level 必须是字符串")
-        normalized_level = level.strip().upper()
-        if normalized_level not in {
-            "DEBUG",
-            "INFO",
-            "WARNING",
-            "ERROR",
-            "CRITICAL",
-        }:
-            raise ValueError(
-                "logger.level 仅支持 debug、info、warning、error、critical"
-            )
-        return normalized_level
-
-    def get_logger_pretty(self) -> bool:
-        config = self._get_effective_config()
-        logger_config = config.get("logger", {})
-        if not isinstance(logger_config, dict):
-            raise ValueError("logger 配置必须是对象")
-        pretty = logger_config.get("pretty", True)
-        if not isinstance(pretty, bool):
-            raise ValueError("logger.pretty 必须是布尔值")
-        return pretty
-
     def development_test_tools_enabled(self) -> bool:
         config = self._get_effective_config()
         development = config.get("development", {})

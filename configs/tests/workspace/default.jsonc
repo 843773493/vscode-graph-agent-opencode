@@ -84,10 +84,6 @@
       }
     ]
   },
-  "logger": {
-    "level": "info",
-    "pretty": true
-  },
   "default_agent": "default",
   "agents": {
     "default": {
@@ -498,5 +494,5 @@
   "development": {
     "test_tools": true
   },
-  "config_version": 1
+  "config_version": 2
 }

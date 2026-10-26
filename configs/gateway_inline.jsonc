@@ -1,6 +1,12 @@
 {
   "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
-  "config_version": 1, // load_gateway_config 与 gateway_schema 校验配置版本。
+  "config_version": 3,
+  "logging": {
+    "runtime": {
+      "level": "info",
+      "pretty": true
+    }
+  }, // load_gateway_config 与 gateway_schema 校验配置版本。
   "workspaces": [], // load_gateway_config 读取远程 Gateway 注册项。
   "ui": {
     "theme": {

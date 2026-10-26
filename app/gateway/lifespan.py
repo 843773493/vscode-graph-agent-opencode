@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import cast
 
 import httpx
 from fastapi import FastAPI
@@ -121,6 +122,10 @@ async def lifespan(app: FastAPI):
             state_store=gateway_state,
             startup=True,
             gateway_id=gateway_id,
+        )
+        runtime_logging = cast(dict[str, object], cast(dict[str, object], gateway_config.payload["logging"])["runtime"])
+        configure_application_logging(
+            service="gateway", level=cast(str, runtime_logging["level"]), pretty=cast(bool, runtime_logging["pretty"]),
         )
     except Exception as error:
         recovery_error: Exception | None = None

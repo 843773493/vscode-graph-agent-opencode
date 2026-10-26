@@ -107,6 +107,7 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--restore", action="store_true", help="恢复最近一次日志配置迁移的原件")
     parser.add_argument("--level")
     parser.add_argument("--pretty", choices=("true", "false"))
     parser.add_argument("--home", type=Path, default=Path.home())
@@ -126,27 +127,29 @@ def main() -> None:
         else None
     )
     if args.action == "migrate-runtime-logging":
-        # TODO: 迁齐可恢复写入与 SQLite snapshot/CAS 协调后，接通不带 --preview 的显式提交。
-        if not args.preview:
-            parser.error("日志迁移当前仅提供 --preview；可恢复写入尚未完成，不会改写配置")
+        from configs.runtime_logging_commit import commit_runtime_logging_migration
         from configs.runtime_logging_migration import preview_runtime_logging_migration
 
         workspaces = tuple(args.migration_workspace)
         if args.workspace is not None:
             workspaces = (args.workspace, *workspaces)
-        plan = preview_runtime_logging_migration(
-            boxteam_home=boxteam_home, workspaces=workspaces,
-            level=args.level, pretty=None if args.pretty is None else args.pretty == "true",
-            project_root=project_root,
-            gateway_sqlite_path=(
+        if args.preview and args.restore:
+            parser.error("--preview 与 --restore 不能同时使用")
+        options = {
+            "boxteam_home": boxteam_home, "workspaces": workspaces,
+            "level": args.level, "pretty": None if args.pretty is None else args.pretty == "true",
+            "project_root": project_root,
+            "gateway_sqlite_path": (
                 Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) / "gateway.sqlite"
                 if os.environ.get("BOXTEAM_GATEWAY_ROOT") else None
             ),
-        )
-        print(json.dumps({"action": args.action, "preview": True, **plan.report()}, ensure_ascii=False))
+        }
+        report = (preview_runtime_logging_migration(**options).report() if args.preview
+                  else commit_runtime_logging_migration(**options, restore=args.restore))
+        print(json.dumps({"action": args.action, "preview": args.preview, **report}, ensure_ascii=False))
         return
-    if args.preview or args.level is not None or args.pretty is not None or args.migration_workspace:
-        parser.error("--preview、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
+    if args.preview or args.restore or args.level is not None or args.pretty is not None or args.migration_workspace:
+        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
     if args.action in {"doctor", "diagnose"}:
         gateway_schema_source, workspace_schema_source = _layout_schema_sources(
             project_root
@@ -286,6 +289,15 @@ def main() -> None:
             config_root=config_root,
             profile="default",
             project_root=project_root,
+        )
+        from configs.runtime_logging_commit import commit_runtime_logging_migration
+
+        commit_runtime_logging_migration(
+            boxteam_home=boxteam_home,
+            workspaces=(args.workspace,) if args.workspace is not None else (),
+            project_root=project_root,
+            gateway_sqlite_path=(Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) / "gateway.sqlite"
+                                 if os.environ.get("BOXTEAM_GATEWAY_ROOT") else None),
         )
 
     details = _validate_installed_configuration(

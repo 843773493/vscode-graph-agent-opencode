@@ -6,6 +6,7 @@ from pathlib import Path
 import jsonschema
 from referencing.exceptions import Unresolvable
 
+from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.services.infrastructure.config.policy import (
     gateway_config_policy,
@@ -15,6 +16,7 @@ from app.services.infrastructure.config.policy import (
 
 
 def read_jsonc_object(path: Path) -> dict[str, object]:
+    require_settled_config_migration(path)
     parsed = parse_stable_config_file(read_stable_config_file(path))
     if parsed is None:
         raise FileNotFoundError("配置文件不存在")
@@ -63,6 +65,13 @@ def validate_config_payload(
 ) -> dict[str, object]:
     """运行时唯一校验入口；公开诊断不复制源文，完整细节留在原始异常链。"""
     schema_domain = schema.get("x-boxteam-config-domain")
+    if schema_domain == "workspace":
+        require_current_workspace_config(config)
+    if schema_domain == "gateway":
+        logging = config.get("logging")
+        runtime = logging.get("runtime") if isinstance(logging, dict) else None
+        if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
+            runtime["level"] = runtime["level"].strip().lower()
     try:
         if schema_domain == "workspace":
             validate_policy_manifest(schema, workspace_config_policy())
@@ -84,6 +93,14 @@ def validate_config_payload(
             f"配置验证失败: stage={stage}, location={location}, rule={error.validator}"
         ) from error
     return config
+
+
+def require_current_workspace_config(config: dict[str, object], *, partial: bool = False) -> None:
+    if "logger" in config or "logging" in config or config.get("config_version", 2 if partial else None) != 2:
+        raise ValueError(
+            "Workspace 日志配置须显式迁移到 Gateway logging.runtime；停止相关服务后执行 "
+            "uv run python -m configs.boxteam migrate-runtime-logging --migration-workspace <工作区>"
+        )
 
 
 def load_validated_config(

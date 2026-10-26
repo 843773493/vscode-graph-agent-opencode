@@ -1,9 +1,10 @@
 {
   // BoxTeam Gateway 控制面配置模式定义。
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://boxteam.dev/schemas/gateway-config-v1.json",
+  "$id": "https://boxteam.dev/schemas/gateway-config-v3.json",
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
+    { "pattern": "/logging/runtime/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
     { "pattern": "/ui/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -19,7 +20,8 @@
   "additionalProperties": false,
   "required": [
     "config_version",
-    "workspaces"
+    "workspaces",
+    "logging"
   ],
   "properties": {
     "$schema": {
@@ -27,8 +29,24 @@
     },
     "config_version": {
       "type": "integer",
-      "enum": [1, 2],
-      "description": "v1 允许缺少 connection_id；加载时先按 v1 校验并备份，再迁移为 v2。Gateway workspaces 变化属于 restart_gateway。"
+      "enum": [1, 2, 3],
+      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-logging 推进到 v3。Gateway workspaces 变化属于 restart_gateway。"
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime"],
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "pretty"],
+          "properties": {
+            "level": { "type": "string", "enum": ["debug", "info", "warning", "error", "critical"], "default": "info" },
+            "pretty": { "type": "boolean", "default": true }
+          }
+        }
+      }
     },
     "workspaces": {
       "type": "array",
@@ -87,7 +105,7 @@
     {
       "if": {
         "properties": {
-          "config_version": { "const": 2 }
+          "config_version": { "enum": [2, 3] }
         }
       },
       "then": {

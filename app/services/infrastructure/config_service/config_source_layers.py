@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
     ConfigSource,
     config_revision,
@@ -37,7 +38,11 @@ from app.services.infrastructure.config_service.config_service_common import (
     release_inline_config_uri_for_file,
 )
 from configs.layout_migrations import migrate_legacy_workspace_configuration
-from configs.runtime import merge_json_objects, read_jsonc_object
+from configs.runtime import (
+    merge_json_objects,
+    read_jsonc_object,
+    require_current_workspace_config,
+)
 
 
 class ConfigSourceLayersMixin:
@@ -383,6 +388,7 @@ class ConfigSourceLayersMixin:
         config_key: str,
         path: Path,
     ) -> dict[str, Any] | None:
+        require_settled_config_migration(path)
         if self._workspace_state_store is None:
             return self._read_config_source(path) if path.is_file() else None
         blocked = self._workspace_state_store.migrate_legacy_config_secrets(config_key)
@@ -451,13 +457,14 @@ class ConfigSourceLayersMixin:
             payload = parse_stable_config_file(file_snapshot)
             if payload is None:
                 raise RuntimeError(f"present 配置文件解析为空: {path}")
+            require_current_workspace_config(payload, partial=True)
             prepare_config_for_persistence(payload)
             ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
                 uri=None,
-                config_version=int(payload.get("config_version", 1)),
+                config_version=int(payload.get("config_version", 2)),
                 presence="present",
                 payload=payload,
                 layer_digest=file_snapshot.digest,
@@ -476,6 +483,7 @@ class ConfigSourceLayersMixin:
         payload = parse_stable_config_file(file_snapshot)
         if payload is None:
             raise RuntimeError(f"present 配置文件解析为空: {path}")
+        require_current_workspace_config(payload, partial=True)
         prepare_config_for_persistence(payload)
         ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
         verify_stable_config_file(file_snapshot)
@@ -485,7 +493,7 @@ class ConfigSourceLayersMixin:
         source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
             uri=None,
-            config_version=int(payload.get("config_version", 1)),
+            config_version=int(payload.get("config_version", 2)),
             presence="present",
             payload=payload,
             layer_digest=file_snapshot.digest,
@@ -593,10 +601,12 @@ class ConfigSourceLayersMixin:
     def _read_config_source(
         path: Path,
     ) -> dict[str, Any]:
+        require_settled_config_migration(path)
         config_snapshot = read_stable_config_file(path)
         config = parse_stable_config_file(config_snapshot)
         if config is None:
             raise FileNotFoundError(f"配置文件不存在: {path}")
+        require_current_workspace_config(config, partial=True)
         ConfigAgentToolsMixin._preflight_custom_tool_factories(config)
         return config
 

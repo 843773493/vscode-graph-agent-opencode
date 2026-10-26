@@ -32,7 +32,7 @@ def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
 
 def _base_config() -> dict:
     return {
-        "config_version": 1,
+        "config_version": 2,
         "llm": {
             "providers": [
                 {
@@ -52,7 +52,7 @@ def _base_config() -> dict:
                 }
             ]
         },
-        "logger": {"level": "info", "pretty": True},
+        "mcp": {"servers": {"sample": {"transport": "stdio", "command": "info"}}},
         "default_agent": "default",
         "agents": {
             "default": {
@@ -65,6 +65,15 @@ def _base_config() -> dict:
             }
         },
     }
+
+
+@pytest.mark.parametrize("legacy_logger", [{"level": "info"}, {"level": "verbose"}, {"pretty": False}])
+def test_workspace_logger_requires_explicit_cross_domain_migration(tmp_path: Path, legacy_logger: dict) -> None:
+    config = {**_base_config(), "logger": legacy_logger}
+    path = _write_workspace_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
+    with pytest.raises(ValueError, match="migrate-runtime-logging"):
+        service.get_snapshot()
 
 
 def _append_test_event(store: WorkspaceStateStore, event_id: str) -> None:
@@ -501,13 +510,13 @@ def test_workspace_local_config_is_merged_before_workspace_override(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["logger"]["level"] = "warning"
+    config["mcp"]["servers"]["sample"]["command"] = "warning"
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
     local_path.write_text(
         json.dumps(
             {
-                "logger": {"level": "debug"},
+                "mcp": {"servers": {"sample": {"transport": "stdio", "command": "debug"}}},
                 "agents": {"default": {"name": "Local Agent"}},
             }
         ),
@@ -531,7 +540,7 @@ def test_workspace_local_config_is_merged_before_workspace_override(
         workspace_root=workspace_root,
     )
 
-    assert service.get_logger_level() == "DEBUG"
+    assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
     assert service.list_agents()["default"]["name"] == "Workspace Agent"
     assert service.get_snapshot().source_paths == (
         Path("configs/workspace_inline.jsonc").resolve(),
@@ -554,10 +563,10 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["logger"]["level"] = "warning"
+    config["mcp"]["servers"]["sample"]["command"] = "warning"
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(json.dumps({"logger": {"level": "debug"}}), encoding="utf-8")
+    local_path.write_text(json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "debug"}}}}), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
     workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_path.parent.mkdir(parents=True)
@@ -574,7 +583,7 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
             workspace_state_store=store,
         )
 
-        assert service.get_logger_level() == "DEBUG"
+        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
         assert service.list_agents()["default"]["name"] == "Workspace Agent"
         assert [source.layer for source in service.get_source_details()] == [
             "inline",
@@ -597,8 +606,8 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
         assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
         assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
 
-        config_path.write_text(json.dumps({"logger": {"level": "ERROR"}}), encoding="utf-8")
-        assert service.get_logger_level() == "DEBUG"
+        config_path.write_text(json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "ERROR"}}}}), encoding="utf-8")
+        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
     finally:
         store.close()
 
@@ -623,7 +632,7 @@ def test_config_source_layer_consistent_across_read_paths(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        first.get_logger_level()
+        first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"]
         first.validate_workspace_config()
         assert store.get_active_config_snapshot("workspace") is not None
 
@@ -693,7 +702,7 @@ def test_workspace_config_restarts_from_active_snapshot_after_source_json_change
         )
         first.validate_workspace_config()
         assert store.get_active_config_snapshot("workspace") is not None
-        assert first.get_logger_level() == "INFO"
+        assert first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
         config_path.write_text("{ this is not valid jsonc", encoding="utf-8")
         second = ConfigService(
             config_dir=Path.cwd() / "configs",
@@ -701,7 +710,7 @@ def test_workspace_config_restarts_from_active_snapshot_after_source_json_change
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        assert second.get_logger_level() == "INFO"
+        assert second.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
     finally:
         store.close()
 
@@ -722,7 +731,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
             workspace_root=workspace_root, workspace_state_store=store,
         )
         # 来源已导入、active 尚未发布，模拟首次启动在两者之间退出。
-        assert first.get_logger_level() == "INFO"
+        assert first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
         source = store.get_source_layer("workspace_mutable_override")
         assert source is not None
         assert store.get_active_config_snapshot("workspace") is None
@@ -735,7 +744,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
         )
         for _ in range(2):
             with pytest.raises(exception):
-                recovered.get_logger_level()
+                recovered.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"]
             unchanged = store.get_source_layer("workspace_mutable_override")
             assert unchanged is not None
             # 既有秘密迁移会刷新更新时间，但不得发布损坏来源的任何业务字段。
@@ -744,10 +753,10 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
             assert store.get_pending_config_candidate(config_domain="workspace") is None
         # 修复源文件后，原 owner 可以从真实新内容建立唯一 active。
         fixed = _base_config()
-        fixed["logger"]["level"] = "debug"
+        fixed["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(fixed), encoding="utf-8")
         recovered.validate_workspace_config()
-        assert recovered.get_logger_level() == "DEBUG"
+        assert recovered.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
         assert store.get_active_config_snapshot("workspace") is not None
         changed = store.get_source_layer("workspace_mutable_override")
         assert changed.layer_revision == source.layer_revision + 1
@@ -1089,7 +1098,7 @@ def test_workspace_config_overrides_user_global_config(
     tmp_path: Path,
 ) -> None:
     global_config = _base_config()
-    global_config["logger"]["level"] = "warning"
+    global_config["mcp"]["servers"]["sample"]["command"] = "warning"
     global_path = tmp_path / "home" / ".boxteam" / "workspace.jsonc"
     global_path.parent.mkdir(parents=True)
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
@@ -1122,40 +1131,8 @@ def test_workspace_config_overrides_user_global_config(
     assert service.development_test_tools_enabled() is True
 
 
-def test_logger_level_is_normalized_and_validated(tmp_path: Path) -> None:
-    config = _base_config()
-    config["logger"]["level"] = " warning "
-    config_path = _write_workspace_config(tmp_path, config)
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
-
-    assert service.get_logger_level() == "WARNING"
-
-    config["logger"]["level"] = "verbose"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-    invalid_service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=config_path,
-    )
-    with pytest.raises(ValueError, match="logger.level 仅支持"):
-        invalid_service.get_logger_level()
 
 
-def test_logger_pretty_is_read_and_validated(tmp_path: Path) -> None:
-    config = _base_config()
-    config["logger"]["pretty"] = False
-    config_path = _write_workspace_config(tmp_path, config)
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
-
-    assert service.get_logger_pretty() is False
-
-    config["logger"]["pretty"] = "yes"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-    invalid_service = ConfigService(
-        config_dir=Path.cwd() / "configs",
-        config_path=config_path,
-    )
-    with pytest.raises(ValueError, match="logger.pretty 必须是布尔值"):
-        invalid_service.get_logger_pretty()
 
 
 def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
@@ -1509,7 +1486,7 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config_path.parent.mkdir(parents=True)
     workspace_config_path.write_text(
-        json.dumps({"logger": {"level": "warning"}}),
+        json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "warning"}}}}),
         encoding="utf-8",
     )
     service = ConfigService(
@@ -1519,7 +1496,7 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     )
 
     original_revision = service.get_revision()
-    global_config["logger"]["level"] = "debug"
+    global_config["mcp"]["servers"]["sample"]["command"] = "debug"
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
 
     assert await service.reload() is False
@@ -1686,7 +1663,7 @@ async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     assert status.healthy is False
     assert "missing_package.tools:create_missing_tool" in (status.last_error or "")
     rejected = json.loads(config_path.read_text(encoding="utf-8"))
-    assert rejected["config_version"] == 1
+    assert rejected["config_version"] == 2
     assert rejected["agents"]["default"]["tools"]["custom"][0]["factory"] == (
         "missing_package.tools:create_missing_tool"
     )
@@ -1802,7 +1779,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
             if snapshot.path == config_path and not mutated:
                 mutated = True
                 changed = _base_config()
-                changed["logger"]["level"] = "debug"
+                changed["mcp"]["servers"]["sample"]["command"] = "debug"
                 config_path.write_text(json.dumps(changed), encoding="utf-8")
             return payload
 
@@ -1831,13 +1808,13 @@ async def test_restart_required_failure_exposes_changed_sections(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
-    config["logger"]["level"] = "debug"
+    config["mcp"]["servers"]["sample"]["command"] = "debug"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     async def require_restart(*_args) -> None:
         raise ConfigRestartRequiredError(
             "需要重启工作区后端",
-            changed_sections=("logger",),
+            changed_sections=("mcp",),
         )
 
     with pytest.raises(ConfigRestartRequiredError):
@@ -1848,7 +1825,7 @@ async def test_restart_required_failure_exposes_changed_sections(
     assert status.healthy is False
     assert status.restart_required is True
     assert status.reason == "restart_required"
-    assert status.changed_sections == ("logger",)
+    assert status.changed_sections == ("mcp",)
 
 
 @pytest.mark.asyncio
@@ -1998,14 +1975,14 @@ async def test_sqlite_migrated_source_change_is_imported_on_reload(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        assert service.get_logger_level() == "INFO"
+        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
         config = _base_config()
-        config["logger"]["level"] = "error"
+        config["mcp"]["servers"]["sample"]["command"] = "error"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        assert service.get_logger_level() == "INFO"
+        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
         assert await service.reload() is True
-        assert service.get_logger_level() == "ERROR"
+        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "error"
         source = store.get_source_layer("workspace_mutable_override")
         assert source is not None
         assert source.presence == "present"
@@ -2216,13 +2193,13 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         service.validate_workspace_config()
         active_before = store.get_active_config_snapshot("workspace")
         assert active_before is not None
-        config["logger"]["level"] = "debug"
+        config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> None:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
-                changed_sections=("logger",),
+                changed_sections=("mcp",),
             )
 
         with pytest.raises(ConfigRestartRequiredError):
@@ -2236,7 +2213,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         )
         assert pending is not None
         assert pending.state == "pending_restart"
-        assert pending.payload["logger"]["level"] == "debug"
+        assert pending.payload["mcp"]["servers"]["sample"]["command"] == "debug"
         events = store.list_config_events(config_domain="workspace")
         assert len(events) == 1
         assert events[0].result == "restart_required"
@@ -2265,13 +2242,13 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["logger"]["level"] = "debug"
+        config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> None:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
-                changed_sections=("logger",),
+                changed_sections=("mcp",),
             )
 
         with pytest.raises(ConfigRestartRequiredError):
@@ -2320,13 +2297,13 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["logger"]["level"] = "debug"
+        config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> None:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
-                changed_sections=("logger",),
+                changed_sections=("mcp",),
             )
 
         with pytest.raises(ConfigRestartRequiredError):
@@ -2390,13 +2367,13 @@ async def test_workspace_pending_discard_requires_active_and_source_baseline(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["logger"]["level"] = "debug"
+        config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> None:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
-                changed_sections=("logger",),
+                changed_sections=("mcp",),
             )
 
         with pytest.raises(ConfigRestartRequiredError):
@@ -2458,13 +2435,13 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["logger"]["level"] = "debug"
+        config["mcp"]["servers"]["sample"]["command"] = "debug"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> None:
             raise ConfigRestartRequiredError(
                 "需要重启工作区后端",
-                changed_sections=("logger",),
+                changed_sections=("mcp",),
             )
 
         with pytest.raises(ConfigRestartRequiredError):
@@ -2495,7 +2472,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             workspace_state_store=restored_store,
             startup_mount=startup_mount,
         )
-        assert restored.get_snapshot().to_dict()["logger"]["level"] == "debug"
+        assert restored.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
         proof = restored.get_loaded_config_proof()
         assert proof["loaded_source"] == "pending"
         assert proof["candidate_id"] == pending.candidate_id
@@ -2521,7 +2498,7 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
             config_domain="workspace",
             candidate_id="candidate-1",
             idempotency_key="reload-1",
-            payload={"config_version": 1},
+            payload={"config_version": 2},
             source_baseline={},
             candidate_digest="digest",
             effective_digest="digest",

@@ -206,7 +206,7 @@ def _load_or_migrate_gateway_override(
         source_record = state_store.sync_config_source(
             config_key=config_key,
             uri=None,
-            config_version=int(payload.get("config_version", 1)),
+            config_version=int(payload.get("config_version", 3)),
             presence="present",
             payload=payload,
             layer_digest=file_snapshot.digest,
@@ -230,7 +230,7 @@ def _load_or_migrate_gateway_override(
         shutil.copy2(path, backup_path)
     source_record = state_store.sync_config_source(
         config_key=config_key,
-        config_version=int(payload.get("config_version", 1)),
+        config_version=int(payload.get("config_version", 3)),
         uri=None,
         presence="present",
         payload=payload,

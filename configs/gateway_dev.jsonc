@@ -1,10 +1,17 @@
 {
   "$schema": "./gateway_schema.jsonc",
-  "config_version": 1,
+  "config_version": 3,
+  "logging": {
+    "runtime": {
+      "level": "info",
+      "pretty": true
+    }
+  },
   "workspaces": [
     {
       "enabled": true,
       "kind": "remote_gateway",
+      "connection_id": "connection_dev_container",
       "name": "Gateway E2E Docker Gateway",
       "host": "127.0.0.1",
       "port": 22222,
