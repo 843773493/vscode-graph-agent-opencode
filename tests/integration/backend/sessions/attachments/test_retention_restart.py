@@ -35,7 +35,7 @@ def directory_snapshot(case: CommunicationCase) -> dict[str, object]:
         return dict(row)
 
 
-async def test_day_29_product_reuse_restarts_full_retention_and_hard_restart_never_extends_it(
+async def test_day29_reuse_and_restart(
     communication_case: CommunicationCase,
 ) -> None:
     case = communication_case

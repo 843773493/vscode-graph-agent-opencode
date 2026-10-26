@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
@@ -29,18 +30,24 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_case as communication_case,  # noqa: PLC0414
 )
 from tests.support.api_helpers import create_session
+from tests.support.e2e_control.harness import control_request
+
+
+def resource_leases(case: CommunicationCase, resource_id: str) -> list[dict[str, object]]:
+    """只读唯一持久账本，不通过构造 owner 帮产品结算。"""
+    ledger = json.loads((case.workspace / ".boxteam/resources.json").read_bytes())
+    return [item for item in ledger["leases"] if item["resource_id"] == resource_id]
 
 
 def directory_lease(case: CommunicationCase, attachment_id: str) -> dict[str, object]:
-    """只读唯一持久账本，不通过构造 owner 帮产品结算。"""
-    ledger = json.loads((case.workspace / ".boxteam/resources.json").read_bytes())
-    lease, = (item for item in ledger["leases"] if item["resource_id"] == attachment_id)
+    lease, = resource_leases(case, attachment_id)
     return lease
 
 
 @pytest.mark.parametrize("communication_case", [{"resources": True}], indirect=True, ids=["pty"])
+@pytest.mark.parametrize("stop_boundary", [None, "before_dispatch", "after_receipt"], ids=["live", "before-stop", "after-stop"])
 async def test_process_retention_across_hard_restarts(
-    communication_case: CommunicationCase,
+    communication_case: CommunicationCase, stop_boundary: str | None,
 ) -> None:
     case = communication_case
     session = await create_session(case.client, "处理进程跨崩溃保活")
@@ -123,9 +130,63 @@ async def test_process_retention_across_hard_restarts(
     response = await case.client.get(f"/api/v1/resources/{rid}")
     assert response.status_code == 200, response.text
     resource = response.json()["data"]
-    response = await case.client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": resource["owner_revision"]})
-    assert response.status_code == 200, response.text
-    stopped = response.json()["data"]
+    recovery = None
+    if stop_boundary is not None:
+        control = case.replay.control
+        phase = "resource.stop." + stop_boundary
+        barrier = "attachment-stop-receipt"
+        control.arm_match(barrier, phase, {"resource_id": rid, "kind": "terminal", "delete": False})
+        pending = asyncio.create_task(case.client.post(
+            f"/api/v1/resources/{rid}/stop", json={"expected_revision": resource["owner_revision"]},
+        ))
+        try:
+            reached = await asyncio.to_thread(control.acknowledged_match, barrier)
+            operation, = (item for item in resource_leases(case, rid) if item["lease_id"] == reached["operation_id"])
+            assert operation["status"] == "active"
+            assert directory_lease(case, attachment_id) == lease
+            if stop_boundary == "before_dispatch":
+                assert all(process.is_running() for process in processes)
+            else:
+                assert all(not process.is_running() or process.status() in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD} for process in processes)
+            await case.hard_restart()
+            interrupted = await pending
+            assert interrupted.status_code == 502, interrupted.text
+        finally:
+            control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
+                "action": "release_match", "barrier_id": barrier,
+            })
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        response = await case.client.get(f"/api/v1/resources/{rid}")
+        assert response.status_code == 200, response.text
+        resource = response.json()["data"]
+        recovered_operation, = (item for item in resource_leases(case, rid) if item["lease_id"] == operation["lease_id"])
+        expected = "reconcile_required" if stop_boundary == "before_dispatch" else "settled"
+        assert recovered_operation == {**operation, "status": expected, "updated_at": recovered_operation["updated_at"]}
+        events = [event for event in control.events if isinstance(details := event.get("details"), dict)
+                  and details.get("resource_id") == rid
+                  and event["phase"] in ("resource.stop.before_dispatch", "resource.stop.after_receipt")]
+        assert [event["phase"] for event in events] == ["resource.stop.before_dispatch"] + (
+            ["resource.stop.after_receipt"] if stop_boundary == "after_receipt" else []
+        )
+        if stop_boundary == "before_dispatch":
+            assert resource["status"] == "running" and resource["reconciliation_status"] == "reconcile_required"
+            assert directory_lease(case, attachment_id) == lease
+            assert directory_snapshot(case) == released and directory.is_dir()
+            assert all(process.is_running() for process in processes)
+        else:
+            assert resource["status"] == "terminated" and resource["reconciliation_status"] == "verified"
+            assert directory_lease(case, attachment_id)["status"] == "settled"
+        recovery = {"boundary": stop_boundary, "operation_before": operation,
+                    "operation_after": recovered_operation, "events": events, "resource": resource}
+
+    if stop_boundary != "after_receipt":
+        response = await case.client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": resource["owner_revision"]})
+        assert response.status_code == 200, response.text
+        stopped = response.json()["data"]
+    else:
+        stopped = resource
     assert stopped["status"] == "terminated" and stopped["reconciliation_status"] == "verified"
     assert stopped["resource_id"] == rid and stopped["source_thread"] == resource["source_thread"]
     assert all(not process.is_running() or process.status() in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD} for process in processes)
@@ -143,6 +204,6 @@ async def test_process_retention_across_hard_restarts(
     assert directory_lease(case, attachment_id) == settled and canonical.read_bytes() == frozen_history
     case.record("process-retention-restart", {
         "resource_id": rid, "processes": identities, "initial": initial, "released": released,
-        "expired": expired, "lease": lease, "settled": settled, "stopped": stopped,
-        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，原期限精确到期后仍保留处理进程占用，管理停止核实父子进程终态后回收；不证明挂起操作接管或未知回执终止",
+        "expired": expired, "lease": lease, "settled": settled, "stopped": stopped, "recovery": recovery,
+        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，精确到期保活，停止派发前或真实回执返回后硬退出，由新Backend核实原终态或新管理操作终止后回收；不证明不合作执行可强制终止",
     })

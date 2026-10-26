@@ -83,6 +83,16 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 后端在关联资源后退出且未发送 detach，随后重启
 - **THEN** owner 按原持久事实区分待恢复任务、新代关联和已失效持有者，解除可证明失效的关联并开始相应回收规则，未知外部进程仍要求核实
 
+#### Scenario: 停止派发前 Backend 硬退出
+
+- **WHEN** 管理停止已登记原 operation lease 并完成撤权，但尚未向外部 owner 派发停止时 Backend 硬退出
+- **THEN** 新 Backend 保留原待核实 lease，不自动重放停止；仍存活的处理进程继续保护其附件目录占用和原到期期限，只有显式管理停止核实真实进程终态后才结清占用
+
+#### Scenario: 真实停止回执返回后 Backend 硬退出
+
+- **WHEN** 外部 owner 已停止处理进程并返回正式回执，但 Backend 尚未提交该终态就硬退出
+- **THEN** 新 Backend 沿原资源身份核实外部终态并结清原 operation 与目录占用，不重复派发停止；到期目录按原 locator 和期限回收，后续重启不得复活目录或改写 canonical 历史
+
 #### Scenario: 单个资源的冷恢复授权同步失败
 
 - **WHEN** Terminal或Browser owner冷恢复时，某个资源的新授权版本同步失败或回执丢失

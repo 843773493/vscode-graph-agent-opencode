@@ -530,11 +530,15 @@ class WorkspaceResourceOwner:
         try:
             # 停止先撤销旧授权；真实执行的排空由外部owner在关闭运行时后核实。
             await self._advance_revision(record, for_stop=True)
+            details = {"workspace_id": self.workspace_id, "resource_id": record.resource_id,
+                       "kind": self.kind, "delete": delete, "owner_revision": record.owner_revision}
+            await observe_phase(lease_id, "resource.stop.before_dispatch", details=details)
             result = await (
                 self._transport.delete_resource(record.resource_id)
                 if delete
                 else self._transport.stop_resource(record.resource_id, reason=reason)
             )
+            await observe_phase(lease_id, "resource.stop.after_receipt", details=details)
             runtime = result.get(self.kind)
             if not isinstance(runtime, dict):
                 raise TypeError("外部资源 owner 未收到停止/删除的完整外部回执")
