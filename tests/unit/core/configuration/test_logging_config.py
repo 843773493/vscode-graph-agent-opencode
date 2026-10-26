@@ -12,12 +12,16 @@ import pytest
 
 from app.core.logging_config import (
     APPLICATION_LOG_HANDLER_NAME,
+    RuntimeLoggingConflictError,
     RuntimeLogRecord,
+    apply_runtime_logging,
     configure_application_logging,
     format_runtime_log_record,
+    runtime_logging_state,
 )
 from app.core.logging_contract import load_runtime_log_contract
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
+from app.schemas.runtime_logging import RuntimeLoggingApply
 
 
 @pytest.fixture
@@ -173,3 +177,83 @@ def test_sink_failure_raises_original_error_once(isolated_root_logger: logging.L
         logging.getLogger("app.test").error("不能静默失败")
     assert failure.value is original
     assert stream.calls == 1
+
+
+def test_revision_cas_and_idempotence_control_actual_handler(
+    isolated_root_logger: logging.Logger,
+) -> None:
+    stream = io.StringIO()
+    configure_application_logging(service="backend", stream=stream)
+    original = runtime_logging_state()
+    apply = RuntimeLoggingApply(runtime_instance_id=original.runtime_instance_id,
+                                revision="r1", expected_revision=None, level=" DEBUG ", pretty=False)
+    applied = apply_runtime_logging(**apply.model_dump())
+    assert applied.level == "debug" and applied.pretty is False
+    assert apply_runtime_logging(**apply.model_dump()) == applied
+    assert stream.getvalue().count("应用产品日志设置: revision=r1") == 1
+    with pytest.raises(RuntimeLoggingConflictError, match="设置不一致"):
+        apply_runtime_logging(**apply.model_copy(update={"pretty": True}).model_dump())
+    with pytest.raises(RuntimeLoggingConflictError, match="运行实例已变化"):
+        apply_runtime_logging(**apply.model_copy(update={"runtime_instance_id": "old-instance"}).model_dump())
+    with pytest.raises(RuntimeLoggingConflictError, match="当前 revision 已变化"):
+        apply_runtime_logging(**apply.model_copy(update={"revision": "late"}).model_dump())
+    assert runtime_logging_state() == applied
+    changed = apply_runtime_logging(**apply.model_copy(update={
+        "revision": "r2", "expected_revision": "r1", "level": "warning", "pretty": True,
+    }).model_dump())
+    logging.getLogger("app.test").debug("不能出现")
+    logging.getLogger("app.test").warning("保留 WARNING")
+    assert "不能出现" not in stream.getvalue()
+    assert "[WARNING]" in stream.getvalue()
+    assert changed.runtime_instance_id == original.runtime_instance_id
+    with pytest.raises(RuntimeLoggingConflictError, match="当前 revision 已变化"):
+        apply_runtime_logging(**apply.model_dump())
+    assert runtime_logging_state() == changed
+
+
+@pytest.mark.asyncio
+async def test_internal_http_control_requires_private_token_and_loopback(
+    isolated_root_logger: logging.Logger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.api.runtime_logging import (
+        runtime_logging_router,
+        verify_runtime_control_token,
+    )
+    from app.core.trace_middleware import TraceMiddleware
+
+    configure_application_logging(service="backend", stream=io.StringIO())
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(runtime_logging_router(prefix="/control", verify_token=verify_runtime_control_token))
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", "private-gateway-token")
+    transport = ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        for token in (None, "local-dev-token", "wrong-token"):
+            headers = {} if token is None else {"X-Local-Token": token}
+            assert (await client.get("/control", headers=headers)).status_code == 401
+        headers = {"X-Local-Token": "private-gateway-token"}
+        for browser_header in ({"Origin": "http://localhost"}, {"Sec-Fetch-Site": "same-origin"}):
+            assert (await client.get("/control", headers=headers | browser_header)).status_code == 403
+        state_response = await client.get("/control", headers=headers)
+        assert state_response.status_code == 200
+        assert state_response.headers["X-Request-ID"] == state_response.json()["request_id"]
+        state = state_response.json()["data"]
+        payload = {"runtime_instance_id": state["runtime_instance_id"], "revision": "http-r1",
+                       "expected_revision": None, "level": "WARNING", "pretty": False}
+        for invalid in ({"pretty": "false"}, {"pretty": 0}, {"level": "warn"},
+                        {"revision": " "}, {"unknown": 1}, {"expected_revision": 1}):
+            assert (await client.post("/control", headers=headers, json=payload | invalid)).status_code == 422
+        applied = await client.post("/control", headers=headers, json=payload)
+        assert applied.status_code == 200
+        assert applied.json()["data"]["level"] == "warning"
+        assert applied.json()["data"]["applied_revision"] == "http-r1"
+        assert applied.headers["X-Request-ID"] == applied.json()["request_id"]
+        conflict = await client.post("/control", headers=headers, json=payload | {"runtime_instance_id": "old"})
+        assert conflict.status_code == 409
+        monkeypatch.delenv("BOXTEAM_RUNTIME_CONTROL_TOKEN")
+        assert (await client.get("/control", headers=headers)).status_code == 503
+    async with AsyncClient(transport=ASGITransport(app=app, client=("192.0.2.1", 1234)), base_url="http://localhost") as client:
+        assert (await client.get("/control")).status_code == 403

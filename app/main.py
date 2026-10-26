@@ -23,6 +23,7 @@ from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
 from app.api.resources import router as resources_router
 from app.api.runtime import router as runtime_router
+from app.api.runtime_logging import runtime_logging_router, verify_runtime_control_token
 from app.api.session_activity import router as session_activity_router
 from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
@@ -209,6 +210,10 @@ async def workspace_http_exception_handler(
 
 app.add_exception_handler(RequestValidationError, request_validation_error_response)
 
+
+app.include_router(runtime_logging_router(
+    prefix="/api/v1/internal/runtime-logging", verify_token=verify_runtime_control_token,
+))
 
 workspace_api = APIRouter(dependencies=[Depends(workspace_container_scope)])
 

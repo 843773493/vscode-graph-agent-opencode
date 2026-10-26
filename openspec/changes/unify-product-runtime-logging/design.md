@@ -65,6 +65,8 @@ Launcher 决定自身与 Gateway 的去向；Gateway 为本机托管子进程分
 
 每个进程校验身份与参数，幂等应用并返回真实 `instance_id/revision/effective settings`；Backend 只应用一次，不按挂载工作区重复应用。准备启动的新进程必须在 readiness 前取得当前有效设置；应用期间的进程退出/新增由同一生命周期 owner 串行结算，不能接受已退出旧 PID 的迟到确认。
 
+进程控制使用 `runtime_instance_id` 与 `expected_revision` 核对目标和当前状态；bootstrap 的 applied revision 为 null。同 revision、同设置的请求重放不重复应用；同 revision 内容冲突或当前 revision 已变化时明确拒绝。Backend 的该入口属于进程，不进入按工作区解析的路由。Gateway 启动 owner 将其已有私有本机凭据交给受管 Backend／Node，固定开发 token 与资源 owner 头不能代替这一认证；没有显式控制凭据的单服务入口拒绝管理。Launcher 日志命令复用现有私有控制端点并另核对同一凭据，发行版也提供这一控制能力，保持原公开监听拓扑。
+
 全部目标确认后才允许既有 active promotion；单个进程失败、超时或最终 CAS 冲突时，沿原 apply journal 恢复已改变的消费者并核实结果。补偿失败进入 `recovery_required` 并显示逐进程状态，不把一次跨进程更新宣称为同时原子切换。日志故障本身优先通过 stderr 与控制响应暴露，避免向同一失败 sink 无限递归记录错误。
 
 Launcher 初始启动在 Gateway 验证配置前可使用内置 bootstrap 设置，必须标记该阶段；ready 前切到 Gateway 确认的有效设置。此暂态不是第二套可变配置来源。

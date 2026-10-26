@@ -18,3 +18,5 @@
 - 下游替身必须作为独立本地 HTTP 服务启动并显式清理。
 - 导航 scope 下游装具在启动成功前由 `ExitStack` 管理日志，成功后由返回句柄接管；就绪失败或中断仍释放进程和全部日志，清理失败独立汇总并保留启动异常。诊断引用原始日志路径，不全量读取追加日志。
 - 正式产物写入 `out/tests/integration/gateway/`。
+
+`test_gateway_launcher_handoff.py` 通过真实 Launcher、Gateway 和受管工作区运行；`runtime_logging_controls.py` 仅驱动原服务 HTTP 与原 Launcher socket，不准备执行或资源状态。核对五类进程的私有认证、实例／revision 冲突、实际 DEBUG 落盘、WARNING 过滤及换代后的旧实例拒绝，观察结果保存到本测试 `artifacts/runtime-logging-control.json`。它不代表 Gateway 配置候选自动热应用、补偿或完整双工作区验收。

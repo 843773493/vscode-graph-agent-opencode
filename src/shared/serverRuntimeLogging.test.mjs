@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   configureRuntimeLogging, createRuntimeLogger, formatRuntimeLogRecord, loadRuntimeLogContract,
+  applyRuntimeLogging, runtimeLoggingState,
 } from "./serverRuntimeLogging.mjs";
 
 const contract = loadRuntimeLogContract();
@@ -83,4 +84,40 @@ describe("JS 产品日志真实入口", () => {
     expect(observed).toBe(original);
     expect(attempts).toBe(1);
   });
+
+  test("实例与 revision CAS 拒绝迟到请求，同 revision 幂等并改变真实过滤", () => {
+    const before = runtimeLoggingState("browser", contract);
+    const payload = {
+      runtime_instance_id: before.runtime_instance_id, revision: "r1", expected_revision: null,
+      level: "WARNING", pretty: false,
+    };
+    const applied = applyRuntimeLogging(payload, "browser", contract);
+    expect(applied).toEqual({ ...before, applied_revision: "r1", level: "warning", pretty: false });
+    expect(applyRuntimeLogging(payload, "browser", contract)).toEqual(applied);
+    expect(() => applyRuntimeLogging({ ...payload, pretty: true }, "browser", contract)).toThrow("设置不一致");
+    expect(() => applyRuntimeLogging({ ...payload, runtime_instance_id: "old" }, "browser", contract)).toThrow("运行实例已变化");
+    expect(() => applyRuntimeLogging({ ...payload, revision: "late" }, "browser", contract)).toThrow("当前 revision 已变化");
+    expect(runtimeLoggingState("browser", contract)).toEqual(applied);
+    const output = [];
+    const logger = createRuntimeLogger("browser", "test", { write: (value) => output.push(value) }, contract);
+    logger.debug("不能出现"); logger.warning("真实 WARNING");
+    expect(output).toHaveLength(1);
+    expect(output[0]).toContain("level=warning");
+    expect(output[0]).toContain("真实 WARNING");
+    const next = applyRuntimeLogging({ ...payload, revision: "r2", expected_revision: "r1", pretty: true }, "browser", contract);
+    expect(next.runtime_instance_id).toBe(before.runtime_instance_id);
+    expect(() => applyRuntimeLogging(payload, "browser", contract)).toThrow("当前 revision 已变化");
+  });
+
+  for (const invalid of [null, [], {}, { pretty: "false" }, { pretty: 0 }, { level: "warn" },
+    { revision: " " }, { unknown: 1 }, { expected_revision: 1 }]) {
+    test(`非法控制参数不改变进程设置：${JSON.stringify(invalid)}`, () => {
+      const before = runtimeLoggingState("terminal", contract);
+      const payload = invalid === null || Array.isArray(invalid) || Object.keys(invalid).length === 0
+        ? invalid : { runtime_instance_id: before.runtime_instance_id, revision: "r1",
+          expected_revision: null, level: "debug", pretty: false, ...invalid };
+      expect(() => applyRuntimeLogging(payload, "terminal", contract)).toThrow("日志应用参数非法");
+      expect(runtimeLoggingState("terminal", contract)).toEqual(before);
+    });
+  }
 });

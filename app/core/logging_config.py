@@ -7,6 +7,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from threading import RLock
 from typing import TextIO
 
 from app.core.identifier import create_uuid_hex
@@ -15,6 +16,21 @@ from app.core.trace_middleware import get_current_request_id
 
 APPLICATION_LOG_HANDLER_NAME = "boxteam-application"
 _RUNTIME_INSTANCE_ID = create_uuid_hex(namespace="runtime-logging")
+_CONFIGURATION_LOCK = RLock()
+
+
+class RuntimeLoggingConflictError(ValueError):
+    """目标实例或当前 revision 已变化，调用方必须重新核实。"""
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLoggingState:
+    service: str
+    pid: int
+    runtime_instance_id: str
+    applied_revision: str | None
+    level: str
+    pretty: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +112,8 @@ class _RuntimeFormatter(logging.Formatter):
 
 
 class _RuntimeHandler(logging.StreamHandler):
+    applied_revision: str | None = None
+
     def emit(self, record: logging.LogRecord) -> None:
         # 标准 emit 会吞掉 sink 异常；此入口直接写入并保留原始失败。
         self.stream.write(self.format(record) + self.terminator)
@@ -108,45 +126,96 @@ def configure_application_logging(
     level: str | int | None = None,
     pretty: bool | None = None,
     stream: TextIO | None = None,
-) -> logging.Handler:
+) -> _RuntimeHandler:
     """配置唯一的产品日志入口；进程托管方负责最终文件和轮转。"""
-    contract = load_runtime_log_contract()
-    selected_level = contract.default_level if level is None else level
-    if isinstance(selected_level, str):
-        resolved_level = contract.levels.get(selected_level.strip().lower())
-    else:
-        resolved_level = (
-            selected_level
-            if type(selected_level) is int and selected_level in contract.levels.values()
-            else None
+    with _CONFIGURATION_LOCK:
+        contract = load_runtime_log_contract()
+        selected_level = contract.default_level if level is None else level
+        if isinstance(selected_level, str):
+            resolved_level = contract.levels.get(selected_level.strip().lower())
+        else:
+            resolved_level = (
+                selected_level
+                if type(selected_level) is int and selected_level in contract.levels.values()
+                else None
+            )
+        if resolved_level is None:
+            raise ValueError(f"不支持的日志级别: {selected_level}")
+        selected_pretty = contract.default_pretty if pretty is None else pretty
+        if type(selected_pretty) is not bool:
+            raise TypeError("日志 pretty 必须是布尔值")
+        root_logger = logging.getLogger()
+        handler = next(
+            (candidate for candidate in root_logger.handlers
+             if candidate.name == APPLICATION_LOG_HANDLER_NAME),
+            None,
         )
-    if resolved_level is None:
-        raise ValueError(f"不支持的日志级别: {selected_level}")
-    selected_pretty = contract.default_pretty if pretty is None else pretty
-    if type(selected_pretty) is not bool:
-        raise TypeError("日志 pretty 必须是布尔值")
-    root_logger = logging.getLogger()
-    handler = next(
-        (candidate for candidate in root_logger.handlers
-         if candidate.name == APPLICATION_LOG_HANDLER_NAME),
-        None,
-    )
-    if handler is None:
-        handler = _RuntimeHandler(stream if stream is not None else _STDERR_PROXY)
-        handler.name = APPLICATION_LOG_HANDLER_NAME
-        root_logger.addHandler(handler)
-    elif not isinstance(handler, _RuntimeHandler):
-        raise RuntimeError(f"日志 handler 名称冲突: {APPLICATION_LOG_HANDLER_NAME}")
-    elif stream is not None:
-        handler.setStream(stream)
-    handler.setLevel(resolved_level)
-    handler.setFormatter(_RuntimeFormatter(
-        service=service, pretty=selected_pretty, contract=contract,
-    ))
-    root_logger.setLevel(resolved_level)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        uvicorn_logger = logging.getLogger(name)
-        uvicorn_logger.handlers.clear()
-        uvicorn_logger.setLevel(logging.NOTSET)
-        uvicorn_logger.propagate = True
-    return handler
+        if handler is None:
+            handler = _RuntimeHandler(stream if stream is not None else _STDERR_PROXY)
+            handler.name = APPLICATION_LOG_HANDLER_NAME
+            root_logger.addHandler(handler)
+        elif not isinstance(handler, _RuntimeHandler):
+            raise RuntimeError(f"日志 handler 名称冲突: {APPLICATION_LOG_HANDLER_NAME}")
+        elif stream is not None:
+            handler.setStream(stream)
+        handler.setLevel(resolved_level)
+        handler.setFormatter(_RuntimeFormatter(
+            service=service, pretty=selected_pretty, contract=contract,
+        ))
+        handler.applied_revision = None
+        root_logger.setLevel(resolved_level)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            uvicorn_logger = logging.getLogger(name)
+            uvicorn_logger.handlers.clear()
+            uvicorn_logger.setLevel(logging.NOTSET)
+            uvicorn_logger.propagate = True
+        return handler
+
+
+def runtime_logging_state() -> RuntimeLoggingState:
+    """读取实际 handler，不另存一份可变日志设置。"""
+    with _CONFIGURATION_LOCK:
+        root = logging.getLogger()
+        handlers = [handler for handler in root.handlers
+                    if handler.name == APPLICATION_LOG_HANDLER_NAME]
+        if len(handlers) != 1 or not isinstance(handlers[0], _RuntimeHandler):
+            raise RuntimeError("产品日志 handler 尚未唯一初始化")
+        handler = handlers[0]
+        formatter = handler.formatter
+        if not isinstance(formatter, _RuntimeFormatter) or root.level != handler.level:
+            raise RuntimeError("产品日志实际过滤与格式状态不一致")
+        return RuntimeLoggingState(
+            service=formatter.service, pid=os.getpid(),
+            runtime_instance_id=_RUNTIME_INSTANCE_ID,
+            applied_revision=handler.applied_revision,
+            level=logging.getLevelName(handler.level).lower(), pretty=formatter.pretty,
+        )
+
+
+def apply_runtime_logging(
+    *, runtime_instance_id: str, revision: str, expected_revision: str | None,
+    level: str, pretty: bool,
+) -> RuntimeLoggingState:
+    """用实例身份与当前 revision 作 CAS；重放不能覆盖更新后的设置。"""
+    with _CONFIGURATION_LOCK:
+        current = runtime_logging_state()
+        if runtime_instance_id != current.runtime_instance_id:
+            raise RuntimeLoggingConflictError("日志目标运行实例已变化")
+        contract = load_runtime_log_contract()
+        normalized_level = level.strip().lower()
+        if not revision.strip() or normalized_level not in contract.levels:
+            raise ValueError("日志 revision 或 level 非法")
+        if type(pretty) is not bool:
+            raise TypeError("日志 pretty 必须是布尔值")
+        if revision == current.applied_revision:
+            if (normalized_level, pretty) != (current.level, current.pretty):
+                raise RuntimeLoggingConflictError("同一日志 revision 的设置不一致")
+            return current
+        if expected_revision != current.applied_revision:
+            raise RuntimeLoggingConflictError("日志当前 revision 已变化")
+        handler = configure_application_logging(
+            service=current.service, level=normalized_level, pretty=pretty, stream=None,
+        )
+        handler.applied_revision = revision
+        logging.getLogger(__name__).debug("应用产品日志设置: revision=%s", revision)
+        return runtime_logging_state()

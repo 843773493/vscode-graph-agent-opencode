@@ -10,6 +10,7 @@
 - `sseRuntimeValidators.js`：由协议生成流程维护的校验器。
 - 与上述 JavaScript 实现对应的 `*.d.ts` 类型声明。
 - `serverRuntimeLogging.mjs`：Launcher、Terminal 和 Browser 共用的 Node 产品日志合同、实例身份、等级及文本编码。只在服务端导入，不进入浏览器依赖图。
+- `serverRuntimeLoggingControl.mjs`：复用 Gateway 私有凭据与既有服务端口／Launcher 控制通道的日志查询和应用。实际设置与 revision 只在日志入口保存；同实例、同 revision 重放幂等，冲突和过期确认明确拒绝。Launcher 应用确认复用其原 Logger 和文件 sink。
 
 ## 不可修改内容
 

@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.process_lifecycle import ManagedProcess, _spawn_logged_process
 from app.gateway.runtime.process_logs import ProcessLogStore
 
@@ -32,6 +33,7 @@ def _local_child_environment() -> dict[str, str]:
     environment = os.environ.copy()
     for key in _GATEWAY_STARTUP_ENVIRONMENT_KEYS:
         environment.pop(key, None)
+    environment.pop("BOXTEAM_RUNTIME_CONTROL_TOKEN", None)
     return environment
 
 
@@ -237,6 +239,7 @@ def start_local_backend_process(
     env["PYTHONUNBUFFERED"] = "1"
     if extra_env:
         env.update(extra_env)
+    env["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = get_gateway_local_token()
     command = [str(python_executable)]
     if debug_port is not None:
         command.extend(
@@ -309,6 +312,7 @@ def start_local_node_service_process(
     env = _local_child_environment()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    env["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = get_gateway_local_token()
     command = [
         node_executable,
         str(backend_path),

@@ -154,11 +154,13 @@ export async function main(args) {
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
     { loadRuntimeLogContract, createRuntimeLogger },
+    { runtimeLoggingControl },
   ] = await Promise.all([
     import("./instance-lock.mjs"),
     import("./logging/service-log.mjs"),
     import("./gateway/supervisor.mjs"),
     import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLogging.mjs")).href),
+    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLoggingControl.mjs")).href),
   ]);
   const logContract = loadRuntimeLogContract(runtime.applicationRoot);
   const lock = acquireLauncherLock({
@@ -196,6 +198,10 @@ export async function main(args) {
       gatewayStdout: gatewayLog.stdout,
       gatewayStderr: gatewayLog.stderr,
       logger: launcherLogger,
+      onRuntimeLogging(payload) {
+        const token = readFileSync(path.join(boxteamHome, "state", "gateway", "credentials", "local-token"), "utf8").trim();
+        return runtimeLoggingControl(payload, { service: "launcher", token, contract: logContract, logger: launcherLogger });
+      },
     });
     process.exitCode = exitCode;
   } finally {

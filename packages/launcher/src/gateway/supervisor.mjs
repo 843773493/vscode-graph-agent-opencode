@@ -394,6 +394,7 @@ export async function superviseGateway({
   logger,
   gatewayStdout = process.stdout,
   gatewayStderr = process.stderr,
+  onRuntimeLogging,
   processObject = process,
 }) {
   const endpoint = gatewayEndpoint(runtime.distribution, environment);
@@ -512,6 +513,9 @@ export async function superviseGateway({
     }
 
     const handleHandoff = async (payload) => {
+      if (publicListener === null) {
+        throw new Error("直接监听公开端口的 Gateway 不支持 generation handoff");
+      }
       if (currentChild === null) {
         throw new Error("Gateway supervisor 当前没有 active generation");
       }
@@ -538,9 +542,6 @@ export async function superviseGateway({
         process.platform,
         { logger },
       );
-      if (publicListener === null) {
-        throw new Error("直接监听公开端口的 Gateway 不支持 generation handoff");
-      }
       publicListener.setTarget({
         host: endpoint.host,
         port: replacement.childPort,
@@ -553,14 +554,13 @@ export async function superviseGateway({
       };
     };
 
-    const controlAddress = gatewayOwnsPublicPort
-      ? null
-      : gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
+    const controlAddress = gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
     control =
       controlAddress === null
         ? null
         : createGatewaySupervisorControl({
             address: controlAddress,
+            onRuntimeLogging,
             onHandoff(payload) {
               handoffChain = handoffChain.then(
                 () => handleHandoff(payload),

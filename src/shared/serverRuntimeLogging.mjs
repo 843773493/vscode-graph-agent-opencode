@@ -6,6 +6,11 @@ import { formatWithOptions } from "node:util";
 const contracts = new Map();
 const runtimeInstanceId = randomUUID();
 let settings = null;
+let appliedRevision = null;
+
+export class RuntimeLoggingConflictError extends Error {
+  statusCode = 409;
+}
 
 export function loadRuntimeLogContract(applicationRoot = process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd()) {
   const resource = path.resolve(applicationRoot, "resources/logging/runtime-contract.json");
@@ -38,7 +43,51 @@ export function configureRuntimeLogging({ level, pretty } = {}, contract = loadR
   }
   if (typeof normalizedPretty !== "boolean") throw new TypeError("日志 pretty 必须是布尔值");
   settings = { level: normalizedLevel.trim().toLowerCase(), pretty: normalizedPretty };
+  appliedRevision = null;
   return { ...settings, pid: process.pid, runtime_instance_id: runtimeInstanceId };
+}
+
+export function runtimeLoggingState(service, contract = loadRuntimeLogContract()) {
+  if (settings === null) configureRuntimeLogging({}, contract);
+  return {
+    service, pid: process.pid, runtime_instance_id: runtimeInstanceId,
+    applied_revision: appliedRevision, ...settings,
+  };
+}
+
+export function applyRuntimeLogging(payload, service, contract = loadRuntimeLogContract(), logger = null) {
+  const fields = ["runtime_instance_id", "revision", "expected_revision", "level", "pretty"];
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)
+      || Object.keys(payload).length !== fields.length
+      || fields.some((field) => !Object.hasOwn(payload, field))
+      || typeof payload.runtime_instance_id !== "string" || !payload.runtime_instance_id
+      || typeof payload.revision !== "string" || !payload.revision.trim()
+      || (payload.expected_revision !== null && typeof payload.expected_revision !== "string")
+      || typeof payload.level !== "string"
+      || !Object.hasOwn(contract.record.levels, payload.level.trim().toLowerCase())
+      || typeof payload.pretty !== "boolean") {
+    const error = new TypeError("日志应用参数非法");
+    error.statusCode = 422;
+    throw error;
+  }
+  const current = runtimeLoggingState(service, contract);
+  const level = payload.level.trim().toLowerCase();
+  if (payload.runtime_instance_id !== runtimeInstanceId) {
+    throw new RuntimeLoggingConflictError("日志目标运行实例已变化");
+  }
+  if (payload.revision === appliedRevision) {
+    if (level !== settings.level || payload.pretty !== settings.pretty) {
+      throw new RuntimeLoggingConflictError("同一日志 revision 的设置不一致");
+    }
+    return current;
+  }
+  if (payload.expected_revision !== appliedRevision) {
+    throw new RuntimeLoggingConflictError("日志当前 revision 已变化");
+  }
+  configureRuntimeLogging({ level, pretty: payload.pretty }, contract);
+  appliedRevision = payload.revision;
+  (logger ?? createRuntimeLogger(service, "runtime.logging", null, contract)).debug("应用产品日志设置: revision=%s", payload.revision);
+  return runtimeLoggingState(service, contract);
 }
 
 export function formatRuntimeLogRecord(record, pretty, contract = loadRuntimeLogContract()) {

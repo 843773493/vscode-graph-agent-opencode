@@ -32,6 +32,8 @@ out/tests/packages/launcher/src/gateway/control-channel-encoding/
 
 控制端点按规范化的home确定：POSIX保留短home中的`state/gateway-supervisor.sock`，长home使用同一home摘要对应的临时socket；备用地址仍超过100字节时在监听前明确报错。Windows使用`\\.\pipe\boxteam-gateway-supervisor-<home摘要>`命名管道，不对管道执行mkdir、chmod或rm。客户端和服务端调用同一地址解析器，不另存一份控制端点事实。
 
+发行版与开发版均在这一控制端点提供 `operation: runtime_logging`，日志命令另核对 Gateway 已有私有 token；不以资源 owner 固定头代替认证。发行版仍直接监听公开端口，明确拒绝 generation handoff，不能为日志控制启动第二个公开代理或新 daemon。
+
 `handoff.test.mjs`承接完整控制结果、pending失败保留旧generation、成功切换并停止旧generation三场景。Node子进程的cwd为正式输出`out/tests/packages/launcher/src/gateway/handoff/workspace/<run_id>/`，临时目录显式为该cwd；因此深层输出根内的Unix socket可使用短相对地址。公开端口随机分配，以真实控制连接观察就绪，不用固定睡眠代替就绪。健康与generation读取经过真实HTTP和公开代理，Gateway进程仍为替身；该证据不代表真实Python Gateway启动或Windows/macOS原生通过。
 
 `control-client.test.mjs`同样在自己的正式输出工作区运行Node并清理本次目录，传输仍为随机TCP替身；`control-channel.test.mjs`分别核路径规则，以及用独立Node文件/server替身证明Unix清理与命名管道不碰文件系统。

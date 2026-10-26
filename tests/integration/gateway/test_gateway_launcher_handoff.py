@@ -13,8 +13,12 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 import commentjson
+import httpx
 
 from app.core.logging_contract import load_runtime_log_contract
+from tests.integration.gateway.runtime_logging_controls import (
+    verify_runtime_logging_controls,
+)
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.ports import integration_port_block_for_file
 
@@ -544,6 +548,10 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         launcher_log = log_contract.path_for(log_root, "launcher")
         gateway_log_identity = gateway_log.stat().st_ino
         assert launcher_log.is_file()
+        logging_states = verify_runtime_logging_controls(
+            f"http://127.0.0.1:{port}", token, boxteam_home,
+            launcher_pid=process.pid, artifacts=artifacts,
+        )
 
         restart_request = Request(
             f"http://127.0.0.1:{port}/api/gateway/runtime/restart-development",
@@ -682,6 +690,16 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             )
             gateway_instance_ids.append(identities.pop())
         assert gateway_instance_ids[0] != gateway_instance_ids[1]
+        with httpx.Client(timeout=5, trust_env=False) as client:
+            control_url = f"http://127.0.0.1:{port}/api/gateway/internal/runtime-logging"
+            headers = {"X-Local-Token": token}
+            current = client.get(control_url, headers=headers).json()["data"]
+            assert current["pid"] == new_process_id
+            assert current["runtime_instance_id"] != logging_states["gateway"]["runtime_instance_id"]
+            stale = {"runtime_instance_id": logging_states["gateway"]["runtime_instance_id"],
+                         "expected_revision": None, "revision": "stale-generation", "level": "critical", "pretty": False}
+            assert client.post(control_url, headers=headers, json=stale).status_code == 409
+            assert client.get(control_url, headers=headers).json()["data"] == current
         assert "logger=uvicorn.error" in persisted_gateway_log
         assert gateway_log.stat().st_ino == gateway_log_identity
         assert not gateway_log.with_name(gateway_log.name + ".1").exists()

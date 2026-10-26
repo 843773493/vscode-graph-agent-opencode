@@ -1,4 +1,5 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
 
 import http from "node:http";
 import { randomUUID } from "node:crypto";
@@ -260,6 +261,7 @@ async function main() {
 
     try {
       const { url, pathname } = normalizePathname(request);
+      if (await handleRuntimeLoggingRequest(request, response, { pathname, service: "browser", readJson })) return;
       if (request.method === "GET" && pathname === "/health") {
         sendJson(response, 200, {
           ok: true,

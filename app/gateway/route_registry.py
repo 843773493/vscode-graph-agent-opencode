@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.api.runtime_logging import runtime_logging_router
+from app.gateway.auth import verify_gateway_token
 from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
 from app.gateway.control.router import router as gateway_control_router
 from app.gateway.device_connections import router as device_connections_router
@@ -39,6 +41,9 @@ ROUTE_MODULES = (
 
 
 def register_gateway_routes(app: FastAPI) -> None:
+    app.include_router(runtime_logging_router(
+        prefix="/api/gateway/internal/runtime-logging", verify_token=verify_gateway_token,
+    ))
     for module in ROUTE_MODULES:
         app.include_router(module.router)
     # 两个代理 Router 含通配路由，必须晚于 Gateway 自有接口注册，否则会吞掉

@@ -29,7 +29,7 @@ export function gatewaySupervisorControlAddress(
   return temporarySocketPath;
 }
 
-export function createGatewaySupervisorControl({ address, onHandoff }) {
+export function createGatewaySupervisorControl({ address, onHandoff, onRuntimeLogging }) {
   if (typeof address !== "string" || address.length === 0) {
     throw new TypeError("Gateway supervisor control socket 路径无效");
   }
@@ -68,7 +68,13 @@ export function createGatewaySupervisorControl({ address, onHandoff }) {
         return;
       }
       Promise.resolve()
-        .then(() => onHandoff(payload))
+        .then(() => {
+          if (payload?.operation === "runtime_logging") {
+            if (typeof onRuntimeLogging !== "function") throw new Error("Launcher 未提供日志管理入口");
+            return onRuntimeLogging(payload);
+          }
+          return onHandoff(payload);
+        })
         .then((data) => {
           socket.end(`${JSON.stringify({ ok: true, data })}\n`);
         })

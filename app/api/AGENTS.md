@@ -7,6 +7,7 @@
 - `deps.py`：所有路由共享的 FastAPI 依赖提供者（从 `request.app.state.container` 取服务实例）与 `verify_local_token`；`get_request_id` 从 `app.core.trace_middleware` 重导出。
 - canonical `session_id` / `thread_id` 的 `Annotated` 校验类型由 `app.schemas.canonical_params` 唯一定义，并复用 `app.core.session_catalog_store` 的唯一校验器。
 - `sse_heartbeat.py`：把异步事件源包装成带空闲心跳的 SSE 流的统一实现。
+- `runtime_logging.py`：Backend 与 Gateway 共用的进程级内部日志控制路由；不挂到 `workspace_api`，不依赖工作区容器，不按工作区复制共享 Backend 的日志设置。入口只接受无浏览器来源头的 loopback 请求，并核对 Gateway 私有凭据；Backend 单服务未显式配置控制凭据时拒绝管理，不接受固定开发 token。
 - `workspace_file_response.py`：复用 Starlette 文件响应的 Range 与头部实现，协调延迟 I/O 错误、发头时点和临时下载清理；文件解析与归档准备仍归 Workspace 文件 owner。
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 - `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。

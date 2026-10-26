@@ -15,7 +15,7 @@
 
 ## 3. 进程级热应用
 
-- [ ] 3.1 为真实进程提供受既有本机认证保护的日志设置应用/确认入口，按实例与 revision 幂等处理，不按工作区重复应用共享 Backend。
+- [x] 3.1 为真实进程提供受既有本机认证保护的日志设置应用/确认入口，按实例与 revision 幂等处理，不按工作区重复应用共享 Backend。
 - [ ] 3.2 将日志注册为 Gateway 配置 runtime consumer，复用现有 Launcher 控制通道和托管服务管理链，完成 prepare、逐进程 apply、proof 和 promotion。
 - [ ] 3.3 处理新增/退出进程、同端口换代及迟到确认，保证新实例 readiness 前取得有效设置；Launcher bootstrap 设置在 ready 前被权威设置替换。
 - [ ] 3.4 贯通拒绝、超时、最终 CAS 冲突及补偿失败，复用 apply journal 与 recovery_required，逐进程暴露真实状态；日志 sink 错误避免递归和静默吞噬。
@@ -61,3 +61,12 @@
 - `record-launcher-final-049` 2通过，真实交接核两代Gateway的首条Uvicorn日志、不同实例身份、Backend不重复启动及日志不双写／不交接轮转。`record-node-final-050` 23通过，包含真实Terminal／Browser错误入口、原生诊断及进程装具生命周期，不是纯helper验收。
 - `record-static-comparison-051.json` 使用完整HEAD归档比较受影响Python文件：Ruff3／3、Pyright246／246，无新增；`record-static-js-final-056` 对35份实际JS文件语法检查通过。静态基线临时树已删除，原始命令、输出、指纹与退出码保留。未修改Web页面／DTO，未新增Web构建或Windows原生验收。
 - 当前为4／22。2.1尚需与1.4一并移除Workspace日志比较及accessor；独立实例身份不等于2.4所需的活动写入owner证明。配置跨域迁移、受认证的逐进程热应用、revision诊断及WARNING下真实PTY逐字节验证仍未完成。
+
+### 3.1 受认证进程控制切片（2026-10-26）
+
+- Backend、Gateway 复用同一进程级内部路由；Terminal／Browser 复用同一 Node 控制入口。只接受无浏览器来源头的 loopback 管理请求，核对 Gateway 现有私有 token；Backend／Node 由启动 owner 显式交付凭据，未配置则拒绝，不把固定开发 token 或资源 owner 头当作认证。共享 Backend 路由不取得工作区容器，不按挂载工作区复制设置。
+- Launcher 扩展原控制 socket／命名管道，不新增端口或 daemon；发行版也提供该私有控制能力，公开流量仍直接由 Gateway 监听。实际应用核对 `runtime_instance_id`、`expected_revision`，同 revision 的相同设置幂等、不同内容明确冲突；替换进程的旧实例请求拒绝。Python 从唯一 handler 取得实际设置，JS 复用现有设置，不新增配置持久化事实源。
+- `control-real-launcher-062` 首次真实检查发现 Launcher 的 DEBUG 应用确认绕过原文件 sink；已改为复用原 Logger，并由最终 `control-real-launcher-final-073` 两项真实检查通过。实际覆盖五类进程的认证、非法参数、DEBUG／WARNING 和格式变化、单次确认落盘、PID／实例保持，以及原工作区执行与 Gateway 交接后旧实例拒绝；不是只验证 helper。此检查仍不代表配置候选自动驱动热更新、逐进程补偿或双工作区完整验收。
+- 最终证据仍位于 `out/tests/temp/unify-product-runtime-logging/artifacts/`：`control-python-final-067` 49通过，`control-js-final-068` 193通过，`control-services-final-071` 为辅助服务完整 matrix（Node175／Bun383通过），`control-syntax-js-072` 8份JS语法检查通过。所有运行有进程外保护、原始输出、源码指纹与退出码。
+- `control-static-final-069` Ruff通过；`control-static-comparison-074.json` 使用完整HEAD归档比较Pyright，11条基线／11条当前，无新增。基线临时树与tar已删除，原始输出保留。未修改Web，不新增Web构建或Windows原生验证。
+- 当前5／22。2.4活动日志owner证明与冲突互斥、2.5完整日志去向诊断、跨域配置迁移及3.2起的候选应用／补偿仍待实现；不能将手动进程控制通过表述为全产品自动热更新完成。
