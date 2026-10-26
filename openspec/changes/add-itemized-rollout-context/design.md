@@ -64,6 +64,8 @@ full copy 保留原消息与 item 的 local ID；message projection 的目标本
 
 CSM 的类型说明还须区分 catalog/来源绑定版本、最近观察到的内容版本、成功封存后上下文可见的内容版本，以及控制行的 CAS 版本。applied 由 assembly seal 事务推进，receipt 只确认该事实；pending observation 不代表应用，晚到 desired 可以继续待消费。运行时持久化版本基准不构成第二个版本 owner。来源内容版本可由 source owner 显式提供非空字符串，不能把控制行的递增规则或某一路径的摘要格式套到来源版本。
 
+`AppendedItemRef.source_tracking_at_seal`与`ContextSealBinding.format_version`由本 owner 的 epoch/serde维护：新绑定显式版本2，旧无标签绑定按版本1原样重编码，业务运行态只使用新引用，不引入第二个封存writer或SQLite schema迁移。请求、当前控制、封存追踪三类字段的语义及版本边界见`add-context-injection-lifecycle`设计4.2与任务9.1；Provider frame的hash范围不含引用metadata，历史frame与request hash不随这次改名重算。
+
 来源观察类型也区分 owner 和阶段：producer→CSM 的 `SourceObservation` 表达生命周期输入，包含正文及策略信息；资源 reactor 的三字段结构用 `PublishedSourceObservationRef` 表达 source/URI 与 drain 时读到的已发布版本引用。该引用不冻结正文，不代表 CSM 已应用或持久提交；正文由后续 `content_for` 读取。全迁该内部类型的导出和消费者，不用同名或别名把两种契约混在一起，也不新增公共抽象。
 
 同名 `SemanticResourceDescriptor` 则在各自定义处说明用途：derivation 的结构服务派生图与资源登记，分别声明来源依赖和其它语义资源依赖，不携带已发布快照版本；virtual_resources 的结构服务 URI resolver 的 catalog 绑定，携带 source identity、kind 和注入的 semantic revision/hash。后者不自行计算摘要，也不承诺 revision 与 hash 相等；display URI 与稳定 identity 分开。保持类型名和现有值、校验及消费链，在类型处消歧，不为同名结构新增公共抽象。

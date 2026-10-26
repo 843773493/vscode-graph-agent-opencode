@@ -53,7 +53,7 @@ async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_rea
     annotations = {
         "source_ordinal": 999, "replaceable_source": True,
         "replacement_policy": "replaceable", "selection_only": True,
-        "selection_role": "backing_only", "tracking_state": "untracked",
+        "selection_role": "backing_only", "tracking_state": "untracked", "source_tracking_at_seal": "untracked",
         "tracking_status": "untracked", "role": "delta", "base_delta_role": "delta",
         "source_binding": {"source_ref": "forged-source"}, "root_placement": "tail_only",
     }
@@ -69,7 +69,7 @@ async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_rea
     saver.register_context_contribution(session, thread, contribution)
     observation = SourceObservation(
         owner=owner, source_id="opaque-observation", source_kind="workspace_instructions",
-        name="扩展来源", revision="source-v1", tracking_mode="tracked", content="来源第一版",
+        name="扩展来源", revision="source-v1", requested_mode="tracked", content="来源第一版",
         extensions=extensions,
     )
     base = build_source_lifecycle_decision(observation, decision_kind="base")

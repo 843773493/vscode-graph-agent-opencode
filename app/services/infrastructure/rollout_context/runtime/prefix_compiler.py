@@ -141,7 +141,7 @@ def compile_prefix_context(
             (frame.item_ref.ref_id, frame.item_ref.source_revision)
             for frame in previous_binding.prefix.state.frames
             if frame.role == "user" and frame.item_ref.ref_type == "source_item"
-            and frame.item_ref.tracking_state == "not_tracked"
+            and frame.item_ref.source_tracking_at_seal == "untracked"
         )
         if transition is not None and transition.reason == EpochReason.RUNTIME_NOTICE_CONSUMED:
             retained_source_refs |= frozenset(
@@ -307,7 +307,7 @@ def compile_prefix_context(
             selected_identities.append(ref_identity)
             frames.append(replace(
                 frame, ordinal=ordinal, provider_profile=provider_profile,
-                item_ref=replace(frame.item_ref, tracking_state="not_tracked"),
+                item_ref=replace(frame.item_ref, source_tracking_at_seal="untracked"),
             ))
     for ref_id, source, content in tail_values:
         ordinal += 1
@@ -316,7 +316,7 @@ def compile_prefix_context(
             ordinal, provider_profile, "user", "text", content,
             AppendedItemRef(
                 "source_item", ref_id, source.descriptor.source_id, source.revision,
-                "tracked" if source.tracked else "not_tracked",
+                "tracked" if source.tracked else "untracked",
             ),
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。

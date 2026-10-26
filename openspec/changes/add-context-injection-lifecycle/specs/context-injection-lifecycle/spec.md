@@ -170,6 +170,8 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 
 观察回执 SHALL明确区分未变化、恢复已提交基准、来源未跟踪和接受新观察，并独立表达是否存在待提交更新。接受观察不等于queued，更不等于injected或seal成功；来源回到已提交基准时 MUST撤销尚未seal的净增量，不追加空更新。请求操作、当前tracking状态和来源绑定封存时的状态 MUST分别表达；canonical引用的不适用与来源引用的未跟踪 MUST由类型合同区分，不能共用含义不明的状态值。封存时状态不可随之后track/untrack回写。
 
+请求字段 SHALL使用`requested_mode`，当前控制字段保留`tracking_status`，封存引用使用`source_tracking_at_seal`；外部`skill_load.mode`与派生`tracked`不变。canonical引用的封存追踪字段 MUST为`None`，来源引用 MUST明确为`tracked|untracked`。字段变更由itemized唯一codec按整份封存版本处理，新封存明确登记版本；旧封存读取、重试与fork重编码 MUST保留原字节和历史身份，不允许混合版本字段、公开别名或双写。
+
 #### Scenario: 缺少更新入口不能宣称tracked可用
 
 - **WHEN** 持续更新的instruction来源请求登记为tracked，却没有有效owner版本发布接线

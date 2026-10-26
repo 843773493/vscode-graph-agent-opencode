@@ -23,6 +23,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
+from typing import Literal
 
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.errors import ItemSchemaError
@@ -38,7 +39,8 @@ from app.domain.itemized.validation import _non_empty_string
 
 _SHA256_BYTES_PATTERN = re.compile(r"^sha256:bytes:v1:[0-9a-f]{64}$")
 _WIRE_ROLES = frozenset({"system", "user", "assistant", "tool"})
-_TRACKING_STATES = frozenset({"tracked", "not_tracked"})
+SourceTrackingAtSeal = Literal["tracked", "untracked"]
+"""来源在本次封存时的追踪事实；canonical 引用用 None 表示不适用。"""
 _APPEND_REF_TYPES = frozenset({"canonical_item", "source_item"})
 
 
@@ -225,32 +227,32 @@ class AppendedItemRef:
     """追加 item 的 typed 引用,携带 source 绑定供冲突校验。
 
     canonical_item 不得携带 source 字段;source_item 必须携带
-    source_identity,tracked 还必须有 source_revision。not_tracked 是
-    闭合 tracking 状态,不参与 revision 冲突校验。
+    source_identity 与明确的封存追踪状态；tracked 还必须有 source_revision。
+    canonical 的 None 表示不适用，与来源的 untracked 严格区分。
     """
 
-    ref_type: str
+    ref_type: Literal["canonical_item", "source_item"]
     ref_id: str
     source_identity: str | None = None
     source_revision: str | None = None
-    tracking_state: str = "not_tracked"
+    source_tracking_at_seal: SourceTrackingAtSeal | None = None
 
     def __post_init__(self) -> None:
         if self.ref_type not in _APPEND_REF_TYPES:
             raise ItemSchemaError(f"未知 AppendedItemRef.ref_type: {self.ref_type}")
         _non_empty_string(self.ref_id, "AppendedItemRef.ref_id")
-        if self.tracking_state not in _TRACKING_STATES:
-            raise ItemSchemaError(
-                f"未知 AppendedItemRef.tracking_state: {self.tracking_state}"
-            )
         if self.ref_type == "canonical_item":
             if self.source_identity is not None or self.source_revision is not None:
                 raise ItemSchemaError("canonical AppendedItemRef 不得携带 source 绑定")
-            if self.tracking_state != "not_tracked":
+            if self.source_tracking_at_seal is not None:
                 raise ItemSchemaError("canonical AppendedItemRef 不得声明 tracking 状态")
             return
+        if self.source_tracking_at_seal not in {"tracked", "untracked"}:
+            raise ItemSchemaError(
+                "source AppendedItemRef.source_tracking_at_seal 必须是 tracked 或 untracked"
+            )
         _non_empty_string(self.source_identity, "AppendedItemRef.source_identity")
-        if self.tracking_state == "tracked":
+        if self.source_tracking_at_seal == "tracked":
             _non_empty_string(self.source_revision, "AppendedItemRef.source_revision")
 
 
@@ -480,7 +482,7 @@ def _check_source_conflicts(frames: Sequence[ProviderProfileItemFrame]) -> None:
     seen: dict[tuple[str, str], str] = {}
     for frame in frames:
         ref = frame.item_ref
-        if ref.ref_type != "source_item" or ref.tracking_state != "tracked":
+        if ref.ref_type != "source_item" or ref.source_tracking_at_seal != "tracked":
             continue
         key = (ref.source_identity or "", ref.source_revision or "")
         prior_hash = seen.get(key)

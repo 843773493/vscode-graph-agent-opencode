@@ -1985,7 +1985,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         source_kind="workspace_instructions",
         name="Typed observation",
         revision=source_revision,
-        tracking_mode="tracked",
+        requested_mode="tracked",
     )
     decision = build_source_lifecycle_decision(
         observation, decision_kind="track"
@@ -2029,7 +2029,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         "selection_only": True,
         "selection_role": "backing_only",
         "root_placement": "root_eligible",
-        "tracking_state": "untracked",
+        "tracking_state": "untracked", "source_tracking_at_seal": "untracked",
         "tracking_status": "untracked",
         "role": "delta",
         "base_delta_role": "delta",

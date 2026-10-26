@@ -96,7 +96,7 @@ ADVERSARIAL_CONTROL_KEYS = {
     "replacement_policy": "replaceable",
     "selection_only": True,
     "selection_role": "backing_only",
-    "tracking_state": "untracked",
+    "tracking_state": "untracked", "source_tracking_at_seal": "untracked",
     "tracking_status": "untracked",
     "role": "delta",
     "base_delta_role": "delta",
@@ -351,7 +351,7 @@ class TestAdversarialControlKeys:
                 source_kind="skill",
                 name="demo",
                 revision="rev-7",
-                tracking_mode="tracked",
+                requested_mode="tracked",
                 from_revision="rev-6",
                 content="正文",
                 **extensions,
@@ -402,7 +402,7 @@ class TestAdversarialControlKeys:
             ref_id="ref-1",
             source_identity="skill:demo",
             source_revision="rev-1",
-            tracking_state="tracked",
+            source_tracking_at_seal="tracked",
         )
         prefix_clean = stable_prefix_hash(
             stable_prefix_bytes((frame(clean_ref),)),
@@ -1326,7 +1326,7 @@ def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, 
     observation = SourceObservation(
         owner=ContextSourceOwnerKey(MAIN_SESSION_ID, thread_id),
         source_id="skill:extension-contract", source_kind="skill", name="extension-contract",
-        revision="extension-rev-1", tracking_mode="tracked", content="冻结来源正文",
+        revision="extension-rev-1", requested_mode="tracked", content="冻结来源正文",
         extensions=extensions,
     )
     decision = build_source_lifecycle_decision(observation, decision_kind="base")
@@ -1349,7 +1349,7 @@ def test_source_observation_rejects_unversioned_extension(saver):
         SourceObservation(
             owner=ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID)),
             source_id="skill:invalid-extension", source_kind="skill", name="invalid-extension",
-            revision="rev-1", tracking_mode="tracked", content="正文",
+            revision="rev-1", requested_mode="tracked", content="正文",
             extensions={"vendor.future/context": {"value": {}, "protection": "public"}},
         )
 
@@ -1401,7 +1401,7 @@ def test_root_policy_fields_survive_observation_mapping_with_adversarial_extensi
     }}
     clean = SourceObservation(
         owner=owner, source_id="instruction:R06", source_kind="filesystem_rules",
-        name="Filesystem 规则", revision="rules-v1", tracking_mode="tracked",
+        name="Filesystem 规则", revision="rules-v1", requested_mode="tracked",
         content="文件系统规则", root_placement="root_eligible", policy_key="filesystem_rules",
     )
     adversarial = replace(clean, extensions=opaque)

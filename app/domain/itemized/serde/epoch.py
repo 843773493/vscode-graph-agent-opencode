@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict
+from typing import Literal, cast
 
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
@@ -15,6 +16,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileItemFrame,
     RuntimeNoticeAcceptanceRef,
     SealedPrefixAssembly,
+    SourceTrackingAtSeal,
 )
 from app.domain.itemized.epoch.root_compilation import (
     CompiledRootItem,
@@ -55,13 +57,54 @@ def _parent(value: object) -> ParentAssemblyRef | None:
     return ParentAssemblyRef(**raw)
 
 
-def _item_ref(value: object) -> AppendedItemRef:
+def _item_ref(value: object, version: Literal[1, 2]) -> AppendedItemRef:
+    tracking_field = "tracking_state" if version == 1 else "source_tracking_at_seal"
     raw = _object(
         value,
-        {"ref_type", "ref_id", "source_identity", "source_revision", "tracking_state"},
+        {"ref_type", "ref_id", "source_identity", "source_revision", tracking_field},
         "AppendedItemRef",
     )
-    return AppendedItemRef(**raw)
+    fields = dict(raw)
+    # TODO：v1 仅服务既有封存历史；历史保留策略改变前不得删除或迁写。
+    if version == 1:
+        tracking = fields.pop("tracking_state")
+        if tracking not in {"tracked", "not_tracked"} or (
+            raw["ref_type"] == "canonical_item" and tracking != "not_tracked"
+        ):
+            raise ItemSchemaError("v1 AppendedItemRef.tracking_state 非法")
+        fields["source_tracking_at_seal"] = (
+            None if raw["ref_type"] == "canonical_item"
+            else "tracked" if tracking == "tracked" else "untracked"
+        )
+    # 唯一领域构造器校验值域及 canonical/source 的组合；codec 不复制业务校验。
+    return AppendedItemRef(
+        ref_type=cast(Literal["canonical_item", "source_item"], fields["ref_type"]),
+        ref_id=cast(str, fields["ref_id"]),
+        source_identity=cast(str | None, fields["source_identity"]),
+        source_revision=cast(str | None, fields["source_revision"]),
+        source_tracking_at_seal=cast(SourceTrackingAtSeal | None, fields["source_tracking_at_seal"]),
+    )
+
+
+def _item_ref_to_dict(ref: AppendedItemRef, version: Literal[1, 2]) -> dict[str, object]:
+    fields = asdict(ref)
+    # TODO：按读取时的版本复现旧封存，不能把历史引用重写为新字段。
+    if version == 1:
+        tracking = fields.pop("source_tracking_at_seal")
+        fields["tracking_state"] = "tracked" if tracking == "tracked" else "not_tracked"
+    return fields
+
+
+def _state_to_dict(state: PrefixEpochState, version: Literal[1, 2]) -> dict[str, object]:
+    fields = state.to_dict()
+    # TODO：旧版重编码只存在于此 codec，运行态和新 prepare 均使用新版引用。
+    if version == 1:
+        fields["frames"] = tuple(
+            {**frame.frame_manifest(), "item_ref": _item_ref_to_dict(frame.item_ref, version)}
+            for frame in state.frames
+        )
+        fields["appended_refs"] = tuple(_item_ref_to_dict(ref, version) for ref in state.appended_refs)
+    return fields
 
 
 def _notice_acceptance(value: object) -> RuntimeNoticeAcceptanceRef | None:
@@ -81,12 +124,12 @@ def context_seal_binding_to_dict(binding: ContextSealBinding) -> dict[str, objec
     root = asdict(binding.root) if binding.root is not None else None
     if root is not None:
         root["epoch"]["reason"] = binding.root.epoch.reason.value
-    return {
+    stored = {
         "prefix": {
             "assembly_id": prefix.assembly_id,
-            "state": prefix.state.to_dict(),
+            "state": _state_to_dict(prefix.state, binding.format_version),
             "parent": asdict(prefix.parent) if prefix.parent is not None else None,
-            "appended_refs": tuple(asdict(ref) for ref in prefix.appended_refs),
+            "appended_refs": tuple(_item_ref_to_dict(ref, binding.format_version) for ref in prefix.appended_refs),
             "prefix_byte_length": prefix.prefix_byte_length,
             "prefix_hash": prefix.prefix_hash,
             "consumed_transition": stored_transition,
@@ -99,16 +142,27 @@ def context_seal_binding_to_dict(binding: ContextSealBinding) -> dict[str, objec
         "source_revisions": tuple(asdict(source) for source in binding.source_revisions),
         "notice_acceptance": asdict(binding.notice_acceptance) if binding.notice_acceptance is not None else None,
     }
+    if binding.format_version == 2:
+        stored["format_version"] = 2
+    return stored
 
 
 def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
     """恢复同一 sealed frame；字段/摘要/owner 绑定漂移都直接失败。"""
+    if not isinstance(payload, Mapping):
+        raise ItemSchemaError("ContextSealBinding 必须是 object")
+    # TODO：无版本标签唯一对应已封存的 v1；不按局部字段猜测或兼容混合格式。
+    version: Literal[1, 2] = 1
+    if "format_version" in payload:
+        if type(payload["format_version"]) is not int or payload["format_version"] != 2:
+            raise ItemSchemaError("未知 ContextSealBinding.format_version")
+        version = 2
     raw = _object(
         payload,
         {
             "prefix", "root", "tool_set_snapshot_id", "applied_toolset_revision",
             "selection_revision", "previous_assembly_id", "source_revisions", "notice_acceptance",
-        },
+        } | ({"format_version"} if version == 2 else set()),
         "ContextSealBinding",
     )
     prefix = _object(
@@ -137,7 +191,7 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
         frames.append(ProviderProfileItemFrame(
             ordinal=frame["ordinal"], provider_profile=frame["provider_profile"],
             role=frame["role"], payload_kind=frame["payload_kind"],
-            content=frame["content"], item_ref=_item_ref(frame["item_ref"]),
+            content=frame["content"], item_ref=_item_ref(frame["item_ref"], version),
         ))
     transition = prefix["consumed_transition"]
     if transition is not None:
@@ -161,13 +215,13 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
             epoch_applied=state["epoch_applied"],
             frames=tuple(frames),
             appended_refs=tuple(
-                _item_ref(value) for value in _array(state["appended_refs"], "appended_refs")
+                _item_ref(value, version) for value in _array(state["appended_refs"], "appended_refs")
             ),
             parent=_parent(state["parent"]),
         ),
         parent=_parent(prefix["parent"]),
         appended_refs=tuple(
-            _item_ref(value) for value in _array(prefix["appended_refs"], "appended_refs")
+            _item_ref(value, version) for value in _array(prefix["appended_refs"], "appended_refs")
         ),
         prefix_byte_length=prefix["prefix_byte_length"],
         prefix_hash=prefix["prefix_hash"],
@@ -213,4 +267,5 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
         previous_assembly_id=raw["previous_assembly_id"],
         source_revisions=tuple(revisions),
         notice_acceptance=_notice_acceptance(raw["notice_acceptance"]),
+        format_version=version,
     )

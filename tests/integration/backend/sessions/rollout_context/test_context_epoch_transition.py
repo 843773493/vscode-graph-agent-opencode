@@ -338,6 +338,31 @@ def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation, reque
         yield case
 
 
+def test_tracking_contract_survives_provider_retry_and_cold_append(epoch_case):
+    case = epoch_case
+    case.load_snapshot()
+    prepared = case.prepare("tracking-contract")
+    original = case.snapshot(prepared)
+    refs = [frame.item_ref for frame in original.seal_binding.prefix.state.frames]
+    assert original.seal_binding.format_version == 2
+    assert {ref.source_tracking_at_seal for ref in refs if ref.ref_type == "source_item"} == {"tracked", "untracked"}
+    assert any(ref.ref_type == "canonical_item" for ref in refs)
+    assert all(ref.source_tracking_at_seal is None for ref in refs if ref.ref_type == "canonical_item")
+    sealed_bytes = canonical_json_bytes(original.to_dict())
+    rows = case.selected_rows()
+    case.restart()
+    assert case.prepare("tracking-contract")["assembly_id"] == original.assembly_id
+    assert case.selected_rows() == rows
+    assert canonical_json_bytes(case.snapshot(prepared).to_dict()) == sealed_bytes
+    following = case.snapshot(case.prepare("tracking-following"))
+    assert following.seal_binding.format_version == 2
+    assert following.seal_binding.prefix.state.epoch == original.seal_binding.prefix.state.epoch
+    old_frames = original.seal_binding.prefix.state.frames
+    assert following.seal_binding.prefix.state.frames[:len(old_frames)] == old_frames
+    assert following.seal_binding.prefix.parent.assembly_id == original.assembly_id
+    assert canonical_json_bytes(case.snapshot(prepared).to_dict()) == sealed_bytes
+
+
 @pytest.mark.parametrize("epoch_case", (False, True), indirect=True, ids=("no-sources", "tracked-sources"))
 def test_prepare_reuses_empty_rebuild_read_only_within_each_request(epoch_case, rebuild_reads):
     case = epoch_case

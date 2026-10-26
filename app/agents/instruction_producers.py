@@ -38,7 +38,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
     ApplySourceLifecycleDecision,
     SourceObservation,
-    SourceTrackingMode,
+    SourceRequestedMode,
     build_source_lifecycle_decision,
 )
 
@@ -208,7 +208,7 @@ class InstructionProducerObservation:
     owner: ContextSourceOwnerKey
     spec: InstructionProducerSpec
     revision: str
-    tracking_mode: SourceTrackingMode = "tracked"
+    requested_mode: SourceRequestedMode = "tracked"
     activation_boundary: Literal["turn", "model_call"] = "turn"
     from_revision: str | None = None
 
@@ -251,7 +251,7 @@ class InstructionProducerObservation:
             source_kind=self.spec.source_kind,
             name=self.spec.name,
             revision=self.revision,
-            tracking_mode=self.tracking_mode,
+            requested_mode=self.requested_mode,
             activation_boundary=self.activation_boundary,
             from_revision=self.from_revision,
             content=self.spec.content,

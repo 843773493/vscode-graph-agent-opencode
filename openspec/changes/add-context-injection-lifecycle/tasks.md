@@ -338,7 +338,7 @@
 
 本节为可直接进入实施的任务清单，按依赖关系逐切片实现并验收；团队／协作专项继续暂缓，不阻塞本节独立任务。语义以 specs 为准；标签拼写、配置键及typed结构由对应实施切片收敛，不作为整节停留在规划阶段的理由，也不能改变已定默认值、互斥模式、来源优先级或稳定前缀合同。涉及itemized封存映射及统一寻址的部分复用其唯一owner，不在此复制第二份合同；任务完成须有对应实现与验收证据。
 
-- [ ] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
+- [x] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
 - [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
 - [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
 - [ ] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
@@ -361,3 +361,9 @@
 - 来源、控制状态、Skill回执与事件回归181 passed；最终新增合同3 passed（包含于前述181项，不累加）。恢复/dispatch 24 passed，正式matrix的fork首次请求6 passed；epoch前33项通过，余下完整复制3项经新增`integration-context-source-epoch-copy`正式watchdog补验通过。均有进程外期限与4GiB保护；不代替完整Web、真实Provider或9.13–9.15新增总门。
 - R01真实reload测试在首次执行前的workspace来源前置断言失败，完整旧HEAD归档同位置复现，未放宽断言，代码登记9.15 TODO。初轮组合120秒到期，原始非零保留；epoch初轮在full-copy装具处拒绝非matrix启动；尝试通用integration-python时因其8GiB默认上限高于外层4GiB而在启动前失败，最终使用具名4GiB suite，不修改默认保护。所有失败与最终补验均保留原件。
 - Ruff/compileall及45项OpenSpec strict通过。Pyright最终73项诊断全部在完整旧HEAD的76项中，无新增，移除3项既有pending字段诊断；不称类型全绿。四处调用方AST核查与作者结构自查无新增职责问题，未启动团队专项。部分运行期间仅规划文档或无关R01 TODO注释变化，实际产品依赖指纹未变。准确命令、前后指纹、raw、退出码、类型对照、失败归因与产物清单见`out/tests/temp/cil_observation_results_20261026/artifacts/verification-023.json`；旧树与tar核验后删除。9.3完成，其余第9节按未完成任务继续推进。
+
+### 2026-10-26 9.1 请求与封存追踪字段迁移
+
+- 请求字段统一为`requested_mode`，新封存引用使用typed `source_tracking_at_seal`：canonical为None，source明确tracked/untracked；外部skill_load.mode、当前tracking_status和派生tracked不变。全量迁齐生产构造、compiler、summary、严格codec及调用测试，无旧属性别名或双写。原itemized codec对新绑定显式写版本2，旧无标签版本1原样重编码；新prepare hash使用v2，不重写旧封存或SQLite schema。
+- 领域/来源回归1526 passed；最终codec文件42 passed（包含前述已通过节点及新增2项，不累加整文件）。seal/epoch/manifest集成为103 passed、1个既有迁移测试失败；修改前完整HEAD同位置复现current=23/target=24，不放宽断言。正式epoch-copy matrix3 passed。修改前完整4440文件归档经实际准入/CSM/prepare/seal生成tracked、snapshot及canonical旧历史，新代码冷读、原key重试、同epoch追加、真实fork入口复制和来源离线冷读通过，旧sealed字节/request hash/owner均保留。
+- Ruff/compileall及45项strict通过。14文件Pyright基线607项/最终602项，无新增；最后两条错误合同测试的单文件检查仍为基线10项/最终10项，不称类型全绿。作者AST/结构自查通过，未启动团队专项或冒充独审。初轮测试装具及临时探针生命周期/进程组保护失败保留原件，最终复用原owner和matrix保护补验；未替代完整Web、真实Provider、Windows或9.13–9.15总门。准确命令、指纹、raw、失败归因及产物清单见`out/tests/temp/cil_tracking_fields_20261026/artifacts/verification-023.json`；旧代码归档和tar核验后清理，保留历史JSON与运行原件。

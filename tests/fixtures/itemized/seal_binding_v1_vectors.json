@@ -1,0 +1,156 @@
+{
+  "source_commit": "cee34b4d0",
+  "description": "旧提交经实际 accept_turn、CSM、prepare_context_for_provider 及 seal 生成，冻结用于封存格式回放。",
+  "canonical_sha256": "2695af5b7b3f4f43e8c79e388a66fa57e3cdfae0e6939f3e281630d8afc72f93",
+  "sealed_binding": {
+    "applied_toolset_revision": "sha256:jcs:v1:76e2323a478f5b2a7f79fe23a95155fc01770704f3c257bb7298fdf27312f079",
+    "notice_acceptance": {
+      "acceptance_commit_id": 1,
+      "selection_hash": "sha256:jcs:v1:a034f98cd7714ecb5b279970b03e9c7fdee59214142bd656bf9c79479bd710ff"
+    },
+    "prefix": {
+      "appended_refs": [
+        {
+          "ref_id": "source-update:skill:one-shot:snapshot:1:activation",
+          "ref_type": "source_item",
+          "source_identity": "skill:one-shot",
+          "source_revision": "snapshot:1",
+          "tracking_state": "not_tracked"
+        }
+      ],
+      "assembly_id": "assembly-e3c666c9205f45e9b3285e0ccb7b7c50",
+      "consumed_transition": null,
+      "parent": {
+        "assembly_id": "assembly-861a6f8203cb49a7b81a9e201f7b6026",
+        "epoch_ordinal": 1,
+        "prefix_byte_length": 739,
+        "prefix_hash": "sha256:bytes:v1:9a5d3b6ae9e651a48905c726ca921c3f6453e418aae53ee6295ff52833b73159"
+      },
+      "prefix_byte_length": 933,
+      "prefix_hash": "sha256:bytes:v1:f2e65aa8ce571cfd195863e88b4b9950d7b311718efe58ee052e892b4927c433",
+      "state": {
+        "appended_refs": [],
+        "epoch": {
+          "ordinal": 1,
+          "reason": "initial",
+          "turn_id": "turn-e9373030d1daaa2c6d0bee7e"
+        },
+        "epoch_applied": true,
+        "frames": [
+          {
+            "content": "基础规则第一版",
+            "item_ref": {
+              "ref_id": "root:prefix-epoch:1:initial",
+              "ref_type": "source_item",
+              "source_identity": "compiled-root",
+              "source_revision": "sha256:jcs:v1:45b37dd8c9e02458c0a5f7df232d0cc37133a720649225e04ed9914bad112ad1",
+              "tracking_state": "tracked"
+            },
+            "ordinal": 1,
+            "payload_kind": "text",
+            "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+            "role": "system"
+          },
+          {
+            "content": {
+              "item_ids": [
+                "item-epoch-ingress"
+              ],
+              "message": {
+                "data": {
+                  "additional_kwargs": {},
+                  "content": "真实用户输入",
+                  "id": "epoch-ingress",
+                  "name": null,
+                  "response_metadata": {},
+                  "type": "human"
+                },
+                "type": "human"
+              }
+            },
+            "item_ref": {
+              "ref_id": "item-epoch-ingress",
+              "ref_type": "canonical_item",
+              "source_identity": null,
+              "source_revision": null,
+              "tracking_state": "not_tracked"
+            },
+            "ordinal": 2,
+            "payload_kind": "structured_content",
+            "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+            "role": "user"
+          },
+          {
+            "content": "v1\n",
+            "item_ref": {
+              "ref_id": "source-full:skill:debugging:skill:1",
+              "ref_type": "source_item",
+              "source_identity": "skill:debugging",
+              "source_revision": "skill:1",
+              "tracking_state": "tracked"
+            },
+            "ordinal": 3,
+            "payload_kind": "text",
+            "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+            "role": "user"
+          },
+          {
+            "content": "仅一次的冻结正文\n",
+            "item_ref": {
+              "ref_id": "source-update:skill:one-shot:snapshot:1:activation",
+              "ref_type": "source_item",
+              "source_identity": "skill:one-shot",
+              "source_revision": "snapshot:1",
+              "tracking_state": "not_tracked"
+            },
+            "ordinal": 4,
+            "payload_kind": "text",
+            "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+            "role": "user"
+          }
+        ],
+        "parent": {
+          "assembly_id": "assembly-e3c666c9205f45e9b3285e0ccb7b7c50",
+          "epoch_ordinal": 1,
+          "prefix_byte_length": 933,
+          "prefix_hash": "sha256:bytes:v1:f2e65aa8ce571cfd195863e88b4b9950d7b311718efe58ee052e892b4927c433"
+        },
+        "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+        "tool_compatibility_key": "sha256:jcs:v1:bce1d785b6024d2c345127e19fe831daedf3ffc61abc1270106f837ea3b0f1c9"
+      }
+    },
+    "previous_assembly_id": "assembly-861a6f8203cb49a7b81a9e201f7b6026",
+    "root": {
+      "content": "基础规则第一版",
+      "epoch": {
+        "ordinal": 1,
+        "reason": "initial",
+        "turn_id": "turn-e9373030d1daaa2c6d0bee7e"
+      },
+      "provider_profile": "chat_completions:chat_completions|provider=|custom=openai|model=epoch-provider|caps=",
+      "sources": [
+        {
+          "content_hash": "sha256:jcs:v1:1d431ae2528f4c87d435f0f6768d5e100d0a34f0f191dccd50900d277013d6a5",
+          "included_reason": "initial",
+          "name": "RULES.md",
+          "revision": "rules:1",
+          "source_identity": "workspace:rules",
+          "source_kind": "workspace_rules",
+          "source_ordinal": 0
+        }
+      ],
+      "tool_compatibility_key": "sha256:jcs:v1:bce1d785b6024d2c345127e19fe831daedf3ffc61abc1270106f837ea3b0f1c9"
+    },
+    "selection_revision": "sha256:jcs:v1:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "source_revisions": [
+      {
+        "decision_id": "source-seal:skill:one-shot:snapshot:1:activation",
+        "expected_control_revision": null,
+        "previous_revision": null,
+        "revision": "snapshot:1",
+        "source_id": "skill:one-shot"
+      }
+    ],
+    "tool_set_snapshot_id": "tool-set:sha256:jcs:v1:76e2323a478f5b2a7f79fe23a95155fc01770704f3c257bb7298fdf27312f079"
+  }
+}

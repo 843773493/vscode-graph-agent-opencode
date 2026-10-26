@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -34,7 +37,7 @@ from app.domain.itemized.hash.request_hash import (
     context_request_hash,
     context_request_hash_preimage,
 )
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -100,6 +103,90 @@ def test_sealed_binding_preserves_root_and_prefix_after_json_restart(binding):
     assert restored.prefix.state.epoch_applied
     assert restored.root.sources[0].source_identity == "instruction:R01"
     assert restored.prefix.prefix_hash == binding.prefix.prefix_hash
+
+
+@pytest.fixture
+def historical_binding_payload():
+    return json.loads((Path.cwd() / "tests/fixtures/itemized/seal_binding_v1_vectors.json").read_text())
+
+
+def test_historical_seal_reencodes_without_rewriting_bytes(historical_binding_payload):
+    raw = historical_binding_payload["sealed_binding"]
+    before = canonical_json_bytes(raw)
+    assert hashlib.sha256(before).hexdigest() == historical_binding_payload["canonical_sha256"]
+    restored = context_seal_binding_from_dict(raw)
+    assert restored.format_version == 1
+    refs = [frame.item_ref for frame in restored.prefix.state.frames]
+    assert {ref.source_tracking_at_seal for ref in refs if ref.ref_type == "source_item"} == {"tracked", "untracked"}
+    assert all(ref.source_tracking_at_seal is None for ref in refs if ref.ref_type == "canonical_item")
+    assert any(ref.ref_type == "canonical_item" for ref in refs)
+    assert canonical_json_bytes(context_seal_binding_to_dict(restored)) == before
+
+
+def test_new_seal_distinguishes_source_tracking_from_canonical(binding):
+    state = binding.prefix.state
+    state = append_items(
+        state,
+        (
+            ProviderProfileItemFrame(2, state.provider_profile, "user", "text", "用户输入", AppendedItemRef("canonical_item", "user:2")),
+            ProviderProfileItemFrame(3, state.provider_profile, "user", "text", "一次快照", AppendedItemRef("source_item", "snapshot:1", "skill:once", "v1", "untracked")),
+        ),
+        desired_provider_profile=state.provider_profile,
+        desired_tool_compatibility_key=state.tool_compatibility_key,
+    )
+    updated = replace(binding, prefix=seal_assembly(state, assembly_id="new-version"), previous_assembly_id=binding.prefix.assembly_id)
+    raw = json.loads(json.dumps(context_seal_binding_to_dict(updated)))
+    assert raw["format_version"] == 2
+    assert [frame["item_ref"]["source_tracking_at_seal"] for frame in raw["prefix"]["state"]["frames"]] == ["tracked", None, "untracked"]
+    assert b'"tracking_state"' not in canonical_json_bytes(raw)
+    assert context_seal_binding_from_dict(raw) == updated
+
+
+@pytest.mark.parametrize("version", [None, 1, 3, True, "2", 2.0])
+def test_seal_codec_rejects_unknown_explicit_versions(binding, version):
+    raw = context_seal_binding_to_dict(binding)
+    raw["format_version"] = version
+    with pytest.raises(ItemSchemaError, match="format_version"):
+        context_seal_binding_from_dict(raw)
+
+
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("location", ["frame", "state_refs", "appended_refs"])
+def test_seal_codec_rejects_mixed_reference_versions(binding, historical_binding_payload, historical, location):
+    raw = deepcopy(historical_binding_payload["sealed_binding"]) if historical else json.loads(json.dumps(context_seal_binding_to_dict(binding)))
+    prefix = raw["prefix"]
+    ref = prefix["state"]["frames"][0]["item_ref"]
+    if location == "state_refs":
+        ref = deepcopy(ref)
+        prefix["state"]["appended_refs"] = [ref]
+    elif location == "appended_refs":
+        ref = prefix["appended_refs"][0]
+    ref["source_tracking_at_seal" if historical else "tracking_state"] = "tracked"
+    with pytest.raises(ItemSchemaError, match="字段"):
+        context_seal_binding_from_dict(raw)
+
+
+@pytest.mark.parametrize("tracking", [None, "untracked", "invalid"])
+def test_historical_codec_rejects_invalid_tracking(historical_binding_payload, tracking):
+    raw = deepcopy(historical_binding_payload["sealed_binding"])
+    raw["prefix"]["state"]["frames"][0]["item_ref"]["tracking_state"] = tracking
+    with pytest.raises(ItemSchemaError, match="tracking_state"):
+        context_seal_binding_from_dict(raw)
+
+
+def test_historical_canonical_reference_cannot_become_tracked(historical_binding_payload):
+    raw = deepcopy(historical_binding_payload["sealed_binding"])
+    ref = next(frame["item_ref"] for frame in raw["prefix"]["state"]["frames"] if frame["item_ref"]["ref_type"] == "canonical_item")
+    ref["tracking_state"] = "tracked"
+    with pytest.raises(ItemSchemaError, match="tracking_state"):
+        context_seal_binding_from_dict(raw)
+
+
+def test_new_reference_fields_without_version_are_rejected(binding):
+    raw = context_seal_binding_to_dict(binding)
+    del raw["format_version"]
+    with pytest.raises(ItemSchemaError, match="字段"):
+        context_seal_binding_from_dict(raw)
 
 
 @pytest.mark.parametrize("field", ["root", "selection_revision", "previous_assembly_id"])

@@ -32,8 +32,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceOwnerKey,
 )
 
-SourceTrackingMode = Literal["snapshot", "tracked", "untrack"]
-"""producer 声明的 tracking 模式；与 skill_load 的 mode 闭合集一致。"""
+SourceRequestedMode = Literal["snapshot", "tracked", "untrack"]
+"""本次观察请求的操作模式；不是当前控制状态或封存时的追踪事实。"""
 
 
 def _require_non_empty(value: object, field_name: str) -> str:
@@ -47,7 +47,7 @@ class SourceObservation:
     """producer 提交给 CSM 的一次结构化来源观察。
 
     字段即决策入口：owner thread、source/facet identity、published
-    semantic revision、activation boundary、tracking mode、base/delta
+    semantic revision、activation boundary、requested mode、base/delta
     关系与幂等键全部显式声明。content 是受信 source owner 已验证的正文
     快照；None 表示只登记「该来源有新事实」，正文由 owner 的权威内存
     快照在消费点提供。extensions 必须是 namespaced/versioned 的透传
@@ -59,7 +59,7 @@ class SourceObservation:
     source_kind: str
     name: str
     revision: str
-    tracking_mode: SourceTrackingMode
+    requested_mode: SourceRequestedMode
     activation_boundary: SourceActivationBoundary = "turn"
     from_revision: str | None = None
     content: str | None = None
@@ -74,9 +74,9 @@ class SourceObservation:
             _require_non_empty(
                 getattr(self, field_name), f"SourceObservation.{field_name}"
             )
-        if self.tracking_mode not in {"snapshot", "tracked", "untrack"}:
+        if self.requested_mode not in {"snapshot", "tracked", "untrack"}:
             raise ValueError(
-                f"SourceObservation.tracking_mode 非法: {self.tracking_mode!r}"
+                f"SourceObservation.requested_mode 非法: {self.requested_mode!r}"
             )
         if self.activation_boundary not in {"turn", "model_call"}:
             raise ValueError(
@@ -127,7 +127,7 @@ def build_source_lifecycle_decision(
     """把 typed observation 确定性映射为 owner 可消费的 intent 分支。
 
     映射只使用 observation 的 typed 字段；extensions 不参与任何分支或
-    字段取值。tracking mode 到 control 字段的对应关系：snapshot/
+    字段取值。requested mode 到 control 字段的对应关系：snapshot/
     observe_pending 不改变 tracking status，tracked 声明 tracked，
     untrack 声明 frozen（untracked）。
     """
@@ -136,9 +136,9 @@ def build_source_lifecycle_decision(
     if decision_kind in {"base", "delta", "rebuild"} and observation.revision is None:
         raise ValueError("base/delta/rebuild 决策要求 observation 携带 revision")
     tracking_status: Literal["tracked", "untracked"] | None = None
-    if observation.tracking_mode == "tracked":
+    if observation.requested_mode == "tracked":
         tracking_status = "tracked"
-    elif observation.tracking_mode == "untrack":
+    elif observation.requested_mode == "untrack":
         tracking_status = "untracked"
     revision: str | None = observation.revision
     if decision_kind == "untrack":
@@ -176,6 +176,6 @@ def build_source_lifecycle_decision(
 
 __all__ = [
     "SourceObservation",
-    "SourceTrackingMode",
+    "SourceRequestedMode",
     "build_source_lifecycle_decision",
 ]

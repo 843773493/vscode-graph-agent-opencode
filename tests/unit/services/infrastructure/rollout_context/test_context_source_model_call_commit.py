@@ -207,7 +207,7 @@ def test_ordinary_lifecycle_intent_keeps_visible_revision_until_real_seal(
         source_kind="skill",
         name="a",
         revision=f"ordinary-{decision_kind}-revision",
-        tracking_mode="tracked",
+        requested_mode="tracked",
         from_revision=(
             prior_visible_revision if decision_kind == "delta" else None
         ),
@@ -266,7 +266,7 @@ def test_owner_rejects_source_decision_without_canonical_item(
         source_kind="skill",
         name=f"missing-item-{decision_kind}",
         revision=f"revision-{decision_kind}",
-        tracking_mode="tracked",
+        requested_mode="tracked",
         from_revision="previous-revision" if decision_kind == "delta" else None,
         content="冻结来源正文",
     )
@@ -282,17 +282,17 @@ def test_owner_rejects_source_decision_without_canonical_item(
 
 
 @pytest.mark.parametrize(
-    "decision_kind,tracking_mode,tracking_status",
+    "decision_kind,requested_mode,tracking_status",
     [("track", "tracked", "tracked"), ("untrack", "untrack", "untracked")],
 )
 def test_control_decision_keeps_itemless_contract_at_owner(
-    source_seal_case, decision_kind, tracking_mode, tracking_status,
+    source_seal_case, decision_kind, requested_mode, tracking_status,
 ):
     saver, owner = source_seal_case.saver, source_seal_case.owner
     source_observation = SourceObservation(
         owner=owner, source_id="control-source", source_kind="skill",
         name="control-source", revision="source-revision",
-        tracking_mode="tracked", content="source item",
+        requested_mode="tracked", content="source item",
     )
     source_decision = build_source_lifecycle_decision(
         source_observation, decision_kind="base",
@@ -305,7 +305,7 @@ def test_control_decision_keeps_itemless_contract_at_owner(
     observation = SourceObservation(
         owner=owner, source_id=f"{decision_kind}-source", source_kind="skill",
         name=f"{decision_kind}-source", revision="control-revision",
-        tracking_mode=tracking_mode, content=None,
+        requested_mode=requested_mode, content=None,
     )
     decision = build_source_lifecycle_decision(
         observation, decision_kind=decision_kind,

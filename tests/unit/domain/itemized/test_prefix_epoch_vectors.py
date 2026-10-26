@@ -1,12 +1,14 @@
 """prefix_epoch 稳定前缀/epoch 合同的 golden vectors 与错误合同测试。
 
 所有预期 hash/字节串均为独立固化的字面量 golden,不由生产代码现算生成。
-覆盖 Unicode、空内容、连续 revision、frame serialization、not_tracked、
+覆盖 Unicode、空内容、连续 revision、frame serialization、untracked、
 source conflict、非法 epoch 组合、ToolSet mismatch、stable-prefix
 violation 与 provider-profile-change-requires-rebuild。
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 import pytest
 
@@ -25,6 +27,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileItemFrame,
     RuntimeNoticeAcceptanceRef,
     SourceIdentityConflictError,
+    SourceTrackingAtSeal,
     StablePrefixViolationError,
     ToolSetRebaseRequiredError,
     append_items,
@@ -127,20 +130,32 @@ V7_ASM2_HASH = (
 
 
 def _ref(
-    ref_type: str,
+    ref_type: Literal["canonical_item", "source_item"],
     ref_id: str,
     *,
     source_identity: str | None = None,
     source_revision: str | None = None,
-    tracking_state: str = "not_tracked",
+    source_tracking_at_seal: SourceTrackingAtSeal | None = None,
 ) -> AppendedItemRef:
     return AppendedItemRef(
         ref_type=ref_type,
         ref_id=ref_id,
         source_identity=source_identity,
         source_revision=source_revision,
-        tracking_state=tracking_state,
+        source_tracking_at_seal=source_tracking_at_seal,
     )
+
+
+@pytest.mark.parametrize("tracking", ["tracked", "untracked"])
+def test_canonical_reference_cannot_claim_source_tracking(tracking) -> None:
+    with pytest.raises(ItemSchemaError, match="canonical.*tracking"):
+        AppendedItemRef("canonical_item", "canonical", source_tracking_at_seal=tracking)
+
+
+@pytest.mark.parametrize("tracking", [None, "not_tracked", "snapshot"])
+def test_source_reference_requires_explicit_sealed_tracking(tracking) -> None:
+    with pytest.raises(ItemSchemaError, match="source_tracking_at_seal"):
+        AppendedItemRef("source_item", "source", "skill:once", "v1", tracking)
 
 
 def _frame(
@@ -239,7 +254,7 @@ def test_consecutive_revision_golden_chain() -> None:
                 "src-agents-1",
                 source_identity="boxteam://resources/agents-md",
                 source_revision=revision,
-                tracking_state="tracked",
+                source_tracking_at_seal="tracked",
             ),
         )
         state = append_items(
@@ -283,11 +298,11 @@ def test_frame_serialization_is_order_independent_jcs() -> None:
     assert len(frame_a.frame_bytes()) == V5_FRAME_LEN
 
 
-def test_not_tracked_source_repeats_without_conflict() -> None:
+def test_untracked_source_repeats_without_conflict() -> None:
     state = initial_epoch_state(
         provider_profile=PROFILE, tool_compatibility_key=KEY_ZERO
     )
-    # snapshot 模式:同一 source identity 的 not_tracked item 携带 revision,
+    # snapshot 模式:同一 source identity 的 untracked item 携带 revision,
     # 但不参与 tracked revision 冲突校验。
     first = _frame(
         1,
@@ -298,6 +313,7 @@ def test_not_tracked_source_repeats_without_conflict() -> None:
             "src-skill-1",
             source_identity="boxteam://resources/skills/report",
             source_revision="skill-rev-7",
+            source_tracking_at_seal="untracked",
         ),
     )
     second = _frame(
@@ -309,6 +325,7 @@ def test_not_tracked_source_repeats_without_conflict() -> None:
             "src-skill-2",
             source_identity="boxteam://resources/skills/report",
             source_revision="skill-rev-7",
+            source_tracking_at_seal="untracked",
         ),
     )
     state = append_items(
@@ -317,14 +334,14 @@ def test_not_tracked_source_repeats_without_conflict() -> None:
         desired_provider_profile=PROFILE,
         desired_tool_compatibility_key=KEY_ZERO,
     )
-    assert state.appended_refs[0].tracking_state == "not_tracked"
+    assert state.appended_refs[0].source_tracking_at_seal == "untracked"
     # tracked ref 缺 source_revision 直接失败。
     with pytest.raises(ItemSchemaError):
         _ref(
             "source_item",
             "src-skill-3",
             source_identity="boxteam://resources/skills/report",
-            tracking_state="tracked",
+            source_tracking_at_seal="tracked",
         )
 
 
@@ -341,7 +358,7 @@ def test_source_identity_conflict_and_duplicate_body() -> None:
             "src-1",
             source_identity="boxteam://resources/agents-md",
             source_revision="rev-9",
-            tracking_state="tracked",
+            source_tracking_at_seal="tracked",
         ),
     )
     state = append_items(
@@ -357,7 +374,7 @@ def test_source_identity_conflict_and_duplicate_body() -> None:
             "src-2",
             source_identity="boxteam://resources/agents-md",
             source_revision="rev-9",
-            tracking_state="tracked",
+            source_tracking_at_seal="tracked",
         ),
     )
     with pytest.raises(SourceIdentityConflictError) as conflict_info:
@@ -378,7 +395,7 @@ def test_source_identity_conflict_and_duplicate_body() -> None:
             "src-3",
             source_identity="boxteam://resources/agents-md",
             source_revision="rev-9",
-            tracking_state="tracked",
+            source_tracking_at_seal="tracked",
         ),
     )
     with pytest.raises(SourceIdentityConflictError):
@@ -757,7 +774,7 @@ def test_pending_transition_only_consumed_after_successful_seal() -> None:
     )
     rebuilt = append_items(
         rebuilt,
-        [_frame(1, "user", "压缩摘要", _ref("source_item", "src-summary", source_identity="compaction"))],
+        [_frame(1, "user", "压缩摘要", _ref("source_item", "src-summary", source_identity="compaction", source_tracking_at_seal="untracked"))],
         desired_provider_profile=PROFILE,
         desired_tool_compatibility_key=key_a,
     )
@@ -791,7 +808,7 @@ def test_pending_transition_only_consumed_after_successful_seal() -> None:
             ref_id="src-summary",
             source_identity="compaction",
             source_revision=None,
-            tracking_state="not_tracked",
+            source_tracking_at_seal="untracked",
         ),
     )
 
