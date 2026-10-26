@@ -611,6 +611,9 @@
     "auto_summarize": true // ConfigService._load_public_runtime_config 使用。
   },
   "mcp": {
+    "supervision": {
+      "sealed_call_timeout_seconds": 1800 // 从模型发送前保留资格开始计时，包含模型响应和人工确认等待；修改需重启工作区。
+    },
     "servers": {} // McpRuntimeManager 使用；默认不启动外部 MCP Server。
   },
   "runtime": {

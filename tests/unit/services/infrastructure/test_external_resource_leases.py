@@ -19,6 +19,30 @@ from app.services.infrastructure.external_resource_leases import (
 )
 
 
+def test_optional_lease_expiry_reads_legacy_rows_and_round_trips_deadline(tmp_path):
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    ledger.register_external(resource_id="connection", kind="mcp_connection", lifetime_scope="workspace")
+    legacy = ledger.acquire_operation(resource_id="connection", turn_stream_id="holder", operation_id="legacy")
+    payload = json.loads(path.read_text())
+    payload["leases"][0].pop("expires_at")
+    path.write_text(json.dumps(payload))
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    retained = cold.get_lease(legacy.lease_id)
+    assert retained is not None and retained.expires_at is None
+    deadline = "2026-10-26T01:30:00+00:00"
+    prepared = cold.acquire_operation(
+        resource_id="connection", turn_stream_id="prepared-holder", operation_id="prepared", expires_at=deadline,
+    )
+    retained = ExternalResourceLeaseLedger(state_path=path).get_lease(prepared.lease_id)
+    assert retained is not None and retained.expires_at == deadline
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match="关联键不一致"):
+        cold.acquire_operation(resource_id="connection", turn_stream_id="prepared-holder", operation_id="prepared",
+                               expires_at="2026-10-26T02:30:00+00:00")
+    assert path.read_bytes() == before
+
+
 @pytest.fixture(params=["register", "refresh", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
 def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], object]]:
     mutations: dict[str, Callable[[ExternalResourceLeaseLedger], object]] = {

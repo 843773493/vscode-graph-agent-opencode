@@ -37,6 +37,7 @@ class McpResourceUse:
     operation_id: str
     session_id: str
     thread_id: str
+    model_call_id: str
 
 
 @dataclass(slots=True)

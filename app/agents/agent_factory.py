@@ -99,7 +99,9 @@ from app.services.infrastructure.events.channel_events import (
     ContextSourceEventPublisher,
 )
 from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     McpCatalogResourcePublisher,
+    extension_dispatch_from_activation,
 )
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.extension_catalog import (
@@ -160,6 +162,7 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
+    from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
@@ -711,6 +714,7 @@ def create_my_deep_agent(
     # 固定信封即使当前没有可执行 target 也必须存在；target 的启停只改变
     # 封存目录与执行准入，不改变 Provider 工具面。
     target_resolver = None
+    extension_call_scope = None
     skill_snapshot_resolver = None
 
     def discovery_catalog_resolver() -> FrozenToolCatalog:
@@ -809,11 +813,27 @@ def create_my_deep_agent(
                 model_call_id=tool_invocation_context.require_model_call_id(),
             ).binding_ref
 
+        def reserve_extension_call(snapshot: ResourceActivationSnapshotRef, model_call_id: str, checkpoint_ns: str):
+            parents = tuple(binding for binding in snapshot.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+            if len(parents) != 1:
+                raise ExtensionTargetResolutionError("MCP 封存资格缺少唯一冻结目录")
+            dispatch = extension_dispatch_from_activation(
+                snapshot=snapshot, binding=parents[0], model_call_id=model_call_id,
+                payload=checkpointer.read_resource_activation_payload(
+                    snapshot, parents[0], storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
+                ),
+            )
+            return mcp_catalog_owner.execution_handles.reserve_model_call(
+                dispatch.binding_ref, session_id=session_id, thread_id=thread_id, model_call_id=model_call_id,
+            )
+
+        extension_call_scope = reserve_extension_call
+
         local_targets = {tool.name: tool for tool in custom_tools}
 
         def resolve_target(binding: ExtensionTargetBinding, use: McpResourceUse | None):
             if binding.origin == "mcp":
-                return mcp_catalog_owner.execution_target(binding, use)
+                return mcp_catalog_owner.execution_handles.execution_target(binding, use)
             target = local_targets.get(binding.target_id)
             if target is None:
                 raise ExtensionTargetResolutionError(
@@ -972,6 +992,7 @@ def create_my_deep_agent(
         source_message_grouping_supplier=config_service.get_source_message_grouping,
         tool_set_producer=tool_set_producer,
         extension_policy_resolver=extension_context_policies,
+        extension_call_scope=extension_call_scope,
         resource_activation=resource_activation,
         context_read_admission=lambda: session_service.session_read_admission(session_id),
         context_control_admission=lambda operation_id, payload, recovery_ref: session_service.session_context_control_admission(

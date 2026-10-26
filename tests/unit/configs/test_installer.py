@@ -100,7 +100,7 @@ def test_development_templates_enable_development_capabilities_and_docker_gatewa
     )
     assert workspace["development"] == {"test_tools": False}
     assert workspace_dev["development"] == {"test_tools": True}
-    assert workspace["mcp"] == {"servers": {}}
+    assert workspace["mcp"] == {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}}
     assert "mcp" in workspace_dev
     assert workspace_dev["runtime"]["debug"] == workspace["runtime"]["debug"]  # type: ignore[index]
     debugging_tools = {

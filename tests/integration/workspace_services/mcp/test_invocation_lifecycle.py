@@ -172,12 +172,18 @@ async def test_envelope_publishes_real_progress_and_terminal_activity(
 
         context = activity_case.context
         context_token = context.set_tool_call_id("activity-call", projection_identity=ItemProjectionIdentity(model_call_id=create_uuid_hex()))
+        thread = context.thread_binding
+        with case.owner.execution_handles.reserve_model_call(
+            case.owner.binding_snapshot(), session_id=thread.session_id, thread_id=thread.thread_id,
+            model_call_id=context.require_model_call_id(),
+        ) as retain:
+            retain([{"id": "activity-call", "name": "invoke_extension_tool", "args": {"tool_name": "mcp__schema__probe"}}])
         sink_token = set_current_model_delta_sink(SimpleNamespace(activities=activity_case.runtime))
         try:
             invoker = create_extension_tool_invoker_tool(
                 case.owner.get_tools(), invocation_context=context,
                 catalog_binding_resolver=sealed_extension_catalog_binding_resolver(case.owner.binding_snapshot()),
-                target_resolver=case.execution_target,
+                target_resolver=case.owner.execution_handles.execution_target,
             )
             result = await asyncio.wait_for(call(invoker, "activity-call", mode), 5)
         finally:
@@ -194,6 +200,43 @@ async def test_envelope_publishes_real_progress_and_terminal_activity(
             ]
             assert McpInvocationReceipt.from_artifact(result.artifact) is None
         assert "/private/" not in repr(commits)
+
+
+@pytest.mark.parametrize("schema_server_case", [1], indirect=True)
+async def test_expired_sealed_call_is_paired_and_never_reaches_real_server(
+    schema_server_case: SchemaServerCase, activity_case,
+) -> None:
+    from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+
+    async with schema_server_case.started() as case:
+        context = activity_case.context
+        thread = context.thread_binding
+        model_call_id = create_uuid_hex()
+        token = context.set_tool_call_id("expired-call", projection_identity=ItemProjectionIdentity(model_call_id=model_call_id))
+        try:
+            binding = case.owner.binding_snapshot()
+            with case.owner.execution_handles.reserve_model_call(
+                binding, session_id=thread.session_id, thread_id=thread.thread_id, model_call_id=model_call_id,
+            ) as retain:
+                retain([{"id": "expired-call", "name": "invoke_extension_tool", "args": {"tool_name": "mcp__schema__probe"}}])
+            await asyncio.sleep(1.1)
+            invoker = create_extension_tool_invoker_tool(
+                case.owner.get_tools(), invocation_context=context,
+                catalog_binding_resolver=sealed_extension_catalog_binding_resolver(binding),
+                target_resolver=case.owner.execution_handles.execution_target,
+            )
+            result = await call(invoker, "expired-call", "progress")
+        finally:
+            context.reset_tool_call_id(token)
+        assert result.tool_call_id == "expired-call" and result.status == "error"
+        assert "资格已失效" in result.content
+        assert case.received() == []
+        resource_id = binding.resolve("mcp__schema__probe").connection_ref
+        assert resource_id is not None
+        cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+        record = cold.get(resource_id)
+        assert record is not None and record.status == "running"
+        assert not cold.leases_for_resource(resource_id)
 
 
 async def test_progress_writer_failure_is_reported_instead_of_sdk_swallowing_it(

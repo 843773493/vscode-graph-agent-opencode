@@ -20,8 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from _thread import RLock
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -40,6 +39,11 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.mcp.config import (
     parse_mcp_server_configs,
+    sealed_call_timeout_seconds,
+)
+from app.services.infrastructure.mcp.execution_handles import (
+    McpExecutionHandle,
+    McpExecutionHandles,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
@@ -49,10 +53,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_schema_hash,
     payload_digest,
-)
-from app.services.infrastructure.mcp.invocation import (
-    ExtensionExecutionTarget,
-    McpResourceUse,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.session_runtime import (
@@ -266,6 +266,10 @@ class McpCatalogOwner:
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
         self._publication_lock = RLock()
+        self.execution_handles = McpExecutionHandles(
+            leases=leases, lock=self._publication_lock, resolve_active=self._resolve_execution_handle,
+            timeout_seconds=sealed_call_timeout_seconds(raw_config),
+        )
         self._publication: McpCatalogPublication | None = None
         self._publication_subscribers: dict[int, McpPublicationCallback] = {}
         self._next_publication_subscriber = 0
@@ -278,6 +282,7 @@ class McpCatalogOwner:
     async def start(self) -> None:
         if self._started or self._session_scope is not None:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
+        self.execution_handles.reconcile_lost_handles()
         # 只保留已核实关闭的旧连接；旧 socket 与未完成操作不能随新连接复活。
         self._leases.reconcile({
             record.resource_id: "stopped"
@@ -341,11 +346,16 @@ class McpCatalogOwner:
                 _catalog_failure_text(failure, server_id=failed_server_id, stage="startup")
             ) from failure
         self._started = True
+        self.execution_handles.start()
 
     async def shutdown(self) -> None:
         errors: list[Exception] = []
         with self._publication_lock:
             self._started = False
+            try:
+                self.execution_handles.close()
+            except Exception as error:  # noqa: BLE001 - 汇总账本释放失败，仍须排空 SDK 原 task，最后重抛。
+                errors.append(error)
             if self._publication is not None:
                 try:
                     self._publish_readiness_locked("unavailable", "MCP 目录 owner 已关闭")
@@ -448,10 +458,10 @@ class McpCatalogOwner:
     def get_tools(self) -> list[BaseTool]:
         return list(self.publication_snapshot().tools.values())
 
-    def _resolve_execution_target(self, binding: ExtensionTargetBinding) -> BaseTool:
+    def _resolve_execution_handle(self, binding: ExtensionTargetBinding) -> McpExecutionHandle:
         """只按封存连接及 schema 解析；新同名工具绝不能接管旧调用。"""
-        # TODO(4.4): 为已封存调用和 HITL 等待建立有界资格，排空期保留原 handle；
-        # 当前原连接关闭即明确拒绝，不能用新同名连接补齐历史执行。
+        # TODO(4.4/7.x): 正常配置替换保留并排空获准的旧 runtime；当前重启
+        # 仍关闭原连接，不能凭历史资格从新同名连接恢复执行。
         with self._publication_lock:
             runtime = self._runtimes.get(binding.server_id or "")
             target = self._tools_by_id.get(binding.target_id)
@@ -466,43 +476,7 @@ class McpCatalogOwner:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
                 )
-            return target
-
-    @contextmanager
-    def execution_target(
-        self, binding: ExtensionTargetBinding, use: McpResourceUse | None,
-    ) -> Iterator[ExtensionExecutionTarget]:
-        """原连接验证与持久占用同次准入；未知结果跨 Turn 保留。"""
-        with self._publication_lock:
-            target = self._resolve_execution_target(binding)
-            if use is None or not all((use.holder_id, use.operation_id, use.session_id, use.thread_id)):
-                raise ExtensionTargetResolutionError("MCP 执行缺少受信 typed resource-use")
-            assert binding.connection_ref is not None
-            lease_id = "mcp-invocation:v1:" + payload_digest(
-                [binding.connection_ref, use.operation_id], context="MCP operation lease",
-                error_type=McpCatalogError,
-            )
-            if self._leases.get_lease(lease_id) is not None:
-                raise ExtensionTargetResolutionError("MCP 原 operation 已执行或待核实，禁止自动重放")
-            self._leases.acquire_operation(
-                resource_id=binding.connection_ref, turn_stream_id=use.holder_id,
-                operation_id=use.operation_id, lease_id=lease_id,
-                holder_session_id=use.session_id, holder_thread_id=use.thread_id,
-            )
-        execution = ExtensionExecutionTarget(target)
-        try:
-            yield execution
-        finally:
-            if not execution.started or execution.result_confirmed:
-                self._leases.release(lease_id)
-            else:
-                # 原连接是否仍在运行与远端操作是否完成是两个独立事实。
-                record = self._leases.get(binding.connection_ref)
-                assert record is not None
-                self._leases.update_external_state(
-                    binding.connection_ref, lifetime_scope="workspace", status=record.status,
-                    unresolved_lease_id=lease_id,
-                )
+            return McpExecutionHandle(binding, target, runtime)
 
     def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)

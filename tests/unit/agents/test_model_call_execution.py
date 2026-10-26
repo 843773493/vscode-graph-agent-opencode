@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -108,6 +108,53 @@ async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result
     assert bound_result.response_metadata == {"model_call_id": model_call_id}
     assert assistant.response_metadata == {"provider_id": "test-provider"}
     assert result.response_metadata == {}
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_model_dispatch_reserves_before_sending_and_retains_only_actual_calls(bridge, response_dispatch, mode):
+    _model_call_id, dispatch = response_dispatch
+    steps = []
+
+    @contextmanager
+    def qualification():
+        steps.append("reserved")
+        try:
+            yield lambda calls: steps.append(("retained", calls))
+        finally:
+            steps.append("exited")
+
+    prepared = bridge._prepare_projection.return_value[0]
+    prepared["extension_call_scope"] = qualification()
+    call = {"id": "actual-call", "name": "invoke_extension_tool", "args": {"tool_name": "mcp__mini__echo"}}
+    response = ModelResponse(result=[AIMessage(content="", tool_calls=[call])])
+
+    def sent(_prepared, _messages, _tools):
+        steps.append("sent")
+        return response
+
+    async def asent(*args):
+        return sent(*args)
+
+    bridge._invoke.side_effect = sent
+    bridge._ainvoke.side_effect = asent
+    result = await dispatch(response, mode)
+    assert steps == ["reserved", "sent", ("retained", result.result[0].tool_calls), "exited"]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_failed_connection_qualification_prevents_model_sending(bridge, response_dispatch, mode):
+    _model_call_id, dispatch = response_dispatch
+
+    @contextmanager
+    def rejected_qualification():
+        raise OSError("测试资格写盘失败")
+        yield  # pragma: no cover - contextmanager 的生成器合同。
+
+    bridge._prepare_projection.return_value[0]["extension_call_scope"] = rejected_qualification()
+    with pytest.raises(OSError, match="资格写盘失败"):
+        await dispatch(ModelResponse(result=[]), mode)
+    bridge._invoke.assert_not_called()
+    bridge._ainvoke.assert_not_called()
 
 
 @pytest.mark.asyncio

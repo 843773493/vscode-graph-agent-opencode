@@ -557,7 +557,7 @@ async def test_connection_identity_survives_cold_seal_without_changing_wire_hash
         sealed_target = dispatch.binding_ref.resolve(sealed_member.member_id)
         assert sealed_target.connection_ref == sealed_member.revision
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner._resolve_execution_target(sealed_target)
+            owner._resolve_execution_handle(sealed_target)
     second, fresh = guidance_prepare("execution-identity-fresh")
     fresh_parent, = (binding for binding in fresh.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert fresh_parent.members[0].revision != sealed_member.revision

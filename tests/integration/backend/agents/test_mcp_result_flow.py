@@ -189,7 +189,13 @@ async def test_product_discovery_parallel_results_and_cold_checkpoint(
     receipts = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert sorted(receipt["arguments"]["result_mode"] for receipt in receipts) == ["error", "success"]
     ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
-    leases = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session]
+    qualifications = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session
+                      and lease["lease_id"].startswith("mcp-prepared:")]
+    assert len(qualifications) == len(records)
+    assert {lease["operation_id"] for lease in qualifications} == {record["identity"]["model_call_id"] for record in records}
+    assert {lease["status"] for lease in qualifications} == {"released"}
+    assert all(lease["expires_at"] and lease["holder_thread_id"] == thread for lease in qualifications)
+    leases = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session and lease["lease_id"].startswith("mcp-invocation:")]
     assert len(leases) == 2
     assert {lease["status"] for lease in leases} == {"released"}
     assert {lease["holder_thread_id"] for lease in leases} == {thread}
@@ -279,7 +285,14 @@ async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
     received = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert len([row for row in received if row["arguments"].get("call_mode") == "disconnect"]) == 1
     ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
-    leases = {lease["operation_id"]: lease for lease in ledger["leases"] if lease["holder_session_id"] == session}
+    qualifications = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session
+                      and lease["lease_id"].startswith("mcp-prepared:")]
+    assert len(qualifications) == len(records)
+    assert {lease["operation_id"] for lease in qualifications} == {record["identity"]["model_call_id"] for record in records}
+    assert {lease["status"] for lease in qualifications} == {"released"}
+    assert all(lease["expires_at"] and lease["holder_thread_id"] == thread for lease in qualifications)
+    leases = {lease["operation_id"]: lease for lease in ledger["leases"] if lease["holder_session_id"] == session
+              and lease["lease_id"].startswith("mcp-invocation:")}
     expected = []
     for record, call in zip(records[:2], calls, strict=True):
         call_id = call["id"]

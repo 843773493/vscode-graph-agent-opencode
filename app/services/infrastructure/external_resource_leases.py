@@ -17,6 +17,9 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
+
+from pydantic import ConfigDict, TypeAdapter
 
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
@@ -29,6 +32,8 @@ _UNSETTLED_LEASE_STATUSES = frozenset({"active", "reconcile_required"})
 
 @dataclass(slots=True)
 class ResourceRecord:
+    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     resource_id: str
     kind: str
     lifetime_scope: str
@@ -39,6 +44,8 @@ class ResourceRecord:
 
 @dataclass(slots=True)
 class ResourceLease:
+    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     lease_id: str
     resource_id: str
     turn_stream_id: str
@@ -47,6 +54,12 @@ class ResourceLease:
     updated_at: str = ""
     holder_session_id: str | None = None
     holder_thread_id: str | None = None
+    # 期限由实际 owner 执行；账本不能据此假报资源或远端操作已停止。
+    expires_at: str | None = None
+
+
+_RESOURCE_RECORD = TypeAdapter(ResourceRecord)
+_RESOURCE_LEASE = TypeAdapter(ResourceLease)
 
 
 class ExternalResourceLeaseLedger:
@@ -124,6 +137,7 @@ class ExternalResourceLeaseLedger:
         holder_thread_id: str | None = None,
         allow_stopped: bool = False,
         allow_unverified: bool = False,
+        expires_at: str | None = None,
     ) -> ResourceLease:
         record = self._require_record(resource_id)
         allowed_statuses = {"running", "recovered"}
@@ -146,6 +160,7 @@ class ExternalResourceLeaseLedger:
                 or existing.operation_id != operation_id
                 or existing.holder_session_id != holder_session_id
                 or existing.holder_thread_id != holder_thread_id
+                or existing.expires_at != expires_at
             ):
                 raise RuntimeError(f"资源 lease 重复但关联键不一致: lease_id={lease_id}")
             return self._copy_lease(existing)
@@ -157,6 +172,7 @@ class ExternalResourceLeaseLedger:
             updated_at=self._now(),
             holder_session_id=holder_session_id,
             holder_thread_id=holder_thread_id,
+            expires_at=expires_at,
         )
         self._commit(leases=(lease,))
         return self._copy_lease(lease)
@@ -190,6 +206,7 @@ class ExternalResourceLeaseLedger:
         holder_thread_id: str | None = None,
         allow_stopped: bool = False,
         allow_unverified: bool = False,
+        expires_at: str | None = None,
     ) -> ResourceLease:
         """为一次 Tool/Activity 操作取得 lease；不自动重放操作。"""
         resolved_lease_id = lease_id or f"{turn_stream_id}:{operation_id}:{resource_id}"
@@ -202,6 +219,7 @@ class ExternalResourceLeaseLedger:
             holder_thread_id=holder_thread_id,
             allow_stopped=allow_stopped,
             allow_unverified=allow_unverified,
+            expires_at=expires_at,
         )
 
     def release(self, lease_id: str) -> ResourceLease:
@@ -381,10 +399,10 @@ class ExternalResourceLeaseLedger:
         if not isinstance(raw, dict):
             raise TypeError(f"资源状态文件必须是对象: path={self._state_path}")
         for value in self._load_rows(raw, "records"):
-            record = ResourceRecord(**value)
+            record = _RESOURCE_RECORD.validate_python(value)
             self._records[record.resource_id] = record
         for value in self._load_rows(raw, "leases"):
-            lease = ResourceLease(**value)
+            lease = _RESOURCE_LEASE.validate_python(value)
             self._leases[lease.lease_id] = lease
 
     def _load_rows(

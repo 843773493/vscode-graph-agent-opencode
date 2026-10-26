@@ -118,3 +118,12 @@
 - 完整暂存 tree 隔离验收：`mcp-lease-isolated-111` 中正式 integration-extension-discovery 为166 passed／109.49秒，信封、资源账本、执行恢复及真实请求准备为95 passed／58.35秒，6个核心模块／新增测试 Pyright零诊断，受影响 Ruff通过。最终 `mcp-lease-isolated-product-114` 为2 passed／95.45秒，经真实 Gateway、Session消息入口、Agent与stdio Server核对并发成功／业务错误、未知结果、实际软件operation归属、磁盘账本及冷checkpoint；模型继续复用model_stream，不代表真实外部Provider、OAuth或Web验收。
 - 保留111的未配置真实密钥启动错误、112的网页embedding遗留Provider引用、113的夹具工具声明联合形状处理错误原件；最终夹具只登记回放Provider，并使用既有无embedding网页模式，未放宽调用配对、身份、顺序、hash或unknown断言。111与最终114的源码tree只差该产品测试夹具，115逐blob核对最终index与受测tree一致；各次完整archive已核验4516个tracked blob后删除，只保留命令、指纹、raw、退出码、integrity及正式输出。
 - 扩大型检查109为20个文件，完整HEAD基线176条／当前176条，零新增诊断；该轮6条新Ruff格式诊断已由110及隔离最终检查修正。不宣称全仓类型通过。全部原件位于 `out/tests/temp/csm-kind-boundary/artifacts/mcp-lease-*`、`types-mcp-lease-109/`、`staged-mcp-lease-111/` 和 `staged-mcp-lease-product-11*/`。
+
+### 4.4 有界封存资格切片验收（2026-10-26）
+
+- 模型发送前从 Saver 冻结的 activation 取得原连接 handle，经唯一 ExternalResourceLeaseLedger 登记资格；响应后绑定真实 model-call，只保留实际输出的信封调用身份。执行核对 Session／Thread／model-call／operation，保留 HITL edit 在原封存目录内选择目标的行为。资格与实际调用分别结算，并发兄弟各自完成后释放共同资格；未知实际操作不会被资格到期或关闭代为结清。
+- 同一 MCP 配置族新增 `supervision.sealed_call_timeout_seconds`，默认1800秒、范围1–86400秒，从模型发送前取得 handle 开始覆盖生成与人工等待；相同资格不可重新发放或重试续期。到期释放短期引用并拒绝后续执行；重启仅释放失去 handle 的 MCP 资格，不改动其它资源 kind 或虚报外部停止。lease JSON 增加可选 expires_at，不改变 SQL 结构或 schema 版本，仍明确拒绝未知字段。
+- 最终暂存 tree `c7e9db4366e7dc3cefdfa8835554186705399d96` 经完整 archive 隔离验收：正式 `integration-extension-discovery` 190 passed／115.75秒，相关合同、同步执行、账本、配置、执行恢复及真实 CSM 请求准备154 passed／78.90秒，Gateway→Session消息→Agent→真实stdio Server产品验收2 passed／95.64秒。三组范围有重叠，不累计；产品逐项核对真实资格、实际operation、Session／Thread、并发结果、进度、三份请求hash、断线unknown及冷恢复，模型响应复用既有model_stream，不代表OAuth、真实外部Provider或Web验收。
+- 保留121的共享协议调用方缺少资格、122的资格与实际占用混入断言，以及131的同步CSM空目录向已关闭事件循环登记timer等失败原件；迁齐真实调用方、分别验证两类占用，并修正空目录不登记timer，未放宽配对、归属、schema错误或hash断言。126为25 passed，129为86 passed，132为77 passed，133为9 passed，最终134集中复验。
+- 受影响Ruff与严格OpenSpec校验通过；最终扩大Pyright完整HEAD基线147条／当前133条，零新增诊断，不宣称全仓类型通过。准确命令、源码指纹、raw、退出码及类型比较位于 `out/tests/temp/csm-kind-boundary/artifacts/staged-mcp-reservation-134/`；4517个tracked blob核验未变后已删除完整临时source，保留正式测试产物与integrity证据。
+- 4.2／4.4／4.6继续未勾选：正常配置热替换后的旧runtime保留、退役排空及HITL跨替换依赖7.x共同发布屏障，尚未实现。持久等待的主动继续持有、授权／连接控制和完整产品门仍未完成；HITL拒绝／直接应答及最终执行本地工具后的未用资格提前结算保留代码TODO，目前仍受原期限约束。

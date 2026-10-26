@@ -34,12 +34,13 @@ def parse_mcp_server_configs(
         return ()
     if not isinstance(raw_config, dict):
         raise TypeError("mcp 配置必须是对象")
-    unknown_root_fields = set(raw_config) - {"servers"}
+    unknown_root_fields = set(raw_config) - {"servers", "supervision"}
     if unknown_root_fields:
         raise ValueError(
             "mcp 配置包含不支持的字段: "
             + ", ".join(sorted(unknown_root_fields))
         )
+    sealed_call_timeout_seconds(raw_config)
     raw_servers = raw_config.get("servers", {})
     if not isinstance(raw_servers, dict):
         raise TypeError("mcp.servers 必须是对象")
@@ -56,6 +57,21 @@ def parse_mcp_server_configs(
             )
         )
     return tuple(server_configs)
+
+
+def sealed_call_timeout_seconds(raw_config: object) -> int:
+    """同一 MCP 配置族的有界封存资格；更改仍沿现有重启策略生效。"""
+    if raw_config is None:
+        return 1800
+    if not isinstance(raw_config, dict):
+        raise TypeError("mcp 配置必须是对象")
+    supervision = raw_config.get("supervision", {})
+    if not isinstance(supervision, dict) or set(supervision) - {"sealed_call_timeout_seconds"}:
+        raise ValueError("mcp.supervision 必须是仅包含受支持监督参数的对象")
+    value = supervision.get("sealed_call_timeout_seconds", 1800)
+    if type(value) is not int or not 1 <= value <= 86400:
+        raise ValueError("mcp.supervision.sealed_call_timeout_seconds 必须是 1–86400 的整数")
+    return value
 
 
 def _parse_server(

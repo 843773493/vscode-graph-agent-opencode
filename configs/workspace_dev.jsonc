@@ -487,6 +487,7 @@
     "test_tools": true
   },
   "mcp": {
+    "supervision": { "sealed_call_timeout_seconds": 1800 },
     "servers": {
       "tui-mcp": {
         "enabled": true,

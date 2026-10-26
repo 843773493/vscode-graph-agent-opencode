@@ -61,6 +61,13 @@
 
 跨 execution／Turn 的持久资源持有 MUST 复用 ExternalResourceLeaseLedger 的 mcp_connection 和 typed resource-use 合同，状态证据由实际连接 owner 提供；owner 内短期 generation／handle 保留 MUST 不成为第二套持久租约账本，也不得按参数名称推测资源使用。
 
+系统 MUST 在模型发送前为冻结目录的精确连接保留有界资格，并在模型响应后收窄到真实输出的信封调用身份；既有人工确认 edit 仍可选择原封存目录内的目标。期限沿 Workspace 配置族的 `mcp.supervision.sealed_call_timeout_seconds` 读取，默认1800秒、范围1–86400秒，从取得原 handle 起包含模型生成和确认等待，不因重试续期。资格与实际操作占用 MUST 分别结算，资格过期不能伪报正在执行或结果未知的远端操作已结束。
+
+#### Scenario: 资格到期但原连接仍运行
+
+- **WHEN** 原模型调用的资格到期，工具尚未开始，而原连接仍可用
+- **THEN** 系统释放未来执行资格，返回与原 tool_call_id 配对的明确失败，不向 Server 发送请求，也不把连接报告为已停止
+
 #### Scenario: 同一连接跨执行被持有
 
 - **WHEN** 工具通过 typed resource-use 声明继续持有 MCP 连接资源，后续执行仍使用该资源

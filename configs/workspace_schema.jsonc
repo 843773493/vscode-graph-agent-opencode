@@ -529,6 +529,19 @@
       "description": "当前工作区后端连接的 MCP Server。当前不支持进程内热切换；修改会拒绝整个候选配置，需要重启工作区后端。",
       "additionalProperties": false,
       "properties": {
+        "supervision": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sealed_call_timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 1800,
+              "description": "模型发送前开始保留原连接执行资格的最长秒数，包含模型生成及人工确认等待。到期拒绝尚未开始的调用，不将执行中的远端操作伪报为已停止。修改需重启工作区。"
+            }
+          }
+        },
         "servers": {
           "type": "object",
           "default": {},

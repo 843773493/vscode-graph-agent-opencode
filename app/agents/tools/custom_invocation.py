@@ -218,6 +218,7 @@ def create_extension_tool_invoker_tool(
                         # 持久占用归原 operation；Turn 收尾不能代替远端结果核实。
                         holder_id=operation_id,
                         operation_id=operation_id, session_id=thread.session_id, thread_id=thread.thread_id,
+                        model_call_id=invocation_context.require_model_call_id(),
                     )
                 if target_resolver is not None:
                     execution = access.enter_context(target_resolver(sealed_target, use))

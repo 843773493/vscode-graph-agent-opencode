@@ -289,10 +289,10 @@ async def test_restart_same_schema_never_resolves_old_connection(
     try:
         sealed = owner.binding_snapshot()
         old_target = sealed.resolve("mcp__mini__echo")
-        assert owner._resolve_execution_target(old_target) is owner.get_tools()[0]
+        assert owner._resolve_execution_handle(old_target).tool is owner.get_tools()[0]
         await owner.shutdown()
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner._resolve_execution_target(old_target)
+            owner._resolve_execution_handle(old_target)
         await owner.start()
         fresh = owner.binding_snapshot()
         fresh_target = fresh.resolve(old_target.target_id)
@@ -302,8 +302,8 @@ async def test_restart_same_schema_never_resolves_old_connection(
         assert fresh.binding_id != sealed.binding_id
         assert fresh.binding_hash != sealed.binding_hash
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner._resolve_execution_target(old_target)
-        assert owner._resolve_execution_target(fresh_target) is owner.get_tools()[0]
+            owner._resolve_execution_handle(old_target)
+        assert owner._resolve_execution_handle(fresh_target).tool is owner.get_tools()[0]
     finally:
         await owner.shutdown()
 
@@ -321,8 +321,8 @@ async def test_same_server_and_generation_are_isolated_between_owner_instances(
         assert left.binding_id != right.binding_id
         assert left.resolve("mcp__mini__echo").connection_ref != right.resolve("mcp__mini__echo").connection_ref
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owners[1]._resolve_execution_target(left.resolve("mcp__mini__echo"))
-        assert owners[0]._resolve_execution_target(left.resolve("mcp__mini__echo")) is owners[0].get_tools()[0]
+            owners[1]._resolve_execution_handle(left.resolve("mcp__mini__echo"))
+        assert owners[0]._resolve_execution_handle(left.resolve("mcp__mini__echo")).tool is owners[0].get_tools()[0]
     finally:
         for owner in owners:
             await owner.shutdown()

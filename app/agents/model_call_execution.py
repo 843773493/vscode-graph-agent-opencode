@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast, overload
 from uuid import UUID
@@ -42,6 +42,7 @@ from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
+from app.services.infrastructure.mcp.execution_handles import CallRetention
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
@@ -151,15 +152,16 @@ def _request_wire_options(bound_model: object) -> dict[str, Any]:
 
 
 @overload
-def _bind_response_model_call(response: ModelResponse[Any], *, model_call_id: str) -> ModelResponse[Any]: ...
+def _bind_response_model_call(response: ModelResponse[Any], *, model_call_id: str, retain_calls: CallRetention | None = None) -> ModelResponse[Any]: ...
 
 
 @overload
-def _bind_response_model_call(response: ExtendedModelResponse[Any], *, model_call_id: str) -> ExtendedModelResponse[Any]: ...
+def _bind_response_model_call(response: ExtendedModelResponse[Any], *, model_call_id: str, retain_calls: CallRetention | None = None) -> ExtendedModelResponse[Any]: ...
 
 
 def _bind_response_model_call(
     response: ModelResponse[Any] | ExtendedModelResponse[Any], *, model_call_id: str,
+    retain_calls: CallRetention | None = None,
 ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
     """在本次 dispatch 返回边界保留真实 callback 身份，不从 vendor ID 推导。"""
     model_response = response.model_response if isinstance(response, ExtendedModelResponse) else response
@@ -192,6 +194,8 @@ def _bind_response_model_call(
             })
         messages.append(message)
     bound = replace(model_response, result=messages)
+    if retain_calls is not None:
+        retain_calls([call for message in messages if isinstance(message, AIMessage) for call in message.tool_calls])
     return replace(response, model_response=bound) if isinstance(response, ExtendedModelResponse) else bound
 
 
@@ -227,6 +231,7 @@ class _PreparedModelCall(TypedDict):
     losses: tuple[str, ...]
     resource_refs: tuple[SessionContextResourceDTO, ...]
     native_projection: NotRequired[Mapping[str, object]]
+    extension_call_scope: NotRequired[AbstractContextManager[CallRetention]]
 
 
 class ModelCallExecution:
@@ -241,6 +246,7 @@ class ModelCallExecution:
         extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
         context_read_admission: Callable[[], AbstractAsyncContextManager[None]],
         context_control_admission: Callable[[str, Mapping[str, object], str], AbstractAsyncContextManager[None]],
+        extension_call_scope: Callable[[ResourceActivationSnapshotRef, str, str], AbstractContextManager[CallRetention]] | None = None,
     ) -> None:
         if not session_id or not thread_id:
             raise ValueError("model-call execution 需要显式 SessionThread owner")
@@ -255,6 +261,7 @@ class ModelCallExecution:
         self._extension_policy_resolver = extension_policy_resolver
         self._context_read_admission = context_read_admission
         self._context_control_admission = context_control_admission
+        self._extension_call_scope = extension_call_scope
         self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[Runnable[Any, AIMessage], ResponseFormat[Any] | None]] | None = None
         self._decode_output: Callable[..., Mapping[str, Any]] | None = None
         self._model_name: str | None = None
@@ -551,6 +558,9 @@ class ModelCallExecution:
         ):
             raise ValueError("source-mismatch: Saver assembly 与当前 prepared owner/plan 不一致")
         prepared["snapshot"] = snapshot
+        if self._extension_call_scope is not None:
+            # 冻结正文的读取仍在原 Session gate 内；短期连接占用在真实发送前进入。
+            prepared["extension_call_scope"] = self._extension_call_scope(activation, callback_id, checkpoint_ns)
         if _target_format(request.model) == "responses":
             native = prepared.get("native_projection")
             if not isinstance(native, Mapping):
@@ -635,7 +645,7 @@ class ModelCallExecution:
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
         # execution 的返回路径提前清理。
-        with sealed_assembly_dispatch_scope(
+        with prepared.get("extension_call_scope", nullcontext(lambda _calls: None)) as retain_calls, sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
             resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),
@@ -643,6 +653,7 @@ class ModelCallExecution:
             response = self._invoke(prepared, messages, tools)
             return _bind_response_model_call(
                 response, model_call_id=prepared["callback_model_call_id"],
+                retain_calls=retain_calls,
             )
 
     async def aexecute(
@@ -672,7 +683,7 @@ class ModelCallExecution:
         prepared, messages, tools = self._project_prepared(request, await self._aprepare(request))
         # 同步执行入口的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
-        with sealed_assembly_dispatch_scope(
+        with prepared.get("extension_call_scope", nullcontext(lambda _calls: None)) as retain_calls, sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
             resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),
@@ -680,6 +691,7 @@ class ModelCallExecution:
             response = await self._ainvoke(prepared, messages, tools)
             return _bind_response_model_call(
                 response, model_call_id=prepared["callback_model_call_id"],
+                retain_calls=retain_calls,
             )
 
 

@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
@@ -81,13 +82,22 @@ class SchemaServerCase:
             return []
         return [json.loads(line) for line in self.receipts.read_text(encoding="utf-8").splitlines()]
 
+    @contextmanager
     def execution_target(self, binding, use):
         # 独立协议测试显式注入归属；真实 Agent 路径仍由调用中间件取得身份。
-        use = use or McpResourceUse(
-            holder_id="schema-test", operation_id="schema-test:" + create_uuid_hex(),
-            session_id="schema-test", thread_id="schema-test-thread",
+        assert use is None  # 这组协议测试不装配 Agent，归属由夹具显式提供。
+        model_call_id, call_id = create_uuid_hex(), create_uuid_hex()
+        operation_id = software_tool_operation_id("mcp_call", "schema-test", "schema-test-thread", model_call_id, call_id)
+        use = McpResourceUse(
+            holder_id=operation_id, operation_id=operation_id,
+            session_id="schema-test", thread_id="schema-test-thread", model_call_id=model_call_id,
         )
-        return self.owner.execution_target(binding, use)
+        with self.owner.execution_handles.reserve_model_call(
+            self.owner.binding_snapshot(), session_id=use.session_id, thread_id=use.thread_id, model_call_id=model_call_id,
+        ) as retain:
+            retain([{"name": "invoke_extension_tool", "id": call_id, "args": {"tool_name": binding.target_id}}])
+        with self.owner.execution_handles.execution_target(binding, use) as execution:
+            yield execution
 
     def invoker(self):
         return create_extension_tool_invoker_tool(
@@ -105,7 +115,7 @@ def schema_server_case(request: pytest.FixtureRequest) -> SchemaServerCase:
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
-        raw_config={"servers": {"schema": {
+        raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}, "servers": {"schema": {
             "enabled": True, "transport": "stdio", "command": sys.executable,
             "args": [str(context.project_root / "tests/integration/workspace_services/mcp/schema_server.py"),
                      str(definitions), str(receipts)],
