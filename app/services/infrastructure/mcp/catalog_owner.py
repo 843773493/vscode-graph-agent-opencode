@@ -98,9 +98,9 @@ class McpToolDescriptor:
 @dataclass(frozen=True, slots=True)
 class McpServerSnapshot:
     server_id: str
-    transport: str
+    transport: Literal["stdio", "streamable_http"]
     enabled: bool
-    status: str
+    status: Literal["disabled", "ready", "failed"]
     tools: tuple[McpToolDescriptor, ...]
     # 最近一次 relist 的错误事实；原始异常仅留诊断，成功 relist 后清空。
     last_relist_error: str | None = None
@@ -685,7 +685,7 @@ class McpCatalogOwner:
             sorted(
                 server_id
                 for server_id, runtime in self._runtimes.items()
-                if not runtime.session.supports_tool_list_changed()
+                if runtime.running and not runtime.session.supports_tool_list_changed()
             )
         )
 

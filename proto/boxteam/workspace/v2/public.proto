@@ -297,6 +297,7 @@ message McpServerDTO {
   string server_id = 1;
   string transport = 2;
   bool enabled = 3;
+  // ready 表示在线；disabled 表示配置禁用；failed 表示已启用但原连接不可用。
   string status = 4;
   repeated McpToolDTO tools = 5;
 }

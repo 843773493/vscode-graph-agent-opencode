@@ -296,6 +296,7 @@ export interface McpServerDTO {
   server_id: string;
   transport: string;
   enabled: boolean;
+  /** ready 表示在线；disabled 表示配置禁用；failed 表示已启用但原连接不可用。 */
   status: string;
   tools: McpToolDTO[];
 }

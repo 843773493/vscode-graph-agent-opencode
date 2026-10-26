@@ -102,6 +102,12 @@ async def test_noncooperative_stdio_obeys_close_deadline_without_overlapping_ins
             if deadline == 1:
                 assert not status["healthy"] and status["active_revision"] == original["active_revision"]
                 assert status["applied_paths"] == [] and elapsed < 4
+                unavailable = await client.get("/api/v1/mcp/servers", headers={"X-Request-ID": "stdio-unavailable-proof"})
+                assert unavailable.status_code == 200, unavailable.text
+                assert unavailable.headers["x-request-id"] == unavailable.json()["request_id"] == "stdio-unavailable-proof"
+                server, = unavailable.json()["data"]
+                assert server["enabled"] and server["status"] == "failed"
+                assert server["tools"][0]["tool_id"] == "mcp__schema__probe"
                 assert [(row["phase"], row["version"]) for row in case.phases()] == [("start", "old"), ("eof", "old")]
                 assert psutil.pid_exists(old_pid)
                 with pytest.raises(portalocker.exceptions.LockException), portalocker.Lock(case.lock, timeout=0):

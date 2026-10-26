@@ -1264,6 +1264,8 @@ export declare type McpServerDTO = Message<"boxteam.workspace.v2.McpServerDTO"> 
   enabled: boolean;
 
   /**
+   * ready 表示在线；disabled 表示配置禁用；failed 表示已启用但原连接不可用。
+   *
    * @generated from field: string status = 4;
    */
   status: string;

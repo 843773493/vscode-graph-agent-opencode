@@ -105,6 +105,26 @@ async def test_partial_start_failure_closes_all_original_contexts(lifecycle_owne
     assert all(task.done() for task in lifecycle_factory.closed.values())
 
 
+async def test_explicit_refresh_skips_stopped_runtime_and_still_refreshes_live_sibling(lifecycle_owner, lifecycle_factory):
+    owner, factory = lifecycle_owner, lifecycle_factory
+    await owner.start()
+    try:
+        for session in factory.sessions.values():
+            session.supports_notifications = False
+        calls = {key: session.list_calls for key, session in factory.sessions.items()}
+        await owner._runtimes["alpha"].scope.close()
+        assert {server.server_id: server.status for server in owner.list_servers()} == {"alpha": "failed", "beta": "ready"}
+        assert owner.servers_without_change_notifications() == ("beta",)
+        factory.sessions["beta"].tool_names = ["new"]
+        await owner.relist_servers_without_notifications()
+        assert {key: session.list_calls for key, session in factory.sessions.items()} == {
+            "alpha": calls["alpha"], "beta": calls["beta"] + 1,
+        }
+        assert "mcp__beta__new" in owner.get_tool_ids()
+    finally:
+        await owner.shutdown()
+
+
 async def test_restarted_owner_fences_notifications_from_previous_sessions(lifecycle_owner, lifecycle_factory):
     owner, factory = lifecycle_owner, lifecycle_factory
     await owner.start()

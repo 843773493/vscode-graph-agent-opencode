@@ -202,3 +202,11 @@
 - 正式 `integration-mcp-stdio-recovery` 为3 passed／87.37秒，外层收据 `recovery-matrix-final-004` exit0／91.56秒，源码前后无漂移。原单实例 watcher／Runner／model_stream 替换、失败修复及 stdio→HTTP 产品回归 `replacement-final-002` 为1 passed／73.14秒；HTTP promotion 前后崩溃、claim 冷恢复、清理失败及 SSE replay `http-recovery-regression-002` 为4 passed／159.99秒，均 exit0、源码前后无漂移。最终对共享 report 的唯一后续修改是增加只读 catalog_status，正式 stdio 套件覆盖该新增字段；不重复未受影响的 HTTP 长检查。
 - 低优先级遮蔽、多Server部分失败、模型交错、旧资格排空和双工作区隔离沿7.2—7.5及4.4的具名证据按未变产品依赖复用。四文件 Ruff／Pyright 最终均零诊断，严格 OpenSpec 校验通过；原始命令、源码指纹、raw、退出码及失败现场在 `out/tests/temp/mcp-stdio-faults/artifacts/`。保留初轮 Pyright 入口缺失、类型收窄、导入格式与新崩溃断言混淆配置 healthy／目录 readiness 的失败原件，修正测试合同后才完成最终正式验收。没有改动数据库或Web源码；Windows Job Object、OAuth、完整HITL、持久等待和Gateway／Web授权不由本切片证明。
 - 关闭7.6，当前20/52；连接管理／授权进入下一纵向切片，团队／协作专项继续TODO。
+
+### 5.6 前置：失败连接的原目录 API 状态（2026-10-26）
+
+- 真实1秒stdio关闭期限失败后，原GET `/mcp/servers` 实测500：无通知能力查询访问已关闭session，DTO也只接受ready／disabled。原刷新选择统一跳过不在线runtime，typed snapshot与DTO接受实际failed，公开proto登记现有string的三种语义；不新增读取链路或吞掉在线连接的协议错误。新单测核失败alpha不被访问、在线beta仍完整刷新。
+- `red-001` 保留真实500及原request_id；`product-final-002`正式stdio矩阵3 passed／87.78秒，核不可用期间HTTP返回failed、原工具描述与同request_id，旧进程／锁仍由原scope持有，后续修复及崩溃恢复原断言不变。`unit-final-002` 39 passed／4.78秒，`http-diagnostics-final-002` 1 passed／14.20秒，保留真实stdio协议错误的503、安全错误、诊断原文和同入口恢复。
+- Ruff及5文件Pyright均零诊断，Buf格式／lint／build及相对真实HEAD `b590c163c` 的breaking检查通过，Web真实tsc及build通过。首次误用Bun直接执行tsc在4GiB保护下触发JSC MemoryExhaustion；改为项目的 `bun run --cwd src/clients/web tsc --noEmit` 入口后25.52秒通过，未放宽内存保护或修改依赖／环境。无UI行为修改，未将构建当作浏览器授权验收。
+- 两份OpenAPI由仅含本边界的完整暂存tree导出，不混入其他会话尚未提交的fork／task字段；同时补齐HEAD已提交但旧快照遗漏的directory_uri及mcp_cleanup。逐项JSON差异留在openapi-delta.json。4524个tree blob核验，仅两份预期生成快照变化后清理临时源码；原命令、源码指纹、raw、实际退出码及完整正式产物保留在 `out/tests/temp/mcp-server-readiness/artifacts/` 与同名正式测试路径。严格OpenSpec校验通过。
+- 5.6仍未勾选，进度20/52：本切片只闭合原状态出口，独立连接操作、OAuth、授权UI、持久等待及其Gateway／Web产品门继续推进；团队／协作TODO不变。
