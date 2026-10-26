@@ -31,7 +31,9 @@ try {
   await page.getByRole("button", { name: "日志与诊断", exact: true }).click();
   const response = await pending;
   const diagnostics = (await response.json()).data;
-  if (response.status() !== 200 || diagnostics.processes.length !== 5) throw new Error("真实五类进程诊断缺失");
+  if (response.status() !== 200 || diagnostics.processes.length !== 7) throw new Error("真实双工作区进程诊断缺失");
+  const backends = diagnostics.processes.filter((process) => process.service === "backend");
+  if (backends.length !== 1 || backends[0].workspace_ids.length !== 2) throw new Error("共享 Backend 未按实例去重");
   const panel = page.locator(".gateway-diagnostics-runtime");
   await panel.waitFor({ state: "visible" });
   const text = await panel.innerText();

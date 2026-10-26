@@ -13,20 +13,72 @@ import commentjson
 import httpx
 
 from app.core.logging_contract import load_runtime_log_contract
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+from tests.support.workspaces import prepare_default_test_workspace
 
 
-def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, artifacts: Path) -> None:
+def join_runtime_logging_workspaces(gateway_url: str, token: str, workspace_root: Path, *, artifacts: Path) -> None:
+    """只准备隔离配置，完整 Backend 成员关系由产品生命周期入口建立。"""
+    secondary_root = prepare_default_test_workspace(
+        workspace_root=workspace_root / "logging-secondary",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=Path.cwd() / "resources/skills",
+    )
+    (secondary_root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
+    shutil.copy2(workspace_root / ".boxteam/workspace.jsonc", secondary_root / ".boxteam/workspace.jsonc")
+    with httpx.Client(base_url=gateway_url, headers={"X-Local-Token": token}, timeout=120, trust_env=False) as client:
+        primary = next(item for item in client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["items"] if item["active"])
+        added = client.post("/api/gateway/workspaces/local", json={"root_path": str(secondary_root), "name": "Logging Secondary"}).raise_for_status().json()["data"]
+        secondary = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_root)))
+        assert secondary["status"] == "ready" and secondary["backend_generation"] != primary["backend_generation"]
+        client.post(f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop").raise_for_status()
+        desired = [primary["workspace_id"], secondary["workspace_id"]]
+        joined = client.post(f"/api/gateway/workspaces/{primary['workspace_id']}/runtime/restart-safe", json={
+            "expected_backend_generation": primary["backend_generation"],
+            "expected_workspace_ids": primary["affected_workspace_ids"], "desired_workspace_ids": desired,
+        }).raise_for_status().json()["data"]
+        assert joined["status"] == "restarted", joined
+        assert set(joined["affected_workspace_ids"]) == set(desired)
+        members = joined["workspaces"]["items"]
+        assert len(members) == 2 and all(item["status"] == "ready" for item in members)
+        assert {item["backend_generation"] for item in members} == {joined["backend_generation"]}
+        assert len({item["services"]["workspace_api"]["local_url"] for item in members}) == 1
+    (artifacts / "runtime-logging-shared-backend.json").write_text(json.dumps(joined, indent=2) + "\n", encoding="utf-8")
+
+
+def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, artifacts: Path, cookie: str) -> None:
     """只编辑用户来源，由真实 watcher、配置事务和进程 owner 完成状态转换。"""
     path = home / "config" / "gateway.jsonc"
     original = path.read_text(encoding="utf-8")
     document = commentjson.loads(original)
     observed = []
-    with httpx.Client(timeout=5, trust_env=False, headers={"X-Local-Token": token}) as client:
-        target = next(item for item in client.get(f"{gateway_url}/api/gateway/workspaces").json()["data"]["items"] if item["active"])
+    with httpx.Client(timeout=5, trust_env=False, headers={"X-Local-Token": token, "Cookie": cookie}) as client:
+        targets = client.get(f"{gateway_url}/api/gateway/workspaces").raise_for_status().json()["data"]["items"]
         urls = {"gateway": f"{gateway_url}/api/gateway/internal/runtime-logging"}
-        for role, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
-            suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
-            urls[role] = target["services"][service]["local_url"].rstrip("/") + suffix
+        resources = []
+        for target in targets:
+            for role, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
+                suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
+                url = target["services"][service]["local_url"].rstrip("/") + suffix
+                if url not in urls.values():
+                    urls[f"{role}:{target['workspace_id']}"] = url
+            headers = {"X-BoxTeam-Workspace-Id": target["workspace_id"]}
+            session = client.post(f"{gateway_url}/api/v1/sessions", headers=headers, json={"title": "日志热应用资源保持"}).raise_for_status().json()["data"]
+            for kind in ("terminal", "browser"):
+                created = client.post(f"{gateway_url}/api/v1/resources/{kind}s", headers=headers, timeout=45, json={
+                    "session_id": session["session_id"], "thread_id": session["thread_id"],
+                    "retention_scope": "workspace", "title": f"logging-{kind}",
+                }).raise_for_status().json()["data"]
+                resources.append((target["workspace_id"], created))
+
+        def resource_identity(resource):
+            metadata = resource["metadata"]
+            fields = ("os_pid",) if resource["kind"] == "terminal" else ("page_id", "runtime_generation", "started_at")
+            assert all(metadata[field] is not None for field in fields), resource
+            assert resource["status"] == "running" and resource["reconciliation_status"] == "verified", resource
+            return {field: resource[field] for field in ("resource_id", "workspace_id", "owner_revision", "source_thread", "thread_associations")} | {field: metadata[field] for field in fields}
+
+        resource_identities = {resource["resource_id"]: resource_identity(resource) for _, resource in resources}
 
         def states():
             result = {role: client.get(url).raise_for_status().json()["data"] for role, url in urls.items()}
@@ -56,9 +108,10 @@ def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, a
                     diagnostic = diagnostic_envelope["data"]
                     assert diagnostic["status"] == "ready", diagnostic
                     assert len(diagnostic["processes"]) == len(actual)
+                    actual_by_instance = {state["runtime_instance_id"]: state for state in actual.values()}
                     for process in diagnostic["processes"]:
                         assert process["error"] is None
-                        state = actual[process["service"]]
+                        state = actual_by_instance[process["state"]["runtime_instance_id"]]
                         assert process["state"] | {"log_sink": state["log_sink"]} == state
                         if state["log_sink"] is None:
                             assert process["output_mode"] == "stdout-only"
@@ -67,8 +120,13 @@ def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, a
                             sink = process["state"]["log_sink"]
                             assert sink | {"path": state["log_sink"]["path"]} == state["log_sink"] | {"log_id": sink["log_id"]}
                             assert sink["log_id"] in {log["log_id"] for log in diagnostic["logs"]}
+                        if process["service"] == "backend":
+                            assert set(process["workspace_ids"]) == {target["workspace_id"] for target in targets}
+                    for workspace_id, resource in resources:
+                        snapshot = client.get(f"{gateway_url}/api/v1/resources/{resource['resource_id']}", headers={"X-BoxTeam-Workspace-Id": workspace_id}).raise_for_status().json()["data"]
+                        assert resource_identity(snapshot) == resource_identities[resource["resource_id"]]
                     assert str(home) not in json.dumps(diagnostic["processes"])
-                    observed.append({"revision": last["revision"], "processes": actual, "diagnostics": diagnostic["processes"]})
+                    observed.append({"revision": last["revision"], "processes": actual, "diagnostics": diagnostic["processes"], "resources": resource_identities})
                     return
                 time.sleep(0.05)
             raise AssertionError(f"产品日志热应用未结算: {last}")

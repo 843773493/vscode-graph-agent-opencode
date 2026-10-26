@@ -17,6 +17,7 @@ import httpx
 
 from app.core.logging_contract import load_runtime_log_contract
 from tests.integration.gateway.runtime_logging_controls import (
+    join_runtime_logging_workspaces,
     verify_runtime_logging_controls,
     verify_runtime_logging_diagnostics_ui,
     verify_runtime_logging_reload,
@@ -434,6 +435,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             for event in file_event_data["events"]
         )
 
+        join_runtime_logging_workspaces(f"http://127.0.0.1:{port}", token, workspace_root, artifacts=artifacts)
         session_payload = _request_json(
             f"http://127.0.0.1:{port}/api/v1/sessions",
             token,
@@ -489,7 +491,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             if message["role"] == "assistant"
         ] == [(session_id, thread_id, "基础回放")]
 
-        verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts)
+        verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts, cookie=guest_cookie)
         verify_runtime_logging_diagnostics_ui(f"http://127.0.0.1:{port}", artifacts=artifacts)
         before_restart_status = _get_json(status_url, token)["data"]
         assert isinstance(before_restart_status, dict)
@@ -563,6 +565,16 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             f"http://127.0.0.1:{port}", token, boxteam_home,
             launcher_pid=process.pid, artifacts=artifacts,
         )
+        # 两个 singleton 启动后合并一次；后续 Gateway 交接不能再启动 Backend。
+        backend_starts_before_handoff = gateway_log.read_text(
+            encoding="utf-8",
+        ).count("启动工作区后端:")
+        assert backend_starts_before_handoff == 3
+        captured_before_handoff = (
+            stdout_path.read_text(encoding="utf-8")
+            + stderr_path.read_text(encoding="utf-8")
+        )
+        assert captured_before_handoff.count("启动工作区后端:") == backend_starts_before_handoff
 
         restart_request = Request(
             f"http://127.0.0.1:{port}/api/gateway/runtime/restart-development",
@@ -680,11 +692,11 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         assert f"Started server process [{initial_process_id}]" in log_text
         assert f"Started server process [{new_process_id}]" in log_text
         assert f"Finished server process [{initial_process_id}]" in log_text
-        assert log_text.count("启动工作区后端:") == 1
+        assert log_text.count("启动工作区后端:") == backend_starts_before_handoff
         persisted_gateway_log = gateway_log.read_text(encoding="utf-8")
         assert persisted_gateway_log.count(f"Started server process [{initial_process_id}]") == 1
         assert persisted_gateway_log.count(f"Started server process [{new_process_id}]") == 1
-        assert persisted_gateway_log.count("启动工作区后端:") == 1
+        assert persisted_gateway_log.count("启动工作区后端:") == backend_starts_before_handoff
         persisted_launcher_log = launcher_log.read_text(encoding="utf-8")
         assert "启动工作区后端:" not in persisted_launcher_log
         assert f"service=launcher pid={process.pid} runtime_instance_id=" in persisted_launcher_log

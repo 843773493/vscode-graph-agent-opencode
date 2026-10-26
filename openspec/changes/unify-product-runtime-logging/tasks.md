@@ -26,7 +26,7 @@
 - [ ] 4.1 完成受影响 Python 静态分析和 JS 静态检查；若修改 Web 诊断消费者，同批完成真实类型检查和 `bun run --cwd src/clients/web build`。
 - [ ] 4.2 定向验证跨语言等级过滤、格式字段、异常栈、路径覆盖、轮转顺序、权限/写入失败与重复捕获，使用共享样本区分正确实现与现有分散实现。
 - [ ] 4.3 验证仅旧配置、仅新配置、新旧一致、新旧冲突、不同工作区覆盖冲突、重复迁移及迁移中断恢复；确认运行期无旧字段双读。
-- [ ] 4.4 通过真实 Launcher/Gateway 与隔离 home 启动 Backend、Terminal、Browser，并让一个 Backend 挂载两个隔离工作区；修改真实用户级配置，验证 INFO→DEBUG→WARNING、pretty 切换、有效 revision、各进程输出和 PID/资源身份保持。
+- [x] 4.4 通过真实 Launcher/Gateway 与隔离 home 启动 Backend、Terminal、Browser，并让一个 Backend 挂载两个隔离工作区；修改真实用户级配置，验证 INFO→DEBUG→WARNING、pretty 切换、有效 revision、各进程输出和 PID/资源身份保持。
 - [ ] 4.5 在真实应用链注入一个消费者失败、最终 CAS 冲突与补偿失败，验证 active/pending 和逐进程状态；验证同端口换代、新实例启动及 Gateway 交接不丢失日志去向。
 - [ ] 4.6 在 WARNING 配置下经过真实终端工具执行包含中文、ANSI、多行及 DEBUG 文本的命令，逐字节核对输出与退出码；核对会话 Trace/LLM/工具结果仍在原工作区路径。
 - [ ] 4.7 所有测试使用现有 matrix 或进程外超时与内存保护；正式产物镜像测试路径保存，临时探索只用 `out/tests/temp/unify-product-runtime-logging/`，保留命令、源码指纹、原始输出和实际退出码。当前未要求新增 UI 交互；若实施新增交互则补真实浏览器验收。
@@ -135,3 +135,9 @@
 - `diagnostics-real-061` 为2项通过：真实 Launcher／Gateway 热切换及后续 handoff 保持通过，诊断结果与五类进程的内部实际确认逐字段一致；Chromium 经真实 Gateway 初始化、打开日志诊断并核对实例／PID／revision、owner、文件身份及 stdout-only，未拦截 API。JSON、截图与 raw 保留于 `out/tests/integration/gateway/test_gateway_launcher_handoff/artifacts/runtime-logging-diagnostics*`。驱动随后将页面创建纳入浏览器释放作用域，并独立保留执行与清理异常；健康场景业务步骤不变。
 - `diagnostics-ruff-final-067` 无诊断；Pyright 当前8个文件的12条诊断均为此前已存在的两份集成测试诊断，`diagnostics-types-comparison-069.json` 对照此前原始分析，并逐文件确认对应基线源码与提交 `054dcdf56` 一致，新增0条，产品模块无诊断。Buf 格式、生成、lint／build 及基于真实提交 `054dcdf56` 的 breaking 检查通过，OpenSpec strict validate 与差异检查通过。
 - 保留失败原件：057将 TypeScript 运行在 Bun 引擎内，触发4 GiB进程外内存保护；060改走既有 TypeScript CLI 后，指出新增 JSON null 适配遗漏，补齐后065通过。063指出导入排序与多余 noqa，修正后067通过。未放宽业务断言。证据根仍为 `out/tests/temp/unify-product-runtime-logging/artifacts/`，本批指纹包含 Python、协议、Web 类型／源码／样式；所有检查使用原进程外保护。当前14／22，双工作区、真实进程故障链与原始 PTY 完整验收仍待完成。
+
+### 4.4 双工作区与活动资源真实验收（2026-10-26）
+
+- 通过真实注册、停止及受控整组重启入口将两个隔离工作区合并到同一 Backend；会话、两份终端和两份 Browser 均从产品入口创建。修改真实用户 JSONC，三轮确认全部7个进程的 revision、等级和格式；共享 Backend 只有一个实际确认实例，完整保留两个成员。每轮逐项核4个活动资源的原生 PID／页面身份、owner revision 与 thread 关联，日志 DEBUG仅落盘一次、WARNING过滤保持。真实浏览器诊断与随后的 pending Gateway 交接同场通过。
+- `shared-runtime-real-final-073` 两项通过，87.53秒；070已完成热应用、资源与Web步骤，最后因原单工作区启动计数断言失败。现在交接前明确断言两个 singleton 加一次合并共3次启动，交接后原始捕获与持久日志都必须保持这份冻结计数，没有放宽身份或顺序断言。
+- `shared-runtime-ruff-final-074` 与JS语法检查072通过；Pyright075仍是两份既有测试的12条诊断，`shared-runtime-types-comparison-076.json`逐条核对066无新增。产品Web源码未变，复用065真实类型检查与058构建。全部运行保留外部保护、指纹、raw及退出码；正式现场仍在handoff测试对应产物目录。当前15／22，真实故障链及WARNING下完整终端工具验收待补。
