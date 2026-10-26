@@ -44,7 +44,7 @@ optional stateless framework dispatch bridge -> Provider adapter
 
 **Non-Goals:**
 
-- 不建立资源插件安装/卸载宿主、plugin manifest监视、第三方进程内provider ABI或任意外部网络资源自动注入；外部服务的工具扩展沿用MCP，未来MCP resource订阅需要独立设计和实现，不能假称当前runtime已支持。
+- 不建立资源插件安装/卸载宿主、plugin manifest监视、第三方进程内provider ABI或任意外部网络资源自动注入；显式登记的 HTTP(S) Skill 链接按下文快照更新策略规划，不等于自动发现或执行网络内容。外部服务的工具扩展沿用MCP，未来MCP resource订阅需要独立设计和实现，不能假称当前runtime已支持。
 - 不设计按 Turn/请求次数自动到期、注入次数或即时 Skill 移除。
 - 不让模型看到或传入 Skill 的绝对路径、相对路径、catalog 层级或 Gateway 内部 locator。
 - Skill metadata 暂不解析 `name`、`description` 之外的 frontmatter 字段。
@@ -119,9 +119,9 @@ W(next)[0:len(W(previous))] == W(previous)
 
 普通 Provider/model 配置漂移不能自行创建 epoch；模型路由本次明确选择不同 profile 则使用 `provider_changed` 投影边界。该边界仅重标记冻结的 root/frame profile 并重新投影请求，保留原正文、role、source identity/revision、canonical 顺序与 ToolSet，不运行 root compiler、不观察当前文件、不产生 source restore。新旧 assembly 各自保留完整 request hash，previous_assembly_id 记录真实前驱，不跨 profile 宣称字节级前缀继承。尚未有sealed assembly的SessionThread可以在initial assembly选择当前desired profile；已有assembly后，控制面改变模型只更新desired profile。若下一次dispatch前既没有本次路由明确选择，也没有实际compaction、rewind或有效ToolSet hard rebase这一合法边界，owner必须返回`provider-profile-change-requires-rebuild`并保持原applied profile/assembly不变，不能静默使用旧模型、绕过路由选择偷建epoch或把no-op ToolSet change伪造成rebase。合法边界发生时，profile切换与首个新epochassembly一起原子applied并记录旧/新profile provenance。
 
-下文允许合并来源的“合法新 epoch”只指上述来源/root 重建边界；`provider_changed` 不具备该权限。
+下文允许将来源完整状态重新编入 system root 的“合法新 epoch”只指上述来源/root 重建边界；`provider_changed` 不具备该权限。同批尚未封存的 user 来源消息聚合见 4.1，不属于 root 重建。
 
-该约束同时禁止把新 source 合并进旧 system/user message，也禁止 Provider adapter 为满足交替 role 而合并相邻 user item。某 Provider 无法表达独立追加 item 时必须显式 reject。
+该约束同时禁止把新 source 合并进旧 system/user message，也禁止 Provider adapter 为满足交替 role 而合并相邻 user item。compiler 可以在 seal 前按 4.1 聚合本批来源；某 Provider 无法表达已经封存的追加消息边界时必须显式 reject。
 
 ### 3. Provider ToolSet 变化必须 hard rebase；扩展目标目录是另一种版本化事实
 
@@ -146,7 +146,7 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 
 ### 4. source owner 声明根指令资格；普通追加永远使用 user
 
-每个source owner以必填typed `root_placement=root_eligible|tail_only`声明其受信内容是否有资格进入新epoch的根指令；CSM不得从文件名、路径、wire role或自由extensions推断资格。首次组装只把当时有效的`root_eligible`来源按稳定顺序编译成一个不可变最顶层`wire_role=system` item。`tail_only`来源包括默认不可信的外部MCP工具指引，只能作为上下文数据进入独立user item。第一条真实用户消息之后、且没有实际新epoch边界时，任何source完整内容、diff、重新加载或恢复都只能在尾部新增独立`wire_role=user` item，不因资格或内容是full/delta而改变：
+每个source owner以必填typed `root_placement=root_eligible|tail_only`声明其受信内容是否有资格进入新epoch的根指令；CSM不得从文件名、路径、wire role或自由extensions推断资格。首次组装只把当时有效的`root_eligible`来源按稳定顺序编译成一个不可变最顶层`wire_role=system` item。`tail_only`来源包括默认不可信的外部MCP工具指引，只能作为上下文数据进入 user 来源消息。第一条真实用户消息之后、且没有实际新epoch边界时，任何source完整内容、diff、重新加载或恢复都只能在尾部新增`wire_role=user`消息；同批消息是否聚合按 4.1 处理，role 不因资格或内容是full/delta而改变：
 
 | CSM item | 当前 wire role |
 |---|---|
@@ -155,23 +155,46 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 | AGENTS、Skill metadata/activation、team/runtime delta | `user` |
 | 同epoch的source完整恢复或合并后的delta | `user` |
 | 实际compaction、rewind、Provider ToolSet hard rebase或fork首次组装形成的新root中的`root_eligible`有效内容 | 新epoch唯一顶层`system` |
-| 同一新epoch中的`tail_only`有效内容 | 独立`user` |
+| 同一新epoch中的`tail_only`有效内容 | `user`，按 4.1 聚合或独立发送 |
 
 这些 `wire_role=user` item 仍是 ambient runtime/source item，不是 canonical `user_input`，没有 `turn_id`，不能成为 Turn root/member。Provider 原生的 assistant/tool call/tool result role 不受此表影响。
 
 合法新epoch重建时，compiler可从已提交active view及冻结的受信ResourceSnapshot，把`root_eligible`来源的base+delta物化为新root中的当前完整状态；必须记录确定性顺序、source refs/hash、覆盖的revision链和旧item lineage，避免同一语义在新root与tail重复投影。旧canonical item/detail/assembly字节不变，历史读取仍是旧sealed selection；fork只对目标新thread首次assembly应用此规则，不重编译source历史。`tail_only`即使在新epoch也不得借摘要或合并进入system。任何source变化本身不得制造epoch；若无合法重建边界，不能为提高优先级而前插system。为Anthropic中途system只保留关闭的capability TODO。
 
+#### 4.1 CSM 模型可见表达与 Skill 刷新
+
+本节的消息分组、模型解释和版本生效边界已同步到 specs，新增实现与验收列入 tasks 第 9 节。标签语法、配置键及内部存储映射仍可继续细化，不能据此将现有实现或历史验收视为已满足新增合同。
+
+- **统一来源表达与模型提示。** system root 和 user 来源更新均以统一来源块表达，说明来源身份、名称、类型、版本、操作含义、完整正文或 diff 格式，以及追踪模式和原有信任资格。集中 CSM 提示解释这些消息与真实用户任务的区别、diff 增删语义及同一来源新旧版本的替代关系；来源更新不影响其它来源，不改变既有优先级，也不因统一包装而提升信任资格。模型可见结构不包含物理路径、内部 locator 或凭据。
+- **默认聚合本批 user 来源。** compiler 在 seal 前将同一模型调用待追加的 CSM 来源批次按确定性顺序编成一条 `user` 消息，每个来源仍保留独立身份、revision、操作和提交追踪。Workspace 上下文配置保留切换为逐来源独立消息的参数，便于快速切换与对比测试；两种分组方式复用同一封装和生命周期链路。分组不跨越真实用户输入或工具协议事实，不吸收旧 sealed 消息；Provider adapter 只消费已封存分组，配置切换仅影响后续尚未封存批次。逻辑 item 仍是处理基础，聚合消息保留所含 item 的引用和顺序，各来源绑定分别记录封存时的 tracking 状态，不将多个 item 的状态压成一个消息级状态；具体映射随后细化。
+- **单次显式刷新与生效关系。** 再次 `skill_load(name)` 可加载本次激活边界冻结的已发布版本，无需先 untrack 或卸载，也不另加重复的 reload 参数；同来源同版本仍有效时复用正文，版本变化时追加刷新并明确新版取代旧版。snapshot 与 tracked 是互斥加载模式，每次以请求 mode 为准；省略 mode 使用 snapshot，并停止该名称已有追踪，显式 tracked 则建立或保持追踪。同版本复用正文仍须完成模式切换，并在回执中反映实际追踪状态。同名来源身份变化需明确来源切换和替代范围；加载与追踪状态变更共同成功，失败保留原有效状态。“最新版”仍受既有激活边界约束，不转为调用时读盘。旧 sealed 内容保留供历史复现，与当前生效版本区分；untrack 只停止追踪和自动恢复，不撤销正文。snapshot 被 rewind 移除或压缩未保留时不自动恢复，本轮不增加 unload。
+
+CSM解释提示本身是已登记、版本化的instruction来源，不由adapter补拼。来源块采用确定性封装，正文中的类似标签不能改变软件记录的来源边界。消息分组策略在preparation选择并与有序item引用一起封存，retry及历史恢复复用封存结果；item与frame映射调整接入itemized唯一owner，不新增封存writer或另存一份消息级来源状态。
+
+#### 4.2 来源更新能力、状态语义与正文入口
+
+本节明确职责与字段语义；命名在本轮按下述方向统一，具体配置键与持久化结构不在这里冻结。跨层改名须迁齐写入方、消费者与测试，不保留字段别名或双写。
+
+- **owner 提供版本，CSM 消费版本。** tracked 来源需有可核验的 owner、发布入口与激活边界，接线检查关注更新能力，不要求每个来源建 watcher 或独立回调。复用 R01 已有配置 reload／runtime generation 链路及集成测试，核清 R01／R02 的实际缺口，不另造平行更新路径，也不把 generation 重建等同于任意 model-call 热更新。source item 可来自文件、配置、内存或计算结果；canonical 用户、模型和工具协议事实不纳入 CSM tracking。所有变更仍由 ContextStore／Saver 提交与封存。
+- **操作、当前状态和封存状态分别表达。** `skill_load.mode` 保留为外部操作；`SourceObservation.tracking_mode` 改为 `requested_mode`，运行态与持久控制态保留 `tracking_status`，来源 item／绑定的 `tracking_state` 改为 `source_tracking_at_seal`，派生属性及回执 `tracked` 保留。canonical 引用不适用 tracking，来源引用可处于未跟踪状态，两者由类型合同区分，不能只替换字符串。`observe()` 返回明确的处理结果，区分未变化、基准恢复、未跟踪与接受新观察；是否存在 pending 增量另行表达，回到已提交基准可取消 pending，不能用接受观察或 queued 代替成功 seal。要求 tracked 的调用入口遇到状态不符应报错。
+- **来源 owner 统一发布有效正文。** R01 默认提示词保留唯一权威入口，清理代码中的重复兜底并核清缺省行为。R02 将可覆盖说明与软件身份事实分离，移除项目特定示例，区分配置中的首选／fallback 与实际调用身份；覆盖说明不改变权威事实。外部提示词文件作为可选正文输入，默认使用inline，显式文件替换正文而非拼接；有效配置确定唯一正文输入，由 owner 读取并发布有效正文和 revision，正文变化须反映到 revision，显式读取失败报错；CSM 不读文件、不承担覆盖解析，模型请求路径只消费冻结版本。
+
 ### 5. Resource Observation Platform、URI 与 SkillCatalog
 
-SkillCatalog 合并三层来源：
+SkillCatalog 按四层优先级选择同名来源，由高到低为：
 
 ```text
-inline resources/skills
-    < ${BOXTEAM_HOME}/skills
-    < ${workspace_abs_path}/.boxteam/skills
+Workspace 本地（${workspace_abs_path}/.boxteam/skills）
+    > Gateway 本地（${BOXTEAM_HOME}/skills）
+    > 网络来源（由 Workspace 或 Gateway 获取）
+    > 内置 inline（resources/skills）
 ```
 
-同名项按上述优先级确定唯一有效 entry；名称冲突、非法 metadata 或不可读文件必须显式诊断。`${BOXTEAM_HOME}/skills` 是 Gateway 级全局 catalog，默认可用于所有工作区；Gateway 负责全局 catalog/control-plane 发现，但不得写工作区 Session SQLite。Workspace 后端取得内部 catalog descriptor 后，由当前 Session 的 CSM 完成加载和持久化。
+显式登记的网络 Skill 经来源与内容校验成功后纳入 SkillCatalog，与其它来源一样支持 `skill_load(name)`。获取和更新由所属 Workspace 或 Gateway owner 负责；名称选择统一归入网络层，不因 Gateway 代理获取或落盘缓存而升级为本地层。同层多个来源允许显式配置优先级；未区分优先级时按同优先级处理，同优先级仍存在相同规范化名称则明确报冲突，不用扫描顺序选择。非法 metadata 或不可读来源必须显式诊断。内容更新保持稳定来源身份，目录优先级变化只影响后续名称解析，不自动改绑已有 tracked registration。
+
+`${BOXTEAM_HOME}/skills` 是 Gateway 本地 catalog，默认可用于所有工作区；Gateway 负责全局 catalog/control-plane 发现，但不得写工作区 Session SQLite。Workspace 后端取得内部 catalog descriptor 后，由当前 Session 的 CSM 完成加载和持久化。具体层内优先级配置键留待后续细化。
+
+这四层是名称选择优先级，不是URI scope分类；网络来源不新增`network` scope，模型可见display URI按来源owner绑定沿用统一寻址合同。外部获取地址保持owner私有，已有tracked绑定使用稳定resource/source identity，不依赖当前display URI重新选择来源。
 
 资源流水线区分“观察的来源”和“消费的语义资源”，再接一条只读激活链。内置适配和业务解析器由各进程composition root在代码中显式装配；typed port只用于清晰边界与测试替身，不构成可安装插件宿主：
 
@@ -236,6 +259,34 @@ SemanticResourceDescriptor {       # 公开部分不含provider locator
 
 SourceReconciler经代码内装配的来源适配稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求；Gateway raw Skill owner复用相同文件稳定读取，以已接受byte revision组合稳定publication revision。Workspace的GatewaySkillSources在接受认证响应时验证Gateway/Workspace身份、entry/source provenance、byte length及UTF-8原始hash，后续prepare只读accepted内存事实。typed Gateway来源不进入通用file descriptor闭集，不恢复已回收的generic gateway_snapshot、version_token或memory-state。缺少文件双读语义的其它来源仍须使用自身可验证的版本与一致性token，不能伪装成文件读取。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
 
+#### 来源能力分层与快照更新策略
+
+外部获取地址、模型可见资源寻址与更新策略分离：来源 owner 使用外部 URL 或其它私有 locator 获取内容，模型可见资源身份仍沿用 5.1 的统一寻址合同，不新增另一套公开 URI 语法，也不把外部地址或凭据直接作为模型可见身份。不根据获取地址的 scheme 或来源类别写死监听／轮询方式。以下分层是现有职责的划分，不要求每层新增抽象、管理器或持久化状态；特殊来源通过登记相应能力接入同一链路，而非另建同步流程。配置键、组合语法、事件传输接口与来源描述符继续留待后续细化。
+
+| 职责 | 处理内容 | 配置可选择的内容 |
+|---|---|---|
+| 获取地址解析 | 由来源 owner 将外部地址或私有 locator 解析为获取目标 | 已登记的获取地址协议能力及来源绑定，与模型可见 URI 解析分开 |
+| 快照获取 | 读取并校验正文、取得来源版本 | 已实现的文件、Gateway、HTTP 或其它获取能力及参数 |
+| 更新触发 | 决定何时要求重新对账 | 事件、周期轮询、手动触发及显式组合 |
+| 对账与发布 | 校验变化并发布不可变快照 | 复用唯一对账与快照链路，不另配一套状态机 |
+| 上下文激活 | 决定何时选择新版本进入模型上下文 | 既有 turn／model_call、snapshot／tracked 策略，与观察方式分开 |
+
+配置只声明能力引用、参数与组合关系，沿相应 Gateway／Workspace owner 的既有配置域和覆盖规则生效，并按功能域与扩展点组织。能力实现仍由代码装配，配置不能安装任意插件、执行代码或回调；owner 不支持的获取协议、未登记能力和不支持的组合必须报错，不能剥掉外部地址 scheme 后改按本地路径处理，也不能静默切换获取或触发方式。同一来源可以选择不同触发策略，不同来源可复用同一种已支持的获取／触发能力。
+
+下表仅为可覆盖的默认组合，不是封闭的来源分类或固定分派表：
+
+| 来源示例 | 默认组合 | 归属 |
+|---|---|---|
+| Workspace 本地 Skill | 文件监听触发 + 本地快照获取 | Workspace owner |
+| Gateway 域 Skill | 发布通知触发 + Gateway 认证快照获取；可切换周期轮询 | Gateway 观察并发布，Workspace 获取并接受 |
+| 显式登记的 HTTP(S) Skill 链接 | 配置周期触发 + HTTP 获取；有已支持的通知能力时也可事件触发 | Workspace 私有来源由 Workspace 获取；Gateway 共享来源由 Gateway 统一获取并分发 |
+
+- **触发方式可选，获取链路复用。** 默认选用一种触发方式，也允许显式组合“事件 + 低频周期对账”，不是自动降级或强制双开。各触发汇入同一 owner 的对账入口，合并重复请求并避免重复获取、发布及上下文注入。手动触发同样请求来源对账，不使 `skill_load` 临时读盘或联网。轮询间隔支持分钟、小时等配置；触发方式与间隔不由 URI 推导。
+- **跨进程发布与通知各司其职。** 当前 Gateway Skill 已有 owner 文件观察、认证快照与 Workspace accepted 快照链路，Workspace 侧仍固定周期轮询；后续由同一链路支持可配置策略，不保留平行同步实现。默认 Gateway 先发布可获取的新快照，再向消费相关来源或目录的 Workspace 通知来源身份、revision 等信息；Workspace 收到后及时安排后台获取和校验。切换为轮询时检查同一快照接口。Gateway 本地发现变化与 Workspace 获知版本分别配置，切换后者不必关闭前者。
+- **通知是线索，快照是权威。** 首次建立订阅、重连或收到 gap 后主动对账，并覆盖初始获取与建立订阅之间的变化窗口。重复或连续通知可合并为一次对账，只需取得当前可验证版本，不要求逐个消费中间 revision。获取、身份或正文校验失败应显式记录来源不可用并沿用既有 readiness 合同，不能把通知本身当作成功更新，也不能以陈旧版本冒充最新。
+- **网络获取由来源 owner 执行。** HTTP(S) 链接仅限显式登记，按配置的事件、轮询或手动触发安排后台获取与对账；可利用 ETag／Last-Modified 条件请求减少传输，但它们不直接替代正文内容版本，缺少这些头时仍可比较取得的正文。同一 Gateway 共享链接不由每个 Workspace 各自访问上游；Workspace 消费 Gateway 的已发布快照。触发策略与上下文激活边界分别配置，模型请求准备和 `skill_load` 不临时联网读取。
+- **快照新鲜度与指令生效分离。** 所有触发方式统一进入来源对账、快照接受／发布、语义资源派生及激活链路；来源更新不直接改写任何 sealed item，不主动唤醒所有 thread，也不绕过 snapshot／tracked 语义。获取网络内容与将其作为指令激活分别受现有来源资格和显式激活规则约束，不因检测到更新自动执行其中的指令。
+
 #### 5.1 统一资源寻址
 
 URI是模型与工具可见的逻辑地址层，不是provider文件系统。规范URI复用现有`boxteam://` scheme：
@@ -296,7 +347,7 @@ ResourceActivationCoordinator只构造和校验typed snapshot，不直接写thre
 
 Execution/ModelCall snapshot将`display_uri`映射到精确`resource_id + semantic_revision + semantic_hash + source_lineage_digest/ref + snapshot_ref`并交给ContextRequestPlan/assembly；source lineage只进入provenance/integrity合同，不因来源原始字节变化而令未变的模型可见facet重建plan hash。旧context item和旧assembly永远读取其已封存snapshot/detail，不通过display URI解析当前资源。tracked registration也绑定exact resource identity；同名高优先级Skill后来出现只改变未来catalog snapshot，既有registration不自动改绑。配置变更影响已知来源登记时由config owner在独立shadow scope中完成candidate校验、initial reconcile和health校验，成功后原子切换来源绑定generation、fence旧发布并drain旧scope；失败只关闭candidate，继续保留旧generation且显式诊断，不留下两套同时发布的monitor。
 
-所有 Skill metadata、Skill activation、AGENTS 和其它文件 source 都经同一个 `StableSourceReader`，不能由 middleware 各自执行一次普通 `read_text`。reader 输入是 provider 所有的 `SourceReadHandle` 和允许根，不要求 ContextStore 能直接访问物理路径：workspace 文件可由 workspace provider 本地读取，Gateway global Skill 必须由 Gateway provider 读取后，以仅内部可用且受认证的 `StableSourceSnapshot(entry_identity, source_identity, revision_hash, byte_length, content_bytes)` 返回；该 envelope 和 handle 都不得进入模型、普通工具结果或 canonical history。handle 必须能在 Gateway/backend 重启后由持久 catalog entry identity 重新解析，不能依赖进程内临时路径 token。
+文件来源的 Skill metadata、Skill activation、AGENTS 和其它文件 source 都经同一个 `StableSourceReader`，不能由 middleware 各自执行一次普通 `read_text`。reader 输入是 provider 所有的 `SourceReadHandle` 和允许根，不要求 ContextStore 能直接访问物理路径：workspace 文件可由 workspace provider 本地读取，Gateway global Skill 必须由 Gateway provider 读取后，以仅内部可用且受认证的 `StableSourceSnapshot(entry_identity, source_identity, revision_hash, byte_length, content_bytes)` 返回；该 envelope 和 handle 都不得进入模型、普通工具结果或 canonical history。handle 必须能在 Gateway/backend 重启后由持久 catalog entry identity 重新解析，不能依赖进程内临时路径 token。
 
 一次稳定读取使用有界的双读确认，而不是把 `mtime` 当 revision：每个 attempt 都重新校验允许根 containment，拒绝非普通文件及不允许的 symlink，使用 no-follow handle 打开并在读前/读后比较文件 identity、size 和高精度时间签名；随后再次独立打开并读取，只有两次读都各自稳定、filesystem identity/signature一致且精确内容 hash 相同才接受。最多尝试三次，仍变化则返回 `source-changed-during-read` 并阻止本次候选、seal 和 dispatch。正文超过产品固定上限返回 `source-too-large`，不是截断；文本不是严格 UTF-8 返回 `source-invalid-encoding`。`source_snapshot_hash`覆盖接受的完整原始字节，换行、BOM、空白和 Unicode 不做隐式规范化；各logical facet另保存由版本化extractor产生的`facet_revision_hash`，只有模型实际可见的facet payload变化才追加context item。AGENTS等整文件facet直接使用原始正文；Skill metadata facet只序列化name/description，activation facet只使用frontmatter之后的精确正文bytes。持久 item再使用版本化确定性serializer。
 
@@ -304,7 +355,7 @@ SkillCatalog的published snapshot至少绑定catalog revision、entry/resource/s
 
 模型只看到当前有效 entry 的 `name` 和 `description`。frontmatter通过禁用custom tag/alias/object构造的安全解析器处理，name/description必须是唯一、有界scalar；语法错误、重复字段或类型错误使entry显式invalid。其它字段可存在但暂不进入metadata/activation payload、facet revision或策略判断；它们改变时`source_snapshot_hash`可变化，两个facet payload不变则不追加metadata/activation item。activation正文从已接受snapshot的frontmatter结束byte offset后精确取得，不把未支持字段带入模型。工具输入`name`只作为已构造catalog map的精确key，统一校验长度、控制字符、分隔符、`.`/`..`和编码歧义，绝不用于路径拼接；路径解析和稳定读取均在软件内部完成，路径不得进入模型可见参数、普通工具结果或历史正文。
 
-activation registration绑定`name + catalog_entry_identity + resolved_source_identity`，不是只绑定可被覆盖的name；同时每个`(session_id, thread_id, normalized_skill_name)`至多一个active tracked registration。snapshot/tracked自动检查都不会因同名workspace/global/inline优先级变化而静默改绑另一个文件；原tracked source不可读时返回明确`tracked-source-unavailable`并阻止未记录的dispatch。模型显式再次调用`skill_load(name, tracked)`时，若effective entry identity未变则幂等复用；若已变化，则在一个owner事务中把旧registration冻结为untracked、为当前effective entry追加完整activation并建立新tracked registration，旧context item保持不变，结果返回不含路径的`source_rebound=true`。同一source revision已在active view可见时，重复snapshot调用返回`already_active`而不追加；revision不同的显式snapshot调用可追加新的不可变activation。tool invocation retry仍以调用幂等键优先恢复原结果。
+activation registration绑定`name + catalog_entry_identity + resolved_source_identity`，不是只绑定可被覆盖的name；同时每个`(session_id, thread_id, normalized_skill_name)`至多一个active tracked registration。目录在Workspace本地、Gateway本地、网络、inline层级及层内优先级的变化不改绑已有registration；snapshot也不会自动重选来源。原tracked source不可读时返回明确`tracked-source-unavailable`并阻止未记录的dispatch。模型显式再次调用`skill_load(name, tracked)`时，按当前冻结catalog解析effective entry：身份未变则复用registration并按需刷新版本；身份变化则在一个owner事务中把旧registration冻结为untracked、接受当前完整activation候选并建立新tracked registration，旧context item保持不变，结果返回不含路径的`source_rebound=true`。显式snapshot加载同样使用当前冻结catalog，但成功后停止该名称已有追踪，即使这次选中了另一来源，也不得留下旧来源的隐式追踪。同一source revision已在active view可见时可以复用正文、不追加item，但仍须完成请求mode对应的状态切换；revision不同则追加新的不可变activation。加载与状态变更共同成功，失败保留原状态；tool invocation retry仍以调用幂等键优先恢复原结果。
 
 Metadata 与 activation 独立生效：metadata 让模型知道可选 Skill；activation 是 `skill_load` 后实际进入上下文的 Skill 正文。首次组装已有 metadata 可进入 root system item，运行中 metadata 变化只能追加 user-role delta，不能改写 root item。
 
@@ -393,11 +444,13 @@ skill_load(
 )
 ```
 
-不存在其它即时移除工具。工具结果只返回名称、实际 mode、revision/hash 的安全标识和是否追加 source item，不返回内部路径或完整 Skill 正文。
+不存在其它即时移除工具。工具结果返回名称、实际 mode、tracking状态、revision/hash 的安全标识和是否追加 source item，可以包含安全display URI，不返回内部路径或完整 Skill 正文。snapshot与tracked是互斥加载模式，untrack是停止后续追踪的操作。
+
+同一owner原子接受本次冻结版本的激活候选和模式控制变更，回执不能冒充正文已注入；applied/injected仍仅在assembly seal推进。成功的snapshot转换须清理或替换尚未seal且与本次显式版本冲突的旧tracking候选，不让旧自动增量随后覆盖snapshot；历史sealed内容不变，失败保留原状态。
 
 #### snapshot
 
-CSM 通过当前activation snapshot的SkillCatalog绑定解析名称，取得ResourceRegistry已稳定发布的 `SKILL.md` revision，追加一个完整、不可变、ambient 的 activation item。由于调用发生在用户消息之后，该 item 投影为 `wire_role=user`。工具调用不读文件、网络或provider；随后不检查变化、不维护 active tracking registration，也不检查 rewind 是否移除了该 item，它只依靠 active context 自然保留且不自动到期。
+CSM 通过当前activation snapshot的SkillCatalog绑定解析名称，取得ResourceRegistry已稳定发布的 `SKILL.md` revision，追加一个完整、不可变、ambient 的 activation item；同来源同版本仍可见时按 4.1 复用正文。由于调用发生在用户消息之后，新 item 投影为 `wire_role=user`，消息分组遵循 4.1。工具调用不读文件、网络或provider。snapshot加载成功后停止该名称已有追踪，与本次加载共同完成；即使正文无需追加，也不能保留原tracked状态。随后不自动检查变化、不维护 active tracking registration，也不检查 rewind 是否移除了该 item，它只依靠 active context 自然保留且不自动到期。再次显式调用可按 4.1 刷新版本，不要求先停止追踪或卸载。
 
 存储仍保留 captured revision/hash、catalog entry identity、item identity 和受保护正文，以便 replay/audit；“不追踪”不等于丢弃已提交 provenance。
 
@@ -407,7 +460,7 @@ CSM 保存 resource/source identity、catalog/provider binding revision、当前
 
 - 文件未变化且最新 committed revision 仍在 active view：不追加 item；
 - 文件变化：从 active view 中最新已提交可见 revision 计算到当前 revision 的一个 delta，并以 `wire_role=user` 追加；
-- registration 在 rewind 目标 checkpoint 中仍为 tracked，但最新已注入 revision 不在重建后的 active view：从冻结activation snapshot取得并持久化published完整revision恢复事实；实际新epoch中只把`root_eligible`状态合并新root，`tail_only`仍用独立`wire_role=user` item；
+- registration 在 rewind 目标 checkpoint 中仍为 tracked，但最新已注入 revision 不在重建后的 active view：从冻结activation snapshot取得并持久化published完整revision恢复事实；实际新epoch中只把`root_eligible`状态合并新root，`tail_only`仍用`wire_role=user`消息，按 4.1 聚合或独立发送；
 - 同一文件在两个 model request 之间多次变化：只提交从最新已提交可见 revision 到最终稳定 revision 的一个 delta。
 
 revision 只有在对应 item 进入 sealed assembly 后才算 committed/injected。仅观察到变化或生成临时候选不能推进 diff 基准。seal 前失败保留 pending candidate；retry 必须复用同一 candidate identity/bytes。
@@ -426,7 +479,7 @@ revision 只有在对应 item 进入 sealed assembly 后才算 committed/injecte
 
 tracked source的Registry snapshot不可用会在activation boundary返回`tracked-source-unavailable`并阻止dispatch，因此不能把模型再次调用工具当作唯一恢复路径。受信Session控制API必须允许用户以精确`session_id + thread_id + normalized skill name + mode=untrack`调用同一个CSM mutation，并返回与工具一致的安全结果；API不得接受路径、不得读取source、不得删除既有context item，也不得实现第二套tracking状态或“立即卸载Skill”语义。该入口只解决模型无法运行时的人工控制面可达性，权限校验、幂等、checkpoint-versioned untrack和`tracking-state-conflict`合同与模型工具完全相同。Web若暴露操作，只能消费该API返回的完整状态，不得本地伪造untracked。
 
-CSM tracking state 与 checkpoint 一起版本化。rewind 到 `untrack` 之前的 checkpoint 会恢复当时的 tracked 状态；rewind 到其后的 checkpoint 保持 untracked。这避免控制状态脱离产生它的上下文因果点。
+CSM tracking state 与 checkpoint 一起版本化。rewind 到 `untrack` 或显式snapshot停止追踪之前的 checkpoint 会恢复当时的 tracked 状态；rewind 到其后的 checkpoint 保持未追踪。这避免控制状态脱离产生它的上下文因果点，不能用当前模式覆盖历史checkpoint。
 
 ### 7. diff 基准是最新已提交且仍可见的 revision
 
@@ -453,9 +506,9 @@ rewind先从目标checkpoint恢复checkpoint-versioned CSM registration，重建
 - tracked registration 若仍有效且当前 revision 不在 active view，CSM 从冻结的Registry activation snapshot追加published完整 revision；
 - untracked registration 不检查、不恢复。
 
-rewind可以在不继续执行时只提交view和pending transition；下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，并在同一transaction提交恢复事实、seal首个`rewind` epoch assembly及消费transition。snapshot不可用或seal失败时保留rewind view与pending transition，但不追加半成品source、不应用新epoch、不dispatch；该路径不得读文件、网络或其它provider。合法新epoch中，只有owner声明`root_eligible`且仍在目标active view有效的source完整状态可合并进新root；`tail_only`的tracked完整恢复作为独立`wire_role=user` item。恢复事实/lineage必须持久化且旧sealed assembly不变，不能把旧delta再次选入新plan造成重复。
+rewind可以在不继续执行时只提交view和pending transition；下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，并在同一transaction提交恢复事实、seal首个`rewind` epoch assembly及消费transition。snapshot不可用或seal失败时保留rewind view与pending transition，但不追加半成品source、不应用新epoch、不dispatch；该路径不得读文件、网络或其它provider。合法新epoch中，只有owner声明`root_eligible`且仍在目标active view有效的source完整状态可合并进新root；`tail_only`的tracked完整恢复使用`wire_role=user`，消息分组遵循 4.1。恢复事实/lineage必须持久化且旧sealed assembly不变，不能把旧delta再次选入新plan造成重复。
 
-compaction提交summary/active view时登记`PendingPrefixEpochTransition(reason=compaction)`。下一次model-call preparation可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，把原base+delta链物化为该完整revision，并在同一transaction推进source overlay epoch、seal首个compaction epoch assembly和消费transition。snapshot不可用或seal失败不回滚已提交的compaction view，但不产生半应用epoch或Provider request，也不回退读源。实际新epoch只将`root_eligible`的完整有效状态合并到唯一顶层system root；`tail_only`仍位于用户消息之后并使用独立`wire_role=user` item。新plan只选择物化后的有效状态一次，旧base/delta/detail保持不可变，直到retention/GC确认没有sealed assembly依赖。
+compaction提交summary/active view时登记`PendingPrefixEpochTransition(reason=compaction)`。下一次model-call preparation可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，把原base+delta链物化为该完整revision，并在同一transaction推进source overlay epoch、seal首个compaction epoch assembly和消费transition。snapshot不可用或seal失败不回滚已提交的compaction view，但不产生半应用epoch或Provider request，也不回退读源。实际新epoch只将`root_eligible`的完整有效状态合并到唯一顶层system root；`tail_only`仍位于用户消息之后并使用`wire_role=user`，消息分组遵循 4.1。新plan只选择物化后的有效状态一次，旧base/delta/detail保持不可变，直到retention/GC确认没有sealed assembly依赖。
 
 snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 active view 和已提交受保护 detail 决定是否携带；CSM 不执行自动恢复。若压缩没有实际重建上下文，则不得借 compaction 名义改变旧前缀。
 
@@ -466,13 +519,13 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | ID | 当前生产来源与入口 | 当前触发、落位与生命周期 | 当前问题 | 本 change 的详细目标 |
 |---|---|---|---|---|
 | R01 | Agent 基础说明：`ConfigService.get_agent_runtime_config()` 读取 agent `instructions.system_prompt`，`agent_factory.create_my_deep_agent()` 传给 `create_agent(system_prompt=...)` | Agent 构建时形成基础 `SystemMessage`，之后作为每次请求的 system prompt 起点 | 只有最终拼接文本，没有独立 source revision/facet；运行中配置变化无法只追加 | 注册 `agent-instructions` root source；首次组装封入唯一 root system item并记录配置 revision/hash；首个 user item 后发生变化只能追加 user-role full/delta，不能重建 root |
-| R02 | 运行时身份与路径：`agent_factory._runtime_identity_system_prompt()` 注入 workspace 绝对根、首选/fallback provider/model 和路径规则 | 每次 Agent runtime 构建时追加到基础 system prompt | 与 R01 原地拼接，provider/config 重建可能改变旧前缀；字段 provenance 不可独立校验 | 注册 `runtime-identity` root source；稳定规范化 workspace/provider/model snapshot；首次进入 root，后续变更按独立 user-role source item追加；不得借 Agent 重建改写旧 assembly |
+| R02 | 运行时身份与路径：`agent_factory._runtime_identity_system_prompt()` 注入 workspace 绝对根、首选/fallback provider/model 和路径规则 | 每次 Agent runtime 构建时追加到基础 system prompt | 与 R01 原地拼接，provider/config 重建可能改变旧前缀；字段 provenance 不可独立校验 | 注册 `runtime-identity` root source；稳定规范化 workspace/provider/model snapshot；首次进入 root，后续变更按独立来源身份追加 user-role 更新，消息分组遵循 4.1；不得借 Agent 重建改写旧 assembly |
 | R03 | Session内部团队静态规则：启用 `create_team` 时 `_team_aware_system_prompt()` 追加 `TEAM_COORDINATION_SYSTEM_PROMPT` | 按最终可见工具集条件，在 Agent 构建时拼入 system prompt；当前team member仍由delegated Session表达 | 工具策略与 prompt 拼接隐式耦合，缺少“为何启用”的 source 事实；跨Session成员模型与新的SessionThread边界冲突 | 注册条件化 `team-coordination-policy` root source并绑定精确ToolSet revision；运行中启停走C02 hard rebase，在新epoch重编译条件化root。policy明确team只管理当前Session的child thread，跨Session只允许send/read/wait，不向旧epoch追加软policy通知；动态团队事实另走E04 |
 | R04 | Todo 静态规则：`TodoListMiddleware(system_prompt=TODO_SYSTEM_PROMPT)` | middleware 在 model request 前追加 system block；`TODO_TOOL_DESCRIPTION` 同时改变 tool schema | 每请求重新拼接，靠后置捕获猜测边界；prompt 与 tool schema owner 混在 middleware 行为里 | `TODO_SYSTEM_PROMPT` 注册为绑定 ToolSet policy的条件化 root source；`TODO_TOOL_DESCRIPTION` 归 C02 ToolSetSnapshot；启停通过同一 desired revision在 safe boundary hard rebase并决定新 epoch是否 included |
-| R05 | Skill metadata/index：`WorkspaceSkillsMiddleware`/upstream `SkillsMiddleware` 发现 bundled 与 workspace Skill，向 system prompt写入 locations、name、description、路径和 `read_file` 指令 | metadata 在 `before_agent` 读取一次，格式化后的 catalog 在每次 model request 前追加；当前未发现 `${BOXTEAM_HOME}/skills` | 路径泄露给模型；metadata 与 activation 混合；通过通用 read 工具激活；catalog revision、覆盖关系和运行中变化没有统一事实 | Resource platform持续维护三层SkillCatalog snapshot与`skill:*:metadata` facet，只暴露name/description及安全display URI；activation boundary消费冻结snapshot，首次metadata进入root，后续catalog diff使用user role；activation只能由`skill_load`建立。删除旧middleware位置提示、`.boxteam` Skill mount暴露和通用read白名单。现有`allowed_tools`若仍需用于事件归因，迁到独立工具归属配置 |
+| R05 | Skill metadata/index：`WorkspaceSkillsMiddleware`/upstream `SkillsMiddleware` 发现 bundled 与 workspace Skill，向 system prompt写入 locations、name、description、路径和 `read_file` 指令 | metadata 在 `before_agent` 读取一次，格式化后的 catalog 在每次 model request 前追加；当前未发现 `${BOXTEAM_HOME}/skills` | 路径泄露给模型；metadata 与 activation 混合；通过通用 read 工具激活；catalog revision、覆盖关系和运行中变化没有统一事实 | Resource platform持续维护四层SkillCatalog snapshot与`skill:*:metadata` facet，只暴露name/description及安全display URI；activation boundary消费冻结snapshot，首次metadata进入root，后续catalog diff使用user role；activation只能由`skill_load`建立。删除旧middleware位置提示、`.boxteam` Skill mount暴露和通用read白名单。现有`allowed_tools`若仍需用于事件归因，迁到独立工具归属配置 |
 | R06 | 文件系统静态规则：`FilesystemMiddleware(system_prompt=FILESYSTEM_SYSTEM_PROMPT, custom_tool_descriptions=...)` | 每次请求前追加 filesystem/environment system block，并注册/改写文件工具说明 | system block 依赖请求期拼接；其中 Skill 路径例外与旧 read 激活方案绑定；工具说明不是独立 ToolSet 事实 | 文件系统行为规则注册为绑定 ToolSet policy的 root source并删除 Skill 读取例外；所有 tool descriptions 归 C02；工具 policy变化触发 hard rebase并重编译新 epoch，不能重写旧 context item |
 | R07 | 手动压缩工具静态规则：`CachePreservingSummarizationToolMiddleware(... COMPACT_CONVERSATION_SYSTEM_PROMPT)` | 启用 `compact_conversation` 时，每次 model request 前追加 system block并提供工具 | 与压缩派生请求、压缩结果的生命周期混在一起 | 静态使用规则注册为绑定 ToolSet policy的条件化 root source；工具 schema与启停归 C02并以 hard rebase生效；真正的派生摘要请求与结果归 D01，不把它们伪装成同一 CSM source |
-| R08 | 工作区 `AGENTS.md`：`WorkspaceAgentsMiddleware` 初次读取完整内容，`before_model` 检测变化后追加 `workspace_agents_change` `HumanMessage`，发现 compaction marker 时又把当前完整内容拼回 system prompt | 每次 model request 前读单文件；变化时生成 unified diff；middleware 内存保存 applied/observed 内容 | 直接改 LangChain state/system prompt；控制状态不随 checkpoint 版本化；重启/rewind 容易重复或错基准 | 注册`workspace-agents:content` resource/source，由实际owner声明`root_placement`；共享file monitor标脏，Reconciler稳定读取并发布snapshot，普通激活边界按latest-visible-committed追加user-role delta；实际rewind/compaction新epoch仅在资格为`root_eligible`时将完整有效状态合并新root，否则恢复为独立user item。状态由Saver/ContextStore持久化，删除旧middleware直接读盘/拼接和消息注入，不运行`rg`扫盘 |
+| R08 | 工作区 `AGENTS.md`：`WorkspaceAgentsMiddleware` 初次读取完整内容，`before_model` 检测变化后追加 `workspace_agents_change` `HumanMessage`，发现 compaction marker 时又把当前完整内容拼回 system prompt | 每次 model request 前读单文件；变化时生成 unified diff；middleware 内存保存 applied/observed 内容 | 直接改 LangChain state/system prompt；控制状态不随 checkpoint 版本化；重启/rewind 容易重复或错基准 | 注册`workspace-agents:content` resource/source，由实际owner声明`root_placement`；共享file monitor标脏，Reconciler稳定读取并发布snapshot，普通激活边界按latest-visible-committed追加user-role delta；实际rewind/compaction新epoch仅在资格为`root_eligible`时将完整有效状态合并新root，否则恢复为user来源块，消息分组遵循 4.1。状态由Saver/ContextStore持久化，删除旧middleware直接读盘/拼接和消息注入，不运行`rg`扫盘 |
 | ~~R09~~ | **已移除，不再是迁移闭包成员**：原「Agent memory：`StructuredMemoryMiddleware` 读取配置的 memory sources 并用 `MEMORY_SYSTEM_PROMPT` 包裹为 system block」 | 原仅 `create_my_deep_agent(memory=...)` 非空时启用，默认生产 runtime 未传入 | 该能力已被 change `remove-agent-memory` 整体移除（`StructuredMemoryMiddleware`、`MEMORY_SYSTEM_PROMPT`、`agent.memory` 配置键与 schema、`agent_memory` policy key/prompt tag、`memory_state` source kind 均已物理删除） | 无迁移目标；编号 R09 仅作历史记录保留，后续 R 集合一律为 R01–R07 与 R08，MUST NOT 再为 R09 登记 producer、source 或矩阵项 |
 | E01 | main-thread Goal生命周期：`goal_continuation`、`goal_objective_updated`、`goal_budget_limited` | `GoalRuntimeService` 构造`PreparedInternalMessage`，再用`create_and_run_internal()`创建`MessageRole.user`消息和Job；当前只以Session定位 | 内部控制状态成为普通user message/Turn root，注入与execution唤醒绑死；若按thread机械复制会错误地让child拥有Goal | Goal capability只允许Session main thread；作为`goal:<goal_id>:state` ambient/pending event source提交，保留事件revision与用户目标边界并由独立wakeup启动execution，不创建真实user Turn。child thread收到Goal操作必须明确拒绝，不能fallback到main |
 | E02 | Session内委派与跨Session生成结果：`delegated_task`、`generated_session_result` | `SessionSubagentService`或session-generation reporting通过internal message准备/派发Job；新生成Session的seed prompt另有`prepare_user_message()`路径 | durable委派当前创建child Session且回报只按Session定位；系统委派/回报可伪装user root | durable委派改为同一Session的child thread，任务seed进入精确child，完成汇报按持久parent thread地址注册幂等ambient event；不复制child history。生成Session result回到发起thread；seed由producer显式声明`user_derived_root`或`internal_source`，禁止根据文本/role猜测 |
@@ -666,11 +719,11 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 ## Risks / Trade-offs
 
-- **[post-user source 的role与新epoch根资格]** → 同epoch一律独立user-role，避免暗中提高优先级；只有实际新epoch才按source owner typed`root_placement`决定受信完整状态是否进入唯一system root，默认外部MCP指引维持`tail_only`。Anthropic中途system能力只留TODO。
+- **[post-user source 的role与新epoch根资格]** → 同epoch一律user-role，消息按 4.1 聚合或独立发送，避免暗中提高优先级；只有实际新epoch才按source owner typed`root_placement`决定受信完整状态是否进入唯一system root，默认外部MCP指引维持`tail_only`。Anthropic中途system能力只留TODO。
 - **[untrack 不会立即消除 Skill 影响]** → 工具名称和结果明确描述“停止追踪”；既有上下文继续存在，不承诺即时移除。
 - **[Provider adapter 自动合并连续 user message]** → 对 projector 输出做 frame-level golden test 和 dispatch 前 stable-prefix 校验；无法关闭合并的 Provider profile 显式 reject。
 - **[bridge 之后仍有 middleware 修改 request]** → bridge必须位于最后一个 request-mutating hook，Provider preflight比较 sealed frame bytes/hash；任何差异阻断 dispatch，telemetry只能旁路观察。
-- **[Gateway 全局与 workspace Skill 同名]** → 使用固定优先级和内部 catalog entry identity；模型只看到唯一有效名称，诊断保留 origin 但不泄露路径。
+- **[多来源 Skill 同名]** → 按 Workspace 本地 > Gateway 本地 > 网络来源 > inline 及显式层内优先级选择；同优先级同名明确报冲突。内部 catalog entry identity 保持稳定，既有 tracked registration 不随目录优先级改绑；诊断保留 origin 但不泄露私有地址。
 - **[文件读取期间变化导致错误 delta]** → 使用 stat/signature/hash 的稳定读取循环；无法获得一致快照时阻止本次 dispatch。
 - **[watcher丢事件、重复事件或overflow]** → event只标dirty/gap，SourceReconciler按source descriptor有界重读，ResourceDerivationGraph按依赖DAG parse/diff/CAS；required资源未恢复readiness时阻断新dispatch，不把event sequence当来源或语义revision。
 - **[共享watch task或已知来源订阅失效影响多个consumer]** → 每个channel独立背压，文件监视器暴露共享watch/consumer健康状态；config owner对受影响的候选来源订阅用独立scope完成shadow start、initial reconcile、原子切换和旧scope drain，失败继续使用上一份valid snapshot并显式标记stale/unavailable；释放机制不作reload决策。
@@ -693,7 +746,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与当前格式的显式schema校验；开发旧格式直接拒绝并清理，不新增兼容升级链，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
 2. 增加 stable-prefix epoch/reason/manifest、ToolSet compatibility key、desired/applied revision和 CSM source/tracking contract。
 3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle；Gateway global Skill由实际Gateway raw owner复用文件观察，经认证typed Workspace source接入，保留来源owner的byte revision与publication revision权威；Workspace各消费者迁齐后删除旧本机Gateway路径读取，不保留fallback（已回收的memory-state和generic gateway_snapshot version-token通路不恢复）。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
-4. 建立URI grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
+4. 接入统一URI grammar/resolver、四层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证私有获取地址/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
 6. 接入 `add-itemized-rollout-context` 的 Thread generation/lease/idle-unload/lazy-rehydrate 边界；在其唯一生命周期验收中证明 main 与 child unload/rebuild 不改变 CSM state、ToolSet binding、stable prefix 或历史。
 7. Goal限定main thread，清理旧跨Sessionteam开发数据；完成当前Session内child ledger/fanout和公开fork/copy的发布、恢复、删除验证，不实现旧board物化。

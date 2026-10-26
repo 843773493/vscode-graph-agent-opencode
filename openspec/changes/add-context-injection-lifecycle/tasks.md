@@ -1,5 +1,7 @@
 当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作设计待调整，暂停继续扩展该部分实现与专项验收。4.7/4.9/6.8 及总验收中涉及团队、成员、委派与会话协作通信的剩余内容保留 TODO 和未完成状态，待新设计确定后重新规划；通用来源注入、执行恢复、fork、资源和 URI 链路继续推进。已有证据保留，不能据此将延期部分勾选完成。
 
+本轮规划补齐（2026-10-25）：第 9 节跟踪 CSM 模型可见协议、消息分组、显式刷新与模式转换、来源能力组合和四层 SkillCatalog 等新增要求，全部保持未完成。第 1–8 节的已勾选任务及收据仅证明各自历史基线，不覆盖本轮增量；其中旧逐来源消息、三来源目录与重复加载的基线按第 9 节迁移，不保留并行实现。团队／协作延期范围不因本轮文档补齐重新启动。
+
 当前验收坐标（2026-10-19）：A01–A03 已接受范围沿原具名收据复用；4.6 已由 instruction generation、条件来源与 Skill metadata 的具名验收收口，见本节对应收据。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
 
 ## 1. Context mutation、stable-prefix 与 source domain contract
@@ -122,7 +124,7 @@
 ## 5. ToolSet hard rebase、Provider、history 与 display projection
 
 - [x] 5.1 修改plan compiler，使首次组装及fork目标首次assembly时只把owner声明`root_eligible`且有效的初始贡献编译成一个不可变root system item，并保存source identity/revision/ordinal/hash/included reason/ToolSet binding/visibility/loss；仅实际compaction、rewind或Provider可见ToolSet hard rebase的新epoch可重编译root并吸收合格post-user source的完整有效状态，记录base/delta lineage且不重复选择。`tail_only`始终不入root，旧item/assembly不改写。
-- [x] 5.2 修改LangChain/native Provider projector，使同epoch第一条真实用户消息后的CSM full/delta/恢复均输出独立user-role item，不合并旧system/user、不前插或按role重排；合法新epoch只将`root_eligible`完整有效状态放入唯一新root，`tail_only`保持独立user-role item；compaction summary与tool事实保留原因果顺序。
+- [x] 5.2 原基线：修改LangChain/native Provider projector，使同epoch第一条真实用户消息后的CSM full/delta/恢复输出user-role来源item，不合并旧system/user、不前插或按role重排；合法新epoch只将`root_eligible`完整有效状态放入唯一新root，`tail_only`保持user-role；compaction summary与tool事实保留原因果顺序。本轮多来源默认聚合及可切换分组另由9.7实现与验收，本项不证明新分组已完成。
 - [x] 5.3 实现 Provider-profile item frame封存、ToolSetRef/policy compatibility key及父 assembly逐字节前缀校验；同一 sealed assembly重试必须复用 frames/tools，adapter自动合并/规范化或同 epoch ToolSet漂移时显式 reject。
 - [x] 5.4 保持 ToolSelectionStore/ToolService拥有 workspace/agent级 desired revision、每次新 model-call preparation冻结完整desired ToolSetSnapshot，并以该SessionThread当前合法执行链的sealed assembly binding作为applied唯一权威，实现safe-boundary hard rebase；删除孤立switch intent/helper与SessionControl第二份工具observed/applied字段，不新增开发旧schema迁移；policy与wire order参与有效变化，seal失败不推进applied：in-flight sealed call不可变、旧 outstanding call先产生真实配对 terminal outcome、快速切换可合并到最终 desired、应用后创建 `toolset_changed` epoch且同 Turn可多 epoch；Provider无法投影旧工具历史时 fail closed。Provider capability matrix只保留关闭状态的 Anthropic中途 system TODO，并保持原生 tool call/result role。
 - [x] 5.5 废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获、prepare/seal、状态与 fallback职责；框架确需 model-call hook时实现无状态 sealed-assembly dispatch bridge并置于最后一个 request-mutating位置，否则删除该 middleware，由 Provider adapter直接消费 Saver-issued dispatch reference；history/diagnostic独立读取同一 sealed selection。
@@ -331,3 +333,24 @@
 
 - 按原6.5及A/B逐项合取已通过的GraphBinding/locator、附件七持久边界和跨UTC同digest、全部具名actor双顺序、retention/SQLite回滚、detail/revision/candidate/ToolSet与sealed bytes合同；没有新增行为缺口。删除核心及相关测试10项SHA与当前HEAD逐字节一致，逐项owner决定与原件身份见 `out/tests/temp/lifecycle_execution_deletion_20261023/artifacts/cil-6_5-owner-acceptance-008.json`，独立只读终审见 `cil-6_5-final-contract-audit-007.json`。
 - 状态机每个恢复阶段由已有owner测试与产品恢复收据按职责合取；部分持久状态由测试构造，commit窗口4项为BaseException，真实OS硬杀只按partial-fence/目录隔离及附件七阶段的限定范围引用。原合同未要求每阶段均硬杀，不扩大成全actor×故障阶段笛卡尔积。本次不复跑已通过场景，也不关闭7.3完整default/Web或URI普通响应总门；历史失败和性能TODO保留。
+
+## 9. CSM 模型协议、来源更新策略与 Skill 刷新增量（2026-10-25）
+
+本节于2026-10-25登记规划，按用户2026-10-26最新要求转入优先实施；团队／协作专项继续暂缓。语义以 specs 为准；标签拼写、配置键及typed结构在对应切片实施前收敛，不能改变已定默认值、互斥模式、来源优先级或稳定前缀合同。涉及itemized封存映射及统一寻址的部分复用其唯一owner，不在此复制第二份合同。
+
+- [ ] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
+- [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
+- [ ] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
+- [ ] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
+- [ ] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
+- [ ] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
+- [ ] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
+- [ ] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
+- [ ] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
+- [ ] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
+- [ ] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
+- [ ] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
+- [ ] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
+- [ ] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
+- [ ] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
+- [ ] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
