@@ -219,7 +219,7 @@ async function launchDetachedManager() {
   const logPath = resolveServiceLogPath(boxteamHome, process.env, logContract);
   rmSync(readyFile, { force: true });
 
-  const child = spawnDetachedProcess({
+  const child = await spawnDetachedProcess({
     command: process.execPath,
     args: [path.join(projectRoot, "scripts", "launch", "dev.mjs")],
     cwd: projectRoot,

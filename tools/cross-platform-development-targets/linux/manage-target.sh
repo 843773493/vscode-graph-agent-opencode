@@ -210,6 +210,7 @@ case "$action" in
       fail "开发服务端口已被占用，请先执行 stop 或使用另一目标"
     fi
     log_file="$artifacts/runtime/$profile/services.log"
+    control_log="$artifacts/runtime/$profile/bootstrap.stdout.log"
     if test "$profile" = development; then
       test -x "$repository/.venv/bin/python" || fail "目标 .venv 尚未初始化，请先执行 bootstrap"
       (
@@ -224,7 +225,7 @@ case "$action" in
           PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
           BOXTEAM_DEV_LOCAL_ONLY=1 \
           BOXTEAM_DEV_PORT_OFFSET=0 \
-          bun run scripts/launch/dev.mjs --only-launch >"$log_file" 2>&1 </dev/null &
+          bun run scripts/launch/dev.mjs --only-launch >"$control_log" 2>&1 </dev/null &
         printf '%s\n' "$!" > "$artifacts/runtime/$profile/start.pid"
       )
       start_pid=$(cat "$artifacts/runtime/$profile/start.pid")
@@ -233,8 +234,8 @@ case "$action" in
     else
       command -v boxteam >/dev/null 2>&1 || fail "目标尚未安装 boxteam 命令"
       nohup env BOXTEAM_HOME="$boxteam_home" BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT="$workspace" \
-        BOXTEAM_SERVICE_LOG_PATH="$log_file" BOXTEAM_SERVICE_LOG_CAPTURED=1 \
-        boxteam start --no-open >"$log_file" 2>&1 </dev/null &
+        BOXTEAM_SERVICE_LOG_PATH="$log_file" \
+        boxteam start --no-open >"$control_log" 2>&1 </dev/null &
       start_pid=$!
       printf '%s\n' "$start_pid" > "$artifacts/runtime/$profile/start.pid"
       wait_http http://127.0.0.1:8014/api/gateway/health "installed Gateway" "$start_pid"

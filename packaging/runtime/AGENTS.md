@@ -52,6 +52,8 @@ Linux/Windows构建入口只传runtime根、输出根、npm tarball和具名发�
 
 `runtime-release-assets.mjs::stageRuntimeAndLauncherPackages`是两平台runtime manifest与Launcher staging的唯一owner。Launcher排除任意层级的`node_modules`及普通`AGENTS.md`、`*.test.mjs`文件；生产入口、schema和其它文件保留原字节，版本与平台依赖继续在staging注入；staged manifest去掉已无对应测试文件的`test`脚本，其它脚本保留，源码包测试入口不变。Windows便携版沿用这份Launcher staging，不再复制开发文件；npm命令和Windows shell参数仍归平台builder。
 
+Windows 便携版复制 Launcher 后只移除其顶层 runtime optionalDependencies，再按 win32/x64 安装生产依赖；保留日志锁依赖的 optional 平台原生包，不能全局 omit optional。npm 安装版继续由包管理器安装 Launcher 的正式依赖。
+
 构建指纹只在`packaging/runtime/`与`packages/launcher/`子树排除普通`AGENTS.md`、`*.test.mjs`文件，前者不进入发行包，后者已在staging排除。同名目录及链接保持既有语义；其它输入根中的说明与测试仍可能随源码进入产物，继续计入。测试同时证明排除文件变化不触发重建、目录内产品正文及builder修改仍改变指纹；不能把排除扩展到全仓。
 
 构建输入的相对路径在枚举阶段统一用`/`，用于排除规则、全局排序和hash标签；实际打开文件时才用宿主`node:path`定位。不能先按Windows反斜杠排序、最后才替换分隔符：目录前缀相同的`a/文件`与`a0.py`会因此交换顺序，使相同普通文件树产生不同指纹。目标发布平台与宿主路径是两个独立维度；逻辑路径归一保留Linux/macOS既有排序规则，旧Windows构建缓存可能需要重新构建，不保留第二套摘要算法。

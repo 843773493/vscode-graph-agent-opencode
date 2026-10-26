@@ -16,5 +16,8 @@
   "scripts": {
     "test": "bun test src"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@lickle/lock": "0.0.1"
+  }
 }

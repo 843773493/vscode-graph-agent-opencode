@@ -153,7 +153,7 @@ export async function main(args) {
     { acquireLauncherLock },
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
-    { loadRuntimeLogContract, createRuntimeLogger },
+    { loadRuntimeLogContract, createRuntimeLogger, registerRuntimeLogSink },
     { runtimeLoggingControl },
   ] = await Promise.all([
     import("./instance-lock.mjs"),
@@ -174,7 +174,8 @@ export async function main(args) {
     if (resolveServiceLogPath(boxteamHome, logEnvironment, logContract) === resolveServiceLogPath(boxteamHome, logEnvironment, logContract, "gateway")) {
       throw new Error("Launcher 显式日志路径不能占用 Gateway 日志文件");
     }
-    serviceLog = openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment });
+    serviceLog = await openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment });
+    registerRuntimeLogSink(serviceLog.sink, serviceLog.descriptors);
     const launcherLogger = createRuntimeLogger("launcher", "launcher", serviceLog.stderr, logContract);
     if (environment.BOXTEAM_SERVICE_LOG_PATH?.trim()) {
       environment.BOXTEAM_SERVICE_LOG_PATH = serviceLog.path;
@@ -190,7 +191,7 @@ export async function main(args) {
     if (bootstrap.output) {
       launcherLogger.info(`配置: ${bootstrap.output}`);
     }
-    gatewayLog = openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment, role: "gateway" });
+    gatewayLog = await openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment, role: "gateway" });
     const exitCode = await superviseGateway({
       runtime,
       environment: bootstrap.environment,

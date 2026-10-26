@@ -102,6 +102,8 @@ def verify_runtime_logging_controls(
         assert "invalid runtime control token" in str(_launcher_control(home, {"action": "status", "token": invalid})["error"])
     before = _launcher_control(home, {"action": "status", "token": token})
     assert before["service"] == "launcher" and before["pid"] == launcher_pid
+    assert before["log_sink"]["path"] == str(contract.path_for(log_root, "launcher"))
+    assert before["log_sink"]["role"] == "launcher"
     payload = {"runtime_instance_id": before["runtime_instance_id"], "expected_revision": None,
                    "revision": "control-launcher-debug", "level": "debug", "pretty": False}
     debug = _launcher_control(home, {"action": "apply", "token": token, "payload": payload})

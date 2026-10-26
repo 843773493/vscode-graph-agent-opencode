@@ -22,6 +22,8 @@ src/
 
 `cli.mjs`先解析命令再动态加载对应职责模块；`--version`只读取版本来源，不加载runtime discovery或服务生命周期实现。
 
+日志打开与 `spawnDetachedProcess` 均为异步入口，调用方必须 await 文件锁和句柄交付；detached 将冻结 sink 与实际 stdout/stderr 一并交付，Gateway 管道不继承 Launcher 的文件证明。原生文件锁依赖由 Launcher 包声明，不能依赖源码根目录的 node_modules。
+
 Gateway相关实现与测试集中在[Gateway生命周期](gateway/AGENTS.md)：
 
 ```text

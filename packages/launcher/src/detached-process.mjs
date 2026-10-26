@@ -1,10 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync } from "node:fs";
-import { openServiceLogDescriptor } from "./logging/service-log.mjs";
+import { openServiceLogFile, SERVICE_LOG_CAPTURED_ENV } from "./logging/service-log.mjs";
 
 const DETACHED_TERMINATION_TIMEOUT_MS = 5_000;
 
-export function spawnDetachedProcess({
+export async function spawnDetachedProcess({
   command,
   args,
   cwd,
@@ -12,22 +11,22 @@ export function spawnDetachedProcess({
   logPath,
   contract,
 }) {
-  const logDescriptor = openServiceLogDescriptor(logPath, contract);
+  const file = await openServiceLogFile(logPath, contract, { source: "detached" });
   let child;
   const failures = [];
   try {
     child = spawn(command, args, {
       cwd,
-      env: environment,
+      env: { ...environment, [SERVICE_LOG_CAPTURED_ENV]: "1", BOXTEAM_RUNTIME_LOG_SINK: JSON.stringify(file.sink) },
       detached: true,
-      stdio: ["ignore", logDescriptor, logDescriptor],
+      stdio: ["ignore", file.descriptor, file.descriptor],
       windowsHide: true,
     });
   } catch (error) {
     failures.push(error);
   }
   try {
-    closeSync(logDescriptor);
+    file.close();
   } catch (error) {
     failures.push(error);
   }

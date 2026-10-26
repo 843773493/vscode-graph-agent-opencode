@@ -10,6 +10,8 @@ function observeTermination(scenario) {
     import childProcess from "node:child_process";
     import { syncBuiltinESMExports } from "node:module";
     const [moduleUrl, scenario] = JSON.parse(process.argv[1]);
+    // 原生库按真实宿主加载；仅终止请求的系统边界模拟 Windows。
+    const { terminateDetachedProcess } = await import(moduleUrl);
     Object.defineProperty(process, "platform", { value: "win32" });
     const pid = scenario === "invalid" ? 0 : 32109;
     const launchError = Object.assign(new Error("taskkill启动失败"), { code: "ENOENT" });
@@ -36,7 +38,6 @@ function observeTermination(scenario) {
       return { status: 5, stderr: "Access is denied" };
     };
     syncBuiltinESMExports();
-    const { terminateDetachedProcess } = await import(moduleUrl);
     let observation;
     try {
       terminateDetachedProcess(pid);

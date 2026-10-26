@@ -144,6 +144,19 @@ class ProcessLogFile(io.TextIOWrapper):
 
 def _previous_writer_is_alive(payload: dict[str, object]) -> bool:
     phase = payload.get("phase")
+    if phase == "stream":
+        path = Path(str(payload["path"]))
+        identity = path.stat()
+        if (str(identity.st_dev), str(identity.st_ino)) != (payload.get("device"), payload.get("inode")):
+            raise RuntimeError("原日志文件身份已变化，拒绝轮转")
+        if sys.platform == "win32":
+            return _windows_log_has_open_handles(path)
+        with path.open("r+b") as probe:
+            try:
+                portalocker.lock(probe, portalocker.LOCK_EX | portalocker.LOCK_NB)
+            except portalocker.exceptions.LockException:
+                return True
+        return False
     if phase == "spawning":
         raise RuntimeError("日志交付曾中断，无法证明子进程是否仍持有描述符；拒绝轮转")
     pid = payload.get("pid")
@@ -167,12 +180,18 @@ def _previous_writer_is_alive(payload: dict[str, object]) -> bool:
         raise RuntimeError("日志所有权阶段非法")
     if not alive and sys.platform == "win32":
         # Windows 根退出不代表后代排空；独占打开可核实是否仍有继承句柄。
+        return _windows_log_has_open_handles(Path(str(payload["path"])))
+    return True
+
+
+def _windows_log_has_open_handles(path: Path) -> bool:
+    if sys.platform == "win32":
         import pywintypes
         import win32file
 
         try:
             handle = win32file.CreateFile(
-                str(payload["path"]), win32file.GENERIC_WRITE, 0, None,
+                str(path), win32file.GENERIC_WRITE, 0, None,
                 win32file.OPEN_EXISTING, 0, None,
             )
         except pywintypes.error as error:
@@ -181,7 +200,7 @@ def _previous_writer_is_alive(payload: dict[str, object]) -> bool:
             raise
         handle.Close()
         return False
-    return True
+    raise RuntimeError("Windows 文件共享证明只能在目标平台执行")
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,7 +29,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
   const { loadRuntimeLogContract } = await import(loggingUrl);
   const contract = loadRuntimeLogContract();
   const logPath = path.join(fixtureRoot, "中文 日志.log");
-  const originals = Object.fromEntries(["openSync", "chmodSync", "closeSync", "writeSync"].map((key) => [key, fs[key]]));
+  const originals = Object.fromEntries(["openSync", "chmodSync", "closeSync", "writeSync", "writeFileSync", "unlinkSync"].map((key) => [key, fs[key]]));
   const originalSpawn = childProcess.spawn;
   const originalSpawnSync = childProcess.spawnSync;
   const originalKill = process.kill;
@@ -40,28 +40,45 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
   const writeError = new Error("injected write failure");
   const spawnError = new Error("injected spawn failure");
   const terminationError = new Error("injected termination failure");
+  const guardCloseError = new Error("injected guard close failure");
+  const recordWriteError = new Error("injected ownership write failure");
+  const recordCloseError = new Error("injected ownership close failure");
+  const recordRemoveError = new Error("injected ownership remove failure");
   const child = scenario === "spawn-close-no-pid" ? {} : { pid: 32109 };
   const events = [];
   let terminationCalls = 0;
   const primaryWrites = [];
   let descriptor, closeCalls = 0, fileWrites = 0, spawnCalls = 0;
+  let guardDescriptor, recordDescriptor, recordPath;
+  let guardCloseCalls = 0, recordCloseCalls = 0, recordRemoveCalls = 0;
   let serviceLog;
   try {
     fs.openSync = (file, ...args) => {
       const result = originals.openSync(file, ...args);
-      if (file === logPath) descriptor = result;
+      if (file === logPath && descriptor === undefined) descriptor = result;
+      if (file === `${logPath}.owner.lock`) guardDescriptor = result;
+      if (typeof file === "string" && file.startsWith(`${logPath}.owner.json.`) && file.endsWith(".tmp")) {
+        recordDescriptor = result;
+        recordPath = file;
+      }
       return result;
     };
     fs.chmodSync = (file, ...args) => {
-      if (file === logPath && ["open-single", "open-dual", "detached-single", "detached-dual"].includes(scenario)) throw permissionError;
+      if (file === logPath && ["open-single", "open-dual", "detached-single", "detached-dual", "guard-open-dual"].includes(scenario)) throw permissionError;
       return originals.chmodSync(file, ...args);
     };
     fs.closeSync = (file) => {
       originals.closeSync(file);
-      if (file === descriptor) {
+      if (file === guardDescriptor) {
+        guardCloseCalls += 1;
+        if (scenario.startsWith("guard-")) throw guardCloseError;
+      } else if (file === recordDescriptor) {
+        recordCloseCalls += 1;
+        if (["record-close", "record-write-close-remove"].includes(scenario)) throw recordCloseError;
+      } else if (file === descriptor) {
         closeCalls += 1;
         events.push("close");
-        if (scenario.endsWith("-dual") || scenario.startsWith("spawn-close")) throw closeError;
+        if (["open-dual", "detached-dual", "spawn-dual", "guard-close-dual"].includes(scenario) || scenario.startsWith("spawn-close")) throw closeError;
       }
     };
     fs.writeSync = (file, buffer, offset, length, position) => {
@@ -72,13 +89,30 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
       const available = length ?? buffer.byteLength - start;
       return originals.writeSync(file, buffer, start, Math.min(available, 2), position);
     };
+    fs.writeFileSync = (file, ...args) => {
+      if (file === recordDescriptor && scenario.startsWith("record-write")) throw recordWriteError;
+      return originals.writeFileSync(file, ...args);
+    };
+    fs.unlinkSync = (file) => {
+      if (file === recordPath) {
+        recordRemoveCalls += 1;
+        if (scenario === "record-write-close-remove") throw recordRemoveError;
+      }
+      return originals.unlinkSync(file);
+    };
     // 只执行真实描述符IO；创建及终止边界为替身，不启动后台进程。
     childProcess.spawn = (command, args, options) => {
       spawnCalls += 1;
       events.push("spawn");
       assert.equal(command, process.execPath);
       assert.deepEqual(args, []);
-      assert.deepEqual(options, { cwd: fixtureRoot, env: {}, detached: true,
+      const sink = JSON.parse(options.env.BOXTEAM_RUNTIME_LOG_SINK);
+      assert.equal(sink.path, logPath);
+      assert.equal(sink.role, "launcher");
+      assert.equal(options.env.BOXTEAM_SERVICE_LOG_CAPTURED, "1");
+      assert.deepEqual(options, { cwd: fixtureRoot, env: {
+        BOXTEAM_RUNTIME_LOG_SINK: JSON.stringify(sink), BOXTEAM_SERVICE_LOG_CAPTURED: "1",
+      }, detached: true,
         stdio: ["ignore", descriptor, descriptor], windowsHide: true });
       if (["spawn-single", "spawn-dual"].includes(scenario)) throw spawnError;
       assert(scenario.startsWith("spawn-"), "初始化失败不能继续创建进程");
@@ -110,10 +144,48 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
       stdout: { write(value) { primaryWrites.push(value); return false; } },
       stderr: { write(value) { primaryWrites.push(value); return true; } },
     });
-    if (scenario.startsWith("spawn-")) {
+    if (scenario.startsWith("guard-") || scenario.startsWith("record-")) {
+      let observedError;
+      try { serviceLog = await open(); }
+      catch (error) { observedError = error; }
+      assert.equal(serviceLog, undefined, "清理失败不能交付未完成的文件 owner");
+      const expected = {
+        "guard-close": [guardCloseError],
+        "guard-close-dual": [guardCloseError, closeError],
+        "guard-open-dual": [permissionError, guardCloseError],
+        "record-write": [recordWriteError],
+        "record-close": [recordCloseError],
+        "record-write-close-remove": [recordWriteError, recordCloseError, recordRemoveError],
+      }[scenario];
+      if (expected.length === 1) assert.equal(observedError, expected[0]);
+      else {
+        assert(observedError instanceof AggregateError);
+        assert.deepEqual(observedError.errors, expected);
+        assert.equal(observedError.cause, expected[0]);
+      }
+      assert.equal(closeCalls, 1);
+      assert.equal(guardCloseCalls, 1);
+      assert.equal(spawnCalls, 0);
+      assert.throws(() => fs.fstatSync(descriptor), { code: "EBADF" });
+      assert.throws(() => fs.fstatSync(guardDescriptor), { code: "EBADF" });
+      if (scenario.startsWith("record-")) {
+        assert.equal(recordCloseCalls, 1);
+        assert.equal(recordRemoveCalls, 1);
+        assert.throws(() => fs.fstatSync(recordDescriptor), { code: "EBADF" });
+        assert.equal(fs.existsSync(`${logPath}.owner.json`), false, "失败的归属正文不能发布");
+        assert.equal(fs.existsSync(recordPath), scenario === "record-write-close-remove");
+      } else if (scenario !== "guard-open-dual") {
+        // guard 失败已释放本次句柄，后续 owner 应能重新取得同一路径。
+        for (const [key, value] of Object.entries(originals)) fs[key] = value;
+        childProcess.spawnSync = originalSpawnSync;
+        syncBuiltinESMExports();
+        const reopened = await open();
+        reopened.close();
+      }
+    } else if (scenario.startsWith("spawn-")) {
       let returnedChild, observedError;
       try {
-        returnedChild = spawnDetachedProcess({ contract, command: process.execPath, args: [],
+        returnedChild = await spawnDetachedProcess({ contract, command: process.execPath, args: [],
           cwd: fixtureRoot, environment: {}, logPath });
       } catch (error) { observedError = error; }
       assert.equal(spawnCalls, 1);
@@ -146,8 +218,8 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
       let observedError;
       try {
         if (scenario.startsWith("detached-")) {
-          spawnDetachedProcess({ contract, command: process.execPath, args: [], cwd: fixtureRoot, environment: {}, logPath });
-        } else { serviceLog = open(); }
+          await spawnDetachedProcess({ contract, command: process.execPath, args: [], cwd: fixtureRoot, environment: {}, logPath });
+        } else { serviceLog = await open(); }
       } catch (error) { observedError = error; }
       if (scenario.endsWith("-dual")) {
         assert(observedError instanceof AggregateError, "初始化和清理失败都必须保留");
@@ -158,7 +230,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
       assert.equal(closeCalls, 1);
       assert.throws(() => fs.fstatSync(descriptor), { code: "EBADF" });
     } else {
-      serviceLog = open();
+      serviceLog = await open();
       if (scenario === "write-failure") {
         assert.throws(() => serviceLog.stdout.write("未落盘的日志"), (error) => error === writeError);
         assert.deepEqual(primaryWrites, []);
@@ -207,8 +279,10 @@ function runServiceLogIo(scenario, platform = process.platform) {
     platform,
   ])}\n`, { flag: "wx" });
   const args = [observerPath, inputPath];
+  // 场景文件均使用绝对路径；避免 Windows CreateProcess 因深层 cwd 而拒绝启动观察器。
+  const observerCwd = process.cwd();
   const result = spawnSync("node", args, {
-    cwd: fixtureRoot, timeout: 5000,
+    cwd: observerCwd, timeout: 5000,
     env: { ...process.env, BOXTEAM_PROJECT_ROOT: process.cwd() },
   });
   const stdout = result.stdout ?? Buffer.alloc(0);
@@ -216,7 +290,7 @@ function runServiceLogIo(scenario, platform = process.platform) {
   writeFileSync(path.join(artifactsRoot, "stdout.raw"), stdout, { flag: "wx" });
   writeFileSync(path.join(artifactsRoot, "stderr.raw"), stderr, { flag: "wx" });
   writeFileSync(path.join(artifactsRoot, "result.json"), `${JSON.stringify({
-    command: ["node", ...args], cwd: fixtureRoot, timeout_ms: 5000,
+    command: ["node", ...args], cwd: observerCwd, timeout_ms: 5000,
     status: result.status, signal: result.signal,
     error: result.error ? { name: result.error.name, message: result.error.message, code: result.error.code ?? null } : null,
   }, null, 2)}\n`, { flag: "wx" });
@@ -237,6 +311,16 @@ describe("Launcher服务日志文件IO与失败归属", () => {
   }
   test("短写仍完整保存两路UTF8日志并保留前台返回值", () => runServiceLogIo("partial-writes"));
   test("磁盘写入失败保留原异常且不伪造前台输出", () => runServiceLogIo("write-failure"));
+  for (const [scenario, description] of [
+    ["guard-close", "所有权锁关闭失败时释放未交付的日志句柄"],
+    ["guard-close-dual", "所有权锁与日志关闭失败保留两份原异常"],
+    ["record-write", "归属正文写入失败时不发布且释放全部句柄"],
+    ["record-close", "归属记录关闭失败时不发布且清理临时文件"],
+    ["record-write-close-remove", "归属写入关闭和清理失败保留原异常顺序"],
+  ]) {
+    test(description, () => runServiceLogIo(scenario));
+  }
+  test.skipIf(process.platform === "win32")("初始化和所有权锁关闭失败保留原异常顺序", () => runServiceLogIo("guard-open-dual"));
 });
 
 describe("detached创建与日志描述符交付", () => {

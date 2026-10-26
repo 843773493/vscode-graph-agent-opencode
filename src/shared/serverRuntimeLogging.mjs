@@ -7,7 +7,18 @@ const contracts = new Map();
 const runtimeInstanceId = randomUUID();
 let settings = null;
 let appliedRevision = null;
-const logSink = readRuntimeLogSink();
+let logSink = readRuntimeLogSink();
+let logDescriptors = [1, 2];
+
+export function registerRuntimeLogSink(sink, descriptors) {
+  if (!Array.isArray(descriptors) || descriptors.length === 0 || descriptors.some((value) => !Number.isInteger(value) || value < 0)) {
+    throw new TypeError("产品日志去向缺少实际描述符");
+  }
+  const frozen = Object.freeze({ ...sink });
+  verifiedRuntimeLogSink(frozen, descriptors);
+  logSink = frozen;
+  logDescriptors = [...descriptors];
+}
 
 function readRuntimeLogSink() {
   if (process.env.BOXTEAM_RUNTIME_LOG_SINK === undefined) return null;
@@ -20,14 +31,14 @@ function readRuntimeLogSink() {
   return Object.freeze(sink);
 }
 
-function verifiedRuntimeLogSink() {
-  if (logSink === null) return null;
-  // bigint 避免 inode 在 JSON 数字中丢失精度；始终核验两个实际输出描述符。
-  const identities = [fstatSync(1, { bigint: true }), fstatSync(2, { bigint: true }), statSync(logSink.path, { bigint: true })];
-  if (identities.some((identity) => String(identity.dev) !== logSink.device || String(identity.ino) !== logSink.inode)) {
+function verifiedRuntimeLogSink(sink = logSink, descriptors = logDescriptors) {
+  if (sink === null) return null;
+  // bigint 避免 inode 丢失精度；核验实际持有的文件或继承的 stdout/stderr。
+  const identities = [...descriptors.map((descriptor) => fstatSync(descriptor, { bigint: true })), statSync(sink.path, { bigint: true })];
+  if (identities.some((identity) => String(identity.dev) !== sink.device || String(identity.ino) !== sink.inode)) {
     throw new Error("受管进程实际日志描述符与冻结去向不一致");
   }
-  return { ...logSink };
+  return { ...sink };
 }
 
 export class RuntimeLoggingConflictError extends Error {

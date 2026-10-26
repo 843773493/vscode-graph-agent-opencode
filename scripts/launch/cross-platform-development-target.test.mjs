@@ -1145,7 +1145,6 @@ describe("平台 adapter 边界", () => {
     expect(script).toContain("开发服务端口已被占用");
     expect(script).toContain("bun install --force --frozen-lockfile");
     expect(script).toContain("BOXTEAM_SERVICE_LOG_PATH");
-    expect(script).toContain("BOXTEAM_SERVICE_LOG_CAPTURED");
   });
 
   test("Linux adapter 快速暴露冲突并按环境版本重建目标 .venv", () => {
@@ -1162,7 +1161,6 @@ describe("平台 adapter 边界", () => {
     expect(script).toContain('rm -rf -- "$repository/.venv"');
     expect(script).toContain("bun install --force --frozen-lockfile");
     expect(script).toContain('BOXTEAM_SERVICE_LOG_PATH="$log_file"');
-    expect(script).toContain("BOXTEAM_SERVICE_LOG_CAPTURED=1");
     expect(script).toContain("$target_home/.boxteams-dev");
     expect(script).toContain("$target_home/.boxteams");
     expect(script).not.toContain('kill "$(cat');

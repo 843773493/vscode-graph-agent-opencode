@@ -119,8 +119,11 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
     runtime.distribution === "source-development"
       ? baseEnvironment.BOXTEAM_DEFAULT_BACKEND_PORT?.trim()
       : String(RELEASE_DEFAULT_BACKEND_PORT);
+  const environment = { ...baseEnvironment };
+  // Gateway 输出经 Launcher 的管道转存，不继承 Launcher 文件描述符的证明。
+  delete environment.BOXTEAM_RUNTIME_LOG_SINK;
   return {
-    ...baseEnvironment,
+    ...environment,
     BOXTEAM_DISTRIBUTION: runtime.distribution,
     BOXTEAM_RUNTIME_MANIFEST: runtime.manifestPath,
     BOXTEAM_PROJECT_ROOT: runtime.applicationRoot,

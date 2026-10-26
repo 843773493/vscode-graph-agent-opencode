@@ -10,7 +10,7 @@
 - [ ] 2.1 统一 Python 应用日志字段、等级与格式，将 Backend、Gateway、Uvicorn 接入唯一 handler 路径，消除重复传播和启动时按工作区比较 logger 的逻辑。
 - [x] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
 - [x] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
-- [ ] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
+- [x] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
 - [ ] 2.5 在现有 runtime/config 诊断中展示进程身份、owner、绝对日志路径、来源、applied revision 和实际日志设置；stdout-only 入口明确标记。
 
 ## 3. 进程级热应用
@@ -78,3 +78,12 @@
 - 最终定向 `ownership-python-final-085` 256通过；`ownership-js-078` 193通过；`ownership-real-launcher-final-086` 4通过，覆盖真实 Launcher 交接、受管 Backend／Terminal／Browser 的 PID、实例、revision 和文件身份保持，以及托管终端真实产品入口。原始输出、命令、源码指纹与进程外保护记录仍在既有临时证据根。
 - 扩大的 `ownership-python-077` 为323通过／5失败；完整 HEAD 归档 `ownership-baseline-079` 在相同5项断言复现失败，均为既有测试捕获 httpx INFO 后断言日志全空。本切片不改写这些预期。`ownership-static-final-082` Ruff通过；`ownership-static-comparison-087.json` 核Pyright基线30条／当前8条，无新增；剩余8条不宣称全绿。
 - 2.4仍未勾选：Launcher／detached 自身文件 sink 的同路径互斥与归属尚需迁齐。Windows 原生独占打开分支尚未实机验证；未修改Web页面，不新增Web构建。本切片不代表完整2.5诊断、配置跨域迁移或候选自动热应用完成，当前仍为5／22。
+
+### 2.4 Launcher／detached 日志归属完成（2026-10-26）
+
+- Launcher 前台、Gateway 文件与 detached 交付统一 await `openServiceLogFile`，旧描述符入口及全部调用方已迁齐。稳定 guard 内发布冻结文件身份；Unix 原生 flock 随实际输出描述符保留，Windows 使用原生共享句柄探测。活动写入者、存活后代及外部替换不能触发重开或轮转；只有捕获标记不能接管日志。
+- 使用 Launcher 正式依赖 `@lickle/lock`，不依赖源码根 node_modules。最初候选 `fs-native-extensions` 在 Bun 原生调用崩溃，已移除；`launcher-dependencies-100` 验证 staged Launcher 自行解析并运行 Linux 原生锁，Windows 目标包也正确带入。便携版仅移除 Launcher 顶层 runtime 可选依赖，安装生产依赖时保留锁的 Windows 原生包。
+- 所有权锁释放失败仍关闭未交付日志句柄；归属写入、关闭与临时文件清理失败按顺序保留原异常，失败正文不发布。`launcher-ownership-failures-final-123` 43通过；最终相关完整 JS `launcher-ownership-all-js-final-132` 263通过／1平台跳过；真实 Launcher／Gateway 交接 `launcher-handoff-real-final-133` 2通过。
+- 真实 Windows `hyf-win` 最终 `launcher-windows-native-final-131` 12通过／1 POSIX 场景跳过，覆盖原生互斥、detached 分流、根退出后的继承句柄、关闭后重开、篡改证明及写入／清理故障。仅在隔离临时树执行，未重启目标已有服务。125在观察器启动阶段因深层 cwd 报 ENOENT，130暴露重开检查未恢复进程命令边界；已修正测试接线，未放宽业务断言。126另有固定端口 EADDRINUSE，结束并行网络操作后的132全组通过；原始失败记录保留，不宣称已证明具体端口占用来源。
+- Python 定向 `launcher-ownership-python-096` 256通过；修改 Python 的 Ruff102及单文件 Pyright110通过；扩大类型检查115仍有8条既存错误，118对比无新增。098中一项托管终端启动报 BadStatusLine，104单独通过；保留现场与原始输出，未确认根因。116／117因中断没有完整结果，不计为通过。
+- 证据仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`，正式测试现场按各测试路径留存；候选锁库的临时下载源码已删除，版本记录和失败证据保留。当前6／22；配置跨域迁移、2.5完整诊断和候选自动热应用尚未完成。Windows installed 全产品启动、完整热更新及 macOS 原生验收仍未验证，相关原生终止性能 TODO 保留；未修改 Web，不新增 Web 构建。

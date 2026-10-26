@@ -359,6 +359,12 @@ function stageStandalonePackage(nodeArchive) {
     nodeRuntime: NODE_RUNTIME_WINDOWS_X64,
   });
   cpSync(launcherPackageRoot, launcherRoot, { recursive: true });
+  // 便携版已有内置 runtime，仅安装 Launcher 依赖及其 Windows 原生预构建。
+  const launcherManifestPath = path.join(launcherRoot, "package.json");
+  const launcherManifest = JSON.parse(readFileSync(launcherManifestPath, "utf8"));
+  delete launcherManifest.optionalDependencies;
+  writeFileSync(launcherManifestPath, `${JSON.stringify(launcherManifest, null, 2)}\n`);
+  run("bun", ["install", "--production", "--ignore-scripts", "--os", "win32", "--cpu", "x64"], { cwd: launcherRoot });
   const windowsLauncher = buildWindowsLauncher();
   cpSync(windowsLauncher, path.join(packageRoot, "BoxTeam.exe"));
   cpSync(windowsLauncher, path.join(packageRoot, "BoxTeamDoctor.exe"));

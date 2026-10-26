@@ -200,10 +200,9 @@ function Invoke-TargetAction([string[]]$Arguments) {
             } else {
                 $env:BOXTEAM_HOME = $BoxTeamHome
                 $env:BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace
-                # TODO: 在真实 Windows VMware 目标验证 Launcher 被外层重定向时不会重复写入日志。
+                # TODO: 在真实 Windows VMware 目标验证 installed 启动与外层控制输出分流。
                 $env:BOXTEAM_SERVICE_LOG_PATH = $Log
-                $env:BOXTEAM_SERVICE_LOG_CAPTURED = "1"
-                Start-Process -FilePath "boxteam.cmd" -ArgumentList @("start", "--no-open") -RedirectStandardOutput $Log -RedirectStandardError "$Log.stderr" -WindowStyle Hidden
+                Start-Process -FilePath "boxteam.cmd" -ArgumentList @("start", "--no-open") -RedirectStandardOutput "$Log.launcher.stdout" -RedirectStandardError "$Log.launcher.stderr" -WindowStyle Hidden
             }
             Write-Output (@{ profile = $Profile; boxteam_home = $BoxTeamHome; workspace = $Workspace } | ConvertTo-Json -Compress)
         }
