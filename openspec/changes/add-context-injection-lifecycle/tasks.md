@@ -446,3 +446,9 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - `mode-recovery-product-fixed-027` 为1 passed／105.88秒；随后仅暂存本边界并完整 git archive 隔离其它会话改动，正式 `integration-skill-mode-recovery` 为1 passed／116.18秒，`integration-context-source-epoch-copy` 为3 passed／14.59秒。既有 grouping 正式套件另为3 passed／85.40秒；结合9.6—9.8的具名封装、替代、模式失败回滚／幂等证据，关闭9.13组合门，9.2／9.9—9.12／9.14／9.16和团队／协作TODO保持未完成。
 - 扩大回归 `rewind-header-regression-030` 为77 passed、1 failed、3 setup errors；其中冷恢复夹具强制 tracked 的失败在完整 HEAD 原件同处复现，修正夹具只重绑 descriptor 并沿用持久追踪态，未放宽业务断言。修正后的该项、Turn before及header错配共3 passed／12.86秒；3项fork setup缺正式runner的问题已由上列正式epoch-copy套件覆盖。较早定向52 passed／61.44秒与上述用例有交集，不累加统计。
 - 9文件Ruff／compileall通过；8文件Pyright基线与当前均90项、无新增，新产品集成测试Pyright零错误；OpenSpec strict有效。准确命令、前后指纹、raw、退出码和失败原件见`out/tests/temp/csm-kind-boundary/artifacts/`的025—040具名收据；两份完整源码分别逐blob核验后清理，正式测试输出保留。无Web产品源码变更，未运行Web构建、外部Provider或Windows，不代替其它总验收。
+
+
+### 2026-10-26 Gateway 来源对账顺序（9.10 前置子项）
+
+- 同一 Gateway owner 的条件请求、正文／身份验证、accepted snapshot、ETag 与错误发布进入同一串行区间，较早响应或认证失败不能在较新结果之后回写；不同 owner 继续独立并行。事件／轮询／手动策略与发布通知尚未完成，9.9／9.10／9.14保持未勾。
+- 新并发测试覆盖旧正文和旧401两条迟到路径，并核对下一请求ETag；同文件既有身份、304、冷启动总期限、双owner并发／失败隔离与关闭回归共68 passed／15.45秒。Ruff、compileall通过，2文件Pyright基线／当前均零错误。准确命令、源码指纹、raw及退出码见`out/tests/temp/csm-kind-boundary/artifacts/`的042—045收据；该切片未改HTTP合同或配置，不代替真实Gateway／Web或来源策略总验收。

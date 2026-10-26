@@ -144,6 +144,59 @@ async def test_authentication_failure_blocks_retained_revision_until_authenticat
     channel.unsubscribe(subscription)
 
 
+@pytest.mark.parametrize("first_status", [200, 401])
+async def test_same_owner_reconcile_cannot_publish_late_snapshot_or_error_after_newer_result(
+    source_case, first_status: int,
+):
+    owner, source, skill, channel = source_case
+    original = owner.snapshot(workspace_id=source._workspace_id)
+    first_entered, second_entered, release_first = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    requests: list[httpx.Request] = []
+
+    async def reply(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        snapshot = owner.snapshot(workspace_id=source._workspace_id)
+        if len(requests) == 1:
+            first_entered.set()
+            await release_first.wait()
+            if first_status != 200:
+                return httpx.Response(first_status, json={"detail": "expired credential"})
+        else:
+            second_entered.set()
+        return httpx.Response(200, json={
+            "data": snapshot.model_dump(mode="json"), "request_id": request.headers["X-Request-ID"],
+        }, headers={"ETag": '"' + snapshot.revision + '"', "X-Request-ID": request.headers["X-Request-ID"]})
+
+    source._state(GATEWAY_ID).client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
+    subscription = channel.subscribe(label="同一 owner 的接受顺序")
+    first = asyncio.create_task(source.reconcile(gateway_id=GATEWAY_ID))
+    second = None
+    try:
+        await asyncio.wait_for(first_entered.wait(), 1)
+        skill.write_text("已发布的新正文\n", encoding="utf-8")
+        async with asyncio.timeout(3):
+            while owner.snapshot(workspace_id=source._workspace_id).revision == original.revision:
+                await asyncio.sleep(0.01)
+        latest = owner.snapshot(workspace_id=source._workspace_id)
+        second = asyncio.create_task(source.reconcile(gateway_id=GATEWAY_ID))
+        # HTTP 获取本身必须排队，不能等拿到陈旧正文后再串行写入。
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(second_entered.wait(), 0.02)
+        release_first.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 1)
+        assert source.snapshot(gateway_id=GATEWAY_ID) == latest
+        assert source._state(GATEWAY_ID).etag == '"' + latest.revision + '"'
+        assert source._state(GATEWAY_ID).error is None
+        assert subscription.pending()[-1].revision == latest.revision
+        assert requests[-1].headers.get("If-None-Match") == (
+            '"' + original.revision + '"' if first_status == 200 else None
+        )
+    finally:
+        release_first.set()
+        await asyncio.gather(*(task for task in (first, second) if task is not None), return_exceptions=True)
+        channel.unsubscribe(subscription)
+
+
 @pytest.mark.parametrize("failure", ["missing-header", "header-drift", "missing-body", "body-drift"])
 async def test_snapshot_200_rejects_missing_or_drifted_request_identity(
     source_case, request_identity: str, failure: str,

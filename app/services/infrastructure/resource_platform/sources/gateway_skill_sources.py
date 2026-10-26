@@ -66,6 +66,7 @@ class _GatewaySkillState:
     error: str | None = "not-ready"
     etag: str | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    reconcile_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
     client: httpx.AsyncClient | None = None
 
@@ -205,68 +206,70 @@ class GatewaySkillSources:
     ) -> None:
         """唯一接受入口；仅独立观察轮询由 Gateway 的 HTTP 入口创建请求身份。"""
         state = self._state(gateway_id)
-        try:
-            request_id = None if independent_poll else require_current_request_id("Gateway Skill source snapshot")
-            headers = {"X-Local-Token": self._local_token_supplier()}
-            if request_id is not None:
-                headers["X-Request-ID"] = request_id
-            if state.etag is not None and state.snapshot is not None:
-                headers["If-None-Match"] = state.etag
-            timeout = self._connection.resolve_timeout_seconds()
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout
-            # HTTPX 的 timeout 按网络阶段计时；首次绑定还须共享总墙钟预算。
-            async with asyncio.timeout_at(deadline if wait_for_connection else None):
-                while True:
-                    remaining = deadline - loop.time() if wait_for_connection else timeout
-                    if wait_for_connection and remaining <= 0:
-                        raise TimeoutError("Gateway Skill source 首次绑定超时")
-                    try:
-                        response = await self._client(state).get(
-                            self._connection.resolve_gateway_url()
-                            + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}",
-                            headers=headers,
-                            timeout=remaining,
-                        )
-                    except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                        # 冷启动只等连接拒绝或建立超时；DNS、网络、TLS 等错误立即失败。
-                        if not wait_for_connection or not (
-                            isinstance(error, httpx.ConnectTimeout) or _connection_refused(error)
-                        ):
-                            raise
-                        await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
-                        continue
-                    break
-            if response.status_code != 304:
-                response.raise_for_status()
-            response_request_id = response.headers.get("X-Request-ID")
-            if not response_request_id or not response_request_id.strip() or (
-                request_id is not None and response_request_id != request_id
-            ):
-                raise ValueError("Gateway Skill source 响应头 request_id 无效或与创建请求不一致")
-            if response.status_code == 304:
-                if response.content:
-                    raise ValueError("Gateway Skill source 304 响应正文必须为空")
-                if state.snapshot is None:
-                    raise ValueError("Gateway Skill source 304 缺少 accepted revision")
-                recovered = state.error is not None
-                state.error = None
-                if recovered:
-                    self._notify(state)
-                return
-            envelope = APIResponse[GatewaySkillSourcesDTO].model_validate_json(response.content)
-            if envelope.request_id != response_request_id:
-                raise ValueError("Gateway Skill source 响应正文 request_id 与响应头不一致")
-            snapshot = envelope.data
-            if envelope.code != 0 or snapshot is None:
-                raise ValueError("Gateway Skill source 缺少有效 data")
-            self._accept_snapshot(snapshot, gateway_id=gateway_id)
-            state.etag = response.headers.get("ETag")
-        except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
-            # 内部日志保留详细原因；公开观察只发布 owner 可用性，不泄漏凭据或路径。
-            state.error = type(error).__name__
-            self._notify(state)
-            logger.error("Gateway Skill source 对账失败: gateway_id=%s error=%s", gateway_id, error)
+        # 条件请求、验证、接受与错误发布属于同一次 owner 对账，迟到结果不得越过新版。
+        async with state.reconcile_lock:
+            try:
+                request_id = None if independent_poll else require_current_request_id("Gateway Skill source snapshot")
+                headers = {"X-Local-Token": self._local_token_supplier()}
+                if request_id is not None:
+                    headers["X-Request-ID"] = request_id
+                if state.etag is not None and state.snapshot is not None:
+                    headers["If-None-Match"] = state.etag
+                timeout = self._connection.resolve_timeout_seconds()
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + timeout
+                # HTTPX 的 timeout 按网络阶段计时；首次绑定还须共享总墙钟预算。
+                async with asyncio.timeout_at(deadline if wait_for_connection else None):
+                    while True:
+                        remaining = deadline - loop.time() if wait_for_connection else timeout
+                        if wait_for_connection and remaining <= 0:
+                            raise TimeoutError("Gateway Skill source 首次绑定超时")
+                        try:
+                            response = await self._client(state).get(
+                                self._connection.resolve_gateway_url()
+                                + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}",
+                                headers=headers,
+                                timeout=remaining,
+                            )
+                        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                            # 冷启动只等连接拒绝或建立超时；DNS、网络、TLS 等错误立即失败。
+                            if not wait_for_connection or not (
+                                isinstance(error, httpx.ConnectTimeout) or _connection_refused(error)
+                            ):
+                                raise
+                            await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
+                            continue
+                        break
+                if response.status_code != 304:
+                    response.raise_for_status()
+                response_request_id = response.headers.get("X-Request-ID")
+                if not response_request_id or not response_request_id.strip() or (
+                    request_id is not None and response_request_id != request_id
+                ):
+                    raise ValueError("Gateway Skill source 响应头 request_id 无效或与创建请求不一致")
+                if response.status_code == 304:
+                    if response.content:
+                        raise ValueError("Gateway Skill source 304 响应正文必须为空")
+                    if state.snapshot is None:
+                        raise ValueError("Gateway Skill source 304 缺少 accepted revision")
+                    recovered = state.error is not None
+                    state.error = None
+                    if recovered:
+                        self._notify(state)
+                    return
+                envelope = APIResponse[GatewaySkillSourcesDTO].model_validate_json(response.content)
+                if envelope.request_id != response_request_id:
+                    raise ValueError("Gateway Skill source 响应正文 request_id 与响应头不一致")
+                snapshot = envelope.data
+                if envelope.code != 0 or snapshot is None:
+                    raise ValueError("Gateway Skill source 缺少有效 data")
+                self._accept_snapshot(snapshot, gateway_id=gateway_id)
+                state.etag = response.headers.get("ETag")
+            except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
+                # 内部日志保留详细原因；公开观察只发布 owner 可用性，不泄漏凭据或路径。
+                state.error = type(error).__name__
+                self._notify(state)
+                logger.error("Gateway Skill source 对账失败: gateway_id=%s error=%s", gateway_id, error)
 
     def _accept_snapshot(self, snapshot: GatewaySkillSourcesDTO, *, gateway_id: str) -> None:
         if snapshot.gateway_id != gateway_id or snapshot.workspace_id != self._workspace_id:
