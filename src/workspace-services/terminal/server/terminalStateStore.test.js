@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -123,13 +124,13 @@ for (const mode of ["directory", "parse", "schema", "workspace", "records"]) {
       payload[mode === "schema" ? "schema_version" : mode === "workspace" ? "workspace_id" : "terminals"] = store.stateFile;
       await writeFile(store.stateFile, JSON.stringify(payload));
     }
-    const logged = t.mock.method(console, "error", () => undefined);
+    const logged = t.mock.method(process.stderr, "write", () => undefined);
     await assert.rejects(store.readRecords(), (error) => {
       const stage = mode === "directory" ? "正文读取" : mode === "parse" ? "正文解析" : "记录核验";
       assert.equal(error.message, `读取终端状态失败: workspace_id=${store.workspaceId}, artifact=terminal_records, stage=${stage}, code=${error.code}`);
       assert(!error.message.includes(store.stateFile));
       assert.equal(error.code, mode === "directory" ? "EISDIR" : "terminal_records_read_failed");
-      assert(logged.mock.calls.some(({ arguments: args }) => args.at(-1) === error.cause && args[1].filePath === store.stateFile));
+      assert(logged.mock.calls.some(({ arguments: args }) => args[0].includes(inspect(error.cause)) && args[0].includes(inspect(store.stateFile))));
       return true;
     });
     if (mode === "directory") await rm(store.stateFile, { recursive: true });

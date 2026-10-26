@@ -1,6 +1,10 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import path from "node:path";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+
+const logger = createRuntimeLogger("browser", "browser.browserStateStore");
 
 /**
  * 文件保存成功后形成的下载记录，不含真实路径或可直接请求的下载URI。
@@ -100,7 +104,7 @@ export class BrowserStateStore {
           "browser_checkpoint_workspace_quota_exceeded",
           "browser_checkpoint_index_changed_externally",
         ].includes(error?.code)) throw error;
-        console.error("[browser-state-store] 读取浏览器检查点失败", { browserId, filePath, stage }, error);
+        logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 读取浏览器检查点失败", { browserId, filePath, stage }, error);
         const wrapped = new Error(
           `读取浏览器检查点失败: browser_id=${browserId}, stage=${stage}, code=${error?.code || "browser_checkpoint_read_failed"}`,
           { cause: error },
@@ -169,7 +173,7 @@ export class BrowserStateStore {
             cause = new AggregateError([error, cleanupError], "检查点写入失败且临时文件清理失败");
           }
         }
-        console.error("[browser-state-store] 写入浏览器检查点失败", { browserId, filePath, stage }, cause);
+        logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 写入浏览器检查点失败", { browserId, filePath, stage }, cause);
         const wrapped = new Error(
           `写入浏览器检查点失败: browser_id=${browserId}, stage=${stage}, code=${error?.code || "browser_checkpoint_write_failed"}`,
           { cause },
@@ -191,7 +195,7 @@ export class BrowserStateStore {
       try {
         await rm(filePath, { force: true });
       } catch (error) {
-        console.error("[browser-state-store] 删除浏览器检查点失败", { browserId, filePath }, error);
+        logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 删除浏览器检查点失败", { browserId, filePath }, error);
         const wrapped = new Error(
           `删除浏览器检查点失败: browser_id=${browserId}, code=${error?.code || "browser_checkpoint_delete_failed"}`,
           { cause: error },
@@ -264,7 +268,7 @@ export class BrowserStateStore {
       }
     } catch (error) {
       if (stage === "目录读取" && error?.code === "ENOENT") return sizes;
-      console.error("[browser-state-store] 核验浏览器检查点目录失败", { directory: this.checkpointDir, stage }, error);
+      logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 核验浏览器检查点目录失败", { directory: this.checkpointDir, stage }, error);
       const wrapped = new Error(
         `核验浏览器检查点目录失败: stage=${stage}, code=${error?.code || "browser_checkpoint_directory_failed"}`,
         { cause: error },
@@ -306,7 +310,7 @@ export class BrowserStateStore {
       return parsed.browsers;
     } catch (error) {
       if (stage === "正文读取" && error?.code === "ENOENT") return null;
-      console.error("[browser-state-store] 读取浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, error);
+      logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 读取浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, error);
       const wrapped = new Error(
         `读取浏览器状态失败: workspace_id=${this.workspaceId}, artifact=browser_records, stage=${stage}, code=${error?.code || "browser_records_read_failed"}`,
         { cause: error },
@@ -353,7 +357,7 @@ export class BrowserStateStore {
           cause = new AggregateError([writeError, cleanupError], "状态写入失败且临时文件清理失败", { cause: writeError });
         }
       }
-      console.error("[browser-state-store] 写入浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, cause);
+      logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 写入浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, cause);
       const wrapped = new Error(
         `写入浏览器状态失败: workspace_id=${this.workspaceId}, artifact=browser_records, stage=${stage}, code=${writeError?.code || "browser_records_write_failed"}`,
         { cause },
@@ -375,7 +379,7 @@ export class BrowserStateStore {
       stage = "正文保存";
       await writeFile(filePath, buffer);
     } catch (error) {
-      console.error("[browser-state-store] 保存浏览器截图失败", { browserId, screenshotId, filePath, stage }, error);
+      logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 保存浏览器截图失败", { browserId, screenshotId, filePath, stage }, error);
       const wrapped = new Error(
         `保存浏览器截图失败: browser_id=${browserId}, screenshot_id=${screenshotId}, stage=${stage}, code=${error?.code || "browser_screenshot_write_failed"}`,
         { cause: error },
@@ -401,7 +405,7 @@ export class BrowserStateStore {
       stage = "正文保存";
       await download.saveAs(filePath);
     } catch (error) {
-      console.error("[browser-state-store] 保存浏览器下载失败", { browserId, downloadId, filePath, stage }, error);
+      logger.withContext({ workspace_id: this.workspaceId }).error("[browser-state-store] 保存浏览器下载失败", { browserId, downloadId, filePath, stage }, error);
       const wrapped = new Error(
         `保存浏览器下载失败: browser_id=${browserId}, download_id=${downloadId}, stage=${stage}, code=${error?.code || "browser_download_write_failed"}`,
         { cause: error },

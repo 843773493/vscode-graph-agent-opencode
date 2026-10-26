@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const SUPPORTED_COMMANDS = new Set([
   "start",
@@ -152,11 +153,14 @@ export async function main(args) {
     { acquireLauncherLock },
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
+    { loadRuntimeLogContract, createRuntimeLogger },
   ] = await Promise.all([
     import("./instance-lock.mjs"),
     import("./logging/service-log.mjs"),
     import("./gateway/supervisor.mjs"),
+    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLogging.mjs")).href),
   ]);
+  const logContract = loadRuntimeLogContract(runtime.applicationRoot);
   const lock = acquireLauncherLock({
     boxteamHome,
     runtime,
@@ -165,14 +169,15 @@ export async function main(args) {
   let gatewayLog = null;
   try {
     const logEnvironment = { ...environment, BOXTEAM_PROJECT_ROOT: runtime.applicationRoot };
-    if (resolveServiceLogPath(boxteamHome, logEnvironment) === resolveServiceLogPath(boxteamHome, logEnvironment, "gateway")) {
+    if (resolveServiceLogPath(boxteamHome, logEnvironment, logContract) === resolveServiceLogPath(boxteamHome, logEnvironment, logContract, "gateway")) {
       throw new Error("Launcher 显式日志路径不能占用 Gateway 日志文件");
     }
-    serviceLog = openServiceLog({ boxteamHome, environment: logEnvironment });
+    serviceLog = openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment });
+    const launcherLogger = createRuntimeLogger("launcher", "launcher", serviceLog.stderr, logContract);
     if (environment.BOXTEAM_SERVICE_LOG_PATH?.trim()) {
       environment.BOXTEAM_SERVICE_LOG_PATH = serviceLog.path;
     }
-    serviceLog.stdout.write(`日志: ${serviceLog.path}\n`);
+    launcherLogger.info(`日志: ${serviceLog.path}`);
     const bootstrap = initializeUserConfiguration({
       runtime,
       environment: {
@@ -181,26 +186,18 @@ export async function main(args) {
       },
     });
     if (bootstrap.output) {
-      serviceLog.stdout.write(`配置: ${bootstrap.output}\n`);
+      launcherLogger.info(`配置: ${bootstrap.output}`);
     }
-    gatewayLog = openServiceLog({ boxteamHome, environment: logEnvironment, role: "gateway" });
+    gatewayLog = openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment, role: "gateway" });
     const exitCode = await superviseGateway({
       runtime,
       environment: bootstrap.environment,
       openBrowser: !effectiveArgs.includes("--no-open"),
-      stdout: serviceLog.stdout,
-      stderr: serviceLog.stderr,
       gatewayStdout: gatewayLog.stdout,
       gatewayStderr: gatewayLog.stderr,
+      logger: launcherLogger,
     });
     process.exitCode = exitCode;
-  } catch (error) {
-    serviceLog?.stderr.write(
-      `Launcher 启动失败: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }\n`,
-    );
-    throw error;
   } finally {
     try {
       try {

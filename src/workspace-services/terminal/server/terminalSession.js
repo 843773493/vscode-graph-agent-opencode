@@ -1,3 +1,5 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import {
   readProcessStat,
   terminateTerminalProcessTree,
@@ -14,6 +16,8 @@ import {
   stripCommandMarkerLines,
 } from "../shared/commandText.js";
 
+const logger = createRuntimeLogger("terminal", "terminal.terminalSession");
+
 export function nowIso() {
   return new Date().toISOString();
 }
@@ -29,14 +33,14 @@ export async function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   try {
     directoryStat = await stat(resolved);
   } catch (error) {
-    console.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
+    logger.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
     const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
       ? "终端工作目录不存在或不是目录"
       : "终端工作目录检查失败";
     throw new Error(message, { cause: error });
   }
   if (!directoryStat.isDirectory()) {
-    console.error("[terminal-session] 终端工作目录不是目录", { cwd: resolved });
+    logger.error("[terminal-session] 终端工作目录不是目录", { cwd: resolved });
     throw new Error("终端工作目录不存在或不是目录");
   }
   return resolved;
@@ -209,7 +213,7 @@ export class TerminalSession {
           commandStatus: "completed",
           reason: "command_completed",
         }).catch((error) => {
-          console.error(
+          logger.error(
             `[terminal-session] 命令完成后释放隐藏 PTY 失败: terminal_id=${this.id}`,
             error,
           );
@@ -229,7 +233,7 @@ export class TerminalSession {
           this.lastCommandCompletedAt = this.endedAt;
         }
         this.touch();
-        console.error(
+        logger.error(
           `[terminal-session] PTY 退出清理失败: terminal_id=${this.id}`,
           error,
         );
@@ -242,7 +246,7 @@ export class TerminalSession {
           timestamp: this.endedAt,
         });
         void this.manager.persist().catch((persistError) => {
-          console.error(
+          logger.error(
             `[terminal-session] PTY 退出失败状态持久化失败: terminal_id=${this.id}`,
             persistError,
           );
@@ -268,7 +272,7 @@ export class TerminalSession {
         },
       });
     } catch (error) {
-      console.error(
+      logger.error(
         `[terminal-session] 终端 PTY 启动失败: terminal_id=${this.id}`,
         { cwd: resolvedCwd ?? this.cwd, command: this.command },
         error,
@@ -315,7 +319,7 @@ export class TerminalSession {
     if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
       this.markReconciliationStatus("unknown");
       if (error) {
-        console.error(`[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
+        logger.error(`[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
       }
       this.releaseReason = error
         ? "pty_worker_error"
@@ -632,7 +636,7 @@ export class TerminalSession {
     try {
       await this.dispose();
     } catch (cleanupError) {
-      console.error(`[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
+      logger.error(`[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
       throw new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
     }
     if (stopped) {

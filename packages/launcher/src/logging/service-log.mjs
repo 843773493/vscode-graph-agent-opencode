@@ -9,12 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { loadRuntimeLogContract, runtimeLogPath, runtimeLogRoot } from "./runtime-contract.mjs";
 
 export const SERVICE_LOG_PATH_ENV = "BOXTEAM_SERVICE_LOG_PATH";
 export const SERVICE_LOG_CAPTURED_ENV = "BOXTEAM_SERVICE_LOG_CAPTURED";
 
-export function rotateServiceLog(logPath, contract = loadRuntimeLogContract()) {
+export function rotateServiceLog(logPath, contract) {
   let logStat;
   try {
     logStat = statSync(logPath);
@@ -31,15 +30,14 @@ export function rotateServiceLog(logPath, contract = loadRuntimeLogContract()) {
   renameSync(logPath, `${logPath}.1`);
 }
 
-export function resolveServiceLogPath(boxteamHome, environment = process.env, role = "launcher") {
+export function resolveServiceLogPath(boxteamHome, environment, contract, role = "launcher") {
   const configured = role === "launcher" ? environment[SERVICE_LOG_PATH_ENV]?.trim() : null;
   if (configured) return path.resolve(configured);
-  const contract = loadRuntimeLogContract(environment.BOXTEAM_PROJECT_ROOT);
-  return runtimeLogPath(runtimeLogRoot(boxteamHome, contract), role, null, contract);
+  return contract.pathFor(contract.rootFor(boxteamHome), role);
 }
 
 /** 打开并初始化日志描述符；成功后由调用方负责关闭。 */
-export function openServiceLogDescriptor(logPath, contract = loadRuntimeLogContract()) {
+export function openServiceLogDescriptor(logPath, contract) {
   mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
   rotateServiceLog(logPath, contract);
   const descriptor = openSync(logPath, "a", 0o600);
@@ -65,17 +63,18 @@ export function openServiceLogDescriptor(logPath, contract = loadRuntimeLogContr
 
 export function openServiceLog({
   boxteamHome,
+  contract,
   environment = process.env,
   role = "launcher",
   stdout = process.stdout,
   stderr = process.stderr,
 }) {
-  const logPath = resolveServiceLogPath(boxteamHome, environment, role);
+  const logPath = resolveServiceLogPath(boxteamHome, environment, contract, role);
   const captured = environment[SERVICE_LOG_CAPTURED_ENV] === "1";
   if (role === "launcher" && captured) {
     return { path: logPath, stdout, stderr, close() {} };
   }
-  const descriptor = openServiceLogDescriptor(logPath, loadRuntimeLogContract(environment.BOXTEAM_PROJECT_ROOT));
+  const descriptor = openServiceLogDescriptor(logPath, contract);
   const tee = (primary) => ({
     write(value) {
       const content = Buffer.isBuffer(value)

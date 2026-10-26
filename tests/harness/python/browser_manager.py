@@ -50,6 +50,7 @@ def start_browser_manager_processes(
         raise RuntimeError("未找到 node，无法启动浏览器管理器 e2e 进程")
 
     env = os.environ.copy()
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_BROWSER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
@@ -150,6 +151,7 @@ def start_browser_frontend_process(
     if node_bin is None:
         raise RuntimeError("未找到 node，无法启动浏览器 attach 前端")
     env = os.environ.copy()
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
     process, logs = spawn_logged_process(

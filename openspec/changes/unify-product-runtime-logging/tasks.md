@@ -1,14 +1,14 @@
 ## 1. 合同与配置迁移
 
 - [x] 1.1 全仓检索日志路径、轮转、旧 logger 配置、环境覆盖及其直接/间接消费者，核对当前 Backend 多工作区生命周期基线。
-- [ ] 1.2 建立唯一的日志布局与默认轮转合同资源及跨语言样本，明确角色文件名、实例身份、pretty/compact 字段和 raw output 边界。
+- [x] 1.2 建立唯一的日志布局与默认轮转合同资源及跨语言样本，明确角色文件名、实例身份、pretty/compact 字段和 raw output 边界。
 - [ ] 1.3 在 Gateway inline/schema/dev 配置加入 `logging.runtime.level/pretty`，分别推进两域配置版本与策略声明，保持现有来源层次。
 - [ ] 1.4 实现显式跨域迁移的预览、备份、冲突选择、原子文件替换与中断恢复，覆盖用户级、local 和明确指定的工作区；删除旧 Workspace logger 运行期读写、schema 与 accessor。
 
 ## 2. 唯一日志输出与路径归属
 
 - [ ] 2.1 统一 Python 应用日志字段、等级与格式，将 Backend、Gateway、Uvicorn 接入唯一 handler 路径，消除重复传播和启动时按工作区比较 logger 的逻辑。
-- [ ] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
+- [x] 2.2 为 Launcher、Terminal、Browser 接入共享 JS 服务端日志入口，迁齐产品 console 调用，保留第三方与 PTY 原始输出。
 - [x] 2.3 贯通 Launcher、Gateway、detached、开发及显式单服务入口的日志路径分配，迁移新实例默认根并保留显式 Launcher 路径覆盖，移除旧默认路径和重复常量。
 - [ ] 2.4 统一打开时轮转及句柄所有权，确保现有 Gateway 重启/交接复用存活子进程时不轮转活动文件、不双写、不破坏存活合同；迁齐 SSH 转发日志入口。
 - [ ] 2.5 在现有 runtime/config 诊断中展示进程身份、owner、绝对日志路径、来源、applied revision 和实际日志设置；stdout-only 入口明确标记。
@@ -50,4 +50,14 @@
 - 迁齐初次启动、存量恢复、本机手动注册、联邦管理、SSH隧道／转发与开发重启。开发单Backend入口明确stdout-only；其余业务进程继续只输出流。Launcher与Gateway分别落盘，detached不再次tee Gateway到Launcher捕获流，显式覆盖仍只作用于Launcher。
 - 证据根：`out/tests/temp/unify-product-runtime-logging/artifacts/`。最终定向Python `paths-python-final-012` 67通过，JS `paths-js-final-015` 60通过；真实启动日志查询 `paths-entry-final-014` 1通过；最终真实Launcher `paths-launcher-final-028` 2通过，核同一Gateway文件、无交接轮转、Backend单次启动、两文件分流及冲突路径在轮转前拒绝。`paths-lifecycle-010` 中106项生命周期单测和1项真实双挂载执行通过；当时发现的旧bootstrap路径导致日志查询失败，已迁齐并在014验证，不把该首次运行写为全绿。
 - `paths-routing-017` 29通过、20项fixture准备失败，均引用已删除的 `registry.runtime.resolve_backend_workspace_id`。完整HEAD归档的 `paths-restore-baseline-022` 已复现同一fixture失败，本切片不扩展修复。`static-comparison-019.json`及`static-comparison-031.json`核Ruff46条基线／46条当前、两组Pyright分别7／7及12／12，无新增；10个JS文件语法检查及18个Python文件AST解析通过，不能称全仓静态全绿。
-- 1.2仍缺实际日志记录格式及跨语言输出样本；2.4仍需完成运行实例的日志owner记录、跨Gateway存活接管的实际去向与冲突核验；2.5的进程诊断及第3节配置热应用尚未实现。当前为2／22，未声称完成日志功能、Windows原生或完整4.4／4.5验收。
+- 1.2仍缺实际日志记录格式及跨语言输出样本；2.4仍需完成运行实例的日志owner记录、跨Gateway存活接管的实际去向与冲突核验；2.5的进程诊断及第3节配置热应用尚未实现。该次切片结束时为2／22，未声称完成日志功能、Windows原生或完整4.4／4.5验收。
+
+
+### 1.2／2.2 日志记录与进程身份切片（2026-10-26）
+
+- Python 与 JS 的默认等级、格式、时间与关联字段从同一合同资源取得，真实格式器共同消费 `record-samples.json`。各进程生成独立运行实例 ID；重复配置保持身份，日志仅附真实存在的关联字段。标准 Python logging 与 Uvicorn 复用一个 handler，模块入口先于 Uvicorn 首条启动日志初始化；sink 写入失败直接保留原异常。
+- Launcher、Terminal、Browser 受管服务端诊断迁到 `src/shared/serverRuntimeLogging.mjs`。原 Launcher 私有合同 loader 已删除；文件 IO 与 detached 调用方显式接收选定 runtime 的合同。CLI 的 help／version 等用户输出、第三方流、网页 console 和 PTY 字节保持原入口。发行源码复制器同时携带共享模块与资源；测试进程装具显式传 application root，不借工作区或服务 cwd 猜根。
+- 证据根仍为 `out/tests/temp/unify-product-runtime-logging/artifacts/`：`record-python-final-047` 26通过，`record-paths-python-055` 61通过，`record-js-final-048` 100通过，`record-all-services-final-054` 为完整辅助服务 matrix（Node175／Bun383通过）。此前039的4项失败来自嵌套cause文本缩进的观察合同，053的20项失败来自遗漏下沉目录的两份console测试消费者；均迁齐后在054核验，不把首次运行写为全绿。
+- `record-launcher-final-049` 2通过，真实交接核两代Gateway的首条Uvicorn日志、不同实例身份、Backend不重复启动及日志不双写／不交接轮转。`record-node-final-050` 23通过，包含真实Terminal／Browser错误入口、原生诊断及进程装具生命周期，不是纯helper验收。
+- `record-static-comparison-051.json` 使用完整HEAD归档比较受影响Python文件：Ruff3／3、Pyright246／246，无新增；`record-static-js-final-056` 对35份实际JS文件语法检查通过。静态基线临时树已删除，原始命令、输出、指纹与退出码保留。未修改Web页面／DTO，未新增Web构建或Windows原生验收。
+- 当前为4／22。2.1尚需与1.4一并移除Workspace日志比较及accessor；独立实例身份不等于2.4所需的活动写入owner证明。配置跨域迁移、受认证的逐进程热应用、revision诊断及WARNING下真实PTY逐字节验证仍未完成。

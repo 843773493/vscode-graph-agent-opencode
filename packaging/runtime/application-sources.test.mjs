@@ -62,6 +62,7 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["configs/__pycache__/cached.pyc", Buffer.from("ignored config cache")],
     ["resources/模板目录/资源 文件.json", Buffer.from("资源 bytes")],
     ["resources/cache.pyc", Buffer.from("ignored resource bytecode")],
+    ["src/shared/serverRuntimeLogging.mjs", Buffer.from("shared logging")],
     ["src/workspace-services/terminal/server/终端 server.js", Buffer.from("terminal")],
     ["src/workspace-services/terminal/server/__pycache__/cached.pyc", Buffer.from("ignored")],
     ["src/workspace-services/terminal/protocol/终端 protocol.proto", Buffer.from("terminal protocol")],
@@ -121,6 +122,8 @@ test("staging复制后可加载终端会话模块的真实相对依赖", () => {
     writeFileSync(path.join(directory, "fixture.txt"), relative);
   }
   for (const relative of [
+    "resources/logging",
+    "src/shared",
     "src/workspace-services/terminal/server",
     "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared",

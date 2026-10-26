@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync } from "node:fs";
 import { openServiceLogDescriptor } from "./logging/service-log.mjs";
-import { loadRuntimeLogContract } from "./logging/runtime-contract.mjs";
 
 const DETACHED_TERMINATION_TIMEOUT_MS = 5_000;
 
@@ -11,8 +10,9 @@ export function spawnDetachedProcess({
   cwd,
   environment,
   logPath,
+  contract,
 }) {
-  const logDescriptor = openServiceLogDescriptor(logPath, loadRuntimeLogContract(environment?.BOXTEAM_PROJECT_ROOT));
+  const logDescriptor = openServiceLogDescriptor(logPath, contract);
   let child;
   const failures = [];
   try {

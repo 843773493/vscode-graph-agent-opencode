@@ -1,3 +1,4 @@
+import { createRuntimeLogger } from "../../../../src/shared/serverRuntimeLogging.mjs";
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
@@ -171,7 +172,7 @@ describe("gateway supervisor", () => {
   test("只转发一次关闭信号并清理监听器", () => {
     const child = fakeChild();
     const processObject = new EventEmitter();
-    const remove = installSignalForwarding(child, processObject, "linux");
+    const remove = installSignalForwarding(child, processObject, "linux", { logger: createRuntimeLogger("launcher", "test", { write() {} }) });
 
     processObject.emit("SIGINT");
     processObject.emit("SIGINT");
@@ -185,7 +186,7 @@ describe("gateway supervisor", () => {
   test("Windows SIGBREAK 转换为 Gateway 可处理的 SIGTERM", () => {
     const child = fakeChild();
     const processObject = new EventEmitter();
-    installSignalForwarding(child, processObject, "win32");
+    installSignalForwarding(child, processObject, "win32", { logger: createRuntimeLogger("launcher", "test", { write() {} }) });
 
     processObject.emit("SIGBREAK");
 
@@ -204,7 +205,7 @@ describe("gateway supervisor", () => {
         return { unref() {} };
       },
       clearTimeoutImpl() {},
-      stderr: { write: (value) => errors.push(String(value)) },
+      logger: createRuntimeLogger("launcher", "test", { write: (value) => errors.push(String(value)) }),
     });
 
     processObject.emit("SIGTERM");
@@ -262,14 +263,7 @@ describe("gateway supervisor", () => {
         status: 200,
         statusText: "OK",
       }),
-      stdout: {
-        write(value) {
-          output.push(value);
-        },
-      },
-      stderr: {
-        write() {},
-      },
+      logger: createRuntimeLogger("launcher", "test", { write: (value) => output.push(value) }),
       gatewayStdout: { write: (value) => gatewayOutput.push(value) },
       gatewayStderr: { write: (value) => gatewayOutput.push(value) },
       processObject,
@@ -306,8 +300,7 @@ describe("gateway supervisor", () => {
         healthUrls.push(url);
         return { ok: true, status: 200, statusText: "OK" };
       },
-      stdout: { write() {} },
-      stderr: { write() {} },
+      logger: createRuntimeLogger("launcher", "test", { write() {} }),
       processObject,
     });
 
@@ -354,8 +347,7 @@ describe("gateway supervisor", () => {
         children.length === 1
           ? { ok: false, status: 503, statusText: "pending failed" }
           : { ok: true, status: 200, statusText: "OK" },
-      stdout: { write: (value) => output.push(String(value)) },
-      stderr: { write() {} },
+      logger: createRuntimeLogger("launcher", "test", { write: (value) => output.push(String(value)) }),
       processObject: new EventEmitter(),
     });
 

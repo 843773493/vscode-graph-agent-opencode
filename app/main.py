@@ -47,6 +47,7 @@ from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.workspace_lifecycle import WorkspaceLifespan
 
+configure_application_logging(service="backend")
 load_boxteam_env()
 
 # 导入期只冻结显式配置；SDK hook 在实际 Provider 请求前安装。
@@ -59,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    configure_application_logging()
+    configure_application_logging(service="backend")
     startup_started = time.monotonic()
     logger.info("Backend 启动阶段 begin: stage=workspace_registry")
     if application.state.workspace_lifespan is not None:
@@ -104,7 +105,7 @@ async def lifespan(application: FastAPI):
             logger_config = candidate
         assert logger_config is not None
         configure_application_logging(
-            level=logger_config[0], pretty=logger_config[1]
+            service="backend", level=logger_config[0], pretty=logger_config[1]
         )
         logger.info("已启动全部挂载工作区: workspace_ids=%s elapsed=%.3fs",
                     registry.workspace_ids, time.monotonic() - startup_started)

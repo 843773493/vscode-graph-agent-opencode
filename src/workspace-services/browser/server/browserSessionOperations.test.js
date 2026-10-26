@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { EventEmitter } from "node:events";
 import { describe, expect, spyOn, test } from "bun:test";
 import { BrowserSession } from "./browserSession.js";
@@ -131,7 +132,7 @@ describe("浏览器帧回调与关闭的生命周期", () => {
     const states = [];
     browser.on("state", (state) => states.push(state));
     const cause = Object.assign(new Error("Target closed /private/chromium"), { code: "EIO" });
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const closing = browser.releaseRuntime().catch((error) => error);
       failAck(cause);
@@ -144,7 +145,7 @@ describe("浏览器帧回调与关闭的生命周期", () => {
       expect(browser.record.reconciliation_status).toBe("unknown");
       expect(states.some((state) => state.stream_error?.includes("stage=screencast_frame"))).toBe(true);
       expect(browser.record.stream_error).not.toContain("/private/chromium");
-      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(diagnostics.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       expect(entry.retiring).toBe(true);
     } finally { diagnostics.mockRestore(); }
   });
@@ -160,7 +161,7 @@ describe("浏览器帧回调与关闭的生命周期", () => {
     const cause = new Error("意外断开 /private/chromium");
     entry.retiring = false;
     entry.cdpSession.send = async () => { throw cause; };
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       browser.receiveScreencastFrame({ data: "", metadata: {}, sessionId: 2 }, entry);
       const executions = [...browser.screencastFrames.keys()];
@@ -168,7 +169,7 @@ describe("浏览器帧回调与关闭的生命周期", () => {
       browser.record.stream_error = "新页面的状态";
       await Promise.allSettled(executions);
       expect(browser.record.stream_error).toBe("新页面的状态");
-      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(diagnostics.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
     } finally { diagnostics.mockRestore(); }
   });
 
@@ -176,7 +177,7 @@ describe("浏览器帧回调与关闭的生命周期", () => {
     const { browser, entry, finishAck, isClosed } = pendingFrame();
     const drain = browser.drainScreencastFrames.bind(browser);
     browser.drainScreencastFrames = (entries) => drain(entries, 1);
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       await expect(browser.closePage(entry.pageId)).rejects.toMatchObject({ code: "browser_frame_drain_timeout" });
       expect(browser.record.reconciliation_status).toBe("unknown");
@@ -224,14 +225,14 @@ describe("浏览器启动的运行时错误归属", () => {
   ])("启动失败由实际阶段产生错误并释放已取得的context: %s", async (stage) => {
     const cause = Object.assign(new Error("EACCES /private/chromium/profile"), { code: "EACCES", statusCode: 503 });
     const { browser, persisted, calls } = startingSession(stage, cause);
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.start().catch((error) => error);
       expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
       expect(failure.message).toContain(`stage=${stage}`);
       expect(failure.message).toContain(browser.id);
       expect(failure.message).not.toContain("/private/chromium/profile");
-      expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       expect(persisted.at(-1)).toMatchObject({ status: "failed", error_message: failure.message, reconciliation_status: "verified" });
       expect(JSON.stringify(persisted)).not.toContain("/private/chromium/profile");
       expect(calls.filter((call) => call === "release_context")).toHaveLength(stage === "acquire_context" ? 0 : 1);
@@ -245,7 +246,7 @@ describe("浏览器启动的运行时错误归属", () => {
       const primary = Object.assign(new Error(`启动 ${nativePath}`), { code: "EACCES", statusCode: 503 });
       const cleanup = Object.assign(new Error(`关闭 ${nativePath}`), { code: "EIO", statusCode: 500 });
       const { browser, context, persisted } = startingSession("create_page", primary, cleanup);
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.start().catch((error) => error);
         expect(failure).toBeInstanceOf(AggregateError);
@@ -278,7 +279,7 @@ describe("浏览器资源生命周期错误归属", () => {
     const { browser } = liveSession();
     const cause = Object.assign(new Error(`EACCES ${nativePath}`), { code: "EACCES", statusCode: 503, errno: -13, syscall: "open" });
     browser.page.evaluate = async () => { throw cause; };
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.runInteractiveOperation({ actor: "user:test", action: "run" },
         () => browser.runPlaywrightCode({ code: "return await page.evaluate(() => 1);" }))
@@ -289,7 +290,7 @@ describe("浏览器资源生命周期错误归属", () => {
       expect(JSON.stringify(browser.toRecord())).not.toContain(nativePath);
       expect(browser.record.status).toBe("running");
       expect(browser.pageEntries.size).toBe(1);
-      expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       const retried = await browser.runInteractiveOperation({ actor: "user:test", action: "run" },
         () => browser.runPlaywrightCode({ code: "return 'script-retry-ok';" }));
       expect(retried.result).toBe("script-retry-ok");
@@ -325,7 +326,7 @@ describe("浏览器资源生命周期错误归属", () => {
       const { browser } = liveSession();
       const cause = Object.assign(new Error("EACCES /private/browser/text-query"), { code: "EACCES", statusCode: 503 });
       browser.page.evaluate = async () => { throw cause; };
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.runInteractiveOperation({ actor: "user:test", action: stage },
           () => stage === "read_clipboard" ? browser.readClipboardText() : browser.findText("marker"))
@@ -336,7 +337,7 @@ describe("浏览器资源生命周期错误归属", () => {
         expect(browser.record.last_operation).toMatchObject({ action: stage, status: "failed", error: failure.message });
         expect(JSON.stringify(browser.toRecord())).not.toContain("/private/browser/text-query");
         expect(browser.record.status).toBe("running");
-        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       } finally { logged.mockRestore(); }
     },
   );
@@ -354,7 +355,7 @@ describe("浏览器资源生命周期错误归属", () => {
       };
       entry.page.title = async () => { if (stage === "debug_title") throw cause; return "调试页面"; };
       entry.page.url = () => "about:blank";
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.runInteractiveOperation({ actor: "user:test", action: "debug-snapshot" },
           () => browser.debugSnapshot()).catch((error) => error);
@@ -365,7 +366,7 @@ describe("浏览器资源生命周期错误归属", () => {
         expect(browser.record.last_operation).toMatchObject({ action: "debug-snapshot", status: "failed", error: failure.message });
         expect(browser.record.status).toBe("running");
         expect(browser.pageEntries.size).toBe(1);
-        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       } finally { logged.mockRestore(); }
     },
   );
@@ -382,7 +383,7 @@ describe("浏览器资源生命周期错误归属", () => {
         create_page: () => browser.createPage(), close_page: () => browser.closePage(browser.activePageId),
         "Page.stopLoading": () => browser.stopLoading(), "Page.captureScreenshot": () => browser.captureClientScreenshot(),
       };
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await operations[stage]().catch((error) => error);
         expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
@@ -390,7 +391,7 @@ describe("浏览器资源生命周期错误归属", () => {
         expect(failure.message).toContain(`stage=${stage}`);
         expect(failure.message).toContain(`page_id=${stage === "create_page" ? null : "page_device"}`);
         expect(failure.message).not.toContain(String.raw`C:\private\chromium\profile`);
-        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
         expect(browser.record.status).toBe("running");
         expect(browser.activePageId).toBe("page_device");
         expect(browser.pageEntries.size).toBe(1);
@@ -418,13 +419,13 @@ describe("浏览器资源生命周期错误归属", () => {
       browser.streaming = true;
       if (stage === "reset_pointer") browser.pointerController.reset = async () => { throw cause; };
       if (stage === "sync_page") browser.pageEntries.get("page_second").page.title = async () => { throw cause; };
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.activatePage("page_second").catch((error) => error);
         expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
         expect(failure.message).toContain(`stage=${stage}`);
         expect(failure.message).not.toContain("/private/browser/profile");
-        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
         expect(browser.activePageId).toBe(["Page.stopScreencast", "reset_pointer"].includes(stage) ? "page_first" : "page_second");
         expect(browser.streaming).toBe(!["reset_pointer", "Page.startScreencast"].includes(stage));
       } finally { logged.mockRestore(); }
@@ -442,7 +443,7 @@ describe("浏览器资源生命周期错误归属", () => {
     "冻结与回滚失败只向诊断交付原生位置: %s", async (nativePath) => {
       const primary = Object.assign(new Error(`冻结失败 ${nativePath}`), { code: "EACCES", statusCode: 500 });
       const rollback = new Error(`回滚失败 ${nativePath}`);
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const { browser, persisted } = transitionSession((pageId, method, params) => {
           if (pageId === "page_second" && method === "Emulation.setScriptExecutionDisabled" && params.value) throw primary;
@@ -452,8 +453,8 @@ describe("浏览器资源生命周期错误归属", () => {
         expect(failure).toBeInstanceOf(AggregateError);
         expect(failure.errors.map((error) => error.cause)).toEqual([primary, rollback]);
         expect(failure.errors[0]).toMatchObject({ code: "EACCES", statusCode: 500 });
-        expect(logged.mock.calls.some((args) => args.at(-1) === primary)).toBe(true);
-        expect(logged.mock.calls.some((args) => args.at(-1) === rollback)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(primary)))).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(rollback)))).toBe(true);
         expect(failure.message).not.toContain(nativePath);
         expect(JSON.stringify(browser.toRecord())).not.toContain(nativePath);
         expect(persisted.at(-1)).toMatchObject({ reconciliation_status: "unknown", resource_state: "freezing" });
@@ -468,12 +469,12 @@ describe("浏览器资源生命周期错误归属", () => {
     browser.inspectResourceSnapshot = BrowserSession.prototype.inspectResourceSnapshot;
     browser.inspectPageEntryProtectionReasons = BrowserSession.prototype.inspectPageEntryProtectionReasons;
     for (const entry of browser.pageEntries.values()) entry.page.evaluate = async () => { throw cause; };
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       await expect(browser.freeze()).rejects.toMatchObject({ code: "browser_resource_protected" });
       expect(browser.snapshot().resource_hard_protection_reasons).toEqual(["protection_inspection_failed:stage=inspect_protection"]);
       expect(JSON.stringify(browser.toRecord())).not.toContain(cause.message);
-      expect(logged.mock.calls.some((args) => args.at(-1).cause === cause)).toBe(true);
+      expect(logged.mock.calls.some((args) => args[0].includes("[cause]:") && args[0].replace(/^\s+/gm, "").includes(cause.stack.replace(/^\s+/gm, "")))).toBe(true);
       expect(browser.record.reconciliation_status).toBe("verified");
     } finally { logged.mockRestore(); }
   });
@@ -778,7 +779,7 @@ describe("浏览器统一操作队列", () => {
     browser.on("state", (state) => states.push(state));
     browser.bindContextPageEvents();
     const page = {};
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       context.emit("page", page);
       const shared = browser.pageRegistrationPromises.get(page);
@@ -800,7 +801,7 @@ describe("浏览器统一操作队列", () => {
       expect(states[0].error_message).toBe(failure.message);
       expect(JSON.stringify(states)).not.toContain(cause.message);
       expect(diagnostics).toHaveBeenCalledTimes(1);
-      expect(diagnostics.mock.calls[0][2]).toBe(cause);
+      expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
     } finally {
       diagnostics.mockRestore();
     }
@@ -823,7 +824,7 @@ describe("浏览器统一操作队列", () => {
     };
     if (stage === "device_profile_goto") entry.page.goto = async () => failOnce();
     if (stage === "restore_device_page_url") entry.page.evaluate = async () => failOnce();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
       expect(injected).toBe(true);
@@ -836,7 +837,7 @@ describe("浏览器统一操作队列", () => {
       if (stage !== "Network.setCacheDisabled" || !enabling) {
         expect(cdpCalls.some(({ method, params }) => method === "Network.setBypassServiceWorker" && params.bypass === false)).toBe(true);
       }
-      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(diagnostics.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       if (enabling) {
         await browser.setDeviceProfile("pixel-7");
         expect(browser.record.device_profile).toBe("pixel-7");
@@ -865,7 +866,7 @@ describe("浏览器统一操作队列", () => {
     browser.pageEntries.set("sibling", { ...entry, pageId: "sibling", page: {
       ...entry.page, setViewportSize: async () => { if (navigating) siblingRestored = true; },
     } });
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
       expect(failure).toBeInstanceOf(AggregateError);
@@ -876,7 +877,7 @@ describe("浏览器统一操作队列", () => {
       expect(failure.message).not.toContain("/private/device");
       expect(browser.record.reconciliation_status).toBe("unknown");
       for (const cause of [primary, bypass, cache, rollback]) {
-        expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(diagnostics.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
       }
     } finally { diagnostics.mockRestore(); }
   });
@@ -894,7 +895,7 @@ describe("浏览器统一操作队列", () => {
       cdpCalls.push({ method, params });
       if (method === "Page.startScreencast" && restartFails) throw restart;
     };
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
       expect(failure.code).toBe("EACCES");
@@ -1235,7 +1236,7 @@ describe("浏览器统一操作队列", () => {
     browser.context = { newPage: async () => { throw cause; } };
     browser.activePageId = "page_failed_recovery";
     browser.pageEntries.set(browser.activePageId, { pageId: browser.activePageId, page });
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.runPlaywrightCode({
         code: "await new Promise(() => undefined);", timeoutMs: 5,
@@ -1257,8 +1258,8 @@ describe("浏览器统一操作队列", () => {
       expect(browser.pendingOperations).toBe(0);
       expect(browser.recoveringTimedOutPageIds.size).toBe(0);
       expect(diagnostics).toHaveBeenCalledTimes(2);
-      expect(diagnostics.mock.calls[0][2]).toBe(cause);
-      expect(diagnostics.mock.calls[1][2]).toBe(barrierFailure);
+      expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
+      expect(diagnostics.mock.calls[1][0]).toContain(inspect(barrierFailure));
     } finally {
       diagnostics.mockRestore();
     }
@@ -1271,7 +1272,7 @@ describe("浏览器统一操作队列", () => {
       browser.page.evaluate = async () => { throw cause; };
       const saved = [];
       browser.manager.persist = async () => { saved.push(browser.toRecord()); };
-      const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+      const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.enqueueOperation({ actor: "agent:test", action: "read" },
           () => browser.readSummary()).catch((error) => error);
@@ -1281,7 +1282,7 @@ describe("浏览器统一操作队列", () => {
         expect(saved.at(-1).last_operation).toMatchObject({ action: "read", status: "failed", error: failure.message });
         expect(JSON.stringify(browser.snapshot())).not.toContain(nativePath);
         expect(JSON.stringify(saved)).not.toContain(nativePath);
-        expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(diagnostics.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
         const url = "file:///explicit/local-page.html";
         browser.page.evaluate = async () => ({ title: "重试成功", url, text: "页面正文", refs: [] });
         const retried = await browser.enqueueOperation({ actor: "agent:test", action: "read" }, () => browser.readSummary());
@@ -1476,14 +1477,14 @@ describe("浏览器统一操作队列", () => {
       title: "",
     });
 
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await browser.navigate(type, "file:///user/opened.html").catch(error => error);
       expect(failure).toMatchObject({ cause, statusCode: 503 });
       expect(failure.message).toContain(`stage=page.${method}`);
       expect(failure.message).toContain("ERR_CONNECTION_REFUSED");
       expect(failure.message).not.toContain(nativePath);
-      expect(logged.mock.calls.some(args => args.at(-1) === cause)).toBe(true);
+      expect(logged.mock.calls.some(args => args[0].includes(inspect(cause)))).toBe(true);
       const snapshot = browser.snapshot();
       expect(snapshot.url).toBe("file:///user/opened.html");
       expect(snapshot.actual_url).toBe("chrome-error://chromewebdata/");
@@ -1518,7 +1519,7 @@ describe("浏览器统一操作队列", () => {
         browser.clients.add({});
         browser.cdpSession.send = async () => { throw secondary; };
       }
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await browser.goto("file:///user/opened.html").catch(error => error);
         expect(failure).toBeInstanceOf(AggregateError);
@@ -1537,7 +1538,7 @@ describe("浏览器统一操作队列", () => {
     const cause = new Error("导航失败 /private/browser/profile");
     let rejectNavigation;
     sourceEntry.page.goto = () => new Promise((_resolve, reject) => { rejectNavigation = reject; });
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const navigation = browser.goto("https://example.test/slow").catch(error => error);
       await browser.activatePage("page_second");

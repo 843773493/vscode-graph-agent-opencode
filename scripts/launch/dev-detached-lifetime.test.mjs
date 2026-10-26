@@ -14,7 +14,7 @@ async function observeStartup({ startupError, cleanupError, failurePhase = "read
   const child = { pid: 32109 };
   // 执行实际入口的函数正文，启动、文件和信号均为显式替身；不加载dev的顶层编排。
   const context = {
-    path, projectRoot: process.cwd(), boxteamHome: "fixture-home",
+    path, logContract: {}, projectRoot: process.cwd(), boxteamHome: "fixture-home",
     process: { execPath: "fixture-runtime", env: {}, stdout: { write() {} } },
     mkdirSync() {}, rmSync() {}, resolveServiceLogPath: () => "fixture.log",
     spawnDetachedProcess: () => child,

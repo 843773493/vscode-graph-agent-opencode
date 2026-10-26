@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { describe, expect, spyOn, test } from "bun:test";
@@ -30,7 +31,7 @@ describe("标签页事件失败的恢复记录", () => {
     const nativePath = String.raw`\\host\share\profile`;
     const failureText = `net::ERR_ACCESS_DENIED ${nativePath}`;
     browser.manager.schedulePersist = () => undefined;
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       page.emit("requestfailed", {
         ...request(requestedUrl, failureText), isNavigationRequest: () => true, frame: () => page,
@@ -54,7 +55,7 @@ describe("标签页事件失败的恢复记录", () => {
     let saved;
     const persisted = new Promise(resolve => { saved = resolve; });
     browser.manager.persist = async () => { saved(browser.toRecord()); };
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       if (event === "close") active.emit("close");
       else if (event === "dialog") target.emit("dialog", {
@@ -65,8 +66,8 @@ describe("标签页事件失败的恢复记录", () => {
       expect(record.resource_transition_error).toContain("stage=sync_page");
       expect(record.resource_transition_error).not.toContain(nativePath);
       expect(record.resource_transition_error).not.toContain(".js:");
-      expect(logged.mock.calls.some(args => args.at(-1) === cause)).toBe(true);
-      expect(logged.mock.calls.some(args => args.at(-1)?.cause === cause)).toBe(true);
+      expect(logged.mock.calls.some(args => args[0].includes(inspect(cause)))).toBe(true);
+      expect(logged.mock.calls.some(args => args[0].includes("[cause]:") && args[0].replace(/^\s+/gm, "").includes(cause.stack.replace(/^\s+/gm, "")))).toBe(true);
       expect(browser.activePageId).toBe(targetEntry.pageId);
       expect(browser.pageEntries.has(activeEntry.pageId)).toBe(event !== "close");
       if (event === "dialog") expect(browser.pendingDialog.message).toBe("等待处理");

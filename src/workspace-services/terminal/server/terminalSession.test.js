@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import path from "node:path";
@@ -47,7 +48,7 @@ function completedSession(t, overrides = {}) {
 test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动诊断", async (t) => {
   const session = completedSession(t, { status: "created" });
   const original = new Error(`spawn ${session.cwd}/private-shell EACCES`);
-  const diagnostic = t.mock.method(console, "error", () => {});
+  const diagnostic = t.mock.method(process.stderr, "write", () => {});
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw original; });
   try {
     await assert.rejects(session.start(), (error) => {
@@ -56,10 +57,10 @@ test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动
       return true;
     });
     assert.equal(session.status, "created");
-    const [message, context, error] = diagnostic.mock.calls[0].arguments;
-    assert.equal(message, `[terminal-session] 终端 PTY 启动失败: terminal_id=${session.id}`);
-    assert.deepEqual(context, { cwd: session.cwd, command: session.command });
-    assert.equal(error, original);
+    const [message] = diagnostic.mock.calls[0].arguments;
+    assert(message.includes(`[terminal-session] 终端 PTY 启动失败: terminal_id=${session.id}`));
+    assert(message.includes(inspect({ cwd: session.cwd, command: session.command })));
+    assert(message.includes(inspect(original)));
   } finally {
     await session.dispose();
   }
@@ -68,13 +69,13 @@ test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动
 test("Worker 错误不进入持久状态，仍保留 unknown 与原始诊断", async (t) => {
   const session = completedSession(t);
   const original = new Error(`EIO: ${session.cwd}/private-worker`);
-  const diagnostic = t.mock.method(console, "error", () => {});
+  const diagnostic = t.mock.method(process.stderr, "write", () => {});
   await session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original });
   assert.equal(session.snapshot().release_reason, "pty_worker_error");
   assert.equal(session.snapshot().status, "exited");
   assert.equal(session.snapshot().reconciliation_status, "unknown");
   assert.equal(JSON.stringify(session.toRecord()).includes(session.cwd), false);
-  assert.equal(diagnostic.mock.calls[0].arguments[1], original);
+  assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(original)));
 });
 
 for (const cleanupResult of ["missing", "terminated", "force_killed", "still_running", "cleanup_failed", null]) {
@@ -112,7 +113,7 @@ test("启动收尾失败保留原Worker句柄、未知记录及两份异常", as
   const session = completedSession(t, { status: "created" });
   const original = new Error("原启动失败");
   const cleanup = new Error("Worker未确认退出");
-  t.mock.method(console, "error", () => {});
+  t.mock.method(process.stderr, "write", () => {});
   const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() { throw cleanup; } };
   session.ptyProcess = worker;
   const states = [];
@@ -148,7 +149,7 @@ for (const failedSave of [1, 2]) {
 test("退出清理失败只广播阶段，原始异常只留在诊断", async (t) => {
   const session = completedSession(t);
   const original = new Error(`EIO: ${session.cwd}/private-cleanup`);
-  const diagnostic = t.mock.method(console, "error", () => {});
+  const diagnostic = t.mock.method(process.stderr, "write", () => {});
   const events = [];
   t.mock.method(session, "broadcast", (event) => events.push(event));
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => ({ pid: null }));
@@ -162,7 +163,7 @@ test("退出清理失败只广播阶段，原始异常只留在诊断", async (t
     assert.equal(events.length, 1);
     assert.equal(events[0].error, "pty_exit_cleanup_failed");
     assert.equal(JSON.stringify([session.snapshot(), events]).includes(session.cwd), false);
-    assert.equal(diagnostic.mock.calls[0].arguments[1], original);
+    assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(original)));
   } finally {
     await session.dispose();
   }

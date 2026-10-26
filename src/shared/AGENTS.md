@@ -2,13 +2,14 @@
 
 ## 目录用途
 
-存放客户端和工作区辅助服务之间共享的跨进程传输定义。目前这里主要提供 SSE 字节流解析、帧边界处理、取消/超时语义和运行时校验。
+存放客户端和工作区辅助服务之间共享的跨进程传输定义。目前这里主要提供 SSE 字节流解析、帧边界处理、取消/超时语义、运行时校验及 Node 产品诊断日志。
 
 ## 可修改内容
 
 - `sse.js`、`sseRuntime.js`：共享 SSE 传输和运行时 DTO 校验。
 - `sseRuntimeValidators.js`：由协议生成流程维护的校验器。
 - 与上述 JavaScript 实现对应的 `*.d.ts` 类型声明。
+- `serverRuntimeLogging.mjs`：Launcher、Terminal 和 Browser 共用的 Node 产品日志合同、实例身份、等级及文本编码。只在服务端导入，不进入浏览器依赖图。
 
 ## 不可修改内容
 

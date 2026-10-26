@@ -20,6 +20,7 @@ def test_load_boxteam_env_keeps_cp1252_console_streams_writable(
     monkeypatch.setattr("app.core.env.sys.stderr", stderr)
 
     assert load_boxteam_env() is None
+    print("中文输出", file=stdout)
     print("中文日志", file=stderr)
     stdout.flush()
     stderr.flush()

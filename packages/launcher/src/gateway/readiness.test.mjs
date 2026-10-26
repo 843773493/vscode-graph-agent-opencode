@@ -1,3 +1,4 @@
+import { createRuntimeLogger } from "../../../../src/shared/serverRuntimeLogging.mjs";
 import { describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
@@ -193,7 +194,7 @@ describe("Launcher Gateway就绪等待", () => {
           observedSignal?.addEventListener("abort", () => reject(observedSignal.reason), { once: true });
         });
       },
-      stdout: { write() {} }, stderr: { write() {} }, processObject: new EventEmitter(),
+      logger: createRuntimeLogger("launcher", "test", { write() {} }), processObject: new EventEmitter(),
     });
     await expect(result).rejects.toThrow("Gateway 就绪前退出: exit=3");
     expect(observedSignal).toBeDefined();

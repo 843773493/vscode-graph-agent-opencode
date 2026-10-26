@@ -1,5 +1,9 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import path from "node:path";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+
+const logger = createRuntimeLogger("terminal", "terminal.terminalStateStore");
 
 export const STATE_FILE_NAME = "terminals.json";
 export const STATE_SCHEMA_VERSION = 3;
@@ -84,7 +88,7 @@ export class TerminalStateStore {
 
   operationError(operation, stage, primary, cause = primary) {
     const code = primary.code || (operation === "读取" ? "terminal_records_read_failed" : "terminal_records_write_failed");
-    console.error(`[terminal-state-store] ${operation}终端状态失败`, {
+    logger.withContext({ workspace_id: this.workspaceId }).error(`[terminal-state-store] ${operation}终端状态失败`, {
       workspaceId: this.workspaceId, filePath: this.stateFile, stage,
     }, cause);
     return Object.assign(new Error(

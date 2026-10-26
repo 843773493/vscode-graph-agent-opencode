@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import path from "node:path";
 import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
@@ -24,7 +25,7 @@ function serializedBytes(checkpoint) {
 describe("浏览器恢复记录错误归属", () => {
   test.each(["正文解析", "记录核验", "正文读取"])("%s失败保留原因且不复制原生存储位置", async (stage) => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     await mkdir(store.stateDir, { recursive: true });
     if (stage === "正文读取") await mkdir(store.stateFile);
     else await writeFile(store.stateFile, stage === "正文解析"
@@ -34,8 +35,8 @@ describe("浏览器恢复记录错误归属", () => {
     expect(failure).toBeInstanceOf(Error);
     expect(failure.message).toBe(`读取浏览器状态失败: workspace_id=${store.workspaceId}, artifact=browser_records, stage=${stage}, code=${failure.code}`);
     expect(failure.message).not.toContain(store.workspaceRoot);
-    expect(diagnostics.mock.calls[0][1].filePath).toBe(store.stateFile);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(store.stateFile));
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
     if (stage === "正文解析") expect(failure.cause).toBeInstanceOf(SyntaxError);
     else if (stage === "正文读取") expect(failure.cause.code).toBe("EISDIR");
     else expect(failure.cause.message).toBe("浏览器状态文件格式错误");
@@ -47,7 +48,7 @@ describe("浏览器恢复记录错误归属", () => {
 
   test.each(["目录创建", "正文写入", "文件发布"])("%s失败保留错误码和原件，释放本次临时文件后可重试", async (stage) => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     if (stage === "目录创建") await writeFile(store.stateDir, "原目录位置已有文件");
     else {
       await mkdir(store.stateDir, { recursive: true });
@@ -58,7 +59,7 @@ describe("浏览器恢复记录错误归属", () => {
     expect(failure.message).toBe(`写入浏览器状态失败: workspace_id=${store.workspaceId}, artifact=browser_records, stage=${stage}, code=${failure.code}`);
     expect(failure.message).not.toContain(store.workspaceRoot);
     expect(failure.cause.code).toBe(failure.code);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
     if (stage === "目录创建") await rm(store.stateDir);
     else {
       expect(await readdir(store.stateDir)).toEqual(stage === "文件发布" ? ["browsers.json"] : []);
@@ -75,7 +76,7 @@ describe("浏览器恢复记录错误归属", () => {
 describe("浏览器截图错误归属", () => {
   test.each(["目录创建", "正文保存"])("%s失败保留原异常并允许显式重试", async (stage) => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     const original = Object.assign(new Error(`写入失败: ${store.screenshotDir}`), { code: "EIO" });
     if (stage === "目录创建") {
       await mkdir(store.stateDir, { recursive: true });
@@ -89,8 +90,8 @@ describe("浏览器截图错误归属", () => {
     expect(failure.message).toContain(`stage=${stage}, code=${failure.code}`);
     expect(failure.message).not.toContain(store.workspaceRoot);
     expect(failure.cause).toBeInstanceOf(Error);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
-    expect(diagnostics.mock.calls[0][1].filePath).toContain(store.screenshotDir);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
+    expect(diagnostics.mock.calls[0][0]).toContain(store.screenshotDir);
     if (stage === "正文保存") {
       expect(failure.cause).toBe(original);
       expect(failure.code).toBe("EIO");
@@ -111,18 +112,18 @@ describe("浏览器检查点错误归属", () => {
   test("目录核验丢失条目不能冒充目标检查点不存在", async () => {
     const store = await createBrowserStateStoreForTest();
     const cause = Object.assign(new Error("目录项在列出后消失"), { code: "ENOENT" });
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     spyOn(store, "verifyCheckpointSizes").mockRejectedValueOnce(cause);
     const failure = await store.readCheckpoint("browser_missing").catch((error) => error);
     expect(failure.message).toBe("读取浏览器检查点失败: browser_id=browser_missing, stage=目录核验, code=ENOENT");
     expect(failure.cause).toBe(cause);
-    expect(diagnostics.mock.calls[0][2]).toBe(cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
     expect(await store.readCheckpoint("browser_missing")).toBeNull();
   });
 
   test("解析失败不复制正文或物理位置，原异常留在日志和cause", async () => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     await mkdir(store.checkpointDir, { recursive: true });
     const filePath = store.checkpointPath("browser_broken");
     await writeFile(filePath, `{"private":"${store.workspaceRoot}"`);
@@ -130,22 +131,22 @@ describe("浏览器检查点错误归属", () => {
     expect(failure.code).toBe("browser_checkpoint_read_failed");
     expect(failure.message).toBe("读取浏览器检查点失败: browser_id=browser_broken, stage=正文解析, code=browser_checkpoint_read_failed");
     expect(failure.cause).toBeInstanceOf(SyntaxError);
-    expect(diagnostics.mock.calls[0][1].filePath).toBe(filePath);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(filePath));
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
     await store.deleteCheckpoint("browser_broken");
     expect(await store.readCheckpoint("browser_broken")).toBeNull();
   });
 
   test("发布失败保留原目录和错误码，清理临时文件后可显式重试", async () => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     const filePath = store.checkpointPath("browser_directory");
     await mkdir(filePath, { recursive: true });
     const failure = await store.writeCheckpoint("browser_directory", { body: "未发布" }).catch((error) => error);
     expect(failure.message).toBe(`写入浏览器检查点失败: browser_id=browser_directory, stage=文件发布, code=${failure.code}`);
     expect(failure.cause.code).toBe(failure.code);
     expect(failure.cause.path).toContain(store.checkpointDir);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
     expect(await readdir(filePath)).toEqual([]);
     expect(await readdir(store.checkpointDir)).toEqual(["browser_directory.json"]);
     expect((await store.checkpointBudgetSnapshot()).used_bytes).toBe(0);
@@ -156,20 +157,20 @@ describe("浏览器检查点错误归属", () => {
 
   test("目录核验与删除失败都不公开系统路径", async () => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
     await mkdir(store.stateDir, { recursive: true });
     await writeFile(store.checkpointDir, "不能当作目录");
     const scan = await store.checkpointBudgetSnapshot().catch((error) => error);
     expect(scan.message).toBe(`核验浏览器检查点目录失败: stage=目录读取, code=${scan.code}`);
     expect(scan.cause.path).toBe(store.checkpointDir);
-    expect(diagnostics.mock.calls[0][2]).toBe(scan.cause);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(scan.cause));
     await rm(store.checkpointDir);
     const filePath = store.checkpointPath("browser_directory");
     await mkdir(filePath, { recursive: true });
     const deletion = await store.deleteCheckpoint("browser_directory").catch((error) => error);
     expect(deletion.message).toBe(`删除浏览器检查点失败: browser_id=browser_directory, code=${deletion.code}`);
     expect(deletion.cause.path).toBe(filePath);
-    expect(diagnostics.mock.calls.at(-1)[2]).toBe(deletion.cause);
+    expect(diagnostics.mock.calls.at(-1)[0]).toContain(inspect(deletion.cause));
     expect(await readdir(filePath)).toEqual([]);
   });
 });
@@ -247,7 +248,7 @@ describe("浏览器检查点配额", () => {
 describe("浏览器产物不含真实路径", () => {
   test.each(["目录创建", "正文保存"])("下载%s失败保留原异常且不发布存储路径", async (stage) => {
     const store = await createBrowserStateStoreForTest();
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     const original = new Error(`download.saveAs: 无法写入 ${store.downloadDir}`);
     if (stage === "目录创建") {
       await mkdir(store.stateDir, { recursive: true });
@@ -265,8 +266,8 @@ describe("浏览器产物不含真实路径", () => {
     expect(failure.message).toContain(`stage=${stage}, code=${failure.code}`);
     expect(failure.message).not.toContain(store.workspaceRoot);
     expect(failure.cause).toBeInstanceOf(Error);
-    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
-    expect(diagnostics.mock.calls[0][1].filePath).toContain(store.downloadDir);
+    expect(diagnostics.mock.calls[0][0]).toContain(inspect(failure.cause));
+    expect(diagnostics.mock.calls[0][0]).toContain(store.downloadDir);
     expect(saveCalls).toBe(stage === "目录创建" ? 0 : 1);
     if (stage === "正文保存") {
       expect(failure.cause).toBe(original);

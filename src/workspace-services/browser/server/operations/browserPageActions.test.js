@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   clickElement,
@@ -20,7 +21,7 @@ describe("用户处理浏览器文件选择", () => {
     };
     const selected = input === "selectFiles" ? ["/private/selected-file"]
       : [{ name: "selected.txt", data: Buffer.from("文件正文").toString("base64") }];
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     try {
       const failure = await handleDialog(session, { [input]: selected }).catch((error) => error);
       expect(failure).toMatchObject({ cause, code: "ENOENT", statusCode: 503 });
@@ -29,7 +30,7 @@ describe("用户处理浏览器文件选择", () => {
       expect(failure.message).not.toContain("another_page");
       expect(failure.message).not.toContain("/private/selected-file");
       expect(session.pendingFileChooser).toBe(chooser);
-      expect(diagnostics.mock.calls[0].at(-1)).toBe(cause);
+      expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
       fail = false;
       expect((await handleDialog(session, { [input]: selected })).summary).toContain("1 个文件");
       expect(session.pendingFileChooser).toBeNull();
@@ -80,7 +81,7 @@ describe("原生对话框失败与重试", () => {
       const dialog = { [method]: async (...values) => { calls.push(values); if (fail) throw cause; } };
       const pending = { pageId: "dialog_page", message: "原生提示", dialog };
       const session = { id: "browser_dialog", activePageId: "another_page", pendingDialog: pending };
-      const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+      const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       try {
         const failure = await handleDialog(session, args).catch((error) => error);
         expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
@@ -88,7 +89,7 @@ describe("原生对话框失败与重试", () => {
         expect(failure.message).toContain("browser_id=browser_dialog, page_id=dialog_page");
         expect(failure.message).not.toContain(nativePath);
         expect(session.pendingDialog).toBe(pending);
-        expect(diagnostics.mock.calls[0].at(-1)).toBe(cause);
+        expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
         fail = false;
         expect((await handleDialog(session, args)).summary).toBe(`${summary}对话框: 原生提示`);
         expect(session.pendingDialog).toBeNull();
@@ -236,7 +237,7 @@ describe("Playwright 代码超时", () => {
 
   test.each(["sync", "async", "deferred"])("恢复失败只公开阶段，原异常保留在诊断与 cause: %s", async (mode) => {
     const cause = new Error("EACCES: /private/browser/profile; C:\\Users\\test\\profile; \\\\host\\share\\profile");
-    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => undefined);
     let rejectRecovery;
     const recovery = new Promise((_, reject) => { rejectRecovery = reject; });
     try {
@@ -261,7 +262,7 @@ describe("Playwright 代码超时", () => {
       expect(failure.message).not.toContain(cause.message);
       expect(failure.cause).toBe(cause);
       expect(diagnostics).toHaveBeenCalledTimes(1);
-      expect(diagnostics.mock.calls[0][2]).toBe(cause);
+      expect(diagnostics.mock.calls[0][0]).toContain(inspect(cause));
     } finally {
       diagnostics.mockRestore();
     }

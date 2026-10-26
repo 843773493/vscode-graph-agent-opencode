@@ -1,5 +1,9 @@
+import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
+
 import { BrowserMemoryPressureMonitor } from "./memoryPressure.js";
 import { chooseResourcePlan, DEFAULT_RESOURCE_POLICY } from "./resourcePolicy.js";
+
+const logger = createRuntimeLogger("browser", "browser.resourceGovernor");
 
 /**
  * @typedef {object} ResourceBatchLimits
@@ -110,7 +114,7 @@ export class BrowserResourceGovernor {
       void this.runCycle().catch((error) => {
         const message = error instanceof Error ? (error.stack || error.message) : String(error);
         this.state.error = message;
-        console.error(`[browser-resource-governor] 资源调度停止: ${message}`);
+        logger.error(`[browser-resource-governor] 资源调度停止: ${message}`);
         this.stop();
       });
     }, delayMs);
@@ -280,7 +284,7 @@ export class BrowserResourceGovernor {
     }
     if (cycleErrors.length > 0) {
       for (const error of cycleErrors) {
-        console.error(
+        logger.error(
           `[browser-resource-governor] 单项资源调度失败: browser_id=${error.browser_id} action=${error.action} error=${error.message}`,
         );
       }

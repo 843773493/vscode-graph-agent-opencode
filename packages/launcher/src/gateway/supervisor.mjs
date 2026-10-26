@@ -326,7 +326,7 @@ export function installSignalForwarding(
     shutdownTimeoutMs = GATEWAY_SHUTDOWN_TIMEOUT_MS,
     setTimeoutImpl = setTimeout,
     clearTimeoutImpl = clearTimeout,
-    stderr = process.stderr,
+    logger,
   } = {},
 ) {
   const listeners = new Map();
@@ -339,8 +339,8 @@ export function installSignalForwarding(
         child.kill(signal === "SIGBREAK" ? "SIGTERM" : signal);
         forceTimer = setTimeoutImpl(() => {
           if (child.exitCode !== null || child.signalCode !== null) return;
-          stderr.write(
-            `boxteam: Gateway 未在 ${shutdownTimeoutMs}ms 内退出，发送 SIGKILL\n`,
+          logger.warning(
+            `Gateway 未在 ${shutdownTimeoutMs}ms 内退出，发送 SIGKILL`,
           );
           child.kill("SIGKILL");
         }, shutdownTimeoutMs);
@@ -362,7 +362,7 @@ export async function openGatewayBrowser({
   spawnImpl = spawn,
   platform = process.platform,
   url,
-  stderr = process.stderr,
+  logger,
 }) {
   if (typeof url !== "string" || url.length === 0) {
     throw new TypeError("Gateway 浏览器 URL 必须是非空字符串");
@@ -379,8 +379,8 @@ export async function openGatewayBrowser({
   });
   const [code] = await once(child, "exit");
   if (code !== 0) {
-    stderr.write(
-      `boxteam: 无法自动打开浏览器（exit=${String(code)}），请访问 ${url}\n`,
+    logger.warning(
+      `无法自动打开浏览器（exit=${String(code)}），请访问 ${url}`,
     );
   }
 }
@@ -391,8 +391,7 @@ export async function superviseGateway({
   openBrowser = true,
   spawnImpl = spawn,
   fetchImpl = fetch,
-  stdout = process.stdout,
-  stderr = process.stderr,
+  logger,
   gatewayStdout = process.stdout,
   gatewayStderr = process.stderr,
   processObject = process,
@@ -401,13 +400,13 @@ export async function superviseGateway({
   // 只有源码开发需要用稳定代理完成 generation handoff；发行版让 Gateway
   // 直接占用公开端口，避免 Launcher 退出后留下不可访问的孤儿 Gateway。
   const gatewayOwnsPublicPort = runtime.distribution !== "source-development";
-  stdout.write(
+  logger.info(
     `BoxTeam ${runtime.version} 正在启动 ` +
-      `(distribution=${runtime.distribution})\n`,
+      `(distribution=${runtime.distribution})`,
   );
-  stdout.write(`Gateway: ${endpoint.url}\n`);
-  stdout.write(`Python: ${runtime.pythonExecutable}\n`);
-  stdout.write(`Node: ${runtime.nodeExecutable}\n`);
+  logger.info(`Gateway: ${endpoint.url}`);
+  logger.info(`Python: ${runtime.pythonExecutable}`);
+  logger.info(`Node: ${runtime.nodeExecutable}`);
 
   const publicListener = gatewayOwnsPublicPort
     ? null
@@ -438,7 +437,7 @@ export async function superviseGateway({
     const removeOutputForwarding = forwardGatewayOutput(child, gatewayStdout, gatewayStderr);
     const removeSignalHandlers = installSignalHandlers
       ? installSignalForwarding(child, processObject, process.platform, {
-          stderr,
+          logger,
         })
       : () => {};
     const exitResult = once(child, "exit");
@@ -457,7 +456,7 @@ export async function superviseGateway({
           );
         }),
       ]).finally(() => readinessController.abort());
-      stdout.write(`Gateway 已就绪: ${endpoint.url}\n`);
+      logger.info(`Gateway 已就绪: ${endpoint.url}`);
       return {
         child,
         childPort,
@@ -485,8 +484,8 @@ export async function superviseGateway({
       if (startup.loadedSource !== "pending") {
         throw error;
       }
-      stdout.write(
-        `Gateway pending generation 未就绪，回退 active snapshot: ${String(error)}\n`,
+      logger.warning(
+        `Gateway pending generation 未就绪，回退 active snapshot: ${String(error)}`,
       );
       try {
         initialChild = await startChild(activeEnvironment);
@@ -508,7 +507,7 @@ export async function superviseGateway({
       void openGatewayBrowser({
         spawnImpl,
         url: endpoint.url,
-        stderr,
+        logger,
       });
     }
 
@@ -526,8 +525,8 @@ export async function superviseGateway({
           installSignalHandlers: false,
         });
       } catch (error) {
-        stdout.write(
-          `Gateway pending generation handoff 失败，继续使用旧 active: ${String(error)}\n`,
+        logger.warning(
+          `Gateway pending generation handoff 失败，继续使用旧 active: ${String(error)}`,
         );
         return { accepted: false, error: String(error) };
       }
@@ -537,7 +536,7 @@ export async function superviseGateway({
         replacement.child,
         processObject,
         process.platform,
-        { stderr },
+        { logger },
       );
       if (publicListener === null) {
         throw new Error("直接监听公开端口的 Gateway 不支持 generation handoff");

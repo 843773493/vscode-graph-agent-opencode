@@ -666,7 +666,23 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         assert persisted_gateway_log.count(f"Started server process [{initial_process_id}]") == 1
         assert persisted_gateway_log.count(f"Started server process [{new_process_id}]") == 1
         assert persisted_gateway_log.count("启动工作区后端:") == 1
-        assert "启动工作区后端:" not in launcher_log.read_text(encoding="utf-8")
+        persisted_launcher_log = launcher_log.read_text(encoding="utf-8")
+        assert "启动工作区后端:" not in persisted_launcher_log
+        assert f"service=launcher pid={process.pid} runtime_instance_id=" in persisted_launcher_log
+        gateway_instance_ids = []
+        for gateway_pid in (initial_process_id, new_process_id):
+            identities = set(re.findall(
+                rf"service=gateway pid={gateway_pid} runtime_instance_id=([0-9a-f]+)",
+                persisted_gateway_log,
+            ))
+            assert len(identities) == 1, (gateway_pid, identities)
+            assert re.search(
+                rf"service=gateway pid={gateway_pid} runtime_instance_id=[0-9a-f]+ logger=uvicorn.error Started server process \[{gateway_pid}\]",
+                persisted_gateway_log,
+            )
+            gateway_instance_ids.append(identities.pop())
+        assert gateway_instance_ids[0] != gateway_instance_ids[1]
+        assert "logger=uvicorn.error" in persisted_gateway_log
         assert gateway_log.stat().st_ino == gateway_log_identity
         assert not gateway_log.with_name(gateway_log.name + ".1").exists()
     finally:

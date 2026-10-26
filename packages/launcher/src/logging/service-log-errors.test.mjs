@@ -18,7 +18,7 @@ ${observeServiceLogIo.toString()}
 console.log(JSON.stringify(await observeServiceLogIo(...JSON.parse(readFileSync(process.argv[2], "utf8")))));
 `, { flag: "wx" });
 
-async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, platform) {
+async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, loggingUrl, platform) {
   const { default: assert } = await import("node:assert/strict");
   const { default: fs } = await import("node:fs");
   const { default: childProcess } = await import("node:child_process");
@@ -26,6 +26,8 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, p
   const { syncBuiltinESMExports } = await import("node:module");
   const { openServiceLog, SERVICE_LOG_PATH_ENV } = await import(logUrl);
   const { spawnDetachedProcess } = await import(detachedUrl);
+  const { loadRuntimeLogContract } = await import(loggingUrl);
+  const contract = loadRuntimeLogContract();
   const logPath = path.join(fixtureRoot, "中文 日志.log");
   const originals = Object.fromEntries(["openSync", "chmodSync", "closeSync", "writeSync"].map((key) => [key, fs[key]]));
   const originalSpawn = childProcess.spawn;
@@ -103,7 +105,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, p
         : { status: 0, stderr: "" };
     };
     syncBuiltinESMExports();
-    const open = () => openServiceLog({
+    const open = () => openServiceLog({ contract,
       boxteamHome: fixtureRoot, environment: { [SERVICE_LOG_PATH_ENV]: logPath },
       stdout: { write(value) { primaryWrites.push(value); return false; } },
       stderr: { write(value) { primaryWrites.push(value); return true; } },
@@ -111,7 +113,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, p
     if (scenario.startsWith("spawn-")) {
       let returnedChild, observedError;
       try {
-        returnedChild = spawnDetachedProcess({ command: process.execPath, args: [],
+        returnedChild = spawnDetachedProcess({ contract, command: process.execPath, args: [],
           cwd: fixtureRoot, environment: {}, logPath });
       } catch (error) { observedError = error; }
       assert.equal(spawnCalls, 1);
@@ -144,7 +146,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, p
       let observedError;
       try {
         if (scenario.startsWith("detached-")) {
-          spawnDetachedProcess({ command: process.execPath, args: [], cwd: fixtureRoot, environment: {}, logPath });
+          spawnDetachedProcess({ contract, command: process.execPath, args: [], cwd: fixtureRoot, environment: {}, logPath });
         } else { serviceLog = open(); }
       } catch (error) { observedError = error; }
       if (scenario.endsWith("-dual")) {
@@ -201,6 +203,7 @@ function runServiceLogIo(scenario, platform = process.platform) {
     scenario, fixtureRoot,
     new URL("./service-log.mjs", import.meta.url).href,
     new URL("../detached-process.mjs", import.meta.url).href,
+    new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href,
     platform,
   ])}\n`, { flag: "wx" });
   const args = [observerPath, inputPath];

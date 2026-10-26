@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { resolveDevelopmentLayout } from "./dev-environment.mjs";
 import { terminateDetachedProcess } from "../../packages/launcher/src/detached-process.mjs";
 import { resolveServiceLogPath } from "../../packages/launcher/src/logging/service-log.mjs";
+import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
 
 const MANAGER_START_TIMEOUT_MS = 120_000;
 const MANAGER_STOP_GRACE_MS = 15_000;
@@ -30,7 +31,7 @@ function createManagerLayout(environment = process.env, cwd = process.cwd()) {
     runtimeRoot,
     readyFile: path.join(runtimeRoot, "detached-ready.json"),
     operationLockFile: path.join(runtimeRoot, "manager-operation.lock"),
-    logPath: resolveServiceLogPath(layout.boxteamHome, environment),
+    logPath: resolveServiceLogPath(layout.boxteamHome, environment, loadRuntimeLogContract(layout.projectRoot)),
     frontendUrl: `http://127.0.0.1:${layout.ports.frontend}`,
     gatewayHealthUrl: `http://127.0.0.1:${layout.ports.gateway}/api/gateway/health`,
   };

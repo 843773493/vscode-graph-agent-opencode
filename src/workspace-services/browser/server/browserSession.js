@@ -1,3 +1,5 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
@@ -41,6 +43,8 @@ import {
   captureBrowserCheckpoint,
   restoreBrowserCheckpoint,
 } from "./resources/browserCheckpoint.js";
+
+const logger = createRuntimeLogger("browser", "browser.browserSession");
 
 const BROWSER_MODAL_DETECTION_MS = 1000;
 const AGENT_LOCK_LEASE_MS = 45_000;
@@ -292,7 +296,7 @@ export class BrowserSession extends EventEmitter {
       void this.queueScreencastProfile("interactive").catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.stream_error = `切换交互流失败: ${message}`;
-        console.error(`[browser-session] ${this.record.stream_error}`);
+        logger.error(`[browser-session] ${this.record.stream_error}`);
       });
     }
     this.streamRelaxTimer = setTimeout(() => {
@@ -301,7 +305,7 @@ export class BrowserSession extends EventEmitter {
       void this.queueScreencastProfile("relaxed").catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.stream_error = `切换低活动流失败: ${message}`;
-        console.error(`[browser-session] ${this.record.stream_error}`);
+        logger.error(`[browser-session] ${this.record.stream_error}`);
       });
     }, STREAM_RELAX_DELAY_MS);
     this.streamRelaxTimer.unref?.();
@@ -486,7 +490,7 @@ export class BrowserSession extends EventEmitter {
         softReasons.push(...inspectedSoftReasons);
         this.protectionInspectionFailureExpiresAtUnixMs = 0;
       } catch (error) {
-        console.error("[browser-session] 资源保护检查失败", { browser_id: this.id }, error);
+        logger.error("[browser-session] 资源保护检查失败", { browser_id: this.id }, error);
         hardReasons.push("protection_inspection_failed:stage=inspect_protection");
         this.protectionInspectionFailureExpiresAtUnixMs = Date.now() + PROTECTION_INSPECTION_RETRY_MS;
       }
@@ -1066,7 +1070,7 @@ export class BrowserSession extends EventEmitter {
       // 原有协议拒绝码与HTTP分类不因原生异常正文退出普通响应而改变。
       error.code = cause?.code;
       error.statusCode = cause?.statusCode;
-      console.error("[browser-session] 注册浏览器标签页失败", { browser_id: this.id, page_id: pageId }, cause);
+      logger.error("[browser-session] 注册浏览器标签页失败", { browser_id: this.id, page_id: pageId }, cause);
       throw error;
     });
     this.pageRegistrationPromises.set(page, registration);
@@ -1161,7 +1165,7 @@ export class BrowserSession extends EventEmitter {
         error: errorText,
         stage: "request_failed",
       });
-      console.error(
+      logger.error(
         `[browser-session] 主文档导航失败: browser_id=${this.id} page_id=${pageId} url=${requestedUrl} error=${errorText}`,
       );
       if (this.activePageId === pageId) {
@@ -1190,7 +1194,7 @@ export class BrowserSession extends EventEmitter {
       void this.activatePage(pageId).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `激活浏览器对话框标签页失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
+        logger.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1200,7 +1204,7 @@ export class BrowserSession extends EventEmitter {
       void this.activatePage(pageId).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `激活文件选择器标签页失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
+        logger.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1211,7 +1215,7 @@ export class BrowserSession extends EventEmitter {
       void this.handlePageClosed(pageId, page).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `处理标签页关闭事件失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
+        logger.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1341,7 +1345,7 @@ export class BrowserSession extends EventEmitter {
       this.record.updated_at = nowIso();
       await this.manager.persist();
       this.emit("state", this.snapshot());
-      console.error("[browser-session] 保存下载失败:", message);
+      logger.error("[browser-session] 保存下载失败:", message);
     } finally {
       this.activeDownloads = Math.max(0, this.activeDownloads - 1);
     }

@@ -17,9 +17,10 @@ import {
   SERVICE_LOG_CAPTURED_ENV,
   SERVICE_LOG_PATH_ENV,
 } from "./service-log.mjs";
-import { loadRuntimeLogContract, runtimeLogPath, runtimeLogRoot } from "./runtime-contract.mjs";
+import { loadRuntimeLogContract } from "../../../../src/shared/serverRuntimeLogging.mjs";
 
-const { max_bytes: maxLogBytes } = loadRuntimeLogContract().rotation;
+const contract = loadRuntimeLogContract();
+const { max_bytes: maxLogBytes } = contract.rotation;
 
 const serviceLogFixtureRunRoot = path.join(
   process.cwd(), "out/tests/packages/launcher/src/logging/service-log/workspace", randomUUID(),
@@ -39,12 +40,12 @@ describe("service log", () => {
     const home = temporaryRoot();
     const samples = JSON.parse(readFileSync(path.resolve("resources/logging/path-samples.json"), "utf8"));
     for (const sample of samples) {
-      expect(runtimeLogPath(runtimeLogRoot(home), sample.role, sample.instance)).toBe(
+      expect(contract.pathFor(contract.rootFor(home), sample.role, sample.instance)).toBe(
         path.resolve(home, sample.path),
       );
     }
     for (const instance of ["", "../outside", "C:\\outside", "/etc", "a\\b", ".", "中文"]) {
-      expect(() => runtimeLogPath(home, "backend", instance)).toThrow("进程日志实例");
+      expect(() => contract.pathFor(home, "backend", instance)).toThrow("进程日志实例");
     }
   });
 
@@ -55,10 +56,10 @@ describe("service log", () => {
     const contract = readFileSync(path.resolve("resources/logging/runtime-contract.json"));
     writeFileSync(path.join(resources, "runtime-contract.json"), contract);
     const home = temporaryRoot();
-    expect(resolveServiceLogPath(home, { BOXTEAM_PROJECT_ROOT: applicationRoot })).toBe(
+    expect(resolveServiceLogPath(home, {}, loadRuntimeLogContract(applicationRoot))).toBe(
       path.join(home, "state/logs/launcher/services.log"),
     );
-    expect(() => resolveServiceLogPath(home, { BOXTEAM_PROJECT_ROOT: path.join(applicationRoot, "missing") })).toThrow();
+    expect(() => loadRuntimeLogContract(path.join(applicationRoot, "missing"))).toThrow();
   });
 
   test("detached 的 Gateway 输出只写 Gateway 文件，覆盖只作用于 Launcher", () => {
@@ -67,8 +68,8 @@ describe("service log", () => {
     const environment = { [SERVICE_LOG_PATH_ENV]: outerPath, [SERVICE_LOG_CAPTURED_ENV]: "1" };
     const captured = [];
     const primary = { write: (value) => captured.push(value) };
-    const launcher = openServiceLog({ boxteamHome: home, environment, stdout: primary, stderr: primary });
-    const gateway = openServiceLog({ boxteamHome: home, environment, role: "gateway", stdout: primary, stderr: primary });
+    const launcher = openServiceLog({ contract, boxteamHome: home, environment, stdout: primary, stderr: primary });
+    const gateway = openServiceLog({ contract, boxteamHome: home, environment, role: "gateway", stdout: primary, stderr: primary });
     try {
       launcher.stdout.write("launcher only\n");
       gateway.stdout.write("gateway 中文\n");
@@ -86,7 +87,7 @@ describe("service log", () => {
   test("默认写入 BOXTEAM_HOME 的 Launcher 日志目录", () => {
     const boxteamHome = temporaryRoot();
 
-    expect(resolveServiceLogPath(boxteamHome, {})).toBe(
+    expect(resolveServiceLogPath(boxteamHome, {}, contract)).toBe(
       path.join(boxteamHome, "state", "logs", "launcher", "services.log"),
     );
   });
@@ -95,7 +96,7 @@ describe("service log", () => {
     const boxteamHome = temporaryRoot();
     const stdout = [];
     const stderr = [];
-    const serviceLog = openServiceLog({
+    const serviceLog = openServiceLog({ contract,
       boxteamHome,
       environment: {},
       stdout: { write: (value) => stdout.push(String(value)) },
@@ -121,7 +122,7 @@ describe("service log", () => {
     const logPath = path.join(boxteamHome, "artifacts", "services.log");
     const stdout = { write() {} };
     const stderr = { write() {} };
-    const serviceLog = openServiceLog({
+    const serviceLog = openServiceLog({ contract,
       boxteamHome,
       environment: {
         [SERVICE_LOG_PATH_ENV]: logPath,
@@ -140,12 +141,12 @@ describe("service log", () => {
 
   test("启动时轮转超过上限的旧日志", () => {
     const boxteamHome = temporaryRoot();
-    const logPath = resolveServiceLogPath(boxteamHome, {});
+    const logPath = resolveServiceLogPath(boxteamHome, {}, contract);
     mkdirSync(path.dirname(logPath), { recursive: true });
     writeFileSync(logPath, "");
     truncateSync(logPath, maxLogBytes);
 
-    const serviceLog = openServiceLog({
+    const serviceLog = openServiceLog({ contract,
       boxteamHome,
       environment: {},
       stdout: { write() {} },

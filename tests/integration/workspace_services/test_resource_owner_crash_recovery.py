@@ -111,6 +111,7 @@ def resource_processes(
     workspace_id = load_or_create_workspace_id(workspace)
     ports = integration_port_block_for_file(Path(request.node.path))
     monkeypatch.setenv("PYTHONPATH", str(project))
+    monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(project))
     with ExitStack() as stack:
         for kind, offset in (("terminal", 40), ("browser", 42)):
             port = ports.port(offset)

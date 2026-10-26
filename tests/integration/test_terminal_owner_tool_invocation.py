@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -162,6 +163,8 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
     diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))
     assert str(not_directory) in diagnostic
     assert "ENOENT" in diagnostic
+    assert re.search(r"service=terminal pid=\d+ runtime_instance_id=[0-9a-f-]+ logger=terminal\.", diagnostic)
+    assert f'workspace_id="{owner.workspace_id}"' in diagnostic
 
 
 @pytest.mark.asyncio

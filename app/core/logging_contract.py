@@ -18,6 +18,12 @@ class RuntimeLogContract:
     paths: Mapping[str, tuple[str, ...]]
     max_bytes: int
     archives: int
+    levels: Mapping[str, int]
+    default_level: str
+    default_pretty: bool
+    pretty_format: str
+    compact_format: str
+    context_fields: tuple[str, ...]
 
     def root_for(self, boxteam_home: Path) -> Path:
         return boxteam_home.resolve().joinpath(*self.root_parts)
@@ -46,6 +52,12 @@ def load_runtime_log_contract(project_root: Path | None = None) -> RuntimeLogCon
         paths={role: tuple(parts) for role, parts in payload["paths"].items()},
         max_bytes=payload["rotation"]["max_bytes"],
         archives=payload["rotation"]["archives"],
+        levels=payload["record"]["levels"],
+        default_level=payload["record"]["defaults"]["level"],
+        default_pretty=payload["record"]["defaults"]["pretty"],
+        pretty_format=payload["record"]["pretty"],
+        compact_format=payload["record"]["compact"],
+        context_fields=tuple(payload["record"]["context_fields"]),
     )
 
 

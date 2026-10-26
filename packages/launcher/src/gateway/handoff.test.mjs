@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 
-async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl) {
+async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, loggingUrl, applicationRoot) {
   const { default: assert } = await import("node:assert/strict");
   const { EventEmitter, once } = await import("node:events");
   const { createServer } = await import("node:http");
@@ -13,6 +13,8 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl) 
   const { requestGatewayHandoff, superviseGateway } = await import(supervisorUrl);
   const { createGatewaySupervisorControl, gatewaySupervisorControlAddress } = await import(controlUrl);
   const { listenServer, closeServer } = await import(lifetimeUrl);
+  const { createRuntimeLogger, loadRuntimeLogContract } = await import(loggingUrl);
+  const logger = createRuntimeLogger("launcher", "test", { write() {} }, loadRuntimeLogContract(applicationRoot));
   const boxteamHome = process.cwd();
   const controlAddress = gatewaySupervisorControlAddress(boxteamHome);
   const environment = {
@@ -64,7 +66,7 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl) 
   };
   const running = superviseGateway({
     runtime, environment: { BOXTEAM_HOME: boxteamHome, BOXTEAM_GATEWAY_PORT: String(publicPort) },
-    openBrowser: false, stdout: { write() {} }, stderr: { write() {} }, processObject,
+    openBrowser: false, logger, processObject,
     spawnImpl(_command, args, options) {
       const child = new EventEmitter();
       child.exitCode = null;
@@ -175,7 +177,7 @@ function runHandoff(scenario) {
       await observeHandoff(...JSON.parse(process.argv[1]));
     `, JSON.stringify([scenario, ...["supervisor", "control-channel", "server-lifetime"].map(
       (name) => new URL("./" + name + ".mjs", import.meta.url).href,
-    )])], {
+    ), new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href, process.cwd()])], {
       encoding: "utf8", timeout: 5000, cwd: fixtureRoot,
       env: { ...process.env, TMPDIR: ".", TMP: ".", TEMP: "." },
     });

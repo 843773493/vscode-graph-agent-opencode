@@ -1,3 +1,5 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
@@ -13,6 +15,8 @@ import {
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { LatestPointerMoveDispatcher } from "./operations/latestPointerMoveDispatcher.js";
 import { encodeBinaryFrame, encodeServerMessage, parseClientMessage } from "./transport/protocol.js";
+
+const logger = createRuntimeLogger("browser", "browser.backend");
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8015;
@@ -71,7 +75,7 @@ async function sendDownload(response, file, { browserId, artifactId, kind, media
   let stage = "open";
   let failure = null;
   const artifactFailure = (cause, failedStage) => {
-    console.error("[browser-backend] 读取浏览器产物失败", {
+    logger.error("[browser-backend] 读取浏览器产物失败", {
       browser_id: browserId, artifact_id: artifactId, kind, stage: failedStage, path: file.path,
     }, cause);
     const missing = failedStage === "open" && cause.code === "ENOENT";
@@ -233,6 +237,7 @@ async function main() {
   const port = Number(args.get("port") || process.env.BOXTEAM_BROWSER_BACKEND_PORT || DEFAULT_PORT);
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
   const workspaceId = validateWorkspaceId(args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID);
+  const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
   const manager = new BrowserManager({ workspaceRoot, workspaceId });
   await manager.init();
   manager.startResourceGovernor({
@@ -521,7 +526,7 @@ async function main() {
       notFound(response);
     } catch (error) {
       if (response.headersSent || response.destroyed) {
-        console.error("[browser-backend] 响应开始后传输失败", error);
+        workspaceLogger.error("[browser-backend] 响应开始后传输失败", error);
         response.destroy(error);
         return;
       }
@@ -871,7 +876,7 @@ async function main() {
       const detail = stripVTControlCharacters(
         error instanceof Error ? (error.stack || error.message) : String(error),
       );
-      console.error(
+      workspaceLogger.error(
         `[browser-backend] WebSocket 操作失败: browser_id=${attachedBrowser?.id || message.browserId || "unknown"} participant_id=${client.participantId} type=${message.type} command=${message.name || "-"}\n${detail}`,
       );
       const visibleMessage = attachedBrowser?.snapshot().navigation_error?.message
@@ -933,7 +938,7 @@ async function main() {
       pointerMoves.close();
       client.closeFrameFlow();
       void detach(false).catch((error) => {
-        console.error(
+        workspaceLogger.error(
           "[browser-backend] WebSocket 关闭时 detach 失败:",
           error instanceof Error ? (error.stack ?? error.message) : String(error),
         );
@@ -942,8 +947,8 @@ async function main() {
   });
 
   server.listen(port, host, () => {
-    console.log(`[browser-backend] listening on http://${host}:${port}`);
-    console.log(`[browser-backend] workspace ${workspaceRoot}`);
+    workspaceLogger.info(`[browser-backend] listening on http://${host}:${port}`);
+    workspaceLogger.info(`[browser-backend] workspace ${workspaceRoot}`);
   });
 
   let shuttingDown = false;
@@ -951,7 +956,7 @@ async function main() {
   const shutdown = async (reason, exitCode, error = null) => {
     if (error) {
       hasFatalError = true;
-      console.error(error);
+      workspaceLogger.error(error);
     }
     if (shuttingDown) {
       return;
@@ -963,7 +968,7 @@ async function main() {
     try {
       await manager.shutdown(reason);
     } catch (shutdownError) {
-      console.error(
+      workspaceLogger.error(
         hasFatalError ? "[browser-backend] 致命错误后的关闭检查点失败:"
           : "[browser-backend] 关闭失败，保留原运行时与 HTTP 管理入口；核实原操作后再次发送关闭信号重试:",
         shutdownError,

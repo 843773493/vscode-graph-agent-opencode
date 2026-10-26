@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -36,7 +37,7 @@ def load_boxteam_env(*, override: bool = False, required: bool = False) -> Path 
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
-    print("[Env] 加载 BoxTeam 环境配置")
+    logging.getLogger(__name__).info("加载 BoxTeam 环境配置")
 
     if not env_file.exists():
         if required:

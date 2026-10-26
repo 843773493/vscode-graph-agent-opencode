@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, spyOn, test } from "bun:test";
 import { BrowserSession } from "../browserSession.js";
 import { captureBrowserCheckpoint, checkpointRestoreUrl, restoreBrowserCheckpoint } from "./browserCheckpoint.js";
@@ -7,7 +8,7 @@ describe("浏览器检查点的运行时失败", () => {
     "%s 保留原始异常与失败阶段，不复制原生存储位置", async (stage) => {
       const cause = Object.assign(new Error("EACCES /private/browser/profile"), { code: "EACCES" });
       const fail = async () => { throw cause; };
-      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
       const browser = new BrowserSession({ manager: { persist: async () => undefined }, record: {
         browser_id: "browser_checkpoint_error", status: "running", reconciliation_status: "verified",
       } });
@@ -39,7 +40,7 @@ describe("浏览器检查点的运行时失败", () => {
         expect(error.message).not.toContain("/private/browser/profile");
         expect(error.code).toBe(stage.startsWith("restore_") ? "browser_checkpoint_page_restore_failed" : "EACCES");
         if (stage.startsWith("restore_")) expect(error.message).toContain(page.url());
-        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(logged.mock.calls.some((args) => args[0].includes(inspect(cause)))).toBe(true);
         expect(releases).toBe(stage === "create_page" || stage.startsWith("restore_") ? 1 : 0);
       } finally { logged.mockRestore(); }
     },

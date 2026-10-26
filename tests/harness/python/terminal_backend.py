@@ -29,6 +29,7 @@ def start_terminal_backend(
         raise RuntimeError("未找到 node，无法启动终端 e2e 进程")
 
     env = os.environ.copy()
+    env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["WORKSPACE_ROOT"] = workspace_root
     env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
     workspace_id = load_or_create_workspace_id(Path(workspace_root))

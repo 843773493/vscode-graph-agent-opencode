@@ -93,6 +93,7 @@ def _browser_backend_process(
             cwd=project_root / "src" / "workspace-services" / "browser" / "server",
             env={
                 **os.environ,
+                "BOXTEAM_PROJECT_ROOT": str(project_root),
                 "WORKSPACE_ROOT": str(workspace_root),
                 "BOXTEAM_BROWSER_WORKSPACE_ROOT": str(workspace_root),
                 "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(workspace_root),

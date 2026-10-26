@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { once } from "node:events";
+import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
 
 import {
   spawnDetachedProcess,
@@ -36,6 +37,7 @@ const {
   portOffset,
   ports,
 } = developmentLayout;
+const logContract = loadRuntimeLogContract(projectRoot);
 const webRoot = path.join(projectRoot, "src", "clients", "web");
 const terminalFrontendRoot = path.join(
   projectRoot,
@@ -214,7 +216,7 @@ async function launchDetachedManager() {
   const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
   mkdirSync(runtimeRoot, { recursive: true });
   const readyFile = path.join(runtimeRoot, "detached-ready.json");
-  const logPath = resolveServiceLogPath(boxteamHome, process.env);
+  const logPath = resolveServiceLogPath(boxteamHome, process.env, logContract);
   rmSync(readyFile, { force: true });
 
   const child = spawnDetachedProcess({
@@ -227,6 +229,7 @@ async function launchDetachedManager() {
       BOXTEAM_DEV_READY_FILE: readyFile,
     },
     logPath,
+    contract: logContract,
   });
   if (!Number.isInteger(child.pid)) {
     throw new Error(`无法取得 detached dev manager pid，日志: ${logPath}`);

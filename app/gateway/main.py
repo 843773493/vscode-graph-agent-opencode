@@ -9,12 +9,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.gateway.lifespan import lifespan
 from app.gateway.route_registry import register_gateway_routes
 from app.gateway.server.static_ui import install_static_web_ui
 from app.protocol.codecs.http_validation import request_validation_error_response
 
+configure_application_logging(service="gateway")
 logger = logging.getLogger(__name__)
 
 

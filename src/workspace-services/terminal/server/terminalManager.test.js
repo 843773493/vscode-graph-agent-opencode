@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { cpSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -68,7 +69,7 @@ test("无效工作目录公开拒绝不含原生路径，原始原因留在诊�
   const root = createTerminalTestWorkspace();
   const file = path.join(root, "not-a-directory.txt");
   writeFileSync(file, "原件不变");
-  const diagnostic = t.mock.method(console, "error", () => {});
+  const diagnostic = t.mock.method(process.stderr, "write", () => {});
   for (const cwd of ["missing", path.join(root, "absolute-missing"), file, "bad\0directory"]) {
     await assert.rejects(() => resolveTerminalCwd(root, cwd), (error) => {
       assert.equal(error.message, cwd.includes("\0")
@@ -76,9 +77,9 @@ test("无效工作目录公开拒绝不含原生路径，原始原因留在诊�
       assert.equal(error.message.includes(root), false);
       assert.equal(error.message.includes(cwd), false);
       const last = diagnostic.mock.calls.at(-1).arguments;
-      assert.equal(last[1].cwd, path.resolve(root, cwd));
+      assert(last[0].includes(inspect({ cwd: path.resolve(root, cwd) })));
       if (cwd !== file) {
-        assert.equal(error.cause, last[2]);
+        assert(last[0].includes(inspect(error.cause)));
         assert.equal(error.cause.code, cwd.includes("\0") ? "ERR_INVALID_ARG_VALUE" : "ENOENT");
       }
       return true;

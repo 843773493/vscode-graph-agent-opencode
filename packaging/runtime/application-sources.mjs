@@ -30,6 +30,11 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
     path.join(applicationRoot, "resources"),
     copyOptions,
   );
+  cpSync(
+    path.join(projectRoot, "src", "shared"),
+    path.join(applicationRoot, "src", "shared"),
+    copyOptions,
+  );
   for (const service of ["terminal", "browser"]) {
     cpSync(
       path.join(projectRoot, "src", "workspace-services", service, "server"),

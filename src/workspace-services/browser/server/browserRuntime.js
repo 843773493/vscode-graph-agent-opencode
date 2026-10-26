@@ -1,3 +1,7 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
+const logger = createRuntimeLogger("browser", "browser.browserRuntime");
+
 export const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 export const NAVIGATION_TIMEOUT_MS = 30000;
 export const TOOL_TIMEOUT_MS = 10000;
@@ -24,7 +28,7 @@ export function browserRuntimeFailure({ browserId, pageId = null, stage, cause }
   );
   error.code = cause?.code;
   error.statusCode = cause?.statusCode;
-  console.error("[browser-runtime] 资源生命周期操作失败", { browser_id: browserId, page_id: pageId, stage }, cause);
+  logger.error("[browser-runtime] 资源生命周期操作失败", { browser_id: browserId, page_id: pageId, stage }, cause);
   return error;
 }
 
@@ -43,7 +47,7 @@ export class BrowserToolTimeoutError extends Error {
     this.recovery_error = "浏览器页面重置失败: stage=reset_page";
     this.message = `${this.message}；${this.recovery_error}`;
     this.cause = cause;
-    console.error("[browser-runtime] 页面超时恢复失败", { timeout_ms: this.timeout_ms }, cause);
+    logger.error("[browser-runtime] 页面超时恢复失败", { timeout_ms: this.timeout_ms }, cause);
   }
 }
 

@@ -1,3 +1,5 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
@@ -11,6 +13,8 @@ import {
   validateTerminalRecord,
 } from "./terminalSession.js";
 import { TerminalStateStore } from "./terminalStateStore.js";
+
+const logger = createRuntimeLogger("terminal", "terminal.terminalManager");
 
 export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
 export const MAX_RETAINED_TERMINAL_HISTORY = 256;
@@ -107,7 +111,7 @@ export class TerminalManager {
     try {
       stat = await readProcessStat(pid);
     } catch (error) {
-      console.error(
+      logger.error(
         `[terminal-manager] 启动时核实进程身份失败: terminal_id=${record.terminal_id}, pid=${pid}`,
         error,
       );

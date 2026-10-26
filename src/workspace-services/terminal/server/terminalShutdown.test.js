@@ -103,7 +103,7 @@ test("迟到就绪仍进入同一关闭；重复信号观察不重复启动或�
 
 test("启动未知即使 worker 已退出仍阻止关闭，不将退出误作未创建或停止证明", async (t) => {
   const manager = await prepareManager(t);
-  t.mock.method(console, "error", () => {});
+  t.mock.method(process.stderr, "write", () => {});
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw new Error("native 无 PID"); });
   const stops = t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
   const options = intent(manager);

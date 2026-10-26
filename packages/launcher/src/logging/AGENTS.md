@@ -4,7 +4,6 @@
 
 ```text
 日志文件
-├── runtime-contract.mjs             读取发行资源中的唯一布局与轮转合同
 └── service-log.mjs
     ├── resolveServiceLogPath       选择显式日志路径或BOXTEAM_HOME默认位置
     ├── rotateServiceLog            启动时按既有大小与份数轮转
@@ -29,6 +28,7 @@
 # 规范
 
 - 前台与detached共用日志描述符初始化owner，成功后各自负责关闭持有的描述符。
+- 共享合同加载和记录编码由 `src/shared/serverRuntimeLogging.mjs` 单点提供，文件 IO 显式接收所选 runtime 的合同。
 - 默认布局与轮转参数只在 `resources/logging/runtime-contract.json` 维护；源码入口使用显式根或运行时工作目录，发行 Launcher 使用选定 runtime 的 application root。
 - Launcher 与 Gateway 各自落盘；detached 捕获 Launcher 后，Gateway 不再向该捕获流 tee。Gateway handoff 共用原 sink，不在 generation 切换时重新打开或轮转文件。
 - 初始化失败要尝试释放；释放也失败时按发生顺序保留两份原异常，cause指向初始化错误。

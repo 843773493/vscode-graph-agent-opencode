@@ -105,6 +105,7 @@ def windows_terminal_backend(
         frontend_stdout_file = lifetime.enter_context(frontend_stdout_path.open("w", encoding="utf-8"))
         frontend_stderr_file = lifetime.enter_context(frontend_stderr_path.open("w", encoding="utf-8"))
         env = os.environ.copy()
+        env["BOXTEAM_PROJECT_ROOT"] = str(Path.cwd().resolve())
         env["BOXTEAM_WORKSPACE_ID"] = workspace_id
         env["WORKSPACE_ROOT"] = workspace_root
         env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root

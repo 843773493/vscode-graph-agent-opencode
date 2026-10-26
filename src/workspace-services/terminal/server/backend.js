@@ -1,3 +1,5 @@
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+
 import http from "node:http";
 import path from "node:path";
 import { existsSync, statSync } from "node:fs";
@@ -8,6 +10,8 @@ import {
 } from "../protocol/messages.js";
 import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
+
+const logger = createRuntimeLogger("terminal", "terminal.backend");
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8012;
@@ -170,6 +174,7 @@ async function main() {
   const port = Number(args.get("port") || process.env.BOXTEAM_TERMINAL_BACKEND_PORT || DEFAULT_PORT);
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
   const workspaceId = resolveRequiredWorkspaceId(args);
+  const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
   const manager = new TerminalManager({
     workspaceRoot,
     workspaceId,
@@ -458,15 +463,15 @@ async function main() {
       messageQueue = messageQueue
         .then(() => detachCurrent())
         .catch((error) => {
-          console.error("[terminal-backend] WebSocket 关闭时 detach 失败", error);
+          workspaceLogger.error("[terminal-backend] WebSocket 关闭时 detach 失败", error);
         });
     });
   });
 
   server.listen(port, host, () => {
-    console.log(`[terminal-backend] listening on http://${host}:${port}`);
-    console.log(`[terminal-backend] workspace ${workspaceRoot}`);
-    console.log(`[terminal-backend] workspace_id ${workspaceId}`);
+    workspaceLogger.info(`[terminal-backend] listening on http://${host}:${port}`);
+    workspaceLogger.info(`[terminal-backend] workspace ${workspaceRoot}`);
+    workspaceLogger.info(`[terminal-backend] workspace_id ${workspaceId}`);
   });
 
   let shuttingDown = false;
@@ -474,7 +479,7 @@ async function main() {
   const shutdown = async (reason, exitCode, error = null) => {
     if (error) {
       hasFatalError = true;
-      console.error(error);
+      workspaceLogger.error(error);
     }
     if (shuttingDown) {
       return;
@@ -487,7 +492,7 @@ async function main() {
     try {
       await manager.shutdown(reason);
     } catch (shutdownError) {
-      console.error(hasFatalError ? "[terminal-backend] 致命错误后的关闭失败:"
+      workspaceLogger.error(hasFatalError ? "[terminal-backend] 致命错误后的关闭失败:"
         : "[terminal-backend] 关闭失败，保留原任务与 HTTP 管理入口；核实后再次发送关闭信号重试:", shutdownError);
       if (!hasFatalError) {
         shuttingDown = false;
@@ -500,7 +505,7 @@ async function main() {
       await closeHttpServer(server);
     } catch (transportError) {
       finalExitCode = 1;
-      console.error("[terminal-backend] transport 关闭失败", transportError);
+      workspaceLogger.error("[terminal-backend] transport 关闭失败", transportError);
     } finally {
       process.exit(hasFatalError ? 1 : finalExitCode);
     }

@@ -16,6 +16,9 @@
     "required_fields": ["timestamp", "level", "service", "pid", "runtime_instance_id", "message"],
     "context_fields": ["workspace_id", "session_id", "thread_id", "request_id"],
     "levels": {"debug": 10, "info": 20, "warning": 30, "error": 40, "critical": 50},
+    "defaults": {"level": "info", "pretty": true},
+    "pretty": "{timestamp} [{level_upper}] service={service} pid={pid} runtime_instance_id={runtime_instance_id} logger={logger}{context} {message}",
+    "compact": "timestamp={timestamp} level={level} service={service} pid={pid} runtime_instance_id={runtime_instance_id} logger={logger}{context} message={message}",
     "timestamp": "UTC ISO-8601 with milliseconds and Z suffix",
     "raw_output": "Third-party stdout/stderr, PTY output and page console preserve original bytes."
   }

@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_application_logging()
+    configure_application_logging(service="gateway")
     load_boxteam_env()
     get_gateway_local_token()
     logger.info("Gateway 日志已初始化: gateway_root=%s", _gateway_root())
