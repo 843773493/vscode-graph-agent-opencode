@@ -44,6 +44,7 @@ class GatewayRuntimeConsumerStage:
     rollback: RuntimeAction
     fencing_token_digest: str | None = None
     fence_check: RuntimeFenceCheck | None = None
+    finalize: RuntimeAction | None = None
 
 
 @dataclass(slots=True)
@@ -63,17 +64,30 @@ class GatewayRuntimeConsumerApplyResult:
     async def rollback(self) -> None:
         """按逆序补偿所有已经 apply 的消费者。"""
 
-        errors: list[str] = []
+        errors: list[tuple[str, Exception]] = []
         for stage in reversed(self.stages):
             try:
                 GatewayRuntimeConsumerTransaction._assert_stage_fence(stage)
                 await _run_action(stage.rollback)
             except Exception as error:  # noqa: BLE001 - 必须汇总全部补偿失败
-                errors.append(f"{stage.consumer_id}: {error}")
+                errors.append((stage.consumer_id, error))
         if errors:
             raise RuntimeError(
-                "Gateway runtime consumer 补偿不完整: " + "; ".join(errors)
-            )
+                "Gateway runtime consumer 补偿不完整: "
+                + "; ".join(f"{consumer_id}: {error}" for consumer_id, error in errors)
+            ) from ExceptionGroup("消费者原始补偿异常", [error for _, error in errors])
+
+    async def finalize(self) -> None:
+        """结算后释放 prepare 持有的资源；失去 claim 也必须释放本地锁。"""
+        errors: list[Exception] = []
+        for stage in reversed(self.stages):
+            if stage.finalize is not None:
+                try:
+                    await _run_action(stage.finalize)
+                except Exception as error:  # noqa: BLE001 — 必须尝试释放全部消费者。
+                    errors.append(error)
+        if errors:
+            raise ExceptionGroup("Gateway runtime consumer 资源释放失败", errors)
 
 
 class GatewayRuntimeConsumerTransaction:
@@ -97,8 +111,8 @@ class GatewayRuntimeConsumerTransaction:
         try:
             for stage in self._stages:
                 self._assert_stage_fence(stage)
-                await _run_action(stage.prepare)
                 prepared.append(stage)
+                await _run_action(stage.prepare)
             for stage in prepared:
                 # apply 可能已经产生部分外部副作用后才抛错；必须先登记阶段，
                 # 让该阶段自己的 rollback 也参与补偿。rollback 需要幂等。
@@ -112,7 +126,10 @@ class GatewayRuntimeConsumerTransaction:
         except BaseException as error:
             # prepare 允许建立尚未暴露给外部请求的候选资源；即使后续
             # prepare 或 apply 尚未开始，也必须调用该阶段的幂等回退释放它。
-            await self._rollback_prepared(prepared, error)
+            try:
+                await self._rollback_prepared(prepared, error)
+            finally:
+                await GatewayRuntimeConsumerApplyResult(tuple(prepared), ()).finalize()
             raise
         return GatewayRuntimeConsumerApplyResult(
             stages=tuple(applied),
@@ -158,18 +175,18 @@ class GatewayRuntimeConsumerTransaction:
         prepared: Sequence[GatewayRuntimeConsumerStage],
         original_error: BaseException,
     ) -> None:
-        errors: list[str] = []
+        errors: list[tuple[str, Exception]] = []
         for stage in reversed(prepared):
             try:
                 GatewayRuntimeConsumerTransaction._assert_stage_fence(stage)
                 await _run_action(stage.rollback)
             except Exception as rollback_error:  # noqa: BLE001
-                errors.append(f"{stage.consumer_id}: {rollback_error}")
+                errors.append((stage.consumer_id, rollback_error))
         if errors:
             raise RuntimeError(
                 "Gateway runtime consumer apply 失败且补偿不完整: "
-                + "; ".join(errors)
-            ) from original_error
+                + "; ".join(f"{consumer_id}: {error}" for consumer_id, error in errors)
+            ) from BaseExceptionGroup("原始应用与补偿异常", [original_error, *(error for _, error in errors)])
 
 
 async def _run_action(action: RuntimeAction) -> None:

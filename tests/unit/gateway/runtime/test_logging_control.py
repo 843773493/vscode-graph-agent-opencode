@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -10,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.logging_config import RuntimeLoggingConflictError
+from app.gateway.runtime import logging_control as logging_control_module
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
@@ -144,3 +146,48 @@ async def test_apply_requires_complete_actual_confirmation(
         else:
             state = await control.apply(base_url="http://127.0.0.1:43000", service="backend", pid=43210, request=logging_request)
             assert state.model_dump(mode="json") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reply", "error_type", "message"), [
+    (b'{"ok": true}', RuntimeError, "完整响应前结束"),
+    (b'{"ok": "true", "data": {}}\n', ValueError, "明确结果"),
+    (b'{"ok": true}\n', ValueError, "缺少状态"),
+    ('{"ok": false, "error": "目标进程已退出 😀"}\n'.encode(), RuntimeError, "目标进程已退出 😀"),
+    (b'x' * (64 * 1024 + 1) + b'\n', ValueError, "limit"),
+    (None, TimeoutError, "^$"),
+])
+async def test_launcher_control_rejects_incomplete_invalid_and_timed_out_responses(
+    monkeypatch: pytest.MonkeyPatch, reply: bytes | None, error_type: type[Exception], message: str,
+) -> None:
+    finished = asyncio.Event()
+    messages: list[dict[str, object]] = []
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            messages.append(json.loads(await reader.readline()))
+            if reply is None:
+                await reader.read()
+            else:
+                writer.write(reply)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    async with await asyncio.start_server(respond, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+
+        async def connect(address: str):
+            assert address == "/explicit/launcher.sock"
+            return await asyncio.open_connection("127.0.0.1", port, limit=64 * 1024)
+
+        monkeypatch.setattr(logging_control_module, "_open_launcher_control", connect)
+        async with httpx.AsyncClient(trust_env=False) as client:
+            with pytest.raises(error_type, match=message):
+                await RuntimeLoggingProcessControl(client=client, token="private-token").launcher_status(
+                    address="/explicit/launcher.sock", pid=43210, timeout_seconds=0.1,
+                )
+        await asyncio.wait_for(finished.wait(), 2)
+    assert messages == [{"operation": "runtime_logging", "token": "private-token", "action": "status"}]

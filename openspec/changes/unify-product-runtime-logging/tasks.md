@@ -108,3 +108,11 @@
 - 证据仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`：最终迁移 `migration-complete-012` 50通过；此前迁移／安装／布局 `migration-final-010` 67通过，后续中断重放及共享owner接续由012补验；Gateway `gateway-final-002` 120通过，Workspace配置消费者 `config-consumers-final-004` 89通过。`typecheck-comparison-006.json` 与 `ruff-comparison-002.json` 核对受影响文件均无新增诊断，整组静态仍有既存错误，不称全绿。
 - 扩大真实生命周期 `migration-mounted-runtime-001` 为10通过／4项模型请求前等待超时；完整提交前源码 `mounted-goal-baseline-001` 在其中同一项、同一等待点复现超时，其余三项未逐项跑基线。保留原始失败与期限，并在该等待点登记性能测量 TODO。4498项归档源码已逐blob核对后删除，基线正式测试产物单独保留。
 - 当前9／22。日志路径策略已登记，但暂按 Gateway pending_restart 处理，避免在3.2尚未接通时虚报热生效；逐进程 prepare／apply／proof／promotion、热更新补偿与新增实例处理仍未完成。未修改Web，不新增Web构建；本切片未进行Windows／macOS产品验收。
+
+### 3.2 应用证明与 Launcher 启动控制基础（2026-10-26，整项未完成）
+
+- Gateway 热应用现在返回当次冻结的 consumer result，journal保存真实proof；最终CAS失败直接调用原消费者的补偿句柄，删除重新枚举并再次应用旧配置的回退链。运行快照同样参与该协议，外来候选不能被回退覆盖。prepare中途失败也参与补偿，结算后的finalize独立释放本地资源；补偿异常组保留原异常对象与堆栈。
+- Launcher在Gateway启动前监听原私有控制通道，将唯一解析的绝对socket／命名管道地址和PID交付子进程。Python客户端直接消费端点，复用同一严格状态与确认校验，提供完整帧、上限、超时、EOF和关闭处理，不复制地址公式、不起Node辅助进程。HTTP控制也具有明确期限。深层测试cwd保持正式输出目录，IPC临时端点退出后删除。
+- `gateway-apply-focused-final-016` 74通过，`gateway-apply-config-regression-021` 71通过，`launcher-startup-control-final-017` 51通过；`launcher-apply-real-handoff-022` 两项真实Launcher／Gateway检查通过，覆盖现有执行、日志控制和交接。新增验收证明最终CAS冲突仍补偿原对象，替换的消费者不被旧回退误改；原始异常身份仍逐对象断言。013首次3项失败暴露补偿异常只剩字符串的问题，已保留异常组后验证；014另有新增测试误写journal终态，按既有SQLite合同改为committed，未放宽业务期限或身份。
+- 015曾暴露深cwd相对socket被展开后超长；已把绝对端点与100字节校验统一在原地址owner，迁齐调用方和测试，017确认。`gateway-apply-pyright-comparison-026.json`核55条基线／54条当前、无新增；Ruff对照8／8无新增，不称全仓静态全绿。证据仍在既有临时artifacts目录，所有运行有进程外保护、源码指纹、raw和实际退出码。
+- 当前仍9／22。尚未注册日志consumer或开放候选自动热更新，3.2／3.3／3.4仍待实现；Windows Python命名管道分支和macOS原生入口未实机验证，未修改Web。本切片不替代完整多进程热更新、失败补偿和双工作区验收。

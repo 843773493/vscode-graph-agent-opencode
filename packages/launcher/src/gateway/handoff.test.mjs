@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, loggingUrl, applicationRoot) {
   const { default: assert } = await import("node:assert/strict");
@@ -10,11 +11,13 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const { createServer } = await import("node:http");
   const { default: net } = await import("node:net");
   const { existsSync } = await import("node:fs");
-  const { requestGatewayHandoff, superviseGateway } = await import(supervisorUrl);
-  const { createGatewaySupervisorControl, gatewaySupervisorControlAddress } = await import(controlUrl);
+  const { requestGatewayHandoff, superviseGateway, waitForGateway } = await import(supervisorUrl);
+  const { createGatewaySupervisorControl, gatewaySupervisorControlAddress, requestGatewaySupervisorControl } = await import(controlUrl);
   const { listenServer, closeServer } = await import(lifetimeUrl);
   const { createRuntimeLogger, loadRuntimeLogContract } = await import(loggingUrl);
-  const logger = createRuntimeLogger("launcher", "test", { write() {} }, loadRuntimeLogContract(applicationRoot));
+  const { runtimeLoggingControl } = await import(new URL("./serverRuntimeLoggingControl.mjs", loggingUrl));
+  const contract = loadRuntimeLogContract(applicationRoot);
+  const logger = createRuntimeLogger("launcher", "test", { write() {} }, contract);
   const boxteamHome = process.cwd();
   const controlAddress = gatewaySupervisorControlAddress(boxteamHome);
   const environment = {
@@ -58,6 +61,7 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   await closeServer(probe);
   const processObject = new EventEmitter();
   const children = [];
+  const readinessControls = [];
   const runtime = {
     distribution: "source-development", version: "test-version",
     manifestPath: "/runtime/runtime-manifest.json", pythonExecutable: "/runtime/python",
@@ -67,6 +71,9 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const running = superviseGateway({
     runtime, environment: { BOXTEAM_HOME: boxteamHome, BOXTEAM_GATEWAY_PORT: String(publicPort) },
     openBrowser: false, logger, processObject,
+    onRuntimeLogging(payload) {
+      return runtimeLoggingControl(payload, { service: "launcher", token: "fixture-token", contract, logger });
+    },
     spawnImpl(_command, args, options) {
       const child = new EventEmitter();
       child.exitCode = null;
@@ -77,7 +84,19 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
         assert.equal(children[0].child.exitCode, null);
         assert.deepEqual(children[0].child.killedWith, []);
       }
-      const server = createServer((request, response) => {
+      const management = JSON.parse(options.env.BOXTEAM_LAUNCHER_CONTROL);
+      assert.equal(management.pid, process.pid);
+      const server = createServer(async (request, response) => {
+        if (request.url === "/api/gateway/health") {
+          const result = await requestGatewaySupervisorControl({
+            address: management.address, timeoutMs: 500,
+            payload: { operation: "runtime_logging", action: "status", token: "fixture-token" },
+          });
+          assert.equal(result.handled, true);
+          assert.equal(result.data.service, "launcher");
+          assert.equal(result.data.pid, management.pid);
+          readinessControls.push(isPending ? "pending" : "active");
+        }
         if (scenario === "failed-handoff" && isPending && request.url === "/api/gateway/health") {
           response.writeHead(503);
           response.end("pending failed");
@@ -132,8 +151,13 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   }
   try {
     await within(waitForControl(), "控制监听就绪");
+    await within(waitForGateway({
+      url: "http://127.0.0.1:" + publicPort + "/api/gateway/health", timeoutMs: 800, intervalMs: 5,
+    }), "公开入口就绪");
     assert.equal(await readGeneration(), "active");
     const handoff = await within(requestGatewayHandoff({ boxteamHome, environment, timeoutMs: 500 }), "generation切换");
+    assert(readinessControls.includes("active"));
+    assert(readinessControls.includes("pending"));
     if (scenario === "failed-handoff") {
       assert.equal(handoff.handled, true);
       assert.equal(handoff.data.accepted, false);
@@ -179,7 +203,7 @@ function runHandoff(scenario) {
       (name) => new URL("./" + name + ".mjs", import.meta.url).href,
     ), new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href, process.cwd()])], {
       encoding: "utf8", timeout: 5000, cwd: fixtureRoot,
-      env: { ...process.env, TMPDIR: ".", TMP: ".", TEMP: "." },
+      env: { ...process.env, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir() },
     });
   } finally { rmSync(fixtureRoot, { recursive: true, force: true }); }
 }

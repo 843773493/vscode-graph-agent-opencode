@@ -262,3 +262,51 @@ async def test_consumer_transaction_does_not_rollback_stage_rejected_before_appl
         await GatewayRuntimeConsumerTransaction((stage,)).apply()
 
     assert calls == ["fence"]
+
+
+@pytest.mark.asyncio
+async def test_partial_prepare_is_compensated_and_finalized_even_when_rollback_fails() -> None:
+    calls: list[str] = []
+
+    def prepare() -> None:
+        calls.append("acquire")
+        raise ValueError("读取冻结进程失败")
+
+    def rollback() -> None:
+        calls.append("rollback")
+        raise RuntimeError("补偿失败")
+
+    stage = GatewayRuntimeConsumerStage(
+        consumer_id="logging", generation="generation-1", prepare=prepare,
+        apply=lambda: calls.append("apply"), health=lambda: _proof("logging", "generation-1"),
+        promote=lambda: None, rollback=rollback, finalize=lambda: calls.append("release"),
+    )
+    with pytest.raises(RuntimeError, match="补偿不完整") as failure:
+        await GatewayRuntimeConsumerTransaction((stage,)).apply()
+    aggregate = failure.value.__cause__
+    assert isinstance(aggregate, ExceptionGroup)
+    assert [type(error) for error in aggregate.exceptions] == [ValueError, RuntimeError]
+    assert calls == ["acquire", "rollback", "release"]
+
+
+@pytest.mark.asyncio
+async def test_finalization_releases_resources_after_claim_is_lost() -> None:
+    calls: list[str] = []
+    fenced = False
+
+    def check() -> None:
+        if fenced:
+            raise RuntimeError("claim 已失效")
+
+    stage = GatewayRuntimeConsumerStage(
+        consumer_id="logging", generation="generation-1", prepare=lambda: calls.append("acquire"),
+        apply=lambda: None, health=lambda: _proof("logging", "generation-1"),
+        promote=lambda: None, rollback=lambda: calls.append("rollback"), fence_check=check,
+        finalize=lambda: calls.append("release"),
+    )
+    result = await GatewayRuntimeConsumerTransaction((stage,)).apply()
+    fenced = True
+    with pytest.raises(RuntimeError, match="补偿不完整"):
+        await result.rollback()
+    await result.finalize()
+    assert calls == ["acquire", "release"]

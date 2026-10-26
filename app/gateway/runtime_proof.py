@@ -20,7 +20,6 @@ from app.gateway.config import (
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
     GatewayConfig,
     GatewayConfigReloadService,
-    GatewayConfigRuntimeRollback,
     record_gateway_restart_startup_failure,
 )
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
@@ -39,6 +38,7 @@ from app.gateway.federation.workspace_port import (
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerApplyResult,
     GatewayRuntimeConsumerStage,
     GatewayRuntimeConsumerTransaction,
     GatewayRuntimeHealthProof,
@@ -141,24 +141,17 @@ async def _apply_gateway_runtime_config(
     previous: GatewayConfig,
     fencing_token: str | None = None,
     fence_check: Callable[[], None] | None = None,
-) -> GatewayConfigRuntimeRollback:
-    """更新可安全即时读取的 Gateway 快照和下一轮调度参数。"""
-    await _set_gateway_runtime_config(
-        app,
-        candidate,
-        fencing_token=fencing_token,
-        fence_check=fence_check,
-    )
-
-    async def rollback() -> None:
-        await _set_gateway_runtime_config(
+) -> GatewayRuntimeConsumerApplyResult:
+    """保留本次真实 apply 的证明与补偿句柄，交给配置 owner 结算。"""
+    return await GatewayRuntimeConsumerTransaction(
+        _gateway_runtime_consumer_stages(
             app,
+            candidate,
             previous,
             fencing_token=fencing_token,
             fence_check=fence_check,
         )
-
-    return rollback
+    ).apply()
 
 
 def _gateway_runtime_consumer_stages(
@@ -321,44 +314,33 @@ def _gateway_runtime_consumer_stages(
                 fence_check=fence_check,
             )
         )
-    return tuple(stages)
-
-
-async def _set_gateway_runtime_config(
-    app: FastAPI,
-    candidate: GatewayConfig,
-    *,
-    fencing_token: str | None = None,
-    fence_check: Callable[[], None] | None = None,
-) -> None:
-    """按消费者协议 apply，并在任一阶段失败时逆序回滚。"""
-    previous = app.state.gateway_config
-    transaction = GatewayRuntimeConsumerTransaction(
-        _gateway_runtime_consumer_stages(
-            app,
-            candidate,
-            previous,
-            fencing_token=fencing_token,
-            fence_check=fence_check,
-        )
-    )
-    try:
-        result = await transaction.apply()
+    def apply_snapshot() -> None:
+        if app.state.gateway_config is not previous:
+            raise RuntimeError("Gateway 运行快照已变化，拒绝覆盖其它候选")
         app.state.gateway_config = candidate
-        await result.promote()
-    except BaseException as error:
-        app.state.gateway_config = previous
-        # transaction.apply 已负责 apply/health 阶段的补偿；promotion hook
-        # 失败时 result 仍然可用，必须再次尝试补偿已经 prepare 的消费者。
-        if "result" in locals():
-            try:
-                await result.rollback()
-            except Exception as rollback_error:  # noqa: BLE001
-                raise RuntimeError(
-                    "Gateway runtime consumer promotion 失败且回滚不完整: "
-                    f"{rollback_error}"
-                ) from error
-        raise
+
+    def rollback_snapshot() -> None:
+        current = app.state.gateway_config
+        if current is candidate:
+            app.state.gateway_config = previous
+        elif current is not previous:
+            raise RuntimeError("Gateway 运行快照已变化，拒绝补偿覆盖其它候选")
+
+    def snapshot_health() -> GatewayRuntimeHealthProof:
+        if app.state.gateway_config is not candidate:
+            raise RuntimeError("Gateway 运行快照尚未确认当前候选")
+        return GatewayRuntimeHealthProof(
+            consumer_id="gateway-config-snapshot", generation=generation, state="healthy",
+            details={"revision": candidate.revision}, fencing_token_digest=fencing_token_digest,
+        )
+
+    stages.append(GatewayRuntimeConsumerStage(
+        consumer_id="gateway-config-snapshot", generation=generation,
+        prepare=lambda: None, apply=apply_snapshot, health=snapshot_health,
+        promote=lambda: None, rollback=rollback_snapshot,
+        fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+    ))
+    return tuple(stages)
 
 
 def _runtime_health_proof_digest(

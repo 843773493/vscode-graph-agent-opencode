@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 const outputRoot = path.resolve("out/tests/packages/launcher/src/gateway/control-channel-encoding");
 const runId = randomUUID();
@@ -159,7 +160,7 @@ describe("Gateway控制JSON的跨块UTF-8", () => {
         const args = [observerPath, inputPath];
         const result = spawnSync("node", args, {
           cwd: workspace, timeout: 5000,
-          env: { ...process.env, TMPDIR: ".", TMP: ".", TEMP: "." },
+          env: { ...process.env, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir() },
         });
         writeFileSync(path.join(artifacts, "stdout.raw"), result.stdout ?? "", { flag: "wx" });
         writeFileSync(path.join(artifacts, "stderr.raw"), result.stderr ?? "", { flag: "wx" });

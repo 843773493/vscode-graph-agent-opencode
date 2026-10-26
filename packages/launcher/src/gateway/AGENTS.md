@@ -26,15 +26,15 @@ out/tests/packages/launcher/src/gateway/control-channel-encoding/
     └── <scenario>/                         固定input、分块字节及接收结果、raw和实际退出状态
 ```
 
-编码fixture只把IPC端点映射到随机本地TCP端口，Socket、data事件、控制owner和`requestGatewayHandoff`均真实执行。第二块在第一块已进入接收端data事件后才写入，不以固定睡眠假定网络分块；2/3/4字节字符分别跨块测试请求、成功结果和错误原因，核完整字段值。运行和场景目录独占创建，Node临时目录显式指向自身cwd，正式现场与结果保留；fixture每阶段1秒、Node总计5秒，外层runner仍须保护。它证明Node流的编码边界，不代表原生Windows命名管道、Unix socket权限或真实Gateway启动验收。
+编码fixture只把IPC端点映射到随机本地TCP端口，Socket、data事件、控制owner和`requestGatewayHandoff`均真实执行。第二块在第一块已进入接收端data事件后才写入，不以固定睡眠假定网络分块；2/3/4字节字符分别跨块测试请求、成功结果和错误原因，核完整字段值。运行和场景目录独占创建，正式现场与结果保留；fixture每阶段1秒、Node总计5秒，外层runner仍须保护。它证明Node流的编码边界，不代表原生Windows命名管道、Unix socket权限或真实Gateway启动验收。
 
 `control-client.test.mjs`在独立Node进程把IPC端点选择替换成随机本地TCP端点，保留真实请求、响应及连接事件，验证上述生命周期；不创建用户socket或运行Gateway。它不验证Unix路径选择、Windows命名管道或真实generation切换，不能替代`handoff.test.mjs`中的完整handoff场景。
 
-控制端点按规范化的home确定：POSIX保留短home中的`state/gateway-supervisor.sock`，长home使用同一home摘要对应的临时socket；备用地址仍超过100字节时在监听前明确报错。Windows使用`\\.\pipe\boxteam-gateway-supervisor-<home摘要>`命名管道，不对管道执行mkdir、chmod或rm。客户端和服务端调用同一地址解析器，不另存一份控制端点事实。
+控制端点按规范化的home确定：POSIX保留短home中的`state/gateway-supervisor.sock`，长home使用同一home摘要对应的绝对临时socket；备用地址仍超过100字节时在监听前明确报错。Windows使用`\\.\pipe\boxteam-gateway-supervisor-<home摘要>`命名管道，不对管道执行mkdir、chmod或rm。JS客户端和服务端调用同一地址解析器；Launcher在启动Gateway前先监听，将`address/pid`通过`BOXTEAM_LAUNCHER_CONTROL`交付给子进程，Python消费者直接使用该端点，不复制地址公式。
 
 发行版与开发版均在这一控制端点提供 `operation: runtime_logging`，日志命令另核对 Gateway 已有私有 token；不以资源 owner 固定头代替认证。发行版仍直接监听公开端口，明确拒绝 generation handoff，不能为日志控制启动第二个公开代理或新 daemon。
 
-`handoff.test.mjs`承接完整控制结果、pending失败保留旧generation、成功切换并停止旧generation三场景。Node子进程的cwd为正式输出`out/tests/packages/launcher/src/gateway/handoff/workspace/<run_id>/`，临时目录显式为该cwd；因此深层输出根内的Unix socket可使用短相对地址。公开端口随机分配，以真实控制连接观察就绪，不用固定睡眠代替就绪。健康与generation读取经过真实HTTP和公开代理，Gateway进程仍为替身；该证据不代表真实Python Gateway启动或Windows/macOS原生通过。
+`handoff.test.mjs`承接完整控制结果、pending失败保留旧generation、成功切换并停止旧generation三场景。Node子进程的cwd为正式输出`out/tests/packages/launcher/src/gateway/handoff/workspace/<run_id>/`；IPC使用绝对的系统临时端点并在退出时删除，避免依赖Launcher与Gateway具有相同cwd。公开端口随机分配，分别观察控制监听和真实HTTP就绪，不用固定睡眠代替就绪；初次及pending的健康响应前均通过子进程收到的端点调用原日志控制owner。Gateway进程仍为替身，该证据不代表真实Python Gateway启动或Windows/macOS原生通过。
 
 `control-client.test.mjs`同样在自己的正式输出工作区运行Node并清理本次目录，传输仍为随机TCP替身；`control-channel.test.mjs`分别核路径规则，以及用独立Node文件/server替身证明Unix清理与命名管道不碰文件系统。
 

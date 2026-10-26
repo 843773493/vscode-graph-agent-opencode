@@ -20,7 +20,7 @@ export function gatewaySupervisorControlAddress(
   }
   const socketPath = paths.join(resolvedHome, "state", "gateway-supervisor.sock");
   if (Buffer.byteLength(socketPath) <= 100) return socketPath;
-  const temporarySocketPath = paths.join(
+  const temporarySocketPath = paths.resolve(
     temporaryDirectory, `boxteam-gateway-supervisor-${homeDigest}.sock`,
   );
   if (Buffer.byteLength(temporarySocketPath) > 100) {

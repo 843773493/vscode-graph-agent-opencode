@@ -119,7 +119,7 @@ async def test_native_source_message_does_not_enter_reload_status_or_persistent_
 @pytest.mark.parametrize("locator", ["/private/runtime/gateway.jsonc", r"C:\private\gateway.jsonc", r"\\server\private\gateway.jsonc"])
 async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
     validation_owner, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    stage: str, locator: str,
+    stage: str, locator: str, runtime_apply_result_factory,
 ) -> None:
     application, service, store, config_path, _, original = validation_owner
     active = store.get_active_config_snapshot("gateway")
@@ -143,7 +143,7 @@ async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
             if stage == "rollback":
                 raise rollback_error
 
-        return rollback
+        return runtime_apply_result_factory(rollback)
 
     def reject_promotion(*args, **kwargs):
         raise promotion_error
@@ -197,7 +197,14 @@ async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
     assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
     assert str(original_error) in caplog.text
     if stage == "rollback":
-        assert any(record.exc_info and record.exc_info[1] is rollback_error for record in caplog.records)
+        rollback_record = next(record for record in caplog.records if "stage=runtime_rollback" in record.message)
+        assert rollback_record.exc_info is not None
+        assert rollback_record.exc_info[1] is not None
+        aggregate = rollback_record.exc_info[1].__cause__
+        assert isinstance(aggregate, ExceptionGroup)
+        assert aggregate.exceptions == (rollback_error,)
+        assert aggregate.exceptions[0] is rollback_error
+        assert str(rollback_error) in caplog.text
     assert "stage=" in (pending.last_error or "")
     assert type(original_error).__name__ in (pending.last_error or "")
     if stage == "apply":

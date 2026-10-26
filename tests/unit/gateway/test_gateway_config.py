@@ -145,8 +145,9 @@ def test_gateway_runtime_consumer_generation_is_unique_for_same_config(
     first = _gateway_runtime_consumer_stages(app, config, config)
     second = _gateway_runtime_consumer_stages(app, config, config)
 
-    assert len(first) == 1
-    assert len(second) == 1
+    assert len(first) == 2
+    assert len(second) == 2
+    assert {stage.consumer_id for stage in first} == {"session-catalog", "gateway-config-snapshot"}
     assert first[0].generation != second[0].generation
     assert registry.registry_revision == 0
     registry.close()
@@ -180,7 +181,7 @@ def test_gateway_runtime_consumer_health_proof_carries_fencing_digest(
         fencing_token="fence-token",
     )
 
-    assert len(stages) == 1
+    assert len(stages) == 2
     proof = stages[0].health()
     assert proof.fencing_token_digest is not None
     assert proof.fencing_token_digest == stages[0].fencing_token_digest
@@ -1407,6 +1408,7 @@ async def test_gateway_config_reload_promotes_ui_candidate_and_emits_event(
 async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conflict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    runtime_apply_result_factory,
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
@@ -1420,7 +1422,7 @@ async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conf
         async def rollback() -> None:
             applied.append(("rollback", previous.revision))
 
-        return rollback
+        return runtime_apply_result_factory(rollback)
 
     try:
         initial = load_gateway_config(

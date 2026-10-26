@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 async function observeControlClient(scenario, supervisorUrl) {
   const { default: assert } = await import("node:assert/strict");
@@ -118,7 +119,7 @@ function runControlClientProbe(scenario) {
       await observeControlClient(...JSON.parse(process.argv[1]));
     `, JSON.stringify([scenario, new URL("./supervisor.mjs", import.meta.url).href])], {
       encoding: "utf8", timeout: 5000, cwd: fixtureRoot,
-      env: { ...process.env, TMPDIR: ".", TMP: ".", TEMP: "." },
+      env: { ...process.env, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir() },
     });
   } finally { rmSync(fixtureRoot, { recursive: true, force: true }); }
 }

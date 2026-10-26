@@ -138,7 +138,6 @@ from .values import ConfiguredRemoteGateway as ConfiguredRemoteGateway
 from .values import ConfiguredTheme as ConfiguredTheme
 from .values import GatewayConfig as GatewayConfig
 from .values import GatewayConfigRuntimeApplier as GatewayConfigRuntimeApplier
-from .values import GatewayConfigRuntimeRollback as GatewayConfigRuntimeRollback
 from .values import GatewayHistoryLoadingConfig as GatewayHistoryLoadingConfig
 from .values import _configured_theme_background as _configured_theme_background
 from .values import _history_loading_config as _history_loading_config

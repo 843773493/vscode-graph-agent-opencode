@@ -64,10 +64,10 @@ describe("Gateway控制端点的平台与路径归属", () => {
     }
   });
   test("长home按规范化归属使用同一有界临时socket", () => {
-    const options = { platform: process.platform === "win32" ? "darwin" : process.platform, temporaryDirectory: "ipc" };
+    const options = { platform: process.platform === "win32" ? "darwin" : process.platform, temporaryDirectory: "/ipc" };
     const home = path.posix.resolve("/", fixtureRoot.replaceAll("\\", "/"), "long-home-".repeat(10));
     const address = gatewaySupervisorControlAddress(home, options);
-    expect(address).toMatch(/^ipc[\/]boxteam-gateway-supervisor-[a-f0-9]{32}\.sock$/);
+    expect(address).toMatch(/^\/ipc\/boxteam-gateway-supervisor-[a-f0-9]{32}\.sock$/);
     expect(Buffer.byteLength(address)).toBeLessThanOrEqual(100);
     expect(gatewaySupervisorControlAddress(home + "/.", options)).toBe(address);
     expect(gatewaySupervisorControlAddress(home + "-other", options)).not.toBe(address);

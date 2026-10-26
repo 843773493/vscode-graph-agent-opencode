@@ -421,6 +421,7 @@ export async function superviseGateway({
   if (publicListener !== null) await publicListener.listen();
 
   const activeEnvironment = activeGatewayEnvironment(environment);
+  const controlAddress = gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
   let currentChild = null;
   let handoffChain = Promise.resolve();
   let control = null;
@@ -432,9 +433,16 @@ export async function superviseGateway({
     const childPort = gatewayOwnsPublicPort
       ? endpoint.port
       : await allocateGatewayChildPort(endpoint.host);
+    const managedEnvironment = { ...childEnvironment };
+    delete managedEnvironment.BOXTEAM_LAUNCHER_CONTROL;
+    if (controlAddress !== null) {
+      managedEnvironment.BOXTEAM_LAUNCHER_CONTROL = JSON.stringify({
+        address: controlAddress, pid: process.pid,
+      });
+    }
     const child = spawnGateway({
       runtime,
-      environment: childEnvironment,
+      environment: managedEnvironment,
       port: childPort,
       spawnImpl,
     });
@@ -480,41 +488,6 @@ export async function superviseGateway({
   };
 
   try {
-    const startup = gatewayStartupContract(environment);
-    let initialChild;
-    try {
-      initialChild = await startChild(environment);
-    } catch (error) {
-      if (startup.loadedSource !== "pending") {
-        throw error;
-      }
-      logger.warning(
-        `Gateway pending generation 未就绪，回退 active snapshot: ${String(error)}`,
-      );
-      try {
-        initialChild = await startChild(activeEnvironment);
-      } catch (fallbackError) {
-        throw new Error(
-          `Gateway pending 启动失败，且 active fallback 也失败: ${String(fallbackError)}`,
-          { cause: fallbackError },
-        );
-      }
-    }
-    currentChild = initialChild;
-    if (publicListener !== null) {
-      publicListener.setTarget({
-        host: endpoint.host,
-        port: initialChild.childPort,
-      });
-    }
-    if (openBrowser) {
-      void openGatewayBrowser({
-        spawnImpl,
-        url: endpoint.url,
-        logger,
-      });
-    }
-
     const handleHandoff = async (payload) => {
       if (publicListener === null) {
         throw new Error("直接监听公开端口的 Gateway 不支持 generation handoff");
@@ -557,7 +530,6 @@ export async function superviseGateway({
       };
     };
 
-    const controlAddress = gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
     control =
       controlAddress === null
         ? null
@@ -573,6 +545,32 @@ export async function superviseGateway({
             },
           });
     if (control !== null) await control.listen();
+
+    const startup = gatewayStartupContract(environment);
+    let initialChild;
+    try {
+      initialChild = await startChild(environment);
+    } catch (error) {
+      if (startup.loadedSource !== "pending") throw error;
+      logger.warning(
+        `Gateway pending generation 未就绪，回退 active snapshot: ${String(error)}`,
+      );
+      try {
+        initialChild = await startChild(activeEnvironment);
+      } catch (fallbackError) {
+        throw new Error(
+          `Gateway pending 启动失败，且 active fallback 也失败: ${String(fallbackError)}`,
+          { cause: fallbackError },
+        );
+      }
+    }
+    currentChild = initialChild;
+    if (publicListener !== null) {
+      publicListener.setTarget({ host: endpoint.host, port: initialChild.childPort });
+    }
+    if (openBrowser) {
+      void openGatewayBrowser({ spawnImpl, url: endpoint.url, logger });
+    }
 
     while (true) {
       const observedChild = currentChild;

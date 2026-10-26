@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyResult
 from app.services.infrastructure.config import ConfigFileWatcher, ConfigReloadStatus
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import (
@@ -23,7 +24,6 @@ from .loader import load_gateway_config
 from .values import (
     GatewayConfig,
     GatewayConfigRuntimeApplier,
-    GatewayConfigRuntimeRollback,
 )
 
 logger = logging.getLogger(__name__)
@@ -456,12 +456,12 @@ class ReloadLifecycleMixin:
                 )
                 return
             runtime_apply_started = False
-            runtime_rollback: GatewayConfigRuntimeRollback | None = None
+            runtime_result: GatewayRuntimeConsumerApplyResult | None = None
             failure_stage = "runtime_apply"
             try:
                 if self._on_runtime_config is not None:
                     runtime_apply_started = True
-                    runtime_rollback = await self._on_runtime_config(
+                    runtime_result = await self._on_runtime_config(
                         candidate,
                         self._config,
                         claim.fencing_token,
@@ -474,8 +474,15 @@ class ReloadLifecycleMixin:
                             "action": "apply",
                             "candidate_id": candidate_id,
                             "changed_paths": list(changed_paths),
+                            "consumer_proofs": [
+                                {"consumer_id": proof.consumer_id, "generation": proof.generation,
+                                 "state": proof.state, "details": proof.details,
+                                 "fencing_token_digest": proof.fencing_token_digest}
+                                for proof in runtime_result.proofs
+                            ],
                         },
                     )
+                    await runtime_result.promote()
                 failure_stage = "promotion"
                 active = self._state_store.get_active_config_snapshot(
                     self._CONFIG_DOMAIN
@@ -549,7 +556,7 @@ class ReloadLifecycleMixin:
                 ) = await self._handle_runtime_apply_failure(
                     apply_id=claim.apply_id,
                     runtime_apply_started=runtime_apply_started,
-                    runtime_rollback=runtime_rollback,
+                    runtime_result=runtime_result,
                     error_detail=error_detail,
                 )
                 error_detail = recovery_error or error_detail
@@ -585,13 +592,17 @@ class ReloadLifecycleMixin:
                 failure_type = ConfigConflictError if conflict else RuntimeError
                 raise failure_type(error_detail) from error
             finally:
-                claim_renewal_task.cancel()
-                await asyncio.gather(claim_renewal_task, return_exceptions=True)
-                self._state_store.release_config_apply_claim(
-                    config_domain=self._CONFIG_DOMAIN,
-                    apply_id=claim.apply_id,
-                    fencing_token=claim.fencing_token,
-                )
+                try:
+                    if runtime_result is not None:
+                        await runtime_result.finalize()
+                finally:
+                    claim_renewal_task.cancel()
+                    await asyncio.gather(claim_renewal_task, return_exceptions=True)
+                    self._state_store.release_config_apply_claim(
+                        config_domain=self._CONFIG_DOMAIN,
+                        apply_id=claim.apply_id,
+                        fencing_token=claim.fencing_token,
+                    )
             self._config = candidate
             self._status = replace(
                 self._status,
@@ -633,14 +644,14 @@ class ReloadLifecycleMixin:
         *,
         apply_id: str,
         runtime_apply_started: bool,
-        runtime_rollback: GatewayConfigRuntimeRollback | None,
+        runtime_result: GatewayRuntimeConsumerApplyResult | None,
         error_detail: str,
     ) -> tuple[bool, str | None]:
         """在 active promotion 失败时补偿已经发生的 Gateway 运行时变更。"""
 
         if not runtime_apply_started:
             return False, None
-        if runtime_rollback is None:
+        if runtime_result is None:
             self._state_store.update_config_apply_journal(
                 apply_id=apply_id,
                 expected_state="applying",
@@ -659,7 +670,7 @@ class ReloadLifecycleMixin:
             last_error=error_detail,
         )
         try:
-            await runtime_rollback()
+            await runtime_result.rollback()
         except Exception as rollback_error:  # noqa: BLE001 - 回退必须捕获所有运行时故障
             rollback_detail = _apply_failure_detail(rollback_error, stage="runtime_rollback")
             self._state_store.record_config_apply_compensation(

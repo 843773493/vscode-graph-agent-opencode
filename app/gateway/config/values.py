@@ -15,6 +15,7 @@ from app.core.history_loading import (
     HistoryLoadingConfig,
 )
 from app.core.path_utils import get_user_config_root
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyResult
 
 # Gateway 来源权威表：每个来源键的逻辑来源层与 precedence 只在本文件登记一次；`inline:0`
 # 是 writer 为无 source_key 的 inline 记录生成的 canonical baseline key。
@@ -84,10 +85,9 @@ class GatewayConfig:
     source_paths: tuple[Path, ...] = ()
     source_details: tuple[ConfigSource, ...] = ()
     payload: dict[str, object] = field(default_factory=dict)
-GatewayConfigRuntimeRollback = Callable[[], Awaitable[None]]
 GatewayConfigRuntimeApplier = Callable[
     [GatewayConfig, GatewayConfig, str, Callable[[], None]],
-    Awaitable[GatewayConfigRuntimeRollback | None],
+    Awaitable[GatewayRuntimeConsumerApplyResult],
 ]
 def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredRemoteGateway:
     return ConfiguredRemoteGateway(
