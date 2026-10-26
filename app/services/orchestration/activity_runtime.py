@@ -146,6 +146,8 @@ class ActivityHandlerRegistry:
                         "retryable",
                         "recovery",
                         "timeout_ms",
+                        "progress",
+                        "total",
                     }
                 )
             ),

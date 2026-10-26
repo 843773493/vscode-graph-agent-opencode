@@ -12,6 +12,7 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.orchestration.message_stream_runtime import (
     MessageStreamRuntime,
 )
@@ -47,6 +48,35 @@ async def register_failure_calls(case):
     case.sink.reset_mock()
     case.tool_result_sink.reset_mock()
     case.writer.commit.reset_mock()
+
+
+@pytest.mark.parametrize("request_first", [False, True])
+async def test_mcp_unknown_is_preserved_by_both_result_carriers(tool_failure_runtime_case, request_first):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    call_id = case.runtime.claim_tool_call_id("original-model", "target")
+    await case.runtime.start_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context")
+    receipt = McpInvocationReceipt(tool_name="mcp__server__write", error_type="McpError")
+    message = ToolMessage(content=receipt.model_dump_json(), artifact=receipt.as_artifact(), status="error", tool_call_id="target")
+    case.tool_result_sink.side_effect = lambda completion: SimpleNamespace(payload={
+        "content": completion.content, "tool_outcome": completion.tool_outcome,
+    })
+
+    async def stream():
+        await case.runtime.complete_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context",
+                                         status="failed", result=message.content, artifact=message.artifact)
+
+    async def request():
+        await case.runtime.complete_tool_from_message(message, model_call_id="original-model")
+
+    first, second = (request, stream) if request_first else (stream, request)
+    await first()
+    await second()
+    case.tool_result_sink.assert_awaited_once()
+    completion, = case.tool_result_sink.await_args.args
+    assert completion.tool_outcome == "unknown" and completion.artifact == message.artifact
+    terminal = [entry.args[1] for entry in case.writer.commit.await_args_list if entry.args[0] == "tool.completed"]
+    assert len(terminal) == 1 and terminal[0]["outcome"] == "outcome_unknown"
 
 
 @pytest.mark.parametrize("request_first", [False, True])

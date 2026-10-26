@@ -58,6 +58,7 @@ from app.domain.itemized.identity.item_projection import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
@@ -90,6 +91,31 @@ PROVIDER_TOOL_CALL_ID = "child-thread-task-call"
 SCOPED_TOOL_CALL_ID = f"{MODEL_CALL_ID}:tool-call:{PROVIDER_TOOL_CALL_ID}"
 LIVE_EXECUTION_ID = "01a0a5cc-a8a5-77f1-aed0-ecb624dcda2e"
 RESULT_CONTENT = '{"child_session_id": "ses_child", "status": "accepted"}'
+
+
+@pytest.mark.parametrize("metadata", [{}, {"tool_outcome": "unknown", "execution_confirmed": False}])
+def test_codec_keeps_mcp_unknown_in_request_carrier(metadata):
+    receipt = McpInvocationReceipt(tool_name="mcp__server__write", error_type="McpError")
+    message = ToolMessage(content=receipt.model_dump_json(), artifact=receipt.as_artifact(),
+                          tool_call_id=PROVIDER_TOOL_CALL_ID, name="invoke_extension_tool", status="error", response_metadata=metadata)
+    item, = LangChainMessageCodec().items_for_message(
+        message, item_sequence=1, message_id="unknown-carrier", turn_id=TURN_ID,
+        timestamp="2026-10-26T00:00:00Z", model_call_id=MODEL_CALL_ID,
+    )
+    assert item.payload["tool_outcome"] == "unknown" and item.payload["execution_confirmed"] is False
+    assert item.payload["content"] == message.content and item.payload["artifact"] == message.artifact
+
+
+@pytest.mark.parametrize("metadata", [{"tool_outcome": "failure"}, {"execution_confirmed": True}])
+def test_codec_rejects_metadata_that_claims_mcp_unknown_is_confirmed(metadata):
+    receipt = McpInvocationReceipt(tool_name="mcp__server__write", error_type="McpError")
+    message = ToolMessage(content=receipt.model_dump_json(), artifact=receipt.as_artifact(),
+                          tool_call_id=PROVIDER_TOOL_CALL_ID, status="error", response_metadata=metadata)
+    with pytest.raises(ValueError, match="终态 metadata 冲突"):
+        LangChainMessageCodec().items_for_message(
+            message, item_sequence=1, message_id="contradictory-carrier", turn_id=TURN_ID,
+            timestamp="2026-10-26T00:00:00Z", model_call_id=MODEL_CALL_ID,
+        )
 
 
 def _live_tool_result(sequence: int, *, outcome: str = "success") -> CanonicalItemRecord:

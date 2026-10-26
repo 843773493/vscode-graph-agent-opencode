@@ -51,6 +51,7 @@ from app.prompting.registry import (
     structured_prompt_registry,
 )
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
     expand_tool_message,
     group_content,
@@ -438,10 +439,14 @@ class LangChainMessageCodec:
             tool_call_id = data_mapping.get("tool_call_id")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 raise ValueError("ToolMessage 缺少真实 tool_call_id")
+            unknown_receipt = McpInvocationReceipt.from_artifact(message.artifact)
             tool_outcome = response_metadata.get(
-                "tool_outcome", "success" if tool_output_status(message) == "success" else "failure",
+                "tool_outcome", "unknown" if unknown_receipt is not None
+                else "success" if tool_output_status(message) == "success" else "failure",
             )
             confirmed = response_metadata.get("execution_confirmed", tool_outcome != "unknown")
+            if unknown_receipt is not None and (tool_outcome != "unknown" or confirmed):
+                raise ValueError("MCP 结果未知回执与 checkpoint 终态 metadata 冲突")
             item_status = response_metadata.get("canonical_item_status", CanonicalItemStatus.COMPLETED)
             payload = {
                 "tool_call_id": tool_call_id,

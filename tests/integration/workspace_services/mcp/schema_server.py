@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import sys
 import wave
 from pathlib import Path
@@ -28,7 +29,7 @@ def audio_asset() -> str:
 RESULT_AUDIO_BASE64 = audio_asset()
 
 
-async def serve(definitions_path: Path, receipt_path: Path) -> None:
+def build_server(definitions_path: Path, receipt_path: Path) -> Server:
     server = Server("full-schema-fixture")
 
     @server.list_tools()
@@ -42,6 +43,25 @@ async def serve(definitions_path: Path, receipt_path: Path) -> None:
         receipt = {"name": name, "arguments": arguments}
         with receipt_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+        call_mode = arguments.get("call_mode")
+        if call_mode == "disconnect":
+            os._exit(0)
+        if call_mode in {"progress", "wait"}:
+            context = server.request_context
+            token = context.meta.progressToken if context.meta is not None else None
+            if token is None:
+                raise ValueError("调用必须提供 SDK progress token")
+            await context.session.send_progress_notification(
+                token, progress=1, total=2, message="私有路径 /private/server/token，不得进入 Activity",
+            )
+            if call_mode == "wait":
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    with receipt_path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({**receipt, "cancelled": True}, ensure_ascii=False) + "\n")
+                    raise
+            await context.session.send_progress_notification(token, progress=2, total=2)
         if arguments.get("result_mode") in {"success", "error"}:
             return types.CallToolResult(
                 isError=arguments["result_mode"] == "error", structuredContent={"receipt": receipt},
@@ -55,6 +75,11 @@ async def serve(definitions_path: Path, receipt_path: Path) -> None:
             )
         return [types.TextContent(type="text", text=json.dumps(receipt, ensure_ascii=False))]
 
+    return server
+
+
+async def serve(definitions_path: Path, receipt_path: Path) -> None:
+    server = build_server(definitions_path, receipt_path)
     async with stdio_server() as (reader, writer):
         await server.run(reader, writer, server.create_initialization_options())
 

@@ -7,6 +7,7 @@
 - MCP stdio 与 Streamable HTTP Client 配置解析。
 - MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。
 - `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
+- stdio 与 Streamable HTTP 统一使用 SDK transport 和 `CancellableMcpClientSession`；`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease。取消通知按原 RPC ID 投递，投递成功不代表远端停止。
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
 - `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。
@@ -42,3 +43,4 @@
 - 历史 binding/快照丢失必须显式 `extension-catalog-unavailable` 并拒绝 dispatch，不从当前 MCP 目录、当前同名 target 或空目录恢复。
 - 不具备 `tools/list_changed` 通知能力的 server 由 owner 在显式目录刷新边界 relist并发布，不在 model-call preparation 临时刷新，不得谎称立即生效。
 - 凭据只允许通过环境变量引用解析，不得写入日志或模型工具描述。
+- Activity 只发布受信调用身份及数值进度，不转发 Server 自由进度正文。取消、超时和断线无法确认副作用时，使用同一 typed 结果未知回执，保留调用配对、artifact 与不可自动重试事实。

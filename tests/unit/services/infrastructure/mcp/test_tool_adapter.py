@@ -56,7 +56,9 @@ async def test_sdk_adapter_preserves_arguments_and_structured_result(sdk_session
         "arguments": {"value": 1},
     }
     result = await target.ainvoke({"type": "tool_call", "id": "probe-id", "name": target.name, "args": arguments})
-    sdk_session.call_tool.assert_awaited_once_with("probe", arguments)
+    assert sdk_session.call_tool.await_count == 1
+    assert sdk_session.call_tool.await_args.args == ("probe", arguments)
+    assert callable(sdk_session.call_tool.await_args.kwargs["progress_callback"])
     assert isinstance(result, ToolMessage)
     assert result.status == "success" and result.tool_call_id == "probe-id"
     assert result.artifact == {"structured_content": {"value": 2}}
@@ -86,8 +88,10 @@ async def test_sdk_adapter_preserves_protocol_error_and_media(sdk_session: Magic
     assert result.content[3]["type"] == "file" and result.content[3]["url"] == "https://example.invalid/report"
 
 
-async def test_sdk_transport_failure_propagates(sdk_session: MagicMock) -> None:
+async def test_sdk_transport_failure_is_explicit_unknown(sdk_session: MagicMock) -> None:
     sdk_session.call_tool.side_effect = ConnectionError("closed")
     target, = await list_mcp_tools(sdk_session)
-    with pytest.raises(ConnectionError, match="closed"):
-        await target.ainvoke({})
+    result = await target.ainvoke({"type": "tool_call", "id": "lost", "name": target.name, "args": {}})
+    assert result.status == "error" and result.tool_call_id == "lost"
+    assert result.artifact["mcp_outcome"]["retryable"] is False
+    assert result.artifact["mcp_outcome"]["error_type"] == "ConnectionError"

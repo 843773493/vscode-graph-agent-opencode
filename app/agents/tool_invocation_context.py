@@ -37,6 +37,9 @@ from app.schemas.internal_v2.text_mutation import (
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
 )
+from app.services.infrastructure.mcp.invocation import (
+    mcp_cancelled_receipt,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -223,6 +226,15 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
                 ):
                     return await handler(request)
             except asyncio.CancelledError as error:
+                mcp_receipt = mcp_cancelled_receipt(error)
+                if delta_sink is not None and mcp_receipt is not None:
+                    async def commit_mcp_cancellation() -> None:
+                        await delta_sink.fail_tool_invocation(
+                            self._context.require_model_call_id(), self._context.require_tool_call_id(),
+                            error=mcp_receipt.model_dump_json(), artifact=mcp_receipt.as_artifact(),
+                        )
+
+                    await run_cleanup_shielded(commit_mcp_cancellation)
                 if (
                     delta_sink is not None
                     and len(error.args) == 1
@@ -361,6 +373,12 @@ def _timeout_tool_message(
         raise RuntimeError("工具超时缺少 tool_call_id") from error
     tool_name = request.tool_call.get("name") or "unknown_tool"
     cause = error.__cause__
+    mcp_receipt = mcp_cancelled_receipt(cause)
+    if mcp_receipt is not None:
+        return ToolMessage(
+            content=mcp_receipt.model_dump_json(), artifact=mcp_receipt.as_artifact(),
+            tool_call_id=tool_call_id, status="error",
+        )
     if (
         isinstance(cause, asyncio.CancelledError)
         and len(cause.args) == 1

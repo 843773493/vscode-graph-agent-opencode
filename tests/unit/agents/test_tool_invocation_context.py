@@ -23,12 +23,53 @@ from app.core.model_delta_context import (
     set_current_model_delta_sink,
 )
 from app.core.turn_execution_scope import ScopeCancelledError, TurnExecutionScope
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.schemas.internal_v2.text_mutation import (
     TextMutationReceiptDTO,
 )
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+
+
+@pytest.mark.parametrize("local_timeout", [False, True])
+async def test_mcp_cancel_commits_same_unknown_receipt_before_timeout_or_interrupt(
+    tool_invocation_failure_case, local_timeout,
+):
+    case = tool_invocation_failure_case
+    middleware = ToolInvocationContextMiddleware(ToolInvocationContext(tool_timeout_seconds=0.03 if local_timeout else None))
+    entered = asyncio.Event()
+    receipt = McpInvocationReceipt(tool_name="mcp__server__write", error_type="CancelledError", cancellation_delivery="sent")
+
+    async def handler(_request_value):
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise asyncio.CancelledError(receipt) from None
+
+    token = set_current_model_delta_sink(case.model_delta_sink)
+    try:
+        task = asyncio.create_task(middleware.awrap_tool_call(_request("mcp-call", model_call_id="mcp-model"), handler))
+        await asyncio.wait_for(entered.wait(), 1)
+        if not local_timeout:
+            task.cancel()
+        await asyncio.wait_for(case.commit_started.wait(), 1)
+        assert not task.done()
+        case.release_commit.set()
+        if local_timeout:
+            result = await task
+            assert result.status == "error" and result.tool_call_id == "mcp-call"
+            assert result.content == receipt.model_dump_json() and result.artifact == receipt.as_artifact()
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        case.model_delta_sink.fail_tool_invocation.assert_awaited_once_with(
+            "mcp-model", "mcp-call", error=receipt.model_dump_json(), artifact=receipt.as_artifact(),
+        )
+    finally:
+        case.release_commit.set()
+        reset_current_model_delta_sink(token)
 
 
 class _ToolBindingFakeModel(FakeMessagesListChatModel):

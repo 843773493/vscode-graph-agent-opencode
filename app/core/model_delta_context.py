@@ -24,7 +24,7 @@ class ModelDeltaSink(Protocol):
     def reject_tool_start(self, callback_run_id: str, error: BaseException) -> None: ...
 
     async def fail_tool_invocation(
-        self, model_call_id: str, tool_call_id: str, *, error: str,
+        self, model_call_id: str, tool_call_id: str, *, error: str, artifact: object = None,
     ) -> None: ...
 
     async def accept_message_chunk(

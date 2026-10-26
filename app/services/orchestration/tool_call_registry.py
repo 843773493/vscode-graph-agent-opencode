@@ -17,6 +17,7 @@ from app.agents.tool_result_text import tool_output_status
 from app.core.identifier import create_prefixed_id
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.orchestration.event_stream.contracts import CanonicalItemObserverError
 
 
@@ -143,7 +144,7 @@ class StreamToolRegistryMixin:
             pending.set_result((tool_execution_id, tool_name))
 
     async def fail_tool_invocation(
-        self, model_call_id: str, tool_call_id: str, *, error: str,
+        self, model_call_id: str, tool_call_id: str, *, error: str, artifact: object = None,
     ) -> None:
         """只闭合已经开始的原 attempt，再允许工具异常进入 scheduler。"""
         provider_id = provider_tool_call_id(
@@ -166,7 +167,7 @@ class StreamToolRegistryMixin:
         execution_id, tool_name = attempts[0]
         await self.complete_tool(
             tool_execution_id=execution_id, tool_call_id=call_id, tool_name=tool_name,
-            status="failed", result=error, error=error,
+            status="failed", result=error, error=error, artifact=artifact,
             outcome="outcome_unknown", completion_reason="execution_error",
         )
 
@@ -323,7 +324,10 @@ class StreamToolRegistryMixin:
                     f"previous={previous_execution_id} current={tool_execution_id}"
                 )
             normalized_status = "completed" if status == "succeeded" else status
-            normalized_outcome = outcome or (
+            unknown_receipt = McpInvocationReceipt.from_artifact(artifact)
+            if unknown_receipt is not None and normalized_status != "failed":
+                raise ValueError("MCP 结果未知回执不能登记为成功")
+            normalized_outcome = "outcome_unknown" if unknown_receipt is not None else outcome or (
                 "success" if normalized_status == "completed" else "provider_error"
             )
             if normalized_outcome == "unknown":

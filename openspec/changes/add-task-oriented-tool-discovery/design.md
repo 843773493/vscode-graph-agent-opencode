@@ -139,6 +139,10 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 输出通过既有结果存储与媒体／artifact 合同保存，保留 MCP isError、结构化内容和多模态引用；progress/cancel 作为调用事实转接，不把每条进度当新的工具结果或成功通知。
 
+调用进度复用原 `resource.operation` Activity，以受信 operation ID 和封存 connection_ref 关联；只转发数值 progress／total，不把 Server 自由 message 混入公开状态。SDK 在接收 task 执行 callback，适配器须捕获原调用 scope；进度写入失败必须交还原调用，不能被 SDK 的日志处理吞掉。
+
+stdio 和 Streamable HTTP 统一使用官方 SDK transport 与同一个可取消 session。工具取消或 SDK 请求超时按原 RPC request ID 投递 `notifications/cancelled`，投递有界且 shield 排空；成功投递只证明通知已发送，不证明远端停止或回滚。取消、超时或断线无法确认结果时，返回唯一 typed `mcp_outcome_unknown` 回执及 artifact，明确 `effect=unknown`、`retryable=false` 和先核实远端状态的恢复要求；取消仍交还原 scheduler。实时终态、request carrier、canonical attempt 和冷检查点保留相同回执，checkpoint 不得仅从 ToolMessage.status 将 unknown 降为确认失败。request projection 与实际 attempt 沿用各自身份，不合并为一条。此调用状态只在本次 SDK 调用内使用，不代替持久连接 lease 或已封存执行资格。
+
 ### 7. 配置热替换接入既有整体候选流水线
 
 保持 Workspace 有效配置覆盖顺序；只处理最终有效值变化。服务器 command/args/env/cwd、URL/headers/auth 引用、enabled 和增删在 supervisor 验收后按 Server 对账；未覆盖或不能安全替换的依赖仍明确归入 restart policy，不把整个 `/mcp` 无条件改成任意字段热更新。

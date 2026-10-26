@@ -2,9 +2,8 @@
 
 职责边界：
 
-- 连接生命周期：经 ``create_session`` + ``session_kwargs.message_handler`` 建立
-  各 enabled server 的唯一 session（``MultiServerMCPClient.session()`` 不暴露
-  message handler，而底层是同一个 ``create_session`` 工厂，不产生第二套连接实现）。
+- 连接生命周期：由每 Server 原 task 经 SDK transport 和统一
+  ``CancellableMcpClientSession`` 建立、排空并关闭唯一 session。
 - 目录 relist：``list_mcp_tools`` 经 SDK 完整分页读取并验证 ``tools/list``。
 - 不可变目录 revision：对「server -> 有序工具描述 + 参数指纹」的语义载荷做
   canonical JSON sha256；payload 不变则 revision 不推进。

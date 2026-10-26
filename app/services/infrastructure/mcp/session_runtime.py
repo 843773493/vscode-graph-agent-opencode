@@ -8,13 +8,18 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Protocol, TypeAlias, cast
 
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.sessions import Connection, create_session
+from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConnection
 
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.mcp.config import McpServerConfig
+from app.services.infrastructure.mcp.invocation import CancellableMcpClientSession
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
+from mcp import StdioServerParameters
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
+from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 
 McpChangeNotifyCallback: TypeAlias = Callable[[], None]
 
@@ -53,11 +58,27 @@ async def production_mcp_session_factory(
         ):
             on_tools_list_changed()
 
-    # Server 配置已由唯一 parser 校验；此处补 SDK 专属回调后收窄 TypedDict。
-    connection = cast(Connection, {
-        **server.connection, "session_kwargs": {"message_handler": message_handler},
-    })
-    async with create_session(connection) as session:
+    @asynccontextmanager
+    async def transport():
+        if server.transport == "stdio":
+            connection = cast(StdioConnection, server.connection)
+            async with stdio_client(StdioServerParameters(
+                command=connection["command"], args=connection["args"],
+                env=connection.get("env"), cwd=connection.get("cwd"),
+            )) as streams:
+                yield streams
+        else:
+            connection = cast(StreamableHttpConnection, server.connection)
+            async with (
+                create_mcp_http_client(headers=connection.get("headers")) as client,
+                streamable_http_client(connection["url"], http_client=client) as (read, write, _),
+            ):
+                yield read, write
+
+    # 两种传输均使用 SDK，原 task 创建和退出 session，不保留旧适配器连接分路。
+    async with transport() as (read, write), CancellableMcpClientSession(
+        read, write, message_handler=message_handler,
+    ) as session:
         await session.initialize()
         yield _McpServerSession(session)
 

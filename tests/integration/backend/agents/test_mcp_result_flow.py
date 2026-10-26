@@ -15,6 +15,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.serialization import normalize_wire_request
+from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     acheckpoint_messages,
 )
@@ -50,21 +51,27 @@ def scripted_model_info() -> dict[str, bool]:
 
 
 @pytest.fixture(scope="module")
+def result_server_receipts_path(request: pytest.FixtureRequest) -> Path:
+    # artifacts_dir 按当前测试节点动态计算；冻结 Server 启动时真正使用的收据路径。
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    return context.artifacts_dir / "receipts.jsonl"
+
+
+@pytest.fixture(scope="module")
 def integration_workspace_config_path(
-    integration_workspace_config_path: str, request: pytest.FixtureRequest,
+    integration_workspace_config_path: str, result_server_receipts_path: Path,
     scripted_debug_backend_port: int,
 ) -> Iterator[str]:
     """在原工作区配置安装后、真实后端启动前登记测试 stdio Server。"""
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    definitions = context.artifacts_dir / "definitions.json"
+    definitions = result_server_receipts_path.with_name("definitions.json")
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     config["mcp"] = {"servers": {"result": {
         "enabled": True, "transport": "stdio", "command": sys.executable,
-        "args": [str(context.project_root / "tests/integration/workspace_services/mcp/schema_server.py"),
-                 str(definitions), str(context.artifacts_dir / "receipts.jsonl")],
-        "cwd": str(context.project_root),
+        "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
+                 str(definitions), str(result_server_receipts_path)],
+        "cwd": str(Path.cwd()),
     }}}
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # 目标后端反向查询 Gateway Skill 来源也必须指向本测试控制面。
@@ -99,7 +106,7 @@ async def result_client(
 
 async def test_product_discovery_parallel_results_and_cold_checkpoint(
     result_client, scripted_model_replay: replay_case.ScriptedModelState,
-    integration_workspace_root_path: str, request: pytest.FixtureRequest,
+    integration_workspace_root_path: str, result_server_receipts_path: Path,
 ) -> None:
     client = result_client
     state = scripted_model_replay
@@ -172,6 +179,79 @@ async def test_product_discovery_parallel_results_and_cold_checkpoint(
         counts = {item.projection_identity.model_call_id for item in items if item.semantic_kind == "tool_result"
                   and item.tool_call_id.endswith(calls[0]["id"])}
         assert counts == {records[1]["identity"]["model_call_id"]}
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    receipts = [json.loads(line) for line in (context.artifacts_dir / "receipts.jsonl").read_text().splitlines()]
+    receipts = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert sorted(receipt["arguments"]["result_mode"] for receipt in receipts) == ["error", "success"]
+
+
+async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
+    result_client, scripted_model_replay: replay_case.ScriptedModelState,
+    integration_workspace_root_path: str, result_server_receipts_path: Path,
+) -> None:
+    client, state = result_client, scripted_model_replay
+    session = await create_session(client, "MCP 断线结果未确认")
+    thread_response = await client.get(f"/api/v1/sessions/{session}/main-thread")
+    assert thread_response.status_code == 200, thread_response.text
+    thread = thread_response.json()["data"]["thread_id"]
+    calls = [replay_case._tool_call(
+        call_index=index, name="invoke_extension_tool",
+        arguments={"tool_name": "mcp__result__probe", "arguments": {"call_mode": mode}},
+    ) for index, mode in enumerate(("progress", "disconnect"))]
+    deltas = [{"tool_calls": [calls[0]]}, {"tool_calls": [calls[1]]}, {"content": "远端结果未确认，不能自动重发。"}]
+    interactions = [build_cassette(
+        asset_id=f"mcp-lifecycle-{index}", model="debug-e2e-model",
+        url="https://opencode.ai/zen/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id=f"chatcmpl-mcp-lifecycle-{index}", model="debug-e2e-model",
+            deltas=({"role": "assistant", **delta},),
+            finish_reason="tool_calls" if "tool_calls" in delta else "stop",
+        ),
+    ).raw["interactions"][0] for index, delta in enumerate(deltas)]
+    state.call_ids = state.control.plan_model_calls(session, thread, interactions)
+    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "先调用进度工具，再验证断线回执；不要重试断线调用。"},
+        "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert accepted.status_code == 200, accepted.text
+    admission = accepted.json()["data"]
+    await wait_for_job_done(client, admission["job_id"], max_attempts=90)
+    event_response = await client.get(f"/api/v1/sessions/{session}/turns/{admission['turn_id']}/message-stream/events")
+    assert event_response.status_code == 200, event_response.text
+    events = event_response.json()["data"]
+    progress_events = [event for event in events if event["type"] == "activity.updated"
+                       and "progress" in event["payload"].get("detail", {})]
+    assert [event["payload"]["detail"]["progress"] for event in progress_events] == [1, 2]
+    assert {event["payload"]["detail"]["total"] for event in progress_events} == {2}
+    assert "/private/" not in json.dumps(events)
+    assert any(event["type"] == "activity.failed" and event["payload"]["outcome"] == "outcome_unknown" for event in events)
+    records = [json.loads((state.artifacts / f"{call_id}.json").read_text()) for call_id in state.call_ids]
+    last_result = next(message for message in records[-1]["request"]["messages"]
+                       if message.get("role") == "tool" and message.get("tool_call_id") == calls[1]["id"])
+    assert json.loads(last_result["content"])["retryable"] is False
+    workspace = Path(integration_workspace_root_path)
+    with RolloutCheckpointSaver(workspace / ".boxteam/sessions") as cold:
+        items = cold._storage.storage.read_items(session, thread)
+        results = [item for item in items if item.semantic_kind == "tool_result" and item.tool_call_id.endswith(calls[1]["id"])]
+        # 现有合同分别保存 request projection 与执行 attempt，不能合并两者身份。
+        assert len(results) == 2
+        assert {item.projection_identity.projection_message_id is not None for item in results} == {False, True}
+        assert {item.projection_identity.model_call_id for item in results} == {records[1]["identity"]["model_call_id"]}
+        assert {item.payload["tool_outcome"] for item in results} == {"unknown"}
+        assert {item.payload["execution_confirmed"] for item in results} == {False}
+        assert results[0].payload["content"] == results[1].payload["content"]
+        assert results[0].payload["artifact"] == results[1].payload["artifact"]
+        receipt = McpInvocationReceipt.from_artifact(results[0].payload["artifact"])
+        assert receipt is not None and receipt.effect == "unknown" and receipt.retryable is False
+        with session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread):
+            messages = await acheckpoint_messages(cold, await cold.aget_tuple(build_checkpoint_config(thread)))
+        restored = next(message for message in messages if getattr(message, "tool_call_id", None) == calls[1]["id"])
+        assert restored.content == results[0].payload["content"] and restored.artifact == results[0].payload["artifact"]
+        assert restored.status == "error"
+        for record in records:
+            with cold._storage.storage.read_connection(session, thread) as connection:
+                assembly_id, = connection.execute("SELECT assembly_id FROM context_assemblies WHERE model_call_id=?",
+                                                  (record["identity"]["model_call_id"],)).fetchone()
+            assembly = cold.get_context_assembly(session, thread, assembly_id=assembly_id)
+            assert normalize_wire_request(record["request"]) == assembly.request_hash_preimage
+            assembly.validate_hashes()
+    received = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
+    assert len([row for row in received if row["arguments"].get("call_mode") == "disconnect"]) == 1
