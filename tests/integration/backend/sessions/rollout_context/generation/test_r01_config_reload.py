@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from hashlib import sha256
+from pathlib import Path
 
 import pytest
 
+import tests.integration.backend.sessions.test_thread_runtime_runner as runner_module
 from app.agents.graph_binding import GRAPH_FACTORY_REGISTRY, GraphBinding
 from app.agents.instruction_producers import InstructionProducerSpec
 from app.agents.model_call_execution import ModelCallExecution
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.epoch.prefix_epoch import stable_prefix_bytes
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.common import JobStatus
+from app.services.infrastructure.resource_platform.sources.observed_source import (
+    StableSourceReader,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -24,6 +33,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _complete_job,
     _session,
+    _start_job,
     runner_case,
     runtime_case,
 )
@@ -32,11 +42,41 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 __all__ = ["runner_case", "runtime_case"]
 
 
+@pytest.fixture(autouse=True)
+def instruction_file_input(input_kind: str, producer_id: str, monkeypatch: pytest.MonkeyPatch):
+    """在真实容器初始化之前选择文件；不手工发布来源或构造 producer。"""
+    files: list[Path] = []
+    if input_kind == "file":
+        build = runner_module._build_owned_container
+
+        def build_with_file(workspace, patch, request):
+            path = workspace / f"{producer_id}.txt"
+            path.write_text(f"{producer_id} 文件初始正文", encoding="utf-8")
+            files.append(path)
+            uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(workspace),
+                                       kind="files", tail_segments=("root", path.name))
+            config_path = workspace / ".boxteam/workspace.jsonc"
+            payload = read_jsonc_object(config_path)
+            instructions = payload.setdefault("agents", {}).setdefault("default", {}).setdefault("instructions", {})
+            if producer_id == "R01":
+                instructions["system_prompt_file"] = uri
+            else:
+                instructions.setdefault("runtime_identity", {})["description_file"] = uri
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            return build(workspace, patch, request)
+
+        monkeypatch.setattr(runner_module, "_build_owned_container", build_with_file)
+    return files
+
+
+@pytest.mark.parametrize("input_kind", ["inline", "file"])
 @pytest.mark.parametrize("producer_id", ["R01", "R02"])
 @pytest.mark.asyncio
 async def test_real_config_reload_refreshes_instruction_generation_without_rewriting_sealed_prefix(
     runtime_case: RuntimeCase,
     producer_id: str,
+    input_kind: str,
+    instruction_file_input: list[Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """真实配置发布经 runtime generation 到下一请求；旧封存请求仍可重试。"""
@@ -131,6 +171,12 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
                 source_reads += 1
                 return read_sources(*args, **kwargs)
 
+            if input_kind == "file":
+                instruction_file_input[0].unlink()
+                with pytest.raises(RuntimeError):
+                    await config.reload(idempotency_key="file-unavailable-before-sealed-retry")
+                with pytest.raises(RuntimeError, match="instruction-source-unavailable"):
+                    config.require_instruction_sources_available("default")
             saved_request = first_record[1]
             checkpoint_ns = saved_request.runtime.execution_info.checkpoint_ns
             try:
@@ -145,6 +191,10 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
                     ),
                 ):
                     retry_patch.setattr(manager, "prepare_sources", count_source_reads)
+                    if input_kind == "file":
+                        def forbidden_file_read(*args, **kwargs):
+                            pytest.fail("sealed retry 不得读取提示词文件")
+                        retry_patch.setattr(StableSourceReader, "read", forbidden_file_read)
                     retry_patch.setattr(ModelCallExecution, "_project_prepared", project)
                     retry, messages, tools = project(bridge, saved_request, await bridge._aprepare(saved_request))
                 assert source_reads == 0
@@ -155,6 +205,9 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
                 assert source_state() == state_before_retry
                 retry_checked = True
             finally:
+                if input_kind == "file":
+                    instruction_file_input[0].write_text(new_content, encoding="utf-8")
+                    assert not await config.reload(idempotency_key="file-available-after-sealed-retry")
                 saver.discard_prepared_context_for_dispatch(
                     session_id, thread_id,
                     execution_id=first_admission.execution_id,
@@ -214,13 +267,15 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     source_config.setdefault("agents", {}).setdefault("default", {}).setdefault(
         "instructions", {}
     )
-    if producer_id == "R01":
-        source_config["agents"]["default"]["instructions"]["system_prompt"] = new_content
+    if input_kind == "file":
+        assert len(instruction_file_input) == 1
+        instruction_file_input[0].write_text(new_content, encoding="utf-8")
     else:
-        source_config["agents"]["default"]["instructions"].setdefault("runtime_identity", {})["description"] = new_content
-    config_path.write_text(
-        json.dumps(source_config, ensure_ascii=False), encoding="utf-8"
-    )
+        if producer_id == "R01":
+            source_config["agents"]["default"]["instructions"]["system_prompt"] = new_content
+        else:
+            source_config["agents"]["default"]["instructions"].setdefault("runtime_identity", {})["description"] = new_content
+        config_path.write_text(json.dumps(source_config, ensure_ascii=False), encoding="utf-8")
     assert await config.reload(idempotency_key="r01-instructions-refresh")
     after = config.get_snapshot()
     expected = before.to_dict()
@@ -251,12 +306,13 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         workspace_layer.layer_revision,
         workspace_layer.layer_digest,
         workspace_layer.source_generation,
-    ) == (initial_layer.layer_revision + 1, sha256(config_path.read_bytes()).hexdigest(), before_source_generation + 1)
+    ) == (initial_layer.layer_revision + (input_kind == "inline"), sha256(config_path.read_bytes()).hexdigest(),
+          before_source_generation + (input_kind == "inline"))
     assert config.get_revision() == after.revision
     runtime = config.get_agent_runtime_config("default")
     assert runtime["system_prompt" if producer_id == "R01" else "runtime_identity_description"] == new_content
 
-    second_admission = await _complete_job(case, session_id, thread_id)
+    second_admission = await _complete_job(case, session_id, thread_id, timeout_seconds=20)
     assert retry_checked and len(projections) == len(produced) == len(case.compiled) == 2
     if producer_id == "R01":
         assert produced[1].content == new_content and produced[1].revision == after.revision
@@ -409,3 +465,19 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         checkpoint_ns=first_record[1].runtime.execution_info.checkpoint_ns,
     )
     assert canonical_json_bytes(restored.to_dict()) == first_seal_bytes
+
+    if input_kind == "file":
+        instruction_file_input[0].unlink()
+        with pytest.raises(RuntimeError):
+            await config.reload(idempotency_key="file-unavailable-for-new-execution")
+        rejected = await _start_job(case.runner, "user", session_id, thread_id)
+        assert rejected.task is not None
+        await asyncio.wait_for(asyncio.shield(rejected.task), 8)
+        assert rejected.status == JobStatus.failed
+        assert "instruction-source-unavailable" in rejected.error_message
+        assert len(case.model_requests) == 3
+        restored = saver.get_context_assembly(
+            session_id, thread_id, assembly_id=first_snapshot.assembly_id,
+            checkpoint_ns=first_record[1].runtime.execution_info.checkpoint_ns,
+        )
+        assert canonical_json_bytes(restored.to_dict()) == first_seal_bytes

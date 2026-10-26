@@ -181,6 +181,13 @@ R01只消费最终合并配置的`agents.<id>.instructions.system_prompt`；发�
 - **操作、当前状态和封存状态分别表达。** `skill_load.mode` 保留为外部操作；`SourceObservation.tracking_mode` 改为 `requested_mode`，运行态与持久控制态保留 `tracking_status`，来源 item／绑定的 `tracking_state` 改为 `source_tracking_at_seal`，派生属性及回执 `tracked` 保留。canonical 引用不适用 tracking，来源引用可处于未跟踪状态，两者由类型合同区分，不能只替换字符串。`observe()` 返回明确的处理结果，区分未变化、基准恢复、未跟踪与接受新观察；是否存在 pending 增量另行表达，回到已提交基准可取消 pending，不能用接受观察或 queued 代替成功 seal。要求 tracked 的调用入口遇到状态不符应报错。
 - **来源 owner 统一发布有效正文。** R01 默认提示词保留唯一权威入口，清理代码中的重复兜底并核清缺省行为。R02 将可覆盖说明与软件身份事实分离，移除项目特定示例，区分配置中的首选／fallback 与实际调用身份；覆盖说明不改变权威事实。外部提示词文件作为可选正文输入，默认使用inline，显式文件替换正文而非拼接；有效配置确定唯一正文输入，由 owner 读取并发布有效正文和 revision，正文变化须反映到 revision，显式读取失败报错；CSM 不读文件、不承担覆盖解析，模型请求路径只消费冻结版本。
 
+
+9.5 文件输入的具体配置由同一 Workspace owner 管理：`agents.<id>.instructions.system_prompt_file` 与 `agents.<id>.instructions.runtime_identity.description_file` 均为可空 files 资源 URI；默认 `null` 使用对应 inline 字段，显式 URI 完整替换该正文。高优先级层可用 `null` 清除低优先级文件选择，沿用既有递归合并规则；不新增配置版本或迁移。这里只登记持久配置 selector，普通文件工具继续接受相对路径、目标机器原生绝对路径与资源 URI。
+
+文件通过原 `WorkspaceFilePaths` owner 解析 Workspace／同目标 Gateway 的 files URI，再复用 `StableSourceReader` 稳定读取、UTF-8／普通文件／symlink／大小检查；正文长度沿用原 schema，不另设一套限制。读取发生在配置候选构建和已有 ConfigFileWatcher 的后台对账中；发布的 ConfigSnapshot 保存冻结有效正文与 selector，冷 active snapshot 恢复不读取当前文件。URI解析所需连接参数使用本次候选的临时 pinned view，临时 view 不发布、不形成第二 active 快照。
+
+同一配置监听器重绑精确文件依赖，订阅开始及重绑窗口主动对账；缺少父目录时只监听最近存在的祖先和下一待创建目录，逐层恢复，不扫描未知目录。读取／正文校验失败明确拒绝候选并保留旧 active，诊断报告失败与来源 URI；无 inline 回退。新 execution 冻结前检查 owner 已记录的内存 readiness，已冻结 execution、同 Turn retry和 sealed replay只恢复原冻结事实。配置 accessor、工具及模型 preparation 不读提示词文件。R01／R02仍按 `next_job` 发布新 runtime generation，不声称在旧 execution 的任意 model call 内即时切换。
+
 9.1 的封存合同由原 itemized owner 版本化：`SourceObservation.requested_mode` 使用闭集 `snapshot|tracked|untrack`，仅表示请求；`AppendedItemRef.source_tracking_at_seal` 使用 `tracked|untracked|None`，其中 canonical 引用只允许 `None`（不适用），source 引用必须明确为 `tracked|untracked`。不提供旧属性别名或双写。新 `ContextSealBinding` 显式保存 `format_version=2`；既有无标签封存唯一对应版本 1，由同一严格 codec 按整份版本读取，并在历史重编码及 fork 复制时保留原字段与字节。禁止混合版本字段、未知显式版本及按局部字段猜测格式。运行态一律使用新引用；新的 preparation preimage 标记 `context-seal-preparation:v2`，既有 seal input hash 不重算。Provider frame 的字节范围不含引用 metadata，因此原 frame、stable prefix、request hash 和历史 owner 保持不变；新 seal 在原链路写新版，不改 SQLite schema 或旧 sealed 原件。
 
 `observe()` 的实现合同为 `SourceObservationResult(source_id, status, pending)`，status 闭合为 `unchanged`、`baseline_restored`、`not_tracked`、`accepted`。`baseline_restored`同时涵盖冷恢复补齐同版正文及seal前回到已提交基准；后者取消净增量。`pending`只反映该来源现有待封存更新，因此重复观察可为`unchanged + pending`，未跟踪来源也可能保留先前显式snapshot候选。持续更新入口调用结果的`require_tracked()`核验，`not_tracked`明确报`context-source-not-tracked`；结果禁止隐式布尔解释。此回执不写入sealed历史，不改变持久结构，applied仍只由原seal事务推进。

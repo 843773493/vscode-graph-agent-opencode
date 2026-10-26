@@ -248,8 +248,10 @@
         "verbosity": "medium" // 当前未接入独立 persona middleware。
       },
       "instructions": {
+        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
         "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。", // Agent middleware 构造系统提示词。
         "runtime_identity": {
+          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
           "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
         }
       },
@@ -471,8 +473,10 @@
       "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
       "tags": [], // AgentService 展示能力标签默认为空。
       "instructions": {
+        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
         "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。", // Agent middleware 构造系统提示词。
         "runtime_identity": {
+          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
           "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
         }
       },
@@ -512,8 +516,10 @@
       "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
       "tags": [], // AgentService 展示能力标签默认为空。
       "instructions": {
+        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
         "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。", // Agent middleware 构造系统提示词。
         "runtime_identity": {
+          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
           "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
         }
       },
@@ -551,8 +557,10 @@
       "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
       "tags": [], // AgentService 展示能力标签默认为空。
       "instructions": {
+        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
         "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。", // Agent middleware 构造系统提示词。
         "runtime_identity": {
+          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
           "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
         }
       },

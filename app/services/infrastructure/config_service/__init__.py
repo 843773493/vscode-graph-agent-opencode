@@ -26,6 +26,10 @@ from app.services.infrastructure.config import (
     WorkspaceSourceOwner,
 )
 from app.services.infrastructure.config.event_cursor import ConfigEventCursor
+from app.services.infrastructure.config.instruction_inputs import (
+    InstructionFileInputs,
+    InstructionFileResolver,
+)
 from app.services.infrastructure.config.llm_resolution import LlmResolution
 from app.services.infrastructure.config.pending_restart import (
     PendingRestartCoordinator,
@@ -87,6 +91,7 @@ class ConfigService(ConfigSourceLayersMixin,
         source_owner_workspace_id: str | None = None,
         event_channel_service: EventChannelService | None = None,
         startup_mount: MountedWorkspace | None = None,
+        instruction_file_resolver: InstructionFileResolver | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -136,6 +141,7 @@ class ConfigService(ConfigSourceLayersMixin,
             else {}
         )
         self._mcp_tool_names: frozenset[str] | None = None
+        self._instruction_inputs = InstructionFileInputs(instruction_file_resolver)
         self._snapshot_store = ConfigSnapshotStore(
             candidate_builder=self._build_candidate_snapshot,
         )
@@ -185,6 +191,10 @@ class ConfigService(ConfigSourceLayersMixin,
 
     def _get_effective_config(self) -> dict[str, Any]:
         return self._require_snapshot().to_dict()
+
+    def require_instruction_sources_available(self, agent_id: str) -> None:
+        """仅新冻结边界检查来源 readiness；历史快照读取不检查当前文件。"""
+        self._instruction_inputs.require_available(self._get_effective_config(), self._normalize_agent_id(agent_id))
 
     async def get(self) -> ConfigDTO:
         return self._build_public_config()

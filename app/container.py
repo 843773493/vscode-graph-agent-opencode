@@ -177,6 +177,7 @@ from app.services.infrastructure.workspace_files.gateway_text_mutation import (
 )
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
+    WorkspaceFilePaths,
 )
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
@@ -603,6 +604,21 @@ def _build_app_container(
         state_path=resolved_boxteam_root / "resources.json",
         state_events=external_resource_state_events,
     )
+    def native_directories() -> GatewayNativeDirectoryClient:
+        return GatewayNativeDirectoryClient(
+            workspace_id=workspace_id,
+            connection=GatewayTransportConnection(
+                gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
+            ),
+            local_token_supplier=get_gateway_local_token,
+        )
+
+    def resolve_instruction_file(uri: str) -> tuple[Path, str]:
+        return WorkspaceFilePaths(
+            workspace=resolved_workspace_root, workspace_id=workspace_id,
+            bindings=native_directories(),
+        ).resolve(uri, allow_empty=False, reject_symlink=True)
+
     config_service = ConfigService(
         workspace_root=resolved_workspace_root,
         workspace_state_store=workspace_activity_service.store,
@@ -610,6 +626,7 @@ def _build_app_container(
         source_owner_workspace_id=workspace_id,
         event_channel_service=job_event_bus.event_channel_service,
         startup_mount=startup_mount,
+        instruction_file_resolver=resolve_instruction_file,
     )
     attachment_blob_store = AttachmentBlobStore(
         resolved_workspace_root, path_resolver=session_path_resolver, clock=clock_ports.wall,
@@ -619,13 +636,7 @@ def _build_app_container(
         config_service=config_service,
         workspace_root=resolved_workspace_root,
         attachments=attachment_blob_store,
-        native_directories=GatewayNativeDirectoryClient(
-            workspace_id=workspace_id,
-            connection=GatewayTransportConnection(
-                gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
-            ),
-            local_token_supplier=get_gateway_local_token,
-        ),
+        native_directories=native_directories(),
     )
     terminal_manager_client = TerminalManagerClient(
         config_service=config_service,

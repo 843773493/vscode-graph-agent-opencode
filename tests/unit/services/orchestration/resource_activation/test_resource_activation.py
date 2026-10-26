@@ -506,9 +506,19 @@ async def test_same_turn_retry_reuses_complete_policy_and_binding_bytes() -> Non
         policy=_policy(overrides={"mcp_tool_catalog": "model_call"}),
     )
     registry.publish(_snapshot("skill:demo", "skills", {"skill": 2}, generation=9))
+
+    def unavailable_source() -> None:
+        pytest.fail("已冻结 execution 或同 Turn retry 不得检查当前来源 readiness")
+
+    restored = await coordinator.freeze_execution(
+        admission=_admission("turn-retry", execution_id="execution-first"),
+        policy=_policy(), require_sources_ready=unavailable_source,
+    )
+    assert restored is first
     retried = await coordinator.freeze_execution(
         admission=_admission("turn-retry", execution_id="execution-retry"),
         policy=_policy(default="model_call", overrides={}),
+        require_sources_ready=unavailable_source,
     )
     assert retried.execution_id == "execution-retry"
     assert retried.turn_id == first.turn_id

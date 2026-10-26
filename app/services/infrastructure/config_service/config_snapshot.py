@@ -7,7 +7,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.config_sources import (
     ConfigSource,
@@ -35,19 +35,36 @@ from app.services.infrastructure.config_service.config_service_common import (
 )
 from configs.runtime import validate_config_payload
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.config.instruction_inputs import (
+        InstructionFileInputs,
+    )
+
 
 class ConfigSnapshotMixin:
+    if TYPE_CHECKING:
+        _instruction_inputs: InstructionFileInputs
+
     def _build_candidate_snapshot(
         self,
         *,
         validate_schema: bool = True,
     ) -> ConfigSnapshot:
         config, source_paths, source_details, schema_path = self._read_effective_config()
+        schema = self._load_schema(schema_path)
         if validate_schema:
-            validate_config_payload(config, schema=self._load_schema(schema_path))
+            validate_config_payload(config, schema=schema)
+        # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
+        # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
+        with self.use_snapshot(build_config_snapshot(
+            config, source_paths=source_paths, source_details=source_details, schema_path=schema_path,
+        )):
+            instruction_paths = self._instruction_inputs.load(config, schema=schema)
+        if validate_schema:
+            validate_config_payload(config, schema=schema)
         snapshot = build_config_snapshot(
             config,
-            source_paths=source_paths,
+            source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
             source_details=source_details,
             schema_path=schema_path,
         )

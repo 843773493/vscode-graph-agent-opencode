@@ -119,6 +119,7 @@ class ResourceActivationCoordinator:
         admission: ExecutionAdmission,
         policy: ResourceActivationPolicySnapshot,
         checkpoint_ns: str = "",
+        require_sources_ready: Callable[[], None] | None = None,
     ) -> ResourceActivationSnapshotRef:
         """active slot 先恢复唯一冻结事实；同用户 Turn retry 只建立新 execution 关联。"""
 
@@ -156,6 +157,9 @@ class ResourceActivationCoordinator:
                 execution_id=admission.execution_id,
             )
         else:
+            # 只有新冻结依赖当前 owner 的内存 readiness；历史恢复不重新读来源。
+            if require_sources_ready is not None:
+                require_sources_ready()
             snapshots = await self._await_required_snapshots(policy, boundary="turn")
             snapshot = self._build_snapshot(
                 snapshot_kind="execution",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.schemas.internal_v2.config import ConfigDTO, ConfigUpdateRequest
 from app.services.infrastructure.config.policy import workspace_config_policy
@@ -11,8 +11,16 @@ from app.services.infrastructure.config.state import (
     ConfigPendingCandidateRecord,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.config.instruction_inputs import (
+        InstructionFileInputs,
+    )
+
 
 class ConfigPublicMixin:
+    if TYPE_CHECKING:
+        _instruction_inputs: InstructionFileInputs
+
     async def update(self, payload: ConfigUpdateRequest) -> ConfigDTO:
         runtime_keys = frozenset(
             {
@@ -131,6 +139,7 @@ class ConfigPublicMixin:
                 "source": "workspace",
                 "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
                 "revision": snapshot.revision,
+                "instruction_inputs": self._instruction_inputs.diagnostics(config),
                 # 来源位置一律只以 URI 表达：``source_details[].uri`` 是唯一出处。
                 # 原先此处的 ``config_path``（真实 user 层路径）与 ``source_paths``
                 # （跨 user/user_local/workspace/runtime_override 四层的真实路径列表）既无 URI

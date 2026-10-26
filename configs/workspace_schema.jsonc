@@ -1111,6 +1111,11 @@
           "minLength": 1,
           "maxLength": 30000
         },
+        "system_prompt_file": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "null 使用 inline system_prompt；files 资源 URI 由目标文件 owner 稳定读取并替换正文，不接受真实路径或请求期读取。"
+        },
         "runtime_identity": {
           "type": "object",
           "additionalProperties": false,
@@ -1119,6 +1124,11 @@
               "type": "string",
               "maxLength": 20000,
               "description": "R02 可覆盖说明；不修改软件生成的工作区范围、Agent 身份及配置候选事实。省略时不附加说明。"
+            },
+            "description_file": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "description": "null 使用 inline description；files 资源 URI 替换说明正文，软件身份事实仍由运行时生成。"
             }
           }
         },

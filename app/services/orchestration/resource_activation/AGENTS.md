@@ -6,6 +6,7 @@
 
 - 有效配置到领域冻结 policy 值的构造、受保护 body port 和唯一 Saver port；不另定义领域 snapshot 类型。
 - ResourceActivationCoordinator 的冻结、parent 关联和 registry generation 捕获逻辑。
+- 新 execution 冻结前可调用配置 owner 注入的内存 readiness 检查；已有冻结事实恢复不检查当前文件，检查端口不得执行来源 I/O。
 
 # 不可修改内容
 

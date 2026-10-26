@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.config import (
@@ -34,8 +36,18 @@ from app.services.infrastructure.config_service.config_snapshot import (
 )
 from configs.runtime import validate_config_payload
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.config.instruction_inputs import (
+        InstructionFileInputs,
+    )
+    from app.services.infrastructure.config.store import ConfigSnapshotStore
+
 
 class ConfigReloadMixin:
+    if TYPE_CHECKING:
+        _instruction_inputs: InstructionFileInputs
+        _snapshot_store: ConfigSnapshotStore
+
     def validate_candidate(
         self,
         snapshot: ConfigSnapshot,
@@ -370,10 +382,14 @@ class ConfigReloadMixin:
                 publish_hook=publish_hook,
             )
 
-        return await self._snapshot_store.reload(
-            candidate_applier=apply_through_shadow,
-            apply_unchanged=True,
-        )
+        try:
+            return await self._snapshot_store.reload(
+                candidate_applier=apply_through_shadow,
+                apply_unchanged=True,
+            )
+        finally:
+            if self._watcher is not None:
+                self._update_config_watch_paths(self._watcher)
 
     def _prepare_candidate(
         self,
@@ -618,15 +634,7 @@ class ConfigReloadMixin:
             raise RuntimeError("配置文件监听器不允许重复启动")
         await self._ensure_shadow_started()
         self._candidate_applier = candidate_applier
-        directories = {self._get_workspace_config_path().parent}
-        candidate_paths = {
-            self._get_workspace_config_path(),
-            self._get_workspace_local_config_path(),
-        }
-        if self._workspace_root is not None:
-            workspace_config_dir = self._workspace_root / ".boxteam"
-            directories.add(workspace_config_dir)
-            candidate_paths.add(workspace_config_dir / "workspace.jsonc")
+        directories, candidate_paths = self._config_watch_paths()
         watcher = ConfigFileWatcher(
             directories=directories,
             candidate_paths=candidate_paths,
@@ -636,6 +644,34 @@ class ConfigReloadMixin:
         )
         await watcher.start()
         self._watcher = watcher
+        self._update_config_watch_paths(watcher)
+
+    def _config_watch_paths(self) -> tuple[set[Path], set[Path]]:
+        directories = {self._get_workspace_config_path().parent}
+        candidate_paths = {
+            self._get_workspace_config_path(),
+            self._get_workspace_local_config_path(),
+        }
+        if self._workspace_root is not None:
+            workspace_config_dir = self._workspace_root / ".boxteam"
+            directories.add(workspace_config_dir)
+            candidate_paths.add(workspace_config_dir / "workspace.jsonc")
+        instruction_paths = self._instruction_inputs.watch_paths(
+            self._snapshot_store.current().to_dict(),
+            include_candidate=not self._snapshot_store.status().healthy,
+        )
+        candidate_paths.update(instruction_paths)
+        for path in instruction_paths:
+            parent = path.parent
+            while not parent.is_dir():
+                candidate_paths.add(parent)
+                parent = parent.parent
+            directories.add(parent)
+        return directories, candidate_paths
+
+    def _update_config_watch_paths(self, watcher: ConfigFileWatcher) -> None:
+        directories, candidates = self._config_watch_paths()
+        watcher.replace_candidates(directories=directories, candidate_paths=candidates)
 
     async def stop_watching(self) -> None:
         watcher = self._watcher

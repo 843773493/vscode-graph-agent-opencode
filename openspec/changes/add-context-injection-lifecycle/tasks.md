@@ -342,7 +342,7 @@
 - [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
 - [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
 - [x] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
-- [ ] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
+- [x] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
 - [ ] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
 - [ ] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
 - [ ] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
@@ -352,7 +352,7 @@
 - [ ] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
 - [ ] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
 - [ ] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
-- [ ] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
+- [x] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
 - [ ] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
 
 ### 2026-10-26 9.3 明确观察处理结果
@@ -393,3 +393,13 @@
 - 扩查发现Responses普通来源发送绕回raw detail、fork重建旧root时按source ID丢弃后续diff两处真实缺陷。原生发送保留正文编码校验并只发送封存frame；root重建区分本次完整物化与旧版本恢复，只移除已被root覆盖的帧，保留后续版本delta。调用方测试迁为解析后精确正文/身份及实际wire与frame一致，旧hash、owner、tool配对与字节断言保留。
 - 正式source-wire matrix最终22 passed，覆盖同步/异步真实HTTP、跨协议fallback、ToolSet重编、失败重试及typed/后继fork；独立进程overlay恢复2 passed；epoch回归34 passed及正式copy matrix3 passed。dispatch/core原45 passed/1 failed，唯一为新增断言把既有text-block列表误写为字符串，修正后定向2 passed；非文本overlay仍明确拒绝。AGENTS真实发布/冷恢复5 passed按未变追加分支复用；运行时其它文件变化范围逐轮记录，不能声称全部源码同指纹重跑。
 - compiler的14项、native projector的3项Pyright诊断均与基线相同，无新增；OpenSpec strict有效。准确命令、前后指纹、raw、实际退出码、失败归因与复用边界见`out/tests/temp/cil_instruction_inputs_20261026/artifacts/verification-035.json`。9.6/9.8/9.13仍保留未完成；跨来源替代、分组与文件输入不由本收据证明。
+
+### 2026-10-26 9.5／9.15 文件输入发布与故障边界
+
+R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner装配、唯一配置快照正文、共享监听重绑、显式失败和新冻结 readiness已贯通；无请求期读盘或 inline回退。真实容器初始化前写入文件 selector，由原 ConfigService、Runner、generation、CSM、Saver和受控model_stream请求链验证。文件变更不伪造JSONC source layer变更；旧封存bytes／request hash／root／owner保持，文件删除时旧sealed retry不调用任何reader，新Job明确失败且不发模型请求。
+
+证据位于 `out/tests/temp/cil_instruction_files_20261026/artifacts/`：`config-files-007` 100 passed；`files-final-021` 15 passed，覆盖替换、null清除、missing／非法UTF-8／目录／symlink／空／超长、冷active恢复、真实watch重绑和缺失父目录恢复、错误目标以及finally不覆盖原错误。`reload-files-008` inline/file × R01/R02四组通过；移动readiness叶方法与复用schema对象后，`reload-final-017`最终文件两组通过；随后仅统一正文校验的安全错误格式，最终15项文件测试重新通过。`activation-010`24项通过，原冻结/同Turn retry补充失败readiness回调断言由 `activation-final-025`验证。
+
+`static-final-022` Ruff31基线／31最终、无新增，12个Python文件compileall通过。真实Pyright14个产品文件273基线／272当前，无新增诊断（`type-comparison-020.json`）；最终文件loader单独0错误（`types-helper-023`）。这些是带基线限制的静态结论，不表述为全仓类型全绿。初轮测试误选诊断Agent、扩展故障注入超出旧测试等待、类型整理残留条件导入，以及多Agent顺序不确定的测试错误均保留原始失败输出并已修正；未放宽正文、身份、顺序或hash断言。各检查均有进程外timeout／4GiB内存保护，准确命令、指纹、原始输出和退出码；基线完整归档树已核验删除，原始证据保留。
+
+9.2及9.6—9.14其余来源接线、显式来源切换、分组和网络来源验收仍以未勾选任务为准；不将此切片当作团队／协作或整个change验收完成。统一日志变更 `unify-product-runtime-logging`进入下一功能边界。

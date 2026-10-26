@@ -636,6 +636,9 @@ class StepRunner:
                     admission=admission,
                     policy=resource_activation_policy_from_config(config_snapshot.to_dict()),
                     checkpoint_ns=rollout_checkpoint_ns,
+                    require_sources_ready=lambda: self.ports.config_service.require_instruction_sources_available(
+                        resolved_agent_id,
+                    ),
                 )
             )
             frozen_activation = await asyncio.shield(activation_freeze_task)

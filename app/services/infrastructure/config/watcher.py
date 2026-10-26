@@ -20,6 +20,15 @@ class ConfigFileWatcher:
         self._on_change = on_change
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
+        self._rebind = asyncio.Event()
+
+    def replace_candidates(self, *, directories: Iterable[Path], candidate_paths: Iterable[Path]) -> None:
+        """同一监听器切换依赖集合；重绑后主动对账，覆盖换订阅窗口。"""
+        roots = tuple(sorted({path.resolve() for path in directories}))
+        candidates = frozenset(path.resolve() for path in candidate_paths)
+        if set(roots) != set(self._directories) or candidates != self._candidate_paths:
+            self._directories, self._candidate_paths = roots, candidates
+            self._rebind.set()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -51,23 +60,24 @@ class ConfigFileWatcher:
             pass
 
     async def _watch_loop(self) -> None:
-        first_iteration = True
-        async for changes in awatch(
-            *self._directories,
-            debounce=200,
-            step=50,
-            rust_timeout=50,
-            yield_on_timeout=True,
-            # 配置候选文件都位于监听目录的直接子项。工作区配置目录同时
-            # 承载 sessions、message_streams 等运行时状态，不能递归监听，
-            # 否则每次 Agent 写状态都会触发 watchfiles 自身的事件风暴。
-            recursive=False,
-        ):
-            if first_iteration:
-                self._ready.set()
+        while True:
+            self._rebind.clear()
+            first_iteration = True
+            async for changes in awatch(
+                *self._directories,
+                debounce=200,
+                step=50,
+                rust_timeout=50,
+                yield_on_timeout=True,
+                stop_event=self._rebind,
+                # 每个依赖只监听直接父目录；不递归进入会话运行时数据。
+                recursive=False,
+            ):
+                if first_iteration or self._contains_candidate_change(changes):
+                    await self._on_change()
+                if first_iteration:
+                    self._ready.set()
                 first_iteration = False
-            if self._contains_candidate_change(changes):
-                await self._on_change()
 
     def _contains_candidate_change(
         self,
