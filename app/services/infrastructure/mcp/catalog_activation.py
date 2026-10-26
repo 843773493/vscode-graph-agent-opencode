@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 from langchain_core.tools import BaseTool
 
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -38,7 +39,7 @@ MCP_TOOL_CATALOG_RESOURCE_ID = "mcp-tool-catalog:v1"
 MCP_GUIDANCE_SOURCE_ID = "mcp-tool-guidance:v1"
 MCP_OWNER_CATALOG_SOURCE_ID = "mcp-owner-catalog:v1"
 CUSTOM_CATALOG_SOURCE_ID = "custom-extension-catalog:v1"
-EXTENSION_CATALOG_SOURCE_ID = "extension-catalog:v1"
+EXTENSION_CATALOG_SOURCE_ID = "extension-catalog:v2"
 
 
 def mcp_guidance_content(payload: object) -> str:
@@ -59,14 +60,14 @@ class McpCatalogResourcePublisher:
         self._registry = registry
         entries = tuple(sorted(custom_tools, key=lambda tool: tool.name))
         self._custom_revision = payload_digest(
-            [[tool.name, tool.args] for tool in entries],
+            [[tool.name, export_model_tool_json_schema(tool)] for tool in entries],
             context="工作区 custom extension typed members",
             error_type=ExtensionCatalogBindingError,
         )
         self._custom_members = build_extension_catalog_binding(
             catalog_revision=self._custom_revision, generation=1,
             targets=(ExtensionTargetBindingInput(
-                target_id=tool.name, origin="custom", args=tool.args,
+                target_id=tool.name, origin="custom", input_schema=export_model_tool_json_schema(tool),
             ) for tool in entries),
         ).members
         registry.register_descriptor(SemanticResourceDescriptor(
@@ -144,7 +145,9 @@ def extension_dispatch_from_activation(
         if identity == EXTENSION_CATALOG_SOURCE_ID
     )
     if len(revisions) != 1:
-        raise ExtensionCatalogUnavailableError("sealed extension catalog 必须有唯一 typed catalog revision")
+        raise ExtensionCatalogUnavailableError(
+            "sealed extension catalog 缺少完整 schema v2 来源；历史可读但不可恢复执行，需新模型调用"
+        )
     catalog = extension_catalog_binding_from_members(
         catalog_revision=revisions[0], generation=binding.captured_registry_generation,
         members=binding.members,

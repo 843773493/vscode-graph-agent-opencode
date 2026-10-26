@@ -23,7 +23,7 @@ class _NoArgumentInput(_StrictDebugInput):
 
     TODO: LangChain 的 ``BaseTool._to_args_and_kwargs`` 对“无字段 args_schema”会直接
     返回空参数，因此直接 ``ainvoke`` 的多余参数到不了本模型；模型面向的固定信封
-    仍按导出 schema 的 properties 明确拒绝这些参数。
+    仍按公开模型的 extra="forbid" 明确拒绝这些参数。
     """
 
 

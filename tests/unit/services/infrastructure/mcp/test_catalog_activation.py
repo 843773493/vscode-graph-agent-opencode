@@ -21,6 +21,10 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.source_protocol import (
+    parse_source_blocks,
+    render_source_blocks,
+)
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -398,7 +402,10 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
         assert returned_snapshot.seal_binding.prefix.state.epoch == initial_snapshot.seal_binding.prefix.state.epoch
         if boundary == "model_call":
             assert returned_snapshot.seal_binding.prefix.state.frames[:-1] == cold_snapshot.seal_binding.prefix.state.frames
-            assert returned_snapshot.seal_binding.prefix.state.frames[-1].content == ""
+            block, = parse_source_blocks(returned_snapshot.seal_binding.prefix.state.frames[-1].content)
+            assert (block.source_identity, block.revision, block.body, block.operation) == (
+                MCP_GUIDANCE_SOURCE_ID, binding.revision, "", "update",
+            )
         else:
             # 当前真实 admission 的 Turn 尚未改变，目录刷新不能改写冻结输入。
             assert activation == _activation == initial
@@ -424,18 +431,17 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     )
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     assert [tool["function"]["name"] for tool in first["tools"]] == ["invoke_extension_tool"]
-    assert any(
-        original_body["content"] in message.content
-        for message in first["messages"]
-        if isinstance(message.content, str)
-    )
     guidance = tuple(
         frame for frame in original.seal_binding.prefix.state.frames
         if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
     )
     assert len(guidance) == 1
     assert guidance[0].role == "user"
-    assert guidance[0].content == original_body["content"]
+    block, = parse_source_blocks(guidance[0].content)
+    assert (block.source_identity, block.revision, block.body, block.source_kind, block.root_placement) == (
+        MCP_GUIDANCE_SOURCE_ID, parent.revision, original_body["content"], "mcp_tool_catalog", "tail_only",
+    )
+    assert any(message.content == guidance[0].content for message in first["messages"])
 
     factory.session.minimum = 5
     factory.changed()
@@ -524,7 +530,9 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
         else:
             assert preparation.transition is not None
             preparation = replace(preparation, prefix_state=replace(preparation.prefix_state, frames=tuple(
-                replace(frame, content="同 revision 的伪造指引正文")
+                replace(frame, content=render_source_blocks(tuple(
+                    replace(block, body="同 revision 的伪造指引正文") for block in parse_source_blocks(frame.content)
+                )))
                 if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID else frame
                 for frame in preparation.prefix_state.frames
             )))
@@ -535,7 +543,7 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
         with pytest.raises(ItemSchemaError, match="guidance applied revision"):
             guidance_prepare("guidance-guard-invalid:" + invalid)
     else:
-        with pytest.raises(ValueError, match="source-mismatch: source wire frame 与 sealed 正文不一致"):
+        with pytest.raises(ValueError, match="source-mismatch: source 来源块与 sealed 正文或绑定不一致"):
             guidance_prepare("guidance-guard-invalid:" + invalid)
     assert tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                  for table in ("context_assemblies", "context_assembly_selections", "resource_activation_assembly_bindings")) == counts

@@ -51,6 +51,7 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
 )
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import (
     ToolMetadata,
     ToolPolicyResolver,
@@ -789,10 +790,10 @@ def create_my_deep_agent(
 
         def resolve_target(binding):
             initial = initial_targets.get(binding.target_id)
-            if initial is not None and extension_schema_hash(initial.args) == binding.schema_hash:
+            if initial is not None and extension_schema_hash(export_model_tool_json_schema(initial)) == binding.schema_hash:
                 return initial
             current = mcp_catalog_owner.publication_snapshot().tools.get(binding.target_id)
-            if current is None or extension_schema_hash(current.args) != binding.schema_hash:
+            if current is None or extension_schema_hash(export_model_tool_json_schema(current)) != binding.schema_hash:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 缺少匹配 schema 的执行 handle: {binding.target_id}"
                 )

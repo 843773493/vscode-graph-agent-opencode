@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import inspect
-import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +22,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
     build_extension_catalog_binding,
     extension_schema_hash,
+    payload_digest,
 )
 from app.services.infrastructure.rollout_context.activation.common import (
     ResourceActivationStoreError,
@@ -58,18 +58,9 @@ def _validate_target_arguments(
     arguments: dict[str, Any] | None,
 ) -> dict[str, Any]:
     normalized_arguments = _normalize_arguments(arguments)
-    schema = export_model_tool_json_schema(target_tool)
-    properties = schema.get("properties")
-    if isinstance(properties, dict):
-        unknown_fields = sorted(set(normalized_arguments) - set(properties))
-        if unknown_fields:
-            raise ToolException(
-                f"扩展工具 {target_tool.name} 包含未知参数: "
-                f"{', '.join(unknown_fields)}"
-            )
     try:
         return validate_model_tool_arguments(target_tool, normalized_arguments)
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, JsonSchemaValidationError) as error:
         raise ToolException(
             f"扩展工具 {target_tool.name} 参数校验失败: {error}"
     ) from error
@@ -94,40 +85,25 @@ def seal_extension_catalog_binding_from_tools(
     tools: Sequence[BaseTool],
 ) -> ExtensionCatalogBindingResolver:
     """纯工具面检查与独立 unit 构建；真实 runtime 使用 Saver 的 durable resolver。"""
-    entries: list[dict[str, object]] = []
-    for tool_item in tools:
+    entries: list[ExtensionTargetBindingInput] = []
+    for tool_item in sorted(tools, key=lambda item: item.name):
         metadata = getattr(tool_item, "metadata", None)
         server_id = (
             metadata.get("mcp_server_id") if isinstance(metadata, dict) else None
         )
-        schema = export_model_tool_json_schema(tool_item)
-        properties = schema.get("properties")
         entries.append(
-            {
-                "target_id": tool_item.name,
-                "origin": "mcp" if server_id else "custom",
-                "server_id": server_id,
-                "args": properties if isinstance(properties, dict) else {},
-            }
-        )
-    entries.sort(key=lambda entry: str(entry["target_id"]))
-    revision_payload = json.dumps(
-        entries, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:"
-        + hashlib.sha256(revision_payload.encode()).hexdigest(),
-        generation=1,
-        targets=[
             ExtensionTargetBindingInput(
-                target_id=str(entry["target_id"]),
-                origin=str(entry["origin"]),
-                args=entry["args"],
-                server_id=entry["server_id"],
+                target_id=tool_item.name, origin="mcp" if server_id else "custom",
+                server_id=server_id, input_schema=export_model_tool_json_schema(tool_item),
             )
-            # dict 字面量键集合固定，类型收窄安全。
-            for entry in entries
-        ],
+        )
+    binding = build_extension_catalog_binding(
+        catalog_revision=payload_digest(
+            [[entry.target_id, entry.origin, entry.server_id, entry.input_schema] for entry in entries],
+            context="扩展工具封存目录", error_type=ExtensionCatalogBindingError,
+        ),
+        generation=1,
+        targets=entries,
     )
     return sealed_extension_catalog_binding_resolver(binding)
 
@@ -141,7 +117,7 @@ def _assert_sealed_target_matches_registration(
     registered_server_id = (
         metadata.get("mcp_server_id") if isinstance(metadata, dict) else None
     )
-    registered_schema_hash = extension_schema_hash(target_tool.args)
+    registered_schema_hash = extension_schema_hash(export_model_tool_json_schema(target_tool))
     if registered_schema_hash != sealed_target.schema_hash:
         raise ExtensionTargetResolutionError(
             "sealed target 与可执行注册参数 schema 不一致: "

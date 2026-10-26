@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import DEBUGGING_TOOL_GROUP, parse_custom_tool_specs
 from app.agents.policy.tool_groups import DEBUGGING_TOOL_NAMES
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -190,7 +191,7 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target() ->
             }
         )
         assert isinstance(result, str), field_name
-        assert "未知参数" in result, result
+        assert "参数校验失败" in result, result
         assert field_name in result, result
         assert "list_breakpoints" in result, result
 
@@ -200,7 +201,7 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target() ->
             "arguments": {"unexpected": 1},
         }
     )
-    assert "未知参数" in result
+    assert "参数校验失败" in result
     assert "unexpected" in result
     service.get_state.assert_not_awaited()
 
@@ -433,7 +434,7 @@ async def test_envelope_preserves_original_tool_call_id_pairing() -> None:
     recorded_binding = recorded_bindings[0]
     assert recorded_binding is not None
     assert recorded_binding.target_id == "list_breakpoints"
-    assert recorded_binding.binding_id.startswith("ext-catalog:v1:")
+    assert recorded_binding.binding_id.startswith("ext-catalog:v2:")
     assert recorded_binding.binding_hash.startswith("sha256:")
     assert recorded_binding.target_schema_hash.startswith("sha256:")
 
@@ -455,7 +456,7 @@ def _extension_binding_inputs(tools):
             ExtensionTargetBindingInput(
                 target_id=tool_item.name,
                 origin="mcp" if server_id else "custom",
-                args=tool_item.args,
+                input_schema=export_model_tool_json_schema(tool_item),
                 server_id=server_id,
             )
         )

@@ -5,8 +5,7 @@
 - 连接生命周期：经 ``create_session`` + ``session_kwargs.message_handler`` 建立
   各 enabled server 的唯一 session（``MultiServerMCPClient.session()`` 不暴露
   message handler，而底层是同一个 ``create_session`` 工厂，不产生第二套连接实现）。
-- 目录 relist：``load_mcp_tools`` 是唯一的工具发现/适配路径，内部经
-  ``_list_all_tools`` 完整分页读取 ``tools/list``。
+- 目录 relist：``list_mcp_tools`` 经 SDK 完整分页读取并验证 ``tools/list``。
 - 不可变目录 revision：对「server -> 有序工具描述 + 参数指纹」的语义载荷做
   canonical JSON sha256；payload 不变则 revision 不推进。
 - 变化通知：消费 ``notifications/tools/list_changed``；不具备通知能力的 server
@@ -32,8 +31,8 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import Connection, create_session
-from langchain_mcp_adapters.tools import load_mcp_tools
 
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp.config import (
@@ -44,10 +43,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
-    extension_args_fingerprint,
     payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
+from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.shared.exceptions import McpError
@@ -134,23 +133,17 @@ class McpServerSessionPort(Protocol):
     def supports_tool_list_changed(self) -> bool: ...
 
 
-class _LangchainServerSession:
+class _McpServerSession:
     """``mcp`` ClientSession 的窄端口包装。"""
 
-    def __init__(self, session: ClientSession, *, server_name: str) -> None:
+    def __init__(self, session: ClientSession) -> None:
         self._session = session
-        self._server_name = server_name
 
     async def initialize(self) -> None:
         await self._session.initialize()
 
     async def list_tools(self) -> list[BaseTool]:
-        # load_mcp_tools 内部经 _list_all_tools 完整分页读取 tools/list。
-        return await load_mcp_tools(
-            self._session,
-            server_name=self._server_name,
-            handle_tool_errors=True,
-        )
+        return await list_mcp_tools(self._session)
 
     def supports_tool_list_changed(self) -> bool:
         capabilities = self._session.get_server_capabilities()
@@ -169,7 +162,7 @@ def production_mcp_session_factory(
 
     ``MultiServerMCPClient.session()`` 不暴露 message handler，因此直接使用
     同一个底层 ``create_session`` 工厂，把 ``tools/list_changed`` 通知消费接入
-    ``session_kwargs``；工具发现仍只经 ``load_mcp_tools``。
+    ``session_kwargs``；工具发现仍只经唯一 SDK 分页适配。
     """
 
     async def _message_handler(message: object) -> None:
@@ -187,7 +180,7 @@ def production_mcp_session_factory(
     @asynccontextmanager
     async def _session_context() -> AsyncIterator[McpServerSessionPort]:
         async with create_session(connection) as session:
-            port = _LangchainServerSession(session, server_name=server.server_id)
+            port = _McpServerSession(session)
             await port.initialize()
             yield port
 
@@ -231,7 +224,7 @@ def _compute_catalog_revision(
     """语义目录载荷的 sha256 revision（canonical JSON；与事件合同同形状）。"""
     payload: list[list[object]] = []
     for server_id in sorted(descriptors_by_server):
-        server_entries: list[list[str]] = []
+        server_entries: list[list[object]] = []
         for descriptor in sorted(
             descriptors_by_server[server_id], key=lambda item: item.tool_id
         ):
@@ -241,7 +234,7 @@ def _compute_catalog_revision(
                     descriptor.tool_id,
                     descriptor.remote_name,
                     descriptor.description,
-                    extension_args_fingerprint(tool.args),
+                    export_model_tool_json_schema(tool),
                 ]
             )
         payload.append([server_id, server_entries])
@@ -262,6 +255,8 @@ def _adapt_server_tools(
     tools: dict[str, BaseTool] = {}
     descriptors: list[McpToolDescriptor] = []
     for remote_tool in remote_tools:
+        # 完整目录发布前验证方言、引用及结构；失败不得发布半目录。
+        export_model_tool_json_schema(remote_tool)
         tool_id = build_mcp_tool_id(server_id, remote_tool.name)
         if tool_id in foreign_tool_ids or tool_id in tools:
             raise ValueError(
@@ -732,7 +727,7 @@ class McpCatalogOwner:
                     ExtensionTargetBindingInput(
                         target_id=descriptor.tool_id, origin="mcp",
                         server_id=descriptor.server_id,
-                        args=candidate_tools[descriptor.tool_id].args,
+                        input_schema=export_model_tool_json_schema(candidate_tools[descriptor.tool_id]),
                     )
                     for descriptor in descriptors
                 ),

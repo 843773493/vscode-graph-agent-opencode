@@ -21,10 +21,10 @@ ref，执行点按最新权限校验并返回真实 paired result。binding ref 
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Literal
 
 from app.domain.itemized.hashing import (
     ItemSchemaError,
@@ -39,12 +39,12 @@ EXTENSION_TOOL_ENVELOPE_IDENTITY = (
     "invoke_extension_tool@v1:tool_name:str+arguments:object"
 )
 
-_BINDING_ID_PREFIX = "ext-catalog:v1"
-EXTENSION_CATALOG_BINDING_SCHEMA = "extension-catalog-binding:v1"
+_BINDING_ID_PREFIX = "ext-catalog:v2"
+EXTENSION_CATALOG_BINDING_SCHEMA = "extension-catalog-binding:v2"
 # 独立 dispatch binding hash 的版本化 JCS preimage schema；它覆盖 catalog
 # semantic revision/hash、server generation 验证 ref、稳定 target/schema 集合、
 # 绑定指引 revision 与 activation policy revision，与 binding_hash 分离。
-EXTENSION_DISPATCH_BINDING_SCHEMA = "extension-dispatch-binding:v1"
+EXTENSION_DISPATCH_BINDING_SCHEMA = "extension-dispatch-binding:v2"
 # 历史 binding 丢失时的显式错误 code；调用方必须拒绝 dispatch，不得回退当前
 # MCP 目录、当前同名 target 或空目录。
 EXTENSION_CATALOG_UNAVAILABLE_CODE = "extension-catalog-unavailable"
@@ -79,18 +79,12 @@ class ExtensionDispatchBindingMismatchError(ExtensionCatalogBindingError):
         self.code = EXTENSION_DISPATCH_BINDING_MISMATCH_CODE
 
 
-def extension_args_fingerprint(args: Mapping[str, object]) -> str:
-    """工具参数 schema 的 canonical JSON 指纹（参与目录语义 revision 载荷）。"""
-    try:
-        return json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        return repr(sorted(args))
-
-
-def extension_schema_hash(args: Mapping[str, object]) -> str:
-    """target 参数 schema 的 sha256 身份；进入 binding 条目并可重算核对。"""
-    fingerprint = extension_args_fingerprint(args)
-    return sha256_token(fingerprint.encode())
+def extension_schema_hash(input_schema: Mapping[str, object]) -> str:
+    """完整公开输入契约的版本化 JCS 指纹，不接受 properties 摘要或 repr。"""
+    return payload_digest(
+        {"schema": "extension-input-schema:v2", "input_schema": input_schema},
+        context="扩展工具完整输入契约", error_type=ExtensionCatalogBindingError,
+    )
 
 
 def sha256_token(data: bytes) -> str:
@@ -130,7 +124,7 @@ class ExtensionTargetBinding:
     """一个扩展 target 在 sealed binding 中的不可变条目。"""
 
     target_id: str
-    origin: str
+    origin: Literal["mcp", "custom"]
     schema_hash: str
     server_id: str | None = None
 
@@ -170,6 +164,10 @@ class ExtensionCatalogBindingRef:
         if not self.catalog_revision.startswith("sha256:"):
             raise ValueError(
                 "ExtensionCatalogBindingRef.catalog_revision 必须是 sha256 revision"
+            )
+        if self.binding_id != f"{_BINDING_ID_PREFIX}:{self.generation}:{self.catalog_revision}":
+            raise ExtensionCatalogUnavailableError(
+                "binding 契约版本不支持恢复执行；历史记录可读，必须从新模型调用获取完整定义"
             )
         if self.generation < 1:
             raise ValueError("ExtensionCatalogBindingRef.generation 必须 >= 1")
@@ -231,11 +229,11 @@ class ExtensionCatalogBindingRef:
 
 @dataclass(frozen=True, slots=True)
 class ExtensionTargetBindingInput:
-    """binding 构建输入；args 为工具参数 schema，schema_hash 在构建时冻结。"""
+    """binding 构建输入；完整公开 input_schema 在构建时冻结为身份。"""
 
     target_id: str
-    origin: str
-    args: Mapping[str, object]
+    origin: Literal["mcp", "custom"]
+    input_schema: Mapping[str, object]
     server_id: str | None = None
 
 
@@ -257,7 +255,7 @@ def build_extension_catalog_binding(
         entries[item.target_id] = ResourceMemberBinding(
             member_id=item.target_id,
             member_kind=item.origin,
-            schema_hash=extension_schema_hash(item.args),
+            schema_hash=extension_schema_hash(item.input_schema),
             server_id=item.server_id,
             revision=catalog_revision,
         )

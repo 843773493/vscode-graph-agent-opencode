@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.itemized.hashing import sha256_jcs
+from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
     ExtensionCatalogBindingRef,
@@ -24,7 +25,6 @@ from app.services.infrastructure.mcp import (
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_BINDING_SCHEMA,
-    extension_args_fingerprint,
 )
 from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory as _FakeSessionFactory,
@@ -101,17 +101,20 @@ async def test_binding_snapshot_frozen_and_verifiable(
         ref = owner.binding_snapshot()
         assert ref.catalog_revision == owner.catalog_revision()
         assert ref.generation == owner.catalog_generation() == 1
-        assert ref.binding_id == f"ext-catalog:v1:1:{ref.catalog_revision}"
+        assert ref.binding_id == f"ext-catalog:v2:1:{ref.catalog_revision}"
         assert set(ref.targets) == {"mcp__mini__echo"}
         target = ref.targets["mcp__mini__echo"]
         assert target.origin == "mcp"
         assert target.server_id == "mini"
         assert target.schema_hash.startswith("sha256:")
-        # schema_hash 与目录语义 revision 同源：对同一 args 重算一致。
+        # 独立按完整输入契约重算，不能用 properties 摘要冒充身份。
         assert target.schema_hash == (
             "sha256:"
             + hashlib.sha256(
-                extension_args_fingerprint(owner.get_tools()[0].args).encode()
+                canonical_json_bytes({
+                    "schema": "extension-input-schema:v2",
+                    "input_schema": export_model_tool_json_schema(owner.get_tools()[0]),
+                })
             ).hexdigest()
         )
         # binding_hash 可按文档化 payload 独立重算核对。
@@ -248,7 +251,7 @@ async def test_cross_server_same_remote_name_uses_declared_namespace(
 
 def test_builder_rejects_duplicate_targets_and_invalid_inputs() -> None:
     base = ExtensionTargetBindingInput(
-        target_id="mcp__mini__echo", origin="mcp", args={"text": {}}, server_id="mini"
+        target_id="mcp__mini__echo", origin="mcp", input_schema={"type": "object", "properties": {"text": {}}}, server_id="mini"
     )
     with pytest.raises(ExtensionTargetConflictError):
         build_extension_catalog_binding(

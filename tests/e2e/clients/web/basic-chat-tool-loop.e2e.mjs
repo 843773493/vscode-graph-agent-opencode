@@ -10143,11 +10143,11 @@ async function mcpBinding(owner, call) {
   assert.equal(parent.activation_ordinal, row.activation_ordinal);
   assert.equal(parent.source_lineage_digest, row.source_lineage_digest);
   assert.equal(parent.source_lineage_ref.digest, row.source_lineage_digest);
-  const revisions = parent.source_lineage_ref.sources.filter(([identity]) => identity === "extension-catalog:v1");
+  const revisions = parent.source_lineage_ref.sources.filter(([identity]) => identity === "extension-catalog:v2");
   assert.equal(revisions.length, 1, "dispatch catalog revision 必须来自原冻结 typed lineage");
   assert.equal(typeof revisions[0][1], "string");
   assert.ok(revisions[0][1]);
-  return { ...row, binding_id: `ext-catalog:v1:${row.captured_registry_generation}:${revisions[0][1]}` };
+  return { ...row, binding_id: `ext-catalog:v2:${row.captured_registry_generation}:${revisions[0][1]}` };
 }
 
 async function runMcpActivation(surface, boundary) {

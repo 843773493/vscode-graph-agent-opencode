@@ -8,6 +8,7 @@
 - MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
+- `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
 - MCP 工具指引派生，以及经 `McpCatalogOwner` 的唯一发布回调把同 revision 的目录、指引和 typed members 组成单一 `mcp_tool_catalog` payload，发布到既有 ResourceRegistry。
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
@@ -30,6 +31,7 @@
 - MCP 工具名称必须带 Server 命名空间，禁止同名工具静默覆盖。
 - 目录 relist 必须完整读取并验证；连续 relist payload 不变时不得推进 revision；增删改发布新 immutable revision，删除以 tombstone 事件标记；目录为空也发布固定 envelope/revision。
 - 目录 generation 只在 revision 实际推进时递增；binding ref 的 binding_id/binding_hash 必须可重算核对。
+- 完整公开 schema（含 required、additionalProperties、组合与本地引用）经统一导出后用于目录、guidance、binding 和信封校验；properties 摘要只作展示。v2 binding 和 lineage 不可由 v1 历史指纹推导执行资格；历史读取保留原件，旧契约恢复执行必须明确拒绝。
 - `binding_hash` 与 `extension_dispatch_binding_hash` 必须复用 domain 的 `sha256_jcs` JCS token（`sha256:jcs:v1:<64hex>`），不得自造第二套 canonical 编码或摘要前缀。
 - 指引只从已验证目录派生并保持有界确定性；外部 description 是不可信数据；binding 与指引必须同 revision 原子冻结，relist/派生失败 fail closed，不半发布。
 - 安全 model-call preparation 只读取 Registry 已发布的 snapshot/revision，不在请求期 relist、读取文件或访问 MCP 网络；无通知 server 的显式刷新仍由目录 owner 在发布边界执行。

@@ -4,15 +4,16 @@ from typing import Any, ClassVar
 
 import pytest
 from jsonschema import ValidationError as JsonSchemaValidationError
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 from app.agents.model_tool_schema import (
     export_model_tool_json_schema,
     filter_tool_event_injected_arguments,
     get_model_tool_schema,
+    model_tool_schema_validator,
     validate_model_tool_arguments,
 )
 
@@ -102,11 +103,78 @@ def test_model_tool_arguments_validate_dictionary_schema_for_protocol_tools() ->
 
     assert validate_model_tool_arguments(
         _ToolWithDictionarySchema(),  # type: ignore[arg-type]
-        {"value": "ready", "ignored": "not-forwarded"},
-    ) == {"value": "ready"}
+        {"value": "ready", "extra": "forwarded"},
+    ) == {"value": "ready", "extra": "forwarded"}
 
     with pytest.raises(JsonSchemaValidationError):
         validate_model_tool_arguments(  # type: ignore[arg-type]
             _ToolWithDictionarySchema(),
             {"value": 123},
         )
+
+
+def test_declared_draft_is_used_instead_of_default() -> None:
+    validator = model_tool_schema_validator({
+        "$schema": "http://json-schema.org/draft-07/schema#", "type": "object",
+        "dependencies": {"flag": ["other"]},
+    })
+    with pytest.raises(JsonSchemaValidationError, match="dependency"):
+        validator.validate({"flag": True})
+    validator.validate({"flag": True, "other": 1})
+
+
+@pytest.mark.parametrize("schema, message", [
+    ({"$schema": "https://unsupported.invalid/schema"}, "方言不受支持"),
+    ({"$ref": "https://offline.invalid/schema"}, "只支持本地引用"),
+    ({"$ref": "#/$defs/missing"}, "本地引用无法解析"),
+])
+def test_unsupported_contract_is_rejected_before_execution(schema, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        model_tool_schema_validator(schema)
+
+
+def test_schema_export_isolated_from_dictionary_owner() -> None:
+    schema = {"type": "object", "$defs": {"value": {"enum": ["a", "b"]}},
+              "properties": {"value": {"$ref": "#/$defs/value"}}}
+    target = StructuredTool(name="dictionary", description="字典契约", args_schema=schema,
+                            func=lambda **arguments: arguments)
+    exported = export_model_tool_json_schema(target)
+    exported["$defs"]["value"]["enum"].append("mutated")
+    assert schema["$defs"]["value"]["enum"] == ["a", "b"]
+
+
+@pytest.mark.parametrize("extra", ["forbid", "allow", "ignore"])
+def test_local_model_keeps_defaults_conversions_and_extra_policy(extra) -> None:
+    class LocalInput(BaseModel):
+        model_config = ConfigDict(extra=extra)
+        count: int
+        label: str = "default"
+
+    target = StructuredTool(name="local", description="本地模型", args_schema=LocalInput,
+                            func=lambda **arguments: arguments)
+    assert validate_model_tool_arguments(target, {"count": "2"}) == {"count": 2, "label": "default"}
+    exported = export_model_tool_json_schema(target)
+    if extra == "forbid":
+        assert exported["additionalProperties"] is False
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            validate_model_tool_arguments(target, {"count": 2, "extra": 3})
+    else:
+        result = validate_model_tool_arguments(target, {"count": "2", "extra": 3})
+        assert result == {"count": 2, "label": "default", **({"extra": 3} if extra == "allow" else {})}
+
+
+def test_local_allow_does_not_grant_access_to_injected_arguments() -> None:
+    class LocalInput(BaseModel):
+        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+        value: str
+        runtime: ToolRuntime
+
+    @tool(args_schema=LocalInput)
+    def local(value: str, runtime: ToolRuntime, **extra) -> str:
+        """后端运行时不属于公开的可扩展字段。"""
+        del runtime, extra
+        return value
+
+    assert validate_model_tool_arguments(local, {"value": "ok", "extra": 1}) == {"value": "ok", "extra": 1}
+    with pytest.raises(ValueError, match="后端注入参数不得由模型提供"):
+        validate_model_tool_arguments(local, {"value": "ok", "runtime": {"privilege": "forged"}})

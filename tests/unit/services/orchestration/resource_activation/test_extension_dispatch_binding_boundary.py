@@ -25,6 +25,7 @@ from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_TOOL_ENVELOPE_IDENTITY,
+    ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
@@ -98,7 +99,7 @@ def _dispatch(
                 target_id=TARGET_ID,
                 origin="mcp",
                 server_id="mini",
-                args=args if args is not None else {"text": {"type": "string"}},
+                input_schema={"type": "object", "properties": args if args is not None else {"text": {"type": "string"}}},
             )
         ],
     )
@@ -291,3 +292,14 @@ def test_inner_catalog_change_does_not_move_plan_hash() -> None:
     tool_ref = plan.selection[0].ref
     assert isinstance(tool_ref, ToolSetRef)
     assert tool_ref.content_hash == sha256_jcs(tool_ref.manifest_preimage())
+
+
+def test_legacy_binding_cannot_be_reinterpreted_as_full_schema_binding() -> None:
+    dispatch = _dispatch(catalog_revision="sha256:" + "a" * 64, guidance_revision="sha256:" + "b" * 64)
+    legacy = dispatch.to_dict()
+    legacy["binding_id"] = str(legacy["binding_id"]).replace("ext-catalog:v2:", "ext-catalog:v1:")
+    original_bytes = canonical_json_bytes(legacy)
+    with pytest.raises(ExtensionCatalogUnavailableError, match="历史记录可读"):
+        ExtensionDispatchBindingRef.from_sealed_snapshot(legacy)
+    assert canonical_json_bytes(legacy) == original_bytes
+    assert ExtensionDispatchBindingRef.from_sealed_snapshot(dispatch.to_dict()) == dispatch

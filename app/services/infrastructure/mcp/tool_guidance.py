@@ -14,8 +14,12 @@ from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.services.infrastructure.mcp.catalog_owner import McpToolDescriptor
-from app.services.infrastructure.mcp.extension_catalog import payload_digest
+from app.services.infrastructure.mcp.extension_catalog import (
+    extension_schema_hash,
+    payload_digest,
+)
 
 MAX_GUIDANCE_DESCRIPTION_LENGTH = 200
 MAX_GUIDANCE_ARGS_FIELDS = 8
@@ -33,11 +37,14 @@ def _sanitize_untrusted_text(value: str, *, max_length: int) -> str:
     return cleaned.strip()[:max_length]
 
 
-def _args_summary(args: Mapping[str, object]) -> str:
+def _args_summary(input_schema: Mapping[str, object]) -> str:
     """参数 schema 的有界确定性摘要；只描述最小调用形式。
 
-    tool.args 是扁平的「字段名 -> schema」映射（无 properties 包装）。
+    摘要只用于展示，身份和校验始终使用完整 input_schema。
     """
+    args = input_schema.get("properties", {})
+    if not isinstance(args, Mapping):
+        raise McpToolGuidanceError("完整工具契约的 properties 必须是 object")
     if not args:
         return "{}"
     parts: list[str] = []
@@ -62,6 +69,7 @@ class McpToolGuidanceEntry:
     remote_name: str
     description: str
     args_summary: str
+    schema_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +107,7 @@ class McpToolGuidanceProducer:
                     "MCP 指引派生输入 dirty：descriptor 引用的工具不在已验证目录: "
                     f"tool_id={descriptor.tool_id} catalog_revision={catalog_revision}"
                 )
+            input_schema = export_model_tool_json_schema(tool)
             entries.append(
                 McpToolGuidanceEntry(
                     tool_id=descriptor.tool_id,
@@ -108,7 +117,8 @@ class McpToolGuidanceProducer:
                         descriptor.description,
                         max_length=MAX_GUIDANCE_DESCRIPTION_LENGTH,
                     ),
-                    args_summary=_args_summary(tool.args),
+                    args_summary=_args_summary(input_schema),
+                    schema_hash=extension_schema_hash(input_schema),
                 )
             )
         entries.sort(key=lambda item: item.tool_id)
@@ -119,6 +129,7 @@ class McpToolGuidanceProducer:
                 entry.remote_name,
                 entry.description,
                 entry.args_summary,
+                entry.schema_hash,
             ]
             for entry in entries
         ]
