@@ -471,3 +471,10 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 本边界只修复配置发布基础合同，策略热切换尚未接入，9.9／9.10／9.14／9.16保持未勾；既有测试夹具及超时将在独立验证修复边界处理，团队／协作专项继续TODO。
 
 - 提交前074对仅本切片暂存tree完整archive复验：122 passed／137.29秒；4515个tracked blob逐个核验未变，临时源码已清理、正式原件保留。073 strict通过；077全config_service目录Ruff的27项经078完整HEAD对照均为既有TRY004、零新增。未混入其它会话的task／fork改动。
+
+
+### 2026-10-26 配置验收夹具与三轮 instruction 验证收口
+
+- 当前配置不再接受旧 logger，API 合同夹具迁为 v2 并以已有 ui.max_concurrent_agents 触发类型错误／条件 schema 引用；JSON Pointer、错误归属、路径不泄露、旧快照不变及持久事件断言原样保留，不恢复旧配置兼容入口。075 为28 passed／78.88秒。
+- 072 完整 HEAD 原件在第三次真实 Job 的 helper 8秒等待处复现既存超时；第三轮与本场景第二轮统一采用20秒功能验收预算，业务期限和全部身份／顺序／hash／冷恢复断言不变。076 的 R01／R02 × inline／file 四组完整三轮全部通过，149.23秒；代码保留带原始证据的性能TODO，不将本次功能通过表述为性能优化完成。
+- 078 两测试文件Pyright基线与当前均14条既有诊断、零新增；全 config_service 及两文件Ruff基线／当前均27条TRY004、零新增。命令、前后源码指纹、raw、退出码及完整HEAD逐blob核验见 out/tests/temp/csm-kind-boundary/artifacts/ 的072／075—078；不代替Web、真实外部Provider、Windows或来源策略热切换总门。

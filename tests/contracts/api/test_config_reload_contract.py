@@ -82,7 +82,7 @@ def test_workspace_config_update_contract_rejects_partial_cas_pairs() -> None:
 
 
 def test_pending_event_contract_never_reports_applied_paths() -> None:
-    changed_paths = ["/ui/theme", "/logger"]
+    changed_paths = ["/ui/default_model", "/mcp/servers"]
     workspace_event = ConfigEventDTO(
         event_seq=1,
         event_id="event-workspace-pending",
@@ -227,8 +227,8 @@ def test_configuration_diagnostics_redact_pending_payload_and_keep_secret_refere
 async def pointer_event_owner(tmp_path: Path, test_config_path: str, request: pytest.FixtureRequest):
     config = read_jsonc_object(Path(test_config_path))
     config.pop("$schema", None)
-    config["config_version"] = 1
-    config["logger"]["level"] = "info"
+    config["config_version"] = 2
+    config.setdefault("ui", {})["max_concurrent_agents"] = 4
     config["mcp"] = {"servers": {"pointer_probe": {
         "transport": "stdio", "enabled": False, "command": "unused-pointer-probe",
         "env": {"ROOT/~": "before"},
@@ -243,7 +243,7 @@ async def pointer_event_owner(tmp_path: Path, test_config_path: str, request: py
         reference = "#/$defs/secret-marker" if reference_kind == "fragment" else (tmp_path / "secret-marker.json").as_uri()
         schema = read_jsonc_object(config_dir / "workspace_schema.jsonc")
         schema["allOf"] = [{
-            "if": {"properties": {"logger": {"properties": {"level": {"const": "debug"}}}}},
+            "if": {"properties": {"ui": {"properties": {"max_concurrent_agents": {"const": 5}}}}},
             "then": {"$ref": reference},
         }]
         (tmp_path / "workspace_schema.jsonc").write_text(json.dumps(schema), encoding="utf-8")
@@ -313,7 +313,7 @@ async def test_workspace_reload_status_rejects_without_echoing_config(
     marker = str(config_path.parent / "secret-marker")
     original = config_path.read_bytes()
     if damage == "value":
-        config["logger"]["level"] = marker
+        config["ui"]["max_concurrent_agents"] = marker
     elif damage == "key":
         config[marker] = "unknown"
     else:
@@ -356,7 +356,7 @@ async def test_workspace_reload_status_never_echoes_unresolved_schema_reference(
     active = store.get_active_config_snapshot("workspace")
     events = service.list_config_events()
     original = config_path.read_bytes()
-    config["logger"]["level"] = "debug"
+    config["ui"]["max_concurrent_agents"] = 5
     config_path.write_text(json.dumps(config), encoding="utf-8")
     with pytest.raises(ValueError, match="stage=schema_reference") as failure:
         await service.reload()

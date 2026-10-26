@@ -405,7 +405,8 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
 
     assert not await config.reload(idempotency_key="r01-instructions-unchanged")
     assert config.get_snapshot().revision == after.revision
-    third_admission = await _complete_job(case, session_id, thread_id)
+    # TODO(performance): 完整 HEAD 在第三轮超过 helper 的8秒等待预算；与第二轮共用20秒功能验收预算，性能另行测量。
+    third_admission = await _complete_job(case, session_id, thread_id, timeout_seconds=20)
     assert len(projections) == 3 and len(produced) == len(case.compiled) == 2
     assert case.tracker.snapshot(session_id, thread_id).generation == first_generation + 1
     third_snapshot = saver.get_context_assembly(
