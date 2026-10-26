@@ -307,6 +307,9 @@ async def test_cleanup_failure_is_observable_without_reverting_new_catalog(
         assert case.owner.binding_snapshot() is current
         assert case.owner.publication_snapshot().status == "available"
         assert case.owner._runtimes["alpha"].running
+        # 撤销未来准入不能覆盖已经核实的关闭失败，也不能解除冲突屏障。
+        case.owner._retirement.revoke_server("alpha")
+        assert row in case.owner.cleanup_diagnostics()
         with pytest.raises(RuntimeError, match="拒绝冲突替换"):
             await case.prepare(config("third"))
         await case.scopes[-1].close()

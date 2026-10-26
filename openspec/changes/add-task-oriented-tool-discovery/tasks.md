@@ -180,3 +180,8 @@
 - 最终`discovery-reasons-final-002` 209 passed／114.72秒，`product-reasons-final-002`真实双工作区watcher、Runner、model_stream及HTTP MCP 3 passed／92.81秒，覆盖原连接替换、两种策略禁用、canonical配对、下一模型请求前释放和Server未收到请求。此前`product-final-001`的5项结果／并发／断线unknown／冷恢复亦通过，范围有重叠不累计；模型回放不代表真实Provider或Web验收。
 - `unit-002`为85 passed／1 failed；唯一system_time周期消息用例已在完整HEAD archive中用`baseline-background-001`复现同一失败，与本切片提交观察链无关，未修改产品行为或放宽断言。Ruff通过；最终Pyright与完整HEAD基线均28条，零新增诊断，不宣称全仓类型全绿。准确命令、前后源码指纹、raw、退出码和比较位于`out/tests/temp/mcp-qualification-settlement/artifacts/`。所有最终运行源码前后不变；4522个HEAD blob核验一致后删除临时baseline源码，保留正式产物及完整证据。
 - 4.2／4.4／4.6保持未勾选：当前产品没有完整HITL resume API/UI，手工保留资格与执行测试不能替代该产品门；持久等待主动持有、OAuth及完整Web／真实Provider验收仍未完成。结构未变，不提升schema版本，不引入第二账本。
+
+### 7.5 退役准入撤销保持失败事实（2026-10-26）
+
+- 新断言先复现撤销准入将cleanup_failed／error_type重置为draining／None；原退役组件改为只替换admits_sealed，保留已核实阶段、原期限和错误类型。失败诊断及同Server冲突屏障不因撤权消失，其他Server仍可更新。
+- `out/tests/temp/mcp-retirement-revocation/artifacts/`保留red-001原始失败、green-002的39 passed／7.23秒和static-002的Ruff／Pyright零错误；准确命令、指纹及退出码完整保留，源码前后未变。不将组件单元验收扩大为尚未实现的产品disconnect验收，7.5综合字段分类与7.6仍未完成。

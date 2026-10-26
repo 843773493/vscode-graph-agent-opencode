@@ -60,7 +60,7 @@ class McpConnectionRetirement:
         """后续禁用／移除也撤销更早退役代际的未来准入。"""
         for connection_ref, retired in tuple(self._retired.items()):
             if retired.runtime.server.server_id == server_id:
-                self._retired[connection_ref] = _RetiredConnection(retired.runtime, retired.deadline, False)
+                self._retired[connection_ref] = replace(retired, admits_sealed=False)
 
     def clear_closed(self) -> None:
         with self._lock:
