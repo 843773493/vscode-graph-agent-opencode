@@ -17,3 +17,4 @@
 - 复用原资源 owner 装具，实际调用生成记录和占用。
 - 明确区分准入前等待、已派发回执未知及已核实终态。
 - 工具资源准入验证恢复和资源锁共用一次预算、已有/尚无lease时的超时及取消、原异常身份、锁后关闭/关联校验，以及准入完成后正式执行继续持原锁；单调时钟推进不代表真实等待或外部终止证明。
+- Thread准入用真实Session文件锁及独立打开的原namespace holder核持有期；覆盖holder/Session锁/读取的期限、取消和跨阶段预算。同Session peer须能在长operation内进入，删除的exclusive holder须等原operation收尾；不为旧生产补装新holder来制造红测结果。

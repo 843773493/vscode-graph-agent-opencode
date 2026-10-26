@@ -1036,7 +1036,8 @@ def _build_app_container(
         session_path_resolver.bind_fork_child_abort_callback(checkpointer.forks.abort_prepared_child_fork)
         session_path_resolver.bind_session_drain_callback(
             drain_session_resources, holders=(session_communication_service.deletion_holder, team_fanout_service.deletion_holder,
-                                             attachment_blob_store.deletion_holder),
+                                             attachment_blob_store.deletion_holder,
+                                             terminal_resource_owner.deletion_holder),
         )
     session_information_service = SessionInformationService(
         session_service=session_service,

@@ -241,6 +241,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal或Browser原孤儿回收入口中，一个资源等待冷恢复授权、资源锁或删除回执
 - **THEN** 同批其它资源独立沿原锁完成恢复及删除前复核，关联、有效lease、原30分钟期限和workspace保留规则仍阻断不应删除的资源；结果或原始错误按原资源顺序汇总。一次回收的准备、恢复、锁、撤权与删除共用入口取得的30秒预算，阶段切换不重置；协作式到期取消并排空本调用等待，已派发未核实的操作保留unknown与精确原占用，未开始的操作不补造unknown，已完成的终态不回滚。后续周期不自动重发未知删除，显式管理仍须原owner核实；调用方取消和传输原始超时保持归属，预算到期不证明外部进程已停止
 
+#### Scenario: Thread准入短锁与长资源操作隔离
+
+- **WHEN** Terminal或Browser进入来源Thread准入，并在真实工具操作及收尾期间等待网络或资源锁
+- **THEN** 在短Session写准入内从权威catalog核定workspace与精确Thread，省略Thread仍只解析canonical main；Session独占锁不跨真实工具执行。同一Session的无关资源可以独立准入，原operation由共用`workspace_resources` namespace的Session shared OS holder保护；holder先于Session锁取得，删除只登记该namespace一次，先等待holder退出再取得Session锁并清理，不增加另一份业务lease或推断外部终态。holder等待、Session锁与准入读取共用入口一次30秒协作式预算，到期/取消排空本次准入并保留原错误归属，尚未进入主体不创建资源、lease或unknown，不后台补做；deleting Session拒绝新准入。成功准入后预算退出，holder覆盖真实operation及原受保护收尾；此前冷恢复、同步阻塞、不合作取消及整个operation/shutdown期限仍属5.4后续验收
+
 #### Scenario: 工具方法的资源准入等待到期
 
 - **WHEN** Terminal或Browser的单次工具方法等待所选资源冷恢复或原资源锁

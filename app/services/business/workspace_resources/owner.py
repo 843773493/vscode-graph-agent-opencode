@@ -6,7 +6,7 @@ import asyncio
 import logging
 from asyncio import timeout
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +23,7 @@ from app.abstractions.workspace_resources import (
 )
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,
     STOPPED_STATUSES,
@@ -87,6 +88,10 @@ class WorkspaceResourceOwner:
         )
         self._resource_locks = {resource_id: asyncio.Lock() for resource_id in self._store.ids()}
         self._recovery = ResourceRecovery(self)
+        # 两个领域共用同一Session holder；只保护真实持有期，原lease仍是唯一持久事实。
+        self.deletion_holder = OperationHolderGate(
+            workspace_root / ".boxteam" / "sessions", namespace="workspace_resources",
+        )
 
     @asynccontextmanager
     async def admit_thread(
@@ -94,15 +99,29 @@ class WorkspaceResourceOwner:
         session_id: str,
         thread_id: str | None,
     ) -> AsyncIterator[ThreadRef]:
-        """来源只能由权威 catalog 核定；省略 Thread 仅表示后端解析 canonical main。"""
-        async with self._sessions.session_write_admission(session_id):
-            session = await self._sessions.get(session_id)
-            if session.workspace_id != self.workspace_id:
-                raise ValueError("外部资源 来源 Session 不属于当前工作区")
-            ref = ThreadRef(
-                session_id, thread_id or self._threads.main_thread_id(session_id)
-            )
-            self._threads.resolve_thread_node(ref.session_id, ref.thread_id)
+        """短锁核定来源，长操作只持原OS holder，删除沿同一holder等待。"""
+        # TODO(5.4)：同步存储、不合作取消及整个operation/shutdown的期限仍须原owner核实。
+        async with AsyncExitStack() as lifetime:
+            budget = asyncio.timeout(30)
+            try:
+                async with budget:
+                    # 锁序与删除一致：先holder，后Session；禁止网络等待长期持Session独占锁。
+                    await lifetime.enter_async_context(self.deletion_holder.lock_for(session_id, exclusive=False))
+                    async with self._sessions.session_write_admission(session_id):
+                        session = await self._sessions.get(session_id)
+                        if session.workspace_id != self.workspace_id:
+                            raise ValueError("外部资源 来源 Session 不属于当前工作区")
+                        ref = ThreadRef(
+                            session_id, thread_id or self._threads.main_thread_id(session_id)
+                        )
+                        self._threads.resolve_thread_node(ref.session_id, ref.thread_id)
+            except TimeoutError as error:
+                if not budget.expired():
+                    raise
+                raise TimeoutError(
+                    "外部资源 Thread 准入等待超过 30 秒: "
+                    f"workspace_id={self.workspace_id}, session_id={session_id}, thread_id={thread_id}"
+                ) from error
             yield ref
 
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:

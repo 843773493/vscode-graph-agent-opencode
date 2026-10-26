@@ -367,3 +367,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux共享owner定向回归122 passed（含新26项），真实PTY/Chromium正式组合2 passed/19.16秒，原Terminal/Browser工具回执7+4项通过。Windows最终快照`0a43ea16413909a3fb734390df946125bdb46bc1`的Terminal同用例1 passed/16.67秒；Browser创建被现有内存压力保护拒绝，实机32GiB内存load85%、可用4806770688字节，默认critical阈值0.85。TODO：资源压力解除后补Windows Browser验收，不改阈值或称Windows全绿。各测试均有进程外期限和4GiB保护。
 - 完整旧HEAD归档叠最终新单测，10项超时行为失败、另2项缺少预算观察点失败、14通过；4435份归档原文件逐字核对。首轮红测在装具缺观察点时失败，已改为进入行为断言；真实组合早期对全部锁等待者的断言错误，后续又误取恢复gather为锁等待者，最终屏障置于真实恢复之后并核本次精确future取消，保留其它任务等待者，未改生产行为或放宽取消断言。原始失败均保留。
 - Ruff、compileall和本片三个Python文件的Pyright通过；作者AST/目录自查无结构finding，不称独审或全仓类型全绿。准确命令、源码指纹、原始输出/退出码、Windows收据及失败归因在`out/tests/temp/resource_operation_admission_20261026/artifacts/`。5.2/5.4保持未完成，整体21/23；同步阻塞、不合作取消、Thread准入和整个operation/shutdown仍TODO，团队与CIL第9节继续暂缓，原4份CIL规划排除实现提交。
+
+### 2026-10-26 Thread 短准入与资源操作隔离（5.4 部分收口）
+
+- 原 `admit_thread` 在共用 namespace 的 Session shared OS holder 内，以一次30秒预算取得短 Session 写锁并核定 workspace/Thread，进入资源操作前释放 Session 锁；holder 保持到原 operation 收尾。Session 删除链只登记一次共用 holder，沿既有 lease/drain 清理，无第二份账本。同 Session 的独立资源可并行，逻辑删除提交后等待原操作退出再清理资源与隔离目录。
+- Linux 相关回归399 passed，最终新单测20 passed，真实 PTY/Chromium 组合2 passed，原资源释放组合11 passed；Windows 新单测20 passed、真实 Terminal 组合1 passed。停止窗口 Backend 硬退出回归 Linux/Windows 各2 passed，核新增 holder 不遗留崩溃锁。Windows Browser 因85%内存压力前置条件未验证，未调整保护阈值。Windows 快照 `53a8e85a9b13af7edeeabc1149382816e45e95ed` 的五份 LF 源码与本地一致。
+- 完整旧 HEAD 归档叠相同最终新单测，12 failed/8 passed，包含旧 Session 长期持锁阻塞 peer 的行为反例。Ruff、compileall、45项 OpenSpec strict 通过；两个新测试最终 Pyright 零诊断，生产7项既存诊断与旧 HEAD 逐项一致，不称全仓类型全绿。首次误用未安装的 `uv run pyright` 未启动检查，改用既有固定版本 `uvx` 后完成。准确命令、源码指纹、raw、退出码与限定证据见 `out/tests/temp/resource_thread_admission_20261026/artifacts/verification-031.json`；纯临时旧树与 tar 已删除。
+- 本片不代表 Gateway/Web 完整验收或整个 operation/shutdown 总期限；同步阻塞、不合作取消及旧代接管仍 TODO，5.2/5.4保持未完成、整体21/23。四份 CIL 规划未改且排除本提交；随后按用户最新优先级转入 CIL 第9节，团队协作继续暂缓。

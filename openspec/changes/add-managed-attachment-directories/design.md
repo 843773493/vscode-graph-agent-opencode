@@ -351,3 +351,9 @@ Linux/Windows的停止窗口各2项通过；当前源码另完成29天重关联�
 原`ResourceOperations._resource`在单次方法入口取得一次30秒协作式预算，冷恢复、原资源锁、校验及取得原lease共同消耗。复用原锁和账本；准入到期排空本次等待，保留已提交恢复版本与已有精确占用，不为未派发动作补造unknown或lease，不后台补做。底层TimeoutError和调用者取消保持归属。预算在正式执行前退出，退出栈继续持原锁覆盖真实工具回执及持久提交，不能把准入预算误当成整个工具执行期限。外层owner.operation的Thread准入、同步写盘、不合作取消、旧代接管及shutdown总期限仍TODO，5.2/5.4保持未完成。
 
 共享owner单测覆盖恢复/锁等待、已有或尚无占用的到期与取消、真实冷恢复20秒加后续锁11秒、原异常身份、锁后关闭/关联重核及准入后执行超过30秒。正式Session与ASGI创建、原工具operation驱动真实PTY或Chromium/HTTP，核peer继续、原记录及精确lease冷读、外部身份/版本、不派发及显式重试；此组合不代表真实等待30秒、Gateway/Web或独立Backend重启。
+
+### Thread短准入与资源长操作隔离（5.4 部分收口）
+
+旧`admit_thread`将Session独占锁跨过整个资源operation，导致同Session的独立资源在网络等待时也无法进入。原入口改为先取得共用namespace的Session shared OS holder，再以短Session写准入核定workspace、canonical main或显式Thread；原Session锁在yield前释放。两类owner共用`workspace_resources` namespace，容器删除链只登记一次，按既有holder→Session锁序等待原operation及受保护close结束，再由原资源owner清理和物理隔离。OS holder仅保护本进程的实际持有期，不是第二份持久事实；原资源/operation lease账本、未知结果核实和恢复规则保持。
+
+Thread准入的holder、Session锁和读取共用入口一次30秒协作式预算；到期/取消排空本次准入，未进入主体不造资源、lease或unknown，底层TimeoutError保持身份。预算在真实执行前退出，不把工具执行、此前冷恢复或收尾强行限制为30秒。删除mark之后新准入沿原active校验拒绝，已准入操作由holder保护到原close结束；崩溃后OS锁释放，原持久未知占用仍须owner核实，不能仅凭holder消失结清。同步阻塞、不合作取消、旧代接管及整个operation/shutdown总期限继续TODO，5.2/5.4保持未勾。
