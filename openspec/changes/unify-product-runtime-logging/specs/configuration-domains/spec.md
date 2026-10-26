@@ -26,6 +26,8 @@ Workspace SHALL（必须）为有效配置路径声明可观察的生效范围�
 
 Gateway 配置 SHALL 提供 `logging.runtime.level` 与 `logging.runtime.pretty`，默认 `info` 与 `true`，只接受有效等级和严格布尔值；配置 SHALL 覆盖本机受管产品进程。Workspace schema MUST 拒绝 logger 或 Gateway logging 字段。两个配置域 MUST 分别升级配置版本，并通过显式可恢复迁移迁出旧 logger，不得在线双读或由 Gateway 读取工作区文件。
 
+迁移 MUST 覆盖显式选定的文件、SQLite 来源层及 active snapshot，Gateway 使用 v3、Workspace 使用 v2。预览 MUST 只读，不创建缺失数据库；来源与 active 的差异和未结算的候选／claim／恢复状态 MUST 显式报告。迁移 MUST 保持既有非日志业务配置的 active／pending 边界，历史事件与已完成 journal 不得改写。
+
 #### Scenario: 旧配置值一致
 - **WHEN** 显式迁移输入中的旧 logger 值一致且目标 Gateway 日志配置缺失
 - **THEN** 迁移保留该值到 Gateway，移除旧位置并校验两域配置，重复迁移不改变结果
@@ -37,3 +39,11 @@ Gateway 配置 SHALL 提供 `logging.runtime.level` 与 `logging.runtime.pretty`
 #### Scenario: 未迁移的旧工作区后来挂载
 - **WHEN** 工作区仍包含旧 logger
 - **THEN** 系统明确报告需执行迁移，不忽略该字段，也不把它用于覆盖进程日志
+
+#### Scenario: 已有 active 快照仍包含旧日志配置
+- **WHEN** 用户对已有 SQLite 配置状态执行显式日志迁移
+- **THEN** 迁移同步处理来源与 active 快照及其校验基线，重启能恢复迁移后的原业务配置，不能仅改文件或顺便激活其他待生效配置
+
+#### Scenario: 迁移预览遇到未结算应用
+- **WHEN** 选定来源存在 pending_restart、应用 claim 或 recovery_required
+- **THEN** 预览列出实际状态且不修改它们；迁移写入必须等原 owner 结算，不能以迁移为由删除或覆盖

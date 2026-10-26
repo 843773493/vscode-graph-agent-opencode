@@ -2,8 +2,8 @@
 
 - [x] 1.1 全仓检索日志路径、轮转、旧 logger 配置、环境覆盖及其直接/间接消费者，核对当前 Backend 多工作区生命周期基线。
 - [x] 1.2 建立唯一的日志布局与默认轮转合同资源及跨语言样本，明确角色文件名、实例身份、pretty/compact 字段和 raw output 边界。
-- [ ] 1.3 在 Gateway inline/schema/dev 配置加入 `logging.runtime.level/pretty`，分别推进两域配置版本与策略声明，保持现有来源层次。
-- [ ] 1.4 实现显式跨域迁移的预览、备份、冲突选择、原子文件替换与中断恢复，覆盖用户级、local 和明确指定的工作区；删除旧 Workspace logger 运行期读写、schema 与 accessor。
+- [ ] 1.3 在 Gateway inline/schema/dev 配置加入 `logging.runtime.level/pretty`，Gateway 从已持久化的 v2 推进至 v3，Workspace 从 v1 推进至 v2，迁齐策略声明并保持现有来源层次。
+- [ ] 1.4 实现显式跨域迁移的预览、备份、冲突选择、原子替换与中断恢复，覆盖用户级、local、明确指定工作区的文件、SQLite 来源层及 active snapshot，保留待结算状态与既有 CAS；删除旧 Workspace logger 运行期读写、schema 与 accessor。
 
 ## 2. 唯一日志输出与路径归属
 
@@ -36,13 +36,20 @@
 
 已核对当前源码的配置、落盘、进程交接和直接／间接测试调用方；完整检索命令、原始输出和128个命中文件的指纹保存在 `out/tests/temp/unify-product-runtime-logging/artifacts/inventory-001/`。这是源码盘点，不代表真实多进程验收通过。
 
-- 两域 inline 当前均为配置 v1，本变更各推进到 v2；`configs/legacy_migrations.py` 的旧混合配置 v4不是两个当前域的版本。迁移同时覆盖测试配置及 Workspace `get_logger_level/get_logger_pretty` 的全部调用方。
+- 两域 inline 当前均为配置 v1，但 Gateway connection_id 链已经持久化 v2；本变更 Gateway 推进至 v3、Workspace 推进至 v2。`configs/legacy_migrations.py` 的旧混合配置 v4不是两个当前域的版本。迁移同时覆盖 SQLite 来源层／active 快照、测试配置及 Workspace `get_logger_level/get_logger_pretty` 的全部调用方。
 - Backend `app/main.py` 当前逐工作区比较日志设置后修改进程 root logger；Gateway lifespan使用默认设置。Backend group共用一个进程，辅助服务按成员持有，改动必须按实际进程应用。
 - Launcher 的默认路径是 `state/launcher/logs/services.log`；Gateway在 `state/gateway/logs/` 分配子进程／SSH日志。两处重复登记64MiB／3份轮转。detached已通过 `BOXTEAM_SERVICE_LOG_CAPTURED` 交付输出所有权，迁移须贯通该入口和开发启动脚本。
 - `runtime/local_workspace.py` 与 registry runtime显式接管、detach仍存活的Backend及辅助进程；新日志owner不得为了迁移路径重启这些进程或轮转其活动文件。
 - 复用 Gateway config `on_runtime_config`／rollback、apply journal及Launcher supervisor控制socket。该socket当前主要承载handoff；日志应用须扩展原通道的消息合同，并补进程实例确认，不能假定已有热更新能力。
 
 优先完成本变更的布局与落盘owner纵向切片，再做配置跨域迁移和进程热应用；它排在当前提示词文件输入切片之后、其余来源扩展之前。团队／协作延期项继续保持TODO。
+
+### 1.4 显式迁移只读预览（2026-10-26，整项未完成）
+
+- `uv run python -m configs.boxteam migrate-runtime-logging --preview` 读取用户/local、显式工作区、SQLite 来源层与 active，按字段报告冲突并支持显式选择；已有新 Gateway 层保持原覆盖语义。预览不安装、不初始化数据库、不扫盘、不提交候选，也不输出完整业务配置或密钥。报告明确为 `logging_preflight`，不代表完整 schema 校验或可写入证明。
+- 使用只读 SQLite 事务，能看到尚未 checkpoint 的 WAL 提交；报告保留原来源 digest／revision，不用正文重新计算的摘要冒充 CAS 基线。pending、claim、active 恢复态及未结算 journal 明确报告，已完成 journal 保持历史。版本基线修正为 Gateway v3／Workspace v2，不能复用既有 connection_id 的 v2。
+- 最终 `logging-migration-preview-tests-final-141` 为66通过；新增 planner／测试类型检查 `logging-migration-preview-new-types-final-142` 零错误。首次整体类型检查139发现CLI开发安装分支两项诊断；完整HEAD归档对照140同为两项、无新增，不声称整体类型全绿。准确命令、源码指纹、raw与退出码在既有 `out/tests/temp/unify-product-runtime-logging/artifacts/` 下；归档临时树与tar已删除。
+- 备份、排他／CAS写入、中断恢复、schema／模板切换及旧logger消费者删除尚未实现，不带 `--preview` 的命令明确拒绝写入。1.3／1.4不勾选，当前仍6／22；此证据不替代真实迁移、跨进程自动热应用、完整Web或Windows安装验收。
 
 ### 2.3 日志布局切片（2026-10-26）
 

@@ -97,6 +97,7 @@ def main() -> None:
             "initialize",
             "install-source-development",
             "migrate",
+            "migrate-runtime-logging",
             "doctor",
             "diagnose",
         ),
@@ -104,6 +105,10 @@ def main() -> None:
     )
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
+    parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--level")
+    parser.add_argument("--pretty", choices=("true", "false"))
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
         "--force",
@@ -120,6 +125,28 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
+    if args.action == "migrate-runtime-logging":
+        # TODO: 迁齐可恢复写入与 SQLite snapshot/CAS 协调后，接通不带 --preview 的显式提交。
+        if not args.preview:
+            parser.error("日志迁移当前仅提供 --preview；可恢复写入尚未完成，不会改写配置")
+        from configs.runtime_logging_migration import preview_runtime_logging_migration
+
+        workspaces = tuple(args.migration_workspace)
+        if args.workspace is not None:
+            workspaces = (args.workspace, *workspaces)
+        plan = preview_runtime_logging_migration(
+            boxteam_home=boxteam_home, workspaces=workspaces,
+            level=args.level, pretty=None if args.pretty is None else args.pretty == "true",
+            project_root=project_root,
+            gateway_sqlite_path=(
+                Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) / "gateway.sqlite"
+                if os.environ.get("BOXTEAM_GATEWAY_ROOT") else None
+            ),
+        )
+        print(json.dumps({"action": args.action, "preview": True, **plan.report()}, ensure_ascii=False))
+        return
+    if args.preview or args.level is not None or args.pretty is not None or args.migration_workspace:
+        parser.error("--preview、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
     if args.action in {"doctor", "diagnose"}:
         gateway_schema_source, workspace_schema_source = _layout_schema_sources(
             project_root
