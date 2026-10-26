@@ -772,17 +772,21 @@ async def test_gateway_adopts_matching_node_manager(local_http, service, port, t
     requests = []
     ownership = object()
     role = service.removesuffix("_manager")
+    logging_state = {
+        "service": role, "pid": 43210, "runtime_instance_id": "node-instance",
+        "applied_revision": None, "level": "info", "pretty": True, "log_sink": None,
+    }
     def adopt_log(store, actual_role, actual_port, proof):
         assert store.root == tmp_path / "logs"
         assert (actual_role, actual_port) == (role, port)
-        assert proof == {"service": role, "pid": 43210}
+        assert proof == logging_state
         return ownership
     monkeypatch.setattr("app.gateway.runtime.local_workspace.ProcessLogStore.adopt", adopt_log)
     def response(request):
         requests.append(request)
         if request.url.path == "/internal/runtime-logging":
             assert request.headers["X-Local-Token"] != "local-dev-token"
-            return httpx.Response(200, json={"data": {"service": role, "pid": 43210}})
+            return httpx.Response(200, json={"data": logging_state})
         return httpx.Response(200, json={"workspace_id": UUID_A, "process_id": 43210})
     local_http(response)
     adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
@@ -814,15 +818,19 @@ async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_contr
     contract = graph.owner.contract
     requests = []
     ownership = object()
+    logging_state = {
+        "service": "backend", "pid": 43212, "runtime_instance_id": "backend-instance",
+        "applied_revision": None, "level": "info", "pretty": True, "log_sink": None,
+    }
     def adopt_log(store, role, port, proof):
         assert store.root == tmp_path / "logs"
-        assert role == "backend" and proof == {"service": role, "pid": 43212}
+        assert role == "backend" and proof == logging_state
         return ownership
     monkeypatch.setattr("app.gateway.runtime.local_workspace.ProcessLogStore.adopt", adopt_log)
     def response(request):
         if request.url.path == "/api/v1/internal/runtime-logging":
             assert request.headers["X-Local-Token"] != "local-dev-token"
-            return httpx.Response(200, json={"data": {"service": "backend", "pid": 43212}})
+            return httpx.Response(200, json={"data": logging_state})
         identity = request.headers["X-BoxTeam-Workspace-Id"]
         requests.append(identity)
         payload = {"workspace_id": identity, "status": "ok", "process_id": 43212,

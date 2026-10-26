@@ -94,3 +94,9 @@
 - 真实 Windows `hyf-win` 最终 `launcher-windows-native-final-131` 12通过／1 POSIX 场景跳过，覆盖原生互斥、detached 分流、根退出后的继承句柄、关闭后重开、篡改证明及写入／清理故障。仅在隔离临时树执行，未重启目标已有服务。125在观察器启动阶段因深层 cwd 报 ENOENT，130暴露重开检查未恢复进程命令边界；已修正测试接线，未放宽业务断言。126另有固定端口 EADDRINUSE，结束并行网络操作后的132全组通过；原始失败记录保留，不宣称已证明具体端口占用来源。
 - Python 定向 `launcher-ownership-python-096` 256通过；修改 Python 的 Ruff102及单文件 Pyright110通过；扩大类型检查115仍有8条既存错误，118对比无新增。098中一项托管终端启动报 BadStatusLine，104单独通过；保留现场与原始输出，未确认根因。116／117因中断没有完整结果，不计为通过。
 - 证据仍在 `out/tests/temp/unify-product-runtime-logging/artifacts/`，正式测试现场按各测试路径留存；候选锁库的临时下载源码已删除，版本记录和失败证据保留。当前6／22；配置跨域迁移、2.5完整诊断和候选自动热应用尚未完成。Windows installed 全产品启动、完整热更新及 macOS 原生验收仍未验证，相关原生终止性能 TODO 保留；未修改 Web，不新增 Web 构建。
+
+### 进程控制响应统一（2026-10-26，3.2 的基础切片）
+
+- 接管和后续热应用共用严格的进程日志状态合同；只向本机管理根地址发送既有私有凭据，拒绝重定向。响应必须核对服务与 PID；应用确认还核对运行实例、revision 和实际设置，不能以 HTTP 成功替代确认。删除接管入口的裸 dict 身份判断。
+- `process-control-contract-144` 为128通过；`process-control-real-handoff-146` 两项真实 Launcher／Gateway 验证通过，包含受管服务接管和原文件去向保持。新控制模块／schema／定向测试 Pyright147零错误，相关 Ruff通过。扩大Pyright145的两条 `GatewayServiceName` 诊断与既有归档基线084一致，不称整体类型全绿。
+- 原始命令、源码指纹、输出与退出码保留在上述证据目录。当前仍6／22；此切片未完成候选协调、跨域迁移或完整诊断，不勾选3.2。

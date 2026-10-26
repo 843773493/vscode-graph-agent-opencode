@@ -8,7 +8,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -19,6 +19,7 @@ from app.core.mounted_workspaces import (
     mounted_workspace_manifest_digest,
 )
 from app.gateway.auth import get_gateway_local_token
+from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
@@ -276,7 +277,10 @@ async def _adopt_local_node_service(
         raise TypeError(
             f"持久化 {service_name} 健康响应缺少 process_id: url={service_url}"
         )
-    role = {"terminal_manager": "terminal", "browser_manager": "browser"}[service_name]
+    roles: dict[str, Literal["terminal", "browser"]] = {
+        "terminal_manager": "terminal", "browser_manager": "browser",
+    }
+    role = roles[service_name]
     ownership = await _adopt_process_log(
         service_url, role, process_id, parsed.port, log_dir=log_dir,
     )
@@ -284,20 +288,14 @@ async def _adopt_local_node_service(
 
 
 async def _adopt_process_log(
-    service_url: str, role: str, process_id: int, port: int, *, log_dir: Path,
+    service_url: str, role: Literal["backend", "terminal", "browser"], process_id: int, port: int, *, log_dir: Path,
 ) -> ProcessLogOwnership:
     """健康证明之后核对受认证进程的实际文件去向，不重开存活日志。"""
-    suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
-        response = await client.get(
-            f"{service_url.rstrip('/')}{suffix}",
-            headers={"X-Local-Token": get_gateway_local_token()},
+        proof = await RuntimeLoggingProcessControl(client=client, token=get_gateway_local_token()).status(
+            base_url=service_url, service=role, pid=process_id,
         )
-        response.raise_for_status()
-        proof = response.json().get("data")
-    if not isinstance(proof, dict) or proof.get("pid") != process_id or proof.get("service") != role:
-        raise RuntimeError("接管进程日志身份与健康证明不匹配")
-    return ProcessLogStore(log_dir).adopt(role, port, proof)
+    return ProcessLogStore(log_dir).adopt(role, port, proof.model_dump(mode="json"))
 
 
 def _validate_group_health(
