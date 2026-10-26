@@ -22,6 +22,8 @@ workspace_services/
 
 `test_resource_grant_deadline.py`经正式Session、ASGI资源创建/传输授权与真实Node/PTY或Chromium/HTTP，验证原资源锁及已签发授权回执等待到期后的503/request_id、peer授权、原身份/版本、精确lease冷读和原管理停止结算。派发前到期可沿原入口重试；回执未知时存活查询不结清，停止核实后拒绝新授权。suite `integration-resource-grant-deadline`固定90秒/4GiB，Linux/Windows均运行；只推进本次截止，不替代真实等待30秒、Gateway/Web、独立Backend重启或整个operation终止核实。
 
+`test_resource_operation_admission.py`复用正式Session、ASGI资源创建及原operation，真实PTY或Chromium/HTTP核对资源锁准入到期、peer继续执行、原记录/lease冷读、外部身份及显式重试；不派发与无后台补做由原transport调用观察证明。suite `integration-resource-operation-admission`固定90秒/4GiB；只推进本次截止，不代表真实等待30秒、Gateway/Web、Backend重启或完整operation终止核实。
+
 ## 可修改内容
 
 - 真实辅助服务模块、测试页面服务、mini MCP 和明确协议替身的组合测试。

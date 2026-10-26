@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import timeout
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
 from app.services.business.workspace_resources.records import (
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 
 OPERATION_CLOSE_WAIT_SECONDS = 30.0
+OPERATION_ADMISSION_WAIT_SECONDS = 30.0
 
 
 class ResourceOperations:
@@ -36,17 +38,30 @@ class ResourceOperations:
     @asynccontextmanager
     async def _resource(self, resource_id: str) -> AsyncIterator[OwnedResourceRecord]:
         self._assert_open()
-        await self._owner.recover((resource_id,))
-        async with self._owner._resource_lock(resource_id):
-            self._assert_open()
-            record = self._owner._require_owned_resource_record(resource_id)
-            self._owner._verified(record)
-            if self._thread not in record.thread_associations:
-                raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
-            if resource_id not in self._lease_refs:
-                self._lease_refs[resource_id] = self._owner._acquire(
-                    record, self._thread, self._holder_id, self._operation_id,
-                )
+        # 只限制本次资源准入；锁继续覆盖真实调用，不能把准入到期当作外部终止。
+        # TODO(5.4)：同步写盘、不合作取消与整个工具operation总期限仍须原owner核实。
+        async with AsyncExitStack() as access:
+            budget = timeout(OPERATION_ADMISSION_WAIT_SECONDS)
+            try:
+                async with budget:
+                    await self._owner.recover((resource_id,))
+                    await access.enter_async_context(self._owner._resource_lock(resource_id))
+                    self._assert_open()
+                    record = self._owner._require_owned_resource_record(resource_id)
+                    self._owner._verified(record)
+                    if self._thread not in record.thread_associations:
+                        raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
+                    if resource_id not in self._lease_refs:
+                        self._lease_refs[resource_id] = self._owner._acquire(
+                            record, self._thread, self._holder_id, self._operation_id,
+                        )
+            except TimeoutError as error:
+                if not budget.expired():
+                    raise
+                raise TimeoutError(
+                    "外部资源 operation 准入等待超过 30 秒: "
+                    f"operation_id={self._operation_id}, holder_id={self._holder_id}, resource_id={resource_id}"
+                ) from error
             yield record
 
     async def _release(self, resource_id: str) -> None:

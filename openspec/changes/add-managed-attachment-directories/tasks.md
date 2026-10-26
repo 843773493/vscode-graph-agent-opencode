@@ -360,3 +360,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增正式 `integration-attachment-process-retention-restart`（240秒/4GiB），复用原 Gateway/Backend、model_stream 和 PTY 装具，经公开消息及真实 exec_command 启动父子进程；四次 Backend 原生硬退出覆盖漏 detach、精确30天到期仍由原进程占用保活、公开管理停止核实父子进程终态后回收，以及再次重启幂等。关联、期限、lease、目录和 canonical 均只读核对，不手填历史、不由测试杀处理进程或结算占用。Linux 1 passed/93.37秒，Windows 1 passed/110.89秒，原身份、locator、期限与历史字节保持。
 - Windows 首轮新用例名导致装具产物路径超限，缩短名称后进入产品；随后首次模型请求的“连接错误”经同路径原始探针确认是回放产物临时文件越过 MAX_PATH。唯一原子写入入口复用现有 `native_io_path`，不改变协议、模型响应或逻辑身份；同路径探针由失败转为成功。新增正文258/320字符边界回归，Linux/Windows 的 model_stream 单测均59 passed（1.55/2.44秒）；Windows 最终快照 `355d3999a66c45b26a7d2a814c03890967fc3ae7`。两次准备/请求失败、初轮新单测遗漏必填 finish_reason 及补齐后的原始结果均保留，未放宽业务断言。
 - Ruff/compileall通过；Pyright 1.1.414的新测试无诊断，回放模块3项原诊断与完整旧HEAD归档逐项一致，4434份原文件经archive校验，不称类型全绿。准确命令、源码指纹、原始输出/退出码、Windows收据、类型对照与作者结构审查位于 `out/tests/temp/attachment_process_retention_restart_20261026/artifacts/`。本片不证明未知回执挂起后硬重启、旧代操作接管、同步阻塞或不合作取消的终止；5.2/5.4/6.2保持未勾、整体20/23。团队及CIL第9节继续暂缓，四份CIL规划排除实现提交。
+
+### 2026-10-26 工具资源准入等待预算（5.4 部分收口）
+
+- 原`ResourceOperations._resource`统一Terminal/Browser单次方法的冷恢复、资源锁和lease校验，入口一次30秒协作式预算；未派发到期不造unknown/新占用，原异常及取消保留归属，已提交恢复及已有lease保留。准入后退出预算并继续持原锁覆盖真实工具执行，不称整个operation已有总期限。
+- Linux共享owner定向回归122 passed（含新26项），真实PTY/Chromium正式组合2 passed/19.16秒，原Terminal/Browser工具回执7+4项通过。Windows最终快照`0a43ea16413909a3fb734390df946125bdb46bc1`的Terminal同用例1 passed/16.67秒；Browser创建被现有内存压力保护拒绝，实机32GiB内存load85%、可用4806770688字节，默认critical阈值0.85。TODO：资源压力解除后补Windows Browser验收，不改阈值或称Windows全绿。各测试均有进程外期限和4GiB保护。
+- 完整旧HEAD归档叠最终新单测，10项超时行为失败、另2项缺少预算观察点失败、14通过；4435份归档原文件逐字核对。首轮红测在装具缺观察点时失败，已改为进入行为断言；真实组合早期对全部锁等待者的断言错误，后续又误取恢复gather为锁等待者，最终屏障置于真实恢复之后并核本次精确future取消，保留其它任务等待者，未改生产行为或放宽取消断言。原始失败均保留。
+- Ruff、compileall和本片三个Python文件的Pyright通过；作者AST/目录自查无结构finding，不称独审或全仓类型全绿。准确命令、源码指纹、原始输出/退出码、Windows收据及失败归因在`out/tests/temp/resource_operation_admission_20261026/artifacts/`。5.2/5.4保持未完成，整体21/23；同步阻塞、不合作取消、Thread准入和整个operation/shutdown仍TODO，团队与CIL第9节继续暂缓，原4份CIL规划排除实现提交。
