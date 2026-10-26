@@ -171,6 +171,12 @@ Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 re
 
 ## Migration Plan
 
+### 有界导航与自动定义切片的集成边界（2026-10-26）
+
+- 删除旧 MCP 全量参数摘要 producer 及其公开符号；统一指引只给有限分组、数量与能力示例，用户显式开启可见性时才投递完整定义。自动定义直接使用同批 definition facet 的规范正文，硬隐藏和执行禁用同时约束导航与自动投递。
+- 唯一 publisher 按单次原子选择读取解析全部扩展策略，本地扩展不再因最初关闭执行而永久缺席后续目录。ToolSelectionStore 提交后通知当前 Agent generation，在原 MCP Owner 发布锁内整体重发父行、members 和 facets；订阅随既有 LifetimeScope 释放，不在 preparation 联网或另建目录。
+- 验证覆盖 1200 个目标的有界确定性导航、完整组合 schema、软／硬隐藏、开关提交、真实 freeze/seal、turn/model_call、重复投递和冷 Saver；正式 Session／消息入口沿 model_stream 执行 Skill、搜索及真实 Node 调试。Provider ToolSet 与 epoch 保持稳定，指引变化只影响实际请求正文。活动定义的压缩后恢复仍按 3.6 推进，不把本切片视为 3.4／3.7 或连接监督完成。
+
 ### 冻结定义与搜索切片的集成边界（2026-10-26）
 
 - 唯一 publisher 在同一 Registry publication 锁中发布 guidance 父行与每目标 definition facet，沿既有 activation／Saver 保存正文、members 和 lineage。搜索恢复时逐项核对来源、完整 schema hash 与原冻结正文；缺失定义明确失败。

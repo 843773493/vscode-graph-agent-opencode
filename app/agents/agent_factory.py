@@ -678,10 +678,9 @@ def create_my_deep_agent(
             )
             custom_metadata[tool.name] = metadata_for_tool(tool, origin="custom", group_id=group_id)
             extension_policies[tool.name] = policy
-            if policy.execution_enabled:
-                custom_tools.append(tool)
-                if policy.confirmation_required:
-                    extension_confirmation_names.add(tool.name)
+            custom_tools.append(tool)
+            if policy.execution_enabled and policy.confirmation_required:
+                extension_confirmation_names.add(tool.name)
         mcp_tools_for_agent = []
         for tool in mcp_tools or []:
             if tool.name in resolved_tool_denylist:
@@ -694,10 +693,9 @@ def create_my_deep_agent(
                 model_visibility_overrides=resolved_model_visibility_overrides,
             )
             extension_policies[tool.name] = policy
-            if policy.execution_enabled:
-                mcp_tools_for_agent.append(tool)
-                if policy.confirmation_required:
-                    extension_confirmation_names.add(tool.name)
+            mcp_tools_for_agent.append(tool)
+            if policy.execution_enabled and policy.confirmation_required:
+                extension_confirmation_names.add(tool.name)
         extension_tools = [
             *custom_tools,
             *mcp_tools_for_agent,
@@ -715,6 +713,21 @@ def create_my_deep_agent(
     def discovery_catalog_resolver() -> FrozenToolCatalog:
         raise ExtensionCatalogUnavailableError("search_tools 需要调用所属的冻结完整目录")
 
+    def extension_context_policies(metadata: Sequence[ToolMetadata]):
+        selection = tool_selection_reader.snapshot(agent_id)
+        execution_overrides = selection.execution_overrides
+        visibility_overrides = selection.model_visibility_overrides
+        policies = {}
+        for entry in metadata:
+            policy = policy_resolver.resolve(
+                entry, execution_override=execution_overrides.get(entry.tool_id),
+                model_visibility_override=visibility_overrides.get(entry.tool_id),
+            )
+            if entry.tool_id in resolved_tool_denylist:
+                policy = replace(policy, execution_enabled=False, model_visible=False)
+            policies[entry.tool_id] = policy
+        return policies
+
     if resource_activation is not None:
         if not isinstance(checkpointer, RolloutCheckpointSaver) or mcp_catalog_owner is None:
             raise RuntimeError("正式 runtime 需要唯一 Saver 与真实 MCP Owner")
@@ -724,23 +737,32 @@ def create_my_deep_agent(
         def enabled_extension(target: BaseTool) -> bool:
             metadata = target.metadata or {}
             origin = "mcp" if metadata.get("mcp_server_id") else "custom"
-            selection = tool_selection_reader.snapshot(agent_id)
             group_id = custom_metadata[target.name].group_id if target.name in custom_metadata else None
-            return target.name not in resolved_tool_denylist and _resolve_tool_policy(
-                policy_resolver, target, origin=origin, group_id=group_id,
-                execution_overrides=selection.execution_overrides,
-                model_visibility_overrides=selection.model_visibility_overrides,
-            ).execution_enabled
+            return extension_context_policies((metadata_for_tool(
+                target, origin=origin, group_id=group_id,
+            ),))[target.name].execution_enabled
 
         publisher = McpCatalogResourcePublisher(
             registry=resource_registry, custom_tools=custom_tools,
-            tool_enabled=enabled_extension, custom_metadata=custom_metadata,
+            policy_resolver=extension_context_policies, custom_metadata=custom_metadata,
         )
         unsubscribe = mcp_catalog_owner.subscribe_publication(publisher.publish)
         try:
             reactor_lifetime_scope.register(unsubscribe, label="MCP catalog publication")
         except BaseException:
             unsubscribe()
+            raise
+
+        def republish_extension_context() -> None:
+            # 与 relist 共用原 Owner 发布锁，不能用锁外读到的旧目录覆盖新 publication。
+            with mcp_catalog_owner.publication_lock:
+                publisher.publish(mcp_catalog_owner.publication_snapshot())
+
+        unsubscribe_selection = tool_selection_reader.subscribe(agent_id, republish_extension_context)
+        try:
+            reactor_lifetime_scope.register(unsubscribe_selection, label="extension tool selection publication")
+        except BaseException:
+            unsubscribe_selection()
             raise
 
         def resolve_skill_snapshot():
@@ -814,20 +836,7 @@ def create_my_deep_agent(
     resolved_tools.append(extension_invoker)
 
     def discovery_policies(catalog: FrozenToolCatalog):
-        selection = tool_selection_reader.snapshot(agent_id)
-        execution_overrides = selection.execution_overrides
-        visibility_overrides = selection.model_visibility_overrides
-        policies = {}
-        for definition in catalog.definitions:
-            name = definition.metadata.tool_id
-            policy = policy_resolver.resolve(
-                definition.metadata, execution_override=execution_overrides.get(name),
-                model_visibility_override=visibility_overrides.get(name),
-            )
-            if name in resolved_tool_denylist:
-                policy = replace(policy, execution_enabled=False, model_visible=False)
-            policies[name] = policy
-        return policies
+        return extension_context_policies(tuple(definition.metadata for definition in catalog.definitions))
 
     async def write_discovered_definition(definition: FrozenToolDefinition, entry: dict[str, object]):
         call_id = tool_invocation_context.require_tool_call_id()

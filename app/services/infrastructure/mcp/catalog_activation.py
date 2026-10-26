@@ -12,8 +12,12 @@ from collections.abc import Callable, Mapping, Sequence
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.agents.policy.tool_capability import ToolMetadata, metadata_for_tool
-from app.domain.itemized.hashing import sha256_jcs
+from app.agents.policy.tool_capability import (
+    ToolCapabilityPolicy,
+    ToolMetadata,
+    metadata_for_tool,
+)
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -30,10 +34,11 @@ from app.services.infrastructure.mcp.extension_catalog import (
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     DEFINITION_FACET,
+    ToolDefinition,
     definition_payload,
     definition_resource_id,
 )
-from app.services.infrastructure.mcp.tool_guidance import McpToolGuidanceProducer
+from app.services.infrastructure.mcp.tool_guidance import extension_tool_guidance
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
     SemanticResourceDescriptor,
@@ -61,10 +66,10 @@ class McpCatalogResourcePublisher:
 
     def __init__(
         self, *, registry: ResourceRegistry, custom_tools: Sequence[BaseTool] = (),
-        tool_enabled: Callable[[BaseTool], bool] | None = None,
+        policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]],
         custom_metadata: Mapping[str, ToolMetadata] | None = None,
     ) -> None:
-        self._tool_enabled = tool_enabled
+        self._policy_resolver = policy_resolver
         self._registry = registry
         entries = tuple(sorted(custom_tools, key=lambda tool: tool.name))
         self._custom_tools = {tool.name: tool for tool in entries}
@@ -92,13 +97,16 @@ class McpCatalogResourcePublisher:
     def publish(self, publication: McpCatalogPublication) -> None:
         if not isinstance(publication, McpCatalogPublication):
             raise TypeError("MCP resource publisher 需要真实 Owner publication")
-        selected_tools = {
-            name: tool for name, tool in publication.tools.items()
-            if self._tool_enabled is None or self._tool_enabled(tool)
-        }
+        tools = {**publication.tools, **self._custom_tools}
+        metadata = {name: self._custom_metadata.get(name) or metadata_for_tool(
+            tool, origin="custom" if name in self._custom_tools else "mcp",
+        ) for name, tool in tools.items()}
+        policies = self._policy_resolver(tuple(metadata.values()))
+        if set(policies) != set(tools):
+            raise ValueError("扩展目录发布需要同一次选择快照的完整有效策略")
         members = (
-            *(member for member in publication.binding_ref.members if member.member_id in selected_tools),
-            *self._custom_members,
+            *(member for member in (*publication.binding_ref.members, *self._custom_members)
+              if policies[member.member_id].execution_enabled),
         )
         revision = payload_digest(
             [publication.binding_ref.catalog_revision, self._custom_revision],
@@ -110,19 +118,15 @@ class McpCatalogResourcePublisher:
             (CUSTOM_CATALOG_SOURCE_ID, self._custom_revision),
             (EXTENSION_CATALOG_SOURCE_ID, revision),
         )
+        definitions_by_id: dict[str, ToolDefinition] = {}
         if publication.status == "available":
-            guidance = McpToolGuidanceProducer().produce(
-                catalog_revision=publication.binding_ref.catalog_revision,
-                descriptors=tuple(
-                    descriptor for descriptor in publication.descriptors
-                    if descriptor.tool_id in selected_tools
-                ),
-                tools_by_id=selected_tools,
-            )
-            payload = {"content": "\n".join(
-                f"{entry.tool_id}：{entry.description}\n参数：{entry.args_summary}"
-                for entry in guidance.entries
-            )}
+            definitions_by_id = {member.member_id: ToolDefinition(
+                metadata[member.member_id], member.schema_hash,
+                canonical_json_bytes(definition_payload(tools[member.member_id], metadata[member.member_id])),
+            ) for member in members}
+            payload = {"content": extension_tool_guidance(tuple(definitions_by_id.values()), {
+                name: policies[name] for name in definitions_by_id
+            })}
             resource = ResourceSnapshot(
                 resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",
                 facet="activation", display_uri=None,
@@ -142,13 +146,10 @@ class McpCatalogResourcePublisher:
             )
         definitions = []
         if publication.status == "available":
-            tools = {**selected_tools, **self._custom_tools}
             for member in members:
-                tool = tools[member.member_id]
-                metadata = self._custom_metadata.get(tool.name) or metadata_for_tool(tool, origin=member.member_kind)
-                body = definition_payload(tool, metadata)
+                body = definitions_by_id[member.member_id].payload
                 definitions.append(ResourceSnapshot(
-                    resource_id=definition_resource_id(tool.name), resource_kind="mcp_tool_catalog",
+                    resource_id=definition_resource_id(member.member_id), resource_kind="mcp_tool_catalog",
                     facet=DEFINITION_FACET, display_uri=None, revision=sha256_jcs(body), payload=body,
                     source_lineage=lineage, generation=publication.binding_ref.generation,
                     members=(member,),

@@ -49,6 +49,7 @@ from app.services.infrastructure.mcp.catalog_owner import (
 from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
 )
+from app.services.infrastructure.mcp.tool_guidance import extension_tool_guidance
 from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
@@ -181,7 +182,7 @@ class _ActivationBodyStore:
     """只接受测试真实发布的 catalog、空 AGENTS chain 正文和精确 owner 引用。"""
 
     _EXPECTED: ClassVar[dict[str, tuple[int, object]]] = {
-        MCP_TOOL_CATALOG_RESOURCE_ID: (0, {"content": ""}),
+        MCP_TOOL_CATALOG_RESOURCE_ID: (0, {"content": extension_tool_guidance((), {})}),
         _SKILL_CATALOG_RESOURCE_ID: (1, {"entries": []}),
         WORKSPACE_AGENTS_RESOURCE_ID: (2, {"content": ""}),
     }
@@ -236,6 +237,7 @@ class _ActivationBodyStore:
 def agent_execution_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     workspace_scope: tuple[str, Path],
+    extension_catalog_policy_resolver,
 ):
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
@@ -325,7 +327,7 @@ def agent_execution_dependencies(
     saver.frozen_resource_activation_for_model_call.return_value = None
     saver.save_resource_activation_snapshot = AsyncMock()
     def activation_factory(resource_registry):
-        publisher = McpCatalogResourcePublisher(registry=resource_registry)
+        publisher = McpCatalogResourcePublisher(registry=resource_registry, policy_resolver=extension_catalog_policy_resolver)
         publisher.publish(McpCatalogPublication(
             binding_ref=build_extension_catalog_binding(
                 catalog_revision=sha256_jcs([]), generation=1, targets=(),
@@ -2210,8 +2212,9 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
     (failure_record,) = [
         record
         for record in caplog.records
-        if record.getMessage().startswith(
-            "[agent_execution_service] ERROR published:"
+        if record.getMessage() == (
+            "[agent_execution_service] step failed: session_id=ses_execution_error "
+            "thread_id=thr_test job_id=job_execution_error turn_id=turn_job_execution_error"
         )
     ]
     assert failure_record.exc_info is not None
@@ -2295,7 +2298,7 @@ async def test_generation_reactor_release_is_isolated_per_thread(agent_execution
 
 
 @pytest.mark.asyncio
-async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(agent_execution_dependencies):
+async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(agent_execution_dependencies, extension_catalog_policy_resolver):
     factory = FakeMcpSessionFactory(initial_tools={"mini": []})
     owner = McpCatalogOwner(
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fake"}}},
@@ -2309,7 +2312,7 @@ async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_r
 
     def build(*, resource_registry, reactor_lifetime_scope, **_kwargs):
         registries.append(resource_registry)
-        publisher = McpCatalogResourcePublisher(registry=resource_registry)
+        publisher = McpCatalogResourcePublisher(registry=resource_registry, policy_resolver=extension_catalog_policy_resolver)
         reactor_lifetime_scope.register(owner.subscribe_publication(publisher.publish), label="MCP publication")
         return object()
 

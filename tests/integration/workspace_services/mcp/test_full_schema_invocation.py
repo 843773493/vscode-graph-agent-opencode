@@ -195,6 +195,7 @@ async def test_invalid_schema_refresh_fails_without_partial_publication(
 @pytest.mark.parametrize("large_schema", [False, True])
 async def test_search_frozen_full_definition_then_execute_real_stdio(
     schema_server_case: SchemaServerCase, registry_db, frozen_provider_activation, large_schema: bool,
+    extension_catalog_policy_resolver,
 ) -> None:
     async with schema_server_case.started() as case:
         schema = {
@@ -207,7 +208,7 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
         case.publish(schema)
         await case.owner.relist_servers_without_notifications()
         registry = ResourceRegistry(publication_lock=case.owner.publication_lock, capture_validator=case.owner.validate_resource_capture)
-        publisher = McpCatalogResourcePublisher(registry=registry)
+        publisher = McpCatalogResourcePublisher(registry=registry, policy_resolver=extension_catalog_policy_resolver)
         scope = LifetimeScope("stdio-discovery")
         scope.register(case.owner.subscribe_publication(publisher.publish), label="stdio-publication")
         try:

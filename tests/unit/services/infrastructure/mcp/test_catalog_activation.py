@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -126,7 +127,12 @@ def catalog_workspace(request: pytest.FixtureRequest) -> Path:
 
 
 @pytest.fixture
-async def catalog_runtime(catalog_workspace):
+def catalog_selection(catalog_workspace):
+    return ToolSelectionStore(boxteam_root=catalog_workspace / ".boxteam")
+
+
+@pytest.fixture
+async def catalog_runtime(catalog_workspace, catalog_selection):
     factory = CatalogSessionFactory()
     owner = McpCatalogOwner(
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
@@ -136,9 +142,24 @@ async def catalog_runtime(catalog_workspace):
     registry = ResourceRegistry(
         publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
     )
-    publisher = McpCatalogResourcePublisher(registry=registry)
+    resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
+
+    def policies(metadata):
+        selection = catalog_selection.snapshot("default")
+        return {entry.tool_id: resolver.resolve(
+            entry, execution_override=selection.execution_overrides.get(entry.tool_id),
+            model_visibility_override=selection.model_visibility_overrides.get(entry.tool_id),
+        ) for entry in metadata}
+
+    publisher = McpCatalogResourcePublisher(registry=registry, policy_resolver=policies)
     scope = LifetimeScope("catalog-runtime-test")
     scope.register(owner.subscribe_publication(publisher.publish), label="mcp-resource-publication")
+
+    def republish():
+        with owner.publication_lock:
+            publisher.publish(owner.publication_snapshot())
+
+    scope.register(catalog_selection.subscribe("default", republish), label="selection-publication")
     try:
         yield owner, factory, registry, scope
     finally:
@@ -268,7 +289,7 @@ async def test_subscription_is_released_by_runtime_scope(catalog_runtime):
     assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
 
 
-async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace):
+async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace, extension_catalog_policy_resolver):
     owner = McpCatalogOwner(
         raw_config={"servers": {}}, workspace_root=catalog_workspace,
         event_service=EventChannelService(),
@@ -281,10 +302,12 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
     await owner.start()
     try:
         registry = ResourceRegistry()
-        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=(tool,))
+        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=(tool,), policy_resolver=extension_catalog_policy_resolver)
         publisher.publish(owner.publication_snapshot())
         resource = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
-        assert resource.payload == {"content": ""}
+        guidance = json.loads(resource.payload["content"])
+        assert guidance["automatic_definitions"] == []
+        assert guidance["navigation"][0]["tool_count"] == 1
         assert len(resource.members) == 1
         assert resource.members[0].member_id == "local_echo"
         assert resource.members[0].member_kind == "custom"
@@ -368,10 +391,12 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
     await drain_pending_relists(owner)
     empty, initial = guidance_prepare("guidance-empty-initial", **prepare_options)
     initial_binding = next(binding for binding in initial.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
-    assert saver.read_resource_activation_payload(
+    initial_body = saver.read_resource_activation_payload(
         initial, initial_binding, checkpoint_ns=prepare_options["checkpoint_ns"],
         storage_owner=(session, thread),
-    ) == {"content": ""}
+    )
+    assert json.loads(initial_body["content"])["navigation"] == []
+    assert json.loads(initial_body["content"])["automatic_definitions"] == []
     initial_snapshot = saver.get_context_assembly(session, thread, assembly_id=empty["assembly_id"])
     contribution_id = f"source-full:{MCP_GUIDANCE_SOURCE_ID}:{initial_binding.revision}"
     ordinal = connection.execute(
@@ -399,7 +424,7 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
         assert restarted.read_resource_activation_payload(
             activation, binding, checkpoint_ns=prepare_options["checkpoint_ns"],
             storage_owner=(session, thread),
-        ) == {"content": ""}
+        ) == initial_body
         returned_snapshot = restarted.get_context_assembly(session, thread, assembly_id=returned["assembly_id"])
         assert returned["tools"] == cold["tools"] == empty["tools"]
         assert returned_snapshot.seal_binding.prefix.state.epoch == initial_snapshot.seal_binding.prefix.state.epoch
@@ -407,7 +432,7 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
             assert returned_snapshot.seal_binding.prefix.state.frames[:-1] == cold_snapshot.seal_binding.prefix.state.frames
             block, = parse_source_blocks(returned_snapshot.seal_binding.prefix.state.frames[-1].content)
             assert (block.source_identity, block.revision, block.body, block.operation) == (
-                MCP_GUIDANCE_SOURCE_ID, binding.revision, "", "update",
+                MCP_GUIDANCE_SOURCE_ID, binding.revision, initial_body["content"], "update",
             )
         else:
             # 当前真实 admission 的 Turn 尚未改变，目录刷新不能改写冻结输入。
@@ -556,3 +581,56 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
     assert canonical_json_bytes(saver.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict()) == original_bytes
     assert connection.execute("SELECT COUNT(*) FROM context_source_control_states WHERE source_id=?",
                               (MCP_GUIDANCE_SOURCE_ID,)).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("boundary", ["model_call", "turn"])
+async def test_selection_publication_injects_full_definition_at_allowed_boundary(
+    catalog_runtime, catalog_selection, registry_db, guidance_prepare, boundary,
+):
+    _owner, factory, registry, _scope = catalog_runtime
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    options = {"boundary": boundary, "checkpoint_ns": f"model:visibility-{boundary}"}
+    first, frozen = guidance_prepare("visibility-initial", **options)
+    parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    original = saver.read_resource_activation_payload(frozen, parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread))
+    assert json.loads(original["content"])["automatic_definitions"] == []
+    list_calls = factory.session.list_calls
+    catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (True, True)})
+    published = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    definition, = json.loads(published.payload["content"])["automatic_definitions"]
+    assert definition["tool_name"] == "mcp__mini__echo"
+    assert definition["input_schema"]["properties"]["text"]["minLength"] == 1
+    assert definition["input_schema"]["required"] == ["text"]
+    assert factory.session.list_calls == list_calls
+    second, activation = guidance_prepare("visibility-enabled", **options)
+    new_parent, = (binding for binding in activation.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    selected = saver.read_resource_activation_payload(activation, new_parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread))
+    assert selected == (published.payload if boundary == "model_call" else original)
+    snapshot = saver.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+    prior = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
+    assert second["tools"] == first["tools"]
+    assert snapshot.seal_binding.prefix.state.epoch == prior.seal_binding.prefix.state.epoch
+    assert (snapshot.request_hash != prior.request_hash) == (boundary == "model_call")
+    third, _ = guidance_prepare("visibility-stable", **options)
+    assert third["messages"] == second["messages"], "同一完整定义不能在稳定后继重复投递"
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
+        retry, _ = guidance_prepare("visibility-enabled", context_owner=restarted, **options)
+        assert retry["messages"] == second["messages"]
+    assert saver.read_resource_activation_payload(frozen, parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread)) == original
+
+
+async def test_disabling_and_reenabling_selection_republishes_members_and_definition(
+    catalog_runtime, catalog_selection,
+):
+    _owner, _factory, registry, scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (False, False)})
+    disabled = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert disabled.members == ()
+    assert json.loads(disabled.payload["content"])["navigation"] == []
+    catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (True, False)})
+    assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
+    await scope.close()
+    catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (True, True)})
+    assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before, "runtime 释放后不得保留选择订阅"

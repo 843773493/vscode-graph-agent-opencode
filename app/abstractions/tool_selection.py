@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -64,3 +64,7 @@ class ToolSelectionSnapshot:
 
 class ToolSelectionReader(Protocol):
     def snapshot(self, agent_id: str) -> ToolSelectionSnapshot: ...
+
+    def subscribe(self, agent_id: str, callback: Callable[[], None]) -> Callable[[], None]:
+        """订阅已提交选择；立即交付当前值，返回生命周期释放函数。"""
+        ...

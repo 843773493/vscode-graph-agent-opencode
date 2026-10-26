@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO
+from threading import RLock
+from typing import BinaryIO, TypedDict
 
 import portalocker
 
@@ -15,12 +16,36 @@ _TOOL_SELECTION_LOCK_TIMEOUT_SECONDS = 10.0
 _TOOL_SELECTION_LOCK_POLL_INTERVAL_SECONDS = 0.05
 
 
+class _AgentToolSelection(TypedDict):
+    execution_overrides: dict[str, bool]
+    model_visibility_overrides: dict[str, bool]
+
+
 class ToolSelectionStore:
     """持久化当前工作区内每个 Agent 的工具能力运行时覆盖。"""
 
     def __init__(self, *, boxteam_root: Path) -> None:
         self._path = boxteam_root / "settings" / "tool_selection.json"
         self._lock_path = boxteam_root / "settings" / "tool_selection.lock"
+        self._subscriber_lock = RLock()
+        self._subscribers: dict[object, tuple[str, Callable[[], None]]] = {}
+
+    def subscribe(self, agent_id: str, callback: Callable[[], None]) -> Callable[[], None]:
+        """先登记再重读，避免订阅与已提交选择之间丢失通知。"""
+        token = object()
+        with self._subscriber_lock:
+            self._subscribers[token] = (agent_id, callback)
+
+        def unsubscribe() -> None:
+            with self._subscriber_lock:
+                self._subscribers.pop(token, None)
+
+        try:
+            callback()
+        except BaseException:
+            unsubscribe()
+            raise
+        return unsubscribe
 
     def snapshot(self, agent_id: str) -> ToolSelectionSnapshot:
         """同一把共享锁下取得精确的执行/可见性选择事实。"""
@@ -57,12 +82,23 @@ class ToolSelectionStore:
                 "model_visibility_overrides": dict(sorted(visibility.items())),
             }
             self._write(payload)
+        # 文件锁释放后才调用订阅者，回调可原子读取最新选择而不重入文件锁。
+        with self._subscriber_lock:
+            callbacks = tuple(callback for owner, callback in self._subscribers.values() if owner == agent_id)
+        errors = []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as error:  # noqa: BLE001 - 通知全部订阅者后完整上抛，不吞掉发布失败
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("工具选择已保存，但目录发布失败", errors)
 
     @staticmethod
     def _agent_settings_from_payload(
         payload: dict[str, object],
         agent_id: str,
-    ) -> dict[str, object]:
+    ) -> _AgentToolSelection:
         raw_settings = payload.get(agent_id, {})
         if not isinstance(raw_settings, dict):
             raise TypeError("工具选择配置的 Agent 项必须是对象: artifact=tool_selection")

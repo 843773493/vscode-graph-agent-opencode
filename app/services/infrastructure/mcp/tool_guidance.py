@@ -1,165 +1,52 @@
-"""McpToolGuidanceProducer：从已验证 MCP 目录派生有界确定性工具指引。
-
-OpenSpec add-context-injection-lifecycle E4：指引只从 validated catalog 派生；
-排序、清洗与参数摘要全部确定性，guidance_revision 可重算核对。外部
-description 是不可信数据，经控制字符清洗与长度截断后只能成为 tail_only
-user-role 内容；指引文本不得更改授权、工具 schema、root 资格或信封。
-原始 MCP prompts/resources/server instructions 不进入本 producer。
-"""
+"""从唯一扩展目录派生有界导航及用户选择的完整定义；不维护第二目录。"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 
-from langchain_core.tools import BaseTool
+from app.agents.policy.tool_capability import ToolCapabilityPolicy
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.mcp.tool_definitions import ToolDefinition
 
-from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.services.infrastructure.mcp.catalog_owner import McpToolDescriptor
-from app.services.infrastructure.mcp.extension_catalog import (
-    extension_schema_hash,
-    payload_digest,
-)
-
-MAX_GUIDANCE_DESCRIPTION_LENGTH = 200
-MAX_GUIDANCE_ARGS_FIELDS = 8
-MAX_GUIDANCE_ARGS_SUMMARY_LENGTH = 120
-_CONTROL_CHARACTER_TRANSLATION = str.maketrans(dict.fromkeys((*range(0x20), 0x7F), " "))
+MAX_NAVIGATION_GROUPS = 8
+MAX_NAVIGATION_LABEL_LENGTH = 80
+MAX_NAVIGATION_DESCRIPTION_LENGTH = 120
+_CONTROL_CHARACTERS = str.maketrans(dict.fromkeys((*range(0x20), 0x7F), " "))
 
 
-class McpToolGuidanceError(RuntimeError):
-    """MCP 工具指引派生的显式错误；dirty 输入必须 fail closed。"""
+def _label(value: str, limit: int) -> str:
+    return value.translate(_CONTROL_CHARACTERS).strip()[:limit]
 
 
-def _sanitize_untrusted_text(value: str, *, max_length: int) -> str:
-    """不可信外部文本：控制字符清洗 + 确定性长度截断。"""
-    cleaned = value.translate(_CONTROL_CHARACTER_TRANSLATION)
-    return cleaned.strip()[:max_length]
+def extension_tool_guidance(
+    definitions: Sequence[ToolDefinition],
+    policies: Mapping[str, ToolCapabilityPolicy],
+) -> str:
+    """软隐藏只留分组导航；硬隐藏和执行禁用不投递名称、描述或契约。
 
-
-def _args_summary(input_schema: Mapping[str, object]) -> str:
-    """参数 schema 的有界确定性摘要；只描述最小调用形式。
-
-    摘要只用于展示，身份和校验始终使用完整 input_schema。
+    自动完整定义不截断，用户选择的目标与搜索共用冻结 facet 正文。
+    外部描述仅作为 tail_only user 来源数据，不能提升为系统指令。
     """
-    args = input_schema.get("properties", {})
-    if not isinstance(args, Mapping):
-        raise McpToolGuidanceError("完整工具契约的 properties 必须是 object")
-    if not args:
-        return "{}"
-    parts: list[str] = []
-    for name in sorted(args)[:MAX_GUIDANCE_ARGS_FIELDS]:
-        schema = args[name]
-        field_type = "any"
-        if isinstance(schema, dict) and isinstance(schema.get("type"), str):
-            field_type = schema["type"]
-        parts.append(f"{name}:{field_type}")
-    summary = ", ".join(parts)
-    if len(args) > MAX_GUIDANCE_ARGS_FIELDS:
-        summary += ", ..."
-    return summary[:MAX_GUIDANCE_ARGS_SUMMARY_LENGTH]
-
-
-@dataclass(frozen=True, slots=True)
-class McpToolGuidanceEntry:
-    """一个 target 的模型可见指引条目；不含路径/credential/server locator。"""
-
-    tool_id: str
-    server_id: str
-    remote_name: str
-    description: str
-    args_summary: str
-    schema_hash: str
-
-
-@dataclass(frozen=True, slots=True)
-class McpToolGuidanceSnapshot:
-    """一次派生的不可变指引；entries 按 tool_id 确定性排序。
-
-    added/modified/tombstones 是相对 previous snapshot 的确定性 delta；
-    tombstones 携带被删除 target 的 tool_id，跨冻结保持稳定。
-    """
-
-    catalog_revision: str
-    guidance_revision: str
-    entries: tuple[McpToolGuidanceEntry, ...]
-    added_tool_ids: tuple[str, ...]
-    modified_tool_ids: tuple[str, ...]
-    tombstones: tuple[str, ...]
-
-
-class McpToolGuidanceProducer:
-    """无状态派生器；delta 相对调用方传入的 previous snapshot。"""
-
-    def produce(
-        self,
-        *,
-        catalog_revision: str,
-        descriptors: Iterable[McpToolDescriptor],
-        tools_by_id: Mapping[str, BaseTool],
-        previous: McpToolGuidanceSnapshot | None = None,
-    ) -> McpToolGuidanceSnapshot:
-        entries: list[McpToolGuidanceEntry] = []
-        for descriptor in descriptors:
-            tool = tools_by_id.get(descriptor.tool_id)
-            if tool is None:
-                raise McpToolGuidanceError(
-                    "MCP 指引派生输入 dirty：descriptor 引用的工具不在已验证目录: "
-                    f"tool_id={descriptor.tool_id} catalog_revision={catalog_revision}"
-                )
-            input_schema = export_model_tool_json_schema(tool)
-            entries.append(
-                McpToolGuidanceEntry(
-                    tool_id=descriptor.tool_id,
-                    server_id=descriptor.server_id,
-                    remote_name=descriptor.remote_name,
-                    description=_sanitize_untrusted_text(
-                        descriptor.description,
-                        max_length=MAX_GUIDANCE_DESCRIPTION_LENGTH,
-                    ),
-                    args_summary=_args_summary(input_schema),
-                    schema_hash=extension_schema_hash(input_schema),
-                )
-            )
-        entries.sort(key=lambda item: item.tool_id)
-        payload = [
-            [
-                entry.tool_id,
-                entry.server_id,
-                entry.remote_name,
-                entry.description,
-                entry.args_summary,
-                entry.schema_hash,
-            ]
-            for entry in entries
-        ]
-        guidance_revision = payload_digest(
-            payload,
-            context="MCP 工具指引载荷",
-            error_type=McpToolGuidanceError,
-        )
-        previous_entries = (
-            {entry.tool_id: entry for entry in previous.entries}
-            if previous is not None
-            else {}
-        )
-        current = {entry.tool_id: entry for entry in entries}
-        current_tool_ids = current.keys()
-        previous_tool_ids = previous_entries.keys()
-        added = tuple(sorted(current_tool_ids - previous_tool_ids))
-        removed = tuple(sorted(previous_tool_ids - current_tool_ids))
-        modified = tuple(
-            sorted(
-                tool_id
-                for tool_id in current_tool_ids & previous_tool_ids
-                if current[tool_id] != previous_entries[tool_id]
-            )
-        )
-        return McpToolGuidanceSnapshot(
-            catalog_revision=catalog_revision,
-            guidance_revision=guidance_revision,
-            entries=tuple(entries),
-            added_tool_ids=added,
-            modified_tool_ids=modified,
-            tombstones=removed,
-        )
+    if set(policies) != {definition.metadata.tool_id for definition in definitions}:
+        raise ValueError("扩展导航需要同一次选择快照的完整有效策略")
+    discoverable = sorted((definition for definition in definitions
+                           if policies[definition.metadata.tool_id].execution_enabled
+                           and not policies[definition.metadata.tool_id].model_visibility_locked),
+                          key=lambda definition: definition.metadata.tool_id)
+    groups: dict[str, list[ToolDefinition]] = {}
+    for definition in discoverable:
+        groups.setdefault(definition.metadata.group_id, []).append(definition)
+    navigation = [
+        {"group": _label(group, MAX_NAVIGATION_LABEL_LENGTH), "tool_count": len(entries),
+         "example_capability": _label(str(entries[0].payload["description"]), MAX_NAVIGATION_DESCRIPTION_LENGTH)}
+        for group, entries in sorted(groups.items())[:MAX_NAVIGATION_GROUPS]
+    ]
+    automatic = [
+        {"tool_name": definition.metadata.tool_id, **definition.payload, "schema_hash": definition.schema_hash}
+        for definition in discoverable if policies[definition.metadata.tool_id].model_visible
+    ]
+    return canonical_json_bytes({
+        "discovery": "使用 search_tools(query=任务) 或 search_tools(tool_ids=[精确工具ID]) 获取完整定义；通过 invoke_extension_tool 调用。Skill 正文仍须由 skill_load 激活。",
+        "navigation": navigation, "additional_groups": max(0, len(groups) - len(navigation)),
+        "automatic_definitions": automatic,
+    }).decode("utf-8")

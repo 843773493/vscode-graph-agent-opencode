@@ -128,7 +128,7 @@ async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
 
 
 @pytest.fixture
-async def catalog_runtime(catalog_workspace):
+async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
     factory = CatalogSessionFactory()
     owner = McpCatalogOwner(
         raw_config={"servers":{"mini":{"enabled":True, "transport":"stdio", "command":"controlled-server"}}},
@@ -146,7 +146,7 @@ async def catalog_runtime(catalog_workspace):
     registry = ResourceRegistry(
         publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
     )
-    publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom)
+    publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=extension_catalog_policy_resolver)
     scope = LifetimeScope("members-persistence")
     scope.register(owner.subscribe_publication(publisher.publish), label="mcp-members-publication")
     try:

@@ -90,6 +90,15 @@ def frozen_provider_prepare(frozen_provider_wire, frozen_provider_activation):
 
 
 @pytest.fixture
+def extension_catalog_policy_resolver():
+    """默认仅导航，完整定义须显式搜索或打开可见性。"""
+    from app.agents.policy import ToolPolicyResolver
+
+    resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
+    return lambda metadata: {entry.tool_id: resolver.resolve(entry) for entry in metadata}
+
+
+@pytest.fixture
 def registered_tool_set_producer_factory(tmp_path):
     """按测试运行目录建立真实 selection owner，schema 仍由正式 producer 冻结。"""
     from app.agents.policy import ToolMetadata, ToolPolicyResolver

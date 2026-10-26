@@ -1,182 +1,108 @@
-"""McpToolGuidanceProducer focused 合同测试（OpenSpec E4 第二段）。
-
-覆盖：确定性派生、空目录固定 envelope、不可信 description 有界清洗、
-增删改 delta、tombstone 稳定、dirty 输入 fail closed。
-"""
+"""统一扩展导航有界，完整定义只按有效可见性投递。"""
 
 from __future__ import annotations
 
-import pytest
-from langchain_core.tools import StructuredTool
-from pydantic import BaseModel
+import json
 
-from app.services.infrastructure.mcp.catalog_owner import McpToolDescriptor
+import pytest
+
+from app.agents.policy.tool_capability import ToolMetadata, ToolPolicyResolver
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+from app.services.infrastructure.mcp.tool_definitions import ToolDefinition
 from app.services.infrastructure.mcp.tool_guidance import (
-    MAX_GUIDANCE_DESCRIPTION_LENGTH,
-    McpToolGuidanceError,
-    McpToolGuidanceProducer,
+    MAX_NAVIGATION_DESCRIPTION_LENGTH,
+    MAX_NAVIGATION_GROUPS,
+    extension_tool_guidance,
 )
 
 
-class _EchoInput(BaseModel):
-    text: str
-    level: int
+@pytest.fixture
+def definition_factory():
+    def create(name, *, group="mcp:mini", description="读取 CI 日志", schema=None, origin="mcp"):
+        schema = schema or {
+            "type": "object", "$defs": {"mode": {"enum": ["read", "write"]}},
+            "properties": {"mode": {"$ref": "#/$defs/mode"}}, "required": ["mode"],
+            "additionalProperties": {"type": "string"},
+        }
+        return ToolDefinition(
+            ToolMetadata(name, origin, "extension", group), extension_schema_hash(schema),
+            canonical_json_bytes({"description": description, "input_schema": schema,
+                                  "kind": "extension", "group_id": group}),
+        )
+    return create
 
 
-def _make_remote_tool(name: str) -> StructuredTool:
-    async def _call(text: str, level: int = 0) -> str:
-        return f"{name}:{text}:{level}"
-
-    return StructuredTool.from_function(
-        coroutine=_call,
-        name=name,
-        description=f"{name} 工具",
-        args_schema=_EchoInput,
-    )
-
-
-def _descriptor(
-    tool_id: str,
-    *,
-    description: str = "工具说明",
-    server_id: str = "mini",
-) -> McpToolDescriptor:
-    return McpToolDescriptor(
-        tool_id=tool_id,
-        server_id=server_id,
-        remote_name=tool_id.split("__")[-1],
-        description=description,
-    )
+@pytest.fixture
+def policies_for():
+    def resolve(definitions, *, visible=(), hidden=(), disabled=()):
+        resolver = ToolPolicyResolver(
+            policy_defaults={"model_visible": False}, policy_rules={},
+            restrictions={"model_hidden": list(hidden), "execution_disabled": list(disabled)},
+        )
+        return {entry.metadata.tool_id: resolver.resolve(
+            entry.metadata, model_visibility_override=entry.metadata.tool_id in visible,
+        ) for entry in definitions}
+    return resolve
 
 
-def test_produce_is_deterministic_and_sorted() -> None:
-    producer = McpToolGuidanceProducer()
-    descriptors = [
-        _descriptor("mcp__mini__zeta"),
-        _descriptor("mcp__mini__alpha"),
+def test_navigation_is_bounded_and_deterministic_without_target_schemas(definition_factory, policies_for):
+    definitions = tuple(definition_factory(f"tool_{group}_{index}", group=f"group:{group:03d}")
+                        for group in range(40) for index in range(30))
+    policies = policies_for(definitions)
+    content = extension_tool_guidance(definitions, policies)
+    assert extension_tool_guidance(tuple(reversed(definitions)), policies) == content
+    body = json.loads(content)
+    assert len(body["navigation"]) == MAX_NAVIGATION_GROUPS
+    assert body["additional_groups"] == 40 - MAX_NAVIGATION_GROUPS
+    assert all(group["tool_count"] == 30 for group in body["navigation"])
+    assert body["automatic_definitions"] == []
+    assert not any(definition.metadata.tool_id in content for definition in definitions)
+    assert "input_schema" not in content
+    assert len(content.encode()) < 4096
+
+
+def test_explicit_visibility_includes_complete_contract_and_local_extensions(definition_factory, policies_for):
+    definitions = (definition_factory("hidden"), definition_factory("visible", origin="custom"))
+    body = json.loads(extension_tool_guidance(definitions, policies_for(definitions, visible=("visible",))))
+    automatic, = body["automatic_definitions"]
+    assert automatic["tool_name"] == "visible"
+    assert automatic["input_schema"] == definitions[1].payload["input_schema"]
+    assert automatic["schema_hash"] == definitions[1].schema_hash
+    assert body["navigation"][0]["tool_count"] == 2
+    assert "skill_load" in body["discovery"]
+
+
+def test_hard_hidden_and_disabled_do_not_leak_through_navigation(definition_factory, policies_for):
+    definitions = (definition_factory("secret", group="secret-group", description="秘密能力"),
+                   definition_factory("disabled", group="disabled-group", description="禁用能力"),
+                   definition_factory("soft", group="visible-group", description="可搜索能力"))
+    content = extension_tool_guidance(definitions, policies_for(
+        definitions, visible=("secret", "disabled"), hidden=("secret",), disabled=("disabled",),
+    ))
+    assert "秘密" not in content and "secret" not in content
+    assert "disabled" not in content and "禁用" not in content
+    assert json.loads(content)["navigation"] == [
+        {"group": "visible-group", "tool_count": 1, "example_capability": "可搜索能力"},
     ]
-    tools_by_id = {
-        "mcp__mini__zeta": _make_remote_tool("zeta"),
-        "mcp__mini__alpha": _make_remote_tool("alpha"),
-    }
-    first = producer.produce(
-        catalog_revision="sha256:" + "0" * 64,
-        descriptors=descriptors,
-        tools_by_id=tools_by_id,
-    )
-    second = producer.produce(
-        catalog_revision="sha256:" + "0" * 64,
-        descriptors=list(reversed(descriptors)),
-        tools_by_id=tools_by_id,
-    )
-    assert first == second
-    assert [entry.tool_id for entry in first.entries] == [
-        "mcp__mini__alpha",
-        "mcp__mini__zeta",
-    ]
-    assert first.added_tool_ids == ("mcp__mini__alpha", "mcp__mini__zeta")
-    # 参数摘要有界且确定性：字段按名排序，类型取 schema type。
-    assert first.entries[0].args_summary == "level:integer, text:string"
 
 
-def test_empty_catalog_fixed_envelope() -> None:
-    producer_a = McpToolGuidanceProducer()
-    producer_b = McpToolGuidanceProducer()
-    snapshot_a = producer_a.produce(
-        catalog_revision="sha256:" + "1" * 64,
-        descriptors=[],
-        tools_by_id={},
-    )
-    snapshot_b = producer_b.produce(
-        catalog_revision="sha256:" + "1" * 64,
-        descriptors=[],
-        tools_by_id={},
-    )
-    assert snapshot_a.entries == ()
-    assert snapshot_a.tombstones == ()
-    assert snapshot_a.added_tool_ids == ()
-    assert snapshot_a.guidance_revision == snapshot_b.guidance_revision
-    assert snapshot_a == snapshot_b
-
-
-def test_untrusted_description_bounded_and_sanitized() -> None:
-    producer = McpToolGuidanceProducer()
-    dirty_description = "a\x00b\x1fc" + "长" * 500
-    snapshot = producer.produce(
-        catalog_revision="sha256:" + "0" * 64,
-        descriptors=[_descriptor("mcp__mini__echo", description=dirty_description)],
-        tools_by_id={"mcp__mini__echo": _make_remote_tool("echo")},
-    )
-    description = snapshot.entries[0].description
-    assert len(description) <= MAX_GUIDANCE_DESCRIPTION_LENGTH
+def test_untrusted_navigation_text_is_bounded_and_sanitized(definition_factory, policies_for):
+    definitions = (definition_factory("echo", description="a\x00b\x1fc" + "长" * 500),)
+    body = json.loads(extension_tool_guidance(definitions, policies_for(definitions)))
+    description = body["navigation"][0]["example_capability"]
+    assert len(description) == MAX_NAVIGATION_DESCRIPTION_LENGTH
     assert not any(ord(char) < 0x20 or ord(char) == 0x7F for char in description)
 
 
-def test_delta_add_modify_tombstone() -> None:
-    producer = McpToolGuidanceProducer()
-    revision = "sha256:" + "0" * 64
-    tools = {
-        "mcp__mini__alpha": _make_remote_tool("alpha"),
-        "mcp__mini__beta": _make_remote_tool("beta"),
-    }
-    first = producer.produce(
-        catalog_revision=revision,
-        descriptors=[_descriptor("mcp__mini__alpha"), _descriptor("mcp__mini__beta")],
-        tools_by_id=tools,
-    )
-    # 修改 beta 描述、删除 alpha、新增 gamma。
-    second_tools = {
-        "mcp__mini__beta": _make_remote_tool("beta"),
-        "mcp__mini__gamma": _make_remote_tool("gamma"),
-    }
-    second = producer.produce(
-        catalog_revision=revision,
-        descriptors=[
-            _descriptor("mcp__mini__beta", description="修改后的说明"),
-            _descriptor("mcp__mini__gamma"),
-        ],
-        tools_by_id=second_tools,
-        previous=first,
-    )
-    assert second.added_tool_ids == ("mcp__mini__gamma",)
-    assert second.modified_tool_ids == ("mcp__mini__beta",)
-    assert second.tombstones == ("mcp__mini__alpha",)
-    assert second.entries[0].description == "修改后的说明"
+def test_empty_catalog_has_stable_discovery_instructions():
+    first = extension_tool_guidance((), {})
+    body = json.loads(first)
+    assert first == extension_tool_guidance((), {})
+    assert body["navigation"] == [] and body["automatic_definitions"] == []
+    assert body["additional_groups"] == 0
 
 
-def test_tombstone_stable_after_next_unchanged_produce() -> None:
-    producer = McpToolGuidanceProducer()
-    revision = "sha256:" + "0" * 64
-    first = producer.produce(
-        catalog_revision=revision,
-        descriptors=[_descriptor("mcp__mini__alpha")],
-        tools_by_id={"mcp__mini__alpha": _make_remote_tool("alpha")},
-    )
-    removed = producer.produce(
-        catalog_revision=revision,
-        descriptors=[],
-        tools_by_id={},
-        previous=first,
-    )
-    assert removed.tombstones == ("mcp__mini__alpha",)
-    # 目录未再变化时重新派生：delta 全空，tombstone 不重复出现。
-    stable = producer.produce(
-        catalog_revision=revision,
-        descriptors=[],
-        tools_by_id={},
-        previous=removed,
-    )
-    assert stable.tombstones == ()
-    assert stable.added_tool_ids == ()
-    assert stable.modified_tool_ids == ()
-    assert stable.guidance_revision == removed.guidance_revision
-
-
-def test_dirty_descriptor_fails_closed() -> None:
-    producer = McpToolGuidanceProducer()
-    with pytest.raises(McpToolGuidanceError):
-        producer.produce(
-            catalog_revision="sha256:" + "0" * 64,
-            descriptors=[_descriptor("mcp__mini__missing")],
-            tools_by_id={"mcp__mini__echo": _make_remote_tool("echo")},
-        )
+def test_incomplete_policy_input_fails_explicitly(definition_factory):
+    with pytest.raises(ValueError, match="完整有效策略"):
+        extension_tool_guidance((definition_factory("missing"),), {})

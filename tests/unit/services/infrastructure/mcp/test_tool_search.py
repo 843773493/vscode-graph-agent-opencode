@@ -50,7 +50,7 @@ from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
 
 
 @pytest.fixture
-async def catalog_runtime(catalog_workspace):
+async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
     factory = CatalogSessionFactory()
     factory.session.description = "查找 CI 失败记录与日志"
     owner = McpCatalogOwner(
@@ -78,7 +78,7 @@ async def catalog_runtime(catalog_workspace):
     ))
     await owner.start()
     registry = ResourceRegistry(publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture)
-    publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom)
+    publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=extension_catalog_policy_resolver)
     scope = LifetimeScope("tool-discovery")
     scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
     try:

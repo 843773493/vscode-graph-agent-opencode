@@ -163,3 +163,41 @@ def test_snapshot_is_frozen_across_later_selection_changes(tmp_path: Path) -> No
     assert first.revision != second.revision
     store.apply_changes(agent_id="default", changes={"read_file": (True, False)})
     assert store.snapshot("default").revision == second.revision
+
+
+def test_selection_subscribers_observe_committed_state_and_release_by_agent(tmp_path):
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+    seen = []
+    other = []
+    release = store.subscribe("default", lambda: seen.append(store.snapshot("default")))
+    release_other = store.subscribe("other", lambda: other.append(store.snapshot("other")))
+    assert len(seen) == len(other) == 1
+    store.apply_changes(agent_id="default", changes={"echo": (True, True)})
+    assert seen[-1].model_visibility_overrides == {"echo": True}
+    assert len(seen) == 2 and len(other) == 1
+    release()
+    release_other()
+    store.apply_changes(agent_id="default", changes={"echo": (True, False)})
+    assert len(seen) == 2
+
+
+def test_selection_callback_failure_does_not_hide_commit_or_skip_peer(tmp_path):
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+    observed = []
+    fail = False
+
+    def broken():
+        if fail:
+            raise RuntimeError("controlled publication failure")
+
+    release = store.subscribe("default", broken)
+    release_peer = store.subscribe("default", lambda: observed.append(store.snapshot("default")))
+    fail = True
+    with pytest.raises(ExceptionGroup, match="已保存.*发布失败") as caught:
+        store.apply_changes(agent_id="default", changes={"echo": (True, True)})
+    assert len(caught.value.exceptions) == 1
+    assert str(caught.value.exceptions[0]) == "controlled publication failure"
+    assert observed[-1] == store.snapshot("default")
+    assert observed[-1].model_visibility_overrides == {"echo": True}
+    release()
+    release_peer()

@@ -41,17 +41,21 @@ def definition_payload(tool: BaseTool, metadata: ToolMetadata) -> dict[str, obje
 
 
 @dataclass(frozen=True, slots=True)
-class FrozenToolDefinition:
+class ToolDefinition:
     metadata: ToolMetadata
     schema_hash: str
-    server_id: str | None
-    provenance: ResourceProvenanceRef
     _payload_json: bytes
 
     @property
     def payload(self) -> dict[str, object]:
         # 不把可变 JSON 引用交给搜索调用方。
         return json.loads(self._payload_json)
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenToolDefinition(ToolDefinition):
+    server_id: str | None
+    provenance: ResourceProvenanceRef
 
 
 @dataclass(frozen=True, slots=True)

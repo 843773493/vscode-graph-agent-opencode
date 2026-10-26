@@ -34,15 +34,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     extension_schema_hash,
     sha256_token,
 )
-from app.services.infrastructure.mcp.tool_guidance import (
-    MAX_GUIDANCE_ARGS_FIELDS,
-    MAX_GUIDANCE_ARGS_SUMMARY_LENGTH,
-    MAX_GUIDANCE_DESCRIPTION_LENGTH,
-    McpToolGuidanceEntry,
-    McpToolGuidanceError,
-    McpToolGuidanceProducer,
-    McpToolGuidanceSnapshot,
-)
 
 __all__ = [
     "EXTENSION_CATALOG_BINDING_SCHEMA",
@@ -50,9 +41,6 @@ __all__ = [
     "EXTENSION_DISPATCH_BINDING_MISMATCH_CODE",
     "EXTENSION_DISPATCH_BINDING_SCHEMA",
     "EXTENSION_TOOL_ENVELOPE_IDENTITY",
-    "MAX_GUIDANCE_ARGS_FIELDS",
-    "MAX_GUIDANCE_ARGS_SUMMARY_LENGTH",
-    "MAX_GUIDANCE_DESCRIPTION_LENGTH",
     "MCP_GUIDANCE_SOURCE_ID",
     "MCP_TOOL_CATALOG_RESOURCE_ID",
     "ExtensionCatalogBindingError",
@@ -72,10 +60,6 @@ __all__ = [
     "McpCatalogSnapshot",
     "McpServerSnapshot",
     "McpToolDescriptor",
-    "McpToolGuidanceEntry",
-    "McpToolGuidanceError",
-    "McpToolGuidanceProducer",
-    "McpToolGuidanceSnapshot",
     "build_extension_catalog_binding",
     "extension_dispatch_from_activation",
     "extension_schema_hash",
