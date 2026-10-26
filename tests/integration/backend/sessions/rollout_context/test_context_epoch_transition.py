@@ -111,10 +111,11 @@ class EpochCase:
     first: dict[str, object] = field(init=False)
     config: RunnableConfig = field(init=False)
 
-    def bind_manager(self) -> None:
+    def bind_manager(self, *, restore: bool = False) -> None:
         self.manager = ContextSourceManager(owner=self.owner, control_state_port=self.saver)
         for descriptor in self.descriptors:
-            self.manager.register(descriptor, tracking_status="tracked")
+            # 首次创建追踪来源；冷恢复只重绑 descriptor，沿用权威控制状态。
+            self.manager.register(descriptor, tracking_status="untracked" if restore else "tracked")
         reactor = ContextSourceReactor(
             sources=self.publisher, context_sources=self.manager,
             lifetime_scope=LifetimeScope("epoch-source-snapshots"), reactor_id="epoch-source-snapshots",
@@ -186,7 +187,7 @@ class EpochCase:
         self.saver = self.stack.enter_context(RolloutCheckpointSaver(
             self.saver._storage.storage.sessions_dir,
         ))
-        self.bind_manager()
+        self.bind_manager(restore=True)
 
     def snapshot(self, prepared: dict[str, object]):
         return self.saver.get_context_assembly(
@@ -475,6 +476,24 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_re
     assert (skill_delta.kind, skill_delta.content) == ("rebuild", "v2\n")
     assert case.manager.prepare_pending() is None
     assert canonical_json_bytes(case.snapshot(second).to_dict()) == second_bytes
+
+
+def test_rebuild_rejects_state_header_mismatch_without_committing(epoch_case, monkeypatch):
+    case = epoch_case
+    before = tuple(case.connection.iterdump())
+    jsonl = case.saver._storage.storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
+    before_jsonl = jsonl.read_bytes()
+    consume = case.saver.consume_mutation_intent
+
+    def mismatch(intent, connection=None):
+        assert isinstance(intent, RebuildContextEpochIntent)
+        return consume(replace(intent, state_header_checkpoint_id="checkpoint-mismatched"), connection)
+
+    monkeypatch.setattr(case.saver, "consume_mutation_intent", mismatch)
+    with pytest.raises(RuntimeError, match="epoch-rebuild-control-conflict"):
+        case.rewind("checkpoint-first")
+    assert tuple(case.connection.iterdump()) == before
+    assert jsonl.read_bytes() == before_jsonl
 
 
 @pytest.mark.parametrize("boundary", ("rewind", "compaction"))
@@ -1263,6 +1282,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     original = case.snapshot(visible)
     old_snapshots = tuple(canonical_json_bytes(case.snapshot(prepared).to_dict())
                           for prepared in (case.first, visible))
+    assert case.manager.load_skill("debugging", mode="untrack").tracked is False
     case.checkpoint("checkpoint-replay-before", messages=[
         case.user, AIMessage(content="重放前的真实回答", id="replay-before-answer"),
     ])
@@ -1295,8 +1315,9 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
         (pending[0],),
     ).fetchone() == cut
     assert {row[0]: row[1:4] for row in case.source_rows()}["skill:one-shot"] == (
-        "untracked", binding.activation_revision, None,
+        "untracked", None, None,
     )
+    assert {row[0]: row[1] for row in case.source_rows()}["skill:debugging"] == "tracked"
     # 真实 replay port 分配新 Turn/root/admission，旧 identity 只进入 lineage。
     case.accepted = case.saver.replay_as_new_turn(
         case.owner.session_id, thread_id=case.owner.thread_id, source_turn_id=source_turn,

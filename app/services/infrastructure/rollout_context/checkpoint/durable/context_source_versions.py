@@ -143,16 +143,26 @@ class ContextSourceVersionsStorageMixin:
                 f"view={intent.target_view_id!r}"
             )
         control = connection.execute(
-            "SELECT control_kind, branch_id, view_id, checkpoint_id FROM control_events WHERE control_sequence=?",
+            "SELECT control_kind, branch_id, view_id, checkpoint_id, payload_json "
+            "FROM control_events WHERE control_sequence=?",
             (intent.control_revision,),
         ).fetchone()
         allowed_kinds = {intent.epoch_reason}
         if intent.epoch_reason == "compaction":
             allowed_kinds.add("checkpoint_created")
-        if control is None or control[0] not in allowed_kinds or control[1:] != (
+        if control is None or control[0] not in allowed_kinds or control[1:4] != (
             view[1], intent.target_view_id, intent.source_checkpoint_id,
         ):
             raise RuntimeError("epoch-rebuild-control-conflict: intent 未绑定同一事务真实控制事件")
+        payload = json_text(control[4], field="epoch-rebuild.control.payload_json")
+        if not isinstance(payload, Mapping):
+            raise TypeError("epoch-rebuild-control-conflict: control payload 必须是 object")
+        state_checkpoint_id = (
+            intent.source_checkpoint_id if control[0] == "checkpoint_created"
+            else payload.get("state_header_checkpoint_id")
+        )
+        if state_checkpoint_id != intent.state_header_checkpoint_id:
+            raise RuntimeError("epoch-rebuild-control-conflict: intent 与冻结控制态 header 不一致")
         transition_id = f"epoch-rebuild:{intent.target_view_id}:{intent.control_revision}"
         if connection.execute(
             "SELECT 1 FROM context_epoch_transitions WHERE transition_id=?", (transition_id,),
@@ -167,6 +177,7 @@ class ContextSourceVersionsStorageMixin:
         if intent.epoch_reason == "rewind":
             self._restore_checkpoint_context_sources(
                 connection, checkpoint_id=intent.source_checkpoint_id,
+                state_header_checkpoint_id=intent.state_header_checkpoint_id,
                 checkpoint_ns=intent.checkpoint_ns, session_id=intent.owner.session_id,
                 thread_id=intent.owner.thread_id, timestamp=timestamp,
             )
@@ -234,6 +245,7 @@ class ContextSourceVersionsStorageMixin:
         connection: sqlite3.Connection,
         *,
         checkpoint_id: str,
+        state_header_checkpoint_id: str,
         checkpoint_ns: str,
         session_id: str,
         thread_id: str,
@@ -250,12 +262,22 @@ class ContextSourceVersionsStorageMixin:
                 "checkpoint-context-state-unavailable: 缺少目标 checkpoint 的精确 owner 控制状态版本"
             )
         require_historical_scope(connection, *header[:2], current_owner=(session_id, thread_id))
+        state_header = connection.execute(
+            "SELECT snapshot.session_id, snapshot.thread_id, snapshot.source_count "
+            "FROM checkpoint_context_source_snapshots snapshot JOIN checkpoints checkpoint "
+            "ON checkpoint.checkpoint_id=snapshot.checkpoint_id AND checkpoint.checkpoint_ns=snapshot.checkpoint_ns "
+            "WHERE snapshot.checkpoint_id=? AND snapshot.checkpoint_ns=? AND checkpoint.status='active'",
+            (state_header_checkpoint_id, checkpoint_ns),
+        ).fetchone()
+        if state_header is None:
+            raise RuntimeError("checkpoint-context-state-unavailable: 缺少目标时间边界的追踪控制态")
+        require_historical_scope(connection, *state_header[:2], current_owner=(session_id, thread_id))
         states = connection.execute(
             f"SELECT {_SOURCE_COLUMNS} FROM checkpoint_context_source_states "
             "WHERE checkpoint_id = ? AND session_id = ? AND thread_id = ?",
-            (checkpoint_id, *header[:2]),
+            (state_header_checkpoint_id, *state_header[:2]),
         ).fetchall()
-        if len(states) != strict_non_negative_int(header[2], field="checkpoint.source_count"):
+        if len(states) != strict_non_negative_int(state_header[2], field="checkpoint.source_count"):
             raise RuntimeError("checkpoint-context-state-conflict: 目标控制状态版本不完整")
         pending = self._pending_context_epoch_row(connection, checkpoint_ns)
         if pending is None or pending[3] != checkpoint_id:
@@ -293,7 +315,7 @@ class ContextSourceVersionsStorageMixin:
             "state_revision = state_revision + 1, updated_at = ? "
             "WHERE session_id = ? AND thread_id = ? AND source_id NOT IN "
             "(SELECT source_id FROM checkpoint_context_source_states WHERE checkpoint_id = ?)",
-            (timestamp, session_id, thread_id, checkpoint_id),
+            (timestamp, session_id, thread_id, state_header_checkpoint_id),
         )
         connection.executemany(
             "INSERT INTO context_source_control_states "

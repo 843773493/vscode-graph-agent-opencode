@@ -64,7 +64,8 @@ def _three_branch_intents() -> tuple[ContextMutationIntent, ...]:
             epoch_reason="rewind",
             view_revision=1,
             control_revision=1,
-            checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
+            checkpoint_ns="", source_checkpoint_id="checkpoint-1",
+            state_header_checkpoint_id="checkpoint-1", target_view_id="view-1",
         ),
     )
 

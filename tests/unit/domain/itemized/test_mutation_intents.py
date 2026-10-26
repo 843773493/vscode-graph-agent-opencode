@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.domain.itemized.enums import PayloadKind, SelectionKind, SemanticKind
@@ -201,7 +203,8 @@ class TestRebuildContextEpochIntent:
                 epoch_reason="toolset_changed",  # type: ignore[arg-type]
                 view_revision=1,
                 control_revision=1,
-                checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
+                checkpoint_ns="", source_checkpoint_id="checkpoint-1",
+                state_header_checkpoint_id="checkpoint-1", target_view_id="view-1",
             )
 
     def test_idempotency_key_and_outcome(self) -> None:
@@ -210,11 +213,15 @@ class TestRebuildContextEpochIntent:
             epoch_reason="rewind",
             view_revision=3,
             control_revision=7,
-            checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
+            checkpoint_ns="", source_checkpoint_id="checkpoint-1",
+            state_header_checkpoint_id="checkpoint-before", target_view_id="view-1",
         )
         assert intent.view_revision == 3
         assert intent.idempotency_key.endswith("rewind:3:7")
         assert intent.failure_outcome == "keep_old_view"
+        assert replace(intent, state_header_checkpoint_id="checkpoint-after").idempotency_key != intent.idempotency_key
+        with pytest.raises(ValueError, match="state_header_checkpoint_id"):
+            replace(intent, state_header_checkpoint_id="")
 
     def test_negative_revision_rejected(self) -> None:
         with pytest.raises(ValueError, match="view_revision"):
@@ -223,7 +230,8 @@ class TestRebuildContextEpochIntent:
                 epoch_reason="compaction",
                 view_revision=-1,
                 control_revision=0,
-                checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
+                checkpoint_ns="", source_checkpoint_id="checkpoint-1",
+                state_header_checkpoint_id="checkpoint-1", target_view_id="view-1",
             )
 
 
@@ -243,7 +251,8 @@ class TestIntentDispatch:
             RebuildContextEpochIntent(
                 owner=_owner(), epoch_reason="compaction",
                 view_revision=1, control_revision=1,
-                checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
+                checkpoint_ns="", source_checkpoint_id="checkpoint-1",
+                state_header_checkpoint_id="checkpoint-1", target_view_id="view-1",
             ),
         ]
         kinds = {intent_kind(intent) for intent in intents}

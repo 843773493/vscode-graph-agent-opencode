@@ -347,12 +347,15 @@ class RebuildContextEpochIntent:
     control_revision: int
     checkpoint_ns: str
     source_checkpoint_id: str
+    # 正文/activation 仍取 canonical 来源，追踪控制态取目标时间边界的冻结 header。
+    state_header_checkpoint_id: str
     target_view_id: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.checkpoint_ns, str):
             raise TypeError("RebuildContextEpochIntent.checkpoint_ns 必须是字符串")
         _require_non_empty(self.source_checkpoint_id, "RebuildContextEpochIntent.source_checkpoint_id")
+        _require_non_empty(self.state_header_checkpoint_id, "RebuildContextEpochIntent.state_header_checkpoint_id")
         _require_non_empty(self.target_view_id, "RebuildContextEpochIntent.target_view_id")
         if self.epoch_reason not in {"compaction", "rewind"}:
             raise ValueError(
@@ -370,7 +373,7 @@ class RebuildContextEpochIntent:
     def idempotency_key(self) -> str:
         return (
             f"epoch-rebuild:{self.owner.session_id}:{self.owner.thread_id}:"
-            f"{self.checkpoint_ns}:{self.source_checkpoint_id}:{self.target_view_id}:"
+            f"{self.checkpoint_ns}:{self.source_checkpoint_id}:{self.state_header_checkpoint_id}:{self.target_view_id}:"
             f"{self.epoch_reason}:{self.view_revision}:{self.control_revision}"
         )
 

@@ -97,6 +97,7 @@ class RolloutCheckpointOperationsMixin:
             ) as connection:
                 self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
+                resolved = None
                 if source_turn_id is not None:
                     resolved = self._resolve_turn_anchor_connection(
                         connection,
@@ -121,6 +122,9 @@ class RolloutCheckpointOperationsMixin:
                     )
                 source_checkpoint_value = strict_text(
                     source[0], field="checkpoints.checkpoint_id"
+                )
+                state_header_checkpoint_id = (
+                    source_checkpoint_value if resolved is None else resolved.state_header_checkpoint_id
                 )
                 source_view_id = source_view_id or strict_text(
                     source[6], field="checkpoints.view_id"
@@ -212,6 +216,7 @@ class RolloutCheckpointOperationsMixin:
                     raise RuntimeError("context boundary namespace state 更新失败")
                 control_payload: dict[str, object] = {
                     "source_checkpoint_id": source_checkpoint_id,
+                    "state_header_checkpoint_id": state_header_checkpoint_id,
                     "source_anchor": source_anchor,
                     "source_turn_id": source_turn_id,
                     "source_view_id": source_view_id,
@@ -261,6 +266,9 @@ class RolloutCheckpointOperationsMixin:
                         control_revision=control_sequence,
                         checkpoint_ns=checkpoint_ns,
                         source_checkpoint_id=source_checkpoint_value,
+                        state_header_checkpoint_id=strict_text(
+                            state_header_checkpoint_id, field="context_boundary.state_header_checkpoint_id",
+                        ),
                         target_view_id=view_id,
                     )
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent

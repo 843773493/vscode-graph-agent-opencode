@@ -350,7 +350,7 @@
 - [ ] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
 - [ ] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
 - [ ] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
-- [ ] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
+- [x] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
 - [ ] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
 - [x] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
 - [ ] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
@@ -437,6 +437,12 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - CSM 名称索引按 source_kind 隔离；Skill 加载、模式切换和同名唯一追踪校验只消费 Skill。要求 tracked 的重复登记先核对控制状态，再准备 descriptor／绑定，拒绝时不改已有登记。实际 skill_load、seal、冷恢复验证同名 instruction 不被覆盖、停追踪或误判重复，历史 assembly 字节不变。
 - `source-registration-final-014` 为142 passed／121.74秒，`mixed-source-seal-009` 为29 passed／9.04秒；两组覆盖有交集，不累计用例数。扩大回归的旧夹具漏配消息分组及控制版本断言已由完整 HEAD 快照复现；后续4项失败为新发现指引中的“Skill 正文”误中泄漏断言，改用夹具的唯一真实正文标记，未改生产校验或放宽泄漏检查。失败原件保留。
 - `source-registration-delivery-static-015` Ruff通过，8文件Pyright基线32项／当前26项，零新增；不称全仓类型通过。准确命令、源码前后指纹、raw和退出码位于`out/tests/temp/csm-kind-boundary/artifacts/`，原baseline全部4512个tracked blob核验未变后已清理并保留正式输出。此为9.2／9.13的独立子项，完整来源能力与组合门仍未勾选；未运行Web、外部Provider或Windows，团队／协作仍TODO。
-- 准确命令、源码指纹、raw、实际退出码及基线对照见`out/tests/temp/cil-source-grouping/artifacts/verification-054.json`和各具名运行目录。临时完整旧代码副本核验后清理，保留运行原件与比较收据。
 
-提交前另将仅本切片的暂存tree完整归档，隔离另一会话未提交的task／fork实现，再跑正式grouping matrix：3 passed／89.01秒。4508份旧HEAD文件逐blob核验不变；暂存快照的全部tracked文件前后hash相同，见`staged-source-proof-059.json`。两份临时源码清理，仅保留各自`out/tests`正式原件及收据。
+
+### 2026-10-26 Skill 模式的真实编辑回退与恢复（9.13）
+
+- 正常 Job／ToolNode 产生 tracked→snapshot→tracked→untrack 四轮历史，再从正式编辑入口连续回退两次，核对冻结控制态、来源引用／封存追踪字段、正文复用和冷 Saver 恢复；旧 assembly 字节及 request hash 保持不变。外部模型仅替换响应并复用 model_stream 资产，不手工写关键业务状态，不代表真实 Provider 或 Web 验收。
+- 修复 Turn before 恢复混用 canonical 来源 checkpoint 与控制态时间边界：来源正文／activation／精确 cut 继续沿 canonical checkpoint；追踪态从输入前 state header 恢复。两个身份通过 typed rebuild intent 和同一控制事件校验、在原 SQLite 事务提交；header 错配零提交。没有 schema 变更、旧数据改写或第二恢复链路。
+- `mode-recovery-product-fixed-027` 为1 passed／105.88秒；随后仅暂存本边界并完整 git archive 隔离其它会话改动，正式 `integration-skill-mode-recovery` 为1 passed／116.18秒，`integration-context-source-epoch-copy` 为3 passed／14.59秒。既有 grouping 正式套件另为3 passed／85.40秒；结合9.6—9.8的具名封装、替代、模式失败回滚／幂等证据，关闭9.13组合门，9.2／9.9—9.12／9.14／9.16和团队／协作TODO保持未完成。
+- 扩大回归 `rewind-header-regression-030` 为77 passed、1 failed、3 setup errors；其中冷恢复夹具强制 tracked 的失败在完整 HEAD 原件同处复现，修正夹具只重绑 descriptor 并沿用持久追踪态，未放宽业务断言。修正后的该项、Turn before及header错配共3 passed／12.86秒；3项fork setup缺正式runner的问题已由上列正式epoch-copy套件覆盖。较早定向52 passed／61.44秒与上述用例有交集，不累加统计。
+- 9文件Ruff／compileall通过；8文件Pyright基线与当前均90项、无新增，新产品集成测试Pyright零错误；OpenSpec strict有效。准确命令、前后指纹、raw、退出码和失败原件见`out/tests/temp/csm-kind-boundary/artifacts/`的025—040具名收据；两份完整源码分别逐blob核验后清理，正式测试输出保留。无Web产品源码变更，未运行Web构建、外部Provider或Windows，不代替其它总验收。

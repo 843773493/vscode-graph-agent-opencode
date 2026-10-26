@@ -3,6 +3,7 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id": "integration-skill-mode-recovery", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 240000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_skill_mode_recovery.py"]},
     {"id": "integration-context-source-grouping", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 180000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/rollout_context/test_source_message_grouping.py"]},
     {"id":"integration-extension-definition-recovery","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_tool_definition_recovery.py"]},
     {"id":"integration-extension-discovery","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/unit/services/infrastructure/mcp","tests/unit/services/infrastructure/rollout_context/test_mcp_members_persistence.py","tests/unit/services/infrastructure/tool_services/test_tool_output_store.py","tests/unit/agents/test_tool_output_middleware.py","tests/unit/agents/test_agent_factory.py","tests/integration/workspace_services/mcp/test_full_schema_invocation.py","tests/integration/workspace_services/mcp/test_invocation_lifecycle.py"]},

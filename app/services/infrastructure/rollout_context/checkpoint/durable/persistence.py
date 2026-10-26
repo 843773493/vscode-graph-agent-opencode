@@ -599,6 +599,7 @@ class RolloutCheckpointPersistenceMixin:
                         control_revision=control_sequence,
                         checkpoint_ns=checkpoint_ns,
                         source_checkpoint_id=checkpoint_id,
+                        state_header_checkpoint_id=checkpoint_id,
                         target_view_id=view_id,
                     )
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent

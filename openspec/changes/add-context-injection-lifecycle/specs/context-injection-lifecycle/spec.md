@@ -826,6 +826,11 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 - **WHEN** Skill由tracked显式切换为snapshot，随后rewind到转换前或转换后的checkpoint
 - **THEN** 系统分别恢复当时的tracked或snapshot状态；转换后的snapshot不自动恢复被移出的正文，不能因历史上曾tracked而重新启用追踪
 
+#### Scenario: 编辑回退到模式转换前的 Turn
+
+- **WHEN** 正常执行已产生多个 Turn 及 tracked／snapshot／untrack 转换，用户从正式编辑入口回退到指定 Turn 输入之前，包括连续回退
+- **THEN** canonical 内容与 activation 引用沿来源 checkpoint 和精确 cut 恢复，追踪控制态沿该 Turn 输入前的冻结 state header 恢复；两种 checkpoint 身份由同一 owner 的 typed intent 与控制事件绑定并在同一事务校验提交，不使用最新来源 checkpoint 的后续模式覆盖历史控制态，也不改写旧 assembly 或封存追踪字段
+
 #### Scenario: compaction 物化 tracked source
 
 - **WHEN** active source 为 `A(base) + A→B(delta) + B→C(delta)` 且 compaction 实际重建上下文

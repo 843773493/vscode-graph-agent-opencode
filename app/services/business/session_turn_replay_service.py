@@ -336,8 +336,8 @@ class SessionTurnReplayService:
             turn_id=target_turn_id,
             anchor_mode="before",
         )
-        # 框架非消息状态取输入前的冻结 header；rewind 仍使用 canonical
-        # 来源 checkpoint，不能把 source/activation snapshot 一并退回。
+        # 框架状态与 CSM 追踪控制态取输入前的冻结 header；canonical 正文及
+        # activation 引用仍由来源 checkpoint 和精确 cut 独立决定。
         base = await self._checkpointer.aget_tuple(
             build_checkpoint_config(
                 owner.thread_id, checkpoint_id=anchor.state_header_checkpoint_id
