@@ -307,6 +307,10 @@ class ExternalResourceLeaseLedger:
         record = self._records.get(resource_id)
         return self._copy_record(record) if record is not None else None
 
+    def records_by_kind(self, kind: str) -> list[ResourceRecord]:
+        """向实际 owner 提供本领域登记，供冷启动核对旧实例。"""
+        return [self._copy_record(record) for record in self._records.values() if record.kind == kind]
+
     def leases_for_turn(self, turn_stream_id: str) -> list[ResourceLease]:
         return [
             self._copy_lease(lease)

@@ -21,11 +21,15 @@ from app.agents.tools.custom_invocation import (
 )
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
@@ -33,6 +37,7 @@ from app.services.infrastructure.mcp.catalog_activation import (
     extension_dispatch_from_activation,
 )
 from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+from app.services.infrastructure.mcp.invocation import McpResourceUse
 from app.services.infrastructure.mcp.tool_definitions import (
     tool_catalog_from_activation,
 )
@@ -76,11 +81,19 @@ class SchemaServerCase:
             return []
         return [json.loads(line) for line in self.receipts.read_text(encoding="utf-8").splitlines()]
 
+    def execution_target(self, binding, use):
+        # 独立协议测试显式注入归属；真实 Agent 路径仍由调用中间件取得身份。
+        use = use or McpResourceUse(
+            holder_id="schema-test", operation_id="schema-test:" + create_uuid_hex(),
+            session_id="schema-test", thread_id="schema-test-thread",
+        )
+        return self.owner.execution_target(binding, use)
+
     def invoker(self):
         return create_extension_tool_invoker_tool(
             self.owner.get_tools(),
             catalog_binding_resolver=sealed_extension_catalog_binding_resolver(self.owner.binding_snapshot()),
-            target_resolver=self.owner.resolve_execution_target,
+            target_resolver=self.execution_target,
         )
 
 
@@ -91,6 +104,7 @@ def schema_server_case(request: pytest.FixtureRequest) -> SchemaServerCase:
     receipts = context.artifacts_dir / "receipts.jsonl"
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
         raw_config={"servers": {"schema": {
             "enabled": True, "transport": "stdio", "command": sys.executable,
             "args": [str(context.project_root / "tests/integration/workspace_services/mcp/schema_server.py"),
@@ -218,7 +232,7 @@ async def test_top_level_contract_change_moves_identity_and_rejects_old_binding(
         assert current.resolve("mcp__schema__probe").schema_hash != old_hash
         invoker = create_extension_tool_invoker_tool(
             case.owner.get_tools(), catalog_binding_resolver=sealed_extension_catalog_binding_resolver(sealed),
-            target_resolver=case.owner.resolve_execution_target,
+            target_resolver=case.execution_target,
         )
         result = await invoker.ainvoke({
             "type": "tool_call", "id": "stale-contract", "name": invoker.name,
@@ -319,7 +333,7 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
             )
             invoker = create_extension_tool_invoker_tool(
                 case.owner.get_tools(), catalog_binding_resolver=sealed_extension_catalog_binding_resolver(dispatch.binding_ref),
-                target_resolver=case.owner.resolve_execution_target,
+                target_resolver=case.execution_target,
             )
             result = await invoker.ainvoke({
                 "type": "tool_call", "id": "invoke-after-search", "name": entry["invocation"]["entry_point"],

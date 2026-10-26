@@ -13,6 +13,7 @@ import pytest
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
@@ -67,6 +68,12 @@ def integration_workspace_config_path(
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    # 原 scripted_backend_process 会登记本组唯一回放 Provider；不解析无关真实密钥。
+    config["llm"]["providers"] = []
+    for target in config["agents"]["default"]["tools"]["custom"]:
+        if target.get("tool_id") == "fetch_webpage":
+            # 网页扩展使用无 embedding 的默认模式，移除旧 Provider 引用。
+            target["options"] = {}
     config["mcp"] = {"servers": {"result": {
         "enabled": True, "transport": "stdio", "command": sys.executable,
         "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
@@ -181,6 +188,22 @@ async def test_product_discovery_parallel_results_and_cold_checkpoint(
         assert counts == {records[1]["identity"]["model_call_id"]}
     receipts = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert sorted(receipt["arguments"]["result_mode"] for receipt in receipts) == ["error", "success"]
+    ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
+    leases = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session]
+    assert len(leases) == 2
+    assert {lease["status"] for lease in leases} == {"released"}
+    assert {lease["holder_thread_id"] for lease in leases} == {thread}
+    assert all(lease["turn_stream_id"] == lease["operation_id"] for lease in leases)
+    expected_operations = set()
+    for call in calls:
+        call_id = call["id"]
+        assert isinstance(call_id, str)
+        expected_operations.add(software_tool_operation_id("mcp_call", session, thread, records[1]["identity"]["model_call_id"], call_id))
+    assert {lease["operation_id"] for lease in leases} == expected_operations
+    connections = {record["resource_id"]: record for record in ledger["records"]}
+    assert {connections[lease["resource_id"]]["kind"] for lease in leases} == {"mcp_connection"}
+    assert {connections[lease["resource_id"]]["lifetime_scope"] for lease in leases} == {"workspace"}
+    assert {connections[lease["resource_id"]]["status"] for lease in leases} == {"running"}
 
 
 async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
@@ -255,3 +278,15 @@ async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
             assembly.validate_hashes()
     received = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert len([row for row in received if row["arguments"].get("call_mode") == "disconnect"]) == 1
+    ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
+    leases = {lease["operation_id"]: lease for lease in ledger["leases"] if lease["holder_session_id"] == session}
+    expected = []
+    for record, call in zip(records[:2], calls, strict=True):
+        call_id = call["id"]
+        assert isinstance(call_id, str)
+        expected.append(software_tool_operation_id("mcp_call", session, thread, record["identity"]["model_call_id"], call_id))
+    assert set(leases) == set(expected)
+    assert leases[expected[0]]["status"] == "released"
+    assert leases[expected[1]]["status"] == "reconcile_required"
+    assert {lease["holder_thread_id"] for lease in leases.values()} == {thread}
+    assert all(lease["turn_stream_id"] == lease["operation_id"] for lease in leases.values())

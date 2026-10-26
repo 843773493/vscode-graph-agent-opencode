@@ -108,3 +108,13 @@
 - 保留失败原件：018修正测试从Job读取不存在turn_id；019完成全部公开事件与恢复断言后，暴露artifacts_dir随当前pytest节点动态变化，最终夹具冻结Server启动时使用的真实收据路径。没有放宽调用身份、顺序、unknown或hash断言。
 - `static-delivery-022` Ruff通过，`type-comparison-final-016` 的10个受影响模块仍为89条既有Pyright诊断，与完整HEAD基线相比零新增；新增invocation模块零诊断。`spec-delivery-023`严格OpenSpec校验通过。证据含命令、源码指纹、raw和退出码，保存在 `out/tests/temp/mcp-invocation-lifecycle/artifacts/`。4510个tracked blob全部核验未变后已删除完整临时baseline及依赖symlink，保留integrity报告；未删除正式测试产物。
 - 仅完成4.5；4.2／4.4的持久连接lease、封存资格和HITL跨替换，以及4.6综合验收保持未完成，短期SDK调用状态不是持久租约。
+
+
+### 4.2 持久连接占用切片验收（2026-10-26）
+
+- 原 MCP Owner 接入工作区唯一 ExternalResourceLeaseLedger，以精确 connection_ref 登记 workspace 范围的 mcp_connection；调用经同一执行目标上下文验证原连接、schema 与 typed resource-use，再写入原 operation 占用。不保存第二套目录、调用历史或持久 lease；原公开裸 handle resolver 已移入该准入链内部，直接和间接调用方整体迁齐。
+- 受信 Session／Thread、emitting model-call 与原 tool-call 生成稳定 operation 身份；holder 归原 operation，Turn 收尾不能代替结果核实。SDK 收到真实结果／协议错误才确认等待完成；已确认结果和未发送的调用释放本次占用，取消、超时、断线与无法核实的结果保留 reconcile_required，同一 operation 拒绝自动重放。独立字典调用即使没有 ToolMessage artifact，也不会把未知回执误判为已确认。
+- SDK 原生命周期 task 交付关闭证据，只有核实关闭才登记 stopped；关闭失败保留 unknown 及释放错误。重启只核对 MCP 领域的旧资源，不改变终端等其它 owner 的事实，不恢复旧 socket、不把旧调用迁投相同 schema 的新连接。持久等待的主动继续持有声明、已封存资格及 HITL 跨替换、有界排空仍未完成，因此4.2／4.4／4.6继续保留未勾选。
+- 完整暂存 tree 隔离验收：`mcp-lease-isolated-111` 中正式 integration-extension-discovery 为166 passed／109.49秒，信封、资源账本、执行恢复及真实请求准备为95 passed／58.35秒，6个核心模块／新增测试 Pyright零诊断，受影响 Ruff通过。最终 `mcp-lease-isolated-product-114` 为2 passed／95.45秒，经真实 Gateway、Session消息入口、Agent与stdio Server核对并发成功／业务错误、未知结果、实际软件operation归属、磁盘账本及冷checkpoint；模型继续复用model_stream，不代表真实外部Provider、OAuth或Web验收。
+- 保留111的未配置真实密钥启动错误、112的网页embedding遗留Provider引用、113的夹具工具声明联合形状处理错误原件；最终夹具只登记回放Provider，并使用既有无embedding网页模式，未放宽调用配对、身份、顺序、hash或unknown断言。111与最终114的源码tree只差该产品测试夹具，115逐blob核对最终index与受测tree一致；各次完整archive已核验4516个tracked blob后删除，只保留命令、指纹、raw、退出码、integrity及正式输出。
+- 扩大型检查109为20个文件，完整HEAD基线176条／当前176条，零新增诊断；该轮6条新Ruff格式诊断已由110及隔离最终检查修正。不宣称全仓类型通过。全部原件位于 `out/tests/temp/csm-kind-boundary/artifacts/mcp-lease-*`、`types-mcp-lease-109/`、`staged-mcp-lease-111/` 和 `staged-mcp-lease-product-11*/`。

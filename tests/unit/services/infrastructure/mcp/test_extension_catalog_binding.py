@@ -15,6 +15,9 @@ import pytest
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import (
     ExtensionCatalogBindingRef,
     ExtensionTargetBindingInput,
@@ -52,6 +55,7 @@ def _make_owner(
     servers: dict[str, object] | None = None,
 ) -> McpCatalogOwner:
     return McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": servers if servers is not None else _stdio_server()},
         workspace_root=tmp_path,
         event_service=event_service,
@@ -285,10 +289,10 @@ async def test_restart_same_schema_never_resolves_old_connection(
     try:
         sealed = owner.binding_snapshot()
         old_target = sealed.resolve("mcp__mini__echo")
-        assert owner.resolve_execution_target(old_target) is owner.get_tools()[0]
+        assert owner._resolve_execution_target(old_target) is owner.get_tools()[0]
         await owner.shutdown()
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner.resolve_execution_target(old_target)
+            owner._resolve_execution_target(old_target)
         await owner.start()
         fresh = owner.binding_snapshot()
         fresh_target = fresh.resolve(old_target.target_id)
@@ -298,8 +302,8 @@ async def test_restart_same_schema_never_resolves_old_connection(
         assert fresh.binding_id != sealed.binding_id
         assert fresh.binding_hash != sealed.binding_hash
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner.resolve_execution_target(old_target)
-        assert owner.resolve_execution_target(fresh_target) is owner.get_tools()[0]
+            owner._resolve_execution_target(old_target)
+        assert owner._resolve_execution_target(fresh_target) is owner.get_tools()[0]
     finally:
         await owner.shutdown()
 
@@ -317,8 +321,8 @@ async def test_same_server_and_generation_are_isolated_between_owner_instances(
         assert left.binding_id != right.binding_id
         assert left.resolve("mcp__mini__echo").connection_ref != right.resolve("mcp__mini__echo").connection_ref
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owners[1].resolve_execution_target(left.resolve("mcp__mini__echo"))
-        assert owners[0].resolve_execution_target(left.resolve("mcp__mini__echo")) is owners[0].get_tools()[0]
+            owners[1]._resolve_execution_target(left.resolve("mcp__mini__echo"))
+        assert owners[0]._resolve_execution_target(left.resolve("mcp__mini__echo")) is owners[0].get_tools()[0]
     finally:
         for owner in owners:
             await owner.shutdown()

@@ -18,6 +18,7 @@ from app.agents.model_tool_schema import (
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.mcp.invocation import (
     McpCallState,
+    confirm_mcp_result,
     mcp_call_scope,
 )
 from mcp import types as mcp_types
@@ -48,6 +49,7 @@ def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
                                 caller.cancel()
 
                 result = await session.call_tool(definition.name, arguments, progress_callback=report_progress)
+                confirm_mcp_result()
         except asyncio.CancelledError as error:
             receipt = McpInvocationReceipt(tool_name=tool_name, error_type=type(progress_failure or error).__name__,
                                            cancellation_delivery=state.cancellation_delivery)
@@ -61,6 +63,7 @@ def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
         except (McpError, OSError, TimeoutError, httpx.TransportError,
                 anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream) as error:
             if isinstance(error, McpError) and error.error.code not in {mcp_types.CONNECTION_CLOSED, 408}:
+                confirm_mcp_result()
                 raise
             receipt = McpInvocationReceipt(tool_name=tool_name, error_type=type(error).__name__,
                                            cancellation_delivery=state.cancellation_delivery)

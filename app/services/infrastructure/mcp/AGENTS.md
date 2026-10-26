@@ -16,6 +16,7 @@
 - `tool_definitions.py` 只从原 activation 恢复完整定义；`tool_search.py` 负责确定性匹配、逐项结果与有界分页，不访问当前网络目录或执行候选。定义正文和来源沿现有资源 body store/Saver 保存，不增设 schema 库。
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
 - MCP typed member 的 revision 保存 Owner 实例与连接代际组成的精确 connection_ref；目录语义 revision 独立保存。Agent 运行时只经 Owner 解析执行目标，不捕获初始 MCP 工具，也不按同名同 schema 迁投新连接。
+- MCP 执行目标沿 `execution_target` 同次验证并占用唯一 ExternalResourceLeaseLedger；typed resource-use 来自受信调用上下文。SDK 确认结果后才释放，未知操作保留 reconcile_required，连接关闭与远端副作用分别核实，禁止自动重放同一 operation。
 
 # 不可修改内容
 

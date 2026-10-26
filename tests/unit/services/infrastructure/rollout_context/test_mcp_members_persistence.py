@@ -21,6 +21,9 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
@@ -131,6 +134,7 @@ async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
 async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
     factory = CatalogSessionFactory()
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers":{"mini":{"enabled":True, "transport":"stdio", "command":"controlled-server"}}},
         workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
     )

@@ -652,7 +652,7 @@ def test_owner_resolved_invoker_does_not_retain_initial_tools():
     resolver, _binding = _sealed_binding_resolver([initial_target])
     initial_ref = weakref.ref(initial_target)
 
-    def reject_resolution(_binding):
+    def reject_resolution(_binding, _use):
         raise AssertionError("本测试不执行工具")
 
     invoker = create_extension_tool_invoker_tool(

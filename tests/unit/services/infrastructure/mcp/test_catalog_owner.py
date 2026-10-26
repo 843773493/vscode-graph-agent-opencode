@@ -19,6 +19,9 @@ from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
     EventChannelSpec,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import (
     McpCatalogError,
     McpCatalogOwner,
@@ -49,6 +52,7 @@ def _make_owner(
     servers: dict[str, object] | None = None,
 ) -> McpCatalogOwner:
     return McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": servers if servers is not None else _stdio_server()},
         workspace_root=tmp_path,
         event_service=event_service,
@@ -88,6 +92,7 @@ async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
         raise failure
 
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": _stdio_server()}, workspace_root=tmp_path,
         event_service=event_channel_service, session_factory=fail_connect,
     )

@@ -20,7 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from _thread import RLock
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -34,6 +35,9 @@ from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.channel_events import McpCatalogEventPublisher
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp.config import (
     parse_mcp_server_configs,
 )
@@ -45,6 +49,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_schema_hash,
     payload_digest,
+)
+from app.services.infrastructure.mcp.invocation import (
+    ExtensionExecutionTarget,
+    McpResourceUse,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.session_runtime import (
@@ -233,6 +241,7 @@ class McpCatalogOwner:
         raw_config: object,
         workspace_root: Path,
         event_service: EventChannelService,
+        leases: ExternalResourceLeaseLedger,
         session_factory: McpSessionFactory | None = None,
     ) -> None:
         self._servers = parse_mcp_server_configs(
@@ -240,6 +249,7 @@ class McpCatalogOwner:
             workspace_root=workspace_root,
         )
         self._publisher = McpCatalogEventPublisher(event_service=event_service)
+        self._leases = leases
         self._session_factory: McpSessionFactory = (
             session_factory or production_mcp_session_factory
         )
@@ -268,6 +278,12 @@ class McpCatalogOwner:
     async def start(self) -> None:
         if self._started or self._session_scope is not None:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
+        # 只保留已核实关闭的旧连接；旧 socket 与未完成操作不能随新连接复活。
+        self._leases.reconcile({
+            record.resource_id: "stopped"
+            for record in self._leases.records_by_kind("mcp_connection")
+            if record.status == "stopped"
+        }, kind="mcp_connection")
         session_scope = LifetimeScope("mcp-sessions")
         self._session_scope = session_scope
         failed_server_id: str | None = None
@@ -284,10 +300,14 @@ class McpCatalogOwner:
                     session_factory=self._session_factory,
                     on_change=self._make_tools_list_changed_callback(server.server_id, generation),
                     on_failure=self._handle_session_failure, scope=session_scope,
+                    on_closed=self._handle_session_closed,
                 )
                 with self._publication_lock:
                     self._runtimes[server.server_id] = runtime
                 await runtime.start()
+                self._leases.register_external(
+                    resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace",
+                )
                 await self._apply_relist((runtime,), source="startup")
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
@@ -428,9 +448,9 @@ class McpCatalogOwner:
     def get_tools(self) -> list[BaseTool]:
         return list(self.publication_snapshot().tools.values())
 
-    def resolve_execution_target(self, binding: ExtensionTargetBinding) -> BaseTool:
+    def _resolve_execution_target(self, binding: ExtensionTargetBinding) -> BaseTool:
         """只按封存连接及 schema 解析；新同名工具绝不能接管旧调用。"""
-        # TODO(4.2/4.4): 接入调用资格及账本后，在有界排空期保留原 handle；
+        # TODO(4.4): 为已封存调用和 HITL 等待建立有界资格，排空期保留原 handle；
         # 当前原连接关闭即明确拒绝，不能用新同名连接补齐历史执行。
         with self._publication_lock:
             runtime = self._runtimes.get(binding.server_id or "")
@@ -447,6 +467,49 @@ class McpCatalogOwner:
                     f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
                 )
             return target
+
+    @contextmanager
+    def execution_target(
+        self, binding: ExtensionTargetBinding, use: McpResourceUse | None,
+    ) -> Iterator[ExtensionExecutionTarget]:
+        """原连接验证与持久占用同次准入；未知结果跨 Turn 保留。"""
+        with self._publication_lock:
+            target = self._resolve_execution_target(binding)
+            if use is None or not all((use.holder_id, use.operation_id, use.session_id, use.thread_id)):
+                raise ExtensionTargetResolutionError("MCP 执行缺少受信 typed resource-use")
+            assert binding.connection_ref is not None
+            lease_id = "mcp-invocation:v1:" + payload_digest(
+                [binding.connection_ref, use.operation_id], context="MCP operation lease",
+                error_type=McpCatalogError,
+            )
+            if self._leases.get_lease(lease_id) is not None:
+                raise ExtensionTargetResolutionError("MCP 原 operation 已执行或待核实，禁止自动重放")
+            self._leases.acquire_operation(
+                resource_id=binding.connection_ref, turn_stream_id=use.holder_id,
+                operation_id=use.operation_id, lease_id=lease_id,
+                holder_session_id=use.session_id, holder_thread_id=use.thread_id,
+            )
+        execution = ExtensionExecutionTarget(target)
+        try:
+            yield execution
+        finally:
+            if not execution.started or execution.result_confirmed:
+                self._leases.release(lease_id)
+            else:
+                # 原连接是否仍在运行与远端操作是否完成是两个独立事实。
+                record = self._leases.get(binding.connection_ref)
+                assert record is not None
+                self._leases.update_external_state(
+                    binding.connection_ref, lifetime_scope="workspace", status=record.status,
+                    unresolved_lease_id=lease_id,
+                )
+
+    def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
+        resource_id = self._connection_ref(runtime)
+        if self._leases.get(resource_id) is not None:
+            self._leases.update_external_state(
+                resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown",
+            )
 
     def _connection_ref(self, runtime: McpServerRuntime) -> str:
         return f"mcp-connection:v1:{self._instance_id}:{runtime.generation}"

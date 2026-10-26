@@ -34,6 +34,9 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationPolicySnapshot,
 )
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import (
     McpCatalogError,
     McpCatalogOwner,
@@ -141,6 +144,7 @@ def catalog_selection(catalog_workspace):
 async def catalog_runtime(catalog_workspace, catalog_selection):
     factory = CatalogSessionFactory()
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
         workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
     )
@@ -297,6 +301,7 @@ async def test_subscription_is_released_by_runtime_scope(catalog_runtime):
 
 async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace, extension_catalog_policy_resolver):
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {}}, workspace_root=catalog_workspace,
         event_service=EventChannelService(),
     )
@@ -552,7 +557,7 @@ async def test_connection_identity_survives_cold_seal_without_changing_wire_hash
         sealed_target = dispatch.binding_ref.resolve(sealed_member.member_id)
         assert sealed_target.connection_ref == sealed_member.revision
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
-            owner.resolve_execution_target(sealed_target)
+            owner._resolve_execution_target(sealed_target)
     second, fresh = guidance_prepare("execution-identity-fresh")
     fresh_parent, = (binding for binding in fresh.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert fresh_parent.members[0].revision != sealed_member.revision

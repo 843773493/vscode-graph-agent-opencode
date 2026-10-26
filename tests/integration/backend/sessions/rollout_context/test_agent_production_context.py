@@ -31,6 +31,9 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.resource_platform.bootstrap import (
     bootstrap_resource_platform,
@@ -84,6 +87,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     skill_file.write_text(f"---\nname: example\ndescription: 集成测试 Skill\n---\n{_SKILL_BODY}\n")
     event_service = EventChannelService()
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {}}, workspace_root=workspace,
         event_service=event_service,
     )

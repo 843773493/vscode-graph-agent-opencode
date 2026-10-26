@@ -38,6 +38,9 @@ from app.services.business.resource_derivations.agents import (
 )
 from app.services.infrastructure.config.snapshot import build_config_snapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
     McpCatalogResourcePublisher,
@@ -2301,6 +2304,7 @@ async def test_generation_reactor_release_is_isolated_per_thread(agent_execution
 async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(agent_execution_dependencies, extension_catalog_policy_resolver):
     factory = FakeMcpSessionFactory(initial_tools={"mini": []})
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fake"}}},
         workspace_root=agent_execution_dependencies["workspace_root"],
         event_service=EventChannelService(), session_factory=factory,

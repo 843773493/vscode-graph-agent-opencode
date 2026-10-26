@@ -8,6 +8,9 @@ from contextlib import asynccontextmanager
 import anyio
 import pytest
 
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import McpCatalogError, McpCatalogOwner
 from tests.support.mcp.session_doubles import FakeMcpSessionFactory
 
@@ -63,6 +66,7 @@ def lifecycle_factory():
 @pytest.fixture
 def lifecycle_owner(tmp_path, event_channel_service, lifecycle_factory):
     return McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {name: {"enabled": True, "transport": "stdio", "command": "fixture"}
                                for name in ("alpha", "beta")}},
         workspace_root=tmp_path, event_service=event_channel_service, session_factory=lifecycle_factory,
@@ -86,6 +90,7 @@ async def test_each_server_keeps_its_own_context_across_start_refresh_and_close_
         await asyncio.create_task(owner.shutdown())
     assert factory.closed == factory.entered
     assert all(task.done() for task in factory.closed.values())
+    assert {record.status for record in owner._leases.records_by_kind("mcp_connection")} == {"stopped"}
 
 
 async def test_partial_start_failure_closes_all_original_contexts(lifecycle_owner, lifecycle_factory):
@@ -157,6 +162,7 @@ async def test_startup_and_cleanup_failures_keep_both_causes(lifecycle_owner, li
     assert lifecycle_factory.closed == lifecycle_factory.entered
     assert lifecycle_owner._session_scope is not None
     assert lifecycle_owner._session_scope.state == "close_failed"
+    assert {record.status for record in lifecycle_owner._leases.records_by_kind("mcp_connection")} == {"unknown"}
 
 
 async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notification(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
@@ -29,6 +30,9 @@ from app.services.infrastructure.mcp.extension_catalog import (
     payload_digest,
 )
 from app.services.infrastructure.mcp.invocation import (
+    ExtensionExecutionTarget,
+    McpResourceUse,
+    extension_execution_scope,
     mcp_progress_scope,
 )
 from app.services.infrastructure.rollout_context.activation.common import (
@@ -172,7 +176,7 @@ def create_extension_tool_invoker_tool(
     is_tool_execution_enabled: Callable[[BaseTool], bool] | None = None,
     catalog_binding_resolver: ExtensionCatalogBindingResolver | None = None,
     invocation_context: ToolInvocationContext | None = None,
-    target_resolver: Callable[[ExtensionTargetBinding], BaseTool] | None = None,
+    target_resolver: Callable[[ExtensionTargetBinding, McpResourceUse | None], AbstractContextManager[ExtensionExecutionTarget]] | None = None,
 ) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
@@ -198,87 +202,106 @@ def create_extension_tool_invoker_tool(
         if not resolved_tool_name:
             raise ValueError("tool_name 不能为空")
 
-        # E4 第三段：旧 tool call 只按封存 ref 解析；live 目录后续增删改
-        # 不参与解析，缺失 target 显式 paired failure，不回退 live 目录。
-        try:
-            binding_ref = catalog_binding_resolver()
-            sealed_target = binding_ref.resolve(resolved_tool_name)
-            target_tool = (
-                target_resolver(sealed_target) if target_resolver is not None
-                else tools_by_name.get(resolved_tool_name)
-            )
-            if target_tool is None:
-                raise ExtensionTargetResolutionError(
-                    "sealed extension catalog binding 中的 target 缺少可执行注册: "
-                    f"tool_name={resolved_tool_name!r} binding_id={binding_ref.binding_id}"
-                )
-            _assert_sealed_target_matches_registration(sealed_target, target_tool)
-        except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
-            raise ToolException(str(error)) from error
-        if is_tool_execution_enabled is not None and not is_tool_execution_enabled(
-            target_tool
-        ):
-            # 权限撤销在执行点拒绝，并按 envelope 合同返回真实 paired result。
-            raise ToolException(f"扩展工具 {resolved_tool_name!r} 已被策略禁用")
-
-        call_arguments = _validate_target_arguments(target_tool, arguments)
-        binding_token = (
-            invocation_context.set_extension_catalog_binding(binding_ref)
-            if invocation_context is not None
-            else None
-        )
-        activities = current_activity_runtime() if sealed_target.origin == "mcp" else None
-        activity_id = None
-        try:
-            if activities is not None:
-                if invocation_context is None or sealed_target.connection_ref is None:
-                    raise RuntimeError("MCP activity 缺少受信调用上下文或原连接身份")
-                activity_id = invocation_context.require_operation_id("mcp_call")
-                await activities.started(
-                    activity_id=activity_id, kind="resource.operation", summary="MCP 调用执行中",
-                    cancellable=True, resumable=False, side_effect_policy="external",
-                    resource_refs=(sealed_target.connection_ref,),
-                    detail={"resource_id": sealed_target.connection_ref, "operation": resolved_tool_name, "phase": "calling"},
-                )
-
-            async def progress(value: float, total: float | None) -> None:
-                if activities is not None and activity_id is not None:
-                    await activities.updated(
-                        activity_id=activity_id, kind="resource.operation",
-                        detail={"phase": "running", "progress": value, "total": total},
-                    )
-
+        with ExitStack() as access:
+            # E4 第三段：旧 tool call 只按封存 ref 解析；live 目录后续增删改
+            # 不参与解析，缺失 target 显式 paired failure，不回退 live 目录。
             try:
-                with mcp_progress_scope(progress):
-                    result = await _invoke_target_tool_without_nested_callbacks(
-                        target_tool, call_arguments, tool_call_id=tool_call_id, envelope_name=envelope_name,
+                binding_ref = catalog_binding_resolver()
+                sealed_target = binding_ref.resolve(resolved_tool_name)
+                use = None
+                if sealed_target.origin == "mcp" and invocation_context is not None:
+                    thread = invocation_context.thread_binding
+                    if thread is None:
+                        raise ExtensionTargetResolutionError("MCP 缺少精确 Thread 归属")
+                    operation_id = invocation_context.require_operation_id("mcp_call")
+                    use = McpResourceUse(
+                        # 持久占用归原 operation；Turn 收尾不能代替远端结果核实。
+                        holder_id=operation_id,
+                        operation_id=operation_id, session_id=thread.session_id, thread_id=thread.thread_id,
                     )
-            except (Exception, asyncio.CancelledError):
-                if activities is not None and activity_id is not None:
-                    async def record_failure() -> None:
-                        await activities.failed(
-                            activity_id=activity_id, kind="resource.operation", outcome="outcome_unknown",
-                            summary="MCP 调用结束，远端结果未确认",
-                            detail={"phase": "ended", "code": "mcp_outcome_unknown", "retryable": False},
+                if target_resolver is not None:
+                    execution = access.enter_context(target_resolver(sealed_target, use))
+                    target_tool = execution.tool
+                else:
+                    target_tool = tools_by_name.get(resolved_tool_name)
+                    execution = ExtensionExecutionTarget(target_tool) if target_tool is not None else None
+                if target_tool is None:
+                    raise ExtensionTargetResolutionError(
+                        "sealed extension catalog binding 中的 target 缺少可执行注册: "
+                        f"tool_name={resolved_tool_name!r} binding_id={binding_ref.binding_id}"
+                    )
+                _assert_sealed_target_matches_registration(sealed_target, target_tool)
+            except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
+                raise ToolException(str(error)) from error
+            if is_tool_execution_enabled is not None and not is_tool_execution_enabled(
+                target_tool
+            ):
+                # 权限撤销在执行点拒绝，并按 envelope 合同返回真实 paired result。
+                raise ToolException(f"扩展工具 {resolved_tool_name!r} 已被策略禁用")
+
+            call_arguments = _validate_target_arguments(target_tool, arguments)
+            binding_token = (
+                invocation_context.set_extension_catalog_binding(binding_ref)
+                if invocation_context is not None
+                else None
+            )
+            activities = current_activity_runtime() if sealed_target.origin == "mcp" else None
+            activity_id = None
+            try:
+                if activities is not None:
+                    if invocation_context is None or sealed_target.connection_ref is None:
+                        raise RuntimeError("MCP activity 缺少受信调用上下文或原连接身份")
+                    activity_id = invocation_context.require_operation_id("mcp_call")
+                    await activities.started(
+                        activity_id=activity_id, kind="resource.operation", summary="MCP 调用执行中",
+                        cancellable=True, resumable=False, side_effect_policy="external",
+                        resource_refs=(sealed_target.connection_ref,),
+                        detail={"resource_id": sealed_target.connection_ref, "operation": resolved_tool_name, "phase": "calling"},
+                    )
+
+                async def progress(value: float, total: float | None) -> None:
+                    if activities is not None and activity_id is not None:
+                        await activities.updated(
+                            activity_id=activity_id, kind="resource.operation",
+                            detail={"phase": "running", "progress": value, "total": total},
                         )
 
-                    await run_cleanup_shielded(record_failure)
-                raise
-            if activities is not None and activity_id is not None:
-                failed = isinstance(result, ToolMessage) and result.status == "error"
+                try:
+                    assert execution is not None
+                    with mcp_progress_scope(progress), extension_execution_scope(execution):
+                        execution.started = True
+                        result = await _invoke_target_tool_without_nested_callbacks(
+                            target_tool, call_arguments, tool_call_id=tool_call_id, envelope_name=envelope_name,
+                        )
+                except (Exception, asyncio.CancelledError):
+                    if activities is not None and activity_id is not None:
+                        async def record_failure() -> None:
+                            await activities.failed(
+                                activity_id=activity_id, kind="resource.operation", outcome="outcome_unknown",
+                                summary="MCP 调用结束，远端结果未确认",
+                                detail={"phase": "ended", "code": "mcp_outcome_unknown", "retryable": False},
+                            )
+
+                        await run_cleanup_shielded(record_failure)
+                    raise
+                assert execution is not None
                 unknown = isinstance(result, ToolMessage) and McpInvocationReceipt.from_artifact(result.artifact) is not None
-                if failed:
-                    await activities.failed(
-                        activity_id=activity_id, kind="resource.operation",
-                        outcome="outcome_unknown" if unknown else "provider_error",
-                        summary="MCP 远端结果未确认" if unknown else "MCP 返回业务错误",
-                    )
-                else:
-                    await activities.completed(activity_id=activity_id, kind="resource.operation", summary="MCP 调用已返回")
-            return result
-        finally:
-            if invocation_context is not None and binding_token is not None:
-                invocation_context.reset_extension_catalog_binding(binding_token)
+                if sealed_target.origin != "mcp":
+                    execution.result_confirmed = True
+                if activities is not None and activity_id is not None:
+                    failed = isinstance(result, ToolMessage) and result.status == "error"
+                    if failed:
+                        await activities.failed(
+                            activity_id=activity_id, kind="resource.operation",
+                            outcome="outcome_unknown" if unknown else "provider_error",
+                            summary="MCP 远端结果未确认" if unknown else "MCP 返回业务错误",
+                        )
+                    else:
+                        await activities.completed(activity_id=activity_id, kind="resource.operation", summary="MCP 调用已返回")
+                return result
+            finally:
+                if invocation_context is not None and binding_token is not None:
+                    invocation_context.reset_extension_catalog_binding(binding_token)
 
     description = (
         "调用工作区配置的扩展工具。"

@@ -88,6 +88,7 @@ class McpServerRuntime:
         self, *, server: McpServerConfig, generation: int,
         session_factory: McpSessionFactory, on_change: McpChangeNotifyCallback,
         on_failure: Callable[[McpServerRuntime, BaseException], None], scope: LifetimeScope,
+        on_closed: Callable[[McpServerRuntime, bool], None],
     ) -> None:
         self.server = server
         self.generation = generation
@@ -96,6 +97,7 @@ class McpServerRuntime:
         self._session_factory = session_factory
         self._on_change = on_change
         self._on_failure = on_failure
+        self._on_closed = on_closed
         self._session: McpServerSessionPort | None = None
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
@@ -142,6 +144,7 @@ class McpServerRuntime:
         finally:
             self._session = None
             self._ready.set()
+            self._on_closed(self, self._failure is None)
 
     async def close(self) -> None:
         self._closing = True

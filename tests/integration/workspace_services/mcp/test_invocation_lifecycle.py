@@ -31,6 +31,9 @@ from app.core.model_delta_context import (
 )
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.invocation import (
     mcp_cancelled_receipt,
@@ -110,6 +113,48 @@ async def test_real_disconnect_returns_paired_non_retryable_unknown(
         assert case.received() == [{"name": "probe", "arguments": {"call_mode": "disconnect"}}]
 
 
+async def test_cancelled_envelope_keeps_durable_unknown_after_turn_cleanup_and_close(
+    schema_server_case: SchemaServerCase,
+) -> None:
+    case = schema_server_case
+    async with case.started():
+        binding = case.owner.binding_snapshot().resolve("mcp__schema__probe")
+        assert binding.connection_ref is not None
+        pending = asyncio.create_task(call(case.invoker(), "durable-cancel", "wait"))
+        for _ in range(100):
+            if case.received():
+                break
+            await asyncio.sleep(0.01)
+        assert case.received() == [{"name": "probe", "arguments": {"call_mode": "wait"}}]
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await pending
+        assert mcp_cancelled_receipt(cancelled.value) is not None
+        ledger = case.owner._leases
+        lease, = ledger.leases_for_resource(binding.connection_ref)
+        assert lease.status == "reconcile_required"
+        ledger.release_turn_leases(lease.turn_stream_id)
+        sibling = await call(case.invoker(), "durable-sibling", "progress")
+        assert sibling.status == "success"
+        assert (record := ledger.get(binding.connection_ref)) is not None and record.status == "running"
+        assert ledger.leases_for_resource(binding.connection_ref) == [lease]
+    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+    assert (record := cold.get(binding.connection_ref)) is not None and record.status == "stopped"
+    assert (retained := cold.get_lease(lease.lease_id)) is not None and retained.status == "reconcile_required"
+
+
+async def test_direct_dictionary_unknown_result_does_not_release_original_occupancy(
+    schema_server_case: SchemaServerCase,
+) -> None:
+    async with schema_server_case.started() as case:
+        result = await case.invoker().ainvoke({"tool_name": "mcp__schema__probe", "arguments": {"call_mode": "disconnect"}})
+        assert json.loads(result)["retryable"] is False
+        resource_id = case.owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref
+        assert resource_id is not None
+        lease, = case.owner._leases.leases_for_resource(resource_id)
+        assert lease.status == "reconcile_required"
+
+
 @pytest.fixture
 def activity_case():
     writer = SimpleNamespace(commit=AsyncMock())
@@ -132,7 +177,7 @@ async def test_envelope_publishes_real_progress_and_terminal_activity(
             invoker = create_extension_tool_invoker_tool(
                 case.owner.get_tools(), invocation_context=context,
                 catalog_binding_resolver=sealed_extension_catalog_binding_resolver(case.owner.binding_snapshot()),
-                target_resolver=case.owner.resolve_execution_target,
+                target_resolver=case.execution_target,
             )
             result = await asyncio.wait_for(call(invoker, "activity-call", mode), 5)
         finally:
@@ -203,6 +248,7 @@ async def http_schema_server_case(request: pytest.FixtureRequest):
             if not server.started:
                 raise TimeoutError("HTTP Server 未就绪")
             owner = McpCatalogOwner(
+                leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
                 raw_config={"servers": {"schema": {"enabled": True, "transport": "streamable_http",
                                                     "url": f"http://127.0.0.1:{port}/mcp/"}}},
                 workspace_root=context.workspace_root, event_service=EventChannelService(),

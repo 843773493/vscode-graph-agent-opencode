@@ -19,6 +19,9 @@ from app.agents.tools.tool_discovery import SearchToolsInput, create_search_tool
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
@@ -54,6 +57,7 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
     factory = CatalogSessionFactory()
     factory.session.description = "查找 CI 失败记录与日志"
     owner = McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
         workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
     )

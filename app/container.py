@@ -673,6 +673,7 @@ def _build_app_container(
         raw_config=config_service.get_mcp_config(),
         workspace_root=resolved_workspace_root,
         event_service=job_event_bus.event_channel_service,
+        leases=external_resource_leases,
     )
     message_service = MessageService(
         main_thread_resolver=session_path_resolver.main_thread_id,

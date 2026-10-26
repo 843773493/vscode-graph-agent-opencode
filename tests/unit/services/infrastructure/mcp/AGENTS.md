@@ -11,6 +11,7 @@ mcp/
 ├── test_extension_catalog_binding.py   # 冻结 binding、namespace 与目标解析
 ├── test_naming.py                      # MCP server/tool 命名合同
 ├── test_session_lifecycle.py           # Server 原 task、取消、失败关闭及通知失效
+├── test_invocation_leases.py           # 精确调用占用、冷启动核对与写盘失败
 ├── test_tool_adapter.py                # SDK 完整分页、原参数与协议结果转换
 ├── test_tool_definition_recovery.py    # 发现、压缩、策略、冷读与 rewind 边界
 ├── test_tool_search.py                 # 冻结定义、策略、排名、字节边界、分页和冷恢复

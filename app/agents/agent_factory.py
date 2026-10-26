@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -107,6 +107,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionTargetBinding,
     ExtensionTargetResolutionError,
+)
+from app.services.infrastructure.mcp.invocation import (
+    ExtensionExecutionTarget,
+    McpResourceUse,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
@@ -807,15 +811,15 @@ def create_my_deep_agent(
 
         local_targets = {tool.name: tool for tool in custom_tools}
 
-        def resolve_target(binding: ExtensionTargetBinding) -> BaseTool:
+        def resolve_target(binding: ExtensionTargetBinding, use: McpResourceUse | None):
             if binding.origin == "mcp":
-                return mcp_catalog_owner.resolve_execution_target(binding)
+                return mcp_catalog_owner.execution_target(binding, use)
             target = local_targets.get(binding.target_id)
             if target is None:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 缺少本地执行注册: {binding.target_id}"
                 )
-            return target
+            return nullcontext(ExtensionExecutionTarget(target))
 
         target_resolver = resolve_target
         permission_check = enabled_extension
