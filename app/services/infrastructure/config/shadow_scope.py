@@ -2,8 +2,8 @@
 
 candidate 始终先在独立 :class:LifetimeScope 中完成校验、来源 reconcile 和
 health 检查；只有全部通过后才会按 generation fence 原子发布。旧 active
-scope 在新 generation 发布后排空。任何失败都只回收 candidate，不提供空配置
-或旧字段 fallback。
+scope 在新 generation 发布后排空。发布前失败只回收 candidate；发布后清理
+失败保留新 active 和未释放的旧 scope，不假装回滚或提供旧字段 fallback。
 """
 
 from __future__ import annotations
@@ -15,13 +15,14 @@ from typing import Literal
 
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import sha256_jcs
+from app.services.infrastructure.config.contracts import ConfigPublication
 
 ShadowReconcile = Callable[
     [Mapping[str, object], LifetimeScope], Awaitable[None]
 ]
-ShadowPublish = Callable[["ConfigShadowGeneration"], Awaitable[None]]
+ShadowPublish = Callable[["ConfigShadowGeneration", ConfigPublication], Awaitable[None]]
 ShadowValidator = Callable[[Mapping[str, object]], None]
-ShadowReadiness = Literal["cold", "ready", "failed", "closed"]
+ShadowReadiness = Literal["cold", "ready", "failed", "closing", "close_failed", "closed"]
 
 
 class ConfigShadowLifecycleError(RuntimeError):
@@ -76,6 +77,7 @@ class ConfigShadowLifecycleOwner:
         self._bootstrap_guard_keys = tuple(dict.fromkeys(bootstrap_guard_keys))
         self._lock = asyncio.Lock()
         self._active: ConfigShadowGeneration | None = None
+        self._retired: list[ConfigShadowGeneration] = []
         self._readiness: ShadowReadiness = "cold"
 
     @property
@@ -110,6 +112,7 @@ class ConfigShadowLifecycleOwner:
                     "already_started", "配置 shadow lifecycle 已启动"
                 )
             scope: LifetimeScope | None = None
+            active: ConfigShadowGeneration | None = None
             try:
                 self._validator(config)
                 self._validate_bootstrap(config)
@@ -121,13 +124,22 @@ class ConfigShadowLifecycleOwner:
                     config=dict(config),
                     scope=scope,
                 )
-                await self._publish(active)
+
+                def publish() -> None:
+                    if self._active is not None:
+                        raise ConfigShadowLifecycleError("publication_conflict", "bootstrap 重复发布")
+                    self._active = active
+                    self._readiness = "ready"
+
+                await self._publish(active, publish)
+                if self._active is not active:
+                    raise ConfigShadowLifecycleError("publication_not_committed", "bootstrap 发布器未提交候选")
             except BaseException:
+                if active is not None and self._active is active:
+                    raise
                 self._readiness = "failed"
                 await self._close_scope_quietly_if_owned(scope)
                 raise
-            self._active = active
-            self._readiness = "ready"
             return active
 
     async def apply_candidate(
@@ -146,6 +158,8 @@ class ConfigShadowLifecycleOwner:
                     "candidate 基线过期: "
                     f"expected={expected_generation} active={active.generation}",
                 )
+            await self._drain_retired()
+            candidate: ConfigShadowGeneration | None = None
             try:
                 self._validator(config)
             except Exception as error:
@@ -173,13 +187,23 @@ class ConfigShadowLifecycleOwner:
                     config=dict(config),
                     scope=candidate_scope,
                 )
-                await self._publish(candidate)
-            except BaseException as error:  # noqa: BLE001
+
+                def publish() -> None:
+                    if self._active is not active:
+                        raise ConfigShadowLifecycleError("publication_conflict", "candidate 基线已变化或重复发布")
+                    self._active = candidate
+                    self._retired.append(active)
+
+                await self._publish(candidate, publish)
+                if self._active is not candidate:
+                    raise ConfigShadowLifecycleError("publication_not_committed", "发布器未提交 candidate")
+            except BaseException as error:
+                if candidate is not None and self._active is candidate:
+                    # 已发布的候选不可关闭或冒称旧代次仍有效；旧 scope 继续由本 owner 持有。
+                    raise
                 await self._close_candidate_with_error(candidate_scope, error)
-            old_generation = active
-            self._active = candidate
             # 原子发布完成后再排空旧 scope；release 失败必须显式暴露。
-            await old_generation.scope.close()
+            await self._drain_retired()
             return ConfigShadowApplyResult(
                 status="published",
                 generation=next_generation,
@@ -187,16 +211,35 @@ class ConfigShadowLifecycleOwner:
             )
 
     async def close(self) -> None:
-        """排空当前 active scope；关闭后不再接受 candidate。"""
+        """排空 active 和未释放的旧 scope；失败保留引用，下次 close 重报实际结果。"""
 
         async with self._lock:
-            active = self._active
             if self._readiness == "closed":
                 return
+            self._readiness = "closing"
+            if self._active is not None and not any(item is self._active for item in self._retired):
+                self._retired.append(self._active)
+            try:
+                await self._drain_retired()
+            except BaseException:
+                self._readiness = "close_failed"
+                raise
+            self._active = None
             self._readiness = "closed"
-            if active is not None:
-                await active.scope.close()
-                self._active = None
+
+    async def _drain_retired(self) -> None:
+        errors: list[Exception] = []
+        for generation in tuple(self._retired):
+            try:
+                await generation.scope.close()
+            except Exception as error:  # noqa: BLE001 - 逐一释放全部 scope，最后合并并重抛原始错误。
+                errors.append(error)
+            else:
+                self._retired.remove(generation)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("配置旧 generation scope 释放失败", errors)
 
     def _validate_bootstrap(self, config: Mapping[str, object]) -> None:
         if not config:
@@ -232,7 +275,7 @@ class ConfigShadowLifecycleOwner:
         try:
             await scope.close()
         except Exception as close_error:  # noqa: BLE001
-            raise ExceptionGroup(
+            raise BaseExceptionGroup(
                 "配置 candidate 失败且 scope 回收失败", [original_error, close_error]
             ) from original_error
         raise original_error

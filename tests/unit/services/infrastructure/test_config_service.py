@@ -1751,6 +1751,130 @@ async def test_candidate_applier_failure_prevents_snapshot_commit(
 
 
 @pytest.mark.asyncio
+async def test_published_reload_keeps_sqlite_cache_and_shadow_consistent_when_old_scope_drain_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    try:
+        await service.start_watching()
+        await service.stop_watching()
+        previous = service.get_revision()
+        old = service._shadow_lifecycle.active
+
+        def fail_old_release() -> None:
+            raise RuntimeError("测试旧来源订阅释放失败")
+
+        old.scope.register(fail_old_release, label="source-policy-release")
+        config["agents"]["default"]["instructions"]["system_prompt"] = "已提交的新配置"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with pytest.raises(ExceptionGroup):
+            await service.reload()
+        persisted = store.get_active_config_snapshot("workspace")
+        assert persisted is not None and persisted.effective_digest != previous
+        assert service.get_revision() == persisted.effective_digest
+        assert service.get_snapshot().to_dict() == service._shadow_lifecycle.active.config
+        assert service._shadow_lifecycle.generation == old.generation + 1
+        assert not service.get_reload_status().healthy
+    finally:
+        try:
+            with pytest.raises(ExceptionGroup):
+                await service.close()
+            assert service._shadow_lifecycle.readiness == "close_failed"
+        finally:
+            store.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_cache_and_shadow_publish_before_claim_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    try:
+        await service.start_watching()
+        await service.stop_watching()
+        previous = service.get_revision()
+        release = store.release_config_apply_claim
+
+        def fail_after_release(**kwargs) -> None:
+            release(**kwargs)
+            raise RuntimeError("测试 claim 释放后的错误")
+
+        monkeypatch.setattr(store, "release_config_apply_claim", fail_after_release)
+        config["agents"]["default"]["instructions"]["system_prompt"] = "claim 清理前已发布"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="claim 释放后的错误"):
+            await service.reload()
+        active = store.get_active_config_snapshot("workspace")
+        assert active is not None and active.effective_digest != previous
+        assert service.get_revision() == active.effective_digest
+        assert service.get_snapshot().to_dict() == service._shadow_lifecycle.active.config
+        assert service._shadow_lifecycle.generation == 2
+        assert service._shadow_lifecycle.active.scope.state == "open"
+        assert not service.get_reload_status().healthy
+    finally:
+        await service.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_reload_cancelled_during_old_scope_drain_keeps_published_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    path = _write_workspace_config(tmp_path, config)
+    workspace = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
+                            workspace_root=workspace, workspace_state_store=store)
+    entered, release = asyncio.Event(), asyncio.Event()
+    task = None
+    try:
+        await service.start_watching()
+        await service.stop_watching()
+        previous = service.get_revision()
+        old = service._shadow_lifecycle.active
+
+        async def wait_old_release() -> None:
+            entered.set()
+            await release.wait()
+
+        old.scope.register(wait_old_release, label="old-source-drain-barrier")
+        config["agents"]["default"]["instructions"]["system_prompt"] = "取消前已发布"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        task = asyncio.create_task(service.reload())
+        await asyncio.wait_for(entered.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        active = store.get_active_config_snapshot("workspace")
+        assert active is not None and active.effective_digest != previous
+        assert service.get_revision() == active.effective_digest
+        assert service.get_snapshot().to_dict() == service._shadow_lifecycle.active.config
+        assert service._shadow_lifecycle.generation == old.generation + 1
+        assert service._shadow_lifecycle.active.scope.state == "open"
+    finally:
+        release.set()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await service.close()
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_source_change_during_apply_fails_final_cas_without_active_promotion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

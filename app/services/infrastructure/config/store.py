@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from app.services.infrastructure.config.contracts import ConfigCandidateApplier
+from app.services.infrastructure.config.contracts import ConfigSnapshotPublisher
 from app.services.infrastructure.config.snapshot import (
     ConfigReloadFailureReason,
     ConfigReloadStatus,
@@ -47,7 +47,7 @@ class ConfigSnapshotStore:
     async def reload(
         self,
         *,
-        candidate_applier: ConfigCandidateApplier | None = None,
+        candidate_applier: ConfigSnapshotPublisher | None = None,
         apply_unchanged: bool = False,
     ) -> bool:
         async with self._reload_lock:
@@ -57,31 +57,32 @@ class ConfigSnapshotStore:
             except Exception as error:
                 self._record_failure(error, reason="invalid_config")
                 raise
-            if candidate.revision == previous.revision:
-                if candidate_applier is not None and apply_unchanged:
-                    try:
-                        await candidate_applier(previous, candidate)
-                    except Exception as error:
-                        self._record_failure(error, reason="apply_failed")
-                        raise
+            changed = candidate.revision != previous.revision
+            published = False
+
+            def publish() -> None:
+                nonlocal published
+                if published:
+                    raise RuntimeError("配置候选只能发布一次")
                 self._commit(candidate)
-                return False
-            if candidate_applier is not None:
-                try:
-                    await candidate_applier(previous, candidate)
-                except Exception as error:
-                    self._record_failure(
-                        error,
-                        reason=(
-                            "restart_required"
-                            if isinstance(error, ConfigRestartRequiredError)
-                            else "apply_failed"
-                        ),
-                    )
-                    raise
-            self._commit(candidate)
-            logger.info("配置热重载成功: revision=%s", candidate.revision)
-            return True
+                published = True
+
+            try:
+                if candidate_applier is not None and (changed or apply_unchanged):
+                    await candidate_applier(previous, candidate, publish)
+                    if not published:
+                        raise RuntimeError("配置发布器返回时尚未发布候选")
+                else:
+                    publish()
+            except Exception as error:
+                # 排空发生在发布后；失败诊断必须指向实际 active，而非假装回滚。
+                self._record_failure(error, reason=(
+                    "restart_required" if isinstance(error, ConfigRestartRequiredError) else "apply_failed"
+                ))
+                raise
+            if changed:
+                logger.info("配置热重载成功: revision=%s", candidate.revision)
+            return changed
 
     def _record_failure(
         self,

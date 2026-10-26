@@ -461,3 +461,13 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 验证原件：`out/tests/temp/csm-kind-boundary/artifacts/gateway-publication-*`。049：完整相关单测 188 passed，149.26s；050：真实 Gateway→受管 Workspace→Provider／skill_load、冻结 Turn、新版下轮激活、不可用阻断及进程重启，1 passed，101.72s。059：仅本切片暂存 tree 完整 archive 后，同一产品入口及相关合同共 127 passed，146.10s；逐个校验 4515 个 tracked blob 未变化，源码已清理，正式输出保留在 `staged-publications-059/formal-output/`。三组结果重叠，不相加冒充独立场景数量。
 - 055：14 文件 Pyright 与 HEAD 对照均为 16 条既有错误、零新增，Ruff 对照均为 12 条既有 TRY004、零新增；061：排除该既有规则的全切片 Ruff 通过，057 compileall 通过，060 strict validate 通过。新增通知用例覆盖真实认证路由、先发布后通知、初始窗口、保活零正文获取、断线阻断／恢复、owner／audience／请求身份与游标拒绝、gap／同 revision 重启、轮询周期、手动对账及显式 event_poll。
 - 路由基线核对 058：完整 HEAD 原件实际 111 条、旧测试写 109 条；本切片实际 112 条、仅新增一条 publication POST，无删除。修正计数及本次 OpenAPI hash，新增接口位于通配代理之前；059 已复验，未放宽旧接口形状或顺序断言。054 的配置测试路径拼写错误未运行任何测试，056 的旧计数失败保留原件，由 058 归因和 059 补验闭合。
+
+
+### 2026-10-26 配置发布与旧 scope 排空的一致性（9.9 前置子项）
+
+- 修复 SQLite 已发布候选、shadow 已切代次而内存快照仍停在旧版的问题。数据库提交后在同一同步段切换快照与 shadow，再等待 claim 清理及旧 scope 排空；提交前失败回收候选，提交后异常／取消保留新 active。未释放旧 scope 继续由原 owner 持有，关闭失败明确报告并允许重试；无新增持久结构或第二配置链路。
+- 063 在旧实现真实复现该缺陷；064 的17项定向验证通过，067 的相关配置单测及API合同共128 passed、22 setup errors。22项错误来自既有旧 logger 夹具；068 的 R01/R02 inline／file 四项均完成更新及第二请求断言，但第三请求达到测试8秒期限。072 的完整 HEAD archive 在相同位置分别复现旧夹具和第三请求超时，4515个 tracked blob 核验未变后清理源码并保留正式输出；不把包装器 exit0 当成被测用例通过。
+- 069 Ruff与071 compileall通过；070 的8文件Pyright基线93／当前90条、零新增，不称全仓类型通过。065 新测试错误假设释放仅一次，依据原 LifetimeScope 的失败重试合同修正为精确三次；066 静态说明修正，失败原件均保留。命令、源码前后指纹、raw与实际退出码见 out/tests/temp/csm-kind-boundary/artifacts/ 的063—073收据。
+- 本边界只修复配置发布基础合同，策略热切换尚未接入，9.9／9.10／9.14／9.16保持未勾；既有测试夹具及超时将在独立验证修复边界处理，团队／协作专项继续TODO。
+
+- 提交前074对仅本切片暂存tree完整archive复验：122 passed／137.29秒；4515个tracked blob逐个核验未变，临时源码已清理、正式原件保留。073 strict通过；077全config_service目录Ruff的27项经078完整HEAD对照均为既有TRY004、零新增。未混入其它会话的task／fork改动。

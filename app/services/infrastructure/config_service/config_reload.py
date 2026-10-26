@@ -13,6 +13,7 @@ from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.shadow_scope import ConfigShadowLifecycleError
 from app.services.infrastructure.config.state import (
@@ -111,6 +112,7 @@ class ConfigReloadMixin:
         async def persist_candidate(
             previous: ConfigSnapshot,
             candidate: ConfigSnapshot,
+            publish: ConfigPublication,
         ) -> None:
             pending = self._prepare_candidate(
                 previous,
@@ -299,6 +301,8 @@ class ConfigReloadMixin:
                         applied_paths=changed_paths,
                     ),
                 )
+                # 数据库事务成功后立即同步发布 cache／shadow，再清理 claim 和旧 scope。
+                publish()
             except ConfigConflictError as error:
                 if self._workspace_state_store is not None and claim is not None:
                     journal = self._workspace_state_store.get_config_apply_journal(
@@ -364,22 +368,27 @@ class ConfigReloadMixin:
         async def apply_through_shadow(
             previous: ConfigSnapshot,
             candidate: ConfigSnapshot,
+            publish_snapshot: ConfigPublication,
         ) -> None:
             # candidate builder 已成功后才启动 shadow；解析/schema 失败仍由
             # ConfigSnapshotStore 记录本次 reload failure，不能在其外层短路。
             if self._shadow_lifecycle.readiness == "cold":
                 await self._shadow_lifecycle.bootstrap(previous.to_dict())
-            publish_hook = None
-            if candidate.revision != previous.revision:
 
-                async def publish_candidate(_generation) -> None:
-                    await persist_candidate(previous, candidate)
+            async def publish_candidate(_generation, publish_shadow: ConfigPublication) -> None:
+                def publish() -> None:
+                    publish_snapshot()
+                    publish_shadow()
 
-                publish_hook = publish_candidate
+                if candidate.revision != previous.revision:
+                    await persist_candidate(previous, candidate, publish)
+                else:
+                    publish()
+
             await self._shadow_lifecycle.apply_candidate(
                 candidate.to_dict(),
                 expected_generation=self._shadow_lifecycle.generation,
-                publish_hook=publish_hook,
+                publish_hook=publish_candidate,
             )
 
         try:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.shadow_scope import (
     ConfigShadowApplyResult,
     ConfigShadowGeneration,
@@ -35,7 +36,7 @@ from app.services.infrastructure.events.event_channel_service import (
     EventChannelSpec,
 )
 
-ShadowGenerationPublishHook = Callable[[ConfigShadowGeneration], Awaitable[None]]
+ShadowGenerationPublishHook = Callable[[ConfigShadowGeneration, ConfigPublication], Awaitable[None]]
 
 # 这些 owner 拒绝没有评估任何 candidate：发布 failed 事件会让订阅者误以为
 # 有候选配置被拒绝，因此只向上抛出原始错误，不发事件。
@@ -119,8 +120,8 @@ class ConfigShadowLifecycleAdapter:
     ) -> ConfigShadowApplyResult:
         """按 generation fence 在 shadow 中校验并原子发布 candidate。
 
-        unchanged 不递增 generation；校验/reconcile/发布/旧 scope 排空失败
-        都先投递 failed 事件再抛出，旧 active generation 保持权威。
+        unchanged 不递增 generation；失败投递 failed 再抛出。发布前保留旧
+        active，发布后的清理失败保留新 active 及未释放 scope，不冒称回滚。
         """
         async with self._operation_lock:
             self._publish_hook = publish_hook
@@ -132,7 +133,8 @@ class ConfigShadowLifecycleAdapter:
                 if result.status == "unchanged":
                     self._publish_event("unchanged", generation=result.generation)
                     if publish_hook is not None:
-                        await publish_hook(self._owner.active)
+                        # 相同配置的 shadow 已发布，只刷新快照来源 metadata。
+                        await publish_hook(self._owner.active, lambda: None)
                 return result
             except ConfigShadowLifecycleError as error:
                 if error.reason_code in _NON_CANDIDATE_FAILURE_REASONS:
@@ -161,6 +163,7 @@ class ConfigShadowLifecycleAdapter:
     async def _publish_generation(
         self,
         generation: ConfigShadowGeneration,
+        publish: ConfigPublication,
     ) -> None:
         """先发布轻量通知，再执行 ConfigService 的权威快照提交回调。
 
@@ -169,7 +172,9 @@ class ConfigShadowLifecycleAdapter:
         """
         self._publish_event("published", generation=generation.generation)
         if self._publish_hook is not None:
-            await self._publish_hook(generation)
+            await self._publish_hook(generation, publish)
+        else:
+            publish()
 
     async def _publish_failure_or_group(
         self,
