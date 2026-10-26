@@ -54,8 +54,8 @@ provider 历史消息从 LangGraph checkpoint 读出后，**必须**经过本方
 
 `read_file` 等工具会按扩展名把图片以 `image`/`image_url` block 返回。工具结果进入请求前，**必须**经过 `project_tool_message_content`，按目标 provider 的 `image_input` 能力决定透传还是降级为文本占位符；不要把媒体 block 直接交给 ChatLiteLLM 的 `_convert_message_to_dict`，它会无条件转成 `image_url`，部分兼容后端会直接拒绝请求。
 
-- Chat Completions 路径：保留其余 block，仅把图片 block 替换为一个文本占位符。
-- Responses 路径：`function_call_output` 只接受字符串，因此整体折叠为字符串（见 `_portable_tool_result_message`）。
+- Chat Completions 路径：图片按能力决定是否采用占位符；保留的标准媒体经官方编码，在连续工具结果组之后按原调用 ID 投影为明确标注的数据消息，工具结果只含文本。封存和发送必须共用这一转换，不让 LiteLLM 再移动图片后改变请求 hash。
+- Responses 路径：`function_call_output` 只接受字符串，因此复用 mapping 的 `project_responses_tool_content`，明确标注各媒体类型并保留资源 URL；封存 native request 与 `_portable_tool_result_message` 共用同一纯投影，禁止分别拼装。
 - 两条路径必须共用 `tool_media_placeholder_text` 构造占位符文案，不要各写一份。
 
 ### 6. 测试位置

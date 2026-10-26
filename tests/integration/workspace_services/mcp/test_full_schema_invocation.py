@@ -47,6 +47,10 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径的 Saver fixture
 )
+from tests.integration.workspace_services.mcp.schema_server import (
+    RESULT_AUDIO_BASE64,
+    RESULT_IMAGE_BASE64,
+)
 
 
 @dataclass
@@ -117,6 +121,34 @@ async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
     assert not case.owner.started
     for runtime in runtimes:
         assert runtime._task is not None and runtime._task.done() and not runtime.running
+
+
+@pytest.mark.parametrize("result_mode", ["success", "error"])
+async def test_real_stdio_envelope_keeps_protocol_status_media_and_structured_content(
+    schema_server_case: SchemaServerCase, result_mode: str,
+) -> None:
+    async with schema_server_case.started() as case:
+        invoker = case.invoker()
+        arguments = {
+            "result_mode": result_mode, "config": {"public": True}, "run_manager": "public",
+            "callbacks": "public", "tool_name": "public", "tool_call_id": "public",
+        }
+        events = [event async for event in invoker.astream_events({
+            "type": "tool_call", "id": "protocol-result", "name": invoker.name,
+            "args": {"tool_name": "mcp__schema__probe", "arguments": arguments},
+        })]
+        assert [(event["event"], event["name"]) for event in events] == [
+            ("on_tool_start", invoker.name), ("on_tool_end", invoker.name),
+        ]
+        result = events[-1]["data"]["output"]
+        assert isinstance(result, ToolMessage)
+        assert result.status == result_mode and result.tool_call_id == "protocol-result"
+        assert result.name == invoker.name
+        assert result.artifact == {"structured_content": {"receipt": {"name": "probe", "arguments": arguments}}}
+        assert [block["type"] for block in result.content] == ["text", "image", "audio", "file", "text"]
+        assert result.content[1]["base64"] == RESULT_IMAGE_BASE64 and result.content[2]["base64"] == RESULT_AUDIO_BASE64
+        assert result.content[3]["url"] == "https://example.invalid/report" and result.content[4]["text"] == "嵌入正文"
+        assert case.received() == [{"name": "probe", "arguments": arguments}]
 
 
 @pytest.mark.parametrize("schema, valid, invalid", [

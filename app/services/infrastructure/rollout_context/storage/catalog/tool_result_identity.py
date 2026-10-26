@@ -6,7 +6,6 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
-from app.abstractions.turn_terminal_status import tool_result_content_text
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import (
@@ -60,12 +59,7 @@ def _same_tool_result_payload(first: CanonicalItemRecord, second: CanonicalItemR
     if "invoke_extension_tool" in {left.get("name"), right.get("name")}:
         left.pop("name", None)
         right.pop("name", None)
-    first_request = first.projection_identity is not None and first.projection_identity.projection_message_id is not None
-    second_request = second.projection_identity is not None and second.projection_identity.projection_message_id is not None
-    if first_request != second_request:
-        # attempt 的既有合同是文本，request 的原始结构化块不改写。
-        left["content"] = tool_result_content_text(left.get("content"))
-        right["content"] = tool_result_content_text(right.get("content"))
+    # attempt 与 request 都保留原始正文和 artifact，不能仅凭相同可见文本吞掉媒体冲突。
     return left == right
 
 

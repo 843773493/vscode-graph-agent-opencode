@@ -29,6 +29,9 @@
 - [x] 4.3 将 Agent 长期捕获工具对象及 initial/live 两段 resolver 全量迁移至 owner 解析，物理删除旧解析路径。
 - [ ] 4.4 实现有界的已封存调用执行资格及 HITL 等待保留，区分普通替换、禁用、断开和最新权限撤销；退役后不授予新的旧代际资格。
 - [ ] 4.5 统一真实 MCP 结果、isError、structuredContent、媒体／artifact、进度和取消处理；必要时整体替换 LangChain MCP 适配路径并删除旧实现。
+  - 已完成结果保真边界：信封复用 BaseTool 结果与错误策略，SDK 保留业务错误／结构化内容／图片／音频，ToolNode 不再将标准媒体 stringify，canonical 与冷恢复保留原正文和 artifact；SSE 仍为派生文本。后继请求不经 AI 正文过滤，Chat 媒体按调用身份送入数据消息，Responses 封存与直接历史共用纯投影。真实本地 HTTP 的两种协议与同步／异步共 4 项验收通过，核对网络正文、请求 hash 和冷恢复；Gateway 产品验收另核并发成功／失败及 3 次封存请求。
+  - TODO：进度事实、取消／断线的 outcome-unknown、外部模型媒体协议验收继续完成，不以模型回放代替真实 Provider 验证。结果切片的准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/mcp-result-preservation/artifacts/`。
+  - 验证：结果链回归 `result-regression-018` 176 passed，Provider 投影 `provider-unified-031` 81 passed，真实 HTTP 同步／异步 `http-media-unified-032` 4 passed，Gateway 产品 `product-unified-final-035` 1 passed，公共封存／重试／前缀／跨协议回退 `wire-regression-036` 24 passed。Ruff 与严格 OpenSpec 校验通过；新增图适配模块 Pyright 零错误，受影响旧模块与完整 HEAD 基线相比无新增诊断。
 - [ ] 4.6 验证同 schema 重连、旧通知、HITL 跨替换、过期 handle、执行撤权、取消、outcome-unknown 和持久 ledger／短期 handle 的持有释放；验证同 Backend 多工作区同名 Server 隔离及静态分析。
 
 ## 5. 本地连接控制与授权流程

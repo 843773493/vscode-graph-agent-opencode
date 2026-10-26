@@ -741,7 +741,8 @@ async def process_agent_event_stream(
                         status=(
                             "failed" if effective_tool_status == "error" else "succeeded"
                         ),
-                        result=result_text,
+                        result=output.content,
+                        artifact=output.artifact,
                         error=result_text if effective_tool_status == "error" else None,
                     )
                     activity_bindings = activity_bindings_by_run_id.pop(run_id, ())

@@ -1,6 +1,7 @@
 from copy import deepcopy
 
-from langchain_core.messages import HumanMessage, ToolMessage
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
@@ -151,9 +152,64 @@ def test_chat_completions_with_vision_keeps_tool_image_block():
         image_input_replay=True,
     )
 
-    projected = model._convert_messages_to_dicts([message])[0]
+    projected, media = model._convert_messages_to_dicts([message])
 
     assert projected["content"] == [
         {"type": "text", "text": "读取完成"},
-        {"type": "image", "base64": "eA==", "mime_type": "image/png"},
     ]
+    assert media["role"] == "user"
+    assert media["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}
+    assert "read-file-call" in media["content"][0]["text"]
+
+
+@pytest.fixture
+def multimodal_tool_result():
+    return ToolMessage(
+        content=[
+            {"type": "text", "text": "完整回执"},
+            {"type": "image", "base64": "eA==", "mime_type": "image/png"},
+            {"type": "audio", "base64": "YXVkaW8=", "mime_type": "audio/wav"},
+            {"type": "file", "url": "https://example.invalid/report", "mime_type": "text/plain"},
+        ],
+        artifact={"structured_content": {"receipt": 3}},
+        tool_call_id="media-call", name="media", status="error",
+    )
+
+
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_chat_tool_results_preserve_media_in_actual_wire(multimodal_tool_result, as_dict):
+    message = multimodal_tool_result
+    source = deepcopy(message)
+    model = BoxteamLiteLLMChatModel(
+        model="openai/test-model", api_key="test-key", api_base="https://example.com/v1",
+        image_input_replay=True,
+    )
+    value = {"role": "tool", "content": message.content, "tool_call_id": message.tool_call_id} if as_dict else message
+    projected, media = model._convert_messages_to_dicts([value])
+    assert projected["tool_call_id"] == message.tool_call_id
+    assert projected["content"] == [
+        {"type": "text", "text": "完整回执"},
+        {"type": "text", "text": "[资源引用：https://example.invalid/report，类型：text/plain]"},
+    ]
+    assert media["role"] == "user" and "media-call" in media["content"][0]["text"]
+    assert media["content"][1:] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}},
+        {"type": "input_audio", "input_audio": {"data": "YXVkaW8=", "format": "wav"}},
+    ]
+    assert message == source
+
+
+def test_responses_reports_each_media_type_and_keeps_resource_link(multimodal_tool_result):
+    message = multimodal_tool_result
+    source = deepcopy(message)
+    model = BoxteamOpenAIResponsesModel(
+        model="openai/test-model", api_key="test-key", api_base="https://example.com/v1",
+    )
+    assistant = AIMessage(content="", tool_calls=[{"name": "media", "args": {}, "id": message.tool_call_id}])
+    projected = model._history_messages([assistant, message])[-1]
+    assert isinstance(projected.content, str)
+    assert "完整回执" in projected.content
+    assert "1 个图片媒体" in projected.content and "1 个音频媒体" in projected.content
+    assert "https://example.invalid/report" in projected.content and "text/plain" in projected.content
+    assert projected.artifact == message.artifact
+    assert message == source

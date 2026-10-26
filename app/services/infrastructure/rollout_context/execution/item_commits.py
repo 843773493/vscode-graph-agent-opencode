@@ -8,7 +8,6 @@ from dataclasses import replace
 
 from app.abstractions.turn_terminal_status import (
     ToolResultCompletion,
-    tool_result_content_text,
 )
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
@@ -151,7 +150,7 @@ class CanonicalItemCommitMixin:
                     outcome = payload.get("tool_outcome")
                     if outcome not in {"success", "failure", "cancelled", "unknown"} or payload.get("execution_confirmed") is not (outcome != "unknown"):
                         raise RuntimeError("request result carrier 缺少明确工具结局/执行确认")
-                    completion = replace(completion, content=tool_result_content_text(payload["content"]), tool_outcome=outcome)
+                    completion = replace(completion, content=payload["content"], artifact=payload.get("artifact"), tool_outcome=outcome)
                 result_item = CanonicalItemRecord.create(
                     item_sequence=1, item_id=completion.item_id,
                     semantic_kind="tool_result", payload_kind="tool_result", status="completed",
@@ -163,6 +162,7 @@ class CanonicalItemCommitMixin:
                         "result_id": completion.tool_attempt_id, "name": tool_name,
                         "content": completion.content, "tool_outcome": completion.tool_outcome,
                         "execution_confirmed": completion.tool_outcome != "unknown",
+                        **({"artifact": completion.artifact} if completion.artifact is not None else {}),
                     },
                     projection_identity=identity, turn_id=admission.turn_id,
                     turn_scope="turn_member" if admission.turn_id is not None else None,

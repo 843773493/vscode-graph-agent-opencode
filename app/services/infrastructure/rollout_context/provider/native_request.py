@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.provider.toolset_request_bridge
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
 from app.services.mapping.itemized.provider_request import (
+    project_responses_tool_content,
     project_runtime_notice_content,
     project_user_message_content,
 )
@@ -55,7 +56,7 @@ def _summary_message_inputs(body: object) -> list[dict[str, object]]:
         call_id = data.get("tool_call_id")
         if not isinstance(call_id, str) or not call_id:
             raise ValueError("source-mismatch: 摘要候选 tool result 缺少 call_id")
-        output = data.get("content")
+        output = project_responses_tool_content(data.get("content"))
         return [{"type": "function_call_output", "call_id": call_id,
                  "output": output if isinstance(output, str) else canonical_json_bytes(output).decode("utf-8")}]
     if role == "user":
@@ -259,7 +260,7 @@ def project_native_request(
                         f"source-mismatch: native tool_result: {item.item_id}"
                     )
                 raw_call_id = item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else payload["tool_call_id"]
-                output = payload.get("content", payload) if isinstance(payload, Mapping) else payload
+                output = project_responses_tool_content(payload.get("content", payload) if isinstance(payload, Mapping) else payload)
                 inputs.append(
                     {
                         "type": "function_call_output",

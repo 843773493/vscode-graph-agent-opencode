@@ -6,6 +6,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.services.mapping.itemized.content_blocks import (
     direct_content_blocks,
@@ -186,10 +187,60 @@ def tool_media_placeholder_text(
     media_count: int,
     path: str | None,
     note: str,
+    media_kind: str = "图片",
 ) -> str:
     """构造工具结果媒体被降级后的文本占位符。"""
     path_hint = f"，路径：{path}" if path else ""
-    return f"[工具结果包含 {media_count} 个图片媒体{path_hint}。{note}]"
+    return f"[工具结果包含 {media_count} 个{media_kind}媒体{path_hint}。{note}]"
+
+
+def tool_resource_link_text(block: Mapping[str, object]) -> str:
+    """只有引用而没有正文的资源按 URI 提示，不临时读取远端内容。"""
+    uri = block.get("url")
+    if not isinstance(uri, str) or not uri:
+        raise ValueError("工具资源链接缺少非空 URL")
+    mime = block.get("mime_type")
+    return f"[资源引用：{uri}，类型：{mime}]" if mime else f"[资源引用：{uri}]"
+
+
+def project_responses_tool_content(content: object, *, path: str | None = None) -> object:
+    """字符串工具协议显式标明媒体类型，保留资源 URI 与原始存储。"""
+    if not isinstance(content, list):
+        return content
+    media_counts: dict[str, int] = {}
+    link_count = 0
+    text_parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            text_parts.append(block)
+            continue
+        if not isinstance(block, Mapping):
+            raise TypeError("Responses 工具结果包含非法内容块")
+        kind = block.get("type")
+        if kind == "file" and "url" in block:
+            text_parts.append(tool_resource_link_text(block))
+            link_count += 1
+            continue
+        media_kind = {
+            "image": "图片", "image_url": "图片", "input_image": "图片",
+            "audio": "音频", "input_audio": "音频", "audio_url": "音频",
+            "video": "视频", "video_url": "视频", "input_video": "视频", "file": "文件",
+        }.get(kind) if isinstance(kind, str) else None
+        if media_kind is not None:
+            media_counts[media_kind] = media_counts.get(media_kind, 0) + 1
+        elif kind in {"text", "input_text", "output_text"} and isinstance(block.get("text"), str):
+            text_parts.append(block["text"])
+        else:
+            text_parts.append(canonical_json_bytes(dict(block)).decode("utf-8"))
+    if not media_counts and not link_count:
+        return content
+    for kind, count in media_counts.items():
+        text_parts.append(tool_media_placeholder_text(
+            media_count=count, media_kind=kind, path=path,
+            note=f"{kind}仍保留在会话记录中；本次 Responses 请求将其按文本占位符回放，"
+                 "以兼容仅接受字符串 function_call_output 的 provider。",
+        ))
+    return "\n".join(text_parts)
 
 
 def project_tool_message_content(
@@ -205,7 +256,7 @@ def project_tool_message_content(
     此处把不支持的图片 block 合并成一个文本占位符，保留图片数量和路径线索；
     消息在会话记录中的原始形态不变。
 
-    TODO: audio/video 工具结果目前没有对应的能力开关，未纳入本次投影。
+    音频／视频由完整上下文的能力路由选择 provider；此处保留既有图片占位行为。
     """
     if image_input or not isinstance(content, list):
         return {"content": content, "diagnostics": []}
@@ -376,7 +427,9 @@ def project_ai_message_content(
 
 __all__ = [
     "project_ai_message_content",
+    "project_responses_tool_content",
     "project_tool_message_content",
     "project_user_message_content",
     "tool_media_placeholder_text",
+    "tool_resource_link_text",
 ]

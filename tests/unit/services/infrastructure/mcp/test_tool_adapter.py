@@ -50,7 +50,11 @@ async def test_sdk_adapter_rejects_invalid_second_page(sdk_session: MagicMock) -
 
 async def test_sdk_adapter_preserves_arguments_and_structured_result(sdk_session: MagicMock) -> None:
     target, = await list_mcp_tools(sdk_session)
-    arguments = {"runtime": "public", "callbacks": "public", "other": {"value": 1}}
+    arguments = {
+        "runtime": "public", "callbacks": "public", "config": {"public": True},
+        "run_manager": "public", "tool_call_id": "public", "tool_name": "public",
+        "arguments": {"value": 1},
+    }
     result = await target.ainvoke({"type": "tool_call", "id": "probe-id", "name": target.name, "args": arguments})
     sdk_session.call_tool.assert_awaited_once_with("probe", arguments)
     assert isinstance(result, ToolMessage)
@@ -60,20 +64,26 @@ async def test_sdk_adapter_preserves_arguments_and_structured_result(sdk_session
     assert result.content[0]["text"] == "ready"
 
 
-async def test_sdk_adapter_preserves_protocol_error_and_media(sdk_session: MagicMock) -> None:
-    sdk_session.call_tool.return_value = types.CallToolResult(isError=True, content=[
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_sdk_adapter_preserves_protocol_error_and_media(sdk_session: MagicMock, is_error: bool) -> None:
+    sdk_session.call_tool.return_value = types.CallToolResult(isError=is_error, structuredContent={"failure": "真实结构化正文"}, content=[
         types.TextContent(type="text", text="真实错误"),
         types.ImageContent(type="image", data="aW1hZ2U=", mimeType="image/png"),
+        types.AudioContent(type="audio", data="YXVkaW8=", mimeType="audio/wav"),
+        types.ResourceLink(type="resource_link", uri="https://example.invalid/report", name="report", mimeType="text/plain"),
     ])
     target, = await list_mcp_tools(sdk_session)
     result = await target.ainvoke({"type": "tool_call", "id": "probe-error", "name": target.name, "args": {}})
     assert isinstance(result, ToolMessage)
-    assert result.status == "error" and result.tool_call_id == "probe-error"
+    assert result.status == ("error" if is_error else "success") and result.tool_call_id == "probe-error"
+    assert result.artifact == {"structured_content": {"failure": "真实结构化正文"}}
     assert isinstance(result.content, list) and all(isinstance(block, dict) for block in result.content)
     assert isinstance(result.content[0], dict) and isinstance(result.content[1], dict)
     assert result.content[0]["text"] == "真实错误"
     assert result.content[1]["type"] == "image"
     assert result.content[1]["base64"] == "aW1hZ2U="
+    assert result.content[2]["type"] == "audio" and result.content[2]["base64"] == "YXVkaW8="
+    assert result.content[3]["type"] == "file" and result.content[3]["url"] == "https://example.invalid/report"
 
 
 async def test_sdk_transport_failure_propagates(sdk_session: MagicMock) -> None:

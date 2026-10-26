@@ -5,13 +5,26 @@ from typing import Any, cast
 
 from jsonschema import Draft202012Validator, validators
 from jsonschema.protocols import Validator
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 from referencing import Registry, Resource
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
 from app.domain.itemized.hashing import canonical_json_bytes
+
+
+class CallBoundStructuredTool(StructuredTool):
+    """把受信身份和完整 JSON 参数分开传入，不占用任何公开 schema 字段。"""
+
+    def _to_args_and_kwargs(
+        self, tool_input: str | dict[str, Any], tool_call_id: str | None,
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        args, kwargs = super()._to_args_and_kwargs(tool_input, tool_call_id)
+        if args:
+            raise TypeError("带调用身份的工具只接受 object 参数")
+        # config／run_manager 等也可能是公开字段，不能经过 BaseTool 的 kwargs 注入通道。
+        return (tool_call_id or "", self.name, kwargs), {}
 
 
 def model_tool_schema_validator(schema: dict[str, Any]) -> Validator:

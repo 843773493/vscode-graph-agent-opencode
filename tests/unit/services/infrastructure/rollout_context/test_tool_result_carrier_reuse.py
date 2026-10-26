@@ -52,7 +52,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
@@ -80,6 +80,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
+from app.services.mapping.itemized.canonical_langchain import project_tool_result
 from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
@@ -218,6 +219,28 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore)
         "1b56a352-tool-msg"
     )
     assert stored[live.item_id].projection_identity.projection_message_id is None
+
+
+@pytest.mark.parametrize("changed", ["media", "artifact"])
+def test_same_visible_text_does_not_hide_media_or_artifact_conflict(storage: RolloutContextStore, changed):
+    live = _live_tool_result(sequence=1)
+    carrier = _request_carrier(sequence=2, message_id="conflicting-media-result")
+    content = [{"type": "text", "text": "相同可见文本"}, {"type": "image", "base64": "b3JpZ2luYWw=", "mime_type": "image/png"}]
+    artifact = {"structured_content": {"version": 1}}
+    live_payload = {**live.payload, "content": content, "artifact": artifact}
+    live = replace(live, payload=live_payload, content_hash=content_hash(live.payload_kind, live_payload))
+    carrier_payload = {
+        **carrier.payload,
+        "content": [content[0], {**content[1], "base64": "Y2hhbmdlZA=="}] if changed == "media" else content,
+        "artifact": {"structured_content": {"version": 2}} if changed == "artifact" else artifact,
+    }
+    carrier = replace(carrier, payload=carrier_payload, content_hash=content_hash(carrier.payload_kind, carrier_payload))
+    thread = storage.storage.main_thread_id(SESSION_ID)
+    storage.executions.append_items(SESSION_ID, thread, (live,), execution_id=MODEL_CALL_ID)
+    original = storage.storage.jsonl_path(SESSION_ID, thread_id=thread).read_bytes()
+    with pytest.raises(ItemSchemaError, match="正文发生变化"):
+        storage.executions.append_items(SESSION_ID, thread, (carrier,), execution_id=MODEL_CALL_ID)
+    assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread).read_bytes() == original
 
 
 def test_equivalent_live_tool_results_still_reused(storage: RolloutContextStore):
@@ -437,22 +460,25 @@ def test_tool_result_owner_retries_only_exact_original_attempt(
 
 
 @pytest.mark.parametrize("result_order", ["request_first", "live_first"])
-@pytest.mark.parametrize("result_content,tool_outcome", [
-    (RESULT_CONTENT, "success"),
-    ('{"status":"error","effect":"not_executed","code":"capability_denied"}', "failure"),
-    ('{"ok":false,"error":{"code":"DEBUG_TOOL_FAILED"}}', "failure"),
+@pytest.mark.parametrize("result_content,artifact,tool_outcome", [
+    (RESULT_CONTENT, None, "success"),
+    ('{"status":"error","effect":"not_executed","code":"capability_denied"}', None, "failure"),
+    ('{"ok":false,"error":{"code":"DEBUG_TOOL_FAILED"}}', None, "failure"),
+    ([{"type": "text", "text": "媒体回执"}, {"type": "image", "base64": "aW1hZ2U=", "mime_type": "image/png"}], {"structured_content": {"count": 2}}, "success"),
+    ([{"type": "text", "text": "媒体失败"}, {"type": "audio", "base64": "YXVkaW8=", "mime_type": "audio/wav"}], {"structured_content": {"code": "remote_failure"}}, "failure"),
 ])
 def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver, tool_result_owner,
-    result_order: str, result_content: str, tool_outcome: str,
+    result_order: str, result_content, artifact, tool_outcome: str,
 ) -> None:
     """两个合法到达顺序都保 P/A，后继真实请求复用不引入第三个结果。"""
     thread_id, completion = tool_result_owner
-    completion = replace(completion, content=result_content, tool_outcome=tool_outcome)
+    completion = replace(completion, content=result_content, artifact=artifact, tool_outcome=tool_outcome)
     messages = [
         AIMessage(content="", id="request-call", response_metadata={"model_call_id": MODEL_CALL_ID},
                   tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]),
-        ToolMessage(content=result_content, id="request-owner-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID),
+        ToolMessage(content=result_content, artifact=artifact, id="request-owner-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID,
+                    status="success" if tool_outcome == "success" else "error"),
     ]
 
     def prepare_request() -> None:
@@ -474,6 +500,13 @@ def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     assert "tool_attempt_id" not in carrier.payload
     assert first.item_id == completion.item_id
     assert first.payload["tool_attempt_id"] == LIVE_EXECUTION_ID
+    with RolloutCheckpointSaver(storage.storage.sessions_dir) as cold:
+        persisted = cold._storage.storage.read_items(SESSION_ID, thread_id)
+        for item in persisted:
+            if item.semantic_kind == "tool_result":
+                restored = project_tool_result(item)
+                assert restored.content == result_content and restored.artifact == artifact
+                assert restored.status == messages[-1].status
     with storage.storage.read_connection(SESSION_ID, thread_id) as connection:
         result_commits = dict(connection.execute(
             "SELECT item_id,commit_id FROM item_catalog WHERE semantic_kind='tool_result'",
@@ -499,7 +532,7 @@ def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == committed_bytes
 
 
-@pytest.mark.parametrize("changed", ["tool_invocation_id", "content", "tool_outcome"])
+@pytest.mark.parametrize("changed", ["tool_invocation_id", "content", "artifact", "tool_outcome"])
 def test_tool_result_owner_rejects_same_attempt_identity_or_payload_changes(
     storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver, tool_result_owner,
     changed: str,

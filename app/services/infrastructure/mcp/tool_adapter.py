@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from langchain_core.tools import BaseTool, StructuredTool
-from langchain_mcp_adapters.tools import (
-    _convert_call_tool_result,
-    _handle_mcp_tool_error,
-)
+from langchain_core.messages import ToolMessage
+from langchain_core.messages.content import create_audio_block
+from langchain_core.tools import BaseTool, ToolException
+from langchain_mcp_adapters.tools import _convert_mcp_content_to_lc_block
 
-from app.agents.model_tool_schema import model_tool_schema_validator
+from app.agents.model_tool_schema import (
+    CallBoundStructuredTool,
+    model_tool_schema_validator,
+)
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 
@@ -16,20 +18,37 @@ from mcp.client.session import ClientSession
 def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
     model_tool_schema_validator(definition.inputSchema)
 
-    async def invoke(**arguments: object):
+    async def invoke(tool_call_id: str, tool_name: str, arguments: dict[str, object], /):
         # runtime 等字段也可能是合法的 MCP 参数，不能作为 Python 注入参数消费。
-        return _convert_call_tool_result(await session.call_tool(definition.name, arguments))
+        # TODO: 接入原调用的进度事实及取消／断线的 outcome-unknown；不能自动重试未知副作用。
+        result = await session.call_tool(definition.name, arguments)
+        content: list[str | dict[str, object]] = [
+            dict(create_audio_block(base64=block.data, mime_type=block.mimeType))
+            if isinstance(block, mcp_types.AudioContent)
+            else dict(_convert_mcp_content_to_lc_block(block))
+            for block in result.content
+        ]
+        artifact = {"structured_content": result.structuredContent} if result.structuredContent is not None else None
+        if tool_call_id:
+            # isError 是真实业务结果；不能通过抛异常丢掉 structuredContent 或媒体。
+            return ToolMessage(
+                content=content, artifact=artifact, tool_call_id=tool_call_id,
+                name=tool_name, status="error" if result.isError else "success",
+            ), None
+        if result.isError:
+            raise ToolException(content)
+        return content, artifact
 
     annotations = definition.annotations.model_dump() if definition.annotations is not None else {}
     metadata = {**annotations, **({"_meta": definition.meta} if definition.meta is not None else {})}
-    return StructuredTool(
+    return CallBoundStructuredTool(
         name=definition.name,
         description=definition.description or "",
         args_schema=definition.inputSchema,
         coroutine=invoke,
         response_format="content_and_artifact",
         metadata=metadata or None,
-        handle_tool_error=_handle_mcp_tool_error,  # type: ignore[arg-type] 上游转换器保留多模态错误正文。
+        handle_tool_error=lambda error: error.args[0],
     )
 
 

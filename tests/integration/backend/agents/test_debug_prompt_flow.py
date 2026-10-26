@@ -180,11 +180,17 @@ def scripted_debug_backend_port(request: pytest.FixtureRequest) -> int:
 
 
 @pytest.fixture(scope="module")
+def scripted_model_info() -> dict[str, bool]:
+    return {"supports_function_calling": True, "supports_reasoning": True}
+
+
+@pytest.fixture(scope="module")
 def scripted_backend_process(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     scripted_debug_backend_port: int,
     scripted_model_replay: ScriptedModelState,
+    scripted_model_info: dict[str, bool],
 ) -> Generator[subprocess.Popen[str], None, None]:
     state = scripted_model_replay
     endpoint = "https://opencode.ai/zen/v1"
@@ -203,7 +209,7 @@ def scripted_backend_process(
             "custom_llm_provider": "openai",
             "api_mode": {
                 "protocol": "chat_completions",
-                "model_info": {"supports_function_calling": True, "supports_reasoning": True},
+                "model_info": scripted_model_info,
                 "supports_reasoning": {"reasoning_content": True},
             },
         }

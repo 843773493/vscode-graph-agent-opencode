@@ -10,6 +10,7 @@ import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import StructuredTool, ToolException
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
 
@@ -84,6 +85,51 @@ FORBIDDEN_RUNTIME_ARGUMENT_FIELDS = (
     "program",
     "launch",
 )
+
+
+@pytest.mark.parametrize("async_target", [False, True])
+async def test_envelope_uses_target_result_contract_without_nested_events(async_target):
+    def output():
+        return [{"type": "text", "text": "完整结果"}], {"structured_content": {"count": 2}}
+
+    async def async_output():
+        return output()
+
+    target = StructuredTool.from_function(
+        func=None if async_target else output, coroutine=async_output if async_target else None,
+        name="protocol_result", description="完整结果", response_format="content_and_artifact",
+    )
+    envelope = create_extension_tool_invoker_tool(
+        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+    )
+    events = [event async for event in envelope.astream_events({
+        "type": "tool_call", "id": "result-contract-call", "name": envelope.name,
+        "args": {"tool_name": target.name, "arguments": {}},
+    })]
+    assert [(event["event"], event["name"]) for event in events] == [
+        ("on_tool_start", envelope.name), ("on_tool_end", envelope.name),
+    ]
+    message = events[-1]["data"]["output"]
+    assert isinstance(message, ToolMessage)
+    assert message.tool_call_id == "result-contract-call" and message.name == envelope.name
+    assert message.content == output()[0] and message.artifact == output()[1]
+
+
+async def test_envelope_preserves_target_error_policy_and_original_call_identity():
+    def fail():
+        raise ToolException("真实目标失败")
+
+    target = StructuredTool.from_function(fail, name="failing_target", description="错误策略", handle_tool_error=lambda error: f"目标回执：{error}")
+    envelope = create_extension_tool_invoker_tool(
+        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+    )
+    result = await envelope.ainvoke({
+        "type": "tool_call", "id": "error-contract-call", "name": envelope.name,
+        "args": {"tool_name": target.name, "arguments": {}},
+    })
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert result.tool_call_id == "error-contract-call" and result.name == envelope.name
+    assert result.content == "目标回执：真实目标失败"
 
 
 class _RuntimeCatalog:

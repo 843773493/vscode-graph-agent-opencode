@@ -13,7 +13,9 @@ from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 
 from app.runtime.provider_errors import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
-from app.services.mapping.itemized.provider_request import tool_media_placeholder_text
+from app.services.mapping.itemized.provider_request import (
+    project_responses_tool_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,46 +351,9 @@ def _project_tool_history(
 
 
 def _portable_tool_result_message(message: ToolMessage) -> ToolMessage:
-    """为 Responses function_call_output 投影不兼容的工具媒体结果。
-
-    图片工具结果仍完整保存在 rollout 和消息流中，但部分兼容 Responses
-    provider 只接受 function_call_output 的字符串 output，不接受其中的
-    input_image 数组。当前用户消息中的附件仍按 input_image 发送；这里只
-    处理历史 ToolMessage，避免把可配对的工具结果误发成 provider 非法请求。
-    """
-    content = message.content
-    if not isinstance(content, list):
-        return message
-
-    media_count = 0
-    text_parts: list[str] = []
-    for block in content:
-        if isinstance(block, str):
-            if block:
-                text_parts.append(block)
-            continue
-        if not isinstance(block, dict):
-            continue
-        block_type = block.get("type")
-        if block_type in {"image", "image_url", "input_image"}:
-            media_count += 1
-            continue
-        if block_type in {"text", "input_text", "output_text"}:
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                text_parts.append(text)
-
-    if media_count == 0:
-        return message
-
+    """与 sealed native request 共用同一工具媒体投影，不另拼正文。"""
     raw_path = (message.additional_kwargs or {}).get("read_file_path")
-    media_hint = tool_media_placeholder_text(
-        media_count=media_count,
-        path=raw_path if isinstance(raw_path, str) and raw_path else None,
-        note=(
-            "图片仍保留在会话记录中；本次 Responses 请求将其按文本占位符回放，"
-            "以兼容仅接受字符串 function_call_output 的 provider。"
-        ),
+    content = project_responses_tool_content(
+        message.content, path=raw_path if isinstance(raw_path, str) else None,
     )
-    replay_content = "\n".join([*text_parts, media_hint])
-    return message.model_copy(update={"content": replay_content})
+    return message if content is message.content else message.model_copy(update={"content": content})

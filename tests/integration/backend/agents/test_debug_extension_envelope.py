@@ -39,6 +39,7 @@ from tests.support.trace import get_trace_payload
 
 # 显式登记共享 fixture；测试模块同时被收集时不依赖 pytest_plugins 的全局注册。
 scripted_model_replay = debug_case.scripted_model_replay
+scripted_model_info = debug_case.scripted_model_info
 scripted_debug_backend_port = debug_case.scripted_debug_backend_port
 scripted_backend_process = debug_case.scripted_backend_process
 scripted_client = debug_case.scripted_client

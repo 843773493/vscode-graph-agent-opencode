@@ -450,6 +450,7 @@ class LangChainMessageCodec:
                 "content": data_mapping.get("content"),
                 "tool_outcome": tool_outcome,
                 "execution_confirmed": confirmed,
+                **({"artifact": message.artifact} if message.artifact is not None else {}),
             }
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None

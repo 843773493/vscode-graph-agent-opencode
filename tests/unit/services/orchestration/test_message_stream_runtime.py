@@ -49,6 +49,41 @@ async def register_failure_calls(case):
     case.writer.commit.reset_mock()
 
 
+@pytest.mark.parametrize("request_first", [False, True])
+@pytest.mark.parametrize("status", ["success", "error"])
+async def test_tool_completion_preserves_blocks_and_artifact_but_stream_keeps_text(
+    tool_failure_runtime_case, request_first, status,
+):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    call_id = case.runtime.claim_tool_call_id("original-model", "target")
+    await case.runtime.start_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context")
+    message = ToolMessage(
+        content=[{"type": "text", "text": "媒体回执"}, {"type": "image", "base64": "aW1hZ2U=", "mime_type": "image/png"}],
+        artifact={"structured_content": {"result": 3}}, status=status,
+        tool_call_id="target", name="read_context",
+    )
+
+    async def stream_completion():
+        await case.runtime.complete_tool(
+            tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context",
+            status="succeeded" if status == "success" else "failed", result=message.content, artifact=message.artifact,
+        )
+
+    async def request_completion():
+        await case.runtime.complete_tool_from_message(message, model_call_id="original-model")
+
+    first, second = (request_completion, stream_completion) if request_first else (stream_completion, request_completion)
+    await first()
+    await second()
+    case.tool_result_sink.assert_awaited_once()
+    completion, = case.tool_result_sink.await_args.args
+    assert completion.content == message.content and completion.artifact == message.artifact
+    assert completion.tool_outcome == ("success" if status == "success" else "failure")
+    completed = [call.args[1] for call in case.writer.commit.await_args_list if call.args[0] == "tool.completed"]
+    assert len(completed) == 1 and completed[0]["result"] == "媒体回执"
+
+
 @pytest.mark.asyncio
 async def test_failure_commits_exact_active_attempt_once_before_return(tool_failure_runtime_case):
     case = tool_failure_runtime_case

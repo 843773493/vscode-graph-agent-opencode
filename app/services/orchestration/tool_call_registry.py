@@ -10,6 +10,7 @@ from langchain_core.messages import ToolMessage
 
 from app.abstractions.turn_terminal_status import (
     ToolResultCompletion,
+    ToolResultContent,
     tool_result_content_text,
 )
 from app.agents.tool_result_text import tool_output_status
@@ -284,7 +285,8 @@ class StreamToolRegistryMixin:
         tool_call_id: str,
         tool_name: str,
         status: str,
-        result: str,
+        result: ToolResultContent,
+        artifact: object = None,
         error: str | None = None,
         outcome: str | None = None,
         completion_reason: str | None = None,
@@ -348,7 +350,7 @@ class StreamToolRegistryMixin:
                         else "provider_failed"
                     )
                 ),
-                "result": result,
+                "result": tool_result_content_text(result),
             }
             if error is not None:
                 payload["error"] = error
@@ -371,7 +373,7 @@ class StreamToolRegistryMixin:
                     model_call_id=model_call_id, tool_call_id=tool_call_id,
                     tool_invocation_id=tool_invocation_id, tool_attempt_id=tool_execution_id,
                     tool_name=tool_name,
-                    content=result, tool_outcome=result_outcome,
+                    content=result, artifact=artifact, tool_outcome=result_outcome,
                 )
                 try:
                     item = await self._tool_result_sink(completion)
@@ -479,5 +481,6 @@ class StreamToolRegistryMixin:
         status = "succeeded" if tool_output_status(message) == "success" else "failed"
         await self.complete_tool(
             tool_execution_id=execution_id, tool_call_id=tool_call_id, tool_name=tool_name,
-            status=status, result=result, error=result if status == "failed" else None,
+            status=status, result=message.content, artifact=message.artifact,
+            error=result if status == "failed" else None,
         )

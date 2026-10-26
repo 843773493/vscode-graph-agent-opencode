@@ -291,6 +291,7 @@ def project_tool_result(item: CanonicalItemRecord) -> ToolMessage:
             evidence.tool_call_id if evidence is not None else payload["tool_call_id"],
         ),
         name=str(payload.get("name") or "tool"),
+        artifact=payload.get("artifact"),
         status="error" if outcome in {"failure", "cancelled", "unknown"} else "success",
         response_metadata={
             **_model_call_metadata(item),

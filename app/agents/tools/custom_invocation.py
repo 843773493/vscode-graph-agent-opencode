@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import inspect
-from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
-from langchain_core.tools import BaseTool, StructuredTool, ToolException
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.model_tool_schema import (
+    CallBoundStructuredTool,
     export_model_tool_json_schema,
     validate_model_tool_arguments,
 )
@@ -146,22 +147,17 @@ def _assert_sealed_target_matches_registration(
 async def _invoke_target_tool_without_nested_callbacks(
     target_tool: BaseTool,
     arguments: dict[str, Any] | None,
+    *, tool_call_id: str, envelope_name: str,
 ) -> Any:
     call_arguments = _validate_target_arguments(target_tool, arguments)
-
-    coroutine = getattr(target_tool, "coroutine", None)
-    if callable(coroutine):
-        return await cast(Awaitable[Any], coroutine(**call_arguments))
-
-    func = getattr(target_tool, "func", None)
-    if callable(func):
-        result = func(**call_arguments)
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    # TODO: 支持没有暴露 func/coroutine 的自定义 BaseTool 时，仍会经过 LangChain 回调。
-    return await target_tool.ainvoke(call_arguments)
+    # 复用 BaseTool 的结果格式、错误策略与同步／异步执行；只隔离内层继承的事件回调。
+    tool_input = {"type": "tool_call", "name": target_tool.name, "id": tool_call_id, "args": call_arguments} if tool_call_id else call_arguments
+    result = await target_tool.ainvoke(tool_input, config={"callbacks": []})
+    if isinstance(result, ToolMessage):
+        if tool_call_id and result.tool_call_id != tool_call_id:
+            raise ToolException("扩展工具返回了与原调用不一致的 tool_call_id")
+        return result.model_copy(update={"name": envelope_name})
+    return result
 
 
 def create_extension_tool_invoker_tool(
@@ -188,9 +184,10 @@ def create_extension_tool_invoker_tool(
         )
 
     async def invoke_extension_tool(
-        tool_name: str,
-        arguments: dict[str, Any] | None = None,
+        tool_call_id: str, envelope_name: str, parameters: dict[str, Any], /,
     ) -> Any:
+        tool_name = parameters["tool_name"]
+        arguments = parameters.get("arguments")
         resolved_tool_name = tool_name.strip()
         if not resolved_tool_name:
             raise ValueError("tool_name 不能为空")
@@ -227,6 +224,7 @@ def create_extension_tool_invoker_tool(
             return await _invoke_target_tool_without_nested_callbacks(
                 target_tool,
                 arguments,
+                tool_call_id=tool_call_id, envelope_name=envelope_name,
             )
         finally:
             if invocation_context is not None and binding_token is not None:
@@ -239,7 +237,7 @@ def create_extension_tool_invoker_tool(
         "目标工具名称和参数来自 search_tools 返回的完整定义、当前已生效的扩展目录、AGENTS.md、SKILL.md 或普通说明文档。"
         '调用参数只有 tool_name 和 arguments，例如 {"tool_name": "<目标工具名>", "arguments": {}}。'
     )
-    return StructuredTool.from_function(
+    return CallBoundStructuredTool.from_function(
         coroutine=invoke_extension_tool,
         name=EXTENSION_TOOL_INVOKER_NAME,
         description=description,

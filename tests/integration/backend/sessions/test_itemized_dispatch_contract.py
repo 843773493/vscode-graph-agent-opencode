@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event, get_ident
 from types import SimpleNamespace
-from typing import cast
+from typing import Annotated, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,7 +26,7 @@ from langchain.agents.structured_output import (
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
+from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.runtime import ExecutionInfo, Runtime
 from pydantic import BaseModel
 
@@ -52,6 +52,7 @@ from app.core.execution_admission_context import current_execution_admission
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_control_store import SessionControlStore
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     ProviderProfileChangeRequiresRebuildError,
@@ -66,6 +67,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
@@ -131,6 +133,10 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
+from tests.integration.workspace_services.mcp.schema_server import (
+    RESULT_AUDIO_BASE64,
+    RESULT_IMAGE_BASE64,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 __all__ = ["dispatch_saver", "native_dispatch_workspace", "native_http_server"]
@@ -195,6 +201,72 @@ def emitting_identity_inspection():
         return f"inspected:{path}"
 
     return context, inspect_with_identity, observations
+
+
+@pytest.fixture
+def media_inspection_tool():
+    @tool("inspect_file")
+    def inspect_media(path: str, tool_call_id: Annotated[str, InjectedToolCallId]):
+        """返回含媒体与资源引用的检查结果。"""
+        return ToolMessage(content=[
+            {"type": "text", "text": path},
+            {"type": "image", "base64": RESULT_IMAGE_BASE64, "mime_type": "image/png"},
+            {"type": "audio", "base64": RESULT_AUDIO_BASE64, "mime_type": "audio/wav"},
+            {"type": "file", "url": "https://example.invalid/report", "mime_type": "text/plain"},
+        ], artifact={"structured_content": {"path": path}}, tool_call_id=tool_call_id, name="inspect_file")
+    return inspect_media
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+async def test_media_tool_loop_preserves_actual_http_body_hash_and_cold_state(
+    dispatch_saver, native_http_server, dispatch_bridge, media_inspection_tool, mode, protocol,
+):
+    saver, session, turn, sessions = dispatch_saver
+    state, endpoint = native_http_server
+    state.call_tool = True
+    model_type = BoxteamLiteLLMChatModel if protocol == "chat_completions" else BoxteamOpenAIResponsesModel
+    model = model_type(model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
+                       custom_llm_provider="openai", streaming=True, max_retries=0,
+                       image_input_replay=True)
+    agent = create_dispatch_agent(
+        model, tools=[media_inspection_tool], checkpointer=saver,
+        execution=dispatch_bridge(session_id=session, instruction="读取媒体", checkpointer=saver,
+                                  tools=(media_inspection_tool,)),
+    )
+    with dispatch_execution_scope(saver, session, turn) as thread:
+        config = cast(RunnableConfig, build_checkpoint_config(thread))
+        if mode == "sync":
+            await asyncio.to_thread(agent.invoke, {"messages": []}, config)
+        else:
+            await agent.ainvoke({"messages": []}, config)
+    assert len(state.requests) == 2
+    body = state.requests[-1]["body"]
+    if protocol == "chat_completions":
+        result, = [message for message in body["messages"] if message.get("role") == "tool"]
+        assert [block["type"] for block in result["content"]] == ["text", "text"]
+        assert "https://example.invalid/report" in result["content"][1]["text"]
+        media = body["messages"][-1]
+        assert media["role"] == "user"
+        assert [block["type"] for block in media["content"]] == ["text", "image_url", "input_audio"]
+        assert "call-native" in media["content"][0]["text"]
+        assert media["content"][2]["input_audio"] == {"data": RESULT_AUDIO_BASE64, "format": "wav"}
+    else:
+        result, = [item for item in body["input"] if item.get("type") == "function_call_output"]
+        assert "1 个图片媒体" in result["output"] and "1 个音频媒体" in result["output"]
+        assert "https://example.invalid/report" in result["output"]
+    with RolloutCheckpointSaver(sessions) as cold:
+        snapshots = cold.list_context_assemblies(session, thread)
+        for request in state.requests:
+            matches = [snapshot for snapshot in snapshots
+                       if snapshot.request_hash_preimage == normalize_wire_request(request["body"])]
+            assert len(matches) == 1
+            matches[0].validate_hashes()
+        with session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread):
+            messages = await acheckpoint_messages(cold, await cold.aget_tuple(config))
+        restored, = [message for message in messages if isinstance(message, ToolMessage)]
+        assert [block["type"] for block in restored.content] == ["text", "image", "audio", "file"]
+        assert restored.artifact == {"structured_content": {"path": "README.md"}}
 
 
 @pytest.mark.asyncio

@@ -14,8 +14,10 @@ from langchain_core.messages import AnyMessage
 from langchain_core.tools import BaseTool
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.runtime import Runtime
 
+from app.agents.graph_tool_adapter import content_preserving_tool_node
 from app.agents.model_call_execution import ModelCallExecution
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
@@ -29,6 +31,13 @@ class IncrementalAgentState(AgentState):
 def create_model_call_agent(model, *, execution: ModelCallExecution, **options) -> CompiledStateGraph:
     """保留框架图、输出解析及请求链，只替换 terminal model execution。"""
     graph = create_agent(model, state_schema=IncrementalAgentState, **options)
+    if "tools" in graph.builder.nodes:
+        tools_node = graph.builder.nodes["tools"]
+        if not isinstance(tools_node.runnable, ToolNode):
+            raise TypeError("model-call graph 缺少框架 ToolNode")
+        graph.builder.nodes["tools"] = replace(
+            tools_node, runnable=content_preserving_tool_node(tools_node.runnable),
+        )
     node = graph.builder.nodes["model"]
     runnable = node.runnable
     if not isinstance(runnable, RunnableCallable) or not callable(runnable.func) or not callable(runnable.afunc):

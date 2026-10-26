@@ -4,7 +4,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
+
+ToolResultContent = str | list[str | dict[str, object]]
 
 
 def tool_result_content_text(content: object) -> str:
@@ -28,15 +31,17 @@ class ToolResultCompletion:
     tool_invocation_id: str
     tool_attempt_id: str
     tool_name: str
-    content: str
+    content: ToolResultContent
     tool_outcome: Literal["success", "failure", "cancelled", "unknown"]
+    artifact: object = None
 
     def __post_init__(self) -> None:
         for name in ("model_call_id", "tool_call_id", "tool_invocation_id", "tool_attempt_id", "tool_name"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ValueError(f"ToolResultCompletion.{name} 必须是真实非空身份")
-        if not isinstance(self.content, str):
-            raise TypeError("工具终态正文必须是字符串")
+        if not isinstance(self.content, (str, list)):
+            raise TypeError("工具终态正文必须是字符串或有序内容块")
+        canonical_json_bytes({"content": self.content, "artifact": self.artifact})
         if self.tool_outcome not in {"success", "failure", "cancelled", "unknown"}:
             raise ValueError(f"未知工具终态: {self.tool_outcome}")
 
@@ -73,4 +78,4 @@ class TurnTerminalStatusWriter(Protocol):
     ) -> bool: ...
 
 
-__all__ = ["ToolResultCompletion", "TurnTerminalStatusWriter", "tool_result_content_text"]
+__all__ = ["ToolResultCompletion", "ToolResultContent", "TurnTerminalStatusWriter", "tool_result_content_text"]

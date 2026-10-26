@@ -181,6 +181,16 @@ Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 re
 
 ## Migration Plan
 
+### MCP 结果保真切片的集成边界（2026-10-26）
+
+- 固定信封统一调用目标 BaseTool 的 ainvoke，删除直接调用 func／coroutine 的分路；保留目标的同步／异步执行、response_format、handle_tool_error、调用 ID 和 artifact，仅隔离内层事件回调。受信调用身份与完整公开参数以位置参数分开传入，config、run_manager、callbacks、tool_name 和 tool_call_id 等合法字段不被框架注入覆盖。
+- 唯一 SDK 适配保留 isError、structuredContent、图片、音频、资源链接和嵌入正文。真实调用返回配对 ToolMessage，业务错误不通过异常路径丢失媒体或结构化结果；无调用 ID 的独立字典调用继续遵循既有 BaseTool 正文返回合同。
+- 真实产品验收发现上游 ToolNode 的固定内容白名单遗漏标准 audio 块，会将整组内容转成 JSON 字符串。现有 graph_tool_adapter 通过继承替换结果规范化，保留同一工具执行、注入、并发、中间件和错误处理；普通 ToolMessage、Command 和混合列表均保留正文与唯一配对终态校验，不修改第三方常量或对象原型。
+- 实时 completion、canonical attempt、request carrier、codec 和冷检查点恢复贯通完整正文与 JSON artifact；SSE 继续使用派生文本。跨载体等价判断比较原正文和 artifact，同文字但不同媒体不得复用。未新增数据库结构或第二份结果存储。
+- 后继模型请求的工具正文独立于 AI 思考过滤。Chat Completions 使用官方媒体编码，将媒体按原调用 ID 放到连续工具结果之后的具名数据消息，保持工具配对相邻；文件 URL 作为资源引用文本。Responses 的直接历史与 native seal 共用纯投影，明确提示每种媒体并保留资源 URL。wire projector 升为 v3，历史原件及其 preimage/hash 保持可读，不重写旧请求。
+- 真实本地 HTTP 服务复用 model_stream 的响应资产与协议编码，分别验证 Chat／Responses 和同步／异步入口；真实网络正文、封存 request_hash 与冷恢复必须一致。它与 Gateway 产品入口验收承担不同证明职责，不删除真实网络验证。
+- 本切片的产品证据使用真实 Gateway、Session／消息入口、真实 stdio Server 和 model_stream 驱动并发成功／失败调用，核对封存请求 hash、canonical 归属与冷读取。回放不证明外部模型服务接受所有媒体协议；进度、取消／断线的 outcome-unknown、连接资格与持久 lease 仍按 4.2、4.4–4.6 完成，4.5 不提前勾选。
+
 ### 精确连接执行身份切片的集成边界（2026-10-26）
 
 - MCP Owner 为每次连接生成包含 Owner 实例与单调连接代际的不可变 connection_ref，写入现有 typed member revision；目录语义 revision 和 catalog generation 仍仅反映完整定义变化。父目录与 definition facets 原子携带相同成员事实，沿原 activation／Saver 持久化，不增加表、writer 或第二份成员集合。
