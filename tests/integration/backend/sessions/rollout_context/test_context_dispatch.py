@@ -21,6 +21,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -131,14 +132,15 @@ def test_dispatch_projects_pending_source_to_chat_and_responses(frozen_provider_
 
     prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='pending-source-chat:create', seal_idempotency_key='pending-source-chat:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='pending-source-chat:create'))
 
-    assert any(
-        message.type == "human" and message.text == source_body
-        for message in prepared["messages"]
-    )
+    frame = next(frame for frame in prepared["snapshot"].seal_binding.prefix.state.frames
+                 if frame.item_ref.source_identity == "skill:debugging")
+    assert parse_source_blocks(frame.content)[0].body == source_body
+    assert any(message.type == "human" and message.content == frame.content
+               for message in prepared["messages"])
     native = saver.project_context_plan_to_native(session_id, saver._storage.storage.main_thread_id(session_id), prepared['plan'])
     assert {
         "role": "user",
-        "content": [{"type": "input_text", "text": source_body}],
+        "content": [{"type": "input_text", "text": frame.content}],
     } in native["request"]["input"]
 
 
@@ -413,8 +415,13 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt( frozen_provide
         second_native = restarted.project_context_plan_to_native(session_id, thread_id, next_plan)
         assert first_native["request"] == second_native["request"]
         assert first_native["request"]["input"][-2:] == [
-            {"role": "user", "content": [{"type": "input_text", "text": text}]}
-            for text in ("基础规则", "本轮规则变化")
+            {"role": "user", "content": [{"type": "input_text", "text": frame.content}]}
+            for frame in original.seal_binding.prefix.state.frames[-2:]
+        ]
+        assert [parse_source_blocks(frame.content)[0].body
+                for frame in original.seal_binding.prefix.state.frames[-2:]] == [
+            [{"type": "text", "text": "基础规则"}],
+            [{"type": "text", "text": "本轮规则变化"}],
         ]
 
 

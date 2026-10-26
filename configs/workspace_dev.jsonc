@@ -197,7 +197,10 @@
       "description": "工作区默认助手，负责通用问答、代码解释、开发辅助和文档问答。",
       "language": "zh-CN",
       "instructions": {
-        "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。"
+        "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。",
+        "runtime_identity": {
+          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+        }
       },
       "model": {
         "primary_provider": "primary",
@@ -396,7 +399,10 @@
       "description": "专门用于代码实现、重构和修复问题。",
       "language": "zh-CN",
       "instructions": {
-        "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。"
+        "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。",
+        "runtime_identity": {
+          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+        }
       },
       "model": {
         "primary_provider": "primary",
@@ -421,7 +427,10 @@
       "description": "专门用于代码审查、风险检查和设计评估。",
       "language": "zh-CN",
       "instructions": {
-        "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。"
+        "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。",
+        "runtime_identity": {
+          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+        }
       },
       "model": {
         "primary_provider": "primary",
@@ -440,7 +449,10 @@
       "description": "专门用于资料检索、文档总结和方案调研。",
       "language": "zh-CN",
       "instructions": {
-        "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。"
+        "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。",
+        "runtime_identity": {
+          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+        }
       },
       "model": {
         "primary_provider": "primary",

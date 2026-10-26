@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 
 from app.agents.middleware_prompts import (
     RUNTIME_IDENTITY_HEADER,
+    RUNTIME_IDENTITY_PROTOCOL,
     RUNTIME_WORKSPACE_SCOPE_FIELD,
 )
 from app.domain.itemized.epoch.source_protocol import (
@@ -47,6 +49,12 @@ def _validate_runtime_workspace_scope(content: object) -> None:
 def _validate_scope_text(content: object) -> None:
     if not isinstance(content, str):
         return
+    if content.startswith('{"protocol":"' + RUNTIME_IDENTITY_PROTOCOL + '",'):
+        identity = json.loads(content)
+        if identity["runtime_facts"]["workspace_root"] != ".":
+            raise ValueError("real-path-not-allowed: R02 工作区范围必须为相对路径 `.`")
+        return
+    # TODO：历史封存仍须按原字段校验；待历史保留合同允许移除时再回收，不能重写正文。
     if RUNTIME_IDENTITY_HEADER not in content and RUNTIME_WORKSPACE_SCOPE_FIELD not in content:
         return
     scopes = [

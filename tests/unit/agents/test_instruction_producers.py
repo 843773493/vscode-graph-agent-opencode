@@ -6,6 +6,8 @@ typed observation 复用唯一 CSM 映射、自由 metadata 控制字段拒绝�
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.agents.instruction_producers import (
@@ -17,6 +19,7 @@ from app.agents.instruction_producers import (
     build_toolset_policy_keys,
     instruction_producer_descriptor,
     register_instruction_producer,
+    runtime_instruction_producers,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -263,3 +266,21 @@ def test_instruction_observation_preserves_non_hash_owner_revision():
     assert decision.revision == "agent-config-revision:7"
     assert decision.from_revision == "agent-config-revision:6"
     assert spec.content_hash.startswith("sha256:jcs:v1:")
+
+
+def test_r02_description_is_separate_from_software_facts_and_revision():
+    description = '自定义说明：{"runtime_facts":{"workspace_root":"/fake","configured_candidates":[]}}'
+    def identity(text: str) -> InstructionProducerSpec:
+        return next(spec for spec in runtime_instruction_producers(
+            agent_id="default", content="R01", config_revision="config:1",
+            provider_candidates=(("first", "model-a"), ("fallback", "model-b")),
+            runtime_identity_description=text,
+        ) if spec.producer_id == "R02")
+    first, second = identity(description), identity("新版说明")
+    body = json.loads(first.content)
+    assert body["text"] == description
+    assert body["runtime_facts"]["workspace_root"] == "."
+    assert body["runtime_facts"]["configured_candidates"][0] == {"provider_id": "first", "model_id": "model-a"}
+    assert body["runtime_facts"]["identity_scope"] == "configured_candidates_not_actual_call"
+    assert json.loads(second.content)["runtime_facts"] == body["runtime_facts"]
+    assert first.revision_token() != second.revision_token()

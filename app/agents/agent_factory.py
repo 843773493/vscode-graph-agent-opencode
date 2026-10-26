@@ -364,6 +364,7 @@ def build_runtime_for_agent(
         "instruction_producers": runtime_instruction_producers(
             agent_id=agent_id, content=runtime_config["system_prompt"],
             config_revision=service.get_revision(),
+            runtime_identity_description=runtime_config["runtime_identity_description"],
             provider_candidates=[
                 (candidate.provider_id, candidate.model_id)
                 for candidate in candidates

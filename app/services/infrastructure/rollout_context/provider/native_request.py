@@ -188,7 +188,11 @@ def project_native_request(
                 inputs.extend(_summary_message_inputs(body))
             else:
                 role = "user" if seal_binding is not None else "system"
-                inputs.append({"role": role, "content": _text_blocks(body, role=role)})
+                content = _text_blocks(body, role=role)
+                # 原始正文仍须能编码；已封存来源只发送 frame 中确定的模型正文。
+                if seal_binding is not None:
+                    content = _text_blocks(frame_by_ref[selection_ref_identity(ref)].content, role=role)
+                inputs.append({"role": role, "content": content})
         else:
             item = resolve_selected_item(entry, items)
             if ref_identity(ref) in superseded:

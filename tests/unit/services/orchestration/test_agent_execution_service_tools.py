@@ -42,6 +42,7 @@ class _DummyConfigService:
     def get_default_agent_runtime_config(self):
         return {
             "system_prompt": "dummy system prompt",
+            "runtime_identity_description": "",
             "providers": self.get_llm_providers(),
             "temperature": 0.2,
             "top_p": 1,

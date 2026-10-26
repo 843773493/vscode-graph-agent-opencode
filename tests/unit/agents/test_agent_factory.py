@@ -60,7 +60,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "model": MagicMock(),
         "instruction_producers": runtime_instruction_producers(
             agent_id="default", content="测试提示词", config_revision="config:1",
-            provider_candidates=(("fixture", "model"),),
+            runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
         ),
         "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         "checkpointer": MagicMock(),
@@ -151,7 +151,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "model": MagicMock(),
         "instruction_producers": runtime_instruction_producers(
             agent_id="default", content="测试提示词", config_revision="config:1",
-            provider_candidates=(("fixture", "model"),),
+            runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
         ),
         "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         "checkpointer": checkpointer,

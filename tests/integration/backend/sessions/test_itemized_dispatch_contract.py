@@ -57,6 +57,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileChangeRequiresRebuildError,
     stable_prefix_bytes,
 )
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
@@ -264,7 +265,7 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     assert body["tools"] == projection["request"]["tools"]
     # compiled root 独立记录 provenance；其余 wire source 忠实消费同一 selection。
     root = restored.seal_binding.root
-    assert root.content == "HTTP system prompt"
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(root.content)] == [("instruction:native-contract", "HTTP system prompt")]
     root_sources = tuple(
         source.source_binding.source_ref
         for source in restored.contributions
@@ -288,9 +289,11 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
         "content": [{"type": "input_text", "text": root.content}],
     }
     assert sum(item.get("role") == "system" for item in body["input"]) == 1
-    assert [item["content"][0]["text"] for item in body["input"][-2:]] == [
-        "HTTP overlay base",
-        "HTTP overlay delta",
+    overlay_frames = restored.seal_binding.prefix.state.frames[-2:]
+    assert [item["content"][0]["text"] for item in body["input"][-2:]] == [frame.content for frame in overlay_frames]
+    assert [parse_source_blocks(frame.content)[0].body for frame in overlay_frames] == [
+        [{"type": "text", "text": "HTTP overlay base"}],
+        [{"type": "text", "text": "HTTP overlay delta"}],
     ]
     assert body["tools"][0]["name"] == "inspect_file"
     assert body["tools"][0]["parameters"]["type"] == "object"
@@ -755,7 +758,7 @@ async def test_cross_protocol_fallback_keeps_frozen_context_through_tool_loop_an
             projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
             target_format=snapshot.target_format, wire_request=snapshot.request_hash_preimage,
         )
-        assert snapshot.seal_binding.root.content == "fallback 必须保留的原始说明"
+        assert [(block.source_identity, block.body) for block in parse_source_blocks(snapshot.seal_binding.root.content)] == [("instruction:native-contract", "fallback 必须保留的原始说明")]
         assert snapshot.seal_binding.root.sources == snapshots[0].seal_binding.root.sources
         if index:
             old = snapshots[index - 1]
@@ -1231,7 +1234,8 @@ print('restarted-dispatch-ok')
                 ])
             assert overlay_inputs[0] == overlay_inputs[1]
             assert [item["content"][0]["text"] for item in overlay_inputs[0]] == [
-                "HTTP overlay base", "HTTP overlay delta",
+                frame.content for frame in first.seal_binding.prefix.state.frames
+                if frame.item_ref.ref_id in {"z-base", "a-delta"}
             ]
         else:
             overlay_inputs = []
@@ -1251,9 +1255,16 @@ print('restarted-dispatch-ok')
                 overlay_inputs.append([wire[index] for index in positions])
                 assert wire[0] == {"role": "system", "content": snapshot.seal_binding.root.content}
             assert overlay_inputs[0] == overlay_inputs[1] == [
-                {"role": "user", "content": [{"type": "text", "text": text}]}
-                for text in ("HTTP overlay base", "HTTP overlay delta")
+                {"role": "user", "content": frame.content}
+                for frame in first.seal_binding.prefix.state.frames
+                if frame.item_ref.ref_id in {"z-base", "a-delta"}
             ]
+        assert [parse_source_blocks(frame.content)[0].body
+                for frame in first.seal_binding.prefix.state.frames
+                if frame.item_ref.ref_id in {"z-base", "a-delta"}] == [
+            [{"type": "text", "text": "HTTP overlay base"}],
+            [{"type": "text", "text": "HTTP overlay delta"}],
+        ]
         old_overlay = [entry for entry in first.selection if entry.base_delta_role != "none"]
         new_overlay = [entry for entry in second.selection if entry.base_delta_role != "none"]
         for old, new in zip(old_overlay, new_overlay, strict=True):
@@ -2170,7 +2181,7 @@ async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_b
         assert current.seal_binding.root == initial.seal_binding.root
     frames = delta.seal_binding.prefix.state.frames
     tail = [frame for frame in frames if frame.item_ref.source_identity == "prefix-chain:tail"]
-    assert [(frame.role, frame.content) for frame in tail] == [
+    assert [(frame.role, parse_source_blocks(frame.content)[0].body) for frame in tail] == [
         ("user", "完整来源 A\n"), ("user", expected_delta),
     ]
     full_tail_index = frames.index(tail[0])
@@ -2200,7 +2211,7 @@ async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_b
     assert [entry for entry in wire_items if entry.get("role") == "user"][-2:] == [
         {"role": "user", "content": [{"type": "input_text", "text": text}]
          if case.target_format == "responses" else text}
-        for text in ("完整来源 A\n", expected_delta)
+        for text in (frame.content for frame in tail)
     ]
 
 
@@ -2385,7 +2396,7 @@ async def test_real_inflight_selection_change_keeps_sealed_retry_and_applies_nex
     assert changed.seal_binding.prefix.state.epoch.ordinal == 2
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
     assert _contract_wire_tool_names(case, case.state.requests[2]["body"]) == ("inspect_folder",)
-    assert changed.seal_binding.root.content == "下一次 safe boundary 的说明"
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(changed.seal_binding.root.content)] == [("instruction:native-contract", "下一次 safe boundary 的说明")]
     assert _sealed_contract_rows(case)[0] == before[0]
     assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
 
@@ -2565,7 +2576,7 @@ async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_comm
     assert changed.seal_binding.prefix.state.epoch.ordinal == 2
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
     assert changed.seal_binding.applied_toolset_revision != first.seal_binding.applied_toolset_revision
-    assert changed.seal_binding.root.content == "重试后才能 applied 的说明"
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(changed.seal_binding.root.content)] == [("instruction:native-contract", "重试后才能 applied 的说明")]
     assert _contract_wire_tool_names(case, case.request(changed)) == ("inspect_folder",)
     assert _sealed_contract_rows(case)[0] == before[0]
     assert _latest_contract_assembly(case).seal_binding == changed.seal_binding

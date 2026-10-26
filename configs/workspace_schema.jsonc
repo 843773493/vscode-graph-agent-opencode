@@ -25,6 +25,7 @@
   "x-boxteam-policy-manifest": [
     { "pattern": "/ui/*", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/llm/providers", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/agents/*/instructions/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/timeout_seconds", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/runtime/auxiliary_services/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
@@ -1109,6 +1110,17 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 30000
+        },
+        "runtime_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string",
+              "maxLength": 20000,
+              "description": "R02 可覆盖说明；不修改软件生成的工作区范围、Agent 身份及配置候选事实。省略时不附加说明。"
+            }
+          }
         },
         "developer_prompt": {
           "type": "string",

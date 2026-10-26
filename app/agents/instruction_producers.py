@@ -1,7 +1,7 @@
 """OpenSpec 4.6：初始 instruction producer 的 typed 注册合同。
 
-设计表 R01–R07 的说明性上下文（Agent 基础说明、runtime identity、条件化
-团队规则、Todo、Skill metadata、Filesystem、compact tool 说明）
+设计表 R01–R07 及 R10 的说明性上下文（Agent 基础说明、runtime identity、条件化
+团队规则、Todo、Skill metadata、Filesystem、compact tool 说明及 CSM 协议）
 在这里取得统一的 producer identity、root 资格声明与 ToolSet policy 绑定；
 producer 只通过 typed spec/observation 提交 provenance 给唯一
 ``ContextSourceManager``，不再直接拼 HumanMessage/system 作为隐式来源。
@@ -19,15 +19,14 @@ from typing import Literal
 
 from app.agents.middleware_prompts import (
     CSM_PROTOCOL_PROMPT,
-    RUNTIME_IDENTITY_HEADER,
-    RUNTIME_WORKSPACE_SCOPE_FIELD,
+    RUNTIME_IDENTITY_PROTOCOL,
 )
 from app.domain.itemized.epoch.root_compilation import (
     SOURCE_POLICY_KEYS,
     RootPlacement,
     SourcePolicyKey,
 )
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -315,25 +314,23 @@ def register_instruction_producer(
 def runtime_instruction_producers(
     *, agent_id: str, content: str, config_revision: str,
     provider_candidates: Sequence[tuple[str, str]],
+    runtime_identity_description: str,
 ) -> tuple[InstructionProducerSpec, ...]:
     """分别冻结配置说明和运行时身份，禁止从最终 system prompt 反捕。"""
     if not provider_candidates:
         raise ValueError("运行时身份至少需要一个 provider/model 候选")
-    primary_provider_id, primary_model_id = provider_candidates[0]
-    fallback_text = ", ".join(
-        f"{provider_id}/{model_id}" for provider_id, model_id in provider_candidates[1:]
-    )
-    identity_prompt = (
-        f"{RUNTIME_IDENTITY_HEADER}\n"
-        f"{RUNTIME_WORKSPACE_SCOPE_FIELD}`.`\n"
-        f"- 当前首选 provider id：`{primary_provider_id}`\n"
-        f"- 当前首选 model id：`{primary_model_id}`\n"
-        f"- 已配置 fallback provider/model（按顺序）：`{fallback_text or '无'}`\n"
-        "这些字段来自当前运行时配置，不是从 project.godot 或其他工作区文件推断的。\n"
-        "回答 provider/model 身份时必须使用上述元数据；project.godot 的 `config/name` 只是项目显示名，绝不是模型名或 provider 名。\n"
-        "文件工具的 path 和 exec_command 的 workdir 都使用当前工作区内的相对路径；`.` 表示工作区根，真实目录由工具 owner 解析。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。\n"
-        "exec_command 的相对 workdir 只相对于当前 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd_relative 是实际执行目录相对 workspace 根目录的路径（`.` 表示根），应以它解释相对路径。"
-    )
+    identity_prompt = canonical_json_bytes({
+        "protocol": RUNTIME_IDENTITY_PROTOCOL,
+        "text": runtime_identity_description,
+        "runtime_facts": {
+            "agent_id": agent_id, "workspace_root": ".",
+            "identity_scope": "configured_candidates_not_actual_call",
+            "configured_candidates": [
+                {"provider_id": provider_id, "model_id": model_id}
+                for provider_id, model_id in provider_candidates
+            ],
+        },
+    }).decode("utf-8")
     return (
         InstructionProducerSpec(
             producer_id="R10", source_id="instruction:csm-protocol",

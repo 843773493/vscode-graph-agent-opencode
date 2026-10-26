@@ -445,7 +445,7 @@ def test_runtime_skips_invalid_fallback_without_blocking_selected_provider(
 
         def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
             assert preferred_provider_id == "selected"
-            return {"providers": providers, "system_prompt": "test"}
+            return {"providers": providers, "system_prompt": "test", "runtime_identity_description": ""}
 
     def build(provider, _runtime, *, prompt_cache_key=None):
         assert prompt_cache_key is None
@@ -475,7 +475,7 @@ def test_runtime_reports_invalid_selected_provider(monkeypatch):
             return "config:runtime-fallback"
 
         def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
-            return {"providers": providers, "system_prompt": "test"}
+            return {"providers": providers, "system_prompt": "test", "runtime_identity_description": ""}
 
     monkeypatch.setattr(
         "app.agents.agent_factory.build_model_from_provider",

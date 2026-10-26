@@ -341,7 +341,7 @@
 - [x] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
 - [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
 - [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
-- [ ] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
+- [x] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
 - [ ] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
 - [ ] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
 - [ ] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
@@ -381,3 +381,15 @@
 - Provider/factory/真实owner回归117 passed；全itemized领域1462 passed；来源与instruction回归105 passed。epoch前轮35 passed/1 failed/3 deselected，唯一失败为旧裸正文断言，改为解析后精确body与source identity后补验1 passed；正式epoch-copy matrix补验3 passed。修改前完整4445文件归档通过实际CSM/prepare/seal/checkpoint生成两份v2历史，新代码冷读、同key重试、同epoch追加、真实fork和来源离线冷读通过，旧sealed bytes、request hash和owner保持不变。均保留准确命令、进程外期限、4GiB保护、前后指纹与原始退出码，不将首次非零改写为通过。
 - Ruff/compileall通过；12产品文件真实Pyright79项均在旧HEAD80项基线内，新产品文件无错误，两个新增测试文件类型检查0错误；不称类型全绿。作者AST与差异自查未发现新增职责冲突，不冒充独审。最终测试后的产品变化仅为EOF空行，另有旧测试断言与OpenSpec说明调整，按实际依赖复用结果。原归档4445文件重新核验后清理，保留生成历史与旧测试原件。收据见`out/tests/temp/cil_source_protocol_20261026/artifacts/verification-029.json`。
 - 9.6、9.8、9.13继续未勾：跨来源具名替代引用及复用旧正文时的显式切回尚缺，9.7聚合与有序多item引用也未实现。本切片不代替完整Web、真实外部Provider、Windows或新增总门；团队/协作专项继续暂缓。
+
+### 2026-10-26 9.4 指令配置与实际发布闭合
+
+- R01只从最终合并配置取得正文，删除Python提示词和缺失Agent兜底。R02采用可覆盖说明与软件事实分离的版本化正文；配置候选不冒充实际调用身份，移除项目示例。新增可选说明、schema及next_job策略，复用原ConfigService与generation发布，不引入请求期拼接或另一条更新链路。
+- 配置83项、producer/factory/Provider单元99项、SDK序列化与冷恢复38项通过；真实R01/R02 reload两项验证下一execution新内容、generation变更、旧key重试及封存前缀不变。原装具在建容器前已写入配置，初始来源断言现核对实际权威行、文件hash及generation=1。执行编排37项通过、2项失败；两失败在完整旧HEAD归档同位置复现，保留原件而不扩大修复。
+- Ruff基线/最终均31项、无新增，23个Python文件compileall通过；6个指令相关文件Pyright基线/最终均16项。没有Web源码变化，不替代Web、真实外部Provider或Windows；9.5外部文件输入及9.15总门继续未勾。作者差异/AST自查不冒充独审。
+
+### 2026-10-26 9.6 封存消费者与fork补齐
+
+- 扩查发现Responses普通来源发送绕回raw detail、fork重建旧root时按source ID丢弃后续diff两处真实缺陷。原生发送保留正文编码校验并只发送封存frame；root重建区分本次完整物化与旧版本恢复，只移除已被root覆盖的帧，保留后续版本delta。调用方测试迁为解析后精确正文/身份及实际wire与frame一致，旧hash、owner、tool配对与字节断言保留。
+- 正式source-wire matrix最终22 passed，覆盖同步/异步真实HTTP、跨协议fallback、ToolSet重编、失败重试及typed/后继fork；独立进程overlay恢复2 passed；epoch回归34 passed及正式copy matrix3 passed。dispatch/core原45 passed/1 failed，唯一为新增断言把既有text-block列表误写为字符串，修正后定向2 passed；非文本overlay仍明确拒绝。AGENTS真实发布/冷恢复5 passed按未变追加分支复用；运行时其它文件变化范围逐轮记录，不能声称全部源码同指纹重跑。
+- compiler的14项、native projector的3项Pyright诊断均与基线相同，无新增；OpenSpec strict有效。准确命令、前后指纹、raw、实际退出码、失败归因与复用边界见`out/tests/temp/cil_instruction_inputs_20261026/artifacts/verification-035.json`。9.6/9.8/9.13仍保留未完成；跨来源替代、分组与文件输入不由本收据证明。

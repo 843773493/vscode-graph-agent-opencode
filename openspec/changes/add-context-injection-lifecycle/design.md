@@ -171,6 +171,8 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 
 CSM解释提示以 R10 / `instruction:csm-protocol` 登记并版本化，不占用 R08（AGENTS）或已移除的 R09，不由adapter补拼。来源块使用 `boxteam-context-sources:v1` 的 JCS JSON（`protocol` + 有序 `sources`），`body` 独立转义；raw contribution 与其原hash继续用于恢复校验，封装只由compiler确定并随frame封存。新版seal binding使用显式版本3及`source_protocol=1`，旧v1/v2由原codec按原形重编码，继承前缀允许包含旧帧，不猜测原正文是否碰巧类似JSON。来源块采用确定性封装，正文中的类似标签不能改变软件记录的来源边界。消息分组策略在preparation选择并与有序item引用一起封存，retry及历史恢复复用封存结果；item与frame映射调整接入itemized唯一owner，不新增封存writer或另存一份消息级来源状态。
 
+R01只消费最终合并配置的`agents.<id>.instructions.system_prompt`；发行包默认正文唯一位于`workspace_inline.jsonc`，Python不另设默认正文或缺失Agent兜底。R02的可覆盖说明采用可选`agents.<id>.instructions.runtime_identity.description`，缺省不额外附加说明；内置配置与开发模板给出普通路径输入和目标机器解释规则。R02 owner将有效说明与软件事实编码为`boxteam-runtime-identity:v1`的JCS正文：`text`是说明，`runtime_facts`独立冻结Agent ID、相对工作区根`.`及有序`configured_candidates`，`identity_scope=configured_candidates_not_actual_call`明确它们不能证明本次实际模型。R10解释这层边界，实际身份仍归本次调用已封存Provider绑定，不在fallback时改写旧root。最终发送门禁只读取软件事实中的工作区范围，不递归解释说明中的伪事实；旧封存R02仍按原字段拒绝真实根路径，不改写历史。`/agents/*/instructions/*`登记为`next_job`策略并同步schema清单，复用现有ConfigService发布与generation重建；不承诺运行中任意model-call立即热更新。新增可选字段不改变配置版本，不需数据库迁移。
+
 #### 4.2 来源更新能力、状态语义与正文入口
 
 本节明确职责与字段语义；命名在本轮按下述方向统一，具体配置键与持久化结构不在这里冻结。跨层改名须迁齐写入方、消费者与测试，不保留字段别名或双写。

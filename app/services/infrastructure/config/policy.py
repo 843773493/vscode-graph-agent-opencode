@@ -253,6 +253,7 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
         rules=(
             ConfigPolicyRule("/ui/*", "next_session", "next_session"),
             ConfigPolicyRule("/llm/providers", "next_job", "next_job"),
+            ConfigPolicyRule("/agents/*/instructions/*", "next_job", "next_job"),
             ConfigPolicyRule(
                 "/runtime/agent/run/timeout_seconds", "next_job", "next_job"
             ),

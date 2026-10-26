@@ -271,6 +271,7 @@ def agent_execution_dependencies(
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
         "require_delegated_report": False,
     }
     config_service.get_agent_tool_config.return_value = {"denylist": []}
@@ -1068,6 +1069,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(agent_execution_depend
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
     }
     service = _build_agent_execution_service(deps)
 
@@ -1212,6 +1214,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(agent_execut
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
     }
     service = _build_agent_execution_service(deps)
 
@@ -1304,6 +1307,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
     }
     deps["config_service"].get_agent_tool_config.return_value = {
         "denylist": [],
@@ -1400,6 +1404,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
     }
     service = _build_agent_execution_service(deps)
 
@@ -1467,6 +1472,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
         "top_p": 1.0,
         "max_output_tokens": 1024,
         "system_prompt": "test",
+        "runtime_identity_description": "",
     }
     service = _build_agent_execution_service(deps)
     tool_arguments = {"code": "print('LC_BLOCK_OK_2')"}

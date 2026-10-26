@@ -9,11 +9,16 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from app.agents.middleware_prompts import (
+    RUNTIME_IDENTITY_HEADER,
+    RUNTIME_WORKSPACE_SCOPE_FIELD,
+)
 from app.agents.providers import wire_finalize
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -102,7 +107,10 @@ def test_runtime_scope_reaches_serialized_http_and_restores_without_host_root(fa
     assert outgoing_http[0] == outgoing_http[1]
     serialized = json.dumps(outgoing_http, ensure_ascii=False)
     assert str(files.workspace_root) not in serialized
-    assert "cwd）：`.`" in serialized
+    binding = saver._storage.assemblies.list_context_assemblies(session, thread)[-1].seal_binding
+    identity = next(block for block in parse_source_blocks(binding.root.content)
+                    if block.source_identity == "instruction:runtime-identity")
+    assert json.loads(identity.body)["runtime_facts"]["workspace_root"] == "."
     runtime = SimpleNamespace(tool_call_id="call-r02-files", state={"files": {}}, store=None)
     # 文件入口显式传递 Gateway 身份；不能让它改变上方 Agent 构造的来源范围。
     token = set_current_gateway_id(runtime_gateway_id)
@@ -124,8 +132,7 @@ def test_runtime_scope_reaches_serialized_http_and_restores_without_host_root(fa
 @pytest.mark.parametrize("factory_context", ["chat_completions", "responses"], indirect=True)
 def test_restored_legacy_r02_is_rejected_without_rewriting_or_http(factory_context, outgoing_http, monkeypatch):
     saver, session, thread, _connection, _selection, manager, captured, _tools, dispatch, files = factory_context
-    source = next(source for source in manager.prepare_sources().sources if source.descriptor.source_id == "instruction:runtime-identity")
-    legacy = source.content.replace("cwd）：`.`", f"cwd）：`{files.workspace_root}`")
+    legacy = f"{RUNTIME_IDENTITY_HEADER}\n{RUNTIME_WORKSPACE_SCOPE_FIELD}`{files.workspace_root}`"
     assert str(files.workspace_root) in legacy
     manager.observe("instruction:runtime-identity", legacy, revision=sha256_jcs({"legacy-r02": legacy}))
     # 显式复现旧 writer 的已封存记录；只在建历史数据时关闭新增门禁。

@@ -1240,6 +1240,26 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
     assert runtime["require_delegated_report"] is False
 
 
+def test_instruction_inputs_use_merged_configuration_without_python_prompt_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config = _base_config()
+    instructions = config["agents"]["default"]["instructions"]
+    instructions["runtime_identity"] = {"description": "我的路径说明"}
+    config_path = _write_workspace_config(tmp_path, config)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+    runtime = service.get_agent_runtime_config("default")
+    assert runtime["system_prompt"] == "hello"
+    assert runtime["runtime_identity_description"] == "我的路径说明"
+    # 实际加载结果缺少指令不能退回另一份隐藏的英文正文。
+    damaged = service._get_effective_config()
+    damaged["agents"]["default"]["instructions"].pop("system_prompt")
+    monkeypatch.setattr(service, "_get_effective_config", lambda: damaged)
+    with pytest.raises(KeyError, match="system_prompt"):
+        service.get_agent_runtime_config("default")
+
+
 def test_agent_runtime_can_require_delegated_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

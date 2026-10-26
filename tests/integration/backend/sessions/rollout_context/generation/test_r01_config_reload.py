@@ -32,18 +32,20 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 __all__ = ["runner_case", "runtime_case"]
 
 
+@pytest.mark.parametrize("producer_id", ["R01", "R02"])
 @pytest.mark.asyncio
-async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sealed_prefix(
+async def test_real_config_reload_refreshes_instruction_generation_without_rewriting_sealed_prefix(
     runtime_case: RuntimeCase,
+    producer_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """真实配置发布经 runtime generation 到下一请求；旧封存请求仍可重试。"""
     case = runtime_case
     saver = case.runner.saver
     config = case.runner.container.config_service
-    source_id = "instruction:agent-instructions"
+    source_id = "instruction:agent-instructions" if producer_id == "R01" else "instruction:runtime-identity"
     before = config.get_snapshot()
-    # 标准 fixture 已重建 .boxteam；核对尚未发布的 workspace 来源与权威记录。
+    # Runner fixture 已在建容器前写入配置，初始来源必须与该真实文件和权威记录一致。
     workspace_source_key = "workspace_root_mutable_override"
     source_store = case.runner.container.workspace_activity_service.store
     before_workspace_sources = [
@@ -51,8 +53,9 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
     ]
     assert len(before_workspace_sources) == 1
     before_workspace_source = before_workspace_sources[0]
-    # TODO(9.15)：核清装具已发布workspace来源与此未发布前置条件的冲突；未核清前保留断言。
-    assert source_store.get_source_layer(workspace_source_key) is None
+    initial_layer = source_store.get_source_layer(workspace_source_key)
+    assert initial_layer is not None
+    initial_config_path = case.runner.workspace / ".boxteam" / "workspace.jsonc"
     assert (
         before_workspace_source.precedence,
         before_workspace_source.source_key,
@@ -62,13 +65,15 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
         before_workspace_source.layer_revision,
         before_workspace_source.layer_digest,
         before_workspace_source.source_generation,
-    ) == (3, workspace_source_key, "absent", False, None, None, None, None)
+    ) == (3, workspace_source_key, "present", True, None, initial_layer.layer_revision,
+          sha256(initial_config_path.read_bytes()).hexdigest(), initial_layer.source_generation)
     before_source_generation = source_store.source_generation_high_water_mark(
         source_key=workspace_source_key
     )
-    assert before_source_generation == 0
-    old_content = before.to_dict()["agents"]["default"]["instructions"]["system_prompt"]
-    new_content = "R01 配置刷新后的 Agent 基础说明：后续请求使用这条新内容。"
+    assert before_source_generation == initial_layer.source_generation == 1
+    initial_instructions = before.to_dict()["agents"]["default"]["instructions"]
+    old_content = initial_instructions["system_prompt"] if producer_id == "R01" else initial_instructions["runtime_identity"]["description"]
+    new_content = f"{producer_id} 配置刷新后的说明：后续请求使用这条新内容。"
     assert new_content != old_content
     produced: list[InstructionProducerSpec] = []
     projections = []
@@ -87,7 +92,7 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
         def compile_generation(**kwargs):
             r01 = [
                 spec for spec in kwargs["instruction_producers"]
-                if spec.producer_id == "R01"
+                if spec.producer_id == producer_id
             ]
             assert len(r01) == 1 and isinstance(r01[0], InstructionProducerSpec)
             produced.append(r01[0])
@@ -181,7 +186,10 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
     )
     first_seal_bytes = canonical_json_bytes(first_snapshot.to_dict())
     first_generation = case.tracker.snapshot(session_id, thread_id).generation
-    assert produced[0].content == old_content and produced[0].revision == before.revision
+    if producer_id == "R01":
+        assert produced[0].content == old_content and produced[0].revision == before.revision
+    else:
+        assert json.loads(produced[0].content)["text"] == old_content
     assert produced[0].source_id == source_id and produced[0].root_placement == "root_eligible"
     first_binding = first_snapshot.seal_binding
     assert first_binding is not None and first_binding.root is not None
@@ -205,14 +213,21 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
     source_config = read_jsonc_object(config_path) if config_path.exists() else {}
     source_config.setdefault("agents", {}).setdefault("default", {}).setdefault(
         "instructions", {}
-    )["system_prompt"] = new_content
+    )
+    if producer_id == "R01":
+        source_config["agents"]["default"]["instructions"]["system_prompt"] = new_content
+    else:
+        source_config["agents"]["default"]["instructions"].setdefault("runtime_identity", {})["description"] = new_content
     config_path.write_text(
         json.dumps(source_config, ensure_ascii=False), encoding="utf-8"
     )
     assert await config.reload(idempotency_key="r01-instructions-refresh")
     after = config.get_snapshot()
     expected = before.to_dict()
-    expected["agents"]["default"]["instructions"]["system_prompt"] = new_content
+    if producer_id == "R01":
+        expected["agents"]["default"]["instructions"]["system_prompt"] = new_content
+    else:
+        expected["agents"]["default"]["instructions"]["runtime_identity"]["description"] = new_content
     assert after.revision != before.revision and after.to_dict() == expected
     workspace_sources = [
         source for source in after.source_details if source.layer == "workspace"
@@ -236,13 +251,20 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
         workspace_layer.layer_revision,
         workspace_layer.layer_digest,
         workspace_layer.source_generation,
-    ) == (1, sha256(config_path.read_bytes()).hexdigest(), before_source_generation + 1)
+    ) == (initial_layer.layer_revision + 1, sha256(config_path.read_bytes()).hexdigest(), before_source_generation + 1)
     assert config.get_revision() == after.revision
-    assert config.get_agent_runtime_config("default")["system_prompt"] == new_content
+    runtime = config.get_agent_runtime_config("default")
+    assert runtime["system_prompt" if producer_id == "R01" else "runtime_identity_description"] == new_content
 
     second_admission = await _complete_job(case, session_id, thread_id)
     assert retry_checked and len(projections) == len(produced) == len(case.compiled) == 2
-    assert produced[1].content == new_content and produced[1].revision == after.revision
+    if producer_id == "R01":
+        assert produced[1].content == new_content and produced[1].revision == after.revision
+    else:
+        before_identity, after_identity = json.loads(produced[0].content), json.loads(produced[1].content)
+        assert after_identity["text"] == new_content
+        assert after_identity["runtime_facts"] == before_identity["runtime_facts"]
+        assert produced[1].revision_token() != produced[0].revision_token()
     assert case.tracker.snapshot(session_id, thread_id).generation == first_generation + 1
     assert case.compiled[1][0] == (session_id, thread_id)
     assert case.compiled[1][1] is not case.compiled[0][1]

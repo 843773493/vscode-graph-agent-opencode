@@ -15,6 +15,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.resource_derivations.agents import (
@@ -271,14 +272,15 @@ async def test_live_agents_publication_appends_delta_without_changing_sealed_roo
         "+CIL_LIVE_AGENTS_B\r\n"
         "+保留末尾空白  \n"
     )
-    assert frame.role == "user" and frame.content == expected_delta
+    assert frame.role == "user"
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(frame.content)] == [(WORKSPACE_AGENTS_SOURCE_ID, expected_delta)]
     assert second_assembly.seal_binding.root is not None
     assert canonical_json_bytes(second_assembly.seal_binding.root.frame_manifest()) == root_bytes
     restored = saver.get_context_assembly(session_id, thread_id, assembly_id=first_assembly.assembly_id)
     assert canonical_json_bytes(restored.to_dict()) == first_bytes
     wire = case.requests()[-1]
     assert normalize_wire_request(wire) == second_assembly.request_hash_preimage
-    assert {"role": "user", "content": expected_delta} in _messages(wire)
+    assert {"role": "user", "content": frame.content} in _messages(wire)
     case.write_actual("live-agents-a-to-b", {
         "first_assembly_id": first_assembly.assembly_id, "second_assembly_id": second_assembly.assembly_id,
         "first_assembly_hash": hashlib.sha256(first_bytes).hexdigest(),
@@ -422,7 +424,8 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
         assert before_control.latest_revision == before_control.latest_visible_committed_revision == old_revision
         assert before_control.tracking_status == "tracked"
         assert first_assembly.seal_binding.root is not None
-        assert first_body in first_assembly.seal_binding.root.content
+        assert [(block.source_identity, block.body) for block in parse_source_blocks(first_assembly.seal_binding.root.content)
+                if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID] == [(WORKSPACE_AGENTS_SOURCE_ID, first_body)]
         root_bytes = canonical_json_bytes(first_assembly.seal_binding.root.frame_manifest())
         first_bytes = canonical_json_bytes(first_assembly.to_dict())
     first_requests = [request for request in case.requests()
@@ -479,8 +482,9 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
         if agents_after == "unchanged":
             assert revisions == [] and new_frames == []
             assert current == before_control
-            assert any(first_body in _wire_text(message["content"])
-                       for message in _messages(second_requests[0]) if message["role"] == "system")
+            assert any(block.source_identity == WORKSPACE_AGENTS_SOURCE_ID and block.body == first_body
+                       for message in _messages(second_requests[0]) if message["role"] == "system"
+                       for block in parse_source_blocks(message["content"]))
         else:
             assert current.latest_revision != old_revision
             assert [(revision.previous_revision, revision.revision) for revision in revisions] == [
@@ -492,8 +496,8 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
                 + ("@@ -1 +1 @@\n-CIL_OLD_AGENTS 已完成首帧。\n+CIL_NEW_AGENTS 停机期间的新指令。\n"
                    if agents_after == "changed" else "@@ -1 +0,0 @@\n-CIL_OLD_AGENTS 已完成首帧。\n")
             )
-            assert new_frames[0].content == expected_delta
-            assert {"role": "user", "content": expected_delta} in _messages(second_requests[0])
+            assert [(block.source_identity, block.body) for block in parse_source_blocks(new_frames[0].content)] == [(WORKSPACE_AGENTS_SOURCE_ID, expected_delta)]
+            assert {"role": "user", "content": new_frames[0].content} in _messages(second_requests[0])
             assert current.state_revision > before_control.state_revision
         restored_first = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=first_assembly.assembly_id)
         assert canonical_json_bytes(restored_first.to_dict()) == first_bytes

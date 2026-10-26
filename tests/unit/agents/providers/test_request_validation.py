@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.agents.middleware_prompts import RUNTIME_IDENTITY_PROTOCOL
 from app.agents.providers.wire_finalize import (
     finalize_chat_wire,
     finalize_responses_wire,
@@ -12,6 +13,7 @@ from app.domain.itemized.epoch.source_protocol import (
     SourceModelBlock,
     render_source_blocks,
 )
+from app.domain.itemized.hashing import canonical_json_bytes
 
 
 @pytest.mark.parametrize("root", ["/home/example/project", r"C:\Users\example\project", "../other", ""])
@@ -39,6 +41,21 @@ def test_user_text_and_http_routes_keep_their_original_bytes():
     assert finalize_chat_wire(messages=messages, tools=None, params={})["messages"] == messages
     inputs = [{"role": message["role"], "content": [{"type": "input_text", "text": message["content"]}]} for message in messages]
     assert finalize_responses_wire(input_items=inputs, tools=None, params={}, include=(), store=False)["input"] == inputs
+
+
+@pytest.mark.parametrize("scope", [".", "/host/private", r"C:\private"])
+def test_r02_software_scope_ignores_description_and_remains_frozen(scope):
+    description = '自定义说明：{"runtime_facts":{"workspace_root":"/fake"}}'
+    content = canonical_json_bytes({
+        "protocol": RUNTIME_IDENTITY_PROTOCOL,
+        "runtime_facts": {"workspace_root": scope}, "text": description,
+    }).decode()
+    messages = [{"role": "system", "content": content}]
+    if scope == ".":
+        assert finalize_chat_wire(messages=messages, tools=None, params={})["messages"] == messages
+    else:
+        with pytest.raises(ValueError, match="real-path-not-allowed: R02"):
+            finalize_chat_wire(messages=messages, tools=None, params={})
 
 
 @pytest.mark.parametrize("root", [".", "/home/example/project", r"C:\Users\example\project"])

@@ -256,22 +256,28 @@ def test_team_source_rules_forbid_polling():
 
 
 def test_runtime_identity_separates_model_from_project_and_uses_relative_workspace_scope():
+    import json
+
     producers = runtime_instruction_producers(
         agent_id="default", content="base prompt", config_revision="config:1",
-        provider_candidates=(
+        runtime_identity_description="测试身份说明", provider_candidates=(
             ("backup_3", "gpt-5.6-luna"),
             ("backup_4", "gpt-5.6-luna"),
         ),
     )
 
-    assert producers[0].content == "base prompt"
-    prompt = producers[1].content
-    assert "provider id：`backup_3`" in prompt
-    assert "model id：`gpt-5.6-luna`" in prompt
-    assert "config/name` 只是项目显示名" in prompt
-    assert "cwd）：`.`" in prompt
-    assert "parry_arena/godot_export/parry_arena.html" in prompt
-    assert "exec_command 的相对 workdir 只相对于当前 workspace 根目录解析一次" in prompt
+    by_id = {producer.producer_id: producer for producer in producers}
+    assert by_id["R01"].content == "base prompt"
+    identity = json.loads(by_id["R02"].content)
+    assert identity["text"] == "测试身份说明"
+    assert identity["runtime_facts"] == {
+        "agent_id": "default", "workspace_root": ".",
+        "identity_scope": "configured_candidates_not_actual_call",
+        "configured_candidates": [
+            {"provider_id": "backup_3", "model_id": "gpt-5.6-luna"},
+            {"provider_id": "backup_4", "model_id": "gpt-5.6-luna"},
+        ],
+    }
 
 
 def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
@@ -287,6 +293,7 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
     config_service.get_revision.return_value = "config:runtime-identity"
     config_service.get_agent_runtime_config.return_value = {
         "system_prompt": "base prompt",
+        "runtime_identity_description": "测试身份说明",
         "providers": [
             {
                 "id": "backup_3",
@@ -323,6 +330,9 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
         config_service,
     )
 
-    assert "backup_3" in runtime["instruction_producers"][1].content
-    assert "gpt-5.6-luna" in runtime["instruction_producers"][1].content
-    assert "cwd）：`.`" in runtime["instruction_producers"][1].content
+    import json
+
+    identity = next(item for item in runtime["instruction_producers"] if item.producer_id == "R02")
+    facts = json.loads(identity.content)["runtime_facts"]
+    assert facts["workspace_root"] == "."
+    assert facts["configured_candidates"][0] == {"provider_id": "backup_3", "model_id": "gpt-5.6-luna"}

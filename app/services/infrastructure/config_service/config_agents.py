@@ -84,22 +84,14 @@ class ConfigAgentsMixin:
         if not providers:
             raise ValueError("未配置任何 LLM provider")
 
-        default_runtime = {
-            "system_prompt": "You are a helpful assistant.",
-            "providers": providers,
-            "require_delegated_report": False,
-        }
-
         agents = config.get("agents", {})
 
         resolved_agent_id = self._normalize_agent_id(agent_id)
         if not agents or resolved_agent_id not in agents:
-            if resolved_agent_id != "default":
-                raise ValueError(f"agent {resolved_agent_id} 不存在")
-            return default_runtime
+            raise ValueError(f"agent {resolved_agent_id} 不存在")
 
         target_agent = agents[resolved_agent_id]
-        instructions = target_agent.get("instructions", {})
+        instructions = target_agent["instructions"]
         model_cfg = target_agent.get("model", {})
         execution_cfg = target_agent.get("execution", {})
         if not isinstance(execution_cfg, dict):
@@ -150,9 +142,9 @@ class ConfigAgentsMixin:
             selected_providers.append(provider)
 
         runtime_config: dict[str, Any] = {
-            "system_prompt": instructions.get(
-                "system_prompt", default_runtime["system_prompt"]
-            ),
+            "system_prompt": instructions["system_prompt"],
+            # 未配置说明时只有软件身份事实；不在 Python 另设提示词正文兜底。
+            "runtime_identity_description": instructions.get("runtime_identity", {}).get("description", ""),
             "providers": selected_providers,
             "require_delegated_report": require_delegated_report,
         }

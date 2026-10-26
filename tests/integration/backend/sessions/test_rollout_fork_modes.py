@@ -89,6 +89,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.execution_admission import (
@@ -2135,8 +2136,11 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
     assert sealed_contribution.extensions == extensions
     assert source_selection.contribution_ordinal == sealed_contribution.contribution_ordinal
     assert sealed_contribution.assembly_id == source_snapshot.assembly_id
+    (source_frame,) = [frame for frame in source_snapshot.seal_binding.prefix.state.frames
+                       if frame.item_ref.ref_id == source_selection.ref.ref_id]
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(source_frame.content)] == [(source_id, request_content)]
     assert any(
-        isinstance(message, HumanMessage) and message.content == request_content
+        isinstance(message, HumanMessage) and message.content == source_frame.content
         for message in prepared["messages"]
     )
 
@@ -2296,7 +2300,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         target_tail_frame.role,
         target_tail_frame.item_ref.source_identity,
         target_tail_frame.item_ref.source_revision,
-        target_tail_frame.content,
+        parse_source_blocks(target_tail_frame.content)[0].body,
     ) == ("user", source_id, source_revision, request_content)
     assert target_snapshot.seal_binding.root is None
     (target_registered,) = [
@@ -2416,7 +2420,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
         base_content=overlay_base, delta_content=overlay_delta,
     )
     first = fork_provider_prepare(fork_context, source.session_id, str(accepted["initial_execution_id"]), manager, "source-first", attempt=1)
-    assert first["messages"][0].content == "源共享规则第一版\n\n保留规则第一版"
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(first["messages"][0].content)] == [("instruction:shared", "源共享规则第一版"), ("instruction:retained", "保留规则第一版")]
     assert manager.observe("instruction:retained", "保留规则第二版", revision="instruction:retained:2").status == "accepted"
     second = fork_provider_prepare(fork_context, source.session_id, str(accepted["initial_execution_id"]), manager, "source-second", attempt=2)
     assert second["messages"][0].content == first["messages"][0].content
@@ -2539,20 +2543,24 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
         (identity, expected_sources[identity][0], registered_ordinals[identity, expected_sources[identity][0]])
         for identity in expected_order
     ]
-    assert root.content == "\n\n".join(expected_sources[identity][1] for identity in expected_order)
+    assert [(block.source_identity, block.body) for block in parse_source_blocks(root.content)] == [(identity, expected_sources[identity][1]) for identity in expected_order]
     assert len(root.sources) == len({entry.source_identity for entry in root.sources}) == 2
     assert "保留规则第二版" not in root.content and "仅尾部正文" not in root.content
     assert snapshot.seal_binding.prefix.state.epoch.reason.value == "initial"
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 1
     assert snapshot.seal_binding.prefix.state.epoch.turn_id == target_accepted["turn_id"]
     assert snapshot.seal_binding.prefix.parent is None
-    assert sum(isinstance(message, HumanMessage) and message.content == "仅尾部正文" for message in result["messages"]) == 1
     (tail_frame,) = [frame for frame in snapshot.seal_binding.prefix.state.frames
                      if frame.item_ref.source_identity == "instruction:tail"]
-    assert (tail_frame.role, tail_frame.item_ref.source_revision, tail_frame.content) == ("user", "instruction:tail:1", "仅尾部正文")
-    assert any(isinstance(message, HumanMessage) and message.content == delta for message in result["messages"])
+    assert (tail_frame.role, tail_frame.item_ref.source_revision, parse_source_blocks(tail_frame.content)[0].body) == ("user", "instruction:tail:1", "仅尾部正文")
+    assert sum(isinstance(message, HumanMessage) and message.content == tail_frame.content for message in result["messages"]) == 1
+    (retained_delta,) = [frame for frame in snapshot.seal_binding.prefix.state.frames
+                        if (frame.item_ref.source_identity, frame.item_ref.source_revision) == ("instruction:retained", "instruction:retained:2")]
+    assert retained_delta.role == "user" and retained_delta.item_ref.source_tracking_at_seal == "untracked"
+    assert parse_source_blocks(retained_delta.content)[0].body == parse_source_blocks(delta)[0].body
+    assert any(isinstance(message, HumanMessage) and message.content == retained_delta.content for message in result["messages"])
     (copied_overlay,) = cold.list_source_overlays(target.session_id, target_thread)
-    assert [(frame.role, frame.item_ref.source_identity, frame.item_ref.source_revision, frame.content)
+    assert [(frame.role, frame.item_ref.source_identity, frame.item_ref.source_revision, parse_source_blocks(frame.content)[0].body)
             for frame in snapshot.seal_binding.prefix.state.frames
             if frame.item_ref.source_identity in {copied_overlay["base_ref"], copied_overlay["delta_ref"]}] == [
         ("user", copied_overlay["base_ref"], "policy-v1", overlay_base),
@@ -2958,7 +2966,7 @@ async def test_successor_fork_keeps_original_a_and_b_history_after_both_sources_
             f"successor-{key}", attempt=1, registry=registry,
         )
         snapshot = prepared["snapshot"]
-        assert snapshot.seal_binding.root.content == f"规则 {key}"
+        assert [block.body for block in parse_source_blocks(snapshot.seal_binding.root.content)] == [f"规则 {key}"]
         history.extend([
             next(message for message in prepared["messages"]
                  if isinstance(message, HumanMessage) and message.content == f"问题 {key}"),
@@ -3087,7 +3095,7 @@ async def test_successor_fork_keeps_original_a_and_b_history_after_both_sources_
     )
     snapshot = prepared["snapshot"]
     assert (snapshot.session_id, snapshot.thread_id) == (current.session_id, target_thread)
-    assert snapshot.seal_binding.root.content == "规则 b"
+    assert [block.body for block in parse_source_blocks(snapshot.seal_binding.root.content)] == ["规则 b"]
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 1
     expected_contents = [message.content for message in history] + ["C 继续聊天"]
     assert [message.content for message in prepared["messages"]

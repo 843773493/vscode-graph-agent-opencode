@@ -302,11 +302,21 @@ def compile_prefix_context(
                     for _, source, content, _, _ in tail_values} if rebuilding else {}
     ordinal = len(state.frames) + len(frames)
     if rebuilding and retained_source_assembly is not None:
-        root_sources = {source.source_identity for source in (() if root is None else root.sources)}
+        root_revisions = {source.source_identity: source.revision for source in (() if root is None else root.sources)}
+        materialized = set(root_revisions) & set(source_by_id)
+        retained_frames = retained_source_assembly.seal_binding.prefix.state.frames
+        # 旧 root 只物化自身版本，晚于该版本的历史 delta 仍构成有效状态；
+        # owner 本次提供的完整版本才覆盖此前全部更新，不能按 source ID 一刀切。
+        root_cutoffs = {
+            identity: max((frame.ordinal for frame in retained_frames
+                           if (frame.item_ref.source_identity, frame.item_ref.source_revision) == (identity, revision)), default=0)
+            for identity, revision in root_revisions.items() if identity not in materialized
+        }
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
-        for frame in retained_source_assembly.seal_binding.prefix.state.frames:
-            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *root_sources}:
-                # 新 root 已包含该来源完整有效状态，不再携带它的旧 activation/diff。
+        for frame in retained_frames:
+            identity = frame.item_ref.source_identity
+            if (identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values(), *materialized}
+                    or identity in root_cutoffs and frame.ordinal <= root_cutoffs[identity]):
                 continue
             ref_identity = ("request_only", frame.item_ref.ref_id, plan.thread_id)
             if ((frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs
