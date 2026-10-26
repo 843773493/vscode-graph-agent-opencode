@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.abstractions.session_context import SessionLookupProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
     from app.domain.itemized.execution_admission import ExecutionAdmission
+    from app.domain.itemized.records import CanonicalItemRecord
     from app.services.infrastructure.config_service import ConfigService
     from app.services.infrastructure.external_resource_leases import (
         ExternalResourceLeaseLedger,
@@ -62,6 +63,7 @@ class StepExecutionPorts:
     session_changes_service: SessionChangesRecorderProtocol
     message_stream_store: MessageStreamStore
     background_message_bus: BackgroundMessageBusProtocol
+    committed_item_observer: Callable[[str, str, Sequence[CanonicalItemRecord]], None]
     workspace_root: Path
     agent_factory: StepAgentFactory
     # Turn 控制 inbox 的持久状态路径解析器：把 (session_id, turn_stream_id)

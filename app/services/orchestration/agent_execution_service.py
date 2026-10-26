@@ -55,6 +55,7 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import CanonicalItemRecord
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
     build_agent_tool_definitions,
@@ -165,6 +166,7 @@ class AgentExecutionService(JobStepExecutor):
                 session_changes_service=session_changes_service,
                 message_stream_store=message_stream_store,
                 background_message_bus=background_message_bus,
+                committed_item_observer=self._acknowledge_tool_results,
                 workspace_root=workspace_root,
                 control_inbox_state_path=self._control_inbox_state_path,
                 agent_factory=self._acquire_step_agent,
@@ -175,6 +177,14 @@ class AgentExecutionService(JobStepExecutor):
             ),
             self.execution_scope_registry,
         )
+
+    def _acknowledge_tool_results(
+        self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord],
+    ) -> None:
+        self._dependency_provider.get_mcp_catalog_owner().execution_handles.acknowledge_tool_results(
+            session_id, thread_id, items,
+        )
+        self._background_message_bus.acknowledge_tool_results(session_id, thread_id, items)
 
     def _resolve_control_inbox_state_path(
         self, session_id: str, turn_stream_id: str

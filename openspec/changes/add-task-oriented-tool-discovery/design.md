@@ -137,7 +137,9 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 旧 model-call 已封存但尚未执行的声明应有有界的 generation 保留／执行准入引用，覆盖 HITL 等待；原 handle 到期或不可恢复时，按原 tool_call_id 显式失败，不无限留存连接。正常替换只排空切换前已接纳或已保留执行资格的调用；切换后不向旧 generation 授予新资格。禁用／断开立即撤销尚未启动调用的执行资格，进行中调用按声明的取消策略收敛。断线／超时无法证明远端未执行时返回 outcome-unknown，不自动重试有副作用调用。
 
-封存资格沿原 ExternalResourceLeaseLedger 登记，与实际发出的 operation lease 分开结算，不能把释放资格当成远端操作已结束。`mcp.supervision.sealed_call_timeout_seconds` 默认1800秒，允许1–86400秒，沿既有 Workspace 覆盖层合并；当前修改仍需重启工作区。从模型发送前取得原 handle 开始计时，包含模型生成和人工确认等待，同一封存资格不得重试续期。响应后只保留真实输出的信封调用身份，显式 HITL edit 可选择原封存目录内其它目标；未使用的本地调用／拒绝／直接应答资格也不得超出原期限。重启丢失的 handle 不可恢复或迁投新连接。正常配置热替换与提前结算未使用资格继续由4.4及7.x接通，不能以当前有界资格代替热替换验收。
+封存资格沿原 ExternalResourceLeaseLedger 登记，与实际发出的 operation lease 分开结算，不能把释放资格当成远端操作已结束。`mcp.supervision.sealed_call_timeout_seconds` 默认1800秒，允许1–86400秒，沿既有 Workspace 覆盖层合并；当前修改仍需重启工作区。从模型发送前取得原 handle 开始计时，包含模型生成和人工确认等待，同一封存资格不得重试续期。响应后只保留真实输出的信封调用身份，显式 HITL edit 可选择原封存目录内其它目标。原 canonical sink 提交完整 ToolResult 后，按 Session、Thread、model-call 和 provider tool-call 的精确身份结算未使用资格，覆盖拒绝、直接应答、编辑为本地工具和准入失败；partial／incomplete 结果不结算，同轮兄弟调用分别结算，重复回执不影响其它调用。这个观察入口只释放未来资格，正在执行或结果未知的实际 operation 仍由连接 owner 核实。
+
+禁用、断开、schema 撤换或期限到达只撤销相应工具资格，不阻断原 execution 后续生成普通模型回复。turn-bound 后继模型调用只继承仍有效的精确 handle 和原 deadline；到期释放所有工具与 runtime 引用，但原 execution scope 存活期间保留短期到期身份，防止下一模型调用重新发放资格或重置期限。scope 关闭后移除标记。工具仍被输出时返回原 tool_call_id 的明确失败；执行点保留具体 schema 不一致或原连接不可用原因。重启丢失的 handle 不可恢复或迁投新连接。正常替换沿第7节共同发布边界排空原有资格，完整 HITL 产品恢复及持久等待仍须各自验收。
 
 输出通过既有结果存储与媒体／artifact 合同保存，保留 MCP isError、结构化内容和多模态引用；progress/cancel 作为调用事实转接，不把每条进度当新的工具结果或成功通知。
 

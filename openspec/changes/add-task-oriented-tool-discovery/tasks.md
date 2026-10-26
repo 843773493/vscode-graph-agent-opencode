@@ -126,7 +126,7 @@
 - 最终暂存 tree `c7e9db4366e7dc3cefdfa8835554186705399d96` 经完整 archive 隔离验收：正式 `integration-extension-discovery` 190 passed／115.75秒，相关合同、同步执行、账本、配置、执行恢复及真实 CSM 请求准备154 passed／78.90秒，Gateway→Session消息→Agent→真实stdio Server产品验收2 passed／95.64秒。三组范围有重叠，不累计；产品逐项核对真实资格、实际operation、Session／Thread、并发结果、进度、三份请求hash、断线unknown及冷恢复，模型响应复用既有model_stream，不代表OAuth、真实外部Provider或Web验收。
 - 保留121的共享协议调用方缺少资格、122的资格与实际占用混入断言，以及131的同步CSM空目录向已关闭事件循环登记timer等失败原件；迁齐真实调用方、分别验证两类占用，并修正空目录不登记timer，未放宽配对、归属、schema错误或hash断言。126为25 passed，129为86 passed，132为77 passed，133为9 passed，最终134集中复验。
 - 受影响Ruff与严格OpenSpec校验通过；最终扩大Pyright完整HEAD基线147条／当前133条，零新增诊断，不宣称全仓类型通过。准确命令、源码指纹、raw、退出码及类型比较位于 `out/tests/temp/csm-kind-boundary/artifacts/staged-mcp-reservation-134/`；4517个tracked blob核验未变后已删除完整临时source，保留正式测试产物与integrity证据。
-- 4.2／4.4／4.6继续未勾选：正常配置热替换后的旧runtime保留、退役排空及HITL跨替换依赖7.x共同发布屏障，尚未实现。持久等待的主动继续持有、授权／连接控制和完整产品门仍未完成；HITL拒绝／直接应答及最终执行本地工具后的未用资格提前结算保留代码TODO，目前仍受原期限约束。
+- 本切片验收时4.2／4.4／4.6继续未勾选：正常配置热替换后的旧runtime保留、退役排空及HITL跨替换依赖7.x共同发布屏障。后续7.x切片已接通正常替换与退役排空，未用资格提前结算由下方canonical结果切片补齐；持久等待、完整HITL产品恢复、授权／连接控制和完整产品门仍未完成。
 
 ### 7.3 共同发布基础切片验收（2026-10-26）
 
@@ -172,3 +172,11 @@
 - 完整暂存 tree `d0f1fb600fdf23f7d53fad269c432ca5efa80d88`：真实 Backend／HTTP MCP／文件 watcher／配置 API 的故障注入1 passed／19.80秒，核对新目录、原 applied 事件、清理失败通知、request_id、拒绝冲突及 active 原件不变；正式 integration-extension-discovery 205 passed／119.70秒，配置／API／合同142 passed／236.74秒。前期定向15项已包含在205项内，不相加；stdio停启及旧HTTP切换的具名产品证据沿上一收据按未变依赖复用。
 - 9文件Pyright基线／当前均13项、Ruff均30项，零新增；全config_service Ruff均27项，检查exit1不称全仓静态全绿。compileall、Buf格式／依赖／相对真实HEAD breaking、前端真实tsc和Web build均通过。002首次遗漏隔离副本的既有Web依赖链接而类型检查失败，另有一项新Python类型诊断及导入格式；003链接已有依赖并修正后才通过，不安装或修改用户环境。源码／原命令／raw／退出码与架构自查在 `out/tests/temp/mcp-retirement-diagnostics/artifacts/` 的 verify-002／verify-003／regression-004／architecture-005；本轮仅追加规划、修正schema陈旧注释和CSM收据日期，不改变受测业务源码。
 - 关闭7.4，当前18/52。7.5／7.6仍按各自逐项验收；非合作真实stdio关闭、stdio停止窗口OS崩溃、OAuth、连接控制、持久等待与Gateway／Web授权尚未由本轮证明，团队／协作专项继续TODO。
+
+### 4.4 canonical结果结算与原执行到期边界验收（2026-10-26）
+
+- 原执行的canonical提交观察入口组合MCP owner和原后台消息ack，迁齐唯一StepExecutionPorts构造与Runner消费者；删除只通知后台消息的旧接线。完整结果按精确Session／Thread／model-call／provider tool-call结算未来资格，跳过partial／incomplete，重复回执不影响兄弟调用，未将结果未知或正在执行的实际operation视为完成。
+- 真实产品测试先复现turn策略禁用后整个Job失败；修正为只撤销相应工具资格，原execution仍能解释失败。到期释放原工具／runtime引用，在原scope存活期间保留到期身份，后继模型调用不重新计时。扩大回归发现具体schema错误被笼统资格错误覆盖，已恢复原错误原因并保留全部原断言。
+- 最终`discovery-reasons-final-002` 209 passed／114.72秒，`product-reasons-final-002`真实双工作区watcher、Runner、model_stream及HTTP MCP 3 passed／92.81秒，覆盖原连接替换、两种策略禁用、canonical配对、下一模型请求前释放和Server未收到请求。此前`product-final-001`的5项结果／并发／断线unknown／冷恢复亦通过，范围有重叠不累计；模型回放不代表真实Provider或Web验收。
+- `unit-002`为85 passed／1 failed；唯一system_time周期消息用例已在完整HEAD archive中用`baseline-background-001`复现同一失败，与本切片提交观察链无关，未修改产品行为或放宽断言。Ruff通过；最终Pyright与完整HEAD基线均28条，零新增诊断，不宣称全仓类型全绿。准确命令、前后源码指纹、raw、退出码和比较位于`out/tests/temp/mcp-qualification-settlement/artifacts/`。所有最终运行源码前后不变；4522个HEAD blob核验一致后删除临时baseline源码，保留正式产物及完整证据。
+- 4.2／4.4／4.6保持未勾选：当前产品没有完整HITL resume API/UI，手工保留资格与执行测试不能替代该产品门；持久等待主动持有、OAuth及完整Web／真实Provider验收仍未完成。结构未变，不提升schema版本，不引入第二账本。

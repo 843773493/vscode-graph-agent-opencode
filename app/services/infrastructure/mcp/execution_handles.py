@@ -18,6 +18,7 @@ from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,
     software_tool_operation_id,
 )
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -52,6 +53,7 @@ class _Reservation:
     pending_operations: set[str] | None = None
     timer: asyncio.TimerHandle | None = None
     owner_scope: LifetimeScope | None = None
+    binding_ref: ExtensionCatalogBindingRef | None = None
 
 
 class McpExecutionHandles:
@@ -60,12 +62,12 @@ class McpExecutionHandles:
     def __init__(
         self, *, leases: ExternalResourceLeaseLedger, lock: RLock,
         resolve_active: Callable[[ExtensionTargetBinding], McpExecutionHandle], timeout_seconds: int,
-        validate_retained: Callable[[ExtensionTargetBinding], None],
+        retention_error: Callable[[ExtensionTargetBinding], str | None],
     ) -> None:
         self._leases = leases
         self._lock = lock
         self._resolve_active = resolve_active
-        self._validate_retained = validate_retained
+        self._retention_error = retention_error
         self._timeout_seconds = timeout_seconds
         self._reservations: dict[ReservationKey, _Reservation] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -118,17 +120,14 @@ class McpExecutionHandles:
         targets = {target.target_id: target for target in binding.targets.values() if target.origin == "mcp"}
         if reservation is not None:
             if (reservation.owner_scope is not scope or scope.state != "open"
-                    or datetime.now(UTC) >= reservation.deadline
-                    or {name: handle.binding for name, handle in reservation.handles.items()} != targets):
-                raise ExtensionTargetResolutionError("MCP 原执行的连接资格已到期或冻结目录不一致")
-            for target in targets.values():
-                self._validate_retained(target)
+                    or reservation.binding_ref != binding):
+                raise ExtensionTargetResolutionError("MCP 原执行 scope 已关闭或冻结目录不一致")
             return reservation
         if scope.state != "open":
             raise ExtensionTargetResolutionError("MCP 原执行 scope 已关闭")
         reservation = _Reservation(
             {name: self._resolve_active(target) for name, target in targets.items()}, (),
-            datetime.now(UTC) + timedelta(seconds=self._timeout_seconds), owner_scope=scope,
+            datetime.now(UTC) + timedelta(seconds=self._timeout_seconds), owner_scope=scope, binding_ref=binding,
         )
         self._register_qualification(key, reservation, prefix="mcp-execution:v1:",
                                      operation_id=execution_id, session_id=session_id, thread_id=thread_id)
@@ -158,7 +157,9 @@ class McpExecutionHandles:
             if execution_id is not None and execution_scope is not None:
                 inherited = self._execution_qualification(binding, session_id=session_id, thread_id=thread_id,
                                                           execution_id=execution_id, scope=execution_scope)
-            handles = inherited.handles if inherited is not None else {
+            # 原执行仍可生成失败说明；失效目标只撤销工具资格，不封锁整个模型。
+            handles = {name: handle for name, handle in inherited.handles.items()
+                       if datetime.now(UTC) < inherited.deadline and self._retention_error(handle.binding) is None} if inherited is not None else {
                 target.target_id: self._resolve_active(target)
                 for target in binding.targets.values() if target.origin == "mcp"
             }
@@ -191,8 +192,7 @@ class McpExecutionHandles:
                     ))
                 reservation.pending_operations = operations
                 # HITL 的显式 edit 可改为原封存目录内其它目标；不能只保留模型
-                # 初选目标。拒绝／直接应答及本地调用的未用资格至多保留到原期限。
-                # TODO(4.4): 从确认结算／canonical 完整结果边界提前释放这些未用资格。
+                # 初选目标。未进入 MCP 的调用在 canonical 结果提交后结算。
                 if not handles or not reservation.pending_operations:
                     self._release(key, reservation)
 
@@ -201,6 +201,28 @@ class McpExecutionHandles:
         finally:
             with self._lock:
                 if reservation.pending_operations is None:
+                    self._release(key, reservation)
+
+    def acknowledge_tool_results(
+        self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord],
+    ) -> None:
+        """只消费已提交结果，释放未来资格；不代替实际 operation 的结果核实。"""
+        with self._lock:
+            for item in items:
+                identity = item.projection_identity
+                if (item.semantic_kind != "tool_result" or item.status in {"partial", "incomplete"} or identity is None
+                        or identity.model_call_id is None or item.tool_call_id is None):
+                    continue
+                key = (session_id, thread_id, identity.model_call_id)
+                reservation = self._reservations.get(key)
+                if reservation is None or reservation.pending_operations is None:
+                    continue
+                operation_id = software_tool_operation_id(
+                    "mcp_call", session_id, thread_id, identity.model_call_id,
+                    provider_tool_call_id(identity, item.tool_call_id),
+                )
+                reservation.pending_operations.discard(operation_id)
+                if not reservation.pending_operations:
                     self._release(key, reservation)
 
     @contextmanager
@@ -222,7 +244,8 @@ class McpExecutionHandles:
             if datetime.now(UTC) >= reservation.deadline:
                 self._release(key, reservation)
                 raise ExtensionTargetResolutionError("MCP 原连接的封存执行资格已到期")
-            self._validate_retained(binding)
+            if error := self._retention_error(binding):
+                raise ExtensionTargetResolutionError(error)
             handle = reservation.handles.get(binding.target_id)
             if (handle is None or handle.binding != binding or not handle.runtime.running
                     or reservation.pending_operations is None
@@ -268,7 +291,16 @@ class McpExecutionHandles:
 
     def _expire(self, key: ReservationKey, reservation: _Reservation) -> None:
         with self._lock:
+            if self._reservations.get(key) is not reservation:
+                return
             self._release(key, reservation)
+            if reservation.owner_scope is not None and reservation.owner_scope.state == "open":
+                # 原 execution 活着时保留到期身份，不能在下一轮重新计时发放。
+                # 释放所有原工具／runtime 引用，scope 关闭时移除这份短期标记。
+                reservation.handles = {}
+                reservation.lease_ids = ()
+                reservation.timer = None
+                self._reservations[key] = reservation
 
     def _release(self, key: ReservationKey, reservation: _Reservation) -> None:
         if self._reservations.get(key) is not reservation:

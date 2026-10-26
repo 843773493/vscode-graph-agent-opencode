@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 
 import httpx
+import pytest
 
 from app import main
 from app.core.path_utils import workspace_context
@@ -162,4 +164,73 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
             )
             assert event is not None and event.result == "restart_required" and event.activation_scope == "restart_workspace"
             assert owner.binding_snapshot() == current
+    assert_closed(mounted_case)
+
+
+@pytest.mark.parametrize("boundary", ["turn", "model_call"])
+async def test_disabled_sealed_call_commits_failure_and_releases_qualification_before_next_model(
+    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch, boundary,
+):
+    replay, controller = inprocess_model_replay
+    ready, release = asyncio.Event(), asyncio.Event()
+    calls: Sequence[str] = ()
+    first = None
+    original_resource = None
+
+    async def observe_phase(call_id, phase):
+        assert phase == "model.response_ready"
+        if call_id == calls[0]:
+            ready.set()
+            await release.wait()
+        elif call_id == calls[1]:
+            # 真实后继请求已经取得 canonical 拒绝结果；不等 Job 结束或资格到期。
+            assert first is not None and original_resource is not None
+            leases = first.external_resource_leases.leases_for_resource(original_resource)
+            assert not any(lease.lease_id.startswith("mcp-prepared:") for lease in leases)
+            assert not any(lease.lease_id.startswith("mcp-invocation:") for lease in leases)
+
+    monkeypatch.setattr("app.testing.model_stream.transport.observe_phase", observe_phase)
+    async with http_schema_endpoint_factory(f"disabled-{boundary}") as endpoint:
+        root, sibling_root = mounted_case.roots.values()
+        path = root / ".boxteam/workspace.jsonc"
+        payload = {
+            "mcp": {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": endpoint.url}}},
+            "context": {"resource_activation": {"overrides": {"mcp_tool_catalog": boundary}}},
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        (sibling_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}), encoding="utf-8")
+        async with main.lifespan(main.app):
+            first, _sibling = mounted_case.containers
+            owner = first.mcp_catalog_owner
+            original_resource = owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref
+            assert original_resource is not None
+            with workspace_context(first.workspace_id, root, session_catalog=first.session_catalog):
+                runner = RunnerCase(first, root)
+                session_id, thread_id = await _session(runner)
+                marker = f"disabled-{boundary.replace('_', '-')}"
+                calls = plan_tool_loop(replay, first, session_id, thread_id, marker)
+                job = await _start_job(runner, "user", session_id, thread_id)
+                try:
+                    await asyncio.wait_for(ready.wait(), 30)
+                    assert any(lease.lease_id.startswith("mcp-prepared:")
+                               for lease in first.external_resource_leases.leases_for_resource(original_resource))
+                    mcp_servers(payload)["schema"]["enabled"] = False
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    await wait_status(first.config_service, lambda status: status.healthy and not owner.get_tool_ids())
+                finally:
+                    release.set()
+                await asyncio.wait_for(asyncio.shield(job.task), 30)
+                assert job.status == JobStatus.completed, job.error_message
+                results = [item for item in first.checkpointer._storage.storage.read_items(session_id, thread_id)
+                           if item.semantic_kind == "tool_result" and item.tool_call_id is not None
+                           and item.tool_call_id.endswith(f"call-{marker}")]
+                assert results
+                for item in results:
+                    assert isinstance(item.payload, dict)
+                    assert item.payload["tool_outcome"] == "failure"
+                    assert item.payload["execution_confirmed"] is True
+                    assert "原连接" in item.payload["content"]
+                assert not endpoint.receipts.exists()
+                assert not first.external_resource_leases.leases_for_resource(original_resource)
+                assert controller.transport.call_count == 2
     assert_closed(mounted_case)

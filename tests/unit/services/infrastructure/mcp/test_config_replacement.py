@@ -440,3 +440,32 @@ async def test_turn_inherits_original_qualification_without_granting_another_exe
     await scope.close()
     await wait_closed(old)
     assert owner._leases.get_lease(original.lease_id).status == "released"
+
+
+@pytest.mark.parametrize("replacement_case", [1], indirect=True)
+async def test_expired_execution_can_finish_model_response_without_renewing_tool_qualification(replacement_case):
+    case = replacement_case
+    owner = case.owner
+    scope = LifetimeScope("expired-execution")
+    case.scopes.append(scope)
+    binding = owner.binding_snapshot()
+    target = binding.resolve("mcp__alpha__echo")
+    with owner.execution_handles.reserve_model_call(
+        binding, session_id="session", thread_id="thread", model_call_id="before-expiry",
+        execution_id="expired-execution", execution_scope=scope,
+    ) as retain:
+        retain([])
+    qualification, = owner._leases.leases_for_resource(target.connection_ref)
+    await asyncio.sleep(1.1)
+    assert owner._leases.get_lease(qualification.lease_id).status == "released"
+    with owner.execution_handles.reserve_model_call(
+        binding, session_id="session", thread_id="thread", model_call_id="after-expiry",
+        execution_id="expired-execution", execution_scope=scope,
+    ) as retain:
+        retain([{"name": "invoke_extension_tool", "id": "late-call", "args": {"tool_name": target.target_id}}])
+    assert not owner._leases.leases_for_resource(target.connection_ref)
+    use = McpResourceUse("holder", software_tool_operation_id("mcp_call", "session", "thread", "after-expiry", "late-call"),
+                         "session", "thread", "after-expiry")
+    with pytest.raises(ExtensionTargetResolutionError, match="资格已失效"), owner.execution_handles.execution_target(target, use):
+        pytest.fail("后继模型调用不能重新获得已到期执行的工具资格")
+    assert owner._runtimes["alpha"].running

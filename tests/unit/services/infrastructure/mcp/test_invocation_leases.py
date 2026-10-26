@@ -9,7 +9,9 @@ from datetime import datetime
 
 import pytest
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -48,6 +50,78 @@ async def lease_case(tmp_path, resource_use, request):
 def resource_use():
     return McpResourceUse(holder_id="original-holder", operation_id=software_tool_operation_id("mcp_call", "original-session", "original-thread", "original-model", "original-call"),
                           session_id="original-session", thread_id="original-thread", model_call_id="original-model")
+
+
+@pytest.fixture
+def committed_result():
+    def result(*, model_call_id="original-model", call_id="original-call", outcome="failure", status="completed"):
+        return CanonicalItemRecord.create(
+            item_sequence=1, item_id=f"result-{model_call_id}-{call_id}",
+            semantic_kind="tool_result", payload_kind="tool_result", status=status,
+            producer_ref={"producer_kind": "tool", "producer_id": "attempt", "invocation_id": model_call_id},
+            payload={"tool_call_id": f"{model_call_id}:tool-call:{call_id}", "result_id": "attempt",
+                     "name": "invoke_extension_tool", "content": "调用已结算",
+                     "tool_outcome": outcome, "execution_confirmed": outcome != "unknown"},
+            projection_identity=ItemProjectionIdentity(model_call_id=model_call_id), wire_role="tool",
+        )
+    return result
+
+
+def test_committed_refusal_releases_only_the_original_qualification(lease_case, resource_use, committed_result):
+    owner, ledger, path = lease_case
+    binding = owner.binding_snapshot().resolve("mcp__mini__echo")
+    qualification, = ledger.leases_for_resource(binding.connection_ref)
+    for session, thread, item in (
+        ("other-session", resource_use.thread_id, committed_result()),
+        (resource_use.session_id, "other-thread", committed_result()),
+        (resource_use.session_id, resource_use.thread_id, committed_result(model_call_id="other-model")),
+        (resource_use.session_id, resource_use.thread_id, committed_result(call_id="other-call")),
+        (resource_use.session_id, resource_use.thread_id, committed_result(status="partial", outcome="unknown")),
+    ):
+        owner.execution_handles.acknowledge_tool_results(session, thread, (item,))
+        retained = ledger.get_lease(qualification.lease_id)
+        assert retained is not None and retained.status == "active"
+    owner.execution_handles.acknowledge_tool_results(resource_use.session_id, resource_use.thread_id, (committed_result(),))
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    retained = cold.get_lease(qualification.lease_id)
+    assert retained is not None and retained.status == "released"
+    assert not cold.leases_for_resource(binding.connection_ref)
+    resource = cold.get(binding.connection_ref)
+    assert resource is not None and resource.status == "running"
+    with pytest.raises(ExtensionTargetResolutionError, match="资格已失效"), owner.execution_handles.execution_target(binding, resource_use):
+        pytest.fail("已提交拒绝结果不能再次使用原资格")
+
+
+def test_committed_unknown_does_not_confirm_an_active_external_operation(lease_case, resource_use, committed_result):
+    owner, _ledger, path = lease_case
+    binding = owner.binding_snapshot().resolve("mcp__mini__echo")
+    with owner.execution_handles.execution_target(binding, resource_use) as execution:
+        execution.started = True
+        owner.execution_handles.acknowledge_tool_results(resource_use.session_id, resource_use.thread_id, (committed_result(outcome="unknown"),))
+        lease, = ExternalResourceLeaseLedger(state_path=path).leases_for_resource(binding.connection_ref)
+        assert lease.lease_id.startswith("mcp-invocation:") and lease.status == "active"
+    retained = ExternalResourceLeaseLedger(state_path=path).get_lease(lease.lease_id)
+    assert retained is not None and retained.status == "reconcile_required"
+
+
+def test_committed_local_edit_or_rejection_does_not_release_sibling_call(lease_case, committed_result):
+    owner, ledger, _path = lease_case
+    binding = owner.binding_snapshot()
+    with owner.execution_handles.reserve_model_call(
+        binding, session_id="parallel-session", thread_id="parallel-thread", model_call_id="parallel-model",
+    ) as retain:
+        retain([{"name": "invoke_extension_tool", "id": call, "args": {"tool_name": "mcp__mini__echo"}}
+                for call in ("first", "second")])
+    qualification, = [lease for lease in ledger.leases_for_resource(binding.resolve("mcp__mini__echo").connection_ref)
+                      if lease.holder_session_id == "parallel-session"]
+    first = committed_result(model_call_id="parallel-model", call_id="first", outcome="success")
+    owner.execution_handles.acknowledge_tool_results("parallel-session", "parallel-thread", (first, first))
+    assert ledger.get_lease(qualification.lease_id).status == "active"
+    use = McpResourceUse("holder", software_tool_operation_id("mcp_call", "parallel-session", "parallel-thread", "parallel-model", "second"),
+                         "parallel-session", "parallel-thread", "parallel-model")
+    with owner.execution_handles.execution_target(binding.resolve("mcp__mini__other"), use) as execution:
+        execution.started = execution.result_confirmed = True
+    assert ledger.get_lease(qualification.lease_id).status == "released"
 
 
 def test_connection_registration_and_exact_cold_occupancy(lease_case, resource_use):

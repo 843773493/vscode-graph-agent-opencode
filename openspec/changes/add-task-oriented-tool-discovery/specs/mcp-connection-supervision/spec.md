@@ -68,10 +68,27 @@
 
 系统 MUST 在模型发送前为冻结目录的精确连接保留有界资格，并在模型响应后收窄到真实输出的信封调用身份；既有人工确认 edit 仍可选择原封存目录内的目标。期限沿 Workspace 配置族的 `mcp.supervision.sealed_call_timeout_seconds` 读取，默认1800秒、范围1–86400秒，从取得原 handle 起包含模型生成和确认等待，不因重试续期。资格与实际操作占用 MUST 分别结算，资格过期不能伪报正在执行或结果未知的远端操作已结束。
 
+未进入 MCP 执行的调用 MUST 在完整 canonical ToolResult 提交后按精确 Session／Thread／model-call／provider tool-call 身份结算未来资格，不等待原期限；partial／incomplete 结果和其它调用的回执 MUST NOT 结算该资格。工具资格失效 MUST NOT 阻断原 execution 后续生成普通模型回复，且后继模型调用 MUST NOT 为同一到期 execution 重新发放资格或重置 deadline。
+
+#### Scenario: 拒绝或本地改写后结算未用资格
+
+- **WHEN** 原信封调用经拒绝、直接应答、编辑为本地工具或准入失败提交完整 canonical ToolResult
+- **THEN** 只结算该调用的未来资格，同轮兄弟调用继续保留自身资格；重复结果不结算其它调用，正在执行或结果未知的实际 operation 仍独立保留
+
+#### Scenario: 禁用后原执行仍可回复
+
+- **WHEN** 已取得资格的模型请求返回前连接被禁用，随后工具拒绝结果已提交
+- **THEN** turn 和 model_call 策略均保留原 tool_call_id 的明确失败且不向 Server 发请求，原执行可在后继模型请求中解释失败；失效目标不取得新资格，未用资格在后继请求前已经结算
+
 #### Scenario: 资格到期但原连接仍运行
 
 - **WHEN** 原模型调用的资格到期，工具尚未开始，而原连接仍可用
 - **THEN** 系统释放未来执行资格，返回与原 tool_call_id 配对的明确失败，不向 Server 发送请求，也不把连接报告为已停止
+
+#### Scenario: 原 execution 到期后继续模型调用
+
+- **WHEN** 原 execution scope 仍打开且原工具资格已经到期，执行需要生成下一次模型回复
+- **THEN** 系统允许普通回复，释放原工具和 runtime 引用并保留到期身份直至 scope 关闭；下一模型调用不重置 deadline，不重发工具资格，输出工具调用时仍明确配对失败
 
 #### Scenario: 同一连接跨执行被持有
 

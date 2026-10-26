@@ -298,7 +298,7 @@ class StepRunner:
             session_id=session_id,
             thread_id=thread_id,
             checkpoint_ns=rollout_checkpoint_ns,
-            committed_item_observer=self.ports.background_message_bus.acknowledge_tool_results,
+            committed_item_observer=self.ports.committed_item_observer,
         )
         model_call_adapter = StepModelCallAdapter(
             checkpointer=checkpointer,

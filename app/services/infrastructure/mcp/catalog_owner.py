@@ -283,7 +283,7 @@ class McpCatalogOwner:
         )
         self.execution_handles = McpExecutionHandles(
             leases=leases, lock=self._publication_lock, resolve_active=self._resolve_execution_handle,
-            validate_retained=self._validate_retained_execution,
+            retention_error=self._retained_execution_error,
             timeout_seconds=sealed_call_timeout_seconds(raw_config),
         )
         self._publication: McpCatalogPublication | None = None
@@ -478,29 +478,41 @@ class McpCatalogOwner:
     def _resolve_execution_handle(self, binding: ExtensionTargetBinding) -> McpExecutionHandle:
         """只按封存连接及 schema 解析；新同名工具绝不能接管旧调用。"""
         with self._publication_lock:
-            runtime = self._runtimes.get(binding.server_id or "")
-            target = self._tools_by_id.get(binding.target_id)
-            if (binding.origin != "mcp" or not self._started or runtime is None
-                    or not runtime.running or target is None
-                    or binding.connection_ref != self._connection_ref(runtime)
-                    or (target.metadata or {}).get("mcp_connection_ref") != binding.connection_ref):
+            handle = self._active_execution_handle(binding)
+            if handle is None:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 的原连接执行 handle 已不可用: {binding.target_id}"
                 )
-            if extension_schema_hash(export_model_tool_json_schema(target)) != binding.schema_hash:
+            if extension_schema_hash(export_model_tool_json_schema(handle.tool)) != binding.schema_hash:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
                 )
-            return McpExecutionHandle(binding, target, runtime)
+            return handle
 
-    def _validate_retained_execution(self, binding: ExtensionTargetBinding) -> None:
+    def _active_execution_handle(self, binding: ExtensionTargetBinding) -> McpExecutionHandle | None:
+        """调用方持有 publication lock，只解析精确的 active 连接对象。"""
+        runtime = self._runtimes.get(binding.server_id or "")
+        target = self._tools_by_id.get(binding.target_id)
+        if (binding.origin != "mcp" or not self._started or runtime is None
+                or not runtime.running or target is None
+                or binding.connection_ref != self._connection_ref(runtime)
+                or (target.metadata or {}).get("mcp_connection_ref") != binding.connection_ref):
+            return None
+        return McpExecutionHandle(binding, target, runtime)
+
+    def _retained_execution_error(self, binding: ExtensionTargetBinding) -> str | None:
         """正常替换只放行原有资格；当前目录 relist 仍核 schema 撤换。"""
         with self._publication_lock:
             retained = self._retirement.retained(binding.connection_ref)
             if (self._started and retained is not None and retained.running
                     and any(server.server_id == binding.server_id and server.enabled for server in self._servers)):
-                return
-            self._resolve_execution_handle(binding)
+                return None
+            active = self._active_execution_handle(binding)
+            if active is None:
+                return f"sealed target 的原连接执行 handle 已不可用: {binding.target_id}"
+            if extension_schema_hash(export_model_tool_json_schema(active.tool)) != binding.schema_hash:
+                return f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
+            return None
 
     async def prepare_config(
         self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,
