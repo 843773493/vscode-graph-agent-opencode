@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 
 import pytest
 
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
+    InstructionUpdateBinding,
     register_instruction_producer,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
@@ -47,6 +49,7 @@ async def test_skill_mode_and_cold_restore_preserve_same_name_instruction(
         producer_id="R01", source_id="instruction:agent-instructions",
         source_kind="agent_instructions", name="shared", content="持续生效的 Agent 指令",
         revision="instruction-owner-v1", root_placement="root_eligible",
+        update_binding=InstructionUpdateBinding("workspace_config", "instruction-owner-v1", "next_job"),
     )
     register_instruction_producer(manager, producer)
     if not instruction_last:
@@ -62,6 +65,7 @@ async def test_skill_mode_and_cold_restore_preserve_same_name_instruction(
     sealed_bytes = canonical_json_bytes(sealed.to_dict())
     before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
     instruction = next(row for row in before if row.source_id == producer.source_id)
+    assert instruction.binding_revision == "instruction-owner-v1"
     result = json.loads(await tool.ainvoke({"name": "shared", "mode": mode}))
     assert result["error"] is None, result
     assert result["tracked"] is (mode == "tracked")
@@ -71,6 +75,9 @@ async def test_skill_mode_and_cold_restore_preserve_same_name_instruction(
     assert cold.source_observation_state(producer.source_id) == ("tracked", producer.revision_token())
     assert cold.source_observation_state(skill.source_id)[0] == ("tracked" if mode == "tracked" else "untracked")
     # 冷 owner 重绑 descriptor 后两种来源仍独立，不修改已发布指令或其版本。
+    with pytest.raises(RuntimeError, match="instruction-producer-not-wired"):
+        register_instruction_producer(cold, replace(producer, update_binding=None))
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == after
     register_instruction_producer(cold, producer)
     cold.register(skill)
     assert {source.source_kind for source in cold.descriptors()} == {"agent_instructions", "skill"}
@@ -89,6 +96,7 @@ async def test_public_untrack_cannot_target_instruction_without_a_skill(
         producer_id="R01", source_id="instruction:agent-instructions",
         source_kind="agent_instructions", name="Agent 说明", content="持续生效的 Agent 指令",
         revision="instruction-owner-v1", root_placement="root_eligible",
+        update_binding=InstructionUpdateBinding("workspace_config", "instruction-owner-v1", "next_job"),
     )
     register_instruction_producer(manager, producer)
     before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)

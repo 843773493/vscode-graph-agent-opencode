@@ -57,6 +57,27 @@ class InstructionProducerError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class InstructionUpdateBinding:
+    """实际 owner 的发布版本及生效边界；由原配置、软件或 catalog 入口绑定。"""
+
+    owner: Literal["workspace_config", "software_release", "skill_catalog"]
+    publication_revision: str
+    activation_boundary: Literal["next_job", "epoch", "resource_activation"]
+
+    def __post_init__(self) -> None:
+        boundaries = {
+            "workspace_config": "next_job",
+            "software_release": "epoch",
+            "skill_catalog": "resource_activation",
+        }
+        if boundaries.get(self.owner) != self.activation_boundary:
+            raise InstructionProducerError(
+                "instruction-update-binding-invalid", "来源 owner 与发布激活边界不匹配",
+            )
+        _non_empty_string(self.publication_revision, "InstructionUpdateBinding.publication_revision")
+
+
+@dataclass(frozen=True, slots=True)
 class InstructionProducerSpec:
     """一个初始 instruction producer 的静态声明。
 
@@ -74,7 +95,7 @@ class InstructionProducerSpec:
     content: str
     revision: str
     policy_key: SourcePolicyKey | None = None
-    wired: bool = True
+    update_binding: InstructionUpdateBinding | None = None
 
     def __post_init__(self) -> None:
         if self.producer_id not in _KNOWN_PRODUCER_IDS:
@@ -100,8 +121,8 @@ class InstructionProducerSpec:
         if not isinstance(self.content, str) or not self.content:
             raise ValueError("InstructionProducerSpec.content 必须是非空字符串")
         _non_empty_string(self.revision, "InstructionProducerSpec.revision")
-        if not isinstance(self.wired, bool):
-            raise TypeError("InstructionProducerSpec.wired 必须是 boolean")
+        if self.update_binding is not None and not isinstance(self.update_binding, InstructionUpdateBinding):
+            raise TypeError("InstructionProducerSpec.update_binding 必须是 InstructionUpdateBinding 或 None")
         if self.policy_key is not None and self.root_placement != "root_eligible":
             raise InstructionProducerError(
                 "instruction-producer-placement-conflict",
@@ -135,17 +156,25 @@ class InstructionProducerSpec:
 
 
 def assert_producer_registrable(spec: InstructionProducerSpec) -> None:
-    """注册门禁：未接线的 producer 不得伪装启用。
-
-    默认未接线的能力（例如生产 runtime 未传入 sources 的条件化 producer）在
-    注册点直接失败，而不是登记一个永远不生效的 source 冒充已启用。
-    """
+    """tracked 注册只接受与实际 producer 匹配的 owner 发布绑定。"""
     if not isinstance(spec, InstructionProducerSpec):
         raise TypeError("assert_producer_registrable 需要 InstructionProducerSpec")
-    if not spec.wired:
+    binding = spec.update_binding
+    if binding is None:
         raise InstructionProducerError(
             "instruction-producer-not-wired",
-            f"producer {spec.producer_id} 默认未接线，不得注册为已启用 source",
+            f"producer {spec.producer_id} 缺少 owner、发布 revision 与激活边界，不得登记 tracked",
+        )
+    expected_owner = (
+        "workspace_config" if spec.producer_id in {"R01", "R02"}
+        else "skill_catalog" if spec.producer_id == "R05" else "software_release"
+    )
+    if binding.owner != expected_owner or (
+        spec.producer_id != "R02" and binding.publication_revision != spec.revision
+    ):
+        raise InstructionProducerError(
+            "instruction-update-binding-conflict",
+            f"producer {spec.producer_id} 的 owner 或已发布 revision 不匹配",
         )
 
 
@@ -224,6 +253,14 @@ class InstructionProducerObservation:
                 "InstructionProducerSpec"
             )
         assert_producer_registrable(self.spec)
+        if self.activation_boundary == "model_call" and (
+            self.spec.update_binding is None
+            or self.spec.update_binding.activation_boundary != "resource_activation"
+        ):
+            raise InstructionProducerError(
+                "instruction-activation-boundary-unsupported",
+                f"producer {self.spec.producer_id} 不支持运行中 model_call 更新",
+            )
         _non_empty_string(self.revision, "InstructionProducerObservation.revision")
         if self.from_revision is not None:
             _non_empty_string(
@@ -307,7 +344,10 @@ def register_instruction_producer(
             )
     if not isinstance(manager, ContextSourceManager):
         raise TypeError("register_instruction_producer 需要唯一 ContextSourceManager")
-    manager.register(instruction_producer_descriptor(spec), tracking_status="tracked")
+    descriptor = instruction_producer_descriptor(spec)
+    assert spec.update_binding is not None
+    manager.register(descriptor, tracking_status="tracked",
+                     binding_revision=spec.update_binding.publication_revision)
     manager.observe(spec.source_id, spec.content, revision=spec.revision_token()).require_tracked()
 
 
@@ -331,17 +371,21 @@ def runtime_instruction_producers(
             ],
         },
     }).decode("utf-8")
+    config_binding = InstructionUpdateBinding("workspace_config", config_revision, "next_job")
+    protocol_revision = sha256_jcs({"protocol": "boxteam-context-sources:v2", "content": CSM_PROTOCOL_PROMPT})
     return (
         InstructionProducerSpec(
             producer_id="R10", source_id="instruction:csm-protocol",
             source_kind="csm_protocol", name="CSM 来源协议",
             root_placement="root_eligible", content=CSM_PROTOCOL_PROMPT,
-            revision=sha256_jcs({"protocol": "boxteam-context-sources:v2", "content": CSM_PROTOCOL_PROMPT}),
+            revision=protocol_revision,
+            update_binding=InstructionUpdateBinding("software_release", protocol_revision, "epoch"),
         ),
         InstructionProducerSpec(
             producer_id="R01", source_id="instruction:agent-instructions",
             source_kind="agent_instructions", name="Agent 基础说明",
             root_placement="root_eligible", content=content, revision=config_revision,
+            update_binding=config_binding,
         ),
         InstructionProducerSpec(
             producer_id="R02", source_id="instruction:runtime-identity",
@@ -351,6 +395,7 @@ def runtime_instruction_producers(
                 "agent_id": agent_id, "content": identity_prompt,
                 "provider_candidates": provider_candidates,
             }),
+            update_binding=config_binding,
         ),
     )
 
@@ -379,6 +424,7 @@ __all__ = [
     "InstructionProducerId",
     "InstructionProducerObservation",
     "InstructionProducerSpec",
+    "InstructionUpdateBinding",
     "RootPlacement",
     "SourcePolicyKey",
     "assert_producer_registrable",

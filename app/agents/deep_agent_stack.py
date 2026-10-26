@@ -24,6 +24,7 @@ from app.agents.custom_tool_confirmation_middleware import (
 )
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
+    InstructionUpdateBinding,
     register_instruction_producer,
 )
 from app.agents.middleware_prompts import (
@@ -237,11 +238,13 @@ def build_deep_agent_middleware(
             ("R07", "compact-tool-usage", COMPACT_CONVERSATION_SYSTEM_PROMPT, "compact_conversation", "compact_conversation" not in resolved_tool_denylist),
         ):
             if present:
+                publication_revision = sha256_jcs({"content": content})
                 register_instruction_producer(context_source_manager, InstructionProducerSpec(
                     producer_id=producer_id, source_id=f"instruction:{source_name}",
                     source_kind=source_name, name=source_name, content=content,
-                    revision=sha256_jcs({"content": content}),
+                    revision=publication_revision,
                     root_placement="root_eligible", policy_key=policy_key,
+                    update_binding=InstructionUpdateBinding("software_release", publication_revision, "epoch"),
                 ))
 
     # 放在所有会改写模型请求的 middleware 之后，确保派生的压缩请求也会被验证。

@@ -20,6 +20,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
+    InstructionUpdateBinding,
     register_instruction_producer,
 )
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
@@ -281,6 +282,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 source_kind="skill_catalog_metadata", name="Skill catalog",
                 root_placement="root_eligible", content=content,
                 revision=self._catalog.catalog_revision,
+                update_binding=InstructionUpdateBinding("skill_catalog", self._catalog.catalog_revision, "resource_activation"),
             ),
         )
 
@@ -395,6 +397,7 @@ def install_frozen_skill_catalog(
         producer_id="R05", source_id="instruction:skill-catalog", source_kind="skill_catalog_metadata",
         name="Skill catalog", root_placement="root_eligible",
         content=SKILLS_SYSTEM_PROMPT.format(skills_list=lines), revision=snapshot.catalog_revision,
+        update_binding=InstructionUpdateBinding("skill_catalog", snapshot.catalog_revision, "resource_activation"),
     ))
 
 

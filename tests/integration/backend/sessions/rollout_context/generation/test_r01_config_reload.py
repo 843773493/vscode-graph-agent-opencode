@@ -135,6 +135,11 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
                 if spec.producer_id == producer_id
             ]
             assert len(r01) == 1 and isinstance(r01[0], InstructionProducerSpec)
+            publication = r01[0].update_binding
+            assert publication is not None
+            assert (publication.owner, publication.publication_revision, publication.activation_boundary) == (
+                "workspace_config", config.get_revision(), "next_job",
+            )
             produced.append(r01[0])
             return builder(**kwargs)
 
@@ -314,6 +319,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
 
     second_admission = await _complete_job(case, session_id, thread_id, timeout_seconds=20)
     assert retry_checked and len(projections) == len(produced) == len(case.compiled) == 2
+    assert source_state().binding_revision == after.revision
     if producer_id == "R01":
         assert produced[1].content == new_content and produced[1].revision == after.revision
     else:

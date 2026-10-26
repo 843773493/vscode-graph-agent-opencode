@@ -42,6 +42,7 @@ from app.agents.graph_binding import (
 )
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
+    InstructionUpdateBinding,
     register_instruction_producer,
     runtime_instruction_producers,
 )
@@ -923,12 +924,14 @@ def create_my_deep_agent(
     )
     for producer in instruction_producers:
         register_instruction_producer(context_source_manager, producer)
+    team_policy_revision = sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT})
     register_instruction_producer(context_source_manager, InstructionProducerSpec(
         producer_id="R03", source_id="instruction:team-coordination-policy",
         source_kind="team_coordination_policy", name="团队协作规则",
         root_placement="root_eligible", content=TEAM_COORDINATION_SYSTEM_PROMPT,
-        revision=sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT}),
+        revision=team_policy_revision,
         policy_key="team_coordination",
+        update_binding=InstructionUpdateBinding("software_release", team_policy_revision, "epoch"),
     ))
 
     runtime_middleware: list[AgentMiddleware] = []

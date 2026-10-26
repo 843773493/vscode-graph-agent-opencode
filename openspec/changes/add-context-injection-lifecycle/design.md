@@ -180,6 +180,9 @@ R01只消费最终合并配置的`agents.<id>.instructions.system_prompt`；发�
 本节明确职责与字段语义；命名在本轮按下述方向统一，具体配置键与持久化结构不在这里冻结。跨层改名须迁齐写入方、消费者与测试，不保留字段别名或双写。
 
 - **owner 提供版本，CSM 消费版本。** tracked 来源需有可核验的 owner、发布入口与激活边界，接线检查关注更新能力，不要求每个来源建 watcher 或独立回调。复用 R01 已有配置 reload／runtime generation 链路及集成测试，核清 R01／R02 的实际缺口，不另造平行更新路径，也不把 generation 重建等同于任意 model-call 热更新。source item 可来自文件、配置、内存或计算结果；canonical 用户、模型和工具协议事实不纳入 CSM tracking。所有变更仍由 ContextStore／Saver 提交与封存。
+
+instruction 注册使用不可变 `InstructionUpdateBinding(owner, publication_revision, activation_boundary)`，删除默认 `wired=True`。R01／R02 绑定实际 ConfigService revision 和 `next_job`；R02 正文 revision 仍独立包含软件身份事实。R03／R04／R06／R07／R10 绑定软件正文 hash 和 `epoch`，R05 绑定冻结 catalog revision 和 `resource_activation`。注册先核验 owner／revision／边界，再复用原 CSM `binding_revision` 持久化；冷恢复缺绑定明确失败，不以恢复出 tracked 标志代替发布能力。只有资源激活来源可声明 model-call 更新，不为配置或静态规则新增 watcher、writer 或 schema。
+
 - **操作、当前状态和封存状态分别表达。** `skill_load.mode` 保留为外部操作；`SourceObservation.tracking_mode` 改为 `requested_mode`，运行态与持久控制态保留 `tracking_status`，来源 item／绑定的 `tracking_state` 改为 `source_tracking_at_seal`，派生属性及回执 `tracked` 保留。canonical 引用不适用 tracking，来源引用可处于未跟踪状态，两者由类型合同区分，不能只替换字符串。`observe()` 返回明确的处理结果，区分未变化、基准恢复、未跟踪与接受新观察；是否存在 pending 增量另行表达，回到已提交基准可取消 pending，不能用接受观察或 queued 代替成功 seal。要求 tracked 的调用入口遇到状态不符应报错。
 - **来源 owner 统一发布有效正文。** R01 默认提示词保留唯一权威入口，清理代码中的重复兜底并核清缺省行为。R02 将可覆盖说明与软件身份事实分离，移除项目特定示例，区分配置中的首选／fallback 与实际调用身份；覆盖说明不改变权威事实。外部提示词文件作为可选正文输入，默认使用inline，显式文件替换正文而非拼接；有效配置确定唯一正文输入，由 owner 读取并发布有效正文和 revision，正文变化须反映到 revision，显式读取失败报错；CSM 不读文件、不承担覆盖解析，模型请求路径只消费冻结版本。
 

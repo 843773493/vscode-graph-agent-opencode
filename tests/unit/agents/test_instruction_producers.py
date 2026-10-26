@@ -15,6 +15,7 @@ from app.agents.instruction_producers import (
     InstructionProducerError,
     InstructionProducerObservation,
     InstructionProducerSpec,
+    InstructionUpdateBinding,
     assert_producer_registrable,
     assert_toolset_policy_binding,
     build_toolset_policy_keys,
@@ -53,6 +54,13 @@ def _instruction_producer_spec(**overrides: object) -> InstructionProducerSpec:
         "revision": _SOURCE_REVISION,
     }
     payload.update(overrides)
+    if "update_binding" not in overrides:
+        owner, boundary = (
+            ("workspace_config", "next_job") if payload["producer_id"] in {"R01", "R02"}
+            else ("skill_catalog", "resource_activation") if payload["producer_id"] == "R05"
+            else ("software_release", "epoch")
+        )
+        payload["update_binding"] = InstructionUpdateBinding(owner, str(payload["revision"]), boundary)
     return InstructionProducerSpec(**payload)  # type: ignore[arg-type]
 
 
@@ -105,7 +113,7 @@ def test_unwired_producer_cannot_pose_as_enabled(
         name="compact-tool-usage",
         content="compact tool usage body",
         policy_key="compact_conversation",
-        wired=False,
+        update_binding=None,
     )
     with pytest.raises(InstructionProducerError) as excinfo:
         assert_producer_registrable(unwired)
@@ -145,6 +153,31 @@ def test_observation_reuses_single_csm_typed_mapping() -> None:
             revision=_SOURCE_REVISION,
             from_revision=_SOURCE_REVISION,
         )
+
+
+@pytest.mark.parametrize("binding", [
+    None,
+    InstructionUpdateBinding("skill_catalog", _SOURCE_REVISION, "resource_activation"),
+    InstructionUpdateBinding("workspace_config", _NEXT_SOURCE_REVISION, "next_job"),
+])
+def test_registration_requires_matching_publication_before_mutating_manager(
+    instruction_context_source_manager: ContextSourceManager,
+    binding: InstructionUpdateBinding | None,
+) -> None:
+    manager = instruction_context_source_manager
+    with pytest.raises(InstructionProducerError, match="instruction-(producer-not-wired|update-binding-conflict)"):
+        register_instruction_producer(manager, _instruction_producer_spec(update_binding=binding))
+    assert manager.descriptors() == ()
+    assert manager.prepare_pending() is None
+
+
+def test_config_generation_publication_cannot_claim_model_call_updates() -> None:
+    spec = _instruction_producer_spec()
+    with pytest.raises(InstructionProducerError, match="instruction-activation-boundary-unsupported"):
+        InstructionProducerObservation(owner=_CONTEXT_SOURCE_OWNER, spec=spec,
+                                       revision=spec.revision, activation_boundary="model_call")
+    with pytest.raises(InstructionProducerError, match="instruction-update-binding-invalid"):
+        InstructionUpdateBinding("workspace_config", _SOURCE_REVISION, "resource_activation")
 
 
 def test_registration_uses_unique_csm_and_rejects_control_metadata(

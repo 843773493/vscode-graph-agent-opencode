@@ -339,7 +339,7 @@
 本节为可直接进入实施的任务清单，按依赖关系逐切片实现并验收；团队／协作专项继续暂缓，不阻塞本节独立任务。语义以 specs 为准；标签拼写、配置键及typed结构由对应实施切片收敛，不作为整节停留在规划阶段的理由，也不能改变已定默认值、互斥模式、来源优先级或稳定前缀合同。涉及itemized封存映射及统一寻址的部分复用其唯一owner，不在此复制第二份合同；任务完成须有对应实现与验收证据。
 
 - [x] 9.1 迁齐追踪字段语义：保留外部`skill_load.mode`，将观察请求字段改为`requested_mode`、来源绑定封存字段改为`source_tracking_at_seal`，运行态／控制态保留`tracking_status`和派生`tracked`；类型区分canonical不适用与来源未跟踪。先全仓定位声明、权威写入、序列化、直接／间接消费者和测试，再完成原子迁移并删除旧别名、双写和死字段；旧sealed字节不重写，需要持久结构调整时由原owner明确处理版本。
-- [ ] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
+- [x] 9.2 校验tracked来源的owner、版本发布入口与激活能力接线，覆盖真实instruction注册和恢复入口；复用现有配置reload/runtime generation与resource发布链路，不为每个来源增加watcher或独立callback。一次性内容采用snapshot，要求tracked却缺接线或状态不符的入口明确失败；不把标记tracked当作持续更新验收。
 - [x] 9.3 统一`observe()`处理结果，区分未变化、恢复基准、未跟踪、接受新观察，独立表达pending；迁齐忽略布尔结果的生产调用方。验证A→B→A在seal前取消净增量，接受观察不推进applied、不等于queued或seal；删除旧布尔歧义与未消费分支。
 - [x] 9.4 收敛R01唯一默认正文入口，清除JSONC与Python重复兜底；拆开R02可覆盖说明和软件生成身份事实，移除项目示例，区分配置候选与实际模型调用身份。由owner统一发布有效正文和revision，复用真实reload/generation接线，不旁路CSM或在请求中补拼正文。
 - [x] 9.5 增加owner管理的可选提示词文件输入，默认inline，显式文件替换正文而非拼接；有效配置只选择一个正文输入。收敛配置键、路径规则与来源发布绑定，同步对应配置域的默认、schema、开发模板与诊断，遵守既有覆盖规则；文件变化发布revision，显式读取失败报错，删除请求期读盘或隐式inline回退。
@@ -491,3 +491,10 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 
 - 095 的唯一断言失败在现行 reader 读取前的 schema 校验：测试只升级18→23，当前 reader明确要求25。保留23中间状态断言，再经生产登记的 execution_queue 与 skill_selection SQL显式升级24／25；冷读改为核对整个封存快照，不仅比较refs。迁移实现与支持范围未改，其它历史身份损坏的拒绝断言不变。
 - 100 定向六项全部通过；101 完整HEAD基线／当前该文件Pyright均8条、零新增，Ruff零新增。完整基线逐blob核验后清理，正式测试输出保留。命令、指纹、raw和退出码保存在 out/tests/temp/csm-kind-boundary/artifacts/assembly-migration-current-reader-100 与 assembly-migration-static-comparison-101，未将前轮失败改写为通过。
+
+
+### 2026-10-27 9.2 instruction 发布绑定闭合
+
+- 删除默认 wired 标记，真实 producer 显式绑定配置、软件或 SkillCatalog 的发布 revision 与 next_job／epoch／resource_activation 边界；缺失或不符在修改 CSM 前失败，恢复复用原 binding_revision。配置不宣称运行中 model-call 更新，没有新增 watcher、持久格式或团队功能。
+- 完整暂存 tree `8863f4301f3aa402c31d272546ecd873f3d48057`：定向33 passed、相邻50 passed（排除R03专项）、原 Skill／来源入口32 passed；各组有交集。R01／R02 × inline／file 产品检查首次3 passed／1 failed，唯一失败在R02-file首轮8秒helper等待，尚未进入更新断言；相同用例单独运行，HEAD基线1 passed／49.94秒，当前1 passed／47.06秒，未修改等待或业务断言。并行负载敏感性保留性能TODO，不能称首轮整批通过。
+- 7文件Ruff零诊断、compileall通过；Pyright基线／当前均22个既有诊断，零新增，检查exit1。原件、准确命令、源码tree及退出码在 `out/tests/temp/csm-tracked-bindings/artifacts/` 的 probe-001、verify-002、baseline-003、serial-004。关闭9.2，当前63/76；9.9—9.12／9.14／9.16、完整Web／外部Provider／Windows及团队协作TODO保持未完成。
