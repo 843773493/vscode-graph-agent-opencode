@@ -62,6 +62,18 @@
 
 长等待 MUST 使用持久操作、deadline、精确 session_id/thread_id 和恢复去重身份，复用既有后台通知与内部执行准入，不长期占用普通工具调用。登记与终态观察 MUST 避免丢唤醒；终态提交后通知原 thread，并只恢复仍有效、通过最新权限与删除 fence 的 continuation。短查询超时 MUST 不取消共享连接操作，取消 thread 等待 MUST 不默认断开共享连接。
 
+`connect`／`status` MUST 仅在显式提供非空且最多4096字符的 `continuation` 时登记长等待；省略时保留原操作及短查询行为。continuation MUST 只表达待继续意图，不作为可执行代码或待重放业务参数。同一 thread／operation 的已登记意图 MUST 不被后续不同意图覆盖。原调用的成功等待回执 MUST 已由 canonical owner 提交并与 task 身份匹配，失败或取消的工具结果 MUST 不产生自动继续资格。
+
+#### Scenario: 只查询状态不登记自动继续
+
+- **WHEN** 模型调用 `connect` 或短 `status`，未提供 continuation
+- **THEN** 系统返回真实操作状态，不隐式新增后台等待或独立 Agent 执行
+
+#### Scenario: 等待登记后原工具调用失败
+
+- **WHEN** 后台等待已登记，但原精确工具调用最终只提交失败或取消结果
+- **THEN** 系统不把该结果当作成功等待回执，也不提交 continuation 执行
+
 等待 MUST 复用 BackgroundTask 的 typed/versioned handler、checkpoint 和原子 mailbox effect；观察 handler MUST 不重新执行授权交换或业务副作用。现有控制存储事务 MUST 原子保存 checkpoint、稳定 ID 邮箱消息和 checkpoint 内待投递 continuation 引用；可恢复投递步骤 MUST 用稳定幂等 key 提交 RuntimeSourceDispatcher，并在成功后结算，崩溃后可安全重放。邮箱 emit／collect MUST 不被视为 Agent 已准入；邮箱 ack 与内部 wakeup ack MUST 分别遵守既有 canonical ToolResult 和执行提交合同。
 
 原调用 MUST 先提交配对等待结果，原执行按既有终态结束，等待事实由 BackgroundTask 承载，不新增 Job 状态；授权完成、目录发布且 continuation 有效后 SHALL 通过 after_turn 调度独立 internal execution。该执行 MUST 使用 turn_id=None，按既有 activation 合同针对自身真实 execution 冻结目录，不修改旧 Turn、不伪装成旧执行 retry/resume。等待展示、取消及对账 SHALL 复用 BackgroundTaskResourceProvider，活动任务 MUST 遵守现有 idle unload blocker；进程重启后的恢复不代表活动等待可以无条件卸载。

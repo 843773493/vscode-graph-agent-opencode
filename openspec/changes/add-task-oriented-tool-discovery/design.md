@@ -89,8 +89,8 @@ MCP 输入按其声明的 JSON Schema 方言和完整契约校验；未声明方
 | operation | 输入 | 结果 |
 | --- | --- | --- |
 | `list` | 可选 server 过滤 | 当前工作区可管理连接摘要 |
-| `connect` | 已配置 connection/server identity | 持久操作 ID、状态和产品授权入口 |
-| `status` | 操作 ID、可选 `wait_timeout_ms` | 真实状态／终态／等待激活信息 |
+| `connect` | 已配置 connection/server identity、可选 `continuation` | 持久操作 ID、状态、产品授权入口及显式登记的后台等待 |
+| `status` | 操作 ID、可选 `wait_timeout_ms`／`continuation` | 真实状态／终态及显式登记的后台等待 |
 | `disconnect` | 连接 identity | 撤销新准入并报告实际关闭结果 |
 
 连接 identity 带 workspace owner、稳定 server identity 和必要的账户标识；token、socket、授权尝试 ID 不作为稳定连接身份。操作 ID 从现有工具调用 operation identity 派生，重放同一次 connect 返回同一有效操作，不反复打开授权页面。超时状态查询不取消连接操作，取消所属 thread 的等待也不自动断开共享工作区连接。
@@ -116,6 +116,10 @@ HTTP Server 以可选的 `mcp.servers.<id>.oauth.redirect_uri` 显式选择标�
 显式 disconnect 只作用于本工作区运行态：撤销新准入、发布无该 Server 成员的目录，并核实原 active／退役 scope 关闭；不改 enabled 配置，也不删除凭据。进程重启按已启用配置创建新连接代际，对遗留非终态只核对当前就绪与原配置指纹，或明确失败／过期；不恢复旧 socket、不重放 token 交换或业务调用。终态历史不因后来重连而改写。
 
 等待记录复用现有后台工作存储／handler 和内部执行准入，按 `(session_id, thread_id, operation_id)` 关联到既有会话节点；具体文件由统一路径解析器取得，不手拼日期或全局目录。记录至少包含 deadline、操作／连接引用、最后观察状态、通知／恢复去重身份和待恢复 continuation 引用，不存储可执行代码或复制业务参数作为第二权威。
+
+长等待由 `connect` 或 `status` 的可选 `continuation` 明确登记，值为最多4096字符的待继续意图。省略时保持现有连接／短查询行为，不自动创建执行；不接受为 disconnect 登记 continuation。同一 thread 的同一操作共用稳定后台 task 身份，已登记的意图不能被后来查询悄悄替换。恢复消息将该意图标记为不可信指令数据，只提示检查新目录后继续，不携带待重发的业务参数。
+
+BackgroundTask 在独立 Context 中启动，不继承原 Job 的固定配置、执行身份或 canonical delta sink。完成通知之前先沿精确 emitting model-call／tool-call 定位已提交的真实 attempt，并核对成功回执内的 task 身份；请求投影不作为另一个执行结果，失败／取消回执不能触发 continuation。定位查询仍只读既有索引和提交边界，邮箱 ack 不因此读取正文；需要恢复意图的 handler 再通过唯一 canonical owner 校验原正文。
 
 采用「登记等待 → 读取当前权威状态 → 订阅／消费变化并再核状态」语义，避免授权在登记前完成造成丢唤醒。连接 owner 确认终态并持久提交后，再发送只含操作引用与状态的最小事件；不能单凭事件把连接标为 ready。等待 handler 只观察和对账授权，不重复执行 connect、token 交换或业务写入；复用现有 typed/versioned handler 与原子 mailbox/checkpoint effect，不把观察等待误标为结果未知的外部副作用。
 

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.core.background_task_contracts import BackgroundTaskHandle
+from app.core.background_task_contracts import (
+    BackgroundTaskDescriptor,
+    BackgroundTaskHandle,
+)
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -13,6 +16,11 @@ from app.schemas.internal_v2.session_resource import (
 
 @runtime_checkable
 class BackgroundTaskRegistryProtocol(Protocol):
+    async def spawn(
+        self, *, session_id: str, thread_id: str, agent_id: str, task_id: str,
+        descriptor: BackgroundTaskDescriptor,
+    ) -> BackgroundTaskHandle: ...
+
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]: ...
 
     def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]: ...

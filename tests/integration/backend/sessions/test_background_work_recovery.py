@@ -8,6 +8,7 @@ import shutil
 import sys
 from collections import Counter
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.harness.python.run_context import TestRunContext
+from tests.support.background_work import ControlledBackgroundHandler
 
 _PROCESS = r'''
 import asyncio, os, sys
@@ -151,6 +153,35 @@ async def finish_recovery(case: BackgroundCase) -> None:
             assert control.list_non_terminal_leases() == ()
             assert [message.message_id for message in control.list_background_messages(case.thread_id, "agent")] == [f"bgt_process-window:message:{index}" for index in range(3)]
     finally:
+        await registry.stop()
+
+
+async def test_background_task_starts_with_independent_context(process_case: BackgroundCase):
+    inherited: ContextVar[str | None] = ContextVar("creator-job-state", default=None)
+    observed = []
+
+    class ContextObserver(ControlledBackgroundHandler):
+        async def step(self, handle):
+            observed.append(inherited.get())
+            return await super().step(handle)
+
+    handler = ContextObserver()
+    handler.finish.set()
+    registry = BackgroundTaskRegistry(store=process_case.store, residency_tracker=ThreadResidencyTracker(), handlers=(handler,))
+    token = inherited.set("old-pinned-job")
+    try:
+        handle = await registry.spawn(
+            session_id=process_case.session_id, thread_id=process_case.thread_id,
+            task_id="bgt_independent-context", agent_id="agent",
+            descriptor=BackgroundTaskDescriptor(kind=handler.kind, version=handler.version, payload={}),
+        )
+        assert registry.residency_blockers(process_case.session_id, process_case.thread_id)
+        await registry.get_task(process_case.session_id, handle.task_id)
+        assert observed == [None]
+        assert inherited.get() == "old-pinned-job"
+        assert registry.residency_blockers(process_case.session_id, process_case.thread_id) == ()
+    finally:
+        inherited.reset(token)
         await registry.stop()
 
 
@@ -389,9 +420,9 @@ async def test_cold_canonical_locator_uses_exact_index_without_body_read_and_wro
         with monkeypatch.context() as patch:
             patch.setattr(storage.storage, "_connect", observed_connect)
             patch.setattr(storage.storage, "_read_v2_item_at", forbidden_body)
-            assert cold.has_committed_tool_result(case.session_id, case.thread_id, "model-target", "collect-call")
-            assert not cold.has_committed_tool_result(case.session_id, case.thread_id, "wrong-model", "collect-call")
-            assert not cold.has_committed_tool_result(case.session_id, case.thread_id, "model-target", "wrong-call")
+            assert cold.committed_tool_result_id(case.session_id, case.thread_id, "model-target", "collect-call")
+            assert not cold.committed_tool_result_id(case.session_id, case.thread_id, "wrong-model", "collect-call")
+            assert not cold.committed_tool_result_id(case.session_id, case.thread_id, "model-target", "wrong-call")
             lookup_counts = dict(counts)
             counts.clear()
             with storage.storage.open_read_snapshot(case.session_id, case.thread_id):

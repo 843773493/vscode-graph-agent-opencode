@@ -26,7 +26,9 @@ from app.domain.itemized.records import CanonicalItemRecord
 
 
 class BackgroundToolResultReader(Protocol):
-    def has_committed_tool_result(self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str) -> bool: ...
+    def committed_tool_result_id(
+        self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str,
+    ) -> str | None: ...
 
 
 class BackgroundMessageBus:
@@ -199,7 +201,7 @@ class BackgroundMessageBus:
                 pending = control.unacknowledged_background_consumptions()
             for consumption_id, thread_id, identity in pending:
                 async with self._store.admission(session_id):
-                    if reader.has_committed_tool_result(session_id, thread_id, identity.model_call_id, identity.tool_call_id):
+                    if reader.committed_tool_result_id(session_id, thread_id, identity.model_call_id, identity.tool_call_id) is not None:
                         self.acknowledge(session_id, consumption_id)
                         acknowledged += 1
         return acknowledged

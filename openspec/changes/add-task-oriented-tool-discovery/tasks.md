@@ -46,13 +46,13 @@
 
 ## 6. 持久等待、精确通知与恢复
 
-- [ ] 6.1 复用既有 typed/versioned BackgroundTask handler/store 登记精确 thread 等待、deadline 和 continuation；观察等待使用原子 mailbox effect，不重复 connect／token 交换／业务副作用，引用按统一会话路径保存，不建第二事实源。
-- [ ] 6.2 实现登记后重读终态，在现有控制存储事务中原子提交 checkpoint、稳定 ID 邮箱消息和 checkpoint 内待投递引用；以可恢复投递阶段衔接 RuntimeSourceDispatcher，同幂等 key 重放并结算，不将 emit／collect 当作 Job 准入，不混用邮箱与 wakeup ack。
-- [ ] 6.3 原调用先提交配对等待结果并结束，经既有内部唤醒／队列按 after_turn 准入独立 internal execution，turn_id=None 并冻结自身新目录；按 operation 去重，重查权限／删除 fence／deadline，不改写原 Turn 或伪装 retry，只恢复仍有效意图。
-- [ ] 6.4 实现短 status 等待的 child scope 期限，以及长等待取消／过期；取消某 thread 等待不默认断开共享连接。
-- [ ] 6.5 实现进程重启对账和无法确认状态；不得恢复旧 socket、重放结果未知外部写入或伪造用户 Turn。
+- [x] 6.1 复用既有 typed/versioned BackgroundTask handler/store 登记精确 thread 等待、deadline 和 continuation；观察等待使用原子 mailbox effect，不重复 connect／token 交换／业务副作用，引用按统一会话路径保存，不建第二事实源。
+- [x] 6.2 实现登记后重读终态，在现有控制存储事务中原子提交 checkpoint、稳定 ID 邮箱消息和 checkpoint 内待投递引用；以可恢复投递阶段衔接 RuntimeSourceDispatcher，同幂等 key 重放并结算，不将 emit／collect 当作 Job 准入，不混用邮箱与 wakeup ack。
+- [x] 6.3 原调用先提交配对等待结果并结束，经既有内部唤醒／队列按 after_turn 准入独立 internal execution，turn_id=None 并冻结自身新目录；按 operation 去重，重查权限／删除 fence／deadline，不改写原 Turn 或伪装 retry，只恢复仍有效意图。
+- [x] 6.4 实现短 status 等待的 child scope 期限，以及长等待取消／过期；取消某 thread 等待不默认断开共享连接。
+- [x] 6.5 实现进程重启对账和无法确认状态；不得恢复旧 socket、重放结果未知外部写入或伪造用户 Turn。
 - [ ] 6.6 验证登记前已完成、邮箱提交后 dispatcher 提交前崩溃、dispatcher 接受后投递结算前崩溃、重复 callback、两 thread 等待同连接、用户输入交错、Session 删除／取消／deadline 和进程重启后的原 thread 冷重建；确认观察恢复不重放授权副作用并完成静态分析。
-- [ ] 6.7 等待展示、取消和对账接入既有 BackgroundTaskResourceProvider；验证运行中仍遵守 idle unload blocker，不另建授权任务清单或未定义挂起状态。
+- [x] 6.7 等待展示、取消和对账接入既有 BackgroundTaskResourceProvider；验证运行中仍遵守 idle unload blocker，不另建授权任务清单或未定义挂起状态。
 
 ## 7. MCP 配置受控热替换
 
@@ -236,3 +236,13 @@
 - Buf格式、lint、build及对真实HEAD的breaking检查通过；Web真实tsc与build通过。OpenAPI从仅含本切片的暂存tree `acfee8c5f0c3c073ef2f80147b7becfb00d8bc97` 导出，只新增上述MCP路径和DTO；4533个源码blob核验后已清理导出副本，未混入并行fork/task字段。最终timer仅改变操作运行态，不改变导出合同。
 - 最终完整暂存tree `c42656df0d0c1f24ef7ac5e9cf011c0a9e6e2fa5` archive隔离复验：同一正式连接操作套件7 passed／77.81秒；核对全部4535个blob未变化后移除源码副本，原正式测试输出保留在 `artifacts/final-source/out/tests/`。该树不含其它agent尚未提交的fork／task改动，不依赖其实现。
 - 准确命令、源码指纹、raw、退出码、类型基线对比及结构索引位于 `out/tests/temp/mcp-connection-operations/artifacts/`；正式测试输出保留在各测试同名目录。当前进度23/52。5.1／5.6／5.7、7.1及后续Agent控制、产品UI、Gateway／Web授权、精确thread后台等待／自动继续门仍未完成；不把Backend API或SDK协议夹具当作这些验收。团队／协作TODO不变，未做Windows或真实外部Provider验收。
+
+
+### 2026-10-27 MCP 精确 thread 持久等待与独立继续
+
+- `connect`／`status` 仅在显式传入 continuation 时登记原 thread 的 typed/versioned BackgroundTask；稳定身份绑定 operation，同一等待不覆盖不同意图。原成功 ToolResult 与 task 匹配后才观察连接，失败／取消结果不产生继续资格。canonical locator 排除 request projection carrier，旧布尔查询及全部调用方已物理迁齐。
+- 观察步骤在原控制事务原子保存 checkpoint、稳定邮箱消息及待投递引用，下一步骤用原 RuntimeSourceDispatcher 幂等提交 after_turn internal execution、turn_id=None；新执行冻结新目录，旧 Turn 不变。投递前重查当前权限、连接、原执行、agent 与 deadline；已提交 wakeup 的恢复复用身份。后台任务用独立 Context，不继承创建者的 pinned config、执行准入和 delta sink，原 Gateway／request 身份显式恢复。
+- 真实 Gateway→Session 消息→Agent→OAuth／MCP 验证：`product-010` 的 turn、model_call、邮箱提交后崩溃及双 thread 独立取消四场景通过；该轮唯一失败是重启后查询已完成旧 Job 的内存 API（404）。`restart-accepted-017` 修正为退出前确认 Job 完成、重启后核持久 execution 终态，1 passed／80.38秒；未放宽执行数量、唯一 wakeup、Turn 归属、实际业务收据或逐请求 hash 断言。Backend 与 Gateway 使用同一隔离控制目录，各场景保存独立进程日志。最终完整暂存 tree `0956bc52a34a156227af13e5815c2e70ddfff538` archive 隔离复验为5 passed／399.31秒；同树后台／恢复／资源清理72 passed／28.06秒。全部4562个 tracked 文件核对无漂移后删除源码副本，正式输出保留在 `isolated-details-019/formal-output/`，不依赖其它会话未提交的 task／fork 改动。
+- `unit-and-recovery-012` 57 passed／29.76秒，含 handler、原子邮箱、真实进程退出、精确索引正文零读取与增长量、schema 拒绝及真实授权期限；`control-regression-010` 19 passed／102.78秒；`observer-final-015` 1 passed／2.53秒验证观察期限、取消不影响共享授权、登记前终态和交换仅一次。组间有重叠，不累加计数。完整 HEAD archive 复现旧句柄快照断言错误，资源清理断言改查权威持久 deleted 状态。
+- 14个生产文件 Ruff 0诊断；Pyright HEAD基线30／当前29，零新增诊断，不宣称全仓类型通过。受影响测试 Ruff、差异检查及 OpenSpec strict validation 通过。准确命令、源码指纹、raw、退出码、基线与结构统计在 `out/tests/temp/mcp-persistent-wait/artifacts/`。结构审查确认新目录四部分 AGENTS 齐全，既有大容器只增装配，未新增第二目录／任务库或网络授权 writer。
+- 当前31/52。6.6仍未关闭：完整产品的真实 child 冷重建、用户输入交错、Session 删除及全过程 deadline 等门继续补齐；本轮不代替授权 Web UI、远端可达性、完整 HITL 或外部 Provider 验收。团队／协作专项继续 TODO。

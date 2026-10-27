@@ -192,6 +192,7 @@ from app.services.orchestration.communication.service import (
 )
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.services.orchestration.job_execution_service import JobExecutionService
+from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -587,10 +588,6 @@ def _build_app_container(
         clock=clock_ports.residency, wall_clock=clock_ports.wall,
     )
     background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
-    background_task_registry = BackgroundTaskRegistry(
-        store=background_work_store, residency_tracker=thread_residency_tracker,
-        handlers=(SystemTimeEmitterHandler(),),
-    )
     background_message_bus = BackgroundMessageBus(store=background_work_store)
     trace_event_store = TraceEventStore(sessions_dir=resolved_sessions_root)
     trace_event_recorder = TraceEventRecorder(
@@ -737,6 +734,14 @@ def _build_app_container(
         store=session_changes_store,
     )
     tool_selection_store = ToolSelectionStore(boxteam_root=resolved_boxteam_root)
+    mcp_connection_wait_handler = McpConnectionWaitHandler(
+        connections=mcp_connection_service, saver=checkpointer, events=job_event_bus,
+        config=config_service, selection=tool_selection_store, sessions=session_service,
+    )
+    background_task_registry = BackgroundTaskRegistry(
+        store=background_work_store, residency_tracker=thread_residency_tracker,
+        handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler),
+    )
     artifact_outputs = ToolOutputStore(workspace_root=resolved_workspace_root)
 
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
@@ -915,6 +920,7 @@ def _build_app_container(
     runtime_source_dispatcher = RuntimeSourceDispatcher(
         saver=checkpointer, session_service=session_service, job_service=job_service,
     )
+    mcp_connection_wait_handler.bind_dispatcher(runtime_source_dispatcher)
     session_orchestrator = SessionOrchestrator(
         attachment_holder=attachment_blob_store.deletion_holder,
         message_service=message_service,

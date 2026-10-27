@@ -114,7 +114,8 @@ class BackgroundTaskHandler(Protocol):
 
     kind: str
     version: int
-    effect: Literal["atomic_mailbox", "external"]
+    @property
+    def effect(self) -> Literal["atomic_mailbox", "external"]: ...
 
     def initial_checkpoint(self, descriptor: BackgroundTaskDescriptor) -> dict[str, JsonValue]: ...
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -12,6 +13,7 @@ import pytest
 
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from configs.installer import install_user_configuration
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.sessions.test_mcp_config_recovery import (
@@ -44,13 +46,16 @@ def product_case(recovery_case, free_tcp_port_factory):
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
     @asynccontextmanager
-    async def start(secure, sibling):
+    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None):
+        home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
+        install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
         payload = read_jsonc_object(path) if path.exists() else {}
         payload["mcp"] = {"servers": {
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
             "secure": secure.configuration(),
         }}
+        payload["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
         payload["llm"] = {"providers": [{
             "id": "control-replay", "endpoint": "https://opencode.ai/zen/v1", "model": "control-replay-model",
             "api_key": "control-replay-key", "custom_llm_provider": "openai",
@@ -70,12 +75,16 @@ def product_case(recovery_case, free_tcp_port_factory):
             backend = await asyncio.to_thread(
                 start_backend_process, workspace_root=str(case.mount.workspace_root), port=backend_port,
                 log_name="mcp-local-control", asgi_app="tests.support.e2e_control.backend_app:app",
-                env_overrides={**replay.environment, "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}"},
+                startup_mount=startup_mount,
+                env_overrides={**replay.environment, "BOXTEAM_HOME": str(home), "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}"},
             )
+            owned_backends = backend_processes if backend_processes is not None else []
+            owned_backends.append(backend)
             try:
                 gateway = await asyncio.to_thread(
                     start_gateway_process, workspace_root=case.mount.workspace_root,
                     default_backend_url=f"http://127.0.0.1:{backend_port}", port=gateway_port,
+                    boxteam_home=home,
                     artifacts_dir=case.context.artifacts_dir / "gateway",
                 )
                 try:
@@ -88,7 +97,9 @@ def product_case(recovery_case, free_tcp_port_factory):
                 finally:
                     await asyncio.to_thread(close_gateway_process, gateway)
             finally:
-                await asyncio.to_thread(close_backend_process, backend)
+                for owned in reversed(owned_backends):
+                    await asyncio.to_thread(close_backend_process, owned)
+                shutil.copytree(case.mount.workspace_root / ".boxteam/logs", case.context.artifacts_dir / "backend-logs")
     return start
 
 

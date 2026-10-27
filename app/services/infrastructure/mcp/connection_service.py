@@ -218,6 +218,20 @@ class McpConnectionService:
             operation = self._store.get(operation_id)
         return operation
 
+    async def wait_terminal(self, operation_id: str, *, deadline: float) -> McpConnectionOperationDTO:
+        """只观察权威操作；先捕获通知再读状态，不轮询或延长原期限。"""
+        while True:
+            changed = self._changed
+            operation = self._store.get(operation_id)
+            remaining = min(deadline, operation.deadline) - time.time()
+            if operation.terminal or remaining <= 0:
+                return operation
+            try:
+                async with asyncio.timeout(remaining):
+                    await changed.wait()
+            except TimeoutError:
+                return self._store.get(operation_id)
+
     def authorization(self, operation_id: str) -> McpAuthorizationDTO:
         operation = self._store.get(operation_id)
         self._admit(operation.operation_id)

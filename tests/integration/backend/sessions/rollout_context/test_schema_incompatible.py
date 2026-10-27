@@ -95,15 +95,15 @@ def _source_files(root: Path) -> dict[str, tuple[bytes, int, int]]:
     ["frozen-schema3", "old-version", "old-schema13", "missing-tool-result-index", "contribution-metadata", "item-metadata"],
     indirect=True,
 )
-@pytest.mark.parametrize("operation", ["initialize", "open_read_snapshot", "read_items", "has_committed_tool_result"])
+@pytest.mark.parametrize("operation", ["initialize", "open_read_snapshot", "read_items", "committed_tool_result_id"])
 def test_old_experimental_shape_is_rejected_without_source_rewrite(
     incompatible_rollout, operation: str
 ) -> None:
     saver, session, thread, root, shape = incompatible_rollout
     before = _source_files(root)
     with pytest.raises(RuntimeError, match="schema-incompatible") as caught:
-        if operation == "has_committed_tool_result":
-            saver.has_committed_tool_result(session, thread, "model", "call")
+        if operation == "committed_tool_result_id":
+            saver.committed_tool_result_id(session, thread, "model", "call")
         elif operation == "read_items":
             saver._storage.storage.read_items(session, thread)
         else:

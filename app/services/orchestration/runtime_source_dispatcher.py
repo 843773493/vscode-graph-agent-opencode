@@ -44,6 +44,19 @@ class RuntimeSourceDispatcher:
         self._jobs = job_service
         self._dispatch_locks = KeyLockPool()
 
+    @staticmethod
+    def _digest(session_id: str, thread_id: str, idempotency_key: str) -> str:
+        return hashlib.sha256(
+            f"runtime-source\0{session_id}\0{thread_id}\0{idempotency_key}".encode(),
+        ).hexdigest()
+
+    def submitted(
+        self, session_id: str, thread_id: str, *, idempotency_key: str,
+    ) -> RuntimeExecutionWakeup | None:
+        """区分已提交的准入恢复与尚未发生的新准入，不以邮箱事实代替。"""
+        digest = self._digest(session_id, thread_id, idempotency_key)
+        return self._saver.runtime_wakeup_for_admission(session_id, thread_id, f"radm_{digest}")
+
     async def submit(
         self, session_id: str, thread_id: str, message: PreparedInternalMessage,
         *, source_id: str, idempotency_key: str,
@@ -53,9 +66,7 @@ class RuntimeSourceDispatcher:
         kind = message.metadata["structured_prompt_kind"]
         if not isinstance(kind, str):
             raise TypeError("runtime source kind 必须是字符串")
-        digest = hashlib.sha256(
-            f"runtime-source\0{session_id}\0{thread_id}\0{idempotency_key}".encode(),
-        ).hexdigest()
+        digest = self._digest(session_id, thread_id, idempotency_key)
         intent = InternalExecutionIntent(
             message_id=f"rmsg_{digest}", execution_id=f"rexec_{digest}",
             admission_idempotency_key=f"radm_{digest}",

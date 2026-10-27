@@ -592,7 +592,8 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     assert terminal_owner.deleted_terminal_ids == ["term_cleanup"]
     assert terminal_owner.cleaned_session_ids == [session_id]
     assert browser_owner.deleted_browser_ids == ["browser_cleanup"]
-    assert handle.status == "deleted"
+    deleted = registry.get_handle(session_id, handle.task_id)
+    assert deleted is not None and deleted.status == "deleted"
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from contextvars import Context
 from pathlib import Path
 from typing import Protocol
 
@@ -92,7 +93,8 @@ class BackgroundTaskRegistry:
         existing = self._running_tasks.get(key)
         if existing is not None and not existing.done():
             return
-        task = asyncio.create_task(self._run(handle), name=f"{handle.task_name}:{handle.task_id}")
+        # 持久任务独立于原 Job；配置快照、delta sink 和执行身份不能随创建者泄入。
+        task = asyncio.create_task(self._run(handle), name=f"{handle.task_name}:{handle.task_id}", context=Context())
         self._running_tasks[key] = task
         task.add_done_callback(lambda completed: self._observe_completion(key, completed))
 

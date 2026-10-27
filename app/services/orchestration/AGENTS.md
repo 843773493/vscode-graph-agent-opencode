@@ -30,6 +30,7 @@ orchestration/
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
 ├── owner_thread_creation_factory.py      按操作作用域装配 Thread 创建依赖并显式关闭控制连接
 ├── runtime_source_dispatcher.py           内部 runtime source/wakeup 的准入与恢复派发
+├── mcp_wait/                              MCP 连接终态观察、原子通知与原 thread 独立执行投递
 ├── thread_residency.py                    runtime admission、generation、blocker 与 idle 回收流程
 ├── thread_residency_state.py               驻留状态、runtime slot、lease 和快照的数据形状
 ├── session_subagent_service.py            Session subagent 委派

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -77,6 +78,35 @@ async def test_real_authorization_deadline_closes_candidate_without_publishing(
         state = parse_qs(urlparse(authorization.authorization_url).query)["state"][0]
         with pytest.raises(PermissionError):
             service.complete_authorization(operation.operation_id, code="late-code", state=state)
+
+
+async def test_observer_deadline_and_cancellation_preserve_shared_authorization(
+    oauth_endpoint_factory, connection_case,
+):
+    async with oauth_endpoint_factory() as endpoint, connection_case(endpoint) as (service, owner, _store):
+        operation = await service.submit(McpConnectionRequestDTO(operation_id="observed", server_id="secure", action="connect"))
+        waiting = await observe(service, operation.operation_id, "waiting_user")
+        async with asyncio.timeout(1):
+            short = await service.wait_terminal(operation.operation_id, deadline=time.time() + 0.02)
+        assert short == waiting and not short.terminal
+        first = asyncio.create_task(service.wait_terminal(operation.operation_id, deadline=operation.deadline))
+        second = asyncio.create_task(service.wait_terminal(operation.operation_id, deadline=operation.deadline))
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert not second.done() and endpoint.exchanges == 0
+        async with httpx.AsyncClient() as client:
+            redirect = await client.get(service.authorization(operation.operation_id).authorization_url)
+        callback = {name: values[0] for name, values in parse_qs(urlparse(redirect.headers["location"]).query).items()}
+        service.complete_authorization(operation.operation_id, **callback)
+        async with asyncio.timeout(8):
+            succeeded = await second
+        assert succeeded.status == "succeeded" and owner.get_tool_ids() == {"mcp__secure__probe"}
+        # 终态先于新观察者登记，不能等待下一条事件，也不能续期。
+        async with asyncio.timeout(0.1):
+            assert await service.wait_terminal(operation.operation_id, deadline=time.time() - 1) == succeeded
+        assert endpoint.exchanges == endpoint.registrations == 1
 
 
 async def test_changed_configuration_fences_late_authorization_before_exchange(

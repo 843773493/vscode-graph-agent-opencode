@@ -119,8 +119,10 @@ class RolloutItemsMixin:
             if decision.action != "copy_snapshot":
                 raise ValueError("canonical 正文 owner 只支持冻结快照导入")
 
-    def has_committed_tool_result(self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str) -> bool:
-        """只读 canonical SQL locator，给邮箱 ack 恢复提供真实提交证明。"""
+    def committed_tool_result_id(
+        self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str,
+    ) -> str | None:
+        """只读精确 attempt 的提交 locator；请求投影不是第二个执行结果。"""
         with self._lock(thread_id, "", session_id=session_id), self._connect(
             thread_id, session_id=session_id, read_only=True,
         ) as connection:
@@ -140,13 +142,14 @@ class RolloutItemsMixin:
                 "SELECT item_id,jsonl_offset,jsonl_length,commit_id FROM item_catalog "
                 "INDEXED BY item_catalog_background_result_identity WHERE semantic_kind='tool_result' "
                 "AND status='completed' AND tool_call_id IN (?,?) "
-                "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? LIMIT 2",
+                "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? "
+                "AND json_extract(projection_manifest_json,'$.projection_identity.projection_message_id') IS NULL LIMIT 2",
                 (tool_call_id, f"{model_call_id}:tool-call:{tool_call_id}", model_call_id),
             ).fetchall()
             if len(rows) > 1:
                 raise RuntimeError("邮箱消费的 canonical ToolResult identity 歧义")
             if rows:
-                _, offset, length, commit_id = rows[0]
+                item_id, offset, length, commit_id = rows[0]
                 commit = connection.execute(
                     "SELECT status,jsonl_start_offset,jsonl_end_offset FROM storage_commits WHERE commit_id=?",
                     (commit_id,),
@@ -155,7 +158,8 @@ class RolloutItemsMixin:
                     0 <= commit[1] <= offset < offset + length <= commit[2] <= committed_offset
                 ):
                     raise RuntimeError("邮箱恢复的 canonical ToolResult 缺少真实提交边界")
-            return bool(rows)
+                return str(item_id)
+            return None
 
     def _insert_canonical_item(
         self,
