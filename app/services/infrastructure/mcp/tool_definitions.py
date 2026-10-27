@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import cast
 
 from langchain_core.tools import BaseTool
 
@@ -19,8 +20,10 @@ from app.domain.itemized.resource_activation import (
     ResourceProvenanceRef,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
+    ConnectionReadiness,
     ExtensionCatalogUnavailableError,
     extension_schema_hash,
+    member_readiness,
 )
 
 DEFINITION_FACET = "definition"
@@ -45,11 +48,16 @@ class ToolDefinition:
     metadata: ToolMetadata
     schema_hash: str
     _payload_json: bytes
+    readiness: ConnectionReadiness = field(default="ready", kw_only=True)
 
     @property
     def payload(self) -> dict[str, object]:
         # 不把可变 JSON 引用交给搜索调用方。
         return json.loads(self._payload_json)
+
+    @property
+    def input_schema(self) -> dict[str, object]:
+        return cast(dict[str, object], self.payload["input_schema"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +80,7 @@ def tool_catalog_from_activation(
     """只解析调用所属快照；缺失历史定义时拒绝，不从 live 同名工具补齐。"""
     # 发布模块依赖本模块，读取路径延迟引用以免形成模块初始化环。
     from app.services.infrastructure.mcp.catalog_activation import (
+        EXTENSION_CATALOG_SOURCE_ID,
         MCP_TOOL_CATALOG_RESOURCE_ID,
         frozen_extension_catalog_revision,
     )
@@ -80,7 +89,7 @@ def tool_catalog_from_activation(
     if len(parents) != 1:
         raise ExtensionCatalogUnavailableError("冻结扩展目录父行缺失或不唯一")
     parent = parents[0]
-    _lineage_id, revision = frozen_extension_catalog_revision(
+    lineage_id, revision = frozen_extension_catalog_revision(
         snapshot=snapshot, binding=parent, payload=read_payload(snapshot, parent),
     )
     facets = {binding.resource_id: binding for binding in snapshot.bindings
@@ -105,5 +114,7 @@ def tool_catalog_from_activation(
             metadata=ToolMetadata(member.member_id, member.member_kind, payload["kind"], payload["group_id"]),
             schema_hash=member.schema_hash, server_id=member.server_id, provenance=binding,
             _payload_json=canonical_json_bytes(payload),
+            # TODO: 历史 v2 没有连接身份，只沿原合同恢复定义；v3 执行入口仍拒绝其 lineage。
+            readiness=member_readiness(member) if lineage_id == EXTENSION_CATALOG_SOURCE_ID else "ready",
         ))
     return FrozenToolCatalog(revision, snapshot.activation_snapshot_id, tuple(definitions))

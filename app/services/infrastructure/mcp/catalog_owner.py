@@ -21,7 +21,7 @@ import asyncio
 import logging
 from _thread import RLock
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -31,8 +31,10 @@ from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
+from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.config import McpCleanupDTO
 from app.services.infrastructure.config.contracts import (
     ConfigApplyRecorder,
@@ -56,6 +58,7 @@ from app.services.infrastructure.mcp.execution_handles import (
     McpExecutionHandles,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
+    ConnectionReadiness,
     ExtensionCatalogBindingRef,
     ExtensionTargetBinding,
     ExtensionTargetBindingInput,
@@ -72,6 +75,10 @@ from app.services.infrastructure.mcp.session_runtime import (
     McpServerRuntime,
     McpSessionFactory,
     production_mcp_session_factory,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
+    ToolDefinition,
+    definition_payload,
 )
 from mcp.shared.exceptions import McpError
 
@@ -128,6 +135,7 @@ class McpCatalogPublication:
     binding_ref: ExtensionCatalogBindingRef
     descriptors: tuple[McpToolDescriptor, ...]
     tools: Mapping[str, BaseTool]
+    definitions: Mapping[str, ToolDefinition]
     status: Literal["available", "dirty", "unavailable"]
     error: str | None = None
 
@@ -172,7 +180,7 @@ def _catalog_failure_text(
 
 
 def _compute_catalog_revision(
-    tools_by_id: Mapping[str, BaseTool],
+    definitions: Mapping[str, ToolDefinition],
     descriptors_by_server: Mapping[str, tuple[McpToolDescriptor, ...]],
 ) -> str:
     """语义目录载荷的 sha256 revision（canonical JSON；与事件合同同形状）。"""
@@ -182,13 +190,13 @@ def _compute_catalog_revision(
         for descriptor in sorted(
             descriptors_by_server[server_id], key=lambda item: item.tool_id
         ):
-            tool = tools_by_id[descriptor.tool_id]
+            definition = definitions[descriptor.tool_id]
             server_entries.append(
                 [
                     descriptor.tool_id,
                     descriptor.remote_name,
                     descriptor.description,
-                    export_model_tool_json_schema(tool),
+                    definition.payload["input_schema"],
                 ]
             )
         payload.append([server_id, server_entries])
@@ -712,7 +720,7 @@ class McpCatalogOwner:
                 await runtime.scope.close()
 
     async def disconnect_server(self, server_id: str, *, admit: Callable[[], None]) -> None:
-        """先撤销新准入及目录成员，再核实 active 与旧退役连接实际关闭。"""
+        """先撤销执行准入、保留已知契约，再核实 active 与旧退役连接实际关闭。"""
         async with self._catalog_lock:
             with self._publication_lock:
                 self.server_configuration(server_id)
@@ -726,11 +734,14 @@ class McpCatalogOwner:
                     item.request_close()
                 tools = {key: value for key, value in self._tools_by_id.items()
                          if (value.metadata or {}).get("mcp_server_id") != server_id}
-                descriptors = {key: value for key, value in self._descriptors_by_server.items() if key != server_id}
                 self._dirty_servers.discard(server_id)
                 publication_error: Exception | None = None
                 try:
-                    self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools, candidate_descriptors=descriptors)
+                    self._publish_snapshot_locked(
+                        server_id=server_id, candidate_tools=tools,
+                        candidate_descriptors=dict(self._descriptors_by_server),
+                        readiness_overrides={server_id: "disconnected"},
+                    )
                 except Exception as error:  # noqa: BLE001 - 广播失败仍须核实原连接关闭，随后合并报告。
                     publication_error = error
         errors = [] if publication_error is None else [publication_error]
@@ -742,6 +753,19 @@ class McpCatalogOwner:
                 errors.append(error)
         if errors:
             raise ExceptionGroup("MCP 断开未完成", errors)
+
+    def mark_authorization_required(self, server_id: str) -> None:
+        """仅标准 SDK 的真实授权回调调用；未知目录不虚构成员。"""
+        with self._publication_lock:
+            self.server_configuration(server_id)
+            runtime = self._runtimes.get(server_id)
+            if runtime is not None and runtime.running:
+                raise McpCatalogError("正在运行的 MCP 连接不能改为未授权目录")
+            self._publish_snapshot_locked(
+                server_id=server_id, candidate_tools=dict(self._tools_by_id),
+                candidate_descriptors=dict(self._descriptors_by_server),
+                readiness_overrides={server_id: "authorization_required"},
+            )
 
     def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)
@@ -956,7 +980,7 @@ class McpCatalogOwner:
             raise McpCatalogError("MCP readiness 缺少原 publication")
         publication = McpCatalogPublication(
             binding_ref=previous.binding_ref, descriptors=previous.descriptors,
-            tools=previous.tools, status=status, error=error,
+            tools=previous.tools, definitions=previous.definitions, status=status, error=error,
         )
         self._publication = publication
         errors = self._broadcast_publication_locked(publication)
@@ -985,12 +1009,31 @@ class McpCatalogOwner:
         server_id: str | None,
         candidate_tools: dict[str, BaseTool],
         candidate_descriptors: dict[str, tuple[McpToolDescriptor, ...]],
+        readiness_overrides: Mapping[str, ConnectionReadiness] | None = None,
     ) -> None:
         "唯一发布锁内构造完整值并切换；事件只携带 revision，不注册资源。"
 
         with self._publication_lock:
+            definitions: dict[str, ToolDefinition] = {}
+            for descriptors in candidate_descriptors.values():
+                for descriptor in descriptors:
+                    tool = candidate_tools.get(descriptor.tool_id)
+                    if tool is not None:
+                        metadata = metadata_for_tool(tool, origin="mcp")
+                        definitions[descriptor.tool_id] = ToolDefinition(
+                            metadata, extension_schema_hash(export_model_tool_json_schema(tool)),
+                            canonical_json_bytes(definition_payload(tool, metadata)),
+                        )
+                    else:
+                        if self._publication is None:
+                            raise McpCatalogError("未知 MCP 目录不能补造定义")
+                        previous = self._publication.definitions[descriptor.tool_id]
+                        readiness = (readiness_overrides or {}).get(descriptor.server_id, previous.readiness)
+                        if readiness == "ready":
+                            raise McpCatalogError("已知 MCP 定义缺少执行连接及明确的未就绪状态")
+                        definitions[descriptor.tool_id] = replace(previous, readiness=readiness)
             new_revision = _compute_catalog_revision(
-                candidate_tools, candidate_descriptors,
+                definitions, candidate_descriptors,
             )
             previous_revision = (
                 self._snapshot.revision if self._snapshot is not None else None
@@ -1011,8 +1054,10 @@ class McpCatalogOwner:
                     ExtensionTargetBindingInput(
                         target_id=descriptor.tool_id, origin="mcp",
                         server_id=descriptor.server_id,
-                        connection_ref=self._connection_ref(self._runtimes[descriptor.server_id]),
-                        input_schema=export_model_tool_json_schema(candidate_tools[descriptor.tool_id]),
+                        connection_ref=(self._connection_ref(self._runtimes[descriptor.server_id])
+                                        if definitions[descriptor.tool_id].readiness == "ready" else None),
+                        input_schema=definitions[descriptor.tool_id].input_schema,
+                        readiness=definitions[descriptor.tool_id].readiness,
                     )
                     for descriptor in descriptors
                 ),
@@ -1020,6 +1065,7 @@ class McpCatalogOwner:
             publication = McpCatalogPublication(
                 binding_ref=binding, descriptors=descriptors,
                 tools=MappingProxyType(dict(candidate_tools)),
+                definitions=MappingProxyType(definitions),
                 status="dirty" if self._dirty_servers else "available",
                 error=(
                     f"MCP 目录仍有未完成刷新: {sorted(self._dirty_servers)}"
@@ -1064,6 +1110,10 @@ class McpCatalogOwner:
         for server in self._servers:
             runtime = self._runtimes.get(server.server_id)
             connected = runtime is not None and runtime.running
+            known_authorization = self._publication is not None and any(
+                self._publication.definitions[descriptor.tool_id].readiness == "authorization_required"
+                for descriptor in self._descriptors_by_server.get(server.server_id, ())
+            )
             snapshots.append(
                 McpServerSnapshot(
                     server_id=server.server_id,
@@ -1072,9 +1122,9 @@ class McpCatalogOwner:
                     status=(
                         "disabled" if not server.enabled else
                         "ready" if connected else
-                        "authorization_required" if runtime is not None and runtime.authorization_required else "failed"
+                        "authorization_required" if known_authorization or runtime is not None and runtime.authorization_required else "failed"
                     ),
-                    tools=self._descriptors_by_server.get(server.server_id, ()),
+                    tools=self._descriptors_by_server.get(server.server_id, ()) if connected else (),
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,
                 )

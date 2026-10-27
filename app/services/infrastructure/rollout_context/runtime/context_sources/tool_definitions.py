@@ -70,7 +70,7 @@ class DefinitionSourceValue(BaseModel):
     status: Literal["available", "unavailable"]
     discovered_from: DiscoveredToolRef
     definition: RestoredDefinition | None = None
-    reason: Literal["tool-disabled", "tool-removed"] | None = None
+    reason: Literal["tool-disabled", "tool-removed", "connection-disconnected", "connection-authorization-required"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +205,7 @@ def tool_definition_batch(
             continue
         definition = current.get(name)
         original, prior = originals[name], prior_sources.get(name)
-        if definition is not None and policy.execution_enabled:
+        if definition is not None and policy.execution_enabled and definition.readiness == "ready":
             if name in automatic_tool_ids:
                 continue
             # 普通续读仍使用原内联／artifact；仅原正文被移除或契约更新时恢复。
@@ -231,7 +231,10 @@ def tool_definition_batch(
         else:
             value = DefinitionSourceValue(
                 tool_id=name, status="unavailable", discovered_from=discovered,
-                reason="tool-disabled" if not policy.execution_enabled else "tool-removed",
+                reason=("tool-disabled" if not policy.execution_enabled else
+                        "tool-removed" if definition is None else
+                        "connection-authorization-required" if definition.readiness == "authorization_required" else
+                        "connection-disconnected"),
             )
         content = canonical_json_bytes(value.model_dump(exclude_none=True)).decode()
         revision = sha256_jcs({"content": content})

@@ -50,6 +50,8 @@ EXTENSION_DISPATCH_BINDING_SCHEMA = "extension-dispatch-binding:v3"
 # MCP 目录、当前同名 target 或空目录。
 EXTENSION_CATALOG_UNAVAILABLE_CODE = "extension-catalog-unavailable"
 EXTENSION_DISPATCH_BINDING_MISMATCH_CODE = "extension-dispatch-binding-mismatch"
+ConnectionReadiness = Literal["ready", "disconnected", "authorization_required"]
+_CATALOG_ONLY_PREFIX = "mcp-catalog-only:v1:"
 
 
 class ExtensionCatalogBindingError(RuntimeError):
@@ -154,6 +156,18 @@ def _validate_connection_ref(value: str | None) -> str:
     return value
 
 
+def member_readiness(member: ResourceMemberBinding) -> ConnectionReadiness:
+    """目录事实可保留已知契约，但目录专用成员不能成为执行连接。"""
+    if member.member_kind == "custom":
+        return "ready"
+    if member.revision == _CATALOG_ONLY_PREFIX + "disconnected":
+        return "disconnected"
+    if member.revision == _CATALOG_ONLY_PREFIX + "authorization_required":
+        return "authorization_required"
+    _validate_connection_ref(member.revision)
+    return "ready"
+
+
 def _binding_id(
     generation: int, catalog_revision: str, members: tuple[ResourceMemberBinding, ...],
 ) -> str:
@@ -204,8 +218,7 @@ class ExtensionCatalogBindingRef:
         if len(member_ids) != len(set(member_ids)):
             raise ExtensionTargetConflictError("extension catalog member_id 必须唯一")
         for member in self.members:
-            if member.member_kind == "mcp":
-                _validate_connection_ref(member.revision)
+            member_readiness(member)
         object.__setattr__(
             self, "members", tuple(sorted(self.members, key=lambda member: member.member_id)),
         )
@@ -228,6 +241,7 @@ class ExtensionCatalogBindingRef:
                 connection_ref=member.revision if member.member_kind == "mcp" else None,
             )
             for member in self.members
+            if member_readiness(member) == "ready"
         })
 
     def binding_preimage(self) -> dict[str, object]:
@@ -245,6 +259,8 @@ class ExtensionCatalogBindingRef:
         """按 sealed ref 解析精确 target；缺失显式失败，不回退 live 目录。"""
         target = self.targets.get(tool_name)
         if target is None:
+            if any(member.member_id == tool_name for member in self.members):
+                raise ExtensionTargetResolutionError(f"sealed target 的连接未就绪，须重新连接并取得新目录: {tool_name}")
             raise ExtensionTargetResolutionError(
                 "sealed extension catalog binding 中不存在 target: "
                 f"tool_name={tool_name!r} binding_id={self.binding_id}"
@@ -261,6 +277,7 @@ class ExtensionTargetBindingInput:
     input_schema: Mapping[str, object]
     server_id: str | None = None
     connection_ref: str | None = None
+    readiness: ConnectionReadiness = "ready"
 
 
 def build_extension_catalog_binding(
@@ -273,7 +290,14 @@ def build_extension_catalog_binding(
     """从已验证目录条目构建 sealed binding；同名冲突发布前显式拒绝。"""
     entries: dict[str, ResourceMemberBinding] = {}
     for item in targets:
-        revision = _validate_connection_ref(item.connection_ref) if item.origin == "mcp" else catalog_revision
+        if item.readiness not in {"ready", "disconnected", "authorization_required"}:
+            raise ValueError("扩展目录 readiness 非法")
+        if item.readiness != "ready":
+            if item.origin != "mcp" or item.connection_ref is not None:
+                raise ValueError("未就绪成员必须属于 MCP 且不得携带执行连接")
+            revision = _CATALOG_ONLY_PREFIX + item.readiness
+        else:
+            revision = _validate_connection_ref(item.connection_ref) if item.origin == "mcp" else catalog_revision
         if item.origin != "mcp" and item.connection_ref is not None:
             raise ValueError("custom target 不得携带 connection_ref")
         if item.target_id in entries:

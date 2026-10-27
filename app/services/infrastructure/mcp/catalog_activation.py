@@ -30,6 +30,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
     extension_catalog_binding_from_members,
+    extension_schema_hash,
     payload_digest,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
@@ -72,13 +73,15 @@ class McpCatalogResourcePublisher:
         self._policy_resolver = policy_resolver
         self._registry = registry
         entries = tuple(sorted(custom_tools, key=lambda tool: tool.name))
-        self._custom_tools = {tool.name: tool for tool in entries}
-        self._custom_metadata = dict(custom_metadata or {})
+        metadata = {tool.name: (custom_metadata or {}).get(tool.name) or metadata_for_tool(tool, origin="custom")
+                    for tool in entries}
+        self._custom_definitions = {tool.name: ToolDefinition(
+            metadata[tool.name], extension_schema_hash(export_model_tool_json_schema(tool)),
+            canonical_json_bytes(definition_payload(tool, metadata[tool.name])),
+        ) for tool in entries}
         self._definition_ids: set[str] = set()
         self._custom_revision = payload_digest(
-            [[tool.name, definition_payload(
-                tool, self._custom_metadata.get(tool.name) or metadata_for_tool(tool, origin="custom"),
-            )] for tool in entries],
+            [[name, definition.payload] for name, definition in self._custom_definitions.items()],
             context="工作区 custom extension typed members",
             error_type=ExtensionCatalogBindingError,
         )
@@ -97,12 +100,10 @@ class McpCatalogResourcePublisher:
     def publish(self, publication: McpCatalogPublication) -> None:
         if not isinstance(publication, McpCatalogPublication):
             raise TypeError("MCP resource publisher 需要真实 Owner publication")
-        tools = {**publication.tools, **self._custom_tools}
-        metadata = {name: self._custom_metadata.get(name) or metadata_for_tool(
-            tool, origin="custom" if name in self._custom_tools else "mcp",
-        ) for name, tool in tools.items()}
+        definitions_by_id = {**publication.definitions, **self._custom_definitions}
+        metadata = {name: definition.metadata for name, definition in definitions_by_id.items()}
         policies = self._policy_resolver(tuple(metadata.values()))
-        if set(policies) != set(tools):
+        if set(policies) != set(definitions_by_id):
             raise ValueError("扩展目录发布需要同一次选择快照的完整有效策略")
         # 冻结目录保存已知定义事实；策略只裁决展示与执行，不把禁用伪装成不存在。
         members = (*publication.binding_ref.members, *self._custom_members)
@@ -116,12 +117,7 @@ class McpCatalogResourcePublisher:
             (CUSTOM_CATALOG_SOURCE_ID, self._custom_revision),
             (EXTENSION_CATALOG_SOURCE_ID, revision),
         )
-        definitions_by_id: dict[str, ToolDefinition] = {}
         if publication.status == "available":
-            definitions_by_id = {member.member_id: ToolDefinition(
-                metadata[member.member_id], member.schema_hash,
-                canonical_json_bytes(definition_payload(tools[member.member_id], metadata[member.member_id])),
-            ) for member in members}
             payload = {"content": extension_tool_guidance(tuple(definitions_by_id.values()), {
                 name: policies[name] for name in definitions_by_id
             })}

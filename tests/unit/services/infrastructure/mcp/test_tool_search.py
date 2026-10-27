@@ -25,6 +25,7 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
+    ExtensionTargetResolutionError,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     definition_resource_id,
@@ -326,6 +327,67 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
     current = saver.get_context_assembly(session, thread, assembly_id=after_wire["assembly_id"])
     assert original.seal_binding.prefix.state.epoch == current.seal_binding.prefix.state.epoch
     assert original.request_hash == current.request_hash
+
+
+@pytest.mark.parametrize("readiness", ["disconnected", "authorization_required"])
+async def test_known_unready_definition_is_frozen_without_execution_qualification(
+    catalog_runtime, guidance_prepare, registry_db, discovery_tool_factory, readiness,
+):
+    owner, _factory, registry, _scope = catalog_runtime
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    _wire, ready = guidance_prepare("known:ready")
+    original_binding = owner.binding_snapshot()
+    await owner.disconnect_server("mini", admit=lambda: None)
+    if readiness == "authorization_required":
+        owner.mark_authorization_required("mini")
+    disconnected_binding = owner.binding_snapshot()
+    assert {member.member_id for member in disconnected_binding.members} == {"mcp__mini__echo"}
+    assert not disconnected_binding.targets and not owner.get_tools()
+    with pytest.raises(ExtensionTargetResolutionError, match="连接未就绪"):
+        disconnected_binding.resolve("mcp__mini__echo")
+    _wire, frozen = guidance_prepare("known:unready")
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
+            snapshot, binding, storage_owner=(session, thread)))
+        previous = tool_catalog_from_activation(ready, lambda snapshot, binding: cold.read_resource_activation_payload(
+            snapshot, binding, storage_owner=(session, thread)))
+    definition, = [item for item in catalog.definitions if item.metadata.origin == "mcp"]
+    original, = [item for item in previous.definitions if item.metadata.origin == "mcp"]
+    assert definition.readiness == readiness and original.readiness == "ready"
+    assert definition.payload == original.payload and definition.schema_hash == original.schema_hash
+    assert catalog.catalog_revision == previous.catalog_revision
+    assert disconnected_binding.binding_hash != original_binding.binding_hash
+    resolver = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={})
+    def policies(value):
+        return {item.metadata.tool_id: resolver.resolve(item.metadata) for item in value.definitions}
+    tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=policies)
+    old_tool = discovery_tool_factory(catalog_resolver=lambda: previous, policy_resolver=policies)
+    old_cursor = json.loads(await old_tool.ainvoke({"query": "CI", "limit": 1}))["next_cursor"]
+    assert old_cursor
+    assert "tool-search-snapshot-conflict" in await tool.ainvoke({"query": "CI", "limit": 1, "cursor": old_cursor})
+    found, missing = json.loads(await tool.ainvoke({"tool_ids": ["mcp__mini__echo", "never-discovered"]}))["results"]
+    assert found["input_schema"] == original.input_schema
+    assert found["readiness"] == readiness and found["execution_ready"] is False
+    assert found["missing_connections"] == ["mini"]
+    assert "连接管理入口" in found["next_step"]
+    assert "next_control" not in found  # 本 fixture 没有登记连接控制，不虚构可调用工具。
+    assert missing["error"]["code"] == "tool-not-found"
+    parent = next(snapshot for snapshot in registry.capture().snapshots if snapshot.facet == "activation")
+    assert any(group.get("connection_required_count") == 1 for group in json.loads(parent.payload["content"])["navigation"])
+    task_results = json.loads(await tool.ainvoke({"query": "CI 失败"}))["results"]
+    assert any(item["tool_id"] == "mcp__mini__echo" and item["readiness"] == readiness for item in task_results)
+    for hidden in ("execution_disabled", "model_hidden"):
+        restricted = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={hidden: ["mcp__mini__echo"]})
+        restricted_tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda value, restricted=restricted: {
+            item.metadata.tool_id: restricted.resolve(item.metadata) for item in value.definitions})
+        error, = json.loads(await restricted_tool.ainvoke({"tool_ids": ["mcp__mini__echo"]}))["results"]
+        assert error["status"] == "error" and "input_schema" not in error
+    # 重连不能让旧目录专用成员取得资格，只有新 publication 获得新连接。
+    await owner.connect_server("mini", admit=lambda: None, on_initialized=lambda: None)
+    assert owner.binding_snapshot().resolve("mcp__mini__echo").connection_ref != original_binding.resolve("mcp__mini__echo").connection_ref
+    assert not disconnected_binding.targets and definition.readiness == readiness
+    assert registry.capture().snapshots
 
 
 async def test_cursor_fences_query_policy_and_catalog_changes(discovery_case, discovery_tool_factory):

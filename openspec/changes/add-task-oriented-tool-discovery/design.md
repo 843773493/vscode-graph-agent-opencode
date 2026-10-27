@@ -64,6 +64,8 @@ MCP 输入按其声明的 JSON Schema 方言和完整契约校验；未声明方
 
 父目录 members 与 definition facets 保存同一批完整的已知注册事实，不按 execution_enabled 丢弃目标；展示与执行的权限分别由现有指引／搜索和信封执行点裁决。因此首次发布前已禁用的目标在封存、冷读后仍能返回明确 tool-disabled，而不会伪装成 tool-not-found；硬隐藏同样不投递定义，旧冻结正文不借 live 目录补洞。成员事实不授予连接或调用资格。
 
+同一 Owner 已完整验证的 MCP 定义在显式断开或标准 SDK 再次要求授权时继续由原 publication 持有；仅保留不可变定义，不保留旧可调用工具。父成员和同批 definition facet 的 revision 以 `mcp-catalog-only:v1:disconnected|authorization_required` 明确表达目录专用状态，执行 targets 只从真实连接成员派生。新连接通过完整验证后发布新的连接成员，不能激活旧冻结目录专用成员。完整定义未变时目录语义 revision 保持，成员 binding 与搜索 cursor 仍区分 readiness；导航、自动定义和搜索明确缺少连接，压缩恢复提供连接不可用事实。未发现的目录不生成成员或 schema，仅提示先连接再在允许边界发现；控制工具自身被隐藏或禁用时不借后续步骤泄露它。历史冻结定义仍经原 Saver 冷读，不从其它 Session 或新 Owner 拼装当前目录，不增建持久目录缓存或 schema 库。
+
 默认模型上下文只自动提供有界能力导航和发现用法；用户显式打开 `model_visible` 的目标仍自动获得完整定义。按需搜索结果作为正常 ToolResult 保存，并登记其不可变定义 provenance。CSM／Saver 复用已有资源存储恢复活动定义，原 ToolResult 已在有效上下文中时不重复注入整份正文；压缩后只恢复需要保留的当前定义，来源仍为原冻结资源，不建第二套正文库。
 
 目录与已选定义使用同一个 publication/activation 事实。模型看到旧定义时只能得到旧 binding 对应的执行或明确失败；更新在下一允许边界提供完整替换定义／删除提示，不能只改 dispatcher。schema 切换使用完整定义替换，避免模型靠文本 diff 拼接契约。

@@ -147,6 +147,7 @@ class McpConnectionService:
         states = values.get("state", [])
         if len(states) != 1 or not states[0]:
             raise ValueError("MCP SDK 未提供唯一 OAuth state")
+        self._owner.mark_authorization_required(self._store.get(operation_id).server_id)
         self._authorizations[operation_id] = _Authorization(url, states[0], asyncio.get_running_loop().create_future())
         self._advance(operation_id, status="waiting_user", stage="authorization")
 

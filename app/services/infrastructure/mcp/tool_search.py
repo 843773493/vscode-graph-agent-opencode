@@ -13,6 +13,9 @@ from dataclasses import asdict
 from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.services.infrastructure.mcp.catalog_activation import (
+    EXTENSION_CATALOG_SOURCE_ID,
+)
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
     FrozenToolDefinition,
@@ -78,7 +81,7 @@ def _offset(cursor: str | None, snapshot_key: str, count: int) -> int:
 
 def _definition_result(
     definition: FrozenToolDefinition, policy: ToolCapabilityPolicy,
-    catalog: FrozenToolCatalog, reasons: list[str],
+    catalog: FrozenToolCatalog, reasons: list[str], *, control_discoverable: bool,
 ) -> dict[str, object]:
     metadata = definition.metadata
     return {
@@ -87,7 +90,16 @@ def _definition_result(
         "group_id": metadata.group_id, **definition.payload,
         "schema_hash": definition.schema_hash, "catalog_revision": catalog.catalog_revision,
         "match_reasons": reasons, "effective_policy": asdict(policy),
-        "readiness": "ready", "missing_connections": [],
+        "readiness": definition.readiness,
+        "missing_connections": [] if definition.readiness == "ready" else [definition.server_id],
+        "execution_ready": definition.readiness == "ready" and any(
+            identity == EXTENSION_CATALOG_SOURCE_ID for identity, _ in definition.provenance.source_lineage_ref.sources
+        ),
+        **({"next_control": {"entry_point": EXTENSION_TOOL_INVOKER_NAME,
+                              "tool_name": "connections.manage", "operation": "connect",
+                              "server_id": definition.server_id}} if definition.readiness != "ready" and control_discoverable else {}),
+        **({"next_step": "先在工作区连接管理入口连接目标 Server，再在允许的激活边界重新发现。"}
+           if definition.readiness != "ready" else {}),
         "invocation": {"entry_point": EXTENSION_TOOL_INVOKER_NAME, "tool_name": metadata.tool_id},
         "provenance": {
             "activation_snapshot_id": catalog.activation_snapshot_id,
@@ -112,9 +124,12 @@ async def search_tool_catalog(
     if set(policies) != set(definitions):
         raise ValueError("工具搜索需要同一次原子选择快照解析的完整策略")
     policy_revision = sha256_jcs({name: asdict(policy) for name, policy in policies.items()})
+    control_policy = policies.get("connections.manage")
+    control_discoverable = (control_policy is not None and control_policy.execution_enabled
+                           and not control_policy.model_visibility_locked)
     snapshot_key = sha256_jcs({
         "schema": "tool-search-cursor:v1", "catalog": catalog.catalog_revision,
-        "definitions": [[entry.metadata.tool_id, entry.provenance.revision] for entry in catalog.definitions],
+        "definitions": [[entry.metadata.tool_id, entry.provenance.revision, entry.readiness] for entry in catalog.definitions],
         "policy": policy_revision, "query": query, "tool_ids": tool_ids,
         "limit": limit, "max_response_bytes": max_response_bytes,
     })
@@ -136,13 +151,14 @@ async def search_tool_catalog(
         tool_id, reasons = candidates[index]
         definition = definitions.get(tool_id)
         if definition is None:
-            entry = _error(tool_id, "tool-not-found")
+            entry = _error(tool_id, "tool-not-found", message="本次冻结目录无此工具；尚未发现的 MCP 目录须先通过工作区连接管理入口连接，再在允许的激活边界重新搜索。")
         elif not policies[tool_id].execution_enabled:
             entry = _error(tool_id, "tool-disabled")
         elif policies[tool_id].model_visibility_locked:
             entry = _error(tool_id, "tool-model-hidden")
         else:
-            entry = _definition_result(definition, policies[tool_id], catalog, reasons)
+            entry = _definition_result(definition, policies[tool_id], catalog, reasons,
+                                       control_discoverable=control_discoverable)
         next_cursor = _cursor(snapshot_key, index + 1) if index + 1 < len(candidates) else None
         trial = {**result, "results": [*results, entry], "next_cursor": next_cursor}
         if len(canonical_json_bytes(trial)) > max_response_bytes:

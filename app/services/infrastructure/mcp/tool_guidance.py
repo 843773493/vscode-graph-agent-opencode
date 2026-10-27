@@ -38,11 +38,16 @@ def extension_tool_guidance(
         groups.setdefault(definition.metadata.group_id, []).append(definition)
     navigation = [
         {"group": _label(group, MAX_NAVIGATION_LABEL_LENGTH), "tool_count": len(entries),
+         **({"connection_required_count": sum(entry.readiness != "ready" for entry in entries)}
+            if any(entry.readiness != "ready" for entry in entries) else {}),
          "example_capability": _label(str(entries[0].payload["description"]), MAX_NAVIGATION_DESCRIPTION_LENGTH)}
         for group, entries in sorted(groups.items())[:MAX_NAVIGATION_GROUPS]
     ]
     automatic = [
-        {"tool_name": definition.metadata.tool_id, **definition.payload, "schema_hash": definition.schema_hash}
+        {"tool_name": definition.metadata.tool_id, **definition.payload, "schema_hash": definition.schema_hash,
+         **({"readiness": definition.readiness, "execution_ready": False,
+             "next_step": "先在工作区连接管理入口连接，再在允许的激活边界重新发现。"}
+            if definition.readiness != "ready" else {})}
         for definition in discoverable if policies[definition.metadata.tool_id].model_visible
     ]
     return canonical_json_bytes({

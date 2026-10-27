@@ -104,6 +104,21 @@ async def test_current_complete_result_does_not_inject_duplicate_definition(disc
     assert not tuple(definition_source_values(wire["snapshot"]))
 
 
+@pytest.mark.parametrize("authorization", [False, True])
+async def test_compacted_known_definition_reports_missing_connection(
+    discovery_history, guidance_prepare, catalog_runtime, authorization,
+):
+    await discovery_history(target="mcp__mini__echo", compact=True)
+    owner, _factory, _registry, _scope = catalog_runtime
+    await owner.disconnect_server("mini", admit=lambda: None)
+    if authorization:
+        owner.mark_authorization_required("mini")
+    wire, _ = guidance_prepare("recovery:known-unready")
+    value, = [value for value, _ in definition_source_values(wire["snapshot"])]
+    assert value.status == "unavailable" and value.definition is None
+    assert value.reason == ("connection-authorization-required" if authorization else "connection-disconnected")
+
+
 @pytest.mark.parametrize("restriction", ["model_hidden", "execution_disabled"])
 async def test_compacted_definition_obeys_current_hard_policy(discovery_history, guidance_prepare, restriction):
     await discovery_history(compact=True)
@@ -152,6 +167,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
     )
     del catalog_runtime
     entry, _scope, _connection = await discovery_history(target="mcp__mini__echo", compact=True)
+    assert entry["execution_ready"] is False
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
 

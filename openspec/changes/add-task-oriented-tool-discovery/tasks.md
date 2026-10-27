@@ -17,7 +17,7 @@
 - [x] 3.1 注册唯一 search_tools 入口和 query/tool_ids 互斥参数模型，接入现有 MCP、本地扩展与连接控制目录；不新增 MCP 专用入口或第二发现链路。
 - [x] 3.2 先将每目标完整定义 facet 与父目录 members／lineage 原子发布到既有 Registry，并由 activation／Saver 冻结正文，再实现冻结快照上的确定性任务排名、精确 ID 结果、逐项错误和绑定目录／策略／查询的 cursor；禁止 live 同名补洞。
 - [x] 3.3 实现候选数、最终字节／行数上限和完整 schema 保真；大定义复用 ToolOutputStore／artifact，以 inline_complete 或 needs_read＋引用／摘要／provenance 表达，不新增 schema 库或读取工具；不支持引用、物化失败及引用也超预算时明确报错。
-- [ ] 3.4 接入 ToolPolicyResolver 完整结果及统一 ToolMetadata，分离软 model_visible 与硬 model_visibility_locked；发现、精确查询、导航和恢复均服从 model_hidden，执行禁用不能经发现绕过；区分已知未授权与未知目录。
+- [x] 3.4 接入 ToolPolicyResolver 完整结果及统一 ToolMetadata，分离软 model_visible 与硬 model_visibility_locked；发现、精确查询、导航和恢复均服从 model_hidden，执行禁用不能经发现绕过；区分已知未授权与未知目录。
 - [x] 3.5 将默认全量摘要改为有界能力导航，保留用户显式 model_visible 自动注入及 Skill 调用；固定 Provider description 不枚举动态目录。
 - [x] 3.6 将发现结果和定义 provenance 接入既有 ToolResult／资源存储及 CSM/Saver 恢复，压缩后按当前硬隐藏策略恢复必要完整定义，已有正文不重复注入，全部 definition facet 不自动进入模型正文。
 - [ ] 3.7 验证首次搜索前与进程重启后的冻结正文、搜索→内联／artifact 读取→信封执行真实链路、ToolOutputMiddleware 裁剪、物化失败、分页冲突、软隐藏／硬隐藏／撤权、压缩恢复、删除提示和 turn/model_call 边界；核对真实序列化请求的 ToolSet／epoch 行为并完成静态分析。
@@ -56,7 +56,7 @@
 
 ## 7. MCP 配置受控热替换
 
-- [ ] 7.1 在既有 Workspace JSONC 配置族和 schema 内补齐必要授权引用及监督参数，遵守既有覆盖层和新增参数命名；无必要不增加参数，不存储凭据明文。
+- [x] 7.1 在既有 Workspace JSONC 配置族和 schema 内补齐必要授权引用及监督参数，遵守既有覆盖层和新增参数命名；无必要不增加参数，不存储凭据明文。
 - [x] 7.2 将变更按 Server 准备新连接，验证命名冲突、完整分页和权限；多 Server 候选全部就绪才进入统一切换。
 - [x] 7.3 接入现有候选 applying journal／claim／受控准入屏障／active promotion，实现配置、目录及执行准入共同可观察的提交边界；补齐 candidate_applier 返回后才 commit 的窗口，不将两个独立赋值视为共同事务，不新增配置事实源。
 - [x] 7.4 实现允许并行实例的先建后换与单实例 stdio 的停后再启，分别处理旧服务保留、apply_failed、recovery_required 和切换后清理失败。
@@ -255,3 +255,12 @@
 - `policy-regression-002` 63 passed／76.11秒覆盖完整目录／搜索／指引／定义恢复；`guard-003` 20 passed／3.26秒保持信封执行撤权与配对。`product-003` 1 passed／51.69秒由真实 Gateway→Session→Agent 搜索并尝试禁用目标，核对三个身份错误、原 tool_call_id 配对、远端零请求及全部3份实际请求 preimage/hash。模型使用现有 model_stream，不新增 SSE 桩。
 - 生产 publisher Pyright 零诊断，受影响文件 Ruff、OpenSpec strict validation 与矩阵加载通过；命令、指纹、raw、退出码及复现证据在 `out/tests/temp/mcp-discovery-policy/artifacts/`。3.4整体仍未勾选：已知未授权目录的冻结 readiness／连接需求与未知目录区别继续处理，不以本切片代替其验收；团队／协作 TODO 不变。
 - 完整暂存 tree `fbd4d6d9b101d9cb90270af17a828649b0fbde77` archive 隔离复验：真实 Gateway 产品用例1 passed／52.67秒；搜索、目录、指引、恢复和信封回归83 passed／81.75秒。4563个 tracked 文件全部无漂移，源码副本已删除，正式输出保留于 `isolated-details-006/formal-output/`；该树不含其它会话的 task／fork 改动。
+
+
+### 3.4／7.1 已知未就绪目录与配置合同验收（2026-10-27）
+
+- 唯一 publication 保留已验证的不可变定义；断开及 SDK 再授权只发布目录专用成员，不保留执行工具。搜索、导航及压缩恢复明确连接需求，旧成员不能取得执行资格；兄弟 Server 保持可用。定义未变时语义 revision 不变，binding／cursor 独立约束 readiness。历史 v2 继续按原合同读取定义，不能据此取得 v3 执行资格。
+- 最终完整暂存 tree `115f0728ca6417ee4c56ddaacbe8eea0078ab9fd` 的 `isolated-details-014`：Ruff通过、8个生产模块Pyright零诊断、OpenSpec strict通过，相关搜索／恢复／binding／信封72 passed／76.37秒；新真实Gateway→Agent→OAuth／MCP场景通过，核对已知待授权、未知目录、原调用配对、零未授权业务请求、兄弟真实执行及4份请求hash。初始禁用场景在Backend启动前因46499端口占用失败，未进入业务逻辑；端口随后已释放，未终止未知进程，同树 `isolated-details-016` 单独补验1 passed／54.39秒，退出码0。
+- 较早tree `6f1c441e0a7669942bee2f838e3a37a0a40db826` 的012为整个MCP单元及信封196 passed／103.69秒；产品组合报告13 passed／417.56秒，但进程随后触及420秒外部保护，实际退出124，不将其记为整组成功。最终v2读取修正由014覆盖。012／014／016各4563个tracked文件核验无漂移，源码副本已清理，正式输出、raw、命令及实际退出码保留于 `out/tests/temp/mcp-discovery-policy/artifacts/`。
+- 现有 Workspace JSONC／schema 已支持 OAuth redirect_uri、env／header凭据引用及 sealed_call_timeout_seconds；沿既有覆盖层和未知字段拒绝，无需增加参数。`known-config-015` 76 passed／18.31秒覆盖安装、配置验证、策略和MCP配置。
+- 架构复查未新增源码目录或第二writer；MCP目录18个直接Python文件。既有catalog_owner增长至1136行，保留大文件残余风险，不在此切片扩展结构重构。关闭3.4／7.1，当前33/52；完整HITL、Web授权及其余未勾场景继续推进，团队／协作专项TODO不变。
