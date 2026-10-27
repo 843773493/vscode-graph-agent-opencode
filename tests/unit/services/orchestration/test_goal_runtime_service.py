@@ -7,6 +7,10 @@ from langchain_core.messages import HumanMessage
 
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.message_service import MessageService
+from app.services.business.persistent_tasks.goal import (
+    continuation_message,
+    objective_updated_message,
+)
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 
@@ -332,8 +336,8 @@ def test_goal_prompts_treat_objective_as_escaped_user_data():
         time_used_seconds=0,
     )
 
-    continuation = GoalRuntimeService._continuation_message(goal).content
-    updated = GoalRuntimeService._objective_updated_prompt(goal)
+    continuation = continuation_message(goal).content
+    updated = objective_updated_message(goal).content
 
     assert continuation.count("</system_reminder>") == 1
     assert updated.count("</system_reminder>") == 1

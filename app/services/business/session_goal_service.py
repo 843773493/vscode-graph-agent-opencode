@@ -10,11 +10,15 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import (
-    MAX_GOAL_OBJECTIVE_CHARS,
-    GoalJobAccountingDTO,
     GoalStatus,
     SessionGoalClearResultDTO,
     SessionGoalDTO,
+)
+from app.services.business.persistent_tasks.goal import (
+    UNFINISHED_GOAL_STATUSES,
+    account_job,
+    enforce_budget,
+    normalize_objective,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.session_goal_store import SessionGoalStore
@@ -22,24 +26,6 @@ from app.services.infrastructure.session_goal_store import SessionGoalStore
 _UNSET = object()
 # Goal 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
 GOAL_LOCK_SHARDS = 64
-UNFINISHED_GOAL_STATUSES = {
-    GoalStatus.active,
-    GoalStatus.paused,
-    GoalStatus.blocked,
-    GoalStatus.usage_limited,
-    GoalStatus.budget_limited,
-}
-
-
-def _normalize_objective(value: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError("objective 不能为空")
-    if len(normalized) > MAX_GOAL_OBJECTIVE_CHARS:
-        raise ValueError(
-            f"objective 不能超过 {MAX_GOAL_OBJECTIVE_CHARS} 个字符"
-        )
-    return normalized
 
 
 class SessionGoalService:
@@ -81,7 +67,7 @@ class SessionGoalService:
         goal = SessionGoalDTO(
             goal_id=snapshot["goal_id"], session_id=record.session_id,
             thread_id=record.main_thread_id,
-            objective=_normalize_objective(snapshot["objective"]), status=GoalStatus.paused,
+            objective=normalize_objective(snapshot["objective"]), status=GoalStatus.paused,
             token_budget=snapshot["token_budget"], created_at=created_at, updated_at=created_at,
         )
         async with self.lock_for(record.session_id):
@@ -115,7 +101,7 @@ class SessionGoalService:
             if current is None or replace:
                 if objective is None:
                     raise ValueError("创建 Goal 时 objective 不能为空")
-                normalized = _normalize_objective(objective)
+                normalized = normalize_objective(objective)
                 current = SessionGoalDTO(
                     goal_id=create_prefixed_id("goal"),
                     session_id=session_id,
@@ -132,23 +118,13 @@ class SessionGoalService:
                     "revision": current.revision + 1,
                 }
                 if objective is not None:
-                    updates["objective"] = _normalize_objective(objective)
+                    updates["objective"] = normalize_objective(objective)
                 if status is not None:
                     updates["status"] = status
                 if token_budget is not _UNSET:
                     updates["token_budget"] = token_budget
                 current = current.model_copy(update=updates)
-            # budget_limited 是 active Goal 的派生状态：预算耗尽只应终止仍在
-            # 推进的目标。用户在 active 之外显式选择的终态/暂停态必须保留，
-            # 否则 complete 会被静默改回 budget_limited，Goal 永远无法收敛。
-            if (
-                current.status == GoalStatus.active
-                and current.token_budget is not None
-                and current.tokens_used >= current.token_budget
-            ):
-                current = current.model_copy(
-                    update={"status": GoalStatus.budget_limited}
-                )
+            current = enforce_budget(current)
             self._store.write(current)
             await self._publish_updated(current)
             return current
@@ -168,7 +144,7 @@ class SessionGoalService:
                 goal_id=create_prefixed_id("goal"),
                 session_id=session_id,
                 thread_id=thread_id,
-                objective=_normalize_objective(objective),
+                objective=normalize_objective(objective),
                 status=GoalStatus.active,
                 token_budget=token_budget,
                 created_at=now,
@@ -229,37 +205,9 @@ class SessionGoalService:
             goal = self._store.read(session_id)
             if goal is None:
                 return goal
-            previous = goal.accounted_jobs.get(job_id)
-            previous_tokens = previous.tokens if previous is not None else 0
-            previous_elapsed = previous.elapsed_seconds if previous is not None else 0
-            time_closed = previous.time_closed if previous is not None else False
-            token_delta = max(max(tokens, 0) - previous_tokens, 0)
-            elapsed_delta = (
-                0 if time_closed else max(max(elapsed_seconds, 0) - previous_elapsed, 0)
-            )
-            used = goal.tokens_used + token_delta
-            status = goal.status
-            if (
-                status == GoalStatus.active
-                and goal.token_budget is not None
-                and used >= goal.token_budget
-            ):
-                status = GoalStatus.budget_limited
-            accounted_jobs = dict(goal.accounted_jobs)
-            accounted_jobs[job_id] = GoalJobAccountingDTO(
-                tokens=max(tokens, previous_tokens),
-                elapsed_seconds=max(elapsed_seconds, previous_elapsed),
-                time_closed=time_closed or close_time,
-            )
-            goal = goal.model_copy(
-                update={
-                    "tokens_used": used,
-                    "time_used_seconds": goal.time_used_seconds + elapsed_delta,
-                    "last_accounted_job_id": job_id,
-                    "accounted_jobs": accounted_jobs,
-                    "status": status,
-                    "updated_at": datetime.now(UTC),
-                }
+            goal = account_job(
+                goal, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed_seconds,
+                close_time=close_time, now=datetime.now(UTC),
             )
             self._store.write(goal)
             await self._publish_updated(goal)

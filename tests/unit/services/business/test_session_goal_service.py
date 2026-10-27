@@ -158,15 +158,16 @@ async def test_budget_limited_is_derived_only_while_goal_is_active(goal_service)
 
 
 @pytest.mark.asyncio
-async def test_accounting_does_not_override_non_active_status(goal_service):
+@pytest.mark.parametrize("status", [status for status in GoalStatus if status != GoalStatus.active])
+async def test_accounting_does_not_override_non_active_status(goal_service, status):
     await goal_service.set("sess_1", objective="目标", token_budget=10)
-    await goal_service.set("sess_1", status=GoalStatus.paused)
+    await goal_service.set("sess_1", status=status)
 
     accounted = await goal_service.account_job(
         "sess_1", job_id="job_1", tokens=10, elapsed_seconds=1
     )
 
-    assert accounted.status == GoalStatus.paused
+    assert accounted.status == status
     assert accounted.tokens_used == 10
 
 

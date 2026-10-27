@@ -36,7 +36,7 @@
 
 ## 4. 将 Goal 迁入统一运行时
 
-- [ ] 4.1 将目标提示、预算记账及完成/阻塞审计构建为 Goal 应用组件，保持 main-thread 限定和既有状态语义。
+- [x] 4.1 将目标提示、预算记账及完成/阻塞审计构建为 Goal 应用组件，保持 main-thread 限定和既有状态语义。
 - [ ] 4.2 平移激活、目标更新、启动恢复、Agent/Job 事件处理并验证去重；Goal 工具和 API 直接操作统一任务 owner。
 - [ ] 4.3 实现可重试的一次性 goal.json 导入，保留稳定身份、预算、revision 和已续跑标记；迁齐fork冻结Goal、preparing节点安装、发布/取消/恢复及旧文件校验消费者，独立fork Goal保持新身份和零用量，child不获得Goal；迁齐消费者后物理移除旧 Goal 状态存储与专用调度实现。
 - [ ] 4.4 物理删除 GoalRuntimeService 及其文件、import、容器字段与装配、独立事件订阅/注销和 close-admission/shutdown 步骤，删除 workspace_lifecycle 中 goal_runtime_service.resume_active_goals 启动 hook；由通用运行时统一接管，禁止保留转发包装层或改名后的独立 Goal 调度器。
@@ -162,3 +162,10 @@
 - 初轮168暴露内容hash不能充当状态生命周期版本，173暴露来源revision格式不符合原合同；修正分配算法，未放宽domain冲突检查。178为3 passed/2 failed，分别是fork漏启真实辅助服务及断言混入其他来源；183的fork保护要求正式runner而未进入业务，原子重试已通过；186正式runner的fork通过，最终189又加严并覆盖全部5项。185为29 passed/2 failed：旧中断测试的Gateway Skill fixture误将快照作为发布通知，另有configured owner未就绪，尚未进入中断裁决；该旧测试消费者仍待迁齐，不把它报为通过。
 - 166 Buf/全部绑定、167 OpenAPI、175合同/旧库/发行SQL/协议 **26 passed**；170真实Web类型及171构建按未变生成资产复用。188/191 Ruff、190相关业务模块Pyright与OpenSpec strict验证通过。184扩大到存储mixin仍exit1、53项诊断，未声称存储全文件类型全绿。准确命令、指纹、原始输出和退出码保留在`out/tests/temp/persistent-task-migration/artifacts/`，正式产物在对应`out/tests/integration/backend/sessions/test_persistent_task_states/`；临时协议staging已清理。当前完成3.3/3.5，Goal与生成器迁移、主Web管理、Windows既有长路径范围仍未完成，团队/协作继续TODO。
 - 185暴露的旧CSM测试消费者已迁齐：非lifespan夹具走真实配置prepare/activate，Gateway协议桩按精确路由区分快照与发布等待，关闭时先排空source观察。192 Ruff通过；193中断裁决 **2 passed／37.09秒**；194真实Runner动态Skill发现、覆盖、降级与tracked来源不改绑 **1 passed／80.76秒**。均有进程外期限/4GiB保护、无源码漂移；185失败原件仍保留，不以修正后的结果覆盖。
+
+### Goal应用规则（2026-10-27）
+
+- 目标校验、未完成状态、active预算收敛、按Job单调增量记账及三类内部提示集中到`business/persistent_tasks/goal.py`；原Service及Runtime直接消费唯一实现，移除旧私有构造器和字符串转发方法。提示正文AST与原版一致，目标仍通过既有提示工厂转义，主线程归属及六种状态不变。该组件不持有存储、事件订阅或后台任务。
+- 195为 **31 passed／8.53秒**，覆盖工具、归属、替换、预算、重复/乱序记账、冻结用时、续跑去重、关闭及后台失败；迟到记账保留状态扩为全部五种非active状态。199真实HTTP/SDK/model_stream产品入口 **1 passed／81.62秒**，从Goal激活到模型工具完成，保留内部执行、无伪用户Turn及后续终端/中断来源。所有测试有进程外期限/4GiB保护且无源码漂移。
+- 200 Ruff、201应用模块Pyright通过。197误用未安装的`uv run pyright`未执行分析，198改用已有离线uvx后发现原Service的object哨兵两项类型错误、原Runtime delivery_policy缺少Literal注解一项；均对照HEAD未修改声明确认，不将扩大检查报为全绿。准确命令、指纹、原始输出和退出码仍在既有证据目录。
+- 本切片完成4.1；统一owner、goal.json导入、fork preparing安装/发布/取消/恢复及GoalRuntimeService删除仍由4.2—4.4追踪，没有将纯规则迁移表述为调度迁移完成。
