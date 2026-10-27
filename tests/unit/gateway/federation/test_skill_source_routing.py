@@ -10,6 +10,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import Response
+from pydantic import ValidationError
 
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.channel import ChannelHandshake, FederationChannelSession
@@ -39,6 +41,7 @@ from app.gateway.federation.workspace_port import (
     WorkspaceSessionMainPort,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.skill_sources import _snapshot_response
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
@@ -177,6 +180,39 @@ async def test_registered_direct_owner_returns_its_bytes_and_conditional_revisio
     second = await relay_gateway_skill_sources(case.hub, case.request(if_none_match=first["etag"]))
     assert second["status"] == 304 and second["etag"] == first["etag"]
     assert case.outbound.requests[0]["nonce"] != case.outbound.requests[1]["nonce"]
+
+
+@pytest.mark.parametrize("uri", [
+    "/private-skills/demo/SKILL.md", r"C:\private-skills\demo\SKILL.md",
+    r"\\server\private-skills\demo\SKILL.md", "file:///private-skills/demo/SKILL.md",
+    "demo/SKILL.md", "", "boxteam://workspace/ws/resources/session",
+    "boxteam://workspace/ws/resources/skills/demo",
+    "boxteam://workspace/ws/resources/skills/demo/examples/SKILL.md",
+    "boxteam://workspace/ws/resources/files/root/SKILL.md",
+])
+async def test_snapshot_response_rejects_non_skill_document_addresses(
+    skill_route_case, uri: str, caplog: pytest.LogCaptureFixture,
+):
+    case = skill_route_case
+    receipt = await relay_gateway_skill_sources(case.hub, case.request())
+    snapshot = GatewaySkillSourcesDTO.model_validate(receipt["data"])
+    payload = snapshot.model_dump(mode="json")
+    payload["entries"][0]["display_uri"] = uri
+    receipt["data"] = payload
+    with pytest.raises(ValidationError) as rejected:
+        _snapshot_response(receipt, Response(), "skill-owner-request")
+    assert rejected.value.errors(include_input=False)[0]["loc"] == ("entries", 0, "display_uri")
+    assert "input_value=" not in str(rejected.value)
+    if uri:
+        assert uri not in str(rejected.value)
+    assert any(record.args == (uri,) for record in caplog.records)
+    # 失败的转发回执不改 owner 已发布的版本或下一次读取。
+    recovered = await relay_gateway_skill_sources(case.hub, case.request())
+    assert GatewaySkillSourcesDTO.model_validate(recovered["data"]) == snapshot
+    response = _snapshot_response(recovered, Response(), "skill-owner-request")
+    assert not isinstance(response, Response)
+    assert response.data == GatewaySkillSourcesDTO.model_validate(recovered["data"])
+    assert response.request_id == "skill-owner-request"
 
 
 async def test_publication_notice_uses_same_authenticated_direct_owner_and_deadline(skill_route_case):

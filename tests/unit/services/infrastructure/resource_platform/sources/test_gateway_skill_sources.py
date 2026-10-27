@@ -27,7 +27,6 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
@@ -746,6 +745,43 @@ async def test_wrong_identity_audience_or_bytes_never_replace_accepted_snapshot(
     with pytest.raises(RuntimeError, match="unavailable"):
         source.snapshot(gateway_id=GATEWAY_ID)
     assert source._state(GATEWAY_ID).snapshot is original
+
+
+@pytest.mark.parametrize("uri", [
+    "/private-skills/demo/SKILL.md", r"C:\private-skills\demo\SKILL.md",
+    "boxteam://workspace/ws/resources/session",
+    "boxteam://workspace/ws/resources/skills/demo",
+])
+async def test_invalid_network_source_address_blocks_publication_until_valid_recovery(source_case, uri: str):
+    owner, source, _skill, channel = source_case
+    original = owner.snapshot(workspace_id=source._workspace_id)
+    source._accept_snapshot(original, gateway_id=GATEWAY_ID)
+    payload = original.model_dump(mode="json")
+    payload["entries"][0].update(layer="network", display_uri=uri)
+    state = source._state(GATEWAY_ID)
+    original_etag = '"' + original.revision + '"'
+    state.etag = original_etag
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": payload, "request_id": request.headers["X-Request-ID"]},
+            headers={"X-Request-ID": request.headers["X-Request-ID"], "ETag": '"invalid-source"'})
+
+    state.client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
+    subscription = channel.subscribe(label="invalid source URI")
+    try:
+        await source.reconcile(gateway_id=GATEWAY_ID)
+        assert state.snapshot is original and state.etag == original_etag
+        assert state.error is not None
+        assert uri not in state.error
+        assert [event.available for event in subscription.pending()] == [False]
+        with pytest.raises(RuntimeError, match="unavailable"):
+            source.snapshot(gateway_id=GATEWAY_ID)
+        payload = original.model_dump(mode="json")
+        await source.reconcile(gateway_id=GATEWAY_ID)
+        assert state.error is None and source.snapshot(gateway_id=GATEWAY_ID) == original
+        assert [event.available for event in subscription.pending()] == [True]
+    finally:
+        channel.unsubscribe(subscription)
 
 
 async def test_concurrent_gateway_owners_keep_snapshot_etag_failure_and_observation_isolated(

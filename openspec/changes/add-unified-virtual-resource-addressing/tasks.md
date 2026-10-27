@@ -868,3 +868,10 @@
 - 唯一 `load_distribution_id` 在定位、读取、UTF-8/JSON 解码和字段校验处明确拒绝，只向普通错误公布逻辑 artifact、阶段、字段规则及适用错误事实；安装位置、非法原值与完整原错留诊断。原生类别、errno/winerror 与直接 cause 保留，不改编码、拒绝域、manifest 或默认身份，不增加 reader/缓存。全部原函数签名与编码 AST 不变，作者结构自查不称独立审查。
 - Linux 三文件65 passed/6.15秒，文件工具/Skill/URI相关回归408 passed/10.84秒；Windows快照 `b519df7913c4b7d5242ad88f9a58156e7b888fa6` 同65项通过/75.87秒。同步/异步 ls/read_file 经真实 FilesystemMiddleware、正式工具配置及 ResourceNavigation 核失败无路径、原件/工作区字节不变、同一工具修复后结果一致；Gateway身份由fixture注入，不称真实HTTP、模型执行或完整Web。未停止或重启Windows既有服务，末次status仍Web/Gateway可用。
 - 完整 `920d30af1` 旧生产上新增29项均失败；事后归档核对4416条原仓库内容一致，新增集成测试只有import换行差异且AST一致，不声称测试字节相同或运行前已采样归档。Ruff、最终compileall及OpenSpec strict 45/0通过；准确命令、源码前后指纹、raw/真实退出码及核对在 `out/tests/temp/distribution_identity_errors_20261025/artifacts/`。初次归档审计的测试字节断言失败原件保留，原因及AST对账见archive-test-audit-012.json。本片只关闭manifest边界，2.2/7.2全局门不补勾，CIL第9节及团队协作继续暂缓。
+
+
+### 2026-10-27 Skill 来源快照的 URI 出口（2.2/7.2 部分收口）
+
+- Gateway 普通/联邦快照和 Workspace 接受入口共用的 DTO 复用唯一 URI parser，拒绝原生路径及非 Skill 文档地址；非法原值仅留原始诊断，普通校验错误不回显输入。不改变来源身份、字节、revision 校验或既有 workspace 配置来源；拒绝不替换旧快照/ETag，合法回执可恢复可用性。
+- 完整固定候选相关回归156项通过；最终测试整理后两文件97项通过，生产字节未变，其余通过证据复用且不累加重叠计数。完整旧HEAD加最终反例为11 failed/3 passed，复现Gateway错误输出与network来源空尾段IndexError。Ruff通过；Pyright候选和原HEAD同为4项既有诊断，无新增。原始命令、源码前后指纹、raw、实际退出码及进程组回收见 `out/tests/temp/skill-source-uri-boundary/artifacts/verification-016.json`。
+- 本片覆盖真实owner、内存联邦channel及MockTransport，不代替真实HTTP/Gateway进程、Windows或完整Web；全局2.2/7.2继续未勾，团队协作继续TODO。

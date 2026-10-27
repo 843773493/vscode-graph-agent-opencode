@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.resource_uri import parse_resource_uri
+
+logger = logging.getLogger(__name__)
 
 
 class GatewaySkillSourceEntryDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     name: str = Field(min_length=1)
     entry_identity: str
@@ -22,9 +27,22 @@ class GatewaySkillSourceEntryDTO(BaseModel):
     layer: Literal["gateway", "network"] = "gateway"
     priority: int = Field(default=0, strict=True)
 
+    @field_validator("display_uri")
+    @classmethod
+    def require_skill_document_uri(cls, uri: str) -> str:
+        try:
+            parsed = parse_resource_uri(uri)
+            if parsed.kind != "skills" or len(parsed.tail_segments) != 2 or parsed.tail_segments[1] != "SKILL.md":
+                raise ValueError("Skill 来源引用必须指向 skills 资源的 SKILL.md")
+        except ValueError:
+            # 非法原值只留原始诊断；普通响应拒绝发布，不修补来源地址。
+            logger.exception("Skill 来源 URI 合同错误: uri=%r", uri)
+            raise
+        return uri
+
 
 class GatewaySkillSourcesDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     gateway_id: str
     workspace_id: str
