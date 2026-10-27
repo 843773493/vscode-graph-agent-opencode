@@ -36,6 +36,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     RuntimeSourceCase,
     _job,
+    _send,
     _tool_reply,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
@@ -336,6 +337,120 @@ async def test_fork_goal_publication_hard_restart_preserves_original_creation(
     assert await _goal(case, target_id) == edited and await _goal(case, source_id) == source_goal
     assert case.requests() == []
     case.write_actual("goal-fork-after-hard-restart", {"phase": phase, "creation": published, "goal": restored, "edited": edited})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["inflight_model", "completed_before_goal_dispatch"])
+async def test_user_created_goal_without_a_goal_admission_root_recovers_after_hard_restart(
+    restart_source_case: RestartRuntimeSourceCase, phase: str,
+) -> None:
+    case = restart_source_case
+    session_id, thread_id, _ = await _target(case)
+    create_call, user_call, complete_call, final_call = await case.plan(session_id, [
+        _tool_reply("create_goal", {"objective": "用户消息中创建且尚未自动续跑的目标", "token_budget": 345},
+                    "call_user_create_goal"),
+        {"content": "用户首轮的目标准备工作"},
+        _tool_reply("update_goal", {"status": "complete"}, "call_user_goal_recovery_complete"),
+        {"content": "冷恢复后完成原目标"},
+    ], thread_id=thread_id, usage={"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11})
+    barrier_id = "user-goal-first-continuation"
+    if phase == "inflight_model":
+        case.control.arm(user_call, "model.response_ready")
+    else:
+        case.control.arm_match(barrier_id, "goal.continuation.before_dispatch", {"session_id": session_id})
+    def release() -> None:
+        if phase == "inflight_model":
+            case.control.release(user_call, "model.response_ready")
+        else:
+            _release_match(case, barrier_id)
+
+    try:
+        sent = await _send(case, session_id, "请创建给定预算的 Goal，并持续完成它")
+        if phase == "inflight_model":
+            await asyncio.to_thread(case.control.acknowledged, user_call, "model.response_ready", 20)
+        else:
+            await asyncio.to_thread(case.control.acknowledged_match, barrier_id)
+        # 只读核对产品已写的应用状态；完成后屏障持有原 Goal 锁，不能用 GET 等待该锁。
+        with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+            row, = connection.execute(
+                "SELECT task_id,application_json FROM persistent_tasks WHERE owner_session_id=? AND retired_at IS NULL",
+                (session_id,),
+            ).fetchall()
+        goal_id, application = row[0], json.loads(row[1])
+        assert application["status"] == "active" and application["last_continued_job_id"] is None
+        assert application["tokens_used"] == 0 and application["accounted_jobs"] == {}
+        created = case.tool_result(create_call + ":tool-call:call_user_create_goal")
+        assert created["goal_id"] == goal_id and created["token_budget"] == 345
+        original, = _sql(case.workspace, session_id, thread_id,
+                        "SELECT execution_id,job_id,turn_id,execution_origin,outcome FROM executions")
+        assert original[1] == sent["job_id"] and original[3] == "user_turn"
+        assert original[4] == ("unknown" if phase == "inflight_model" else "completed")
+        assert _sql(case.workspace, session_id, thread_id, "SELECT COUNT(*) FROM runtime_execution_wakeups") == [(0,)]
+        assert case.call_count(session_id, thread_id) == 2
+        before_models = _sql(case.workspace, session_id, thread_id,
+                             "SELECT model_call_id,execution_id FROM model_calls ORDER BY created_at")
+        assert before_models == ([(create_call, original[0])] if phase == "inflight_model" else
+                                 [(create_call, original[0]), (user_call, original[0])])
+        case.write_actual("user-goal-before-hard-restart", {"phase": phase, "goal_id": goal_id,
+                                                          "application": application, "execution": original, "models": before_models})
+
+        await case.restart(hard=True, while_stopped=release)
+        ready_at = asyncio.get_running_loop().time()
+        async with asyncio.timeout(5):
+            while not (wakeups := _sql(case.workspace, session_id, thread_id,
+                                      "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups")):
+                await asyncio.sleep(0.05)
+        wakeup, = wakeups
+        # TODO：首次冷 prepare 已测13.43秒，性能另行优化；注册和完成共用原45秒 Job 验收预算。
+        async with asyncio.timeout(45):
+            while True:
+                response = await case.client.get(f"/api/v1/jobs/{wakeup[1]}")
+                assert response.status_code in {200, 404}, response.text
+                if response.status_code == 200:
+                    break
+                await asyncio.sleep(0.05)
+            await _job(case, wakeup[1])
+        recovery_seconds = asyncio.get_running_loop().time() - ready_at
+        async with asyncio.timeout(5):
+            while True:
+                goal = await _goal(case, session_id)
+                assert goal is not None
+                if goal["tokens_used"] == 11:
+                    break
+                await asyncio.sleep(0.05)
+        assert goal["status"] == "complete"
+        assert goal["goal_id"] == goal_id and goal["objective"] == created["objective"] and goal["token_budget"] == 345
+        assert set(goal["accounted_jobs"]) == {wakeup[1]} and wakeup[0] == f"goal:{goal_id}:state"
+        assert _sql(case.workspace, session_id, thread_id,
+                    "SELECT execution_id,job_id,turn_id,execution_origin,outcome FROM executions ORDER BY created_at") == [
+                        (*original[:4], "execution_lost" if phase == "inflight_model" else "completed"),
+                        (wakeup[2], wakeup[1], None, "internal", "completed"),
+                    ]
+        assert _sql(case.workspace, session_id, thread_id, "SELECT turn_id FROM turn_records") == [(original[2],)]
+        models = _sql(case.workspace, session_id, thread_id,
+                      "SELECT model_call_id,execution_id FROM model_calls ORDER BY created_at")
+        assert models == [*before_models, (complete_call, wakeup[2]), (final_call, wakeup[2])]
+        assert case.call_count(session_id, thread_id) == 4
+        await case.restart(hard=True)
+        assert await _goal(case, session_id) == goal and case.call_count(session_id, thread_id) == 4
+        assert _sql(case.workspace, session_id, thread_id,
+                    "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups") == [wakeup]
+        case.write_actual("user-goal-after-hard-restart", {"phase": phase, "goal": goal,
+                                                         "execution": original, "wakeup": wakeup, "models": models,
+                                                         "ready_to_job_complete_seconds": recovery_seconds})
+    finally:
+        release()
+        if len(case.backends) > 1:
+            traces = await case.client.get(f"/api/v1/sessions/{session_id}/traces", params={"thread_id": thread_id})
+            assert traces.status_code == 200, traces.text
+            case.write_actual("user-goal-runtime-final", {
+                "phase": phase, "traces": traces.json(),
+                "executions": _sql(case.workspace, session_id, thread_id,
+                                   "SELECT execution_id,job_id,execution_origin,outcome FROM executions ORDER BY created_at"),
+                "models": _sql(case.workspace, session_id, thread_id,
+                               "SELECT model_call_id,execution_id,outcome FROM model_calls ORDER BY created_at"),
+                "backend_logs": {path.name: path.read_text() for path in (case.workspace / ".boxteam/logs").glob("runtime-source-restart-*.stderr.log")},
+            })
 
 
 @pytest.mark.asyncio
