@@ -67,7 +67,7 @@ async def wait_mount(recovery_case, free_tcp_port_factory):
 
 @pytest.fixture
 def wait_plan():
-    def plan(replay, session, thread, continuation, operation_id=None):
+    def plan(replay, session, thread, continuation, operation_id=None, *, interleaved_user=False):
         request = {"operation": "connect", "server_id": "secure", "continuation": continuation} if operation_id is None else {
             "operation": "status", "operation_id": operation_id, "continuation": continuation,
         }
@@ -78,9 +78,14 @@ def wait_plan():
             ("invoke_extension_tool", {"tool_name": "mcp__secure__probe", "arguments": {"proof": "authorized-continuation"}}),
             None,
         ]
+        if interleaved_user:
+            operations.insert(2, None)
         interactions = []
         for index, operation in enumerate(operations):
-            delta = {"content": "已登记等待，结束本次执行。" if index == 1 else "已从授权后独立执行继续。"}
+            text = "已登记等待，结束本次执行。" if index == 1 else "已从授权后独立执行继续。"
+            if interleaved_user and index == 2:
+                text = "已处理交错的用户输入。"
+            delta = {"content": text}
             if operation is not None:
                 delta = {"tool_calls": [_tool_call(call_index=index, name=operation[0], arguments=operation[1])]}
             interaction = build_cassette(

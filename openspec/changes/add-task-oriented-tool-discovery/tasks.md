@@ -51,7 +51,7 @@
 - [x] 6.3 原调用先提交配对等待结果并结束，经既有内部唤醒／队列按 after_turn 准入独立 internal execution，turn_id=None 并冻结自身新目录；按 operation 去重，重查权限／删除 fence／deadline，不改写原 Turn 或伪装 retry，只恢复仍有效意图。
 - [x] 6.4 实现短 status 等待的 child scope 期限，以及长等待取消／过期；取消某 thread 等待不默认断开共享连接。
 - [x] 6.5 实现进程重启对账和无法确认状态；不得恢复旧 socket、重放结果未知外部写入或伪造用户 Turn。
-- [ ] 6.6 验证登记前已完成、邮箱提交后 dispatcher 提交前崩溃、dispatcher 接受后投递结算前崩溃、重复 callback、两 thread 等待同连接、用户输入交错、Session 删除／取消／deadline 和进程重启后的原 thread 冷重建；确认观察恢复不重放授权副作用并完成静态分析。
+- [x] 6.6 验证登记前已完成、邮箱提交后 dispatcher 提交前崩溃、dispatcher 接受后投递结算前崩溃、重复 callback、两 thread 等待同连接、用户输入交错、Session 删除／取消／deadline 和进程重启后的原 thread 冷重建；确认观察恢复不重放授权副作用并完成静态分析。
 - [x] 6.7 等待展示、取消和对账接入既有 BackgroundTaskResourceProvider；验证运行中仍遵守 idle unload blocker，不另建授权任务清单或未定义挂起状态。
 
 ## 7. MCP 配置受控热替换
@@ -287,6 +287,15 @@
 - 真实 Session 消息生成 main 历史，经公开 source-point／fork-context 创建同 Session child；child 登记授权等待并结束原执行。邮箱已提交、dispatcher 尚未接受时强杀 Backend，重启后原 child 冷编译并完成独立 internal execution，turn_id=None；main 无额外执行或唤醒，继承 assembly hash 不变，新五份请求逐一核对 owner、preimage/hash、工具配对及真实 MCP 回执，OAuth 仅交换一次。模型继续复用 model_stream。
 - `child-wait-product-034` 新场景1通过；仅含 HEAD 与该测试文件的完整 Git 快照 `isolated-child-wait-037` 中 child 通过，组合另一个 main 场景失败于新增测试提前读取空 rollout，尚未进入业务。限定仅 child 读取继承基线后，`isolated-child-wait-038` main 场景1通过／71.79秒，实际退出0；child 分支业务断言未变，复用037证据。038 Ruff、Pyright零诊断及OpenSpec strict通过；037沿同树036复用静态结果，036筛选引号错误未执行产品测试的原件保留。
 - 命令、tree、源码指纹、raw、实际退出码与正式输出保存在 `out/tests/temp/mcp-discovery-policy/artifacts/`；035—038源码副本均核验无漂移后清理。6.6仍未勾选，用户输入交错、Session删除及全过程deadline等产品门继续未完成；团队／协作TODO不变。
+
+### 6.6 授权等待准入组合收口（2026-10-27）
+
+- 新增独立文件/工作区的`integration-mcp-wait-admission`，复用原Gateway/Agent装具、同一OAuth/MCP handler与model_stream资产，不拼装第二套SSE。真实用户消息仍在生成时，授权完成通知可持久接受，但after_turn内部执行必须等待用户执行终结；三份execution仅两份用户Turn，六份真实请求逐一核对原owner、preimage/hash、发现定义与工具结果配对。
+- 原活动后台任务继续阻挡删除；用户通过资源控制明确取消后，经导航operation删除并核实settled，再完成工作区授权，不重建Session或模型调用。另以管理API先完成授权、Agent再通过status登记continuation，验证终态重读不会丢通知，原操作仅一次token交换，独立内部执行无伪用户Turn。
+- `product-admission-001`中用户输入场景通过，删除场景最初未遵循活动后台任务的既有删除限制，整次退出1；修正为明确取消后删除。005两项失败源于驱动将短status变化误当终态，原输出明确为verifying/catalog；保留成功断言，改为有界等待真实succeeded。最终`product-blockers-008`为2 passed/114.34秒，退出0。001之后的变动只涉及这两项及期限场景，用户输入分支与共享计划行为未变，复用其通过证据。
+- `product-deadline-009`为1 passed/343.51秒、退出0，使用原产品300秒期限，不改时钟或持久状态。通知提交后保留294.06秒原预算，截止后0.82秒内观察到deadline_exceeded结算，零内部wakeup/新execution/业务调用，操作仍succeeded且连接ready；完整测量位于正式产物的`wait-deadline.json`。
+- 最终010 Pyright与011 Ruff均零诊断，012等待单测14 passed，013矩阵注册校验通过；本轮无产品API/前端/协议变化，不重复Web构建。各运行保留进程外硬期限、4GiB保护、准确命令、逐文件指纹、raw及实际退出码，源码前后相同，位于`out/tests/temp/mcp-wait-admission/artifacts/runs/`；正式输出位于`out/tests/integration/backend/agents/test_mcp_wait_admission/`。最初002因未使用既有临时pyright环境而无法启动，004及最终010以项目解释器完成，未改依赖或用户环境。
+- 结合上方原main/child硬重启、重复callback和双等待者取消证据关闭6.6，当前41/52。完整HITL、跨执行typed持续占用、跨Gateway授权及真实Provider指标仍按原未勾项推进；团队／协作TODO不变。
 
 ### 3.7 大定义的普通读取与完整发现验收（2026-10-27）
 
