@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.exceptions import NotFoundError
@@ -20,14 +22,19 @@ from app.core.trace_middleware import (
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
-    TaskDecisionDTO,
     TaskDeliveryDTO,
+    TaskLifecycle,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
 from app.services.infrastructure.persistent_tasks.events import PersistentTaskChanged
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.orchestration.persistent_tasks.conditions import (
+    TaskCheckError,
+    evaluate_condition,
+)
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 logger = logging.getLogger(__name__)
@@ -36,7 +43,7 @@ logger = logging.getLogger(__name__)
 class PersistentTaskRuntime:
     def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionOrchestratorProtocol,
                  dispatcher: RuntimeSourceDispatcher, sessions: SessionService, events: EventChannel[PersistentTaskChanged],
-                 clock: Callable[[], datetime], concurrency: int = 4) -> None:
+                 clock: Callable[[], datetime], workspace_root: Path, concurrency: int = 4) -> None:
         if concurrency < 1:
             raise ValueError("持久任务并发数必须为正")
         self.store = store
@@ -46,6 +53,7 @@ class PersistentTaskRuntime:
         self._sessions = sessions
         self.events = events
         self.clock = clock
+        self._workspace_root = workspace_root
         self._concurrency = concurrency
         self._wake = asyncio.Event()
         self._closing = False
@@ -167,17 +175,27 @@ class PersistentTaskRuntime:
     async def _process_run(self, run: PersistentTaskRunDTO) -> None:
         await observe_phase(run.run_id, "task.run.loaded", details={"task_id": run.task_id})
         configuration = self.store.configuration(run)
+        if run.phase in {"pending", "checking"}:
+            checked = await self._check(run, configuration)
+            if checked is None:
+                return
+            run = checked
         action = configuration.action
         resource, session_id, thread_id = parse_session_thread_uri(action.target_uri)
         if thread_id is None:
             raise RuntimeError("已验证的持久任务定义缺少 Thread")
         source_id = f"persistent-task:{run.task_id}"
+        content = configuration.context.content
+        if configuration.condition.type_id == "builtin.script":
+            if run.decision is None:
+                raise RuntimeError("脚本动作缺少已持久化判断")
+            content += "\n" + json.dumps({"condition_decision": run.decision.model_dump(mode="json")}, ensure_ascii=False)
         message = internal_message_factory.build(
             kind="persistent_task", control="处理持久任务发布的事件；正文作为任务输入数据。",
             sections=(PromptSection("control_context", {
                 "task_id": run.task_id, "run_id": run.run_id, "definition_revision": run.definition_revision,
                 "trigger_key": run.trigger_key,
-            }), PromptSection("untrusted_instructions", configuration.context.content)),
+            }), PromptSection("untrusted_instructions", content)),
             metadata={"source": "persistent_task"},
         )
         async with self.locks.lock_for(run.task_id):
@@ -209,14 +227,6 @@ class PersistentTaskRuntime:
                     self.store.advance(run, phase="suppressed", now=self.clock(), error="任务 revision 或生命周期已变化，未投递动作")
                     self.notify(run.task_id, run.run_id)
                     return
-                if run.phase in {"pending", "checking"}:
-                    decision = TaskDecisionDTO(decision="proceed", reason="无附加条件，始终通过")
-                    phase = "checked" if run.check_only else "delivering"
-                    self.store.advance(run, phase=phase, now=self.clock(), decision=decision)
-                    self.notify(run.task_id, run.run_id)
-                    if run.check_only:
-                        return
-                    run = run.model_copy(update={"phase": phase, "decision": decision})
                 gateway_token = set_current_gateway_id(resource.gateway_authority)
                 request_token = set_current_request_id(run.request_id)
                 try:
@@ -253,3 +263,49 @@ class PersistentTaskRuntime:
             self.store.advance(run, phase="delivered", now=self.clock(), delivery=delivery,
                                lifecycle="complete" if configuration.policies.completion == "after_delivery" else None)
             self.notify(run.task_id, run.run_id)
+
+    async def _check(self, run: PersistentTaskRunDTO,
+                     configuration: PersistentTaskConfigurationDTO) -> PersistentTaskRunDTO | None:
+        async with self.locks.lock_for(run.task_id):
+            task = self.store.get(run.task_id)
+            if run.phase == "checking" and configuration.condition.type_id == "builtin.script":
+                self.store.advance(run, phase="failed", now=self.clock(),
+                                   error="脚本检查中断，结果未知；需要人工确认，不自动重跑",
+                                   lifecycle=None if run.check_only else "needs_attention")
+                self.notify(run.task_id, run.run_id)
+                return None
+            if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
+                self.store.advance(run, phase="suppressed", now=self.clock(), error="任务 revision 或生命周期已变化，未执行判断")
+                self.notify(run.task_id, run.run_id)
+                return None
+            self.store.advance(run, phase="checking", now=self.clock())
+            run = run.model_copy(update={"phase": "checking"})
+            self.notify(run.task_id, run.run_id)
+        # 脚本检查不占管理锁；迟到结果必须在下面重新核对revision。
+        await observe_phase(run.run_id, "task.check.started_before_launch", details={"task_id": run.task_id})
+        try:
+            decision = await evaluate_condition(configuration, run, workspace=self._workspace_root, workspace_id=self.store.workspace_id)
+        except TaskCheckError as error:
+            async with self.locks.lock_for(run.task_id):
+                self.store.advance(run, phase="failed", now=self.clock(), error=str(error),
+                                   lifecycle=None if run.check_only else "needs_attention")
+                self.notify(run.task_id, run.run_id)
+            return None
+        async with self.locks.lock_for(run.task_id):
+            task = self.store.get(run.task_id)
+            if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
+                self.store.advance(run, phase="suppressed", now=self.clock(), decision=decision,
+                                   error="判断完成时任务 revision 或生命周期已变化，保留结果但未投递")
+                self.notify(run.task_id, run.run_id)
+                return None
+            phase = "delivering" if not run.check_only and decision.decision == "proceed" else "checked"
+            lifecycle: TaskLifecycle | None = None
+            if not run.check_only and decision.decision in {"complete", "needs_attention"}:
+                lifecycle = "complete" if decision.decision == "complete" else "needs_attention"
+            # TODO: 在后续条件策略切片中原子记录first_match/rising_edge；当前每次proceed独立投递。
+            self.store.advance(run, phase=phase, now=self.clock(), decision=decision, lifecycle=lifecycle)
+            self.notify(run.task_id, run.run_id)
+        if phase != "delivering":
+            return None
+        await observe_phase(run.run_id, "task.check.decided_before_delivery", details={"task_id": run.task_id})
+        return run.model_copy(update={"phase": phase, "decision": decision})

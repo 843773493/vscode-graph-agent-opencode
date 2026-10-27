@@ -19,6 +19,7 @@ app/runtime/
 ├── ChatGPT 凭据
 │   └── chatgpt_auth.py       OAuth 凭据目录、Codex 凭据迁移与模型能力
 ├── 原生命令保护
+│   ├── native_command.py      共用监督器入口与有界标准流收集
 │   ├── posix_job.py           独立期限、每进程数据段限额及进程组回收
 │   └── windows_job.py         Windows Job Object整树内存、期限及退出回收
 └── 可替换运行时端口

@@ -11477,6 +11477,37 @@ export declare type TaskTriggerDTO = Message<"boxteam.workspace.v2.TaskTriggerDT
 export declare const TaskTriggerDTOSchema: GenMessage<TaskTriggerDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.TaskScriptCheckDTO
+ */
+export declare type TaskScriptCheckDTO = Message<"boxteam.workspace.v2.TaskScriptCheckDTO"> & {
+  /**
+   * @generated from field: repeated string command = 1;
+   */
+  command: string[];
+
+  /**
+   * @generated from field: double timeout_seconds = 2;
+   */
+  timeoutSeconds: number;
+
+  /**
+   * @generated from field: int64 output_limit_bytes = 3;
+   */
+  outputLimitBytes: bigint;
+
+  /**
+   * @generated from field: int64 memory_limit_mb = 4;
+   */
+  memoryLimitMb: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskScriptCheckDTO.
+ * Use `create(TaskScriptCheckDTOSchema)` to create a new message.
+ */
+export declare const TaskScriptCheckDTOSchema: GenMessage<TaskScriptCheckDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TaskConditionDTO
  */
 export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditionDTO"> & {
@@ -11489,6 +11520,11 @@ export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditi
    * @generated from field: string type_id = 2;
    */
   typeId: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskScriptCheckDTO script = 3;
+   */
+  script?: TaskScriptCheckDTO | undefined;
 };
 
 /**
@@ -11705,6 +11741,11 @@ export declare type TaskDecisionDTO = Message<"boxteam.workspace.v2.TaskDecision
    * @generated from field: string reason = 2;
    */
   reason: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct result = 3;
+   */
+  result?: JsonObject | undefined;
 };
 
 /**

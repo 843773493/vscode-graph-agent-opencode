@@ -128,7 +128,7 @@ class ModelReplayCase:
             main_thread = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
             assert main_thread.status_code == 200, main_thread.text
             thread_id = main_thread.json()["data"]["thread_id"]
-        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text())
+        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
         endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
         interactions = [build_cassette(
             asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
@@ -143,7 +143,7 @@ class ModelReplayCase:
         return calls
 
     def request(self, call: str) -> dict[str, object]:
-        artifact = json.loads((self.model.artifacts / (call + ".json")).read_text())
+        artifact = json.loads((self.model.artifacts / (call + ".json")).read_text(encoding="utf-8"))
         assert artifact["identity"] == self.planned_calls[call]
         assert artifact["request"]["stream"] is True
         return artifact["request"]
@@ -169,6 +169,7 @@ class ModelReplayCase:
     def write_actual(self, name: str, value: dict[str, object]) -> None:
         (self.artifacts_dir / f"{name}-actual.json").write_text(
             json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
 
 
@@ -198,7 +199,7 @@ def _prepare_source_workspace(
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
-    config = commentjson.loads(config_path.read_text())
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     for provider in config["llm"]["providers"]:
         provider.update({
             "endpoint": f"http://127.0.0.1:{port}/v1", "model": "e2e-stub-model",
@@ -213,7 +214,7 @@ def _prepare_source_workspace(
     for agent in config["agents"].values():
         agent["model"]["fallback_providers"] = []
         agent.setdefault("execution", {})["require_delegated_report"] = delegated_report
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return workspace
 
 
@@ -303,11 +304,11 @@ async def source_case(
         mount_payload = {
             "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
         runtime_root = context.runtime_root_for_node(request.node.nodeid)
-        artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
+        artifacts_dir = context.artifacts_dir
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         with ExitStack() as services:
             model = services.enter_context(model_stream_replay(
-                artifacts_dir, runtime_root=runtime_root,
+                runtime_root, runtime_root=runtime_root,
                 business_assertion="runtime-source-product-admission-and-context",
             ))
             for key, value in model.environment.items():
@@ -359,7 +360,7 @@ async def source_case(
                     try:
                         yield case
                     finally:
-                        case.write_actual(request.node.name + "-wire", {"requests": case.requests()})
+                        case.write_actual("source-wire", {"requests": case.requests()})
 
 
 async def _wait_until(predicate: Callable[[], bool], seconds: float = 30) -> None:
@@ -1805,10 +1806,10 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
     if "agents_content" in params:
         (workspace / "AGENTS.md").write_text(params["agents_content"], encoding="utf-8")
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
-    artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
+    artifacts_dir = context.artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     with model_stream_replay(
-        artifacts_dir, runtime_root=runtime_root,
+        runtime_root, runtime_root=runtime_root,
         business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
     ) as model:
         backend = await asyncio.to_thread(

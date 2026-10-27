@@ -2690,9 +2690,17 @@ export interface TaskTriggerDTO {
   timezone: string;
 }
 
+export interface TaskScriptCheckDTO {
+  command: string[];
+  timeout_seconds: number;
+  output_limit_bytes: number;
+  memory_limit_mb: number;
+}
+
 export interface TaskConditionDTO {
   version: string;
   type_id: string;
+  script?: TaskScriptCheckDTO | undefined;
 }
 
 export interface TaskContextDTO {
@@ -2741,6 +2749,7 @@ export interface PersistentTaskDTO {
 export interface TaskDecisionDTO {
   decision: string;
   reason: string;
+  result: { [key: string]: any } | undefined;
 }
 
 export interface TaskDeliveryDTO {
@@ -19557,8 +19566,52 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
   },
 };
 
+function createBaseTaskScriptCheckDTO(): TaskScriptCheckDTO {
+  return { command: [], timeout_seconds: 0, output_limit_bytes: 0, memory_limit_mb: 0 };
+}
+
+export const TaskScriptCheckDTO: MessageFns<TaskScriptCheckDTO> = {
+  fromJSON(object: any): TaskScriptCheckDTO {
+    return {
+      command: globalThis.Array.isArray(object?.command) ? object.command.map((e: any) => globalThis.String(e)) : [],
+      timeout_seconds: isSet(object.timeout_seconds) ? globalThis.Number(object.timeout_seconds) : 0,
+      output_limit_bytes: isSet(object.output_limit_bytes) ? globalThis.Number(object.output_limit_bytes) : 0,
+      memory_limit_mb: isSet(object.memory_limit_mb) ? globalThis.Number(object.memory_limit_mb) : 0,
+    };
+  },
+
+  toJSON(message: TaskScriptCheckDTO): unknown {
+    const obj: any = {};
+    if (message.command?.length) {
+      obj.command = message.command;
+    }
+    if (message.timeout_seconds !== 0) {
+      obj.timeout_seconds = message.timeout_seconds;
+    }
+    if (message.output_limit_bytes !== 0) {
+      obj.output_limit_bytes = Math.round(message.output_limit_bytes);
+    }
+    if (message.memory_limit_mb !== 0) {
+      obj.memory_limit_mb = Math.round(message.memory_limit_mb);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskScriptCheckDTO>, I>>(base?: I): TaskScriptCheckDTO {
+    return TaskScriptCheckDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskScriptCheckDTO>, I>>(object: I): TaskScriptCheckDTO {
+    const message = createBaseTaskScriptCheckDTO();
+    message.command = object.command?.map((e) => e) || [];
+    message.timeout_seconds = object.timeout_seconds ?? 0;
+    message.output_limit_bytes = object.output_limit_bytes ?? 0;
+    message.memory_limit_mb = object.memory_limit_mb ?? 0;
+    return message;
+  },
+};
+
 function createBaseTaskConditionDTO(): TaskConditionDTO {
-  return { version: "", type_id: "" };
+  return { version: "", type_id: "", script: undefined };
 }
 
 export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
@@ -19566,6 +19619,7 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     return {
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+      script: isSet(object.script) ? TaskScriptCheckDTO.fromJSON(object.script) : undefined,
     };
   },
 
@@ -19577,6 +19631,9 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     if (message.type_id !== "") {
       obj.type_id = message.type_id;
     }
+    if (message.script !== undefined) {
+      obj.script = TaskScriptCheckDTO.toJSON(message.script);
+    }
     return obj;
   },
 
@@ -19587,6 +19644,9 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     const message = createBaseTaskConditionDTO();
     message.version = object.version ?? "";
     message.type_id = object.type_id ?? "";
+    message.script = (object.script !== undefined && object.script !== null)
+      ? TaskScriptCheckDTO.fromPartial(object.script)
+      : undefined;
     return message;
   },
 };
@@ -19888,7 +19948,7 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
 };
 
 function createBaseTaskDecisionDTO(): TaskDecisionDTO {
-  return { decision: "", reason: "" };
+  return { decision: "", reason: "", result: undefined };
 }
 
 export const TaskDecisionDTO: MessageFns<TaskDecisionDTO> = {
@@ -19896,6 +19956,7 @@ export const TaskDecisionDTO: MessageFns<TaskDecisionDTO> = {
     return {
       decision: isSet(object.decision) ? globalThis.String(object.decision) : "",
       reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      result: isObject(object.result) ? object.result : undefined,
     };
   },
 
@@ -19907,6 +19968,9 @@ export const TaskDecisionDTO: MessageFns<TaskDecisionDTO> = {
     if (message.reason !== "") {
       obj.reason = message.reason;
     }
+    if (message.result !== undefined) {
+      obj.result = message.result;
+    }
     return obj;
   },
 
@@ -19917,6 +19981,7 @@ export const TaskDecisionDTO: MessageFns<TaskDecisionDTO> = {
     const message = createBaseTaskDecisionDTO();
     message.decision = object.decision ?? "";
     message.reason = object.reason ?? "";
+    message.result = object.result ?? undefined;
     return message;
   },
 };

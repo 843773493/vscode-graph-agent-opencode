@@ -78,6 +78,8 @@ class PersistentTaskStore:
                 payload["configuration"]["trigger"].pop(field)
         if request.configuration.policies.misfire == "skip":
             payload["configuration"]["policies"].pop("misfire")
+        if request.configuration.condition.type_id == "builtin.always":
+            payload["configuration"]["condition"].pop("script")
         preimage = sha256_jcs(payload)
         with self._transaction() as connection:
             row = connection.execute("SELECT task_id,creation_hash FROM persistent_tasks WHERE creation_key=?",
@@ -246,4 +248,7 @@ class PersistentTaskStore:
             if lifecycle is not None:
                 connection.execute("UPDATE persistent_tasks SET lifecycle=?,revision=revision+1,reason=?,updated_at=? "
                                    "WHERE task_id=? AND revision=? AND lifecycle='active'",
-                                   (lifecycle, error, now.isoformat(), run.task_id, run.task_revision))
+                                   (lifecycle, error or (decision.reason if decision else None), now.isoformat(), run.task_id, run.task_revision))
+            elif decision is not None and not run.check_only:
+                connection.execute("UPDATE persistent_tasks SET reason=?,updated_at=? WHERE task_id=? AND revision=? AND lifecycle='active'",
+                                   (decision.reason, now.isoformat(), run.task_id, run.task_revision))

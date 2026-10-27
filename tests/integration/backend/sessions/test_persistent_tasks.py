@@ -43,7 +43,7 @@ def _configuration(target: str, mode: Literal["context_only", "context_and_run"]
     return {
         "name": "服务就绪", "trigger": {"type_id": "builtin.manual", "version": "1", "interval_seconds": None,
                                       "expression": None, "timezone": "UTC"},
-        "condition": {"type_id": "builtin.always", "version": "1"},
+        "condition": {"type_id": "builtin.always", "version": "1", "script": None},
         "context": {"type_id": "builtin.literal", "version": "1", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},
@@ -109,6 +109,7 @@ async def test_component_validation_revision_and_real_dry_run(source_case: Runti
     del missing["condition"]
     invalid.append(missing)
     for key, field, value in (("condition", "version", "99"), ("condition", "type_id", "unknown"),
+                              ("condition", "type_id", "builtin.script"),
                               ("trigger", "type_id", "builtin.cron")):
         candidate = deepcopy(configuration)
         candidate[key][field] = value
@@ -125,7 +126,7 @@ async def test_component_validation_revision_and_real_dry_run(source_case: Runti
     assert response.status_code == 409, response.text
     run = await _check(case, task, check_only=True)
     actual = await _run(case, task, run, "checked")
-    assert actual["decision"] == {"decision": "proceed", "reason": "无附加条件，始终通过"}
+    assert actual["decision"] == {"decision": "proceed", "reason": "无附加条件，始终通过", "result": {}}
     assert actual["delivery"] is None and actual["error"] is None
     assert await _check(case, task, check_only=True) == actual
     response = await case.client.post(f"{ROOT}/{task['task_id']}/checks", json={

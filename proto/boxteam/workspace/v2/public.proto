@@ -2640,9 +2640,17 @@ message TaskTriggerDTO {
   string timezone = 5;
 }
 
+message TaskScriptCheckDTO {
+  repeated string command = 1;
+  double timeout_seconds = 2;
+  int64 output_limit_bytes = 3;
+  int64 memory_limit_mb = 4;
+}
+
 message TaskConditionDTO {
   string version = 1;
   string type_id = 2;
+  optional TaskScriptCheckDTO script = 3;
 }
 
 message TaskContextDTO {
@@ -2691,6 +2699,7 @@ message PersistentTaskDTO {
 message TaskDecisionDTO {
   string decision = 1;
   string reason = 2;
+  google.protobuf.Struct result = 3;
 }
 
 message TaskDeliveryDTO {

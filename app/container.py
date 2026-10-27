@@ -944,6 +944,7 @@ def _build_app_container(
         store=PersistentTaskStore(workspace_activity_service.store, workspace_id=workspace_id),
         orchestrator=session_orchestrator, dispatcher=runtime_source_dispatcher, sessions=session_service,
         events=task_channel(job_event_bus.event_channel_service, workspace_id), clock=clock_ports.wall,
+        workspace_root=resolved_workspace_root,
     )
     persistent_task_service = PersistentTaskService(runtime=persistent_task_runtime, sessions=session_service)
     session_communication_service = SessionCommunicationService(

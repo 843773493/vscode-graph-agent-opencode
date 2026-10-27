@@ -4,6 +4,7 @@
   "schemaVersion": 1,
   "suites": [
     {"id":"integration-persistent-task-schedules","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_schedules.py"]},
+    {"id":"integration-persistent-task-scripts","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_scripts.py"]},
     {"id":"integration-persistent-tasks-manual","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_tasks.py","tests/integration/backend/sessions/test_mounted_workspace_lifespan.py::test_persistent_task_owners_and_management_are_isolated_between_mounts"]},
     {"id": "integration-skill-mode-recovery", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 240000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_skill_mode_recovery.py"]},
     {"id": "integration-context-source-grouping", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 180000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/rollout_context/test_source_message_grouping.py"]},

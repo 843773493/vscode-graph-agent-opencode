@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.time_schedule import MisfirePolicy, TimeSchedule
@@ -45,8 +45,30 @@ class TaskTriggerDTO(TaskComponentDTO):
         return self
 
 
+class TaskScriptCheckDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    command: list[str] = Field(min_length=1)
+    timeout_seconds: float = Field(gt=0)
+    output_limit_bytes: int = Field(gt=0)
+    memory_limit_mb: int = Field(ge=16)
+
+    @model_validator(mode="after")
+    def validate_command(self) -> TaskScriptCheckDTO:
+        if not self.command[0] or any("\0" in argument for argument in self.command):
+            raise ValueError("脚本命令需要非空程序且参数不能包含NUL")
+        return self
+
+
 class TaskConditionDTO(TaskComponentDTO):
-    type_id: Literal["builtin.always"]
+    type_id: Literal["builtin.always", "builtin.script"]
+    script: TaskScriptCheckDTO | None = None
+
+    @model_validator(mode="after")
+    def validate_component(self) -> TaskConditionDTO:
+        if (self.type_id == "builtin.script") != (self.script is not None):
+            raise ValueError("只有script判断必须配置script参数，always不能配置script")
+        return self
 
 
 class TaskContextDTO(TaskComponentDTO):
@@ -102,8 +124,11 @@ class PersistentTaskDTO(BaseModel):
 
 
 class TaskDecisionDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
     decision: Literal["wait", "proceed", "complete", "needs_attention"]
-    reason: str
+    reason: str = Field(min_length=1)
+    result: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class TaskDeliveryDTO(BaseModel):
