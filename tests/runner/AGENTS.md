@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-mcp-real-provider-discovery` 使用现有 `CCTQ_API_KEY`、真实 Provider 与受控 MCP，经 Gateway／Session／Agent 验证完整定义、两轮多调用、冷配对和请求 hash；固定660秒／4GiB。显式选择该 suite 前须将现有凭据加入进程环境，缺失时报告 UNMET_PREREQUISITE，不回退到回放；token 估算、Provider用量和缓存观测各自保留，不代表稳定命中或跨执行持有。
+
 - `integration-mcp-tool-approval`沿真实Gateway、Session消息、原图interrupt及HTTP MCP验证逐调用审批、直接工具编辑、同schema替换、期限、撤权与取消；完整9场景实测582秒，保护期限720秒/4GiB。`integration-web-tool-approval`经真实Chromium验证刷新后读取原检查点、编辑与拒绝，固定240秒/4GiB。均复用model_stream，不代表真实外部Provider或旧socket可恢复。
 
 - `integration-mcp-wait-admission`通过真实Gateway、Agent、OAuth/MCP及model_stream验证用户输入与after_turn唤醒串行、活动等待阻挡删除/取消后删除不复活、终态先完成后登记不丢通知，以及原300秒期限不因成功授权续期。固定600秒/4GiB，与原等待崩溃/child恢复套件使用不同测试文件工作区；不代替完整HITL、跨Gateway或真实Provider验收。

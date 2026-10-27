@@ -12,6 +12,7 @@ from app.agents.providers._format_check import (
     check_history_messages_accepted,
     check_no_private_stream_markers,
     check_stream_merges_without_private_marker_noise,
+    check_tool_call_arguments_complete,
     check_tool_call_chunks_have_required_fields,
 )
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
@@ -144,6 +145,20 @@ def test_tool_call_chunks_without_any_field_fails():
 
     assert not item.passed
     assert "name" in item.remediation
+
+
+@pytest.mark.parametrize("arguments", ["", '{"path":', "[]", "null"])
+def test_completed_stream_rejects_missing_or_incomplete_tool_arguments(arguments: str) -> None:
+    assert not check_tool_call_arguments_complete([
+        _chunk(tool_call_chunks=[{"name": "probe", "args": arguments, "id": "call_one", "index": 0}]),
+    ]).passed
+
+
+def test_completed_stream_accepts_arguments_finished_in_a_later_chunk() -> None:
+    assert check_tool_call_arguments_complete([
+        _chunk(tool_call_chunks=[{"name": "probe", "args": "", "id": "call_one", "index": 0}]),
+        _chunk(tool_call_chunks=[{"args": '{"path":"README.md"}', "id": "call_one", "index": 0}]),
+    ]).passed
 
 
 def test_check_chunks_runs_all_checks():

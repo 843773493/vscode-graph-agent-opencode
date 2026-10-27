@@ -69,7 +69,7 @@
 - [x] 8.2 完成真实前端类型检查及 `bun run --cwd src/clients/web build`；只修改 Web 客户端，不预写 Electron／移动适配。
 - [x] 8.3 沿实际 Gateway、目标工作区和页面初始化链路执行浏览器操作，验证任务搜索→连接授权→完整定义→真实 MCP 执行；授权需测试 OAuth/MCP Server 实际接收请求，不能只 mock helper 或检查健康接口。
 - [x] 8.4 验证 model_call 与 turn 下均能通过有效 continuation 和 after_turn 独立内部执行自动恢复，新执行冻结新目录且原 Turn 不变，无需用户再发继续；验证未过准入时的等待事实、拒绝／过期／断开错误可见、原 thread 恢复和远程 owner 回调可达性，缺少环境时记录具体未验证范围。
-- [ ] 8.5 验证同轮多个信封调用各自确认、取消和结果配对；记录完整定义输入 token、首次调用成功率、发现轮次和真实 Provider 可用时的 cached tokens，不把 mock 当缓存收益证据。
+- [x] 8.5 验证同轮多个信封调用各自确认、取消和结果配对；记录完整定义输入 token、首次调用成功率、发现轮次和真实 Provider 可用时的 cached tokens，不把 mock 当缓存收益证据。
 
 ## 9. 回归证据与交付检查
 
@@ -79,6 +79,14 @@
 - [ ] 9.4 审查重复目录／dispatch／writer、旧 schema 指纹、live 同名回退、静默字段丢弃、宽泛异常、隐式授权／重试、无界等待和无关改动，清理当前范围旧实现。
 - [ ] 9.5 对照全部新增／修改规格场景核验并运行 OpenSpec 严格校验；仅在实际实现和验收完成时勾选任务，不把规划修订或结构校验当作功能完成。
 - [ ] 9.6 规格同步／归档前确认 unify-product-runtime-logging 已先同步主规格并归档；重新读取最新主规格，核对两个共享 MODIFIED Requirement 保留 Gateway logging.runtime、仅日志热应用及混合 Gateway 候选场景，再同步／归档本变更。前置未完成或正文漂移时先修订 delta，禁止逆序覆盖，不改动日志 change 的文件。
+
+### 8.5 真实 Provider 发现及并行参数保真（2026-10-27）
+
+- 沿真实 Gateway 初始化、Session／消息入口及 Agent，以既有 backup_3 Provider 自主搜索受控 MCP 并读取完整定义，两次执行共一次搜索、四次实际信封调用，均首次成功。两轮各有同一模型响应中的两个调用；原 MCP handler 的四份回执、冷检查点配对、五次真实 Provider 请求 preimage／hash、固定 ToolSet 和 epoch 均核对通过。受控 MCP 资产不冒充外部服务 E2E；逐调用 HITL、拒绝、编辑、取消与资格结算复用本 change 已有审批产品证据，不以真实模型成功样本替代那些确定性场景。
+- 第一轮真实请求复现完整参数被转为空对象，主动中止重复调用，退出130；官方 SDK 独立观察确认两份调用只发送参数 done 和 output item done、没有参数 delta。现由同一流状态处理 added／delta／done，补齐未投递后缀、去除重复完成值并拒绝参数或身份冲突，删除原两份调用 ID 索引。同步／异步各覆盖四类完整／部分参数来源，另有冲突及格式检查正反例。
+- `provider-product-011`：1 passed／102.30秒，候选 tree `9512f54c673afed96ee948801e9be13b57f95054`；样本调用成功4/4，首次调用成功，发现轮次1。完整搜索结果在后四份实际请求中各1584字节，`tiktoken o200k_base` 各估算529 tokens（包含定义与 provenance 等结果字段，排除协议开销，非 Provider 计费归因）。原 Provider 各请求输入11154／11732／11993／12049／12312 tokens，cached tokens 为0／10112／10752／11136／11008；不据此承诺命中或推断改造前后节省比例。
+- `responses-regression-012`：89 passed／7.35秒；`provider-http-regression-014`：6 passed／32.13秒，保留真实 HTTP、同步／异步、媒体结果、请求 hash 与冷状态验证，原 Pydantic usage 序列化 warning 单独保留。Ruff通过；新增产品验收 Pyright零诊断，受影响既有模块及测试与完整基线同为25项，逐条对比无新增诊断。
+- 准确命令、全部源码指纹、原输出、退出码、原始 Provider 用量及安全协议事件原件位于 `out/tests/temp/mcp-provider-discovery/artifacts/`，正式产品输出保留在 `source-011/out/tests/integration/workspace_services/mcp/test_provider_discovery/`。不把本项扩展为跨 execution 持续资源持有或旧 socket 恢复验收。
 
 ### 3.1／5.1 本地连接控制的 Agent 入口验收（2026-10-27）
 

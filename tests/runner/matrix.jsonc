@@ -3,6 +3,7 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-mcp-real-provider-discovery","layer":"integration","client":null,"enabled":true,"requiredEnvironment":["CCTQ_API_KEY"],"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/mcp/test_provider_discovery.py"]},
     {"id":"integration-mcp-tool-approval-recovery","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/test_mcp_tool_approval_recovery.py"]},
     {"id":"integration-mcp-tool-approval","layer":"integration","client":null,"enabled":true,"timeoutMs":720000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/test_mcp_tool_approval.py"]},
     {"id":"integration-web-tool-approval","layer":"integration","client":"web","enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_mcp_tool_approval.py"]},

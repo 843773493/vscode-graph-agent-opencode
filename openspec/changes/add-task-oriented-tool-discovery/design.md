@@ -211,6 +211,8 @@ Web 独立回调页可以位于用户正在访问的 Gateway origin；原管理�
 
 普通并发以同一轮多个既有信封调用表达，每个保留独立 ID、冻结 binding、HITL、scope 和结果；依赖关系通过后续模型步骤推进。保留既有 `tool_name+arguments` 输入，不引入 batch 数组第二形状或多套 dispatcher。
 
+Responses 的同一 output item 在唯一流状态中累计参数，参数 done 与 output item done 通过相同完成逻辑核对并只投递尚缺的后缀；上游不发送 delta 时仍保留真实完整参数。已完成值重复出现不重复拼接，完成值与先前内容、item／call ID／工具名冲突时明确失败。同步、异步和实际 Agent 都消费这条转换链，不能从终态日志另建修补工具参数的执行路径。完整定义输入量使用实际请求中的搜索结果正文及明确标注的 tokenizer 估算；Provider 原始用量、cached tokens、发现轮次和实际调用成功样本分别记录，不由回放推断缓存收益。
+
 ### 9. 配置规格按明确依赖顺序同步
 
 `unify-product-runtime-logging` 必须先同步主规格并完成归档，本变更随后才能同步／归档。两个配置 capability 的同名 MODIFIED Requirement 使用包含日志和 MCP 合同的完整正文：保留日志归 Gateway `logging.runtime`、仅日志热应用和混合 Gateway 候选整体提交场景，仅将 MCP 重启分类改为按安全替换验收结果判断。

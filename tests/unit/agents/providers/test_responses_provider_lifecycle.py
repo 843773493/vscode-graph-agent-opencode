@@ -5,9 +5,16 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    message_chunk_to_message,
+)
 from langchain_core.outputs import ChatGenerationChunk
 
+from app.agents.providers.litellm_stream_types import _StreamPartState
 from app.agents.providers.openai_responses import (
     BoxteamOpenAIResponsesModel,
     ResponsesPayloadBuildTimeoutError,
@@ -18,6 +25,86 @@ from app.core.model_delta_context import (
     set_current_model_delta_sink,
 )
 from app.runtime.provider_errors import is_provider_failure
+
+
+@pytest.fixture
+def responses_function_events():
+    def build(mode: str):
+        arguments = ['{"lane":"left"}', '{"lane":"right"}']
+        events = [SimpleNamespace(
+            type="response.output_item.added", output_index=index,
+            item={"type": "function_call", "id": f"fc_{index}", "call_id": f"call_{index}",
+                  "name": "invoke_extension_tool", "arguments": body if mode == "added" else ""},
+        ) for index, body in enumerate(arguments)]
+        if mode in {"partial", "complete"}:
+            events.extend(SimpleNamespace(
+                type="response.function_call_arguments.delta", output_index=index,
+                item_id=f"fc_{index}", delta=body[:8] if mode == "partial" else body,
+            ) for index, body in enumerate(arguments))
+        for index, body in enumerate(arguments):
+            events.extend([
+                SimpleNamespace(type="response.function_call_arguments.done", output_index=index,
+                                item_id=f"fc_{index}", arguments=body),
+                SimpleNamespace(type="response.output_item.done", output_index=index,
+                                item={"type": "function_call", "id": f"fc_{index}", "call_id": f"call_{index}",
+                                      "name": "invoke_extension_tool", "arguments": body}),
+            ])
+        events.append(SimpleNamespace(type="response.completed", response=SimpleNamespace(usage=None)))
+        return events
+    return build
+
+
+@pytest.mark.parametrize("mode", ["done_only", "partial", "complete", "added"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_responses_done_arguments_preserve_parallel_calls_in_both_entries(
+    monkeypatch: pytest.MonkeyPatch, responses_function_events, mode: str, asynchronous: bool,
+) -> None:
+    events = responses_function_events(mode)
+
+    async def async_events():
+        for event in events:
+            yield event
+
+    async def open_async(**_payload):
+        return async_events()
+
+    monkeypatch.setattr("app.agents.providers.openai_responses.litellm.responses", lambda **_payload: iter(events))
+    monkeypatch.setattr("app.agents.providers.openai_responses.litellm.aresponses", open_async)
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test", api_key="test-key", custom_llm_provider="openai", invocation_purpose="tool_test",
+    )
+    messages: list[BaseMessage] = [HumanMessage(content="调用两次工具")]
+    chunks = [chunk async for chunk in model._astream(messages)] if asynchronous else list(model._stream(messages))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    result = message_chunk_to_message(merged.message)
+    assert isinstance(result, AIMessage)
+    assert not result.invalid_tool_calls
+    assert result.tool_calls == [
+        {"type": "tool_call", "id": f"call_{index}", "name": "invoke_extension_tool", "args": {"lane": lane}}
+        for index, lane in enumerate(("left", "right"))
+    ]
+
+
+@pytest.mark.parametrize("failure", ["arguments", "item_id", "call_id", "name", "late_delta"])
+def test_responses_completion_conflicts_fail_before_dispatch(responses_function_events, failure: str) -> None:
+    events = responses_function_events("complete")
+    if failure == "arguments":
+        events[4].arguments = '{"lane":"other"}'
+    elif failure == "item_id":
+        events[4].item_id = "fc_1"
+    elif failure in {"call_id", "name"}:
+        events[5].item[failure] = "different"
+    else:
+        events.insert(6, SimpleNamespace(type="response.function_call_arguments.delta", output_index=0,
+                                         item_id="fc_0", delta=" "))
+    model = BoxteamOpenAIResponsesModel(model="gpt-test", api_key="test-key", custom_llm_provider="openai")
+    state = _StreamPartState()
+    with pytest.raises(RuntimeError, match="冲突|完成后"):
+        for event in events:
+            model._convert_response_event(event, current_index=-1, current_output_index=-1,
+                                          current_sub_index=-1, part_state=state, original_schema=None)
 
 
 @pytest.mark.asyncio

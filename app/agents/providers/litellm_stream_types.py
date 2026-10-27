@@ -195,6 +195,31 @@ def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass(slots=True)
+class _ResponsesToolCall:
+    """同一 output item 的增量与完成值；完成事件只补发尚未投递的后缀。"""
+
+    item_id: str
+    call_id: str
+    name: str
+    arguments: str
+    completed: bool = False
+
+    def append(self, delta: str) -> str:
+        if self.completed:
+            raise RuntimeError(f"Responses function_call 完成后收到参数增量: call_id={self.call_id}")
+        self.arguments += delta
+        return delta
+
+    def finish(self, arguments: str) -> str:
+        if not arguments.startswith(self.arguments) or (self.completed and arguments != self.arguments):
+            raise RuntimeError(f"Responses function_call 完成参数与已投递值冲突: call_id={self.call_id}")
+        suffix = arguments[len(self.arguments):]
+        self.arguments = arguments
+        self.completed = True
+        return suffix
+
+
+@dataclass(slots=True)
 class _StreamPartState:
     """为单次模型响应分配稳定的 LangChain content part 身份。"""
 
@@ -207,10 +232,7 @@ class _StreamPartState:
     active_provider_part_id: str | None = None
     fallback_item_ids: dict[int, str] | None = None
     reasoning_summary_provider_ids: set[str] = field(default_factory=set)
-    responses_tool_call_ids_by_item_id: dict[str, str] = field(default_factory=dict)
-    responses_tool_call_ids_by_output_index: dict[int, str] = field(
-        default_factory=dict
-    )
+    responses_tool_calls: dict[int, _ResponsesToolCall] = field(default_factory=dict)
     last_reasoning_alias_type: str | None = None
     last_reasoning_alias_text: str | None = None
 

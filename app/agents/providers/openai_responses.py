@@ -27,6 +27,9 @@ from app.agents.provider_capabilities import parse_provider_capabilities
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _message_chunk_token,
+)
+from app.agents.providers.litellm_stream_types import (
+    _ResponsesToolCall,
     _StreamPartState,
 )
 from app.agents.providers.openai_response_history import (
@@ -395,8 +398,9 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             arguments = event_item_dict.get("arguments")
             if not isinstance(arguments, str):
                 arguments = ""
-            part_state.responses_tool_call_ids_by_item_id[item_id] = call_id
-            part_state.responses_tool_call_ids_by_output_index[output_index] = call_id
+            if output_index in part_state.responses_tool_calls:
+                raise RuntimeError(f"Responses function_call 重复 output_index: {output_index}")
+            part_state.responses_tool_calls[output_index] = _ResponsesToolCall(item_id, call_id, name, arguments)
             return (
                 output_index,
                 output_index,
@@ -417,38 +421,35 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 ),
             )
 
-        if event_type == "response.function_call_arguments.delta":
+        if event_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"} or (
+            event_type == "response.output_item.done" and event_item_dict.get("type") == "function_call"
+        ):
             output_index = getattr(event, "output_index", None)
             if isinstance(output_index, bool) or not isinstance(output_index, int):
                 raise RuntimeError(
-                    "Responses function_call arguments delta 缺少有效 output_index"
+                    "Responses function_call 参数事件缺少有效 output_index"
                 )
-            item_id = getattr(event, "item_id", None)
-            call_id = getattr(event, "call_id", None)
-            if not isinstance(call_id, str) or not call_id:
-                call_id = (
-                    part_state.responses_tool_call_ids_by_item_id.get(item_id)
-                    if isinstance(item_id, str)
-                    else None
-                )
-            if not isinstance(call_id, str) or not call_id:
-                call_id = part_state.responses_tool_call_ids_by_output_index.get(
-                    output_index
-                )
-            if not isinstance(call_id, str) or not call_id:
-                raise RuntimeError(
-                    "Responses function_call arguments delta 无法关联 function_call: "
-                    f"item_id={item_id!r} output_index={output_index}"
-                )
-            delta = getattr(event, "delta", None)
-            if not isinstance(delta, str):
-                raise RuntimeError(
-                    f"Responses function_call arguments delta 必须是字符串: call_id={call_id}"
-                )
+            call = part_state.responses_tool_calls.get(output_index)
+            if call is None:
+                raise RuntimeError(f"Responses 参数事件无法关联 function_call: output_index={output_index}")
+            item_id = event_item_dict.get("id", getattr(event, "item_id", None))
+            call_id = event_item_dict.get("call_id", getattr(event, "call_id", None))
+            if (item_id is not None and item_id != call.item_id) or (call_id is not None and call_id != call.call_id):
+                raise RuntimeError(f"Responses function_call 参数事件身份冲突: output_index={output_index}")
+            if event_item_dict.get("name", call.name) != call.name:
+                raise RuntimeError(f"Responses function_call 完成工具名冲突: call_id={call.call_id}")
+            value = getattr(event, "delta", None) if event_type.endswith(".delta") else event_item_dict.get(
+                "arguments", getattr(event, "arguments", None),
+            )
+            if not isinstance(value, str):
+                raise RuntimeError(f"Responses function_call 参数必须是字符串: call_id={call.call_id}")
+            delta = call.append(value) if event_type.endswith(".delta") else call.finish(value)
+            if not delta:
+                return current_index, current_output_index, current_sub_index, None
             tool_chunk: dict[str, Any] = {
                 "type": "tool_call_chunk",
                 "args": delta,
-                "id": call_id,
+                "id": call.call_id,
                 "index": output_index,
             }
             return (
@@ -462,16 +463,6 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     )
                 ),
             )
-
-        if (
-            event_type
-            in {
-                "response.function_call_arguments.done",
-                "response.output_item.done",
-            }
-            and event_item_dict.get("type") == "function_call"
-        ):
-            return current_index, current_output_index, current_sub_index, None
 
         if event_type in {
             "response.reasoning_summary_part.added",

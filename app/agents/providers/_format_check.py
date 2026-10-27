@@ -1,6 +1,7 @@
 """Provider 输出格式校验库。"""
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -25,6 +26,7 @@ __all__ = [
     "check_history_messages_accepted",
     "check_no_private_stream_markers",
     "check_stream_merges_without_private_marker_noise",
+    "check_tool_call_arguments_complete",
     "check_tool_call_chunks_have_required_fields",
     "validate_provider_format",
 ]
@@ -298,6 +300,28 @@ def check_tool_call_chunks_have_required_fields(
     )
 
 
+def check_tool_call_arguments_complete(chunks: Sequence[ChatGenerationChunk]) -> FormatCheckItem:
+    merged: AIMessageChunk | None = None
+    for chunk in chunks:
+        message = _chunk_message(chunk)
+        if message is not None:
+            merged = message if merged is None else merged + message
+    invalid = []
+    for call in merged.tool_call_chunks if merged is not None else ():
+        raw = call.get("args")
+        try:
+            complete = isinstance(raw, str) and isinstance(json.loads(raw), dict)
+        except json.JSONDecodeError:
+            complete = False
+        if not complete:
+            invalid.append(call.get("id"))
+    return FormatCheckItem(
+        name="完成流的工具参数必须是完整 JSON 对象", passed=not invalid,
+        detail=f"不完整调用: {invalid}" if invalid else "",
+        remediation="在 Responses 参数 done/output_item.done 中补齐未投递后缀并核对冲突，不能仅凭 added 将空参数解释为 {}。",
+    )
+
+
 class StreamFixture(Protocol):
     name: str
 
@@ -381,6 +405,7 @@ ALL_CHECKS: list[Callable[[Sequence[ChatGenerationChunk]], FormatCheckItem]] = [
     check_content_blocks_are_standard,
     check_stream_merges_without_private_marker_noise,
     check_tool_call_chunks_have_required_fields,
+    check_tool_call_arguments_complete,
 ]
 
 
