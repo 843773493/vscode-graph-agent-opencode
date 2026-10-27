@@ -93,6 +93,8 @@ Goal 的 `active/paused/blocked/usage_limited/budget_limited/complete` 及预算
 
 触发记录冻结 definition revision、trigger identity、输入 revision、判断引用、决定、动作 identity 和接受/执行结果。外部通知必须带幂等键；同一身份不同内容明确冲突。`first_match / rising_edge / each_match` 等条件触发策略持久保存已触发事实，首次满足不等于每次轮询都续跑；服务再次下线后上线是否重触发由策略决定。
 
+`policies.match_mode`默认`each_match`，保持普通定时任务逐计划执行。`first_match`以同一任务已有的持久接受回执判定是否完成首次投递；`rising_edge`以原运行接受顺序中最近的有效wait/proceed判断为边沿，首次无判断等同尚未满足。干跑、过期判断、失败及complete/needs_attention不构造新的边沿，暂停/恢复和改名不重置条件事实。判断、策略选择与运行阶段同事务提交，不另建可变匹配账本。非试运行的proceed停在checked表示策略未触发动作，保留原判断和理由、无错误也无投递。已选中但尚未记录接受回执的运行恢复原动作，先对账后推进后续检查。
+
 后端恢复时先对账在途判断与动作，再推进计划。已存在 durable execution/wakeup 的动作复用原身份，未确认脚本副作用的运行显示中断或结果未知，不盲目重放。missed schedule 沿用显式 skip/run_latest/catch_up；进程停机不承诺执行。任务事件经现有 SSE 传播，错误必须可见。
 
 ### 6.1 启动只等待通用运行时就绪，任务恢复由受管理 worker 处理

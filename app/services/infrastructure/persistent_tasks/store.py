@@ -78,6 +78,8 @@ class PersistentTaskStore:
                 payload["configuration"]["trigger"].pop(field)
         if request.configuration.policies.misfire == "skip":
             payload["configuration"]["policies"].pop("misfire")
+        if request.configuration.policies.match_mode == "each_match":
+            payload["configuration"]["policies"].pop("match_mode")
         if request.configuration.condition.type_id == "builtin.always":
             payload["configuration"]["condition"].pop("script")
         preimage = sha256_jcs(payload)
@@ -236,19 +238,60 @@ class PersistentTaskStore:
                 decision: TaskDecisionDTO | None = None, delivery: TaskDeliveryDTO | None = None,
                 error: str | None = None, lifecycle: TaskLifecycle | None = None) -> None:
         with self._transaction() as connection:
-            changed = connection.execute(
-                "UPDATE persistent_task_runs SET phase=?,decision_json=COALESCE(?,decision_json),delivery_json=COALESCE(?,delivery_json),"
-                "error=?,updated_at=? WHERE run_id=? AND phase=?", (
-                    phase, decision.model_dump_json() if decision else None, delivery.model_dump_json() if delivery else None,
-                    error, now.isoformat(), run.run_id, run.phase,
-                ),
-            ).rowcount
-            if changed != 1:
-                raise RuntimeError("持久任务运行阶段发生并发冲突")
-            if lifecycle is not None:
-                connection.execute("UPDATE persistent_tasks SET lifecycle=?,revision=revision+1,reason=?,updated_at=? "
-                                   "WHERE task_id=? AND revision=? AND lifecycle='active'",
-                                   (lifecycle, error or (decision.reason if decision else None), now.isoformat(), run.task_id, run.task_revision))
-            elif decision is not None and not run.check_only:
-                connection.execute("UPDATE persistent_tasks SET reason=?,updated_at=? WHERE task_id=? AND revision=? AND lifecycle='active'",
-                                   (decision.reason, now.isoformat(), run.task_id, run.task_revision))
+            self._advance(connection, run, phase=phase, now=now, decision=decision, delivery=delivery,
+                          error=error, lifecycle=lifecycle)
+
+    @staticmethod
+    def _advance(connection: sqlite3.Connection, run: PersistentTaskRunDTO, *, phase: TaskRunPhase, now: datetime,
+                 decision: TaskDecisionDTO | None = None, delivery: TaskDeliveryDTO | None = None,
+                 error: str | None = None, lifecycle: TaskLifecycle | None = None) -> None:
+        changed = connection.execute(
+            "UPDATE persistent_task_runs SET phase=?,decision_json=COALESCE(?,decision_json),delivery_json=COALESCE(?,delivery_json),"
+            "error=?,updated_at=? WHERE run_id=? AND phase=?", (
+                phase, decision.model_dump_json() if decision else None, delivery.model_dump_json() if delivery else None,
+                error, now.isoformat(), run.run_id, run.phase,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise RuntimeError("持久任务运行阶段发生并发冲突")
+        if lifecycle is not None:
+            connection.execute("UPDATE persistent_tasks SET lifecycle=?,revision=revision+1,reason=?,updated_at=? "
+                               "WHERE task_id=? AND revision=? AND lifecycle='active'",
+                               (lifecycle, error or (decision.reason if decision else None), now.isoformat(), run.task_id, run.task_revision))
+        elif decision is not None and not run.check_only:
+            connection.execute("UPDATE persistent_tasks SET reason=?,updated_at=? WHERE task_id=? AND revision=? AND lifecycle='active'",
+                               (decision.reason, now.isoformat(), run.task_id, run.task_revision))
+
+    def finish_check(self, run: PersistentTaskRunDTO, decision: TaskDecisionDTO, now: datetime) -> PersistentTaskRunDTO:
+        """判断、策略选择与运行阶段原子提交；已接受动作仍由原回执事实证明。"""
+        with self._transaction() as connection:
+            task = self._task(connection, run.task_id)
+            phase: TaskRunPhase = "checked"
+            lifecycle: TaskLifecycle | None = None
+            error = None
+            if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
+                phase, error = "suppressed", "判断完成时任务 revision 或生命周期已变化，保留结果但未投递"
+            elif not run.check_only:
+                if decision.decision == "proceed" and self._match_allows(connection, run, task.configuration.policies.match_mode):
+                    phase = "delivering"
+                elif decision.decision in {"complete", "needs_attention"}:
+                    lifecycle = "complete" if decision.decision == "complete" else "needs_attention"
+            self._advance(connection, run, phase=phase, now=now, decision=decision, error=error, lifecycle=lifecycle)
+            return self._run(connection.execute("SELECT * FROM persistent_task_runs WHERE run_id=?", (run.run_id,)).fetchone())
+
+    @staticmethod
+    def _match_allows(connection: sqlite3.Connection, run: PersistentTaskRunDTO, mode: str) -> bool:
+        if mode == "each_match":
+            return True
+        if mode == "first_match":
+            return connection.execute("SELECT 1 FROM persistent_task_runs WHERE task_id=? AND delivery_json IS NOT NULL LIMIT 1",
+                                      (run.task_id,)).fetchone() is None
+        # dry-run、过期结果和错误不改变边沿；只有已生效判断的接受顺序有效。
+        previous = connection.execute(
+            "SELECT decision_json FROM persistent_task_runs WHERE task_id=? AND check_only=0 "
+            "AND phase IN ('checked','delivering','delivered') AND decision_json IS NOT NULL "
+            "AND json_extract(decision_json,'$.decision') IN ('wait','proceed') "
+            "AND run_sequence < (SELECT run_sequence FROM persistent_task_runs WHERE run_id=?) "
+            "ORDER BY run_sequence DESC LIMIT 1", (run.task_id, run.run_id),
+        ).fetchone()
+        return previous is None or TaskDecisionDTO.model_validate_json(previous[0]).decision != "proceed"

@@ -47,7 +47,7 @@ def _configuration(target: str, mode: Literal["context_only", "context_and_run"]
         "context": {"type_id": "builtin.literal", "version": "1", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},
-        "policies": {"completion": "continuous", "misfire": "skip"},
+        "policies": {"completion": "continuous", "misfire": "skip", "match_mode": "each_match"},
     }
 
 

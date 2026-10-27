@@ -2720,6 +2720,7 @@ export interface TaskActionDTO {
 export interface TaskPoliciesDTO {
   completion: string;
   misfire: string;
+  match_mode: string;
 }
 
 export interface PersistentTaskConfigurationDTO {
@@ -19740,7 +19741,7 @@ export const TaskActionDTO: MessageFns<TaskActionDTO> = {
 };
 
 function createBaseTaskPoliciesDTO(): TaskPoliciesDTO {
-  return { completion: "", misfire: "" };
+  return { completion: "", misfire: "", match_mode: "" };
 }
 
 export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
@@ -19748,6 +19749,7 @@ export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
     return {
       completion: isSet(object.completion) ? globalThis.String(object.completion) : "",
       misfire: isSet(object.misfire) ? globalThis.String(object.misfire) : "",
+      match_mode: isSet(object.match_mode) ? globalThis.String(object.match_mode) : "",
     };
   },
 
@@ -19759,6 +19761,9 @@ export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
     if (message.misfire !== "") {
       obj.misfire = message.misfire;
     }
+    if (message.match_mode !== "") {
+      obj.match_mode = message.match_mode;
+    }
     return obj;
   },
 
@@ -19769,6 +19774,7 @@ export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
     const message = createBaseTaskPoliciesDTO();
     message.completion = object.completion ?? "";
     message.misfire = object.misfire ?? "";
+    message.match_mode = object.match_mode ?? "";
     return message;
   },
 };

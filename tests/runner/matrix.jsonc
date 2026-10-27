@@ -3,6 +3,7 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-persistent-task-matches","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_matches.py"]},
     {"id":"integration-persistent-task-schedules","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_schedules.py"]},
     {"id":"integration-persistent-task-scripts","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_scripts.py"]},
     {"id":"integration-persistent-tasks-manual","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_tasks.py","tests/integration/backend/sessions/test_mounted_workspace_lifespan.py::test_persistent_task_owners_and_management_are_isolated_between_mounts"]},

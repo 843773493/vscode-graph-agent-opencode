@@ -2670,6 +2670,7 @@ message TaskActionDTO {
 message TaskPoliciesDTO {
   string completion = 1;
   string misfire = 2;
+  string match_mode = 3;
 }
 
 message PersistentTaskConfigurationDTO {

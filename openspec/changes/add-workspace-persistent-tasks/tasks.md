@@ -22,6 +22,7 @@
 - [ ] 3.5 补齐仅发布上下文的业务端口，并复用 source 加 durable wakeup 实现发布后请求执行；覆盖忙时串行投递和明确的投递时机。
   - [x] 3.5.1 实现不可变事件的仅发布端口、原子 canonical view membership、幂等与冷 owner 恢复结算；通过空闲/忙时真实模型准备及公开 fork 验收，不以该子项代替任务动作协调、状态更新和投递时机验收。
 - [ ] 3.6 实现 first_match/rising_edge/each_match 条件策略与已触发事实，重复通知及同键不同内容冲突使用统一幂等入口。
+  - [x] 3.6.1 三种策略复用原运行判断/接受事实，决定与策略选择原子提交；覆盖持续就绪、真实下线再上线、试运行、暂停/恢复/编辑及决定前后硬重启。外部通知入口仍待实施。
 - [ ] 3.7 实现任务暂停/编辑/终止与迟到判断、在途动作的 revision 协调，不隐式取消已接受执行，检查试运行不执行后续工作动作。
   - [x] 3.7.1 always/script检查不持管理锁，返回后重验revision；试运行四类决定、失败与重启后的结果未知均不改变正式生命周期、不投递动作。模型判断及应用迁移仍待实施。
 - [ ] 3.8 接入通用运行时的受管理恢复 worker：start 仅等待存储、订阅、调度权与 worker 初始化回执，逐项恢复和条件执行在后台有界推进；保留任务 recovering 阶段、新触发持久排队及补跑策略，对账判断/投递/工作执行，不盲目重放未知脚本结果。
@@ -106,3 +107,10 @@
 - 初轮078的正文匹配断言忽略了实际XML/JSON封装，改为解析并严格比对完整result；084的测试在Backend停止后未释放故障屏障，修复测试协调后088通过原身份恢复。080命令引用不存在路径、无测试运行，纠正后082通过。上述失败原件均保留，不作通过统计。
 - Windows原生监督器075的16项通过仍有效。产品087暴露共享fixture的GBK读UTF-8，089暴露重复拼接产物路径；修正编码及重复路径后，092实际进入第三次proceed，但旧rollout锁owner在深层Thread目录创建时触发`WinError 206`（`storage/primitives.py::_open_handle`），继而关闭失败并占用catalog，最终1 failed/5 errors/3 deselected。TODO：单独处理Windows原生长路径边界后补完整脚本产品套件；本切片不更改目标系统设置、不将该运行记为Windows产品通过。
 - 所有证据仍在既有临时证据目录，包含准确命令、源码指纹、原始输出和退出码；正式脚本产物在`out/tests/integration/backend/sessions/test_persistent_task_scripts/`。数据库结构未变，仍schema17。first_match/rising_edge、模型条件、Goal/生成器迁移及主Web验收继续保持未完成。
+
+### 条件策略与原运行事实复用（2026-10-27）
+
+- `policies.match_mode`显式支持first_match/rising_edge/each_match，默认each_match保留原手动与定时行为，默认字段不改变旧创建幂等身份。首投只查原接受回执，边沿只查按接受序号排列的有效wait/proceed；不增加第二份可变匹配状态，也不改数据库结构。决定、策略选择、阶段和适用生命周期在原SQLite事务提交，移除编排层原局部结算逻辑。
+- `task-match-product-102`完整matrix为5 passed、177.74秒。通过真实任务API、子进程脚本及model_stream严格核对三种策略的实际模型调用次数、连续就绪、下线再上线、重复同键、试运行、暂停/恢复/改名和两种Backend硬重启窗口。接受后重启复用原canonical item，决定后重启复用原决定；后续真实请求只含应投递的事件。
+- `task-match-contracts-099`为30 passed，含v16旧历史/幂等身份、真实协议/SSE及任务入口，并注入生命周期写入失败证明决定和任务更新一并回滚。107定时完整回归7 passed、95.54秒；106脚本完整回归9 passed、179.93秒，覆盖上个切片审查修复后的完整9项。101后端Pyright零错误，105 Ruff通过；103真实Web类型、104构建、097 Buf/全绑定和098 OpenAPI完成，仅既有chunk提示。100首次Ruff仅有新增测试import排版，格式修正后105通过，未改产品源码或产品断言。
+- 全部产品运行均有进程外超时/4GiB保护且无源码漂移；命令、指纹、原始输出和退出码仍保存于既有证据目录，正式条件策略产物在`out/tests/integration/backend/sessions/test_persistent_task_matches/`。尚未实现外部通知、模型条件、Goal/生成器迁移及任务Web界面，3.6与整体验收仍不勾选；Windows产品范围沿用前述长路径TODO。

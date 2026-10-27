@@ -11,7 +11,9 @@ from app.core.resource_uri import thread_resource_uri
 from app.core.sqlite_state import SQLiteStateDatabase
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskCheckRequest,
     PersistentTaskCreateRequest,
+    TaskDecisionDTO,
     TaskTriggerDTO,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
@@ -58,6 +60,40 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
         assert store.diagnostics().schema_version == 17
+    finally:
+        store.close()
+
+
+def test_task_decision_and_lifecycle_roll_back_together(workspace_root):
+    now = datetime(2026, 10, 27, tzinfo=UTC)
+    request = PersistentTaskCreateRequest.model_validate({
+        "idempotency_key": "atomic-check", "configuration": {
+            "name": "事务检查", "trigger": {"type_id": "builtin.manual", "version": "1"},
+            "condition": {"type_id": "builtin.always", "version": "1"},
+            "context": {"type_id": "builtin.literal", "version": "1", "content": "冻结输入"},
+            "action": {"type_id": "builtin.runtime_source", "version": "1", "delivery_mode": "context_only",
+                       "target_uri": thread_resource_uri("ws_atomic", "ses_atomic", "thr_atomic")},
+        },
+    })
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        tasks = PersistentTaskStore(store, workspace_id="ws_atomic")
+        task = tasks.create(request, now)
+        run = tasks.trigger(task.task_id, PersistentTaskCheckRequest(idempotency_key="complete", expected_revision=task.revision),
+                            now, request_id="req_atomic")
+        tasks.advance(run, phase="checking", now=now)
+        run, = tasks.runs(task.task_id)
+        decision = TaskDecisionDTO(decision="complete", reason="完成")
+        with closing(store.connection()) as connection:
+            connection.execute("CREATE TRIGGER stop_lifecycle BEFORE UPDATE ON persistent_tasks BEGIN SELECT RAISE(ABORT,'lifecycle-write-fault'); END")
+        with pytest.raises(sqlite3.IntegrityError, match="lifecycle-write-fault"):
+            tasks.finish_check(run, decision, now)
+        assert tasks.get(task.task_id) == task and tasks.runs(task.task_id) == [run]
+        with closing(store.connection()) as connection:
+            connection.execute("DROP TRIGGER stop_lifecycle")
+        actual = tasks.finish_check(run, decision, now)
+        assert actual.phase == "checked" and actual.decision == decision
+        assert tasks.get(task.task_id).lifecycle == "complete"
     finally:
         store.close()
 

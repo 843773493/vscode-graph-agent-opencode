@@ -25,7 +25,6 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
     TaskDeliveryDTO,
-    TaskLifecycle,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
@@ -292,20 +291,9 @@ class PersistentTaskRuntime:
                 self.notify(run.task_id, run.run_id)
             return None
         async with self.locks.lock_for(run.task_id):
-            task = self.store.get(run.task_id)
-            if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
-                self.store.advance(run, phase="suppressed", now=self.clock(), decision=decision,
-                                   error="判断完成时任务 revision 或生命周期已变化，保留结果但未投递")
-                self.notify(run.task_id, run.run_id)
-                return None
-            phase = "delivering" if not run.check_only and decision.decision == "proceed" else "checked"
-            lifecycle: TaskLifecycle | None = None
-            if not run.check_only and decision.decision in {"complete", "needs_attention"}:
-                lifecycle = "complete" if decision.decision == "complete" else "needs_attention"
-            # TODO: 在后续条件策略切片中原子记录first_match/rising_edge；当前每次proceed独立投递。
-            self.store.advance(run, phase=phase, now=self.clock(), decision=decision, lifecycle=lifecycle)
+            run = self.store.finish_check(run, decision, self.clock())
             self.notify(run.task_id, run.run_id)
-        if phase != "delivering":
+        if run.phase != "delivering":
             return None
         await observe_phase(run.run_id, "task.check.decided_before_delivery", details={"task_id": run.task_id})
-        return run.model_copy(update={"phase": phase, "decision": decision})
+        return run

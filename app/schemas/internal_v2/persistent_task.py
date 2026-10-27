@@ -95,6 +95,7 @@ class TaskPoliciesDTO(BaseModel):
 
     completion: Literal["continuous", "after_delivery"] = "continuous"
     misfire: MisfirePolicy = "skip"
+    match_mode: Literal["first_match", "rising_edge", "each_match"] = "each_match"
 
 
 class PersistentTaskConfigurationDTO(BaseModel):

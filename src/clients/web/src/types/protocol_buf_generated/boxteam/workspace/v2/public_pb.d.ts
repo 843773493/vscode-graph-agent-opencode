@@ -11608,6 +11608,11 @@ export declare type TaskPoliciesDTO = Message<"boxteam.workspace.v2.TaskPolicies
    * @generated from field: string misfire = 2;
    */
   misfire: string;
+
+  /**
+   * @generated from field: string match_mode = 3;
+   */
+  matchMode: string;
 };
 
 /**
