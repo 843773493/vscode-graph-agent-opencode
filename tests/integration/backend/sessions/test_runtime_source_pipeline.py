@@ -27,6 +27,7 @@ from app.container import AppContainer
 from app.core import identifier, phase_observer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadExecutionIntent
@@ -1730,6 +1731,7 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
 @dataclass
 class RestartRuntimeSourceCase(ModelReplayCase):
     backends: list[BackendProcess]
+    mount: MountedWorkspace | None = None
 
     async def restart(self, *, hard: bool, while_stopped: Callable[[], None] | None = None) -> None:
         previous = self.backends[-1]
@@ -1746,6 +1748,7 @@ class RestartRuntimeSourceCase(ModelReplayCase):
             log_name=f"runtime-source-restart-{len(self.backends)}",
             asgi_app="tests.support.e2e_control.communication_backend_app:app",
             env_overrides=self.model.environment,
+            startup_mount=self.mount,
         )
         assert backend.process.pid != previous.process.pid
         self.backends.append(backend)
@@ -1810,15 +1813,28 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
     artifacts_dir = context.artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    with model_stream_replay(
+    with ExitStack() as services, model_stream_replay(
         runtime_root, runtime_root=runtime_root,
         business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
     ) as model:
+        mount = None
+        if params.get("native_services"):
+            terminal_port, browser_port = ports.port(40), ports.port(42)
+            terminal = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=artifacts_dir)
+            services.callback(terminate_process, terminal)
+            browser = start_browser_manager_processes(
+                workspace_root=workspace, backend_port=browser_port, frontend_port=ports.port(43),
+                artifacts_dir=artifacts_dir, backend_host="127.0.0.1",
+            )
+            services.callback(close_browser_manager_processes, browser)
+            mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
+                                     f"http://127.0.0.1:{terminal_port}", f"http://127.0.0.1:{browser_port}")
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",
             asgi_app="tests.support.e2e_control.communication_backend_app:app",
             env_overrides=model.environment,
+            startup_mount=mount,
         )
         backends = [backend]
         case: RestartRuntimeSourceCase | None = None
@@ -1828,7 +1844,7 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
                 headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": backend.workspace_id},
                 timeout=30,
             ) as client:
-                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends)
+                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, mount)
                 yield case
         finally:
             for handle in reversed(backends):

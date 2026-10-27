@@ -85,6 +85,9 @@ class SessionGoalService:
                     raise RuntimeError("fork Goal 与冻结创建意图不一致")
             else:
                 self._store.goal_write(goal, creation=record)
+        await observe_phase(record.session_creation_idempotency_key, "fork.goal.installed_before_publish", details={
+            "session_id": record.session_id, "goal_id": goal.goal_id,
+        })
         return goal.goal_id
 
     async def abort_fork_goal(self, record: SessionCreationRecord) -> None:

@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import closing
+from datetime import datetime
 
 import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.gateway.credentials import load_or_create_gateway_id
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
+from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_resource import (
     session_resource_identity,
     workspace_session_inventory_identity,
@@ -40,6 +44,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 按当前文件隔离
 )
+from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
 async def _goal(case, session_id: str) -> dict | None:
@@ -223,6 +228,114 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
     assert await _goal(case, session_id) is None and case.call_count(session_id, thread_id) == 0
     assert case.requests() == []
     case.write_actual("goal-management-owner", {"original": original, "edited": edited, "projected": projected})
+
+
+@pytest.fixture
+def restart_fork_deadlines(restart_source_case: RestartRuntimeSourceCase) -> Iterator[ForkDeadlineRegistry]:
+    registry = ForkDeadlineRegistry(restart_source_case.artifacts_dir)
+    try:
+        yield registry
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restart_source_case", [{"native_services": True}], indirect=True)
+@pytest.mark.parametrize("phase", ["fork.goal.installed_before_publish", "copy.target.published"])
+async def test_fork_goal_publication_hard_restart_preserves_original_creation(
+    restart_source_case: RestartRuntimeSourceCase, restart_fork_deadlines: ForkDeadlineRegistry, phase: str,
+) -> None:
+    case = restart_source_case
+    case.client.headers["X-BoxTeam-Gateway-Id"] = load_or_create_gateway_id(
+        case.workspace.parent / "boxteam-home/state/gateway/identity.json",
+    )
+    source_id, _, _ = await _target(case)
+    response = await case.client.put(f"/api/v1/sessions/{source_id}/goal", json={
+        "objective": "硬重启前冻结的来源目标", "status": "paused", "token_budget": 456,
+    })
+    assert response.status_code == 200, response.text
+    source_goal = response.json()["data"]
+    response = await case.client.get(f"/api/v1/sessions/{source_id}/fork-source-point", params={"mode": "full_rollout_copy"})
+    assert response.status_code == 200, response.text
+    point = response.json()["data"]
+    key = "goal-fork-publication-restart"
+    creation_key = SessionContextForkService._creation_key(key)
+    request = {
+        "idempotency_key": key, "source_uri": point["source_uri"],
+        "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+        "anchor_item_id": point["anchor_item_id"], "mode": "full_rollout_copy",
+        "creation_kind": "new_session_main", "target_container_uri": point["main_container_uri"],
+        "goal": {"token_budget": 78},
+    }
+
+    def snapshot() -> tuple[dict, dict]:
+        catalog = case.workspace / ".boxteam/navigation/session-catalog.sqlite"
+        with sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            record = dict(connection.execute(
+                "SELECT * FROM session_creation_records WHERE session_creation_idempotency_key=?", (creation_key,),
+            ).fetchone())
+        with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT task_id,application_json,retired_at FROM persistent_tasks WHERE owner_session_id=?",
+                (record["session_id"],),
+            ).fetchall()
+        assert len(rows) == 1 and rows[0]["retired_at"] is None
+        return record, dict(rows[0])
+
+    case.control.arm(creation_key, phase)
+    deadline = restart_fork_deadlines.for_operation(source_id, key)
+    operation = asyncio.create_task(case.client.post(f"/api/v1/sessions/{source_id}/fork-context", json=request))
+    try:
+        await deadline.wait(asyncio.to_thread(case.control.acknowledged, creation_key, phase), "Goal fork phase")
+        original, installed = snapshot()
+        assert original["state"] == ("preparing" if phase == "fork.goal.installed_before_publish" else "published")
+        frozen_goal = json.loads(original["request_intent_json"])["goal_snapshot"]
+        assert installed["task_id"] == frozen_goal["goal_id"] != source_goal["goal_id"]
+        target_id = original["session_id"]
+        visible = await case.client.get(f"/api/v1/sessions/{target_id}/goal")
+        assert visible.status_code == (404 if original["state"] == "preparing" else 200), visible.text
+        if visible.status_code == 200:
+            assert visible.json()["data"]["goal_id"] == installed["task_id"]
+        case.write_actual("goal-fork-before-hard-restart", {"phase": phase, "creation": original, "goal": installed})
+        await deadline.wait(case.restart(hard=True, while_stopped=lambda: case.control.release(creation_key, phase)), "Goal fork cold recovery")
+        interrupted, = await asyncio.gather(operation, return_exceptions=True)
+        assert isinstance(interrupted, httpx.TransportError), interrupted
+        published, recovered_task = snapshot()
+        assert published["state"] == "published" and recovered_task == installed
+        immutable = set(original) - {"state", "record_updated_at"}
+        assert {name: published[name] for name in immutable} == {name: original[name] for name in immutable}
+        restored = await _goal(case, target_id)
+        assert restored is not None
+        assert restored["goal_id"] == installed["task_id"] and restored["thread_id"] == original["main_thread_id"]
+        assert all(restored[name] == value for name, value in json.loads(installed["application_json"]).items())
+        assert restored["status"] == "paused" and restored["objective"] == source_goal["objective"]
+        assert restored["token_budget"] == 78
+        assert datetime.fromisoformat(restored["created_at"]) == datetime.fromisoformat(original["created_at"])
+        assert restored["tokens_used"] == restored["time_used_seconds"] == 0 and restored["accounted_jobs"] == {}
+        assert await _goal(case, target_id) == restored and await _goal(case, source_id) == source_goal
+        response = await deadline.wait(case.client.post(f"/api/v1/sessions/{source_id}/fork-context", json=request), "Goal fork original retry")
+        assert response.status_code == 200, response.text
+        result = response.json()["data"]
+        assert (result["session"]["session_id"], result["thread_id"], result["goal_id"]) == (
+            target_id, original["main_thread_id"], installed["task_id"],
+        )
+        assert snapshot() == (published, installed)
+    finally:
+        deadline.complete()
+        case.control.release(creation_key, phase)
+        if not operation.done():
+            operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
+    response = await case.client.put(f"/api/v1/sessions/{target_id}/goal", json={"objective": "发布后保留的用户编辑"})
+    assert response.status_code == 200, response.text
+    edited = response.json()["data"]
+    assert edited["goal_id"] == installed["task_id"] and edited["revision"] == restored["revision"] + 1
+    await case.restart(hard=True)
+    assert await _goal(case, target_id) == edited and await _goal(case, source_id) == source_goal
+    assert case.requests() == []
+    case.write_actual("goal-fork-after-hard-restart", {"phase": phase, "creation": published, "goal": restored, "edited": edited})
 
 
 @pytest.mark.asyncio
