@@ -85,8 +85,8 @@ def _isolate_non_navigation_services(
             None,
         ),
         "job_reconcile": (container.runtime_service, "reconcile_stale_executions", 0),
-        "generation_start": (container.session_generation_service, "start", None),
-        "generation_stop": (container.session_generation_service, "shutdown", None),
+        "persistent_tasks_start": (container.persistent_task_runtime, "start", None),
+        "persistent_tasks_stop": (container.persistent_task_runtime, "stop", None),
         "terminal_start": (container.terminal_steering_service, "start", None),
         "terminal_stop": (container.terminal_steering_service, "shutdown", None),
         "node_debug_close": (container.node_debug_service, "close", None),
@@ -205,7 +205,7 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
     assert not operations._executor.has_queue_owner
     assert main.app.state.workspace_container_registry is None
     for group in (stubs, restart_stubs):
-        for name in ("generation_start", "generation_stop", "terminal_stop", "config_close", "mcp_stop"):
+        for name in ("persistent_tasks_start", "persistent_tasks_stop", "terminal_stop", "config_close", "mcp_stop"):
             assert group[name].await_count == 1
 
 

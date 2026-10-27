@@ -1,5 +1,9 @@
 当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作部分等待用户调整设计，暂缓后续功能实现、专项验证和性能优化。8.10 的会话协作通信、8.11 的团队与成员机制，以及 8.3/8.13 中对应的团队协作验收继续保留未完成状态；复合任务的其它通用执行、存储、fork、URI 部分继续推进。已有实现与验收记录保留作后续设计输入，暂缓不计作通过。
 
+历史范围补充（2026-10-26，用户授权）：第 13 节 empty/context_fork 上下文初始化切片及其验收记录保留为既有基线；当时显式前缀按 13.6 延期，不解除其余团队/协作 TODO。
+
+当前规划更新（2026-10-27，用户仅授权修改 OpenSpec）：第 14 节规划范围模式改名 `last_completed_turn_fork`（保留已完成 internal 与空来源行为），以及 view_prefix_fork 的 item-only 全分支定位、显式 view、inclusive/before 和一致捕获。此决定取代 13.6 的冻结凭证延期方案；第 14 节全部未实施，既有第 5/12/13 节勾选和历史日志不代表新合同已通过。只修改规划，不修改工作树代码或运行产品验收，不解除其它团队/协作 TODO。Goal 实现重构仍消费 `add-workspace-persistent-tasks`，业务机制不变。
+
 当前验收坐标（2026-10-10）：核心最终批、索引查询与恢复fixture已集成e11c8c6b，Sol013失败收敛闭包经固定增审后集成faad271c；§10.3原合取要求已完成。导航029独立full真实失败（exit1/636.73s）：300文件完成后跨页UI等待超时，Gateway0；037核两操作已提交，终态分别由另一页处理，同Sol041修完整等待callee，保原300/40/20及计时门。单正文036已集成375600b2，原4.7四门经有限证据合取及独审闭合；Section8身份另验。7.5/8/9/10其它任务按完整原子要求验收，旧Provider403与C1外部前置仍UNMET；043另外确认原8.13确定性thread/model-call replay与外置harness尚待实施，不能全部归为配额阻塞。原goal未完，具名收据与实时租约见团队协作台账。
 
 ## 1. Canonical item 与格式合同
@@ -493,6 +497,16 @@
 v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migration/import 命令调用，用于读取原始 artifact、生成 staging/report/quarantine 和 rollback audit。它不提供长期兼容 API，不参与正常 history/provider/checkpoint/runtime/context compiler，不与 v2 dual write、dual projector、双 schema 或双事实源并存。提取期间若确需保留旧路径，只能是仅转发 v2、禁止读取 v1 且带删除门槛的临时 import shim；当目标模块、调用方迁移、v2-only import/runtime 审计和一次性 migration 命令均闭合时立即删除，最迟在 7.5、主 spec 同步和 change 完成前删除。v1 原始 artifact 可以继续作为不可变迁移/回滚审计材料保存，但不构成保留旧运行代码的理由。
 
 ## Verification ledger
+
+### 2026-10-26 task empty/context_fork 统一创建切片
+
+- 历史适用边界（2026-10-27）：以下 PASS 仅对应当时 empty/context_fork 和前缀未开放的实现；名称迁移、item-only 定位及新的 revision 职责按第 14 节重新验收，不用原 schema 拒绝前缀的测试证明新能力通过。
+- 范围：仅关闭 13.1–13.5。`task` 默认 empty，显式 context_fork 复用原 fork capture/物化/证明和 ThreadCreationRecord；13.6 的显式前缀凭证按用户决定延期。Goal 与其余团队/协作 TODO 不计入本次完成。
+- PASS：进程外保护的定向单测 124 passed（7.42 秒，exit 0，`run-013/unit.log`）；真实模型工具入口、child 首次 Provider wire、精确 caller、原始继承字节、恢复、abort 与 Session 删除共 11 项集成通过（345.93 秒，exit 0，`run-012/integration.log`）。最终新增冻结字段非空校验后，继承、物化后恢复与中止路径补验 3 passed（102.96 秒，exit 0，`run-015/integration.log`），该轮前后源码指纹一致。普通公开 fork 的 idle/no-member/no-intent 与既有团队空历史委派有定向回归。
+- 重试/恢复不重选来源：父追加历史后，真实重试与新服务实例恢复均禁止再次调用 preflight，并核原 request/preimage/child/intent/Job 身份；没有另行执行父 active-view 切换的产品操作。取消注入覆盖 preparing、staging、物化后与发布后；恢复使用持久记录及真实 binder，不代表已验证 OS 强杀重启。
+- PASS：受影响文件 Ruff 与 compileall；主 change 及 `add-context-injection-lifecycle` strict 结构校验。真实 Pyright 当前与完整 HEAD archive 基线均为 185 项诊断，无新增诊断；两次 exit 1，不记为类型全绿。
+- 保留失败：相邻装配检查中定时消息测试 `test_emit_system_time_messages_tool_emits_periodic_messages` 在 `get_task(...)` 返回 None 处失败（`run-007/adjacent.log`）；本次未修改该链路，也未用基线复现归因为既存。其余相关装配/团队检查 30 passed、1 deselected（`run-009/adjacent.log`）。早期失败轮次、原因及实际退出码均保留。
+- 完整命令、日志 SHA-256、源码指纹、失败记录与未验证范围：`out/tests/temp/task_context_fork/artifacts/verification.json`。保留此目录验证日志及正式测试产物，完整 HEAD 类型基线临时源码已删除。未验证真实外部 Provider、Web/Gateway 浏览器 E2E、Windows 与 OS 强杀重启，不外推整个团队或全仓无回归。
 
 2026-10-07 用户取消本地正文加密与 HMAC：以下涉及密钥、AAD、密文、protected-upgrade 的 PASS/REVIEW 仅保留历史事实，不构成当前支持合同、实现义务或新策略通过证据。4.7 与 9.3 按现行单正文合同重新验收。
 
@@ -1123,3 +1137,27 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 增加正式 matrix 分组 `integration-fork-startup-recovery`，直接复用现有五场景、产品消息准入/持久Job/编译图及 `model_stream`，无新增模型或恢复实现。覆盖 pinned fork 的 prepared/target_committed/committed 三阶段，以及 detached fork 捕获后删除来源、在两个已提交阶段冷建容器恢复并继续真实执行；原60秒fork期限不变，suite为240秒/4GiB。
 - Linux首轮5 passed/90.99秒。Windows快照 `7012761d0f8f1b9071d2116d54519780e51860ae` 为3 passed/2 failed：两项均已完成恢复和新输入执行，仅在测试用默认GBK读取owner明确写出的UTF-8请求记录时失败。现只为该读取指定UTF-8，原身份/顺序/工具配对/owner/hash与canonical前缀断言AST保持；Linux两项复验2 passed/66.13秒，Windows快照 `d81478aac2c34beb293ba5137e967c7320784301` 两项复验2 passed/77.76秒，原生文件编码仍为CP936，另外三项依赖未变复用，不冒称最终全五项重跑。
 - Ruff、compileall、真实matrix解析及作者AST自查通过。准确命令、2376项源码前后指纹、原始输出/实际退出码、首轮失败及脚本自查失败原件在 `out/tests/temp/fork_startup_windows_20261025/artifacts/`。这是隔离无关服务的进程内main lifespan和模型回放集成，模拟owner退出不等于真实Backend强杀/进程重启，不替代真实Gateway/Web、同步入口或7.5/8.3整体门；团队/协作继续暂缓。
+
+## 13. task 上下文初始化与统一 child 创建（2026-10-26 历史基线）
+
+本节 13.1–13.5 保留当时实施和验收事实；其中旧范围名、未开放 selector 的 schema 及严格整体 revision 校验不再作为 2026-10-27 新规划的完成证据，后续增量统一见第 14 节。
+
+- [x] 13.1 迁齐 task 工具 schema、委派协议/服务、容器与调用方：默认 empty，不捕获父历史；显式 context_fork 使用精确 parent Thread 安全点；本次仅开放这两种 mode，拒绝 view-prefix、其它 mode 与显式 selector。
+- [x] 13.2 将委派意图与上下文初始化拆为独立维度；公开 fork 与委派复用既有 capture/物化/完成证明及同一 ThreadCreationRecord，物化后同事务发布 child/member/初始 intent。物理迁齐发布、路径 capability、附件终结、abort/Session 删除和启动恢复消费者；不新增 journal、消息复制器或 idle fork 后补委派链。
+- [x] 13.3 验证真实 task 入口与 child 首个 Provider 请求：默认无父历史、context_fork 排除父活跃 task/tool-call、精确 parent child 不误取 main/sibling；未开放 mode/selector/来源覆盖在工具 schema 拒绝；证明 inherited history 只读，目标执行使用新身份。
+- [x] 13.4 验证同 tool-call 重试收敛、参数变化冲突、父 append/view 切换不重选 latest；在 staging、物化及发布/绑定边界故障或取消后使用原记录恢复/中止，无无归属 child、重复 member/intent/Job，Session 删除仍排空原 holder。验收证据及实际 view 切换未单独操作的边界见 2026-10-26 ledger。
+- [x] 13.5 回归普通公开 idle fork 与团队默认空历史委派；完成受影响静态分析和定向检查，所有 fork 操作沿既有固定 60 秒 deadline/watchdog、套件进程外超时与内存保护。将准确命令、源码指纹、输出、退出码及未验证范围登记到 Verification ledger，不外推团队整体完成。
+- 13.6 原延期方案已被 2026-10-27 决定取代：不再以新增冻结前缀选择凭证为前置；改为第 14 节的 item-only/显式 view 和一致捕获。此处不记实现完成，也不重复建立验收 checklist。
+
+## 14. fork 范围命名与 item-only 前缀定位（2026-10-27，仅规划，待实施）
+
+- [ ] 14.1 全仓盘齐范围模式的公开输入、工具、API、DTO/协议与生成类型、前端、日志/lineage/物化恢复枚举、直接间接调用和测试，将模式 context_fork 物理统一为 last_completed_turn_fork，不留 alias/双读/旧死代码。区分独立 Session kind/创建 purpose/方法职责；保留 active-lineage 最近完成 normal Turn、已完成 internal 来源和真实空来源行为。现有持久化实验数据按原 owner 版本合同处理，不静默改写历史 preimage/hash 或加兼容层。
+- [ ] 14.2 迁齐 task 判别 schema、委派协议/服务与公开 fork/source-point/transfer/UI 消费者：task 默认 empty；last_completed_turn_fork 不接受前缀 selector；view_prefix_fork 只需 item_id，支持显式 view_id 与 inclusive/before。公开 API 将既有 anchor_item_id/source_view_id 归一到同一 typed selector，不并行接受字段 alias；prefix 输入不强制 view/revision 成对，调用方观察 revision 与后端冻结 revision 分离。工具来源取真实 execution admission，禁止 Thread/Session/URI 覆盖。
+- [ ] 14.3 在既有 source owner 下实现精确来源 Thread、既定 namespace 的全分支 item 定位：依据已有持久提交顺序及有效 context membership 选择最新 view，排除 hidden/backing/provenance 候选；需要补索引时只在该 owner 补最小索引。显式 view 只校验该 view，不借 resolve_turn_anchor 的 active lineage 替代全分支查找；选中候选后协议不闭合或正文缺失立即拒绝，不回退旧 view、不扩大或移动锚点。
+- [ ] 14.4 核对所有 revision 校验及调用方：freeze_display_point、preflight/_resolve_fork_source、资源候选、服务/transfer 的输入与来源响应检查按职责改造。以同一一致快照或既有 owner 保护覆盖定位、前缀冻结和 capture，消除查 revision 后释放保护的窗口；task canonical tool-call 已提交后再定位，写入临界区与 fork 捕获不自锁。select_view_prefix/capture manifest、committed offsets、hash/length、owner、资源 CAS 等冻结原件校验继续严格，full_rollout_copy/rewind/replay/compaction 不顺带放宽；不能简单删检查、改 <=、补当前 revision 或新建复杂凭证系统。
+- [ ] 14.5 复用原创建/capture/物化/证明/发布/清理/恢复链：原始 selector 进入请求 preimage，解析 view/revision/item/方向/前缀与 capture 进入原日志；同 tool-call 首次冻结后优先复用原记录，不重新定位。显式 view、item、方向、模式或任务变化返回冲突，capture 未完成只能按原冻结前缀继续或中止；无 idle fork 后补委派、第二 journal/复制器或重复 child/member/initial intent/Job。
+- [ ] 14.6 验证真实模型 task 入口：模型只提交 item_id，断言 task 调用已在 canonical history 提交后进入定位，child 首个 Provider 请求包含选定前缀及自身 seed/reference，排除截止点后的 task 调用/新增消息/活跃执行。覆盖非 active 且非祖先分支中的最新候选、显式旧 view、多个 view、hidden/backing 非候选、跨 Thread 相同历史 ID、无候选和非法来源覆盖；新测试必须能区分 active-lineage 或跨 owner 误选实现。
+- [ ] 14.7 验证 inclusive/before、摘要/保留成员顺序、协议不闭合与正文缺失不回退。用真实入口和可控并发屏障验证无关尾部追加、task 写入推进 revision 及来源分支切换下的前缀一致性；同时损坏冻结 revision/manifest/hash 的负例仍须拒绝，不能只证明删除检查后请求成功。
+- [ ] 14.8 覆盖首次冻结后更晚候选出现、同 tool-call 重试及启动恢复不换原 view/anchor/capture；在冻结与 capture、staging、物化、发布/绑定边界故障或取消后核唯一身份、不可见半成品与原 owner 中止。Session 删除继续排空 live holder、清理 abandoned 创建，不重选来源、不复活目标；准确区分服务实例恢复与 OS 强杀重启证据。
+- [ ] 14.9 回归 task 默认 empty 不读取父 rollout、改名模式的 normal/internal/空来源、精确 child caller 及结果回报、普通公开 fork idle/no-member/no-initial-intent，以及未改模式的既有校验。完成受影响静态/真实类型检查和协议生成校验；涉及 Web 消费者时完成真实类型检查及 `bun run --cwd src/clients/web build`，按实际影响补真实 Gateway/Web 入口验证。
+- [ ] 14.10 全部测试保留既有进程外超时/内存保护及固定 60 秒 fork deadline/watchdog，不放宽单次预算。日志和工作区沿原 tests 输出规范；登记准确命令、源码指纹、原始输出、实际退出码与通过/失败/未验证范围。旧 124 单测、11 集成及其它历史 PASS 不代替本节新合同验收；Goal 与其它团队 TODO 不计入本切片完成。

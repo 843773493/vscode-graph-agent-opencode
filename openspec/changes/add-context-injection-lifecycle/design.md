@@ -683,6 +683,8 @@ Session及其全部逻辑后代、recursive Folder删除统一由workspace `navi
 
 ### 14. Session内部状态、跨Session操作和runtime residency必须分开
 
+2026-10-27 task/fork 规划消费 `add-itemized-rollout-context` 的 checkpoint-context-branching requirement「task 上下文初始化复用统一 fork 创建流程」及「Fork item 定位与前缀捕获保持一致」：task 默认 empty，原 context_fork 范围模式统一改名 last_completed_turn_fork，保留已完成 internal 来源与空来源行为。view_prefix_fork 默认只需 item_id，由精确来源 Thread 的所有分支/view 定位最新有效候选，也支持显式 view 和 inclusive/before；定位在 task 调用落盘后进行，并由既有 source owner 的一致快照或保护覆盖冻结与 capture。调用方观察 revision 与后端冻结事实分离，不能因无关后缀追加单独拒绝，也不放宽冻结原件或其它操作的校验。协议不闭合、正文缺失或显式 view 无效明确失败，不回退或移动锚点；首次冻结后重试/恢复复用原 view、前缀及 capture，不追随 latest。继承模式复用同一 fork 内核，在物化后与 delegation/member/初始 intent 一次发布；child 首个请求在继承前缀后消费自己的 seed/reference。此决定取代旧冻结凭证 TODO，不增加 task 专属 Context owner，不解除其它团队 TODO。实现与验收唯一跟踪主 change 第 14 节，本轮只改规划；Goal 的实现重构仍由 `add-workspace-persistent-tasks` 负责，业务机制不变。
+
 Session main thread承担长期用户任务和Goal；durable child thread承担同一Session内的委派、specialist或service工作。二者复用相同ContextStore/CSM实现，但通过capability profile决定可用source和ToolSet：当前main可拥有Goal，child固定`goal_enabled=false`。用户直接向child发送的消息仍由C01创建child-local真实user Turn；禁用Goal不表示child不可对话、不可持久化或只能作为隐藏subgraph。
 
 team board、member、task和coordinator是Session级协作ledger，不属于任一thread ContextStore，也不能跨Session复制。ledger以稳定member identity指向当前Session的child thread；每次状态变化由E04按目标thread生成各自source observation/revision，不能让多个thread共享CSM control state。另一个Session不能attach为team member；跨Session只通过E03 send/read/wait交流，通信ledger只保存幂等、correlation、resolved target和access audit。

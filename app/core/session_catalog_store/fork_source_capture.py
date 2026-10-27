@@ -284,9 +284,9 @@ class ForkSourceCaptureMixin:
         child_owner = None
         if isinstance(creation, ThreadCreationRecord):
             if (request["creation_kind"], capture.creation_key, capture.target_thread_id,
-                request["creation_preimage_hash"], creation.purpose, creation.state) != (
+                request["creation_preimage_hash"], creation.request_intent_json is not None, creation.state) != (
                 "new_child_thread", creation.thread_creation_idempotency_key, creation.child_thread_id,
-                creation.preimage_hash, "fork", "preparing",
+                creation.preimage_hash, True, "preparing",
             ):
                 raise RuntimeError("fork child abort 与原 creation owner 冲突")
             child_owner = self.get_node(capture.target_session_id)

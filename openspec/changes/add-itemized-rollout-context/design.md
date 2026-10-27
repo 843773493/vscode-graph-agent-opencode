@@ -365,21 +365,21 @@ TurnRecord
 
 ### 2.2 Fork 的范围、目标与资源处理
 
-fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一定义。范围选择为 view_prefix_fork、共用该内核的 context_fork 安全默认入口、以及 full_rollout_copy 独立磁盘快照；目标与资源继承独立，不再维护新 Session 专属复制器、侧边对话专属种子历史复制器或模式绑定资源矩阵。
+fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一定义。范围选择为 view_prefix_fork、共用该内核的 last_completed_turn_fork 安全默认入口、以及 full_rollout_copy 独立磁盘快照；目标与资源继承独立，不再维护新 Session 专属复制器、侧边对话专属种子历史复制器或模式绑定资源矩阵。2026-10-27 用户确认：范围模式 context_fork 统一改名 last_completed_turn_fork，但保留无 normal Turn 时已完成 internal execution/admission 的安全来源及真实空来源行为；名称不能被实现者解释为删除这两项既有合同。Session kind/创建 purpose/lineage 中的同名概念须按职责区分，不做全仓机械字符串替换。
 
 采用历史 local ID/原字节保留：当前归属由目标 catalog/资源根确定，原封存执行 scope 由不可变 snapshot binding 核验。SQLite snapshot和JSONL/detail索引保留历史ID、hash、时间与事实；完整复制不解析/替换正文或重建所有实体身份，前缀复制只按索引选择成员及必需依赖，必要 offset 修改属于目标索引。imported history 的当前执行资格由轻量快照归属记录禁止，不把历史 active 改成 cancelled，不恢复 Job/lock/pending tools。新消息、新请求和 replay_as_new_turn 才使用目标当前身份。
 
-消息底部按钮固定点击 item inclusive、所属 view/revision，弹窗默认当前 Session 新 subthread、仅继承正文、不额外复制资源。新建侧边会话复用同一业务入口；打开已有 child只读原对象。成功后在主窗口右侧侧边栏打开新 child，不切换主线程聊天、不自动执行或回报。独立 Session/远端目标按返回 URI 导航。source thread关系与导航父链仍分离。
+消息底部按钮固定点击 item inclusive 及所属展示 view；展示 revision 为观察信息，确认时由来源 owner 冻结所选前缀，不能以无关尾部追加改变整体 revision 为由单独拒绝。弹窗默认当前 Session 新 subthread、仅继承正文、不额外复制资源。新建侧边会话复用同一业务入口；打开已有 child只读原对象。成功后在主窗口右侧侧边栏打开新 child，不切换主线程聊天、不自动执行或回报。独立 Session/远端目标按返回 URI 导航。source thread关系与导航父链仍分离。
 
 全新空会话的普通历史读取仍不物化 rollout。仅显式选择来源且没有历史 selector 时，fork source owner 在来源生命周期保护下借唯一写锁初始化真实空 rollout；并发选择复用同一个 view，已有损坏或被删除的历史不重建。随后所有模式仍消费原冻结/复制/发布链。UI 保留默认前缀模式无 anchor 时禁止提交的行为，显式完整复制可发布 idle 空 child，首次聊天再正常建立目标执行。
 
-由统一寻址 owner登记 Workspace Session集合、Session与Thread领域URI；请求使用 source URI、view/revision/anchor和target容器URI+创建意图。source snapshot capture与target staging/publication分阶段，同 Session复用一个gate，跨端由两端owner导出/导入并复用Gateway路由，不能读远端数据库真实路径或复用send/read/wait grant。
+由统一寻址 owner登记 Workspace Session集合、Session与Thread领域URI；请求使用 source URI、范围 selector 和 target 容器URI+创建意图。view_prefix_fork 默认 item-only，可显式指定 view；后端冻结实际 view/revision/anchor，不要求调用方先查询整体 revision。source snapshot capture与target staging/publication分阶段，同 Session复用一个gate，跨端由两端owner导出/导入并复用Gateway路由，自动定位由真实 source owner 完成，不能读远端数据库真实路径或复用send/read/wait grant。
 
 所有引用资源先经过统一目标检查：复用现有identity/URI/revision、retention_scope、关联、hash/length、availability和owner操作能力。同工作区共享附件不复制bytes；若GC生命周期仍依赖source，附件owner建立目标保活，不把“不复制”投影为不可用。跨域仅在显式选择且owner支持时复用目标已有内容或流式导入；额外资源默认不复制。只增加缺少的owner能力，不扩充ResourceIdentity或给每个资源添加fork布尔属性，也不保存第二份生命周期状态。
 
 全文本依赖在发布前沿typed引用有界解析：正文依赖保留本地可读，provenance不复活压缩历史，依赖不自动成为额外visible成员。目标历史读取和第一次发送在payload读取前按索引/输入预算选择；复制采用固定buffer、有界batch，无全量item/relations/mapping累计，保留原字节。用代表性真实入口验证复制及后继读取，不设固定数据体积或专门的大数据峰值内存门。staging失败定点删除，不用原正文内存回滚。
 
-前缀按有效 `context_selected/context_ordinal` 截止，展示保持源 logical 相对序，两种顺序不能互换。若保留的摘要/回答所属 Turn 的 root 已被压缩，root 只作 hidden backing membership 和真实排序锚点；唯一普通 Turn history reader 按“有可见 canonical 成员”保留 Turn 分组，正文投影仍只读可见成员，不恢复旧提问，不借 internal/fragment 通道伪造来源。各 Turn summary/detail 携带真实读快照的 source view/revision，经分页、镜像和点击原样传递，首次 source-point 不能补猜当前 head。
+前缀按有效 `context_selected/context_ordinal` 截止，展示保持源 logical 相对序，两种顺序不能互换。若保留的摘要/回答所属 Turn 的 root 已被压缩，root 只作 hidden backing membership 和真实排序锚点；唯一普通 Turn history reader 按“有可见 canonical 成员”保留 Turn 分组，正文投影仍只读可见成员，不恢复旧提问，不借 internal/fragment 通道伪造来源。各 Turn summary/detail 携带真实读快照的 source view/revision，经分页、镜像和点击原样传递；显式 view 不能被当前 head 替换，观察 revision 与本次 source owner 冻结的实际 revision 分开记录。
 
 完整快照保留原历史 checkpoint；前缀只保留正文依赖闭合的历史 checkpoint，保留者的 channel/pending bytes 和 hash 不变。staging 同一事务先选前缀、安装目标 view，趁精确 seed 完整时调用唯一 materialization 内核复制所需非 messages channel/versions 到独立新 head，messages 改指目标 selection、活动 pending 为空，再裁剪不闭合的原 checkpoint。安装与恢复共用内核，事务由调用方统一提交；新 head 不冒充原 seed，也不为保留原 seed 扩大正文闭包。
 
@@ -390,6 +390,38 @@ fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一
 所有 fork 测试入口共用固定 60 秒单次操作预算。预算在用户确认提交、API 发请求或直接服务调用时创建，UI 弹窗思考与 fixture setup 不计时；完成必须由 durable/published owner 结果证明，跨 Gateway 的 `pending` 回执继续计时至 `confirmed`。同一逻辑操作的 phase wait、重试及恢复都沿用该 monotonic 绝对 deadline，成功后的独立幂等重放才创建新预算。套件总超时是单独的外层运行预算。fixture 不能通过参数关闭或延长单次上限；测试可用更短的测试阈值验证拒绝与 watchdog 行为，但不得改变生产默认 60 秒。
 
 每个操作的 await 层只读取同一 deadline 的 remaining；独立 watchdog 也只观察这个 deadline，用于在同步阻塞或事件循环失去调度时硬终止当前隔离测试运行。watchdog 先独占创建并 fsync 诊断 sidecar（target、operation/key、last stage、elapsed、`backend_state=unknown`），再终止已验证的本次测试进程组；正常结束、异常和可恢复 retry 都要收停并回收 watchdog。超时后不推断 backend 已取消或回滚，不因超时增加生产侧取消、持久 deadline 或恢复协议。
+
+#### 2.2.1 task 的上下文初始化与委派创建
+
+`task` 默认空历史，通过可选 `context.mode=empty|last_completed_turn_fork|view_prefix_fork` 显式选择。来源始终为当前 execution admission 的 parent Thread，空模式不接触父 rollout。last_completed_turn_fork 保留 active-lineage 安全默认选择及无 normal Turn 的既有例外；view_prefix_fork 消费下节的全分支 item 定位。此工具只做同 Session 委派，不扩展跨端来源、完整快照或额外资源选择。
+
+2026-10-27 决定取代前次前缀延期方案：task 的 view_prefix_fork 接受 `context.item_id`、可选 `context.view_id` 与 `context.anchor_mode=inclusive|before`，不向模型暴露必须预先取得的整体 revision。empty/last_completed_turn_fork 不接受前缀 selector，来源覆盖、未知字段或缺失 item 由判别 schema 拒绝。task 调用的 canonical tool-call 必须已落盘，再进入来源定位；不得为了避开 revision 推进而在模型输出前提前选 view。先利用既有 owner 的一致快照与保护，不引入新的选择凭证系统。
+
+创建意图将“是否委派”与“是否继承历史”分开：`purpose=task` 决定 running seed/reference、delegation/member 和初始 execution；冻结的上下文 request intent 决定是否执行既有 fork 物化及证明。`purpose=fork` 的公开分支仍保持 idle 且不登记 delegation/member。不能用 purpose 是否等于 fork 判断全部上下文物化、附件清理或恢复资格。
+
+`SessionSubagentService` 继续派生稳定 delegation key、冻结任务与成员；同 key 优先读取原创建记录，再由 source owner 定位并在既有创建/capture 记录冻结实际 point。调用方原始 selector 与解析结果分开保存，自动模式的重试 preimage 不能因后端补齐 view/revision 而漂移。公开 fork 与带上下文的 task 复用同一 child 创建编排和底层 capture/materialization，不调用公开 fork 先发布一个 idle child。顺序为 task 调用落盘 → 原 key 检查 → 来源一致性保护内定位/冻结/捕获 → staging/rename 与上下文物化/完成证明 → 同一 SQLite 事务发布 child/member/初始 intent → 真实 binder 准入 child 执行。创建及 registering member 必须在所属 owner 要求的 staging/capture 副作用之前持久化；沿现有 journal 绑定 source capture，不另建协调日志。首个 child 请求在继承前缀之后消费自己的任务 seed/reference。
+
+所有物化、完成证明、发布验证、附件终结、删除清理与启动扫描消费者均按“存在冻结上下文初始化意图”判断；初始 intent 和结果回报仍按委派创建意图判断。恢复使用冻结 metadata/member/request 或已有 snapshot，不重选父 latest；请求 preimage 包含上下文选择，模式或 selector 改变报冲突。同一 Session 的 holder/gate、原记录清理和 imported-history 不可恢复约束保持。结果沿既有初始 execution 回报精确 parent Thread，不另建消息通道。
+
+本切片的规范与验收由 checkpoint-context-branching 的「task 上下文初始化复用统一 fork 创建流程」独占定义；其它团队 TODO 继续延期。Goal 按 `add-workspace-persistent-tasks` 重构其实现，目标、预算、主线程归属、状态与续跑机制保持；本切片既不复制 Goal 到 child，也不改 Goal 的 owner 或调度实现。
+
+#### 2.2.2 item-only 定位、前缀冻结与 revision 职责
+
+现状核对（2026-10-27，只作为实施起点）：`CheckpointForkSource.freeze_display_point` 要求点击项携带 view/revision，`_resolve_fork_source` 以整个 history revision 相等拒绝请求；task 的工具输出落盘会使模型先前读取的 revision 过期。`RolloutViewAnchorMixin.resolve_turn_anchor` 按 turn_id 沿 active lineage 找来源；它不是全分支 item resolver，继续服务原 Turn/rewind/replay 合同。
+
+统一 source owner 增加 item selector 的解析能力，复用现有 view/item membership 与提交顺序索引，限定精确 Session/Thread 及已选 checkpoint namespace。没有显式 view 时在该 Thread 所有已提交分支/view 中选最新的有效上下文候选（visible/context_selected，排除仅 backing/provenance）；最新按 view 创建/发布的持久单调 commit/control 顺序判定，不按墙钟或裸 ID 排序，也不因后继 checkpoint/tail append 将旧 view 伪装成新 view。实施前核实该顺序可从既有索引取得；确有缺口时只在 view owner 补最小索引/顺序事实，不造全局扫描器或第二目录。显式 view 固定候选。先定 view，再校验截至 item 的前缀、协议闭合和正文，失败不回退其它候选。before 仍须校验 item 是有效来源锚点，只从复制成员中排除它。
+
+工具采用 item_id/view_id；公开 fork API 保留已有 anchor_item_id/source_view_id 字段并允许前缀输入省略 view/revision。这是入口 DTO 到同一 typed selector 的一次归一，不在同一入口同时接受两套字段 alias。source-point/UI 预览不能成为第二冻结事实：消息按钮显式传所展示 view，最终确认再由同一来源 owner 冻结实际前缀。公开 fork 仍 idle，task 仍 running 委派。
+
+同一次 source 生命周期 read admission 下，由既有 rollout owner 的一致 SQLite 快照和必要写锁覆盖定位、前缀选择及 snapshot capture；按已有锁顺序建立创建/捕获记录，避免查完 revision 释放保护后再读 latest。task writer 提交调用后退出其写入临界区，再进入 fork owner，不能嵌套自锁。固定 SQLite 与 committed JSONL/detail 的完整性后释放来源保护，物化只读 capture；跨端由来源 owner 执行同一流程，target 不根据自己的观测修订号重选。删除、retention、capture 完成/中止沿原 owner/gate，不能同时持两端 gate，也不把 UI 思考时间纳入持锁窗口。
+
+revision 审计按真实职责处理：
+
+- 活来源输入：source-point/display、preflight、`_resolve_fork_source` 及资源候选中的 view/revision 绑定，改为 prefix 模式的显式/自动选择与一致捕获；可选旧 revision 仅是观察信息，不假装冻结凭证。必须核 view、锚点、有序成员和依赖一致性，不删除保护或改成 <=。其它模式保留各自合同。
+- 服务/传输：`SessionForkRequest` 与 transfer DTO 区分尚未解析 selector 和已冻结来源；`_validate_source_response` 校验实际来源归属、显式 view、锚点/方向和原冻结结果，不再要求自动定位前的缺省 view/revision 等于 owner 返回值。选择字段进入原始请求 preimage，解析结果进入原 intent/capture；不能用填当前 revision 的适配层维持旧接口。
+- 冻结原件：`select_view_prefix` 在 capture 的 SQLite revision 上校验实际 frozen point，snapshot manifest、committed offsets、hash/length、checkpoint/namespace/owner、资源 owner CAS 继续严格核验。恢复只读原 view/capture；不得借输入规则放宽原件，full_rollout_copy、rewind/replay/compaction 的 revision/CAS 不顺带变化。
+
+范围模式重命名须全仓检索公开工具、schema/API、生成协议/类型、UI、日志/lineage/物化恢复枚举和测试，按“范围模式”与 Session kind/purpose 的独立职责迁齐；旧名称不作为 alias 读写。现有实验数据按所属 owner 的既有版本策略处理，不静默改写冻结 preimage/hash 或增加兼容读写。已有工作树中的 task/fork 改动接续修改，保留并发独有改动；本轮仅形成规划，不宣称上述迁移或新行为已实现。
 
 ### 3. JSONL 保存 canonical item，SQLite 按用途分层保存索引和 view
 

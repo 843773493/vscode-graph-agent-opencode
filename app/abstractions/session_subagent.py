@@ -10,8 +10,7 @@ thread（同 owner、kind=child、durable admission intent pending），本模�
   不保留兼容层。
 - ``SessionSubagentAccepted``` 不携带 ``message_id```，也不伪造运行中
   Job：``frozen_job_id``` 是 R23 intent 冻结的稳定 binding identity，
-  ``admission_state``` 恒为 ``pending```，直到 R26 thread-qualified
-  binder 真正消费 intent。
+  ``admission_state``` 反映真实 binder 消费后的持久状态。
 """
 
 from __future__ import annotations
@@ -20,15 +19,15 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from app.core.thread_creation import ThreadCreationService
-from app.schemas.internal_v2.session import SessionDTO
+from app.core.thread_creation import ThreadCreationResult, ThreadCreationService
+from app.schemas.internal_v2.session import SessionDTO, SessionTaskContext
 
 GENERAL_PURPOSE_SUBAGENT = "general-purpose"
 
 
 @dataclass(frozen=True, slots=True)
 class SessionSubagentAccepted:
-    """一次委派创建的最终投影（thread 已 publish，intent 保持 pending）。
+    """一次委派创建的最终投影（thread 已 publish，intent 由真实 binder 消费）。
 
     ``owner_session_id``` 是 parent Session（child thread 的唯一 owner）；
     ``child_thread_id``` 是 owner Session 内 ``thread_catalog``` 的
@@ -63,6 +62,16 @@ class OwnerThreadCreationFactoryProtocol(Protocol):
     def validate_owner_thread(self, session_id: str, thread_id: str) -> None: ...
 
 
+class TaskContextForkProtocol(Protocol):
+    """在同一次委派创建中初始化上下文，不先发布 idle fork。"""
+
+    async def create_task_child(
+        self, *, service: ThreadCreationService, session_id: str, parent_thread_id: str,
+        key: str, context: SessionTaskContext, session_metadata: dict[str, object],
+        collaboration_member: dict[str, object],
+    ) -> ThreadCreationResult: ...
+
+
 @runtime_checkable
 class SessionSubagentProtocol(Protocol):
     async def delegate(
@@ -79,4 +88,5 @@ class SessionSubagentProtocol(Protocol):
         trusted_context: dict[str, object] | None = None,
         untrusted_instructions: str | None = None,
         collaboration_member: dict[str, object] | None = None,
+        context: SessionTaskContext | None = None,
     ) -> SessionSubagentAccepted: ...

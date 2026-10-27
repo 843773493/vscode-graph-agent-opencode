@@ -305,12 +305,14 @@ class ThreadCreationPublishMixin:
             graph_binding = ThreadGraphBindingRecord.from_creation_json(
                 str(row["graph_binding"])
             )
-            if row["purpose"] == "fork":
-                if row["fork_completion_json"] is None or row["admission_intent"] is not None:
-                    raise RuntimeError("fork child 发布必须有完成证明且不得有初始 execution intent")
+            if row["request_intent_json"] is not None:
+                if row["fork_completion_json"] is None:
+                    raise RuntimeError("继承上下文的 child 发布必须有完成证明")
                 proof = json.loads(row["fork_completion_json"])
                 if (proof["target_session_id"], proof["target_thread_id"]) != (session_id, child_thread_id):
                     raise RuntimeError("fork child 完成证明与精确发布 owner 不一致")
+            if row["purpose"] == "fork" and row["admission_intent"] is not None:
+                raise RuntimeError("idle fork child 不得有初始 execution intent")
             connection.execute(
                 "INSERT INTO thread_catalog (thread_id, kind, created_at, "
                 "graph_id, graph_revision, graph_schema_hash, "

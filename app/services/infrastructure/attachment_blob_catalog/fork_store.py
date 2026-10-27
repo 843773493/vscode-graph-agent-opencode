@@ -317,7 +317,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
             control = SessionControlStore(directory / "session-control.sqlite")
             try:
                 current = control.get_thread_creation_record(creation.thread_creation_idempotency_key)
-                if current != creation or current.state != "preparing" or current.purpose != "fork" or current.child_thread_id != capture.target_thread_id:
+                if current != creation or current.state != "preparing" or current.request_intent_json is None or current.child_thread_id != capture.target_thread_id:
                     raise RuntimeError("fork attachment abort 缺少精确 preparing child creation capability")
             finally:
                 control.close()

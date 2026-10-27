@@ -970,6 +970,7 @@ def _build_app_container(
         parent_session_reader=session_service, thread_creation_factory=thread_creation_factory,
         initial_execution_binder=thread_initial_execution_service.binder,
         bind_owner=thread_initial_execution_service.bind_owner,
+        context_forks=session_context_fork_service,
     )
     dependency_provider.set_session_subagent_service(session_subagent_service)
     team_fanout_service = TeamFanoutService(

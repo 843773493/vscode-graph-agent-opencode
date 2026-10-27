@@ -87,7 +87,7 @@ class CheckpointForkOwner:
             raise ValueError("fork_owner_overlap: capture 决定缺少原 creation 的完整冻结意图")
         request = SessionForkRequest.model_validate(intent["request"])
         if isinstance(creation, SessionCreationRecord):
-            key, creation_kind, purpose = creation.session_creation_idempotency_key, "new_session_main", "context_fork"
+            key, creation_kind, purposes = creation.session_creation_idempotency_key, "new_session_main", {"context_fork"}
             target_domain = creation.workspace_id
             if creation.session_id != target_session_id:
                 raise ValueError("fork_owner_overlap: capture 决定与实际 target Session 不一致")
@@ -98,7 +98,7 @@ class CheckpointForkOwner:
                 request_intent=intent,
             )
         else:
-            key, creation_kind, purpose = creation.thread_creation_idempotency_key, "new_child_thread", "fork"
+            key, creation_kind, purposes = creation.thread_creation_idempotency_key, "new_child_thread", {"task", "fork"}
             target_domain = catalog.get_node(target_session_id).workspace_id
             preimage = compute_thread_creation_preimage_hash(
                 workspace_id=target_domain, session_id=target_session_id, thread_id=None,
@@ -112,7 +112,7 @@ class CheckpointForkOwner:
                 artifact_manifest={}, purpose=creation.purpose, request_intent=intent,
             )
         if (self._target_creation(key, creation_kind, target_session_id) != creation
-            or creation.purpose != purpose or creation.state not in {"preparing", "published", "aborted"}
+            or creation.purpose not in purposes or creation.state not in {"preparing", "published", "aborted"}
             or request.creation_kind != creation_kind or preimage != creation.preimage_hash):
             raise ValueError("fork_owner_overlap: capture 决定与本地 creation 原件/preimage 不一致")
         source, source_session_id, source_thread_id = parse_session_thread_uri(intent["source_uri"])
@@ -153,15 +153,15 @@ class CheckpointForkOwner:
             raise ValueError("fork_owner_overlap: target capture 缺少精确本地 creation")
         if request["creation_kind"] == "new_session_main":
             target_session, target_id = creation.session_id, creation.main_thread_id
-            purpose = "context_fork"
+            purposes = {"context_fork"}
             target_main = creation.main_thread_id
         else:
             target_session, target_id = capture.target_session_id, creation.child_thread_id
-            purpose = "fork"
+            purposes = {"task", "fork"}
             target_main = self._storage.storage._path_resolver.main_thread_id(target_session)
-        if (target_session, target_id, creation.purpose, creation.preimage_hash) != (
-            capture.target_session_id, capture.target_thread_id, purpose, request["creation_preimage_hash"],
-        ) or creation.state not in {"preparing", "published", "aborted"}:
+        if (target_session, target_id, creation.preimage_hash) != (
+            capture.target_session_id, capture.target_thread_id, request["creation_preimage_hash"],
+        ) or creation.purpose not in purposes or creation.state not in {"preparing", "published", "aborted"}:
             raise ValueError("fork_owner_overlap: target capture 与本地 creation owner 不一致")
         intent = json.loads(creation.request_intent_json)
         source_domain, target_domain, local = self.require_creation_capture_decision(
@@ -333,7 +333,7 @@ class CheckpointForkOwner:
         if creation_record is not None and thread_creation_record is not None:
             raise ValueError("fork target 只能有一个 creation owner")
         if thread_creation_record is not None:
-            if thread_creation_record.purpose != "fork" or thread_creation_record.state != "preparing":
+            if thread_creation_record.request_intent_json is None or thread_creation_record.state != "preparing":
                 raise RuntimeError("fork child target 必须是本次 preparing creation intent")
             prepared_owner = MutationIntentOwner(session_id=target_session_id, thread_id=thread_creation_record.child_thread_id)
             if target_owner is not None and target_owner != prepared_owner:
@@ -664,7 +664,7 @@ class CheckpointForkOwner:
             await self.source.attachment_store.recover_idle_session(capture.target_session_id, messages=self.source._checkpoint)
 
     async def abort_prepared_child_fork(self, target_session_id: str, record: ThreadCreationRecord) -> bool:
-        if record.state != "preparing" or record.purpose != "fork":
+        if record.state != "preparing" or record.request_intent_json is None:
             raise RuntimeError("fork child 清理缺少原 preparing creation intent")
         catalog = self._storage.forks._catalog_store()
         capture = catalog.get_fork_source_capture(creation_key=record.thread_creation_idempotency_key)

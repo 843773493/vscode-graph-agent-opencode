@@ -18,7 +18,9 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
     finalize_provider_wire,
 )
-from app.agents.skill_runtime import install_frozen_skill_catalog
+from app.agents.skill_runtime import (
+    install_frozen_skill_catalog,
+)
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_request_context import SummaryCandidateScope
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot

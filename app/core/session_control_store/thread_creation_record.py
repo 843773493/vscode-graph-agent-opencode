@@ -132,7 +132,7 @@ class ThreadCreationRecordMixin:
             raise ValueError(f"thread creation state 非法: {state}")
         rows = self._connection.execute(
             f"SELECT {_THREAD_CREATION_RECORD_COLUMNS} FROM thread_creation_records "
-            "WHERE purpose='fork'" + (" AND state=?" if state is not None else "")
+            "WHERE request_intent_json IS NOT NULL" + (" AND state=?" if state is not None else "")
             + " ORDER BY thread_creation_idempotency_key",
             (state,) if state is not None else (),
         ).fetchall()
@@ -311,8 +311,11 @@ class ThreadCreationRecordMixin:
         if purpose == "fork" and (initial_state != "idle" or delegation_id is not None
                                   or task_seed is not None or request_intent_json is None):
             raise ValueError("fork child 必须 idle、没有 delegation/seed，并冻结完整请求")
-        if purpose == "task" and request_intent_json is not None:
-            raise ValueError("task child 不接受 fork 请求")
+        if purpose == "task" and request_intent_json is not None and (
+            initial_state != "running" or delegation_id is None or task_seed is None
+            or task_reference is None or collaboration_member is None
+        ):
+            raise ValueError("继承上下文的 task child 必须冻结委派、seed/reference 与 member")
         if created_at is not None and not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
         if thread_id is not None:
@@ -608,7 +611,7 @@ class ThreadCreationRecordMixin:
                            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         with self._write_transaction() as connection:
             row = self._fetch_thread_creation_record(connection, idempotency_key)
-            if row is None or row["purpose"] != "fork" or row["state"] not in {"preparing", "published"}:
+            if row is None or row["request_intent_json"] is None or row["state"] not in {"preparing", "published"}:
                 raise RuntimeError("fork child completion 缺少有效 creation intent")
             if row["child_thread_id"] != target_thread_id or not all((fork_id, materialization_id, source_snapshot_sha256, target_session_id)):
                 raise RuntimeError("fork child completion owner/identity 不一致")

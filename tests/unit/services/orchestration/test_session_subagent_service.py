@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -173,6 +174,7 @@ def session_subagent_service(
     owner_thread_creation_factory: OwnerThreadCreationFactory,
 ) -> SessionSubagentService:
     return SessionSubagentService(
+        context_forks=Mock(),
         parent_session_reader=_ParentSessionReader(parent_session),
         thread_creation_factory=owner_thread_creation_factory,
         initial_execution_binder=_RecordingBinder(),
@@ -228,6 +230,7 @@ async def test_delegate_creates_durable_child_thread_with_bound_intent(
     assert accepted.admission_state == "bound"
     assert accepted.execution_binding_id.startswith("tbind_")
     assert accepted.frozen_job_id.startswith("job_")
+    session_subagent_service._context_forks.create_task_child.assert_not_called()
 
     # 唯一可见性：workspace catalog 节点数不变（没有第二个 Session）。
     node_count = int(
@@ -254,6 +257,8 @@ async def test_delegate_creates_durable_child_thread_with_bound_intent(
         assert intent.execution_binding_id == accepted.execution_binding_id
         assert intent.job_id == accepted.frozen_job_id
         record = control.get_thread_creation_record(accepted.delegation_id)
+        assert record.request_intent_json is None
+        assert json.loads(record.task_seed)["context"]["mode"] == "empty"
         assert (
             json.loads(record.task_seed)["gateway_id"]
             == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
@@ -414,6 +419,7 @@ async def test_delegate_binding_failure_preserves_published_pending_intent(
         raise RuntimeError("真实绑定失败")
 
     service = SessionSubagentService(
+        context_forks=Mock(),
         parent_session_reader=_ParentSessionReader(parent_session),
         thread_creation_factory=owner_thread_creation_factory,
         initial_execution_binder=_RecordingBinder(),
@@ -459,6 +465,7 @@ async def test_delegate_rejects_agent_mismatch(
     owner_thread_creation_factory: OwnerThreadCreationFactory,
 ) -> None:
     service = SessionSubagentService(
+        context_forks=Mock(),
         parent_session_reader=_MismatchedParentSessionReader(parent_session),
         thread_creation_factory=owner_thread_creation_factory,
         initial_execution_binder=_RecordingBinder(),
@@ -492,6 +499,7 @@ async def test_delegate_without_real_binder_fails_closed_before_side_effects(
     创建任何 thread_catalog child row / admission intent。
     """
     service = SessionSubagentService(
+        context_forks=Mock(),
         parent_session_reader=_ParentSessionReader(parent_session),
         thread_creation_factory=owner_thread_creation_factory,
         initial_execution_binder=None,

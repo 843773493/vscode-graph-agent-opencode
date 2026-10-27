@@ -588,7 +588,7 @@ async def settle_thread_creations_for_deletion(
 
             await ThreadCreationService._cleanup_after_failed_publish(
                 record, session_id=session_id, session_dir=session_dir, inventory=inventory,
-                before_abort=abort_fork if record.purpose == "fork" else None,
+                before_abort=abort_fork if record.request_intent_json is not None else None,
             )
             async with session_gate.exclusive(session_id):
                 if control.get_thread_creation_record(key) != record:
@@ -734,11 +734,16 @@ class ThreadCreationService:
         """
         if purpose not in {"task", "fork"}:
             raise ValueError(f"thread creation purpose 非法: {purpose}")
-        if purpose == "fork" and (request_intent is None or before_publish is None or before_abort is None or initial_state != "idle"
+        if purpose == "fork" and (request_intent is None or initial_state != "idle"
                                   or delegation_id is not None or collaboration_member is not None):
             raise ValueError("fork child 必须冻结请求、先完成物化、保持 idle 且没有 delegation/member")
-        if purpose == "task" and any(value is not None for value in (request_intent, fork_delivery_request_id, before_publish, before_abort, on_published)):
-            raise ValueError("task child 不接受 fork 物化合同")
+        if request_intent is not None:
+            if before_publish is None or before_abort is None:
+                raise ValueError("继承上下文的 child 必须提供物化与清理回调")
+            if purpose == "task" and (initial_state != "running" or delegation_id is None):
+                raise ValueError("继承上下文的 task child 必须为 running 委派")
+        elif any(value is not None for value in (fork_delivery_request_id, before_publish, before_abort, on_published)):
+            raise ValueError("空历史 child 不接受 fork 回调或 delivery identity")
         self._validate_create_inputs(
             idempotency_key=idempotency_key,
             session_id=session_id,
@@ -843,7 +848,7 @@ class ThreadCreationService:
             inventory = build_thread_node_inventory(expected_files)
             with _thread_access(session_id, record.child_thread_id, "locate"):
                 final_exists = final_dir.exists() or final_dir.is_symlink()
-            if record.purpose == "fork" and record.state == "preparing":
+            if record.request_intent_json is not None and record.state == "preparing":
                 capture = self._store.get_fork_source_capture(creation_key=idempotency_key)
                 if capture is not None:
                     request = json.loads(capture.request_json)
@@ -880,7 +885,7 @@ class ThreadCreationService:
                 )
             if final_exists:
                 # rename 后、publish 前崩溃的恢复窗口：目标内容一致才继续。
-                if record.purpose == "fork" and record.state == "preparing":
+                if record.request_intent_json is not None and record.state == "preparing":
                     if before_publish is None:
                         raise RuntimeError("fork child 缺少物化 owner")
                     record = await self._materialize_prepared_fork(
@@ -918,7 +923,7 @@ class ThreadCreationService:
                 session_dir,
                 inventory, record, session_id,
             )
-            if record.purpose == "fork":
+            if record.request_intent_json is not None:
                 if before_publish is None:
                     raise RuntimeError("fork child 缺少物化 owner")
                 record = await self._materialize_prepared_fork(
@@ -1434,7 +1439,7 @@ class ThreadCreationService:
 
     @staticmethod
     def _has_fork_completion(record: ThreadCreationRecord, session_id: str) -> bool:
-        if record.purpose != "fork" or record.fork_completion_json is None:
+        if record.request_intent_json is None or record.fork_completion_json is None:
             return False
         proof = json.loads(record.fork_completion_json)
         if (
@@ -1467,7 +1472,7 @@ class ThreadCreationService:
             (native_io_path(session_dir / record.staging_locator), "staging"),
         )
         materialized_rollout = False
-        if record.purpose == "fork":
+        if record.request_intent_json is not None:
             if before_abort is None:
                 raise RuntimeError("fork child 清理缺少资源 owner 回调")
             materialized_rollout = await before_abort(record)

@@ -15,6 +15,7 @@ from app.abstractions.session_subagent import (
     OwnerThreadCreationFactoryProtocol,
     SessionReaderProtocol,
     SessionSubagentAccepted,
+    TaskContextForkProtocol,
 )
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
@@ -22,6 +23,7 @@ from app.agents.graph_binding import (
     compute_capability_profile_hash,
 )
 from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.schemas.internal_v2.session import SessionTaskContext
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBinder,
 )
@@ -91,6 +93,7 @@ class SessionSubagentService:
         thread_creation_factory: OwnerThreadCreationFactoryProtocol,
         initial_execution_binder: InitialExecutionBinder | None,
         bind_owner: Callable[[str], Awaitable[None]],
+        context_forks: TaskContextForkProtocol,
     ) -> None:
         self._parent_session_reader = parent_session_reader
         self._thread_creation_factory = thread_creation_factory
@@ -99,6 +102,7 @@ class SessionSubagentService:
         # 模型返回虚假 accepted+绑定承诺；intent 不会永久滞留。
         self._initial_execution_binder = initial_execution_binder
         self._bind_owner = bind_owner
+        self._context_forks = context_forks
 
     async def delegate(
         self,
@@ -114,8 +118,10 @@ class SessionSubagentService:
         trusted_context: dict[str, object] | None = None,
         untrusted_instructions: str | None = None,
         collaboration_member: dict[str, object] | None = None,
+        context: SessionTaskContext | None = None,
     ) -> SessionSubagentAccepted:
         normalized_description = description.strip()
+        context = context if context is not None else SessionTaskContext()
         if not normalized_description:
             raise ValueError("description 不能为空")
         if subagent_type != GENERAL_PURPOSE_SUBAGENT:
@@ -162,6 +168,7 @@ class SessionSubagentService:
             "parent_job_id": parent_job_id,
             "parent_tool_call_id": parent_tool_call_id,
             "trusted_context": dict(trusted_context or {}),
+            "context": context.model_dump(mode="json"),
         }
         if untrusted_instructions is not None:
             task_seed["untrusted_instructions"] = untrusted_instructions
@@ -188,21 +195,24 @@ class SessionSubagentService:
         with self._thread_creation_factory.for_owner_session(
             parent_session_id
         ) as thread_owner:
-            result = await thread_owner.create(
-                idempotency_key=delegation_id,
-                session_id=parent_session_id,
-                thread_id=None,
-                delegation_id=delegation_id,
-                initial_state="running",
-                session_metadata=session_metadata,
-                artifact_manifest={},
-                collaboration_member={
-                    "role": "delegated_subagent",
-                    "subagent_type": subagent_type,
-                    "title": normalized_title,
-                    **dict(collaboration_member or {}),
-                },
-            )
+            member = {
+                "role": "delegated_subagent",
+                "subagent_type": subagent_type,
+                "title": normalized_title,
+                **dict(collaboration_member or {}),
+            }
+            if context.mode == "empty":
+                result = await thread_owner.create(
+                    idempotency_key=delegation_id, session_id=parent_session_id,
+                    thread_id=None, delegation_id=delegation_id, initial_state="running",
+                    session_metadata=session_metadata, artifact_manifest={}, collaboration_member=member,
+                )
+            else:
+                result = await self._context_forks.create_task_child(
+                    service=thread_owner, session_id=parent_session_id, parent_thread_id=parent_thread_id,
+                    key=delegation_id, context=context, session_metadata=session_metadata,
+                    collaboration_member=member,
+                )
         await self._bind_owner(parent_session_id)
         with self._thread_creation_factory.for_owner_session(parent_session_id) as thread_owner:
             bound_intent = thread_owner.control_store.get_initial_execution_intent(delegation_id)

@@ -125,8 +125,8 @@ class ForkPathScope:
     @contextmanager
     def prepared_child_fork_target_scope(self, session_id: str, record: ThreadCreationRecord) -> Iterator[Path]:
         """Thread creation owner 的冻结 record 只授予该未发布 child 的路径能力。"""
-        if not isinstance(record, ThreadCreationRecord) or record.purpose != "fork":
-            raise TypeError("prepared child fork target 必须是 fork ThreadCreationRecord")
+        if not isinstance(record, ThreadCreationRecord) or record.request_intent_json is None:
+            raise TypeError("prepared child fork target 必须是带上下文请求的 ThreadCreationRecord")
         session_node = self._path_resolver.resolve_session_node(session_id)
         control = SessionControlStore(session_node / "session-control.sqlite", read_only=True)
         try:

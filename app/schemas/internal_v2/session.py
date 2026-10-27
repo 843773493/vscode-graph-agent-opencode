@@ -32,6 +32,16 @@ class SessionCreateRequest(BaseModel):
     folder_id: str | None = None
 
 
+class SessionTaskContext(BaseModel):
+    """委派 child 的历史初始化选择；来源固定为实际调用 task 的 Thread。"""
+
+    # TODO(task-prefix-selector): 模型输出调用会推进历史 revision；冻结前缀选择凭证落地后再开放显式前缀。
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["empty", "context_fork"] = "empty"
+
+
 class SessionForkOwnerReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
