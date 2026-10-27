@@ -209,3 +209,24 @@ async def test_accounting_continuation_and_clear_keep_main_owner(goal_service):
     empty = await goal_service.clear("sess_1")
     assert empty.thread_id == goal.thread_id and not empty.cleared
     assert len(events) == event_count
+
+
+@pytest.mark.asyncio
+async def test_continuation_attempt_does_not_publish_a_marker_before_acceptance(goal_service, goal_store):
+    original = await goal_service.set("sess_1", objective="未接受不能记为已续跑")
+    attempts = []
+
+    async def dispatch(current):
+        assert goal_store.goal == original
+        attempts.append(current.goal_id)
+        if len(attempts) == 1:
+            raise RuntimeError("continuation-not-accepted")
+
+    with pytest.raises(RuntimeError, match="continuation-not-accepted"):
+        await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+    assert goal_store.goal == original
+    assert await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+    accepted = goal_store.goal
+    assert accepted.goal_id == original.goal_id and accepted.last_continued_job_id == "job_origin"
+    assert not await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+    assert attempts == [original.goal_id, original.goal_id] and goal_store.goal == accepted

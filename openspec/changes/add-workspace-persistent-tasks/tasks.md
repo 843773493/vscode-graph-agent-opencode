@@ -214,3 +214,10 @@
 - 253 Buf lint/build及对真实提交e4d9ce890的breaking检查与全平台绑定生成通过，254 OpenAPI更新仅涉及本任务响应。257真实Web类型检查、262构建通过，只有既有chunk提示；后续冻结声明修正不改变公开schema及前端资产，按依赖复用。没有实现新Web界面，不将构建或Backend HTTP验证表述为Gateway浏览器交互验收。
 - 255最初有5项类型诊断；259剩3项字段收窄诊断，改为静态分析可识别的frozen类声明后263/268均零错误，没有忽略诊断。256为41 passed/1 failed：preparing创建尚未发布catalog节点，实际已正确拒绝；新测试误期待另一个错误文字，改为精确核对原catalog错误及目标Session身份，260/267均42 passed。失败原件保留。
 - 本切片完成7.8；2.1仍含会话生成器应用合同，6.5仍含UI与通用管理动作，不提前勾选。准确命令、HEAD/源码指纹、原始输出和实际退出码沿用out/tests/temp/persistent-task-migration/artifacts/；正式产品产物在对应test_persistent_task_goal_storage及test_persistent_tasks目录。生成器整体迁移、主Web管理、完整进程恢复组合及Windows既有长路径范围仍未完成，团队协作继续TODO。
+
+### Goal 续跑接受前硬重启（2026-10-27）
+
+- 原实现先保存 last_continued_job_id 再提交准入，进程硬杀无法执行异常补偿；272通过真实 Goal PUT 和 Backend 硬重启复现 active Goal 永不执行，15秒内无模型调用。改为在原 Goal 锁内先接受同一 source/wakeup 再保存标记，删除提前写入和异常回写；没有增加持久状态或第二条执行链路。
+- 277定向产品验收 **1 passed／63.43秒**，在接受前屏障硬杀，严格验证原 Goal 身份、一个 wakeup、两次模型调用、零用户 Turn，以及完成后再次硬重启不重复执行。274相关业务/锁/worker/存储/工具 **52 passed／3.81秒**；278 Ruff通过。276 Pyright仍有原 object哨兵两项既有诊断，与198相同，新续跑方法无诊断，未声称该文件类型全绿。最终测试均有进程外期限、4GiB保护且source_changes为空。
+- 271在准备阶段查询尚不存在的rollout库，修正为严格验证库尚不存在后272才完成业务复现。273完整套件为3 passed/1 failed/1 teardown error：Goal工具已完成目标，测试却在最后文本回复前检查两次调用；改为查询唯一wakeup并等待原Job终态，保留严格次数断言，277通过。275只因import空行失败，278已修正；所有失败原件保留。
+- 本切片只证明接受前中断，接受后标记前、完整在途执行与fork发布窗口继续由7.4追踪，不勾选整项。无公开协议/前端变化，不重复Web构建。命令、源码指纹、原始输出和退出码沿用既有临时证据目录，正式产物位于out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。

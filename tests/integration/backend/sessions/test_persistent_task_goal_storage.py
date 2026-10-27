@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from contextlib import closing
 
+import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from tests.integration.backend.sessions.test_persistent_tasks import (
     ROOT,
     _configuration,
     _create,
+    _release_match,
+    _sql,
     _target,
 )
 from tests.integration.backend.sessions.test_runtime_context_publication import (
@@ -20,6 +25,8 @@ from tests.integration.backend.sessions.test_runtime_context_publication import 
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     RuntimeSourceCase,
+    _job,
+    _tool_reply,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     restart_source_case as restart_source_case,  # noqa: PLC0414 - 按当前文件隔离
@@ -210,3 +217,56 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
     assert await _goal(case, session_id) is None and case.call_count(session_id, thread_id) == 0
     assert case.requests() == []
     case.write_actual("goal-management-owner", {"original": original, "edited": edited, "projected": projected})
+
+
+@pytest.mark.asyncio
+async def test_goal_restart_before_continuation_acceptance_does_not_lose_activation(
+    restart_source_case: RestartRuntimeSourceCase,
+) -> None:
+    case = restart_source_case
+    session_id, thread_id, _ = await _target(case)
+    await case.plan(session_id, [
+        _tool_reply("update_goal", {"status": "complete"}, "call_goal_restart_done"),
+        {"content": "硬重启后完成原目标"},
+    ], thread_id=thread_id)
+    barrier_id = "goal-before-continuation"
+    case.control.arm_match(barrier_id, "goal.continuation.before_dispatch", {"session_id": session_id})
+    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+        "objective": "接受续跑前中断后仍须恢复并调用 update_goal 完成",
+    }))
+    try:
+        barrier = await asyncio.to_thread(case.control.acknowledged_match, barrier_id)
+        goal_id = barrier["details"]["goal_id"]
+        with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+            row = connection.execute("SELECT task_id,application_json FROM persistent_tasks WHERE owner_session_id=? AND retired_at IS NULL", (session_id,)).fetchone()
+        assert row[0] == goal_id and json.loads(row[1])["status"] == "active"
+        resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+        assert not (resolver.resolve_thread_node(session_id, thread_id) / "rollout/index.sqlite").exists()
+        assert case.call_count(session_id, thread_id) == 0
+        case.write_actual("goal-before-continuation-kill", {"barrier": barrier, "state": json.loads(row[1])})
+        await case.restart(hard=True, while_stopped=lambda: _release_match(case, barrier_id))
+        result, = await asyncio.gather(activation, return_exceptions=True)
+        assert isinstance(result, httpx.TransportError), result
+        async with asyncio.timeout(15):
+            while True:
+                goal = await _goal(case, session_id)
+                assert goal["goal_id"] == goal_id
+                if goal["status"] == "complete":
+                    break
+                await asyncio.sleep(0.05)
+        wakeups = _sql(case.workspace, session_id, thread_id, "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups")
+        assert len(wakeups) == 1 and wakeups[0][0] == f"goal:{goal_id}:state"
+        await _job(case, wakeups[0][1])
+        assert case.call_count(session_id, thread_id) == 2
+        assert _sql(case.workspace, session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
+        await case.restart(hard=True)
+        assert (await _goal(case, session_id))["goal_id"] == goal_id
+        assert (await _goal(case, session_id))["status"] == "complete"
+        assert _sql(case.workspace, session_id, thread_id, "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups") == wakeups
+        assert case.call_count(session_id, thread_id) == 2
+        case.write_actual("goal-after-continuation-restart", {"goal": goal, "wakeups": wakeups})
+    finally:
+        _release_match(case, barrier_id)
+        if not activation.done():
+            activation.cancel()
+        await asyncio.gather(activation, return_exceptions=True)

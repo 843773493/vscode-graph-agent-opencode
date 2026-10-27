@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import (
     GoalStatus,
@@ -230,7 +231,7 @@ class SessionGoalService:
         trigger_id: str,
         dispatch: Callable[[SessionGoalDTO], Awaitable[None]],
     ) -> bool:
-        """在同一 Goal 锁内认领并派发，避免 pause/clear 与续跑穿插。"""
+        """同一 Goal 锁内派发并登记已接受标记，避免 pause/clear 与续跑穿插。"""
         async with self.lock_for(session_id):
             goal = self._store.goal_read(session_id)
             if (
@@ -239,25 +240,15 @@ class SessionGoalService:
                 or goal.last_continued_job_id == trigger_id
             ):
                 return False
-            previous_marker = goal.last_continued_job_id
-            goal = goal.model_copy(
-                update={
-                    "last_continued_job_id": trigger_id,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-            self._store.goal_write(goal)
-            try:
-                await dispatch(goal)
-            except BaseException:
-                rolled_back = goal.model_copy(
-                    update={
-                        "last_continued_job_id": previous_marker,
-                        "updated_at": datetime.now(UTC),
-                    }
-                )
-                self._store.goal_write(rolled_back)
-                raise
+            await observe_phase(goal.goal_id, "goal.continuation.before_dispatch", details={
+                "session_id": session_id, "goal_id": goal.goal_id, "trigger_id": trigger_id,
+            })
+            # 准入沿原 source/wakeup 幂等提交；接受前不能把尝试记为已续跑。
+            await dispatch(goal)
+            self._store.goal_write(goal.model_copy(update={
+                "last_continued_job_id": trigger_id,
+                "updated_at": datetime.now(UTC),
+            }))
             return True
 
     async def _publish_updated(self, goal: SessionGoalDTO) -> None:
