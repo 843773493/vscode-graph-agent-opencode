@@ -24,6 +24,8 @@ IdentifierPrefix = Literal[
     "node-debug-proc",
     "op",
     "part",
+    "ptask",
+    "ptrun",
     "req",
     "robs",
     "ses",

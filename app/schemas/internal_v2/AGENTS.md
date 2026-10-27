@@ -30,6 +30,7 @@ internal_v2/
 │   │                                 会话资源动作与消息附件引用
 │   └── goal.py                       会话 Goal 状态与操作
 ├── 执行调度与协作
+│   ├── persistent_task.py            持久任务组件、定义和运行回执
 │   ├── job.py / pending_request.py   Job 执行快照与待处理请求
 │   ├── communication.py / team.py   跨 Session 通信与团队 DTO
 │   ├── tool.py / tool_test.py        工具选择与工具测试结果

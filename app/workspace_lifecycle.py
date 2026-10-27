@@ -92,6 +92,7 @@ async def _retry_pending_fork_exports_periodically(container: AppContainer) -> N
 
 
 async def _drain_workspace_jobs(container: AppContainer) -> None:
+    container.persistent_task_runtime.close_admission()
     await container.goal_runtime_service.close_admission()
     container.job_service.close_admission()
     await container.job_service.force_interrupt_active(reason="工作区后端正在关闭")
@@ -107,6 +108,7 @@ class WorkspaceLifespan:
         self._owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
             ("navigation_operations.stop", container.session_catalog_service.operations.stop),
+            ("persistent_tasks.stop", container.persistent_task_runtime.stop),
             ("jobs.close_admission", partial(_drain_workspace_jobs, container)),
             ("jobs.drain_finalizations", container.job_service.drain_finalizations),
             ("node_debug.close", container.node_debug_service.close),
@@ -384,6 +386,8 @@ class WorkspaceLifespan:
                 await container.session_communication_service.start()
             with _workspace_startup_stage(container, "runtime_source_dispatcher.start"):
                 await container.runtime_source_dispatcher.start()
+            with _workspace_startup_stage(container, "persistent_task_runtime.start"):
+                await container.persistent_task_runtime.start()
             with _workspace_startup_stage(container, "session_generation_service.start"):
                 await container.session_generation_service.start()
             with _workspace_startup_stage(container, "terminal_steering_service.start"):

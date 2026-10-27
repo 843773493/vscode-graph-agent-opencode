@@ -147,6 +147,7 @@ _WORKSPACE_MIGRATIONS = (
     # 后物理 DROP 该镜像表（彻底根除表级双轨）。遇同 key 语义冲突 fail-closed。
     _migrate_workspace_config_into_source_layers,
     load_sql(__package__, "workspace_state_sql/015.sql"),
+    load_sql(__package__, "workspace_state_sql/016.sql"),
 )
 
 

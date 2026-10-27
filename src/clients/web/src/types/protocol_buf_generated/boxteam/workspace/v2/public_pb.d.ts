@@ -11440,3 +11440,494 @@ export declare type TextMutationTransferDTO = Message<"boxteam.workspace.v2.Text
  */
 export declare const TextMutationTransferDTOSchema: GenMessage<TextMutationTransferDTO>;
 
+/**
+ * @generated from message boxteam.workspace.v2.TaskTriggerDTO
+ */
+export declare type TaskTriggerDTO = Message<"boxteam.workspace.v2.TaskTriggerDTO"> & {
+  /**
+   * @generated from field: string version = 1;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string type_id = 2;
+   */
+  typeId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskTriggerDTO.
+ * Use `create(TaskTriggerDTOSchema)` to create a new message.
+ */
+export declare const TaskTriggerDTOSchema: GenMessage<TaskTriggerDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskConditionDTO
+ */
+export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditionDTO"> & {
+  /**
+   * @generated from field: string version = 1;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string type_id = 2;
+   */
+  typeId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskConditionDTO.
+ * Use `create(TaskConditionDTOSchema)` to create a new message.
+ */
+export declare const TaskConditionDTOSchema: GenMessage<TaskConditionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskContextDTO
+ */
+export declare type TaskContextDTO = Message<"boxteam.workspace.v2.TaskContextDTO"> & {
+  /**
+   * @generated from field: string version = 1;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string type_id = 2;
+   */
+  typeId: string;
+
+  /**
+   * @generated from field: string content = 3;
+   */
+  content: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskContextDTO.
+ * Use `create(TaskContextDTOSchema)` to create a new message.
+ */
+export declare const TaskContextDTOSchema: GenMessage<TaskContextDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskActionDTO
+ */
+export declare type TaskActionDTO = Message<"boxteam.workspace.v2.TaskActionDTO"> & {
+  /**
+   * @generated from field: string version = 1;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string type_id = 2;
+   */
+  typeId: string;
+
+  /**
+   * @generated from field: string target_uri = 3;
+   */
+  targetUri: string;
+
+  /**
+   * @generated from field: string delivery_mode = 4;
+   */
+  deliveryMode: string;
+
+  /**
+   * @generated from field: string delivery_policy = 5;
+   */
+  deliveryPolicy: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskActionDTO.
+ * Use `create(TaskActionDTOSchema)` to create a new message.
+ */
+export declare const TaskActionDTOSchema: GenMessage<TaskActionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskPoliciesDTO
+ */
+export declare type TaskPoliciesDTO = Message<"boxteam.workspace.v2.TaskPoliciesDTO"> & {
+  /**
+   * @generated from field: string completion = 1;
+   */
+  completion: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskPoliciesDTO.
+ * Use `create(TaskPoliciesDTOSchema)` to create a new message.
+ */
+export declare const TaskPoliciesDTOSchema: GenMessage<TaskPoliciesDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskConfigurationDTO
+ */
+export declare type PersistentTaskConfigurationDTO = Message<"boxteam.workspace.v2.PersistentTaskConfigurationDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskTriggerDTO trigger = 2;
+   */
+  trigger?: TaskTriggerDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskConditionDTO condition = 3;
+   */
+  condition?: TaskConditionDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskContextDTO context = 4;
+   */
+  context?: TaskContextDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskActionDTO action = 5;
+   */
+  action?: TaskActionDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskPoliciesDTO policies = 6;
+   */
+  policies?: TaskPoliciesDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskConfigurationDTO.
+ * Use `create(PersistentTaskConfigurationDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskConfigurationDTOSchema: GenMessage<PersistentTaskConfigurationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskDTO
+ */
+export declare type PersistentTaskDTO = Message<"boxteam.workspace.v2.PersistentTaskDTO"> & {
+  /**
+   * @generated from field: string task_id = 1;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: int64 revision = 3;
+   */
+  revision: bigint;
+
+  /**
+   * @generated from field: int64 definition_revision = 4;
+   */
+  definitionRevision: bigint;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskConfigurationDTO configuration = 5;
+   */
+  configuration?: PersistentTaskConfigurationDTO | undefined;
+
+  /**
+   * @generated from field: string lifecycle = 6;
+   */
+  lifecycle: string;
+
+  /**
+   * @generated from field: string phase = 7;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: optional string reason = 8;
+   */
+  reason?: string | undefined;
+
+  /**
+   * @generated from field: bool recovering = 9;
+   */
+  recovering: boolean;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 10;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 11;
+   */
+  updatedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskDTO.
+ * Use `create(PersistentTaskDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskDTOSchema: GenMessage<PersistentTaskDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskDecisionDTO
+ */
+export declare type TaskDecisionDTO = Message<"boxteam.workspace.v2.TaskDecisionDTO"> & {
+  /**
+   * @generated from field: string decision = 1;
+   */
+  decision: string;
+
+  /**
+   * @generated from field: string reason = 2;
+   */
+  reason: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskDecisionDTO.
+ * Use `create(TaskDecisionDTOSchema)` to create a new message.
+ */
+export declare const TaskDecisionDTOSchema: GenMessage<TaskDecisionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskDeliveryDTO
+ */
+export declare type TaskDeliveryDTO = Message<"boxteam.workspace.v2.TaskDeliveryDTO"> & {
+  /**
+   * @generated from field: string state = 1;
+   */
+  state: string;
+
+  /**
+   * @generated from field: string source_id = 2;
+   */
+  sourceId: string;
+
+  /**
+   * @generated from field: optional string item_id = 3;
+   */
+  itemId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_revision = 4;
+   */
+  sourceRevision?: string | undefined;
+
+  /**
+   * @generated from field: optional string job_id = 5;
+   */
+  jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_id = 6;
+   */
+  executionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskDeliveryDTO.
+ * Use `create(TaskDeliveryDTOSchema)` to create a new message.
+ */
+export declare const TaskDeliveryDTOSchema: GenMessage<TaskDeliveryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskRunDTO
+ */
+export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.PersistentTaskRunDTO"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: string task_id = 2;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: int64 task_revision = 3;
+   */
+  taskRevision: bigint;
+
+  /**
+   * @generated from field: int64 definition_revision = 4;
+   */
+  definitionRevision: bigint;
+
+  /**
+   * @generated from field: string trigger_key = 5;
+   */
+  triggerKey: string;
+
+  /**
+   * @generated from field: bool check_only = 6;
+   */
+  checkOnly: boolean;
+
+  /**
+   * @generated from field: string phase = 7;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskDecisionDTO decision = 8;
+   */
+  decision?: TaskDecisionDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskDeliveryDTO delivery = 9;
+   */
+  delivery?: TaskDeliveryDTO | undefined;
+
+  /**
+   * @generated from field: optional string error = 10;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 11;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 12;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional string request_id = 13;
+   */
+  requestId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskRunDTO.
+ * Use `create(PersistentTaskRunDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskRunDTOSchema: GenMessage<PersistentTaskRunDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskCreateRequest
+ */
+export declare type PersistentTaskCreateRequest = Message<"boxteam.workspace.v2.PersistentTaskCreateRequest"> & {
+  /**
+   * @generated from field: string idempotency_key = 1;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskConfigurationDTO configuration = 2;
+   */
+  configuration?: PersistentTaskConfigurationDTO | undefined;
+
+  /**
+   * @generated from field: optional bool enabled = 3;
+   */
+  enabled?: boolean | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskCreateRequest.
+ * Use `create(PersistentTaskCreateRequestSchema)` to create a new message.
+ */
+export declare const PersistentTaskCreateRequestSchema: GenMessage<PersistentTaskCreateRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskUpdateRequest
+ */
+export declare type PersistentTaskUpdateRequest = Message<"boxteam.workspace.v2.PersistentTaskUpdateRequest"> & {
+  /**
+   * @generated from field: int64 expected_revision = 1;
+   */
+  expectedRevision: bigint;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskConfigurationDTO configuration = 2;
+   */
+  configuration?: PersistentTaskConfigurationDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskUpdateRequest.
+ * Use `create(PersistentTaskUpdateRequestSchema)` to create a new message.
+ */
+export declare const PersistentTaskUpdateRequestSchema: GenMessage<PersistentTaskUpdateRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskControlRequest
+ */
+export declare type PersistentTaskControlRequest = Message<"boxteam.workspace.v2.PersistentTaskControlRequest"> & {
+  /**
+   * @generated from field: int64 expected_revision = 1;
+   */
+  expectedRevision: bigint;
+
+  /**
+   * @generated from field: string action = 2;
+   */
+  action: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskControlRequest.
+ * Use `create(PersistentTaskControlRequestSchema)` to create a new message.
+ */
+export declare const PersistentTaskControlRequestSchema: GenMessage<PersistentTaskControlRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskCheckRequest
+ */
+export declare type PersistentTaskCheckRequest = Message<"boxteam.workspace.v2.PersistentTaskCheckRequest"> & {
+  /**
+   * @generated from field: string idempotency_key = 1;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: int64 expected_revision = 2;
+   */
+  expectedRevision: bigint;
+
+  /**
+   * @generated from field: bool check_only = 3;
+   */
+  checkOnly: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskCheckRequest.
+ * Use `create(PersistentTaskCheckRequestSchema)` to create a new message.
+ */
+export declare const PersistentTaskCheckRequestSchema: GenMessage<PersistentTaskCheckRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskListDTO
+ */
+export declare type PersistentTaskListDTO = Message<"boxteam.workspace.v2.PersistentTaskListDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.PersistentTaskDTO items = 1;
+   */
+  items: PersistentTaskDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskListDTO.
+ * Use `create(PersistentTaskListDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskListDTOSchema: GenMessage<PersistentTaskListDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskRunListDTO
+ */
+export declare type PersistentTaskRunListDTO = Message<"boxteam.workspace.v2.PersistentTaskRunListDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.PersistentTaskRunDTO items = 1;
+   */
+  items: PersistentTaskRunDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskRunListDTO.
+ * Use `create(PersistentTaskRunListDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskRunListDTOSchema: GenMessage<PersistentTaskRunListDTO>;
+

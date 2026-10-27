@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from pydantic.json_schema import models_json_schema
 
 from app.protocol.openapi import protobuf_message_name_for_model
+from app.schemas.internal_v2.persistent_task import PersistentTaskListDTO
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
@@ -26,6 +27,7 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
         WorkspaceFileChangeBatchDTO,
         SseErrorDTO,
         WorkspaceObservationFrameDTO,
+        PersistentTaskListDTO,
     )
 }
 

@@ -1,6 +1,6 @@
 # 目录用途
 
-`app/services/infrastructure/events/` 承载 OpenSpec 3.8 的通用 `EventChannelService`：按 `kind/{参数}` 命名的进程内通知 channel，为每条 channel 提供订阅者隔离的有界队列、单调递增 event sequence、可选短期历史与 cursor 重放，以及可插拔的 `gap` / `fail_closed` 溢出策略。现有 `job.events`（Job event bus）与 `resource.observe`（资源观察通道）都是它的 typed adapter；`resource.state/*`、`config.lifecycle/*`、`context.source/*`、`mcp.catalog/*` 的 typed 轻量事件值对象合同也在本目录定义。
+`app/services/infrastructure/events/` 承载 OpenSpec 3.8 的通用 `EventChannelService`：按 `kind/{参数}` 命名的进程内通知 channel，为每条 channel 提供订阅者隔离的有界队列、单调递增 event sequence、可选短期历史与 cursor 重放，以及可插拔的 `gap` / `fail_closed` 溢出策略。现有 `job.events`（Job event bus）与 `resource.observe`（资源观察通道）都是它的 typed adapter；`resource.state/*`、`config.lifecycle/*`、`context.source/*`、`mcp.catalog/*`、`task.lifecycle/*` 的 typed 轻量事件值对象合同也在本目录定义。
 
 # 可修改内容
 

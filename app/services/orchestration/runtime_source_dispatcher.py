@@ -67,6 +67,26 @@ class RuntimeSourceDispatcher:
         digest = self._digest(session_id, thread_id, idempotency_key)
         return self._saver.runtime_wakeup_for_admission(session_id, thread_id, f"radm_{digest}")
 
+    def context_published(
+        self, session_id: str, thread_id: str, message: PreparedInternalMessage,
+        *, source_id: str, idempotency_key: str,
+    ) -> RuntimeContextReceipt | None:
+        """只查询原发布事实；任务暂停、编辑或重启后也不能丢失已提交回执。"""
+        digest = self._digest(session_id, thread_id, idempotency_key)
+        item_id = f"item-rmsg_{digest}"
+        preimage = self._saver.runtime_context_publication_preimage(session_id, thread_id, item_id)
+        if preimage is None:
+            return None
+        expected = sha256_jcs({
+            "session_id": session_id, "thread_id": thread_id,
+            "source_id": source_id, "prompt": message.content,
+            "metadata": message.metadata, "delivery_mode": "context_only",
+        }).rsplit(":", 1)[1]
+        if preimage != expected:
+            raise RuntimeError("runtime context 已提交正文与查询 preimage 冲突")
+        return RuntimeContextReceipt(session_id, thread_id, source_id, item_id,
+                                     sha256_jcs({"content": message.content, "metadata": message.metadata}))
+
     async def publish_context(
         self, session_id: str, thread_id: str, message: PreparedInternalMessage,
         *, source_id: str, idempotency_key: str,

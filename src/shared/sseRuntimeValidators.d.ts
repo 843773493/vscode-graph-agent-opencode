@@ -4,3 +4,4 @@ export const validateSessionExecutionSseDTO: { (value: unknown): boolean; errors
 export const validateWorkspaceFileChangeBatchDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateSseErrorDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateWorkspaceObservationFrameDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validatePersistentTaskListDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

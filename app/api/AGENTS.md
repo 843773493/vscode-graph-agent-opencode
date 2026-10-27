@@ -29,6 +29,7 @@ app/api/
 │   ├── messages.py             Thread 消息
 │   ├── message_stream.py       消息执行流
 │   ├── session_turns.py        Thread 执行历史
+│   ├── persistent_tasks.py     工作区持久任务管理与完整快照事件流
 │   ├── jobs.py                 后台执行任务
 │   ├── agents.py               Agent 目录与选择
 │   ├── context.py              上下文资源

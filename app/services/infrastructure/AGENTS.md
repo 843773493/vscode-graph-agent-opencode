@@ -13,6 +13,7 @@ infrastructure/
 ├── config_service/            工作区 ConfigService 实现
 ├── events/                    有界事件 channel 与 typed 事件合同
 ├── mcp/                       MCP 连接、工具目录与 Agent 工具适配
+├── persistent_tasks/          持久任务定义版本、运行账本与轻量事件
 ├── node_debug/                Node 调试运行时；按 breakpoint/config/process/session 分区
 ├── resource_platform/         资源观察与已发布快照
 ├── rollout_context/           rollout、checkpoint、fork、seal 的 I/O owner

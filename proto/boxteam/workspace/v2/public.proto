@@ -2631,3 +2631,114 @@ message TextMutationTransferDTO {
   TextMutationReceiptDTO receipt = 1;
   repeated TextMutationSnapshotDTO snapshots = 2;
 }
+
+message TaskTriggerDTO {
+  string version = 1;
+  string type_id = 2;
+}
+
+message TaskConditionDTO {
+  string version = 1;
+  string type_id = 2;
+}
+
+message TaskContextDTO {
+  string version = 1;
+  string type_id = 2;
+  string content = 3;
+}
+
+message TaskActionDTO {
+  string version = 1;
+  string type_id = 2;
+  string target_uri = 3;
+  string delivery_mode = 4;
+  string delivery_policy = 5;
+}
+
+message TaskPoliciesDTO {
+  string completion = 1;
+}
+
+message PersistentTaskConfigurationDTO {
+  string name = 1;
+  TaskTriggerDTO trigger = 2;
+  TaskConditionDTO condition = 3;
+  TaskContextDTO context = 4;
+  TaskActionDTO action = 5;
+  TaskPoliciesDTO policies = 6;
+}
+
+message PersistentTaskDTO {
+  string task_id = 1;
+  string workspace_id = 2;
+  int64 revision = 3;
+  int64 definition_revision = 4;
+  PersistentTaskConfigurationDTO configuration = 5;
+  string lifecycle = 6;
+  string phase = 7;
+  optional string reason = 8;
+  bool recovering = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message TaskDecisionDTO {
+  string decision = 1;
+  string reason = 2;
+}
+
+message TaskDeliveryDTO {
+  string state = 1;
+  string source_id = 2;
+  optional string item_id = 3;
+  optional string source_revision = 4;
+  optional string job_id = 5;
+  optional string execution_id = 6;
+}
+
+message PersistentTaskRunDTO {
+  string run_id = 1;
+  string task_id = 2;
+  int64 task_revision = 3;
+  int64 definition_revision = 4;
+  string trigger_key = 5;
+  bool check_only = 6;
+  string phase = 7;
+  optional TaskDecisionDTO decision = 8;
+  optional TaskDeliveryDTO delivery = 9;
+  optional string error = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  optional string request_id = 13;
+}
+
+message PersistentTaskCreateRequest {
+  string idempotency_key = 1;
+  PersistentTaskConfigurationDTO configuration = 2;
+  optional bool enabled = 3;
+}
+
+message PersistentTaskUpdateRequest {
+  int64 expected_revision = 1;
+  PersistentTaskConfigurationDTO configuration = 2;
+}
+
+message PersistentTaskControlRequest {
+  int64 expected_revision = 1;
+  string action = 2;
+}
+
+message PersistentTaskCheckRequest {
+  string idempotency_key = 1;
+  int64 expected_revision = 2;
+  bool check_only = 3;
+}
+
+message PersistentTaskListDTO {
+  repeated PersistentTaskDTO items = 1;
+}
+
+message PersistentTaskRunListDTO {
+  repeated PersistentTaskRunDTO items = 1;
+}

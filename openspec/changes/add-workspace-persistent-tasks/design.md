@@ -201,3 +201,12 @@ Goal 工具/API 与专用视图可以作为应用入口保留，但直接读写�
 - `context-only-runtime-regressions-021`：旧 runtime notice 文本和冻结执行准入两项真实产品回归通过。`context-only-types-017` 与 `context-only-ruff-019` 均 exit 0；上述最终运行均无源码漂移。
 
 各运行的完整命令、源码指纹、原始输出和实际退出码保存在 `out/tests/temp/persistent-task-migration/artifacts/<运行名>/`。本子项尚未实现同一来源状态更新、任务动作的投递时机协调或统一任务运行时，3.5 及相关整体验收保持未完成。
+
+
+### 手动任务运行时的已实现边界（2026-10-27）
+
+任务账本复用WorkspaceStateStore，schema 16只增加真实使用的任务、不可变定义和运行表。运行引用冻结定义，source正文及wakeup继续归原owner；管理API和SSE只读取同一工作区账本。当前支持manual/always/literal/runtime_source v1，context_only与context_and_run共享一条判断及恢复链路，不接受尚未实现的组件类型或版本。
+
+worker的start等待初始化future，不等待逐项恢复；每个任务按序处理并有全局并发界限。恢复和新检查共用运行账本，同任务未对账的新触发只排队；任务管理与新source准入串行，已接受动作先按旧定义及原run身份查询回执，再记录结果，即便期间暂停或编辑也不会丢失既有事实。保存原Gateway authority与request_id供后台调用，既有执行owner负责模型、队列和Job，任务不等待模型终态、不取消已接受Job。worker初始化及运行失败由生命周期/健康入口明确报告，stop取回异常并排空已开始动作。
+
+产品与协议证据见同变更tasks.md的“手动触发至source动作切片”；这里只登记已实现边界，尚未声称时间计划、脚本/模型条件、状态来源更新、Goal/生成器迁移和任务UI已完成。

@@ -21,6 +21,7 @@ from app.api.mcp import router as mcp_router
 from app.api.message_stream import router as message_stream_router
 from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
+from app.api.persistent_tasks import router as persistent_tasks_router
 from app.api.resources import router as resources_router
 from app.api.runtime import router as runtime_router
 from app.api.runtime_logging import runtime_logging_router, verify_runtime_control_token
@@ -206,6 +207,7 @@ workspace_api = APIRouter(dependencies=[Depends(workspace_container_scope)])
 @workspace_api.get("/health", summary="健康检查")
 async def health(request: Request):
     container = get_workspace_container(request)
+    container.persistent_task_runtime.assert_healthy()
     errors = container.runtime_service.startup_reconciliation_errors
     return {
         "status": "degraded" if errors else "ok",
@@ -220,6 +222,7 @@ async def health(request: Request):
 
 for router in (
     workspace_router,
+    persistent_tasks_router,
     session_activity_router,
     workspace_observation_router,
     runtime_router,

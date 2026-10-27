@@ -13,6 +13,7 @@ workspace_state_store/
 └── workspace_state_sql/
     ├── 001.sql–013.sql  有序 schema 迁移
     ├── 015.sql          MCP 连接操作及幂等 alias；第14次为 Python 来源合并
+    ├── 016.sql          持久任务定义版本与运行账本
     └── legacy_config/   仅供一次性旧表迁移的 SQL
 ```
 

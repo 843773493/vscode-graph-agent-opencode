@@ -12,11 +12,12 @@ from app.protocol.generated.boxteam.workspace.v2 import (
 )
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
-    "SessionExecutionSseDTO": session_stream_pb2.SessionExecutionSse.DESCRIPTOR,
-    "TraceEventDTO": trace_pb2.TraceEvent.DESCRIPTOR,
-    "WorkspaceFileChangeBatchDTO": file_events_pb2.WorkspaceFileChangeBatch.DESCRIPTOR,
-    "SseErrorDTO": file_events_pb2.SseError.DESCRIPTOR,
-    "WorkspaceObservationFrameDTO": public_pb2.WorkspaceObservationFrameDTO.DESCRIPTOR,
+    "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
+    "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
+    "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],
+    "SseErrorDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["SseError"],
+    "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
+    "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
 }
 
 

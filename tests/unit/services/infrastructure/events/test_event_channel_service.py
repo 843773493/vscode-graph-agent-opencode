@@ -15,6 +15,7 @@ from app.services.infrastructure.events.event_channel_service import (
     JOB_EVENTS_CHANNEL_KIND,
     RESOURCE_OBSERVE_CHANNEL_KIND,
     RESOURCE_STATE_CHANNEL_KIND,
+    TASK_LIFECYCLE_CHANNEL_KIND,
     EventChannelHistoryDisabledError,
     EventChannelOverflowError,
     EventChannelService,
@@ -25,8 +26,8 @@ from app.services.infrastructure.events.event_channel_service import (
 )
 
 
-def test_channel_name_helpers_cover_all_six_kinds() -> None:
-    """六类 channel 都能按 `kind/{参数}` 构造与解析。"""
+def test_channel_name_helpers_cover_all_kinds() -> None:
+    """所有 channel 都能按 `kind/{参数}` 构造与解析。"""
     assert channel_name(JOB_EVENTS_CHANNEL_KIND, "job_1") == "job.events/job_1"
     assert (
         channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "provider-1")
@@ -38,6 +39,7 @@ def test_channel_name_helpers_cover_all_six_kinds() -> None:
         == "config.lifecycle/workspace"
     )
     assert channel_name(CONTEXT_SOURCE_CHANNEL_KIND, "ws-1") == "context.source/ws-1"
+    assert channel_name(TASK_LIFECYCLE_CHANNEL_KIND, "ws-1") == "task.lifecycle/ws-1"
     assert mcp_catalog_channel_name() == "mcp.catalog/workspace"
     assert CHANNEL_KINDS == frozenset(
         {
@@ -47,6 +49,7 @@ def test_channel_name_helpers_cover_all_six_kinds() -> None:
             "config.lifecycle",
             "context.source",
             "mcp.catalog",
+            "task.lifecycle",
         }
     )
     for name, expected in (
@@ -55,6 +58,7 @@ def test_channel_name_helpers_cover_all_six_kinds() -> None:
         ("resource.state/debug", ("resource.state", "debug")),
         ("config.lifecycle/workspace", ("config.lifecycle", "workspace")),
         ("context.source/ws-1", ("context.source", "ws-1")),
+        ("task.lifecycle/ws-1", ("task.lifecycle", "ws-1")),
     ):
         assert parse_channel_name(name) == expected
 

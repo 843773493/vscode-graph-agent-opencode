@@ -54,6 +54,7 @@ from app.services.business.gateway_context_query_service import (
 )
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
+from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_query_service import (
@@ -137,6 +138,8 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.pending_request_store import PendingRequestStore
+from app.services.infrastructure.persistent_tasks.events import task_channel
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.resource_platform.bootstrap import (
     ResourcePlatform,
     bootstrap_resource_platform,
@@ -196,6 +199,7 @@ from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
+from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 from app.services.orchestration.session_subagent_service import (
@@ -390,6 +394,8 @@ class AppContainer:
     session_orchestrator: SessionOrchestrator
     session_communication_service: SessionCommunicationService
     runtime_source_dispatcher: RuntimeSourceDispatcher
+    persistent_task_runtime: PersistentTaskRuntime
+    persistent_task_service: PersistentTaskService
     thread_initial_execution_service: ThreadInitialExecutionService
     terminal_steering_service: TerminalSteeringService
     session_catalog_service: SessionCatalogService
@@ -934,6 +940,12 @@ def _build_app_container(
         ),
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
+    persistent_task_runtime = PersistentTaskRuntime(
+        store=PersistentTaskStore(workspace_activity_service.store, workspace_id=workspace_id),
+        orchestrator=session_orchestrator, dispatcher=runtime_source_dispatcher, sessions=session_service,
+        events=task_channel(job_event_bus.event_channel_service, workspace_id), clock=clock_ports.wall,
+    )
+    persistent_task_service = PersistentTaskService(runtime=persistent_task_runtime, sessions=session_service)
     session_communication_service = SessionCommunicationService(
         sessions=session_service, saver=checkpointer, dispatcher=runtime_source_dispatcher,
         transport=communication_transport, query_service=session_context_query_service,
@@ -1154,6 +1166,8 @@ def _build_app_container(
         session_communication_service=session_communication_service,
         runtime_source_dispatcher=runtime_source_dispatcher,
         thread_initial_execution_service=thread_initial_execution_service,
+        persistent_task_runtime=persistent_task_runtime,
+        persistent_task_service=persistent_task_service,
         terminal_steering_service=terminal_steering_service,
         session_catalog_service=session_catalog_service,
         session_generation_service=session_generation_service,

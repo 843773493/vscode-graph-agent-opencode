@@ -10,6 +10,13 @@ from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 def test_sse_endpoints_publish_event_contracts() -> None:
     paths = app.openapi()["paths"]
 
+    task_response = paths["/api/v1/workspaces/{workspace_id}/persistent-tasks/events"]["get"]["responses"]["200"]
+    assert task_response["x-sse-events"] == {
+        "snapshot": {"$ref": "#/components/schemas/PersistentTaskListDTO",
+                     "x-protobuf-message": "boxteam.workspace.v2.PersistentTaskListDTO"},
+    }
+    assert set(task_response["content"]) == {"text/event-stream"}
+
     workspace_response = paths["/api/v1/workspaces/{workspace_id}/workspace/files/events"]["post"]["responses"][
         "200"
     ]
@@ -81,7 +88,7 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
                 assert model_name in components
                 declared_models.add(model_name)
 
-    assert stream_operation_count == 4
+    assert stream_operation_count == 5
     assert declared_models == set(SSE_EVENT_MODELS)
 
     runtime_schema_path = (

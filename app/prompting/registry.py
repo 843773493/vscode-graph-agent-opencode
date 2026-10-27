@@ -280,6 +280,8 @@ INTERNAL_MESSAGE_KIND_SPECS = (
         frozenset({"control_context", "team_task_update"}),
     ),
     InternalMessageKindSpec("checkpoint_reminder", frozenset()),
+    InternalMessageKindSpec("persistent_task", frozenset({"control_context", "untrusted_instructions"}),
+                            frozenset({"control_context", "untrusted_instructions"})),
     InternalMessageKindSpec(
         "missing_custom_tool_retry", frozenset({"control_context"})
     ),

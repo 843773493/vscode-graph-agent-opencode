@@ -43,6 +43,7 @@ RESOURCE_STATE_CHANNEL_KIND: Final[str] = "resource.state"
 CONFIG_LIFECYCLE_CHANNEL_KIND: Final[str] = "config.lifecycle"
 CONTEXT_SOURCE_CHANNEL_KIND: Final[str] = "context.source"
 MCP_CATALOG_CHANNEL_KIND: Final[str] = "mcp.catalog"
+TASK_LIFECYCLE_CHANNEL_KIND: Final[str] = "task.lifecycle"
 
 # channel kind 是闭集：新增 kind 属于代码变更（同步更新本清单与 AGENTS.md），
 # 不提供运行时可配置的扩展点。
@@ -54,6 +55,7 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         CONFIG_LIFECYCLE_CHANNEL_KIND,
         CONTEXT_SOURCE_CHANNEL_KIND,
         MCP_CATALOG_CHANNEL_KIND,
+        TASK_LIFECYCLE_CHANNEL_KIND,
     }
 )
 
@@ -629,6 +631,7 @@ __all__ = [
     "MCP_CATALOG_CHANNEL_KIND",
     "RESOURCE_OBSERVE_CHANNEL_KIND",
     "RESOURCE_STATE_CHANNEL_KIND",
+    "TASK_LIFECYCLE_CHANNEL_KIND",
     "ChannelDelivery",
     "ChannelEventSink",
     "ChannelPublishReceipt",

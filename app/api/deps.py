@@ -15,6 +15,7 @@ from app.services.business.agent_service import AgentService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
+from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_query_service import (
@@ -72,6 +73,7 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing.service import ToolTestService
 
@@ -90,6 +92,8 @@ class _AppContainerProtocol(Protocol):
     runtime_service: RuntimeService
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
+    persistent_task_runtime: PersistentTaskRuntime
+    persistent_task_service: PersistentTaskService
     session_interrupt_service: SessionInterruptService
     session_skill_tracking_service: SessionSkillTrackingService
     session_context_fork_service: SessionContextForkService
@@ -388,6 +392,10 @@ def get_team_service(request: Request) -> TeamCoordinationService:
 
 def get_session_orchestrator(request: Request) -> SessionOrchestrator:
     return _require_service(request, "session_orchestrator", SessionOrchestrator, "SessionOrchestrator 尚未在应用启动阶段初始化")
+
+
+def get_persistent_task_service(request: Request) -> PersistentTaskService:
+    return _require_service(request, "persistent_task_service", PersistentTaskService, "持久任务服务尚未初始化")
 
 
 def get_session_catalog_service(request: Request) -> SessionCatalogService:

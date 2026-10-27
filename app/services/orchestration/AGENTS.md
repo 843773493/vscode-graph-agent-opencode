@@ -43,6 +43,8 @@ orchestration/
 └── team/                                   团队 fanout、恢复与 team_state 发布
 ```
 
+`persistent_tasks/`负责通用任务 worker、手动触发和既有 source 动作对账；定义与运行事实归工作区状态库，不另建执行器。Goal 和生成器的完整迁移仍由对应 OpenSpec 追踪。
+
 主执行链为 `JobExecutionService → AgentExecutionService → execution_step.StepRunner → event_stream → MessageStreamRuntime/既有写入端口`。`GoalRuntimeService` 是独立的 Job 生命周期消费者：`JOB_STARTED` 在后台捕获 Goal 归属，`AGENT_END` 结算并派发续跑，`JOB_COMPLETED` 确保活动 Goal 在空闲时启动；`JOB_FAILED` 与 `JOB_CANCELLED` 分别收敛为 blocked 与 paused。查找执行重试、失败收口或事件身份时进入对应子目录，不要在公共 service 或事件消费处复制同类规则。
 
 ## 可修改内容

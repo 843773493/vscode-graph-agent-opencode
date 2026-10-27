@@ -2682,6 +2682,117 @@ export interface TextMutationTransferDTO {
   snapshots: TextMutationSnapshotDTO[];
 }
 
+export interface TaskTriggerDTO {
+  version: string;
+  type_id: string;
+}
+
+export interface TaskConditionDTO {
+  version: string;
+  type_id: string;
+}
+
+export interface TaskContextDTO {
+  version: string;
+  type_id: string;
+  content: string;
+}
+
+export interface TaskActionDTO {
+  version: string;
+  type_id: string;
+  target_uri: string;
+  delivery_mode: string;
+  delivery_policy: string;
+}
+
+export interface TaskPoliciesDTO {
+  completion: string;
+}
+
+export interface PersistentTaskConfigurationDTO {
+  name: string;
+  trigger: TaskTriggerDTO | undefined;
+  condition: TaskConditionDTO | undefined;
+  context: TaskContextDTO | undefined;
+  action: TaskActionDTO | undefined;
+  policies: TaskPoliciesDTO | undefined;
+}
+
+export interface PersistentTaskDTO {
+  task_id: string;
+  workspace_id: string;
+  revision: number;
+  definition_revision: number;
+  configuration: PersistentTaskConfigurationDTO | undefined;
+  lifecycle: string;
+  phase: string;
+  reason?: string | undefined;
+  recovering: boolean;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+}
+
+export interface TaskDecisionDTO {
+  decision: string;
+  reason: string;
+}
+
+export interface TaskDeliveryDTO {
+  state: string;
+  source_id: string;
+  item_id?: string | undefined;
+  source_revision?: string | undefined;
+  job_id?: string | undefined;
+  execution_id?: string | undefined;
+}
+
+export interface PersistentTaskRunDTO {
+  run_id: string;
+  task_id: string;
+  task_revision: number;
+  definition_revision: number;
+  trigger_key: string;
+  check_only: boolean;
+  phase: string;
+  decision?: TaskDecisionDTO | undefined;
+  delivery?: TaskDeliveryDTO | undefined;
+  error?: string | undefined;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+  request_id?: string | undefined;
+}
+
+export interface PersistentTaskCreateRequest {
+  idempotency_key: string;
+  configuration: PersistentTaskConfigurationDTO | undefined;
+  enabled?: boolean | undefined;
+}
+
+export interface PersistentTaskUpdateRequest {
+  expected_revision: number;
+  configuration: PersistentTaskConfigurationDTO | undefined;
+}
+
+export interface PersistentTaskControlRequest {
+  expected_revision: number;
+  action: string;
+}
+
+export interface PersistentTaskCheckRequest {
+  idempotency_key: string;
+  expected_revision: number;
+  check_only: boolean;
+}
+
+export interface PersistentTaskListDTO {
+  items: PersistentTaskDTO[];
+}
+
+export interface PersistentTaskRunListDTO {
+  items: PersistentTaskRunDTO[];
+}
+
 function createBaseAPIResponse(): APIResponse {
   return { code: undefined, message: undefined, data: undefined, request_id: "" };
 }
@@ -19386,6 +19497,773 @@ export const TextMutationTransferDTO: MessageFns<TextMutationTransferDTO> = {
       ? TextMutationReceiptDTO.fromPartial(object.receipt)
       : undefined;
     message.snapshots = object.snapshots?.map((e) => TextMutationSnapshotDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseTaskTriggerDTO(): TaskTriggerDTO {
+  return { version: "", type_id: "" };
+}
+
+export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
+  fromJSON(object: any): TaskTriggerDTO {
+    return {
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+    };
+  },
+
+  toJSON(message: TaskTriggerDTO): unknown {
+    const obj: any = {};
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.type_id !== "") {
+      obj.type_id = message.type_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskTriggerDTO>, I>>(base?: I): TaskTriggerDTO {
+    return TaskTriggerDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskTriggerDTO>, I>>(object: I): TaskTriggerDTO {
+    const message = createBaseTaskTriggerDTO();
+    message.version = object.version ?? "";
+    message.type_id = object.type_id ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskConditionDTO(): TaskConditionDTO {
+  return { version: "", type_id: "" };
+}
+
+export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
+  fromJSON(object: any): TaskConditionDTO {
+    return {
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+    };
+  },
+
+  toJSON(message: TaskConditionDTO): unknown {
+    const obj: any = {};
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.type_id !== "") {
+      obj.type_id = message.type_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskConditionDTO>, I>>(base?: I): TaskConditionDTO {
+    return TaskConditionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskConditionDTO>, I>>(object: I): TaskConditionDTO {
+    const message = createBaseTaskConditionDTO();
+    message.version = object.version ?? "";
+    message.type_id = object.type_id ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskContextDTO(): TaskContextDTO {
+  return { version: "", type_id: "", content: "" };
+}
+
+export const TaskContextDTO: MessageFns<TaskContextDTO> = {
+  fromJSON(object: any): TaskContextDTO {
+    return {
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+      content: isSet(object.content) ? globalThis.String(object.content) : "",
+    };
+  },
+
+  toJSON(message: TaskContextDTO): unknown {
+    const obj: any = {};
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.type_id !== "") {
+      obj.type_id = message.type_id;
+    }
+    if (message.content !== "") {
+      obj.content = message.content;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskContextDTO>, I>>(base?: I): TaskContextDTO {
+    return TaskContextDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskContextDTO>, I>>(object: I): TaskContextDTO {
+    const message = createBaseTaskContextDTO();
+    message.version = object.version ?? "";
+    message.type_id = object.type_id ?? "";
+    message.content = object.content ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskActionDTO(): TaskActionDTO {
+  return { version: "", type_id: "", target_uri: "", delivery_mode: "", delivery_policy: "" };
+}
+
+export const TaskActionDTO: MessageFns<TaskActionDTO> = {
+  fromJSON(object: any): TaskActionDTO {
+    return {
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+      target_uri: isSet(object.target_uri) ? globalThis.String(object.target_uri) : "",
+      delivery_mode: isSet(object.delivery_mode) ? globalThis.String(object.delivery_mode) : "",
+      delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : "",
+    };
+  },
+
+  toJSON(message: TaskActionDTO): unknown {
+    const obj: any = {};
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.type_id !== "") {
+      obj.type_id = message.type_id;
+    }
+    if (message.target_uri !== "") {
+      obj.target_uri = message.target_uri;
+    }
+    if (message.delivery_mode !== "") {
+      obj.delivery_mode = message.delivery_mode;
+    }
+    if (message.delivery_policy !== "") {
+      obj.delivery_policy = message.delivery_policy;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskActionDTO>, I>>(base?: I): TaskActionDTO {
+    return TaskActionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskActionDTO>, I>>(object: I): TaskActionDTO {
+    const message = createBaseTaskActionDTO();
+    message.version = object.version ?? "";
+    message.type_id = object.type_id ?? "";
+    message.target_uri = object.target_uri ?? "";
+    message.delivery_mode = object.delivery_mode ?? "";
+    message.delivery_policy = object.delivery_policy ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskPoliciesDTO(): TaskPoliciesDTO {
+  return { completion: "" };
+}
+
+export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
+  fromJSON(object: any): TaskPoliciesDTO {
+    return { completion: isSet(object.completion) ? globalThis.String(object.completion) : "" };
+  },
+
+  toJSON(message: TaskPoliciesDTO): unknown {
+    const obj: any = {};
+    if (message.completion !== "") {
+      obj.completion = message.completion;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskPoliciesDTO>, I>>(base?: I): TaskPoliciesDTO {
+    return TaskPoliciesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskPoliciesDTO>, I>>(object: I): TaskPoliciesDTO {
+    const message = createBaseTaskPoliciesDTO();
+    message.completion = object.completion ?? "";
+    return message;
+  },
+};
+
+function createBasePersistentTaskConfigurationDTO(): PersistentTaskConfigurationDTO {
+  return {
+    name: "",
+    trigger: undefined,
+    condition: undefined,
+    context: undefined,
+    action: undefined,
+    policies: undefined,
+  };
+}
+
+export const PersistentTaskConfigurationDTO: MessageFns<PersistentTaskConfigurationDTO> = {
+  fromJSON(object: any): PersistentTaskConfigurationDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      trigger: isSet(object.trigger) ? TaskTriggerDTO.fromJSON(object.trigger) : undefined,
+      condition: isSet(object.condition) ? TaskConditionDTO.fromJSON(object.condition) : undefined,
+      context: isSet(object.context) ? TaskContextDTO.fromJSON(object.context) : undefined,
+      action: isSet(object.action) ? TaskActionDTO.fromJSON(object.action) : undefined,
+      policies: isSet(object.policies) ? TaskPoliciesDTO.fromJSON(object.policies) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskConfigurationDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.trigger !== undefined) {
+      obj.trigger = TaskTriggerDTO.toJSON(message.trigger);
+    }
+    if (message.condition !== undefined) {
+      obj.condition = TaskConditionDTO.toJSON(message.condition);
+    }
+    if (message.context !== undefined) {
+      obj.context = TaskContextDTO.toJSON(message.context);
+    }
+    if (message.action !== undefined) {
+      obj.action = TaskActionDTO.toJSON(message.action);
+    }
+    if (message.policies !== undefined) {
+      obj.policies = TaskPoliciesDTO.toJSON(message.policies);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskConfigurationDTO>, I>>(base?: I): PersistentTaskConfigurationDTO {
+    return PersistentTaskConfigurationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskConfigurationDTO>, I>>(
+    object: I,
+  ): PersistentTaskConfigurationDTO {
+    const message = createBasePersistentTaskConfigurationDTO();
+    message.name = object.name ?? "";
+    message.trigger = (object.trigger !== undefined && object.trigger !== null)
+      ? TaskTriggerDTO.fromPartial(object.trigger)
+      : undefined;
+    message.condition = (object.condition !== undefined && object.condition !== null)
+      ? TaskConditionDTO.fromPartial(object.condition)
+      : undefined;
+    message.context = (object.context !== undefined && object.context !== null)
+      ? TaskContextDTO.fromPartial(object.context)
+      : undefined;
+    message.action = (object.action !== undefined && object.action !== null)
+      ? TaskActionDTO.fromPartial(object.action)
+      : undefined;
+    message.policies = (object.policies !== undefined && object.policies !== null)
+      ? TaskPoliciesDTO.fromPartial(object.policies)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskDTO(): PersistentTaskDTO {
+  return {
+    task_id: "",
+    workspace_id: "",
+    revision: 0,
+    definition_revision: 0,
+    configuration: undefined,
+    lifecycle: "",
+    phase: "",
+    reason: undefined,
+    recovering: false,
+    created_at: undefined,
+    updated_at: undefined,
+  };
+}
+
+export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
+  fromJSON(object: any): PersistentTaskDTO {
+    return {
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      revision: isSet(object.revision) ? globalThis.Number(object.revision) : 0,
+      definition_revision: isSet(object.definition_revision) ? globalThis.Number(object.definition_revision) : 0,
+      configuration: isSet(object.configuration)
+        ? PersistentTaskConfigurationDTO.fromJSON(object.configuration)
+        : undefined,
+      lifecycle: isSet(object.lifecycle) ? globalThis.String(object.lifecycle) : "",
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      recovering: isSet(object.recovering) ? globalThis.Boolean(object.recovering) : false,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskDTO): unknown {
+    const obj: any = {};
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.revision !== 0) {
+      obj.revision = Math.round(message.revision);
+    }
+    if (message.definition_revision !== 0) {
+      obj.definition_revision = Math.round(message.definition_revision);
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = PersistentTaskConfigurationDTO.toJSON(message.configuration);
+    }
+    if (message.lifecycle !== "") {
+      obj.lifecycle = message.lifecycle;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.recovering !== false) {
+      obj.recovering = message.recovering;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskDTO>, I>>(base?: I): PersistentTaskDTO {
+    return PersistentTaskDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskDTO>, I>>(object: I): PersistentTaskDTO {
+    const message = createBasePersistentTaskDTO();
+    message.task_id = object.task_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.revision = object.revision ?? 0;
+    message.definition_revision = object.definition_revision ?? 0;
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? PersistentTaskConfigurationDTO.fromPartial(object.configuration)
+      : undefined;
+    message.lifecycle = object.lifecycle ?? "";
+    message.phase = object.phase ?? "";
+    message.reason = object.reason ?? undefined;
+    message.recovering = object.recovering ?? false;
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTaskDecisionDTO(): TaskDecisionDTO {
+  return { decision: "", reason: "" };
+}
+
+export const TaskDecisionDTO: MessageFns<TaskDecisionDTO> = {
+  fromJSON(object: any): TaskDecisionDTO {
+    return {
+      decision: isSet(object.decision) ? globalThis.String(object.decision) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+    };
+  },
+
+  toJSON(message: TaskDecisionDTO): unknown {
+    const obj: any = {};
+    if (message.decision !== "") {
+      obj.decision = message.decision;
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskDecisionDTO>, I>>(base?: I): TaskDecisionDTO {
+    return TaskDecisionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskDecisionDTO>, I>>(object: I): TaskDecisionDTO {
+    const message = createBaseTaskDecisionDTO();
+    message.decision = object.decision ?? "";
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskDeliveryDTO(): TaskDeliveryDTO {
+  return {
+    state: "",
+    source_id: "",
+    item_id: undefined,
+    source_revision: undefined,
+    job_id: undefined,
+    execution_id: undefined,
+  };
+}
+
+export const TaskDeliveryDTO: MessageFns<TaskDeliveryDTO> = {
+  fromJSON(object: any): TaskDeliveryDTO {
+    return {
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : "",
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
+      source_revision: isSet(object.source_revision) ? globalThis.String(object.source_revision) : undefined,
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+    };
+  },
+
+  toJSON(message: TaskDeliveryDTO): unknown {
+    const obj: any = {};
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.source_id !== "") {
+      obj.source_id = message.source_id;
+    }
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
+    if (message.source_revision !== undefined) {
+      obj.source_revision = message.source_revision;
+    }
+    if (message.job_id !== undefined) {
+      obj.job_id = message.job_id;
+    }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskDeliveryDTO>, I>>(base?: I): TaskDeliveryDTO {
+    return TaskDeliveryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskDeliveryDTO>, I>>(object: I): TaskDeliveryDTO {
+    const message = createBaseTaskDeliveryDTO();
+    message.state = object.state ?? "";
+    message.source_id = object.source_id ?? "";
+    message.item_id = object.item_id ?? undefined;
+    message.source_revision = object.source_revision ?? undefined;
+    message.job_id = object.job_id ?? undefined;
+    message.execution_id = object.execution_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
+  return {
+    run_id: "",
+    task_id: "",
+    task_revision: 0,
+    definition_revision: 0,
+    trigger_key: "",
+    check_only: false,
+    phase: "",
+    decision: undefined,
+    delivery: undefined,
+    error: undefined,
+    created_at: undefined,
+    updated_at: undefined,
+    request_id: undefined,
+  };
+}
+
+export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
+  fromJSON(object: any): PersistentTaskRunDTO {
+    return {
+      run_id: isSet(object.run_id) ? globalThis.String(object.run_id) : "",
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      task_revision: isSet(object.task_revision) ? globalThis.Number(object.task_revision) : 0,
+      definition_revision: isSet(object.definition_revision) ? globalThis.Number(object.definition_revision) : 0,
+      trigger_key: isSet(object.trigger_key) ? globalThis.String(object.trigger_key) : "",
+      check_only: isSet(object.check_only) ? globalThis.Boolean(object.check_only) : false,
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      decision: isSet(object.decision) ? TaskDecisionDTO.fromJSON(object.decision) : undefined,
+      delivery: isSet(object.delivery) ? TaskDeliveryDTO.fromJSON(object.delivery) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskRunDTO): unknown {
+    const obj: any = {};
+    if (message.run_id !== "") {
+      obj.run_id = message.run_id;
+    }
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.task_revision !== 0) {
+      obj.task_revision = Math.round(message.task_revision);
+    }
+    if (message.definition_revision !== 0) {
+      obj.definition_revision = Math.round(message.definition_revision);
+    }
+    if (message.trigger_key !== "") {
+      obj.trigger_key = message.trigger_key;
+    }
+    if (message.check_only !== false) {
+      obj.check_only = message.check_only;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.decision !== undefined) {
+      obj.decision = TaskDecisionDTO.toJSON(message.decision);
+    }
+    if (message.delivery !== undefined) {
+      obj.delivery = TaskDeliveryDTO.toJSON(message.delivery);
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.request_id !== undefined) {
+      obj.request_id = message.request_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskRunDTO>, I>>(base?: I): PersistentTaskRunDTO {
+    return PersistentTaskRunDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskRunDTO>, I>>(object: I): PersistentTaskRunDTO {
+    const message = createBasePersistentTaskRunDTO();
+    message.run_id = object.run_id ?? "";
+    message.task_id = object.task_id ?? "";
+    message.task_revision = object.task_revision ?? 0;
+    message.definition_revision = object.definition_revision ?? 0;
+    message.trigger_key = object.trigger_key ?? "";
+    message.check_only = object.check_only ?? false;
+    message.phase = object.phase ?? "";
+    message.decision = (object.decision !== undefined && object.decision !== null)
+      ? TaskDecisionDTO.fromPartial(object.decision)
+      : undefined;
+    message.delivery = (object.delivery !== undefined && object.delivery !== null)
+      ? TaskDeliveryDTO.fromPartial(object.delivery)
+      : undefined;
+    message.error = object.error ?? undefined;
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    message.request_id = object.request_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskCreateRequest(): PersistentTaskCreateRequest {
+  return { idempotency_key: "", configuration: undefined, enabled: undefined };
+}
+
+export const PersistentTaskCreateRequest: MessageFns<PersistentTaskCreateRequest> = {
+  fromJSON(object: any): PersistentTaskCreateRequest {
+    return {
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      configuration: isSet(object.configuration)
+        ? PersistentTaskConfigurationDTO.fromJSON(object.configuration)
+        : undefined,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskCreateRequest): unknown {
+    const obj: any = {};
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = PersistentTaskConfigurationDTO.toJSON(message.configuration);
+    }
+    if (message.enabled !== undefined) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskCreateRequest>, I>>(base?: I): PersistentTaskCreateRequest {
+    return PersistentTaskCreateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskCreateRequest>, I>>(object: I): PersistentTaskCreateRequest {
+    const message = createBasePersistentTaskCreateRequest();
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? PersistentTaskConfigurationDTO.fromPartial(object.configuration)
+      : undefined;
+    message.enabled = object.enabled ?? undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskUpdateRequest(): PersistentTaskUpdateRequest {
+  return { expected_revision: 0, configuration: undefined };
+}
+
+export const PersistentTaskUpdateRequest: MessageFns<PersistentTaskUpdateRequest> = {
+  fromJSON(object: any): PersistentTaskUpdateRequest {
+    return {
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+      configuration: isSet(object.configuration)
+        ? PersistentTaskConfigurationDTO.fromJSON(object.configuration)
+        : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskUpdateRequest): unknown {
+    const obj: any = {};
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = PersistentTaskConfigurationDTO.toJSON(message.configuration);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskUpdateRequest>, I>>(base?: I): PersistentTaskUpdateRequest {
+    return PersistentTaskUpdateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskUpdateRequest>, I>>(object: I): PersistentTaskUpdateRequest {
+    const message = createBasePersistentTaskUpdateRequest();
+    message.expected_revision = object.expected_revision ?? 0;
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? PersistentTaskConfigurationDTO.fromPartial(object.configuration)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskControlRequest(): PersistentTaskControlRequest {
+  return { expected_revision: 0, action: "" };
+}
+
+export const PersistentTaskControlRequest: MessageFns<PersistentTaskControlRequest> = {
+  fromJSON(object: any): PersistentTaskControlRequest {
+    return {
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+    };
+  },
+
+  toJSON(message: PersistentTaskControlRequest): unknown {
+    const obj: any = {};
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskControlRequest>, I>>(base?: I): PersistentTaskControlRequest {
+    return PersistentTaskControlRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskControlRequest>, I>>(object: I): PersistentTaskControlRequest {
+    const message = createBasePersistentTaskControlRequest();
+    message.expected_revision = object.expected_revision ?? 0;
+    message.action = object.action ?? "";
+    return message;
+  },
+};
+
+function createBasePersistentTaskCheckRequest(): PersistentTaskCheckRequest {
+  return { idempotency_key: "", expected_revision: 0, check_only: false };
+}
+
+export const PersistentTaskCheckRequest: MessageFns<PersistentTaskCheckRequest> = {
+  fromJSON(object: any): PersistentTaskCheckRequest {
+    return {
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+      check_only: isSet(object.check_only) ? globalThis.Boolean(object.check_only) : false,
+    };
+  },
+
+  toJSON(message: PersistentTaskCheckRequest): unknown {
+    const obj: any = {};
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    if (message.check_only !== false) {
+      obj.check_only = message.check_only;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskCheckRequest>, I>>(base?: I): PersistentTaskCheckRequest {
+    return PersistentTaskCheckRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskCheckRequest>, I>>(object: I): PersistentTaskCheckRequest {
+    const message = createBasePersistentTaskCheckRequest();
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.expected_revision = object.expected_revision ?? 0;
+    message.check_only = object.check_only ?? false;
+    return message;
+  },
+};
+
+function createBasePersistentTaskListDTO(): PersistentTaskListDTO {
+  return { items: [] };
+}
+
+export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
+  fromJSON(object: any): PersistentTaskListDTO {
+    return {
+      items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => PersistentTaskDTO.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: PersistentTaskListDTO): unknown {
+    const obj: any = {};
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => PersistentTaskDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskListDTO>, I>>(base?: I): PersistentTaskListDTO {
+    return PersistentTaskListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskListDTO>, I>>(object: I): PersistentTaskListDTO {
+    const message = createBasePersistentTaskListDTO();
+    message.items = object.items?.map((e) => PersistentTaskDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBasePersistentTaskRunListDTO(): PersistentTaskRunListDTO {
+  return { items: [] };
+}
+
+export const PersistentTaskRunListDTO: MessageFns<PersistentTaskRunListDTO> = {
+  fromJSON(object: any): PersistentTaskRunListDTO {
+    return {
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => PersistentTaskRunDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PersistentTaskRunListDTO): unknown {
+    const obj: any = {};
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => PersistentTaskRunDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskRunListDTO>, I>>(base?: I): PersistentTaskRunListDTO {
+    return PersistentTaskRunListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskRunListDTO>, I>>(object: I): PersistentTaskRunListDTO {
+    const message = createBasePersistentTaskRunListDTO();
+    message.items = object.items?.map((e) => PersistentTaskRunDTO.fromPartial(e)) || [];
     return message;
   },
 };

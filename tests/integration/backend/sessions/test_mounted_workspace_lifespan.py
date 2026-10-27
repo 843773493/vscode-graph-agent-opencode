@@ -798,3 +798,48 @@ async def test_double_mount_consumes_each_explicit_candidate_and_ignores_process
             assert proof["generation_id"] == pending.target_generation
             assert proof["fencing_token_digest"] == hashlib.sha256(pending.fencing_token.encode()).hexdigest()
     assert_closed(mounted_case)
+
+
+@pytest.mark.asyncio
+async def test_persistent_task_owners_and_management_are_isolated_between_mounts(mounted_case: MountedCase) -> None:
+    from app.core.resource_uri import thread_resource_uri
+    from tests.integration.backend.sessions.test_persistent_tasks import _configuration
+
+    async with main.lifespan(main.app):
+        a, b = mounted_case.containers
+        tasks = []
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+                                     headers={"X-Local-Token": "local-dev-token"}) as client:
+            for container in (a, b):
+                base = f"/api/v1/workspaces/{container.workspace_id}"
+                response = await client.post(base + "/sessions", json={"title": "隔离任务目标"})
+                assert response.status_code == 200, response.text
+                session_id = response.json()["data"]["session_id"]
+                response = await client.get(base + f"/sessions/{session_id}/main-thread")
+                assert response.status_code == 200, response.text
+                thread_id = response.json()["data"]["thread_id"]
+                response = await client.post(base + "/persistent-tasks", json={
+                    "idempotency_key": "same-key-on-both-mounts",
+                    "configuration": _configuration(thread_resource_uri(container.workspace_id, session_id, thread_id)),
+                })
+                assert response.status_code == 200, response.text
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                tasks.append(response.json()["data"])
+            task_a, task_b = tasks
+            assert task_a["task_id"] != task_b["task_id"]
+            for container, own, other in ((a, task_a, task_b), (b, task_b, task_a)):
+                base = f"/api/v1/workspaces/{container.workspace_id}/persistent-tasks"
+                response = await client.get(base)
+                assert response.json()["data"]["items"] == [own]
+                assert (await client.get(base + "/" + other["task_id"])).status_code == 404
+                response = await client.post(base, json={"idempotency_key": "wrong-target", "configuration": other["configuration"]})
+                assert response.status_code == 400, response.text
+            response = await client.post(f"/api/v1/workspaces/{a.workspace_id}/persistent-tasks/{task_a['task_id']}/control",
+                                         json={"expected_revision": 1, "action": "pause"})
+            assert response.status_code == 200, response.text
+            assert response.json()["data"]["lifecycle"] == "paused"
+            response = await client.get(f"/api/v1/workspaces/{b.workspace_id}/persistent-tasks/{task_b['task_id']}")
+            assert response.json()["data"] == task_b
+            assert a.persistent_task_runtime.events is not b.persistent_task_runtime.events
+            assert a.persistent_task_runtime.store._store.path != b.persistent_task_runtime.store._store.path
+    assert_closed(mounted_case)

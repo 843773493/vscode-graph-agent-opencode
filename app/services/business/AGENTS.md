@@ -39,6 +39,8 @@
 │   ├── terminal_resources/      Terminal资源归属
 │   ├── workspace_resources/     工作区文件资源
 │   └── resource_derivations/    资源派生模型
+├── 持久任务
+│   └── persistent_task_service.py  工作区任务管理、目标和 revision 校验
 ├── 会话执行与通信
 │   ├── session_generation/      生成入口和结果回执
 │   ├── session_navigation/      导航操作及目录状态
