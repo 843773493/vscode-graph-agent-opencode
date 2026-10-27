@@ -245,10 +245,16 @@ class SessionGoalService:
             })
             # 准入沿原 source/wakeup 幂等提交；接受前不能把尝试记为已续跑。
             await dispatch(goal)
+            await observe_phase(goal.goal_id, "goal.continuation.accepted_before_record", details={
+                "session_id": session_id, "goal_id": goal.goal_id, "trigger_id": trigger_id,
+            })
             self._store.goal_write(goal.model_copy(update={
                 "last_continued_job_id": trigger_id,
                 "updated_at": datetime.now(UTC),
             }))
+            await observe_phase(goal.goal_id, "goal.continuation.recorded", details={
+                "session_id": session_id, "goal_id": goal.goal_id, "trigger_id": trigger_id,
+            })
             return True
 
     async def _publish_updated(self, goal: SessionGoalDTO) -> None:

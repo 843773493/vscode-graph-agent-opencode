@@ -34,3 +34,12 @@ class RuntimeExecutionWakeup:
             raise ValueError("runtime wakeup lifecycle/fencing generation 必须为正数")
         if self.delivery_policy not in {"after_turn", "after_tool_result", "after_interrupt"}:
             raise ValueError("runtime wakeup delivery_policy 非法")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionProgress:
+    """原执行及最终 canonical 消息的只读恢复投影，不保存第二份结果。"""
+
+    outcome: str
+    updated_at: str
+    total_tokens: int

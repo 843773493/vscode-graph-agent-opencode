@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,6 +16,10 @@ from app.core.trace_middleware import (
     reset_current_request_id,
     set_current_gateway_id,
     set_current_request_id,
+)
+from app.domain.itemized.runtime_wakeup import (
+    RuntimeExecutionProgress,
+    RuntimeExecutionWakeup,
 )
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.message_service import MessageService
@@ -544,3 +549,69 @@ async def test_terminal_work_uses_the_observed_job_after_registry_removal(goal_r
     current = await goal_service.get("sess_1")
     assert current.tokens_used == 17 and current.time_used_seconds == 3
     assert len(session_orchestrator.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,budget,status,calls", [
+    ("unknown", None, GoalStatus.active, 0),
+    ("completed", None, GoalStatus.active, 1),
+    ("completed_empty", None, GoalStatus.active, 1),
+    ("completed", 10, GoalStatus.budget_limited, 1),
+    ("failed", None, GoalStatus.blocked, 0),
+    ("cancelled", None, GoalStatus.paused, 0),
+])
+async def test_recovery_follows_the_original_continuation_chain_and_settles_its_tail(
+    goal_runtime, goal_service, session_orchestrator, outcome, budget, status, calls,
+):
+    goal = await goal_service.set("sess_1", objective="恢复原执行", token_budget=budget)
+    wakeups = [RuntimeExecutionWakeup(
+        session_id=goal.session_id, thread_id=goal.thread_id, source_id=f"goal:{goal.goal_id}:state",
+        source_item_id=f"item-{index}", execution_id=f"execution-{index}", job_id=f"job-{index}",
+        admission_idempotency_key=f"admission-{index}", agent_id="default",
+        message_created_at="2026-10-27T00:00:00+00:00", gateway_id=None, request_id=None,
+        lease_id=f"lease-{index}", lifecycle_generation=1, lease_fencing_token=1,
+    ) for index in range(3)]
+    accepted = {f"goal:{goal.goal_id}:idle:{goal.goal_id}:{goal.revision}:goal_continuation": wakeups[0]}
+    accepted.update({f"goal:{goal.goal_id}:{previous.job_id}:goal_continuation": following
+                     for previous, following in pairwise(wakeups)})
+    goal_runtime._dispatcher.submitted.side_effect = lambda _session, _thread, *, idempotency_key: accepted.get(idempotency_key)
+    goal_runtime._saver.execution_queue_record.return_value = SimpleNamespace(cursor=SimpleNamespace(commit_id=1))
+    goal_runtime._saver.runtime_execution_progress.return_value = RuntimeExecutionProgress(
+        outcome, "2026-10-27T00:00:03+00:00", 17,
+    )
+
+    await _work(goal_runtime, GoalWork(goal.session_id, goal=goal, recovering=True))
+
+    current = await goal_service.get(goal.session_id)
+    assert current.status == status and len(session_orchestrator.calls) == calls
+    goal_runtime._saver.runtime_execution_progress.assert_called_once_with(wakeups[-1])
+    if outcome == "unknown":
+        assert goal_runtime._goal_job_owners == {wakeups[-1].job_id: goal.goal_id}
+    elif outcome in {"completed", "completed_empty"}:
+        assert set(current.accounted_jobs) == {wakeups[-1].job_id}
+        assert current.tokens_used == 17 and current.time_used_seconds == 3
+        if budget is not None:
+            assert session_orchestrator.calls[0][2]["goal_budget_limited"] is True
+    else:
+        assert current.tokens_used == 0 and current.accounted_jobs == {}
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_attribute_a_previous_goal_revision_to_the_current_objective(
+    goal_runtime, goal_service, session_orchestrator,
+):
+    original = await goal_service.set("sess_1", objective="旧目标")
+    current = await goal_service.set("sess_1", objective="新目标")
+    requested = []
+
+    def submitted(_session, _thread, *, idempotency_key):
+        requested.append(idempotency_key)
+
+    goal_runtime._dispatcher.submitted.side_effect = submitted
+    await _work(goal_runtime, GoalWork(current.session_id, goal=current, recovering=True))
+    assert requested == [f"goal:{current.goal_id}:idle:{current.goal_id}:{current.revision}:goal_continuation",
+                         f"goal:{current.goal_id}:objective:{current.revision}:goal_objective_updated"]
+    assert current.revision == original.revision + 1
+    goal_runtime._saver.runtime_execution_progress.assert_not_called()
+    assert len(session_orchestrator.calls) == 1
+    assert session_orchestrator.calls[0][2]["goal_objective"] == current.objective

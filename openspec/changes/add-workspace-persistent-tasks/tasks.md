@@ -64,6 +64,7 @@
 - [x] 7.2 验证模型判断的四类决定、无效输出/失败、明确输入关联、判断重入、自触发及过期 revision 结果，覆盖现有执行准入而非仅测试 helper。
 - [x] 7.3 验证仅注入、忙时排队、任务暂停与已接受执行、投递中断恢复，核对真实序列化、source/wakeup 引用及内部执行不产生伪用户 Turn。
 - [ ] 7.4 验证 Goal 既有状态/预算/激活与恢复入口、定时三种会话策略/时区/补跑/overlap/回报及迁移重复运行和离线归属，补充受影响定向回归。
+  - [x] 7.4.1 产品入口验证 Goal 续跑接受前，以及执行完成后标记保存前/后的 Backend 硬重启；沿原准入/canonical 用量恢复，保留原身份、精确记账且不重复执行。完整在途模型/工具、目标编辑与旧执行及 fork 发布窗口的硬重启仍待完成。
 - [ ] 7.5 完成后端相关静态分析、真实前端类型检查与 `bun run --cwd src/clients/web build`；全部测试采用进程外超时与内存保护，保留源码指纹、命令、原始输出和实际退出码。
 - [ ] 7.6 在隔离工作区通过真实 Gateway 和浏览器验证创建/编辑/检查/暂停/恢复、运行记录、Goal 联动及工作区/会话切换；当前开发环境以实际 8111 启动配置为准，核对初始化 API 和 request_id，产物遵守 out/tests 路径规范。
 - [ ] 7.7 交付前全仓检索旧接口与 producer，检查悬空调用、双轨、第二事实源、隐式回退和无关改动；如实列明通过、失败及未验证范围。
@@ -221,3 +222,11 @@
 - 277定向产品验收 **1 passed／63.43秒**，在接受前屏障硬杀，严格验证原 Goal 身份、一个 wakeup、两次模型调用、零用户 Turn，以及完成后再次硬重启不重复执行。274相关业务/锁/worker/存储/工具 **52 passed／3.81秒**；278 Ruff通过。276 Pyright仍有原 object哨兵两项既有诊断，与198相同，新续跑方法无诊断，未声称该文件类型全绿。最终测试均有进程外期限、4GiB保护且source_changes为空。
 - 271在准备阶段查询尚不存在的rollout库，修正为严格验证库尚不存在后272才完成业务复现。273完整套件为3 passed/1 failed/1 teardown error：Goal工具已完成目标，测试却在最后文本回复前检查两次调用；改为查询唯一wakeup并等待原Job终态，保留严格次数断言，277通过。275只因import空行失败，278已修正；所有失败原件保留。
 - 本切片只证明接受前中断，接受后标记前、完整在途执行与fork发布窗口继续由7.4追踪，不勾选整项。无公开协议/前端变化，不重复Web构建。命令、源码指纹、原始输出和退出码沿用既有临时证据目录，正式产物位于out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。
+
+### Goal 已完成执行的启动对账（2026-10-27）
+
+- 280经真实 Goal API、model_stream 与 Backend 硬杀复现：执行在接受后标记保存前完成，重启的 active Goal 在15秒内没有下一轮。修复沿当前 Goal ID/revision 的原 idle/objective 准入根及后继幂等引用查找尾执行，unknown仅恢复内存归属，已结束状态复用实时终态处理函数。原队列核验 execution/admission identity，原 canonical 最终输出提供总用量；不新增持久状态、数据库结构或第二份 Goal 结果。
+- 292完整正式 matrix **6 passed／288.02秒**。新增两种标记窗口均通过产品入口生成状态：原执行完成后硬杀，恢复保留原 wakeup；两个执行各记11 token、合计22，严格核对两个原Job、三个模型调用、零用户Turn，再次硬重启无额外执行。295原真实API/SDK/model_stream激活完成与慢恢复暂停回归 **2 passed／35.26秒**。289相关单元 **72 passed／6.92秒**；293补充准入身份核验后的定向检查 **40 passed／5.89秒**，重叠结果不累计。所有最终测试具进程外期限/4GiB保护且source_changes为空。
+- 291领域进度合同、Goal应用与共享runtime的Pyright零错误；294全部本批Python文件Ruff通过。287扩展infra Pyright仍有10项既有sibling方法声明诊断，新增进度读取无诊断；不宣称infra或全仓类型全绿。无公开协议/前端变化，按依赖复用之前Web结果。
+- 281因把codec返回的dict当消息对象读取导致启动500，改用原project_annotations；282为3 failed/62 passed，统一终态后对失败分支读取不适用时间，修正为仅agent_end计算实时elapsed；285因测试给原_sql多传参数未进入重启，改用原签名严格核对唯一执行终态。288旧240秒总期限下exit124、241.27秒，无完整summary；suite从3增至6项后调整总envelope为360秒，场景期限与身份/次数断言未放宽，最终292通过。失败原件均保留。
+- 深历史续跑链仍逐项读取原准入，代码留有测量后优化TODO，尚无长历史性能数据。完整在途执行、无Goal准入根的历史用户执行、目标编辑与旧在途Job的全部重启组合及fork发布硬杀仍由7.4追踪，不勾选整项。准确命令、HEAD/逐文件SHA256、原始输出和退出码保存在out/tests/temp/persistent-task-migration/artifacts/；正式场景产物位于out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。

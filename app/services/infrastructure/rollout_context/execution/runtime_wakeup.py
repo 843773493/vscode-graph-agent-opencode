@@ -11,7 +11,13 @@ from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
-from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.domain.itemized.runtime_wakeup import (
+    RuntimeExecutionProgress,
+    RuntimeExecutionWakeup,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    project_annotations,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
@@ -21,6 +27,9 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
     from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 _COLUMNS = tuple(RuntimeExecutionWakeup.__dataclass_fields__)
@@ -30,6 +39,7 @@ class RuntimeWakeupStorageMixin:
     """source/admission/wakeup 使用同一 ContextStore transaction。"""
 
     _context: RolloutContextStore
+    _storage: RolloutStorage
 
     def commit_runtime_source_wakeup(
         self,
@@ -266,6 +276,34 @@ class RuntimeWakeupStorageMixin:
             if row is None:
                 raise KeyError(f"runtime execution admission 不存在: {execution_id}")
             return str(row[0])
+
+    def runtime_execution_progress(self, wakeup: RuntimeExecutionWakeup) -> RuntimeExecutionProgress:
+        """核对原准入，读取最终消息已保存的整轮用量；不从当前 checkpoint 猜测。"""
+        with self._storage.read_connection(wakeup.session_id, wakeup.thread_id) as connection:
+            record = self._context.executions._execution_queue_record(connection, wakeup.session_id, wakeup.thread_id, "", wakeup.job_id)
+            admission = record.cursor.admission
+            if (admission.execution_id, admission.admission_idempotency_key) != (
+                wakeup.execution_id, wakeup.admission_idempotency_key,
+            ):
+                raise RuntimeError("runtime 进度与原准入 identity 不一致")
+            rows = connection.execute(
+                "SELECT item_id FROM item_catalog WHERE execution_id=? AND semantic_kind='assistant_output' "
+                "AND status='completed' ORDER BY item_sequence DESC", (wakeup.execution_id,),
+            ).fetchall()
+            tokens = 0
+            for row in rows:
+                item = self._storage._read_canonical_item_from_catalog(
+                    connection, session_id=wakeup.session_id, thread_id=wakeup.thread_id,
+                    checkpoint_ns="", item_id=row[0],
+                )
+                metadata = project_annotations(item)
+                usage = metadata.get("token_usage")
+                if usage is not None:
+                    if not isinstance(usage, dict) or type(usage.get("total_tokens")) is not int or usage["total_tokens"] < 0:
+                        raise ValueError("canonical 最终消息 token_usage 非法")
+                    tokens = usage["total_tokens"]
+                    break
+            return RuntimeExecutionProgress(record.outcome, record.updated_at, tokens)
 
     def claim_runtime_wakeup(self, wakeup: RuntimeExecutionWakeup) -> int:
         with self._execution_input_transaction(wakeup.session_id, wakeup.thread_id) as connection:

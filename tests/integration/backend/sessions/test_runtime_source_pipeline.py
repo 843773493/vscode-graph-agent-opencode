@@ -123,6 +123,7 @@ class ModelReplayCase:
 
     async def plan(
         self, session_id: str, responses: list[dict[str, object]], *, thread_id: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> list[str]:
         if thread_id is None:
             main_thread = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
@@ -136,6 +137,7 @@ class ModelReplayCase:
                 response_id=f"chatcmpl-runtime-source-{index}", model="e2e-stub-model",
                 deltas=({"role": "assistant", **response},),
                 finish_reason="tool_calls" if "tool_calls" in response else "stop",
+                usage=usage,
             ),
         ).raw["interactions"][0] for index, response in enumerate(responses)]
         calls = self.control.plan_model_calls(session_id, thread_id, interactions)

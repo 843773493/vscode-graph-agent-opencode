@@ -34,7 +34,10 @@ from app.domain.itemized.mutation_intents import (
 )
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime import ModelCallRecord
-from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.domain.itemized.runtime_wakeup import (
+    RuntimeExecutionProgress,
+    RuntimeExecutionWakeup,
+)
 from app.prompting import internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     source_lifecycle_item,
@@ -477,6 +480,9 @@ class RuntimeExecutionOwnerMixin:
 
     def runtime_execution_outcome(self, session_id: str, thread_id: str, execution_id: str) -> str:
         return self._storage.executions.runtime_execution_outcome(session_id, thread_id, execution_id)
+
+    def runtime_execution_progress(self, wakeup: RuntimeExecutionWakeup) -> RuntimeExecutionProgress:
+        return self._storage.executions.runtime_execution_progress(wakeup)
 
     def claim_runtime_wakeup(self, wakeup: RuntimeExecutionWakeup) -> int:
         return self._storage.executions.claim_runtime_wakeup(wakeup)

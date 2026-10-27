@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -162,6 +162,11 @@ def test_pending_runtime_wakeups_keep_admission_order_after_restart(
         remaining, = restarted.execution_queue_snapshot(SESSION_ID, thread_id).records
         assert remaining.cursor.admission.job_id == accepted[1].job_id
         assert remaining.cursor.commit_id == cursors[1]
+        assert restarted.runtime_execution_progress(cancelled).outcome == "cancelled"
+        progress = restarted.runtime_execution_progress(accepted[1])
+        assert progress.outcome == "unknown" and progress.total_tokens == 0
+        with pytest.raises(RuntimeError, match="原准入 identity"):
+            restarted.runtime_execution_progress(replace(accepted[1], execution_id="another-execution"))
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(

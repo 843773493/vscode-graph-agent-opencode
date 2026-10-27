@@ -251,6 +251,6 @@ Workspace schema21扩展原任务表，以application_type=goal、owner_session_
 
 公开PersistentTaskDTO将共同的任务身份/版本/生命周期与应用状态分开：automation携带原组件配置，goal携带同一Goal DTO，互斥且核验Goal ID。内部AutomationTaskDTO只收窄组件执行需要的不可空配置，不引入第二套序列化或持久化。管理列表/详情读取全部已发布应用，普通组件worker只读取automation；所有数据仍由同一WorkspaceStateStore保存。Goal更新/清除沿原事件触发完整快照失效，任务通知不保存另一份Goal镜像。
 
-Goal 续跑在原 Goal 锁内先提交 source/wakeup 准入，接受成功后再登记 last_continued_job_id；失败不写尝试标记，也不需要补偿回写。接受前进程中断由统一 worker 恢复原 Goal 并重试原幂等链路。此处已验证接受前硬重启；接受后标记前中断及完整在途执行对账仍需独立产品验收，不能据此视为所有恢复窗口完成。
+Goal 续跑在原 Goal 锁内先提交 source/wakeup 准入，接受成功后再登记 last_continued_job_id；失败不写尝试标记，也不需要补偿回写。接受前进程中断由统一 worker 恢复原 Goal 并重试原幂等链路。接受后，worker 只查询当前 Goal ID/revision 的原 idle/objective 准入根，按原 admission commit 选择较晚入口并沿后继幂等键找到尾执行。未结束执行恢复内存归属，已结束执行从原 execution queue 和 canonical 最终输出取得终态、用量及时间，与实时事件共用记账及续跑函数；不读取当前 checkpoint 猜历史，也不增加 Goal 结果账本。已通过产品入口验证执行完成后在标记保存前、保存后硬重启，准确记账且无重复执行。深续跑链仍逐项查询，代码保留测量后优化 TODO；完整在途模型/工具恢复、无 Goal 准入根的历史用户执行及目标编辑与旧在途执行的重启组合仍待7.4验收。
 
 启动枚举Goal及普通任务恢复身份，在初始化回执后才推进单项工作。Goal恢复工作冻结原目标身份和revision，管理查询展示recovering；暂停等操作仍更改原Goal状态，迟到恢复不能改回active。成功结束恢复后清除瞬态进度并通知同一管理列表。通用组件管理暂时明确拒绝Goal动作，等待6.5将表单接到既有Goal规则；不得直接修改同事务派生的lifecycle索引。此查询切片不代表会话生成器或主Web管理已完成，产品/合同证据见tasks.md。

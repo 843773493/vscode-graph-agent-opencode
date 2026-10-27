@@ -270,3 +270,67 @@ async def test_goal_restart_before_continuation_acceptance_does_not_lose_activat
         if not activation.done():
             activation.cancel()
         await asyncio.gather(activation, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["accepted_before_record", "recorded"])
+async def test_goal_restart_after_execution_before_continuation_record_reconciles_the_original_execution(
+    restart_source_case: RestartRuntimeSourceCase,
+    phase: str,
+) -> None:
+    case = restart_source_case
+    session_id, thread_id, _ = await _target(case)
+    await case.plan(session_id, [
+        {"content": "第一轮结束，目标仍需继续"},
+        _tool_reply("update_goal", {"status": "complete"}, "call_goal_reconcile_done"),
+        {"content": "恢复后继续并完成目标"},
+    ], thread_id=thread_id, usage={"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11})
+    barrier_id = "goal-accepted-before-record"
+    case.control.arm_match(barrier_id, f"goal.continuation.{phase}", {"session_id": session_id})
+    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+        "objective": "接受后执行结束但未登记续跑标记时仍能继续",
+    }))
+    try:
+        barrier = await asyncio.to_thread(case.control.acknowledged_match, barrier_id)
+        goal_id = barrier["details"]["goal_id"]
+        original, = _sql(case.workspace, session_id, thread_id,
+                        "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups")
+        await _job(case, original[1])
+        async with asyncio.timeout(5):
+            while _sql(case.workspace, session_id, thread_id,
+                        "SELECT execution_id,outcome FROM executions") != [(original[2], "completed")]:
+                await asyncio.sleep(0.05)
+        assert case.call_count(session_id, thread_id) == 1
+        await case.restart(hard=True, while_stopped=lambda: _release_match(case, barrier_id))
+        result, = await asyncio.gather(activation, return_exceptions=True)
+        assert isinstance(result, httpx.TransportError), result
+        async with asyncio.timeout(15):
+            while True:
+                goal = await _goal(case, session_id)
+                assert goal["goal_id"] == goal_id
+                if goal["status"] == "complete":
+                    break
+                await asyncio.sleep(0.05)
+        wakeups = _sql(case.workspace, session_id, thread_id,
+                       "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups ORDER BY message_created_at")
+        assert len(wakeups) == 2 and wakeups[0] == original
+        assert all(row[0] == f"goal:{goal_id}:state" for row in wakeups)
+        await _job(case, wakeups[1][1])
+        assert case.call_count(session_id, thread_id) == 3
+        async with asyncio.timeout(5):
+            while (goal := await _goal(case, session_id))["tokens_used"] != 22:
+                await asyncio.sleep(0.05)
+        assert set(goal["accounted_jobs"]) == {row[1] for row in wakeups}
+        assert all(account["tokens"] == 11 for account in goal["accounted_jobs"].values())
+        assert _sql(case.workspace, session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
+        await case.restart(hard=True)
+        assert (await _goal(case, session_id))["status"] == "complete"
+        assert case.call_count(session_id, thread_id) == 3
+        assert _sql(case.workspace, session_id, thread_id,
+                    "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups ORDER BY message_created_at") == wakeups
+        case.write_actual("goal-accepted-recovery", {"goal": goal, "original": original, "wakeups": wakeups})
+    finally:
+        _release_match(case, barrier_id)
+        if not activation.done():
+            activation.cancel()
+        await asyncio.gather(activation, return_exceptions=True)

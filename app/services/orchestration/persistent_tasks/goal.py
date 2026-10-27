@@ -50,6 +50,63 @@ def _metadata(goal: SessionGoalDTO) -> dict[str, object]:
     return {"goal_continuation": True, "goal_id": goal.goal_id, "goal_objective": goal.objective}
 
 
+async def _finish_execution(runtime: PersistentTaskRuntime, session_id: str, *, goal_id: str | None,
+                            job_id: str, outcome: str, tokens: int, elapsed_seconds: int) -> None:
+    goals = runtime.goals
+    goal = await goals.get(session_id)
+    if goal is None or goal_id != goal.goal_id:
+        return
+    if outcome not in {"completed", "completed_empty"}:
+        if goal.status == GoalStatus.active:
+            await goals.set(session_id, status=GoalStatus.paused if outcome == "cancelled" else GoalStatus.blocked)
+        return
+    goal = await goals.account_job(session_id, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed_seconds)
+    if goal is None:
+        return
+    async with runtime.action_admission() as admitted:
+        if not admitted:
+            return
+        if goal.status == GoalStatus.budget_limited:
+            await _submit(runtime, goal, budget_limited_message(goal, metadata={**_metadata(goal), "goal_budget_limited": True}), job_id)
+            return
+
+        async def dispatch(current: SessionGoalDTO) -> None:
+            await _submit(runtime, current, continuation_message(current, metadata=_metadata(current)), job_id)
+
+        await goals.dispatch_continuation_if_active(session_id, job_id, dispatch)
+
+
+async def _recover_execution(runtime: PersistentTaskRuntime, goal: SessionGoalDTO) -> bool:
+    """沿原准入幂等身份追踪当前 revision，恢复丢失的终态消费。"""
+    roots = (f"idle:{goal.goal_id}:{goal.revision}:goal_continuation",
+             f"objective:{goal.revision}:goal_objective_updated")
+    accepted = [wakeup for identity in roots if (wakeup := runtime._dispatcher.submitted(
+        goal.session_id, goal.thread_id, idempotency_key=f"goal:{goal.goal_id}:{identity}",
+    )) is not None]
+    if not accepted:
+        return False
+    wakeup = max(accepted, key=lambda row: runtime._saver.execution_queue_record(
+        row.session_id, row.thread_id, row.job_id,
+    ).cursor.commit_id)
+    # TODO：深历史恢复仍逐个查询原准入；先保留正确归属，测量后优化索引读取。
+    while (following := runtime._dispatcher.submitted(
+        goal.session_id, goal.thread_id,
+        idempotency_key=f"goal:{goal.goal_id}:{wakeup.job_id}:goal_continuation",
+    )) is not None:
+        wakeup = following
+    progress = runtime._saver.runtime_execution_progress(wakeup)
+    if progress.outcome == "unknown":
+        runtime._goal_job_owners[wakeup.job_id] = goal.goal_id
+    else:
+        await _finish_execution(
+            runtime, goal.session_id, goal_id=goal.goal_id, job_id=wakeup.job_id,
+            outcome=progress.outcome, tokens=progress.total_tokens,
+            elapsed_seconds=max(0, int(datetime.fromisoformat(progress.updated_at).timestamp()
+                                       - datetime.fromisoformat(wakeup.message_created_at).timestamp())),
+        )
+    return True
+
+
 async def process_goal_work(runtime: PersistentTaskRuntime, work: GoalWork) -> None:
     goals, jobs = runtime.goals, runtime.jobs
     if work.kind in {"agent_end", "failed", "cancelled"}:
@@ -60,26 +117,12 @@ async def process_goal_work(runtime: PersistentTaskRuntime, work: GoalWork) -> N
         goal = await goals.get(work.session_id)
         if goal is None or owner != goal.goal_id or job.thread_id != goal.thread_id:
             return
-        if work.kind != "agent_end":
-            if goal.status == GoalStatus.active:
-                await goals.set(work.session_id, status=GoalStatus.paused if work.kind == "cancelled" else GoalStatus.blocked)
-            return
         assert work.observed_at is not None
-        elapsed = max(0, int((job.ended_at or work.observed_at).timestamp() - job.created_at.timestamp()))
-        goal = await goals.account_job(work.session_id, job_id=job_id, tokens=work.tokens, elapsed_seconds=elapsed)
-        if goal is None:
-            return
-        async with runtime.action_admission() as admitted:
-            if not admitted:
-                return
-            if goal.status == GoalStatus.budget_limited:
-                await _submit(runtime, goal, budget_limited_message(goal, metadata={**_metadata(goal), "goal_budget_limited": True}), job_id)
-                return
-
-            async def dispatch(current: SessionGoalDTO) -> None:
-                await _submit(runtime, current, continuation_message(current, metadata=_metadata(current)), job_id)
-
-            await goals.dispatch_continuation_if_active(work.session_id, job_id, dispatch)
+        elapsed = (max(0, int((job.ended_at or work.observed_at).timestamp() - job.created_at.timestamp()))
+                   if work.kind == "agent_end" else 0)
+        await _finish_execution(runtime, work.session_id, goal_id=owner, job_id=job_id,
+                                outcome="completed" if work.kind == "agent_end" else work.kind,
+                                tokens=work.tokens, elapsed_seconds=elapsed)
         return
 
     async with runtime.action_admission() as admitted:
@@ -91,6 +134,8 @@ async def process_goal_work(runtime: PersistentTaskRuntime, work: GoalWork) -> N
         if work.goal is not None and (goal.goal_id, goal.revision) != (work.goal.goal_id, work.goal.revision):
             return
         if work.job is not None and work.job.thread_id != goal.thread_id:
+            return
+        if work.recovering and await _recover_execution(runtime, goal):
             return
         current_jobs = await jobs.list(session_id=work.session_id)
         if work.kind == "idle" and any(job.thread_id == goal.thread_id and job.status.value in {"queued", "running", "accepted", "streaming"}
