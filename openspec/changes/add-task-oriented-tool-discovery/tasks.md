@@ -302,3 +302,8 @@
 - 新产品场景经真实Gateway→Session消息→Agent搜索，在4096字节预算内取得needs_read引用；下一轮使用实际返回的read_path调用普通read_file，拼回模型所见完整正文核对字节数、SHA-256、完整$defs/enum/required/additionalProperties及原provenance，再经既有信封取得真实MCP回执。搜索本身零业务调用；五份实际请求逐一核owner、preimage/hash，Provider ToolSet及prefix epoch保持不变，不新增schema读取或SSE实现。
 - 仅含HEAD及本测试的完整tree `isolated-large-definition-042`：产品1通过／69.95秒，实际退出0，Ruff、Pyright零诊断及OpenSpec strict通过。同tree的`isolated-discovery-regression-043`为55通过／72.49秒，覆盖首次搜索前冻结、live修改/删除与冷Saver、分页冲突、软/硬隐藏、撤权、真实输出中间件及物化失败、恢复定义/删除事实和turn/model_call边界。3.6的真实Runner压缩→冷恢复→fork→回退与本change5.x/8.3的内联定义和真实执行证据按未变依赖复用，不将单元冷读冒充进程或浏览器验收。
 - 保留039的原测试payload类型诊断、040的PrefixEpoch类型诊断与041的schema预期失败原件；LangChain公开tool_call_schema确实补入Server工具描述，修正为完整公开契约相等断言，未放宽schema内容、正文hash或调用配对。042/043与失败副本均核验tracked文件无漂移后清理源码，正式输出、准确命令和退出码在 `out/tests/temp/mcp-discovery-policy/artifacts/`。关闭3.7，当前40/52；完整HITL、持久等待剩余场景及跨Gateway授权仍未完成，真实Provider缓存收益不由回放证明。
+
+### 2026-10-27 审批恢复的 pending-write 控制合同
+
+- Saver 按官方 WRITES_IDX_MAP 分离可更新控制槽与普通不可变写入，消除 interrupt 与恢复输出争用 index 0。未改变 SQLite 结构或 schema 版本；普通重试正文冲突继续明确拒绝。
+- `pending-final-011` 为4 passed／5.51秒，包含同步／异步、冷读、普通写入冲突和既有损坏检查；最终类型／Ruff检查及新测试复验 `pending-final-static-014` 退出0。命令、逐文件指纹、raw与实际退出码保留在 `out/tests/temp/mcp-tool-approval/artifacts/runs/`。新合同纳入两项既有历史存储矩阵。完整审批和HITL跨替换仍未勾选。

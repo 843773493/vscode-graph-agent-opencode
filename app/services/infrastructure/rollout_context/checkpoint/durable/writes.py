@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-from langgraph.checkpoint.base import PendingWrite
+from langgraph.checkpoint.base import WRITES_IDX_MAP, PendingWrite
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.checkpoint.codec.pending_messages import (
@@ -52,10 +52,11 @@ def _pending_write_row(
     ) = row
     task_id = strict_text(task_id, field="pending_writes.task_id")
     task_path = strict_text(task_path, field="pending_writes.task_path")
-    write_index = strict_non_negative_int(
-        write_index, field="pending_writes.write_index"
-    )
     channel = strict_text(channel, field="pending_writes.channel")
+    if not isinstance(write_index, int) or isinstance(write_index, bool):
+        raise TypeError("pending_writes.write_index 必须是整数")
+    if write_index < 0 and WRITES_IDX_MAP.get(channel) != write_index:
+        raise ValueError("pending_writes 负索引必须匹配 LangGraph 控制通道")
     serializer = strict_text(serializer, field="pending_writes.serializer_name")
     if not isinstance(value_blob, (bytes, bytearray)):
         raise TypeError("pending_writes.value_blob 必须是 bytes")
@@ -169,7 +170,7 @@ class RolloutWriteMixin:
         thread_id: str,
         checkpoint_ns: str,
         checkpoint_id: str,
-        writes: Iterable[PendingWrite],
+        writes: Iterable[tuple[str, object]],
         task_id: str,
         task_path: str,
     ) -> None:
@@ -191,6 +192,9 @@ class RolloutWriteMixin:
                 for index, (channel, value) in enumerate(writes):
                     serializer, blob, length, digest = self._storage._encode(value)
                     channel = strict_text(channel, field="pending_writes.channel")
+                    # 官方控制槽可更新，且不能与恢复后节点的普通第零项互相占用。
+                    # 普通业务写入仍保持原有的不可变重试核对。
+                    index = WRITES_IDX_MAP.get(channel, index)
                     expected = _pending_write_row(
                         (
                             task_id,
@@ -215,6 +219,16 @@ class RolloutWriteMixin:
                     ).fetchone()
                     if existing is not None:
                         stored = _pending_write_row(tuple(existing))
+                        if index < 0:
+                            if stored[:4] != expected[:4]:
+                                raise RuntimeError("pending_writes 控制槽身份冲突")
+                            cursor = connection.execute(
+                                "UPDATE pending_writes SET serializer_name=?, value_blob=?, value_length=?, value_hash=? "
+                                "WHERE checkpoint_id=? AND task_id=? AND task_path=? AND write_index=?",
+                                (*expected[4:8], checkpoint_id, task_id, task_path, index),
+                            )
+                            _assert_one_row(cursor, context="更新 pending_writes 控制槽")
+                            continue
                         if (stored[:4] != expected[:4] or stored[8] != expected[8]
                                 or original_write_fingerprint(*stored[4:8], storage=self._storage) != original_write_fingerprint(*expected[4:8], storage=self._storage)):
                             raise RuntimeError(

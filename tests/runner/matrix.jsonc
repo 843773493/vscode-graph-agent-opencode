@@ -172,6 +172,7 @@
         "tests/integration/backend/sessions/rollout_context/test_message_revisions.py",
         "tests/integration/backend/sessions/rollout_context/test_langgraph_channel_contract.py",
         "tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py",
+        "tests/integration/backend/sessions/rollout_context/test_pending_control_writes.py",
         "tests/integration/backend/sessions/test_rollout_fork_protected.py",
         "tests/integration/backend/sessions/test_rollout_fork_plan_registry.py"
       ]
@@ -194,6 +195,7 @@
         "tests/integration/backend/sessions/rollout_context/test_message_revisions.py",
         "tests/integration/backend/sessions/rollout_context/test_langgraph_channel_contract.py",
         "tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py",
+        "tests/integration/backend/sessions/rollout_context/test_pending_control_writes.py",
         "tests/integration/backend/sessions/test_rollout_fork_protected.py",
         "tests/integration/backend/sessions/test_rollout_fork_plan_registry.py",
         "tests/unit/services/infrastructure/rollout_context/test_turn_activity_projection.py",
