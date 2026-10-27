@@ -20,7 +20,7 @@
 - [x] 3.4 接入 ToolPolicyResolver 完整结果及统一 ToolMetadata，分离软 model_visible 与硬 model_visibility_locked；发现、精确查询、导航和恢复均服从 model_hidden，执行禁用不能经发现绕过；区分已知未授权与未知目录。
 - [x] 3.5 将默认全量摘要改为有界能力导航，保留用户显式 model_visible 自动注入及 Skill 调用；固定 Provider description 不枚举动态目录。
 - [x] 3.6 将发现结果和定义 provenance 接入既有 ToolResult／资源存储及 CSM/Saver 恢复，压缩后按当前硬隐藏策略恢复必要完整定义，已有正文不重复注入，全部 definition facet 不自动进入模型正文。
-- [ ] 3.7 验证首次搜索前与进程重启后的冻结正文、搜索→内联／artifact 读取→信封执行真实链路、ToolOutputMiddleware 裁剪、物化失败、分页冲突、软隐藏／硬隐藏／撤权、压缩恢复、删除提示和 turn/model_call 边界；核对真实序列化请求的 ToolSet／epoch 行为并完成静态分析。
+- [x] 3.7 验证首次搜索前与进程重启后的冻结正文、搜索→内联／artifact 读取→信封执行真实链路、ToolOutputMiddleware 裁剪、物化失败、分页冲突、软隐藏／硬隐藏／撤权、压缩恢复、删除提示和 turn/model_call 边界；核对真实序列化请求的 ToolSet／epoch 行为并完成静态分析。
 
 ## 4. MCP 执行 handle 与连接代际收敛
 
@@ -287,3 +287,9 @@
 - 真实 Session 消息生成 main 历史，经公开 source-point／fork-context 创建同 Session child；child 登记授权等待并结束原执行。邮箱已提交、dispatcher 尚未接受时强杀 Backend，重启后原 child 冷编译并完成独立 internal execution，turn_id=None；main 无额外执行或唤醒，继承 assembly hash 不变，新五份请求逐一核对 owner、preimage/hash、工具配对及真实 MCP 回执，OAuth 仅交换一次。模型继续复用 model_stream。
 - `child-wait-product-034` 新场景1通过；仅含 HEAD 与该测试文件的完整 Git 快照 `isolated-child-wait-037` 中 child 通过，组合另一个 main 场景失败于新增测试提前读取空 rollout，尚未进入业务。限定仅 child 读取继承基线后，`isolated-child-wait-038` main 场景1通过／71.79秒，实际退出0；child 分支业务断言未变，复用037证据。038 Ruff、Pyright零诊断及OpenSpec strict通过；037沿同树036复用静态结果，036筛选引号错误未执行产品测试的原件保留。
 - 命令、tree、源码指纹、raw、实际退出码与正式输出保存在 `out/tests/temp/mcp-discovery-policy/artifacts/`；035—038源码副本均核验无漂移后清理。6.6仍未勾选，用户输入交错、Session删除及全过程deadline等产品门继续未完成；团队／协作TODO不变。
+
+### 3.7 大定义的普通读取与完整发现验收（2026-10-27）
+
+- 新产品场景经真实Gateway→Session消息→Agent搜索，在4096字节预算内取得needs_read引用；下一轮使用实际返回的read_path调用普通read_file，拼回模型所见完整正文核对字节数、SHA-256、完整$defs/enum/required/additionalProperties及原provenance，再经既有信封取得真实MCP回执。搜索本身零业务调用；五份实际请求逐一核owner、preimage/hash，Provider ToolSet及prefix epoch保持不变，不新增schema读取或SSE实现。
+- 仅含HEAD及本测试的完整tree `isolated-large-definition-042`：产品1通过／69.95秒，实际退出0，Ruff、Pyright零诊断及OpenSpec strict通过。同tree的`isolated-discovery-regression-043`为55通过／72.49秒，覆盖首次搜索前冻结、live修改/删除与冷Saver、分页冲突、软/硬隐藏、撤权、真实输出中间件及物化失败、恢复定义/删除事实和turn/model_call边界。3.6的真实Runner压缩→冷恢复→fork→回退与本change5.x/8.3的内联定义和真实执行证据按未变依赖复用，不将单元冷读冒充进程或浏览器验收。
+- 保留039的原测试payload类型诊断、040的PrefixEpoch类型诊断与041的schema预期失败原件；LangChain公开tool_call_schema确实补入Server工具描述，修正为完整公开契约相等断言，未放宽schema内容、正文hash或调用配对。042/043与失败副本均核验tracked文件无漂移后清理源码，正式输出、准确命令和退出码在 `out/tests/temp/mcp-discovery-policy/artifacts/`。关闭3.7，当前40/52；完整HITL、持久等待剩余场景及跨Gateway授权仍未完成，真实Provider缓存收益不由回放证明。

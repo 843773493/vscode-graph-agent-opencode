@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import secrets
 
@@ -41,14 +42,16 @@ def discovery_plan():
             delta = {"content": "已核查目录与连接事实。"} if index == len(operations) else {
                 "tool_calls": [_tool_call(call_index=index, name=operations[index][0], arguments=operations[index][1])],
             }
-            interactions.append(build_cassette(
+            interaction = build_cassette(
                 asset_id=f"{key}-{index}", model="control-replay-model",
                 url="https://opencode.ai/zen/v1/chat/completions",
                 frames=chat_completion_frames(
                     response_id=f"chatcmpl-{key}-{index}", model="control-replay-model",
                     deltas=({"role": "assistant", **delta},), finish_reason="stop" if index == len(operations) else "tool_calls",
                 ),
-            ).raw["interactions"][0])
+            ).raw["interactions"]
+            assert isinstance(interaction, list) and isinstance(interaction[0], dict)
+            interactions.append(interaction[0])
         return replay.control.plan_model_calls(session, thread, interactions)
     return plan
 
@@ -62,6 +65,92 @@ async def observe_operation(client, operation_id, status):
             if operation["status"] == status:
                 return operation
             assert operation["status"] not in {"succeeded", "failed", "expired", "cancelled"}, operation
+
+
+async def test_large_definition_is_read_through_file_tool_before_real_invocation(
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan,
+):
+    schema = {
+        "type": "object", "properties": {"proof": {"$ref": "#/$defs/proof"}},
+        "required": ["proof"], "additionalProperties": False,
+        "$defs": {"proof": {
+            "type": "string", "enum": ["artifact-verified"],
+            "description": "完整契约不得截断：" + "schema-value-" * 450 + "定义尾部必须保留。",
+        }},
+    }
+    async with oauth_endpoint_factory() as secure, http_schema_endpoint_factory("large") as endpoint:
+        endpoint.definitions.write_text(json.dumps({"probe": schema}))
+        async with product_case(secure, endpoint) as (client, replay, case):
+            session = await create_session(client, "大定义沿普通文件链路读取")
+            response = await client.get(f"/api/v1/sessions/{session}/main-thread")
+            assert response.status_code == 200, response.text
+            thread = response.json()["data"]["thread_id"]
+            first = discovery_plan(replay, session, thread, [
+                ("search_tools", {"tool_ids": ["mcp__schema__probe"], "max_response_bytes": 4096}),
+            ], key="large-definition-search")
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+                "message": {"content": "检索 probe 的完整定义；超过预算时保留可读引用。"},
+                "run": {"mode": "single_agent", "agent_id": "default"},
+            })
+            assert response.status_code == 200, response.text
+            await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
+            search_request = json.loads((replay.artifacts / f"{first[-1]}.json").read_text())["request"]
+            found_message, = [message for message in search_request["messages"] if message["role"] == "tool"]
+            assert found_message["tool_call_id"] == "debug-e2e-call-0"
+            assert len(found_message["content"].encode()) <= 4096
+            definition, = json.loads(found_message["content"])["results"]
+            assert definition["schema_state"] == "needs_read" and "input_schema" not in definition
+            assert definition["byte_count"] > 4096 and definition["schema_pointer"] == "/input_schema"
+            assert definition["schema_ref"] == definition["read_path"]
+            assert str(case.mount.workspace_root) not in found_message["content"]
+            assert not endpoint.receipts.exists() or not endpoint.receipts.read_text().strip()
+
+            # 下轮模型使用真实 ToolResult 返回的引用；不预填 artifact 或 checkpoint。
+            second = discovery_plan(replay, session, thread, [
+                ("read_file", {"path": definition["read_path"]}),
+                ("invoke_extension_tool", {"tool_name": "mcp__schema__probe", "arguments": {"proof": "artifact-verified"}}),
+            ], key="large-definition-read-invoke")
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+                "message": {"content": "沿上轮引用用普通 read_file 读取完整定义，再调用 probe。"},
+                "run": {"mode": "single_agent", "agent_id": "default"},
+            })
+            assert response.status_code == 200, response.text
+            await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
+            records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in [*first, *second]]
+            results = [message for message in records[-1]["messages"] if message["role"] == "tool"]
+            assert [(message["name"], message["tool_call_id"]) for message in results] == [
+                ("search_tools", "debug-e2e-call-0"), ("read_file", "debug-e2e-call-0"),
+                ("invoke_extension_tool", "debug-e2e-call-1"),
+            ]
+            # 普通文件文本带行号，长行可分段；拼回实际模型所见正文核对完整字节身份。
+            read_content = results[1]["content"]
+            assert "内容已截断" not in read_content
+            document = "".join(line.split("\t", 1)[1] for line in read_content.splitlines() if "\t" in line)
+            assert len(document.encode()) == definition["byte_count"]
+            assert hashlib.sha256(document.encode()).hexdigest() == definition["content_sha256"]
+            restored = json.loads(document)
+            # LangChain 的公开工具契约包含 Server 的工具描述注解。
+            assert restored["input_schema"] == {**schema, "description": "完整输入契约"}
+            assert restored["provenance"] == definition["provenance"]
+            assert restored["schema_hash"] == definition["schema_hash"]
+            assert json.loads(results[-1]["content"][0]["text"]) == {"name": "probe", "arguments": {"proof": "artifact-verified"}}
+            assert [json.loads(line) for line in endpoint.receipts.read_text().splitlines()] == [
+                {"name": "probe", "arguments": {"proof": "artifact-verified"}},
+            ]
+            assert secure.exchanges == 0
+            assert all(record["tools"] == records[0]["tools"] for record in records)
+            resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
+            with RolloutCheckpointSaver(resolver.sessions_root) as saver:
+                assemblies = saver.list_context_assemblies(session, thread)
+                assert len(assemblies) == len(records) == 5
+                epochs: set[int] = set()
+                for assembly, record in zip(assemblies, records, strict=True):
+                    assert (assembly.session_id, assembly.thread_id) == (session, thread)
+                    assert assembly.request_hash_preimage == normalize_wire_request(record)
+                    assembly.validate_hashes()
+                    assert assembly.seal_binding is not None
+                    epochs.add(assembly.seal_binding.prefix.state.epoch.ordinal)
+                assert len(epochs) == 1
 
 
 async def test_initially_disabled_tool_is_known_but_never_reaches_server(
@@ -242,9 +331,15 @@ async def test_upstream_authorization_uses_published_remote_manager_without_reco
                             and item.projection_identity is not None
                             and item.projection_identity.projection_message_id is None]
                 assert len(attempts) == 5
-                assert [item.payload["tool_outcome"] for item in attempts] == ["success", "failure", "failure", "success", "success"]
-                for item, index in zip((attempts[1], attempts[3]), (1, 3), strict=True):
-                    assert item.payload["artifact"]["structured_content"] == json.loads(results[index]["content"][0]["text"])
+                payloads = []
+                for item in attempts:
+                    assert isinstance(item.payload, dict)
+                    payloads.append(item.payload)
+                assert [payload["tool_outcome"] for payload in payloads] == ["success", "failure", "failure", "success", "success"]
+                for payload, index in zip((payloads[1], payloads[3]), (1, 3), strict=True):
+                    artifact = payload["artifact"]
+                    assert isinstance(artifact, dict)
+                    assert artifact["structured_content"] == json.loads(results[index]["content"][0]["text"])
                 assemblies = saver.list_context_assemblies(session, thread)
                 assert len(assemblies) == len(records) == 6
                 for assembly, record in zip(assemblies, records, strict=True):
