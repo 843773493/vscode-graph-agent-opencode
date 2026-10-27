@@ -455,8 +455,8 @@ class RuntimeExecutionOwnerMixin:
             applied_revision=None, tracked=False,
         )
 
-    def execution_output(self, session_id: str, thread_id: str, execution_id: str) -> tuple[str, InternalDisplayProvenance]:
-        return self._storage.executions.execution_output(session_id, thread_id, execution_id)
+    def execution_output(self, session_id: str, thread_id: str, execution_id: str, *, final_only: bool = False) -> tuple[str, InternalDisplayProvenance]:
+        return self._storage.executions.execution_output(session_id, thread_id, execution_id, final_only=final_only)
 
     def cold_execution_observations(self, session_id: str, thread_id: str, *, job_ids: list[str] | None = None, turn_id: str | None = None) -> list[dict[str, str]]:
         return self._storage.executions.cold_execution_observations(session_id, thread_id, job_ids=job_ids, turn_id=turn_id)

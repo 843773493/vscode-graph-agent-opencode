@@ -152,13 +152,14 @@ class RuntimeWakeupStorageMixin:
             )
             return dict(preimage["input"])
 
-    def execution_output(self, session_id: str, thread_id: str, execution_id: str) -> tuple[str, InternalDisplayProvenance]:
+    def execution_output(self, session_id: str, thread_id: str, execution_id: str, *, final_only: bool = False) -> tuple[str, InternalDisplayProvenance]:
         with self._storage.read_connection(session_id, thread_id, "") as connection:
             self._storage._require_v2_runtime(connection)
-            if connection.execute(
-                "SELECT 1 FROM executions WHERE session_id=? AND thread_id=? AND execution_id=?",
+            execution = connection.execute(
+                "SELECT last_model_call_id FROM executions WHERE session_id=? AND thread_id=? AND execution_id=?",
                 (session_id, thread_id, execution_id),
-            ).fetchone() is None:
+            ).fetchone()
+            if execution is None:
                 raise KeyError(f"execution 输出来源不存在: {execution_id}")
             rows = connection.execute(
                 "SELECT item_id FROM item_catalog WHERE execution_id = ? "
@@ -167,6 +168,9 @@ class RuntimeWakeupStorageMixin:
             items = tuple(self._storage._read_canonical_item_from_catalog(
                 connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=str(row[0]),
             ) for row in rows)
+            if final_only:
+                items = tuple(item for item in items if execution[0] is not None and item.projection_identity is not None
+                              and item.projection_identity.model_call_id == execution[0] and item.status == "completed")
         superseded = superseded_item_ids(items)
         items = tuple(item for item in items if item.item_id not in superseded)
         codec = self._storage._codec()

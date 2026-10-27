@@ -41,6 +41,7 @@
 - `integration-persistent-task-notifications`经受认证的任务入口、真实脚本和model_stream核对外部输入、并发同键重试、异内容冲突、暂停/编辑及Backend硬重启后的原输入/接受身份，固定240秒/4GiB；不替代工作执行事件、模型判断、Goal/生成器或主Web验收。
 - `integration-persistent-task-rules`通过任务API与model_stream验证JSON Pointer、缺失/null、bool/number与结构相等、原条件策略、暂停试运行及checking硬重启，固定240秒/4GiB；不替代模型判断、Goal/生成器或主Web验收。
 - `integration-persistent-task-execution-events`通过真实用户/内部执行、任务API与model_stream核对原canonical终态引用、来源游标、暂停/更换来源及接受前Backend硬重启，固定300秒/4GiB；不替代模型判断、Goal/生成器迁移或主Web验收。
+- `integration-persistent-task-models`经原执行准入与model_stream验证四类决定、无效/取消、独立判断Thread、忙时串行、迟到/试运行及接受后硬重启；固定360秒/4GiB，不替代Goal/生成器迁移或主Web管理验收。
 - `integration-persistent-task-schedules`经任务API、受控时钟、model_stream和真实Backend硬重启，核对interval/cron、时区、补跑、暂停恢复及原计划身份，固定240秒/4GiB；不替代脚本/模型条件、Goal/生成器迁移或主Web验收。
 - `integration-persistent-tasks-manual`通过任务 API、原 source owner 与 model_stream 核对手动触发、试运行、忙时排队、revision 以及接受后硬重启对账，固定300秒/4GiB；不代表定时、脚本/模型条件、Goal/生成器迁移或主Web验收。
 - 每个已启用 suite 都带数据段内存上限与硬超时；被上限或超时中止的套件必须以 TIMEOUT 或非零退出码报出，不得记成通过。

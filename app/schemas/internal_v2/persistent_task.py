@@ -89,16 +89,32 @@ class TaskRuleCheckDTO(BaseModel):
         return value
 
 
+class TaskModelCheckDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    thread_uri: str
+    instruction: str = Field(min_length=1)
+
+    @field_validator("thread_uri")
+    @classmethod
+    def require_thread(cls, value: str) -> str:
+        if parse_session_thread_uri(value)[2] is None:
+            raise ValueError("模型判断必须绑定明确Thread URI")
+        return value
+
+
 class TaskConditionDTO(TaskComponentDTO):
-    type_id: Literal["builtin.always", "builtin.script", "builtin.rule"]
+    type_id: Literal["builtin.always", "builtin.script", "builtin.rule", "builtin.model"]
     script: TaskScriptCheckDTO | None = None
     rule: TaskRuleCheckDTO | None = None
+    model: TaskModelCheckDTO | None = None
 
     @model_validator(mode="after")
     def validate_component(self) -> TaskConditionDTO:
         if ((self.type_id == "builtin.script") != (self.script is not None)
-                or (self.type_id == "builtin.rule") != (self.rule is not None)):
-            raise ValueError("script/rule判断必须配置对应参数，不能配置其它判断器参数")
+                or (self.type_id == "builtin.rule") != (self.rule is not None)
+                or (self.type_id == "builtin.model") != (self.model is not None)):
+            raise ValueError("判断器必须配置对应参数，不能配置其它判断器参数")
         return self
 
 
@@ -139,6 +155,18 @@ class PersistentTaskConfigurationDTO(BaseModel):
     action: TaskActionDTO
     policies: TaskPoliciesDTO = Field(default_factory=TaskPoliciesDTO)
 
+    @model_validator(mode="after")
+    def isolate_model_thread(self) -> PersistentTaskConfigurationDTO:
+        if self.condition.model is not None:
+            def identity(uri: str) -> tuple[str, str, str | None]:
+                resource, session_id, thread_id = parse_session_thread_uri(uri)
+                return resource.scope_id, session_id, thread_id
+
+            judge = identity(self.condition.model.thread_uri)
+            if judge == identity(self.action.target_uri) or (self.trigger.source_uri is not None and judge == identity(self.trigger.source_uri)):
+                raise ValueError("判断Thread必须与动作Thread及执行结束来源Thread分离，避免自触发")
+        return self
+
 
 class PersistentTaskDTO(BaseModel):
     task_id: str
@@ -172,6 +200,15 @@ class TaskDeliveryDTO(BaseModel):
     execution_id: str | None = None
 
 
+class TaskEvaluationDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    thread_uri: str
+    source_item_id: str
+    job_id: str
+    execution_id: str
+
+
 class PersistentTaskRunDTO(BaseModel):
     run_id: str
     task_id: str
@@ -182,6 +219,7 @@ class PersistentTaskRunDTO(BaseModel):
     trigger_type: Literal["manual", "interval", "cron", "external", "execution_end"] = "manual"
     scheduled_for: datetime | None = None
     trigger_payload: dict[str, JsonValue] | None = None
+    evaluation: TaskEvaluationDTO | None = None
     check_only: bool
     phase: TaskRunPhase
     decision: TaskDecisionDTO | None = None

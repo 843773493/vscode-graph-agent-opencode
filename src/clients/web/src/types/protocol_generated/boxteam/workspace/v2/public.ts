@@ -2703,6 +2703,12 @@ export interface TaskConditionDTO {
   type_id: string;
   script?: TaskScriptCheckDTO | undefined;
   rule?: TaskRuleCheckDTO | undefined;
+  model?: TaskModelCheckDTO | undefined;
+}
+
+export interface TaskModelCheckDTO {
+  thread_uri: string;
+  instruction: string;
 }
 
 export interface TaskRuleCheckDTO {
@@ -2769,6 +2775,13 @@ export interface TaskDeliveryDTO {
   execution_id?: string | undefined;
 }
 
+export interface TaskEvaluationDTO {
+  thread_uri: string;
+  source_item_id: string;
+  job_id: string;
+  execution_id: string;
+}
+
 export interface PersistentTaskRunDTO {
   run_id: string;
   task_id: string;
@@ -2786,6 +2799,7 @@ export interface PersistentTaskRunDTO {
   trigger_type: string;
   scheduled_for?: string | undefined;
   trigger_payload?: { [key: string]: any } | undefined;
+  evaluation?: TaskEvaluationDTO | undefined;
 }
 
 export interface PersistentTaskCreateRequest {
@@ -19637,7 +19651,7 @@ export const TaskScriptCheckDTO: MessageFns<TaskScriptCheckDTO> = {
 };
 
 function createBaseTaskConditionDTO(): TaskConditionDTO {
-  return { version: "", type_id: "", script: undefined, rule: undefined };
+  return { version: "", type_id: "", script: undefined, rule: undefined, model: undefined };
 }
 
 export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
@@ -19647,6 +19661,7 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
       script: isSet(object.script) ? TaskScriptCheckDTO.fromJSON(object.script) : undefined,
       rule: isSet(object.rule) ? TaskRuleCheckDTO.fromJSON(object.rule) : undefined,
+      model: isSet(object.model) ? TaskModelCheckDTO.fromJSON(object.model) : undefined,
     };
   },
 
@@ -19664,6 +19679,9 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     if (message.rule !== undefined) {
       obj.rule = TaskRuleCheckDTO.toJSON(message.rule);
     }
+    if (message.model !== undefined) {
+      obj.model = TaskModelCheckDTO.toJSON(message.model);
+    }
     return obj;
   },
 
@@ -19680,6 +19698,43 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     message.rule = (object.rule !== undefined && object.rule !== null)
       ? TaskRuleCheckDTO.fromPartial(object.rule)
       : undefined;
+    message.model = (object.model !== undefined && object.model !== null)
+      ? TaskModelCheckDTO.fromPartial(object.model)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseTaskModelCheckDTO(): TaskModelCheckDTO {
+  return { thread_uri: "", instruction: "" };
+}
+
+export const TaskModelCheckDTO: MessageFns<TaskModelCheckDTO> = {
+  fromJSON(object: any): TaskModelCheckDTO {
+    return {
+      thread_uri: isSet(object.thread_uri) ? globalThis.String(object.thread_uri) : "",
+      instruction: isSet(object.instruction) ? globalThis.String(object.instruction) : "",
+    };
+  },
+
+  toJSON(message: TaskModelCheckDTO): unknown {
+    const obj: any = {};
+    if (message.thread_uri !== "") {
+      obj.thread_uri = message.thread_uri;
+    }
+    if (message.instruction !== "") {
+      obj.instruction = message.instruction;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskModelCheckDTO>, I>>(base?: I): TaskModelCheckDTO {
+    return TaskModelCheckDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskModelCheckDTO>, I>>(object: I): TaskModelCheckDTO {
+    const message = createBaseTaskModelCheckDTO();
+    message.thread_uri = object.thread_uri ?? "";
+    message.instruction = object.instruction ?? "";
     return message;
   },
 };
@@ -20119,6 +20174,50 @@ export const TaskDeliveryDTO: MessageFns<TaskDeliveryDTO> = {
   },
 };
 
+function createBaseTaskEvaluationDTO(): TaskEvaluationDTO {
+  return { thread_uri: "", source_item_id: "", job_id: "", execution_id: "" };
+}
+
+export const TaskEvaluationDTO: MessageFns<TaskEvaluationDTO> = {
+  fromJSON(object: any): TaskEvaluationDTO {
+    return {
+      thread_uri: isSet(object.thread_uri) ? globalThis.String(object.thread_uri) : "",
+      source_item_id: isSet(object.source_item_id) ? globalThis.String(object.source_item_id) : "",
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : "",
+    };
+  },
+
+  toJSON(message: TaskEvaluationDTO): unknown {
+    const obj: any = {};
+    if (message.thread_uri !== "") {
+      obj.thread_uri = message.thread_uri;
+    }
+    if (message.source_item_id !== "") {
+      obj.source_item_id = message.source_item_id;
+    }
+    if (message.job_id !== "") {
+      obj.job_id = message.job_id;
+    }
+    if (message.execution_id !== "") {
+      obj.execution_id = message.execution_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskEvaluationDTO>, I>>(base?: I): TaskEvaluationDTO {
+    return TaskEvaluationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskEvaluationDTO>, I>>(object: I): TaskEvaluationDTO {
+    const message = createBaseTaskEvaluationDTO();
+    message.thread_uri = object.thread_uri ?? "";
+    message.source_item_id = object.source_item_id ?? "";
+    message.job_id = object.job_id ?? "";
+    message.execution_id = object.execution_id ?? "";
+    return message;
+  },
+};
+
 function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
   return {
     run_id: "",
@@ -20137,6 +20236,7 @@ function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
     trigger_type: "",
     scheduled_for: undefined,
     trigger_payload: undefined,
+    evaluation: undefined,
   };
 }
 
@@ -20159,6 +20259,7 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
       trigger_type: isSet(object.trigger_type) ? globalThis.String(object.trigger_type) : "",
       scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
       trigger_payload: isObject(object.trigger_payload) ? object.trigger_payload : undefined,
+      evaluation: isSet(object.evaluation) ? TaskEvaluationDTO.fromJSON(object.evaluation) : undefined,
     };
   },
 
@@ -20212,6 +20313,9 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     if (message.trigger_payload !== undefined) {
       obj.trigger_payload = message.trigger_payload;
     }
+    if (message.evaluation !== undefined) {
+      obj.evaluation = TaskEvaluationDTO.toJSON(message.evaluation);
+    }
     return obj;
   },
 
@@ -20240,6 +20344,9 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     message.trigger_type = object.trigger_type ?? "";
     message.scheduled_for = object.scheduled_for ?? undefined;
     message.trigger_payload = object.trigger_payload ?? undefined;
+    message.evaluation = (object.evaluation !== undefined && object.evaluation !== null)
+      ? TaskEvaluationDTO.fromPartial(object.evaluation)
+      : undefined;
     return message;
   },
 };

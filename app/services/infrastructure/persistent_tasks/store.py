@@ -22,6 +22,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskRunDTO,
     TaskDecisionDTO,
     TaskDeliveryDTO,
+    TaskEvaluationDTO,
     TaskLifecycle,
     TaskRunPhase,
 )
@@ -89,6 +90,8 @@ class PersistentTaskStore:
             payload["configuration"]["condition"].pop("script")
         if request.configuration.condition.rule is None:
             payload["configuration"]["condition"].pop("rule")
+        if request.configuration.condition.model is None:
+            payload["configuration"]["condition"].pop("model")
         preimage = sha256_jcs(payload)
         with self._transaction() as connection:
             row = connection.execute("SELECT task_id,creation_hash FROM persistent_tasks WHERE creation_key=?",
@@ -225,6 +228,7 @@ class PersistentTaskStore:
             request_id=row["request_id"],
             trigger_type=row["trigger_type"], scheduled_for=row["scheduled_for"],
             trigger_payload=json.loads(row["trigger_payload_json"]) if row["trigger_payload_json"] is not None else None,
+            evaluation=TaskEvaluationDTO.model_validate_json(row["evaluation_json"]) if row["evaluation_json"] else None,
             phase=row["phase"], decision=TaskDecisionDTO.model_validate_json(row["decision_json"]) if row["decision_json"] else None,
             delivery=TaskDeliveryDTO.model_validate_json(row["delivery_json"]) if row["delivery_json"] else None,
             error=row["error"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -314,6 +318,17 @@ class PersistentTaskStore:
         if row is None:
             raise RuntimeError("持久任务运行引用的定义版本缺失")
         return PersistentTaskConfigurationDTO.model_validate_json(row[0])
+
+    def record_evaluation(self, run: PersistentTaskRunDTO, evaluation: TaskEvaluationDTO, now: datetime) -> None:
+        """只登记原准入回执；正文仍由canonical owner持有。"""
+        with self._transaction() as connection:
+            row = connection.execute("SELECT evaluation_json FROM persistent_task_runs WHERE run_id=? AND phase='checking'", (run.run_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("判断执行引用缺少checking运行")
+            if row[0] is not None and TaskEvaluationDTO.model_validate_json(row[0]) != evaluation:
+                raise RuntimeError("判断执行引用与原准入身份冲突")
+            connection.execute("UPDATE persistent_task_runs SET evaluation_json=?,updated_at=? WHERE run_id=?",
+                               (evaluation.model_dump_json(), now.isoformat(), run.run_id))
 
     def advance(self, run: PersistentTaskRunDTO, *, phase: TaskRunPhase, now: datetime,
                 decision: TaskDecisionDTO | None = None, delivery: TaskDeliveryDTO | None = None,

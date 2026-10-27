@@ -11535,6 +11535,11 @@ export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditi
    * @generated from field: optional boxteam.workspace.v2.TaskRuleCheckDTO rule = 4;
    */
   rule?: TaskRuleCheckDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskModelCheckDTO model = 5;
+   */
+  model?: TaskModelCheckDTO | undefined;
 };
 
 /**
@@ -11542,6 +11547,27 @@ export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditi
  * Use `create(TaskConditionDTOSchema)` to create a new message.
  */
 export declare const TaskConditionDTOSchema: GenMessage<TaskConditionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskModelCheckDTO
+ */
+export declare type TaskModelCheckDTO = Message<"boxteam.workspace.v2.TaskModelCheckDTO"> & {
+  /**
+   * @generated from field: string thread_uri = 1;
+   */
+  threadUri: string;
+
+  /**
+   * @generated from field: string instruction = 2;
+   */
+  instruction: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskModelCheckDTO.
+ * Use `create(TaskModelCheckDTOSchema)` to create a new message.
+ */
+export declare const TaskModelCheckDTOSchema: GenMessage<TaskModelCheckDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TaskRuleCheckDTO
@@ -11832,6 +11858,37 @@ export declare type TaskDeliveryDTO = Message<"boxteam.workspace.v2.TaskDelivery
 export declare const TaskDeliveryDTOSchema: GenMessage<TaskDeliveryDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.TaskEvaluationDTO
+ */
+export declare type TaskEvaluationDTO = Message<"boxteam.workspace.v2.TaskEvaluationDTO"> & {
+  /**
+   * @generated from field: string thread_uri = 1;
+   */
+  threadUri: string;
+
+  /**
+   * @generated from field: string source_item_id = 2;
+   */
+  sourceItemId: string;
+
+  /**
+   * @generated from field: string job_id = 3;
+   */
+  jobId: string;
+
+  /**
+   * @generated from field: string execution_id = 4;
+   */
+  executionId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskEvaluationDTO.
+ * Use `create(TaskEvaluationDTOSchema)` to create a new message.
+ */
+export declare const TaskEvaluationDTOSchema: GenMessage<TaskEvaluationDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.PersistentTaskRunDTO
  */
 export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.PersistentTaskRunDTO"> & {
@@ -11914,6 +11971,11 @@ export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.Persist
    * @generated from field: optional google.protobuf.Struct trigger_payload = 16;
    */
   triggerPayload?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskEvaluationDTO evaluation = 17;
+   */
+  evaluation?: TaskEvaluationDTO | undefined;
 };
 
 /**

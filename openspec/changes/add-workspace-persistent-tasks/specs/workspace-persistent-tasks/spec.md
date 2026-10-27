@@ -4,6 +4,18 @@
 
 ## ADDED Requirements
 
+### Requirement: 模型判断必须关联精确执行结果
+
+模型判断器 MUST 显式绑定与动作及执行结束来源分离的Thread URI，使用该Thread的独立Agent/工具选择。判断输入 MUST 来自冻结定义与触发，准入 MUST 复用现有source/wakeup和执行队列；运行记录只保存原准入引用。结果 MUST 来自该execution最后一次ModelCall的canonical完成输出，并回显本次run_id和definition_revision，不得用当前最新历史或工具循环中间说明代替。未知结果 SHALL 等待原终态通知并释放worker槽；恢复 MUST 对账原准入，不重复执行判断。
+
+#### Scenario: 忙时判断与后续检查串行
+- **WHEN** 判断Thread忙碌且同一任务收到两次触发
+- **THEN** 第一次判断沿原执行队列等待，第二次保留pending，依次绑定不同execution；其他任务仍能推进
+
+#### Scenario: 接受后中断仍读取原判断
+- **WHEN** 判断准入已提交但任务尚未登记回执时后端中断
+- **THEN** 恢复沿原幂等键取得同一source item/job/execution并读取其结果，不再次调用模型；暂停或编辑后迟到结果保留但不投递动作
+
 ### Requirement: 持久任务必须归属唯一工作区
 
 每项持久任务 MUST 绑定唯一稳定工作区身份，其定义、调度进度、判断及运行记录 MUST 存放在所属工作区 `.boxteam/` 内。Gateway MUST 仅定位工作区、管理后端生命周期及代理请求，不得持有任务定义或执行任务调度。新建任务未指定工作区时 SHALL 使用既有启动配置解析出的 home 下默认工作区；任务保存后不得因界面切换而改绑。

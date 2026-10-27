@@ -2653,6 +2653,12 @@ message TaskConditionDTO {
   string type_id = 2;
   optional TaskScriptCheckDTO script = 3;
   optional TaskRuleCheckDTO rule = 4;
+  optional TaskModelCheckDTO model = 5;
+}
+
+message TaskModelCheckDTO {
+  string thread_uri = 1;
+  string instruction = 2;
 }
 
 message TaskRuleCheckDTO {
@@ -2719,6 +2725,13 @@ message TaskDeliveryDTO {
   optional string execution_id = 6;
 }
 
+message TaskEvaluationDTO {
+  string thread_uri = 1;
+  string source_item_id = 2;
+  string job_id = 3;
+  string execution_id = 4;
+}
+
 message PersistentTaskRunDTO {
   string run_id = 1;
   string task_id = 2;
@@ -2736,6 +2749,7 @@ message PersistentTaskRunDTO {
   string trigger_type = 14;
   optional google.protobuf.Timestamp scheduled_for = 15;
   optional google.protobuf.Struct trigger_payload = 16;
+  optional TaskEvaluationDTO evaluation = 17;
 }
 
 message PersistentTaskCreateRequest {

@@ -27,7 +27,9 @@ from app.schemas.event import Event
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
+    TaskDecisionDTO,
     TaskDeliveryDTO,
+    TaskEvaluationDTO,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
@@ -38,7 +40,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.orchestration.persistent_tasks.conditions import (
     TaskCheckError,
+    condition_input,
     evaluate_condition,
+    model_decision,
 )
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
@@ -63,6 +67,7 @@ class PersistentTaskRuntime:
         self._saver = saver
         self._job_events = job_events
         self._execution_pending: set[str] = set()
+        self._waiting_checks: set[str] = set()
         self._concurrency = concurrency
         self._wake = asyncio.Event()
         self._closing = False
@@ -98,6 +103,7 @@ class PersistentTaskRuntime:
     async def on_event(self, event: Event) -> None:
         # 事件只唤醒原worker；恢复读取canonical终态提交，不依赖内存通知完整性。
         if event.type in {EventType.JOB_COMPLETED, EventType.JOB_FAILED, EventType.JOB_CANCELLED} and not self._closing:
+            self._waiting_checks.clear()
             self._execution_pending.update(task.task_id for task in self.store.list()
                                            if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
             self._wake.set()
@@ -113,6 +119,7 @@ class PersistentTaskRuntime:
         initialized: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._closing = False
         self._failure = None
+        self._waiting_checks.clear()
         self._worker = asyncio.create_task(self._run(initialized), name="persistent-task-runtime")
         self._worker.add_done_callback(self._finished)
         await initialized
@@ -160,7 +167,7 @@ class PersistentTaskRuntime:
                     self.notify(task_id)
                 tasks = self.store.list()
                 for task in tasks:
-                    if task.task_id in self._inflight:
+                    if task.task_id in self._inflight or task.task_id in self._waiting_checks:
                         continue
                     if len(self._inflight) >= self._concurrency:
                         break
@@ -204,6 +211,8 @@ class PersistentTaskRuntime:
             if self._closing:
                 return
             await self._process_run(run)
+            if task_id in self._waiting_checks:
+                return
         self._recovering.discard(task_id)
         self.notify(task_id)
 
@@ -329,6 +338,7 @@ class PersistentTaskRuntime:
 
     async def _check(self, run: PersistentTaskRunDTO,
                      configuration: PersistentTaskConfigurationDTO) -> PersistentTaskRunDTO | None:
+        launching = run.phase == "pending"
         async with self.locks.lock_for(run.task_id):
             task = self.store.get(run.task_id)
             if run.phase == "checking" and configuration.condition.type_id == "builtin.script":
@@ -337,18 +347,27 @@ class PersistentTaskRuntime:
                                    lifecycle=None if run.check_only else "needs_attention")
                 self.notify(run.task_id, run.run_id)
                 return None
-            if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
+            # 模型checking先对账原准入；暂停/编辑不丢掉已接受判断的结果。
+            reconciling = run.phase == "checking" and configuration.condition.type_id == "builtin.model"
+            if not reconciling and (task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only)):
                 self.store.advance(run, phase="suppressed", now=self.clock(), error="任务 revision 或生命周期已变化，未执行判断")
                 self.notify(run.task_id, run.run_id)
                 return None
             self.store.advance(run, phase="checking", now=self.clock())
             run = run.model_copy(update={"phase": "checking"})
             self.notify(run.task_id, run.run_id)
-        # 脚本检查不占管理锁；迟到结果必须在下面重新核对revision。
-        await observe_phase(run.run_id, "task.check.started_before_launch", details={"task_id": run.task_id})
+        # 慢判断不占管理锁；迟到结果必须在下面重新核对revision。
+        if launching or configuration.condition.type_id != "builtin.model":
+            await observe_phase(run.run_id, "task.check.started_before_launch", details={"task_id": run.task_id})
         try:
-            decision = await evaluate_condition(configuration, run, workspace=self._workspace_root, workspace_id=self.store.workspace_id)
+            if configuration.condition.type_id == "builtin.model":
+                decision = await self._check_model(run, configuration)
+                if decision is None:
+                    return None
+            else:
+                decision = await evaluate_condition(configuration, run, workspace=self._workspace_root, workspace_id=self.store.workspace_id)
         except TaskCheckError as error:
+            self._waiting_checks.discard(run.task_id)
             async with self.locks.lock_for(run.task_id):
                 self.store.advance(run, phase="failed", now=self.clock(), error=str(error),
                                    lifecycle=None if run.check_only else "needs_attention")
@@ -361,3 +380,72 @@ class PersistentTaskRuntime:
             return None
         await observe_phase(run.run_id, "task.check.decided_before_delivery", details={"task_id": run.task_id})
         return run
+
+    async def _check_model(self, run: PersistentTaskRunDTO,
+                           configuration: PersistentTaskConfigurationDTO) -> TaskDecisionDTO | None:
+        model = configuration.condition.model
+        assert model is not None
+        resource, session_id, thread_id = parse_session_thread_uri(model.thread_uri)
+        assert thread_id is not None
+        key = f"persistent-task-check:{run.run_id}"
+        async with self.locks.lock_for(run.task_id):
+            try:
+                async with self._sessions.session_read_admission(session_id):
+                    self._sessions.path_resolver.resolve_thread_node(session_id, thread_id)
+                    wakeup = self._dispatcher.submitted(session_id, thread_id, idempotency_key=key)
+            except NotFoundError as error:
+                raise TaskCheckError(f"判断Thread已删除: {error}") from error
+            if wakeup is None:
+                if run.evaluation is not None:
+                    raise RuntimeError("已记录判断的原准入事实缺失")
+                task = self.store.get(run.task_id)
+                if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
+                    self.store.advance(run, phase="suppressed", now=self.clock(), error="任务已变化，未接受模型判断")
+                    self.notify(run.task_id, run.run_id)
+                    return None
+                message = internal_message_factory.build(
+                    kind="persistent_task_check",
+                    control="评估本次冻结输入并只返回一个JSON对象，不直接改变持久任务或投递工作。"
+                            "原样回显run_id和definition_revision；decision为wait/proceed/complete/needs_attention之一，"
+                            "reason为非空理由，result为JSON对象。历史回复不能代替本次结论。",
+                    sections=(PromptSection("control_context", {"run_id": run.run_id, "definition_revision": run.definition_revision}),
+                              PromptSection("untrusted_instructions", json.dumps({"condition": model.instruction,
+                                  "input": condition_input(configuration, run, workspace_id=self.store.workspace_id)}, ensure_ascii=False))),
+                    metadata={"source": "persistent_task_check"},
+                )
+                gateway_token = set_current_gateway_id(resource.gateway_authority)
+                request_token = set_current_request_id(run.request_id)
+                try:
+                    await self._orchestrator.submit_runtime_event(
+                        session_id, message, thread_id=thread_id, source_id=f"persistent-task-check:{run.task_id}",
+                        idempotency_key=key, delivery_policy="after_turn",
+                    )
+                except (NotFoundError, ValueError) as error:
+                    raise TaskCheckError(f"判断准入失败: {type(error).__name__}: {error}") from error
+                finally:
+                    reset_current_gateway_id(gateway_token)
+                    reset_current_request_id(request_token)
+                wakeup = self._dispatcher.submitted(session_id, thread_id, idempotency_key=key)
+                if wakeup is None:
+                    raise RuntimeError("模型判断接受后缺少原durable wakeup")
+        await observe_phase(run.run_id, "task.check.model_accepted_before_record", details={
+            "task_id": run.task_id, "job_id": wakeup.job_id, "execution_id": wakeup.execution_id, "item_id": wakeup.source_item_id,
+        })
+        self.store.record_evaluation(run, TaskEvaluationDTO(thread_uri=model.thread_uri, source_item_id=wakeup.source_item_id,
+                                     job_id=wakeup.job_id, execution_id=wakeup.execution_id), self.clock())
+        self.notify(run.task_id, run.run_id)
+        # 先登记等待，再读终态，避免读后才登记而吞掉并发完成通知；不占worker槽等待模型。
+        self._waiting_checks.add(run.task_id)
+        try:
+            async with self._sessions.session_read_admission(session_id):
+                self._sessions.path_resolver.resolve_thread_node(session_id, thread_id)
+                outcome = self._saver.runtime_execution_outcome(session_id, thread_id, wakeup.execution_id)
+                if outcome == "unknown":
+                    return None
+                self._waiting_checks.discard(run.task_id)
+                if outcome != "completed":
+                    raise TaskCheckError(f"模型判断执行未成功: {outcome}")
+                content, _provenance = self._saver.execution_output(session_id, thread_id, wakeup.execution_id, final_only=True)
+        except NotFoundError as error:
+            raise TaskCheckError(f"判断Thread已删除: {error}") from error
+        return model_decision(content, run)

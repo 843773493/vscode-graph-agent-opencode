@@ -18,6 +18,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
     PersistentTaskCreateRequest,
     TaskDecisionDTO,
+    TaskEvaluationDTO,
     TaskTriggerDTO,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
@@ -63,7 +64,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 19
+        assert store.diagnostics().schema_version == 20
     finally:
         store.close()
 
@@ -136,7 +137,35 @@ def test_execution_event_and_source_cursor_roll_back_together(workspace_root):
         assert tasks.get(task.task_id).lifecycle == "paused" and tasks.execution_cursor(task.task_id) == 15
 
 
-@pytest.mark.parametrize("old_version", [16, 17, 18])
+def test_model_evaluation_reference_is_immutable_and_does_not_publish_a_decision(workspace_root):
+    now = datetime(2026, 10, 27, tzinfo=UTC)
+    request = PersistentTaskCreateRequest.model_validate({
+        "idempotency_key": "evaluation", "configuration": {
+            "name": "明确判断来源", "trigger": {"type_id": "builtin.manual", "version": "1"},
+            "condition": {"type_id": "builtin.always", "version": "1"},
+            "context": {"type_id": "builtin.literal", "version": "1", "content": "原判断输入"},
+            "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": thread_resource_uri("ws_eval", "ses_work", "thr_work"),
+                       "delivery_mode": "context_only"},
+        },
+    })
+    with WorkspaceStateStore(workspace_root=workspace_root) as store:
+        tasks = PersistentTaskStore(store, workspace_id="ws_eval")
+        task = tasks.create(request, now)
+        run = tasks.trigger(task.task_id, PersistentTaskCheckRequest(expected_revision=1, idempotency_key="check"), now, request_id="req_evaluation")
+        tasks.advance(run, phase="checking", now=now)
+        run, = tasks.runs(task.task_id)
+        evaluation = TaskEvaluationDTO(thread_uri=thread_resource_uri("ws_eval", "ses_judge", "thr_judge"),
+                                       source_item_id="item_original", job_id="job_original", execution_id="exe_original")
+        tasks.record_evaluation(run, evaluation, now)
+        tasks.record_evaluation(run, evaluation, now)
+        with pytest.raises(RuntimeError, match="原准入身份冲突"):
+            tasks.record_evaluation(run, evaluation.model_copy(update={"execution_id": "exe_other"}), now)
+        recorded, = tasks.runs(task.task_id)
+        assert recorded.phase == "checking" and recorded.evaluation == evaluation
+        assert recorded.decision is None and recorded.delivery is None and tasks.get(task.task_id).revision == 1
+
+
+@pytest.mark.parametrize("old_version", [16, 17, 18, 19])
 def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch, old_version):
     original = {
         "idempotency_key": "old-create", "enabled": True, "configuration": {
@@ -174,7 +203,7 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
         assert task.task_id == "ptask_old" and task.next_run_at is None
         run, = tasks.runs(task.task_id)
         assert run.run_id == "ptrun_old" and run.request_id == "req_original"
-        assert run.trigger_type == "manual" and run.scheduled_for is None and run.phase == "pending" and run.trigger_payload is None
+        assert run.trigger_type == "manual" and run.scheduled_for is None and run.phase == "pending" and run.trigger_payload is None and run.evaluation is None
         assert tasks.configuration(run) == request.configuration
         with closing(store.connection()) as connection:
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

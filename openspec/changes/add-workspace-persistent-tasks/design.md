@@ -71,6 +71,8 @@ rule v1以标准JSON Pointer从同一冻结检查输入选择值，与必填expe
 
 模型判断器使用显式绑定的独立判断 thread，由现有执行准入启动并保存本次评估与 execution 的关联。自然语言条件连同冻结材料输入判断 thread；它只返回上述判断与理由，不直接修改任务生命周期或自行投递到工作 thread。运行时校验结果后执行动作。判断 thread 的能力与工具按判断任务显式配置，不自动继承工作 thread 的执行权限。
 
+model v1配置明确的`thread_uri`和`instruction`，使用该Thread已有独立Agent/工具选择，工作Thread配置不向其复制。判断Thread不得与动作Thread或结束事件来源Thread相同。冻结输入复用规则/脚本构造器；内部判断source经原准入提交，运行仅登记原source item、job、execution引用（Workspace schema20），不复制正文。返回JSON必须回显本次run_id和definition_revision并包含四类decision、非空reason及对象result；只从该execution最后一次ModelCall的canonical完成输出读取，工具循环的中间说明与其他执行历史不能作为结果。检查串行时后续触发保留pending；未知执行结果由原终态事件唤醒，不占用worker槽等待，也不重新分配执行。接受后硬重启先恢复原wakeup，再按原execution取结果；暂停/编辑保留已接受检查及迟到结果，原revision合同阻止动作。试运行可实际调用判断模型，但不改变正式生命周期或投递工作。
+
 同一任务同一时刻最多一次判断在途。判断请求关联 trigger/run/evaluation identity，不能把别次历史回复当成本次结论；判断执行结束事件不匹配该任务的工作执行结束触发器，避免自我唤醒循环。重复触发的排队或合并策略显式记录，定时任务保留既有 overlap 行为，不把“判断串行”误作所有生成 Job 强制互斥。
 
 ### 4. 任务生命周期、运行阶段和应用状态分别表达

@@ -47,7 +47,11 @@ class PersistentTaskService:
         trigger = configuration.trigger
         if trigger.source_uri is not None:
             trigger = trigger.model_copy(update={"source_uri": await self._validate_thread_uri(trigger.source_uri)})
-        return configuration.model_copy(update={"action": action, "trigger": trigger})
+        condition = configuration.condition
+        if condition.model is not None:
+            model = condition.model.model_copy(update={"thread_uri": await self._validate_thread_uri(condition.model.thread_uri)})
+            condition = condition.model_copy(update={"model": model})
+        return configuration.model_copy(update={"action": action, "trigger": trigger, "condition": condition})
 
     def get(self, task_id: str) -> PersistentTaskDTO:
         task = self._store.get(task_id)

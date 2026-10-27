@@ -25,22 +25,43 @@ class TaskCheckError(ValueError):
     pass
 
 
-async def evaluate_condition(configuration: PersistentTaskConfigurationDTO, run: PersistentTaskRunDTO,
-                             *, workspace: Path, workspace_id: str) -> TaskDecisionDTO:
-    condition = configuration.condition
-    if condition.type_id == "builtin.always":
-        return TaskDecisionDTO(decision="proceed", reason="无附加条件，始终通过")
+class ModelCheckResponse(TaskDecisionDTO):
+    run_id: str
+    definition_revision: int
+
+
+def model_decision(content: str, run: PersistentTaskRunDTO) -> TaskDecisionDTO:
+    try:
+        response = ModelCheckResponse.model_validate_json(content, strict=True)
+    except ValidationError as error:
+        logger.error("模型判断输出无效 task=%s run=%s: %r", run.task_id, run.run_id, content)
+        raise TaskCheckError("模型输出不符合判断协议，详见原始诊断日志") from error
+    if (response.run_id, response.definition_revision) != (run.run_id, run.definition_revision):
+        raise TaskCheckError("模型判断结果与本次运行/定义版本不匹配")
+    return TaskDecisionDTO(decision=response.decision, reason=response.reason, result=response.result)
+
+
+def condition_input(configuration: PersistentTaskConfigurationDTO, run: PersistentTaskRunDTO,
+                    *, workspace_id: str) -> dict[str, JsonValue]:
     # 冻结输入从原定义版本与触发事实构造，不复制另一份可变上下文历史。
     trigger: dict[str, JsonValue] = {"key": run.trigger_key, "type": run.trigger_type,
                                      "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None}
     if run.trigger_payload is not None:
         trigger["payload"] = run.trigger_payload
-    input_value = {
+    return {
         "version": "1", "workspace_id": workspace_id, "task_id": run.task_id, "run_id": run.run_id,
         "definition_revision": run.definition_revision, "task_revision": run.task_revision,
         "trigger": trigger,
         "check_only": run.check_only, "context": configuration.context.model_dump(mode="json"),
     }
+
+
+async def evaluate_condition(configuration: PersistentTaskConfigurationDTO, run: PersistentTaskRunDTO,
+                             *, workspace: Path, workspace_id: str) -> TaskDecisionDTO:
+    condition = configuration.condition
+    if condition.type_id == "builtin.always":
+        return TaskDecisionDTO(decision="proceed", reason="无附加条件，始终通过")
+    input_value = condition_input(configuration, run, workspace_id=workspace_id)
     if condition.type_id == "builtin.rule":
         rule = condition.rule
         assert rule is not None
