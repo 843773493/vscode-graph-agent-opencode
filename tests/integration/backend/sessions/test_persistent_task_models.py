@@ -188,7 +188,7 @@ async def test_judge_isolation_and_late_dry_run_preserve_management_revision(sou
     response = await case.client.post(ROOT, json={"idempotency_key": "same-source", "configuration": invalid})
     assert response.status_code == 422, response.text
     task = await _create(case, _model_configuration(work_uri, judge_uri))
-    for operation in ["pause", "edit", "trial"]:
+    for operation in ["pause", "edit", "trial", "terminate"]:
         if operation == "trial":
             task = await _control(case, task, "pause")
         run = await _begin(case, task, operation, check_only=operation == "trial")
@@ -204,8 +204,8 @@ async def test_judge_isolation_and_late_dry_run_preserve_management_revision(sou
             }), 1)
             assert response.status_code == 200, response.text
             changed = response.json()["data"]
-        elif operation == "pause":
-            changed = await asyncio.wait_for(_control(case, task, "pause"), 1)
+        elif operation in {"pause", "terminate"}:
+            changed = await asyncio.wait_for(_control(case, task, operation), 1)
         else:
             changed = task
         case.control.release(call, "model.response_ready")
@@ -213,8 +213,18 @@ async def test_judge_isolation_and_late_dry_run_preserve_management_revision(sou
         assert actual["decision"]["result"]["evaluated"] == operation and actual["delivery"] is None
         current = (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]
         assert current["revision"] == changed["revision"] and current["lifecycle"] == changed["lifecycle"]
-        task = await _control(case, current, "resume") if operation != "trial" else current
-    assert case.call_count(judge_id, judge_thread) == 3 and case.call_count(work_id, work_thread) == 0
+        task = await _control(case, current, "resume") if operation != "terminate" else current
+    assert case.call_count(judge_id, judge_thread) == 4 and case.call_count(work_id, work_thread) == 0
+    assert task["lifecycle"] == "terminated"
+    response = await case.client.post(f"{ROOT}/{task['task_id']}/control", json={
+        "expected_revision": task["revision"], "action": "resume",
+    })
+    assert response.status_code == 409, response.text
+    response = await case.client.post(f"{ROOT}/{task['task_id']}/checks", json={
+        "expected_revision": task["revision"], "idempotency_key": "after-termination", "check_only": True,
+    })
+    assert response.status_code == 409, response.text
+    assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"] == task
 
 
 @pytest.mark.asyncio

@@ -118,7 +118,7 @@ print(json.dumps({{'decision':decision,'reason':'service-probe','result':{{'serv
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("management", ["pause", "edit"])
+@pytest.mark.parametrize("management", ["pause", "edit", "terminate"])
 async def test_late_script_result_cannot_deliver_after_management_changes(source_case: RuntimeSourceCase, management: str) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)
@@ -132,8 +132,8 @@ print(json.dumps({'decision':'proceed','reason':'late-result','result':{'content
     run = await _check(case, task)
     await _marker(case.workspace / "started")
     try:
-        if management == "pause":
-            changed = await asyncio.wait_for(_control(case, task, "pause"), 1)
+        if management in {"pause", "terminate"}:
+            changed = await asyncio.wait_for(_control(case, task, management), 1)
         else:
             configuration = task["configuration"]
             configuration["context"]["content"] = "new-context"

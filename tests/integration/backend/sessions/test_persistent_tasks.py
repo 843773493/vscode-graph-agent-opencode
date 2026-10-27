@@ -186,7 +186,10 @@ async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 @pytest.mark.parametrize("context_mode", ["event", "state"])
-async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accepted_work(source_case: RuntimeSourceCase, context_mode: str) -> None:
+@pytest.mark.parametrize("control", ["pause", "terminate"])
+async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_work_after_control(
+    source_case: RuntimeSourceCase, context_mode: str, control: str,
+) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)
     configuration = _configuration(target, "context_and_run")
@@ -201,8 +204,9 @@ async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accep
         await asyncio.to_thread(case.control.acknowledged, first_call, "model.response_ready", 30)
         run = await _check(case, task)
         barrier = await asyncio.to_thread(case.control.acknowledged_match, "task-accepted")
-        paused = await _control(case, task, "pause")
-        assert paused["lifecycle"] == "paused"
+        changed = await _control(case, task, control)
+        expected_lifecycle = "paused" if control == "pause" else "terminated"
+        assert changed["lifecycle"] == expected_lifecycle
         response = await case.client.get(f"/api/v1/jobs/{barrier['details']['job_id']}")
         assert response.status_code == 200, response.text
         assert response.json()["data"]["status"] == "queued"
@@ -226,12 +230,12 @@ async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accep
     assert case.sql(session_id, thread_id, "SELECT execution_id,job_id,source_item_id,gateway_id FROM runtime_execution_wakeups") == [
         (delivery["execution_id"], delivery["job_id"], notice_id, case.gateway_id),
     ]
-    assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == "paused"
-    case.write_actual("busy-task", {"run": actual, "pause": paused, "request": case.request(task_call)})
+    assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == expected_lifecycle
+    case.write_actual("busy-task", {"run": actual, "control": changed, "request": case.request(task_call)})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["pause", "edit"])
+@pytest.mark.parametrize("operation", ["pause", "edit", "terminate"])
 async def test_management_revision_suppresses_unaccepted_action(source_case: RuntimeSourceCase, operation: str) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)
@@ -240,8 +244,8 @@ async def test_management_revision_suppresses_unaccepted_action(source_case: Run
     run = await _check(case, task)
     try:
         await asyncio.to_thread(case.control.acknowledged_match, "task-loaded")
-        if operation == "pause":
-            changed = await _control(case, task, "pause")
+        if operation in {"pause", "terminate"}:
+            changed = await _control(case, task, operation)
         else:
             configuration = deepcopy(task["configuration"])
             configuration["context"]["content"] = "task-updated-private：新的定义。"
