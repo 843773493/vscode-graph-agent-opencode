@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
 
 /**
@@ -11525,6 +11525,11 @@ export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditi
    * @generated from field: optional boxteam.workspace.v2.TaskScriptCheckDTO script = 3;
    */
   script?: TaskScriptCheckDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskRuleCheckDTO rule = 4;
+   */
+  rule?: TaskRuleCheckDTO | undefined;
 };
 
 /**
@@ -11532,6 +11537,27 @@ export declare type TaskConditionDTO = Message<"boxteam.workspace.v2.TaskConditi
  * Use `create(TaskConditionDTOSchema)` to create a new message.
  */
 export declare const TaskConditionDTOSchema: GenMessage<TaskConditionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskRuleCheckDTO
+ */
+export declare type TaskRuleCheckDTO = Message<"boxteam.workspace.v2.TaskRuleCheckDTO"> & {
+  /**
+   * @generated from field: string pointer = 1;
+   */
+  pointer: string;
+
+  /**
+   * @generated from field: google.protobuf.Value expected = 2;
+   */
+  expected?: Value | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskRuleCheckDTO.
+ * Use `create(TaskRuleCheckDTOSchema)` to create a new message.
+ */
+export declare const TaskRuleCheckDTOSchema: GenMessage<TaskRuleCheckDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TaskContextDTO

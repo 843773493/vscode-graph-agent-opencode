@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import cast
 
+import rfc8785
+from jsonpointer import resolve_pointer
 from pydantic import JsonValue, ValidationError
 
 from app.runtime.native_command import CommandOutputLimitError, run_native_command
@@ -27,8 +30,6 @@ async def evaluate_condition(configuration: PersistentTaskConfigurationDTO, run:
     condition = configuration.condition
     if condition.type_id == "builtin.always":
         return TaskDecisionDTO(decision="proceed", reason="无附加条件，始终通过")
-    script = condition.script
-    assert script is not None
     # 冻结输入从原定义版本与触发事实构造，不复制另一份可变上下文历史。
     trigger: dict[str, JsonValue] = {"key": run.trigger_key, "type": run.trigger_type,
                                      "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None}
@@ -40,6 +41,22 @@ async def evaluate_condition(configuration: PersistentTaskConfigurationDTO, run:
         "trigger": trigger,
         "check_only": run.check_only, "context": configuration.context.model_dump(mode="json"),
     }
+    if condition.type_id == "builtin.rule":
+        rule = condition.rule
+        assert rule is not None
+        missing = object()
+        actual = resolve_pointer(input_value, rule.pointer, default=missing)
+        found = actual is not missing
+        value = cast(JsonValue, actual) if found else None
+        # JSON相等保留数组顺序并区分true和1，不使用Python的宽松bool/number相等。
+        matches = found and rfc8785.dumps(value) == rfc8785.dumps(rule.expected)
+        return TaskDecisionDTO(
+            decision="proceed" if matches else "wait",
+            reason="规则匹配" if matches else ("规则未匹配" if found else "规则输入字段不存在"),
+            result={"pointer": rule.pointer, "found": found, "actual": value, "expected": rule.expected},
+        )
+    script = condition.script
+    assert script is not None
     try:
         result = await run_native_command(
             script.command, workspace=workspace, stdin=json.dumps(input_value, ensure_ascii=False).encode(),

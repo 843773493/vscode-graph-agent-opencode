@@ -43,6 +43,7 @@ dependencies = [
     "tzdata>=2024.1; sys_platform == 'win32'",
     "portalocker[win32]>=4.4.1",
     "pywin32>=312; sys_platform == 'win32'",
+    "jsonpointer>=3.1.1,<4",
 ]
 
 [project.optional-dependencies]

@@ -67,6 +67,8 @@ Gateway 只负责工作区定位、托管后端生命周期与透明代理，不
 
 script v1的command为argv，不隐式套shell，cwd由所属工作区唯一确定。stdin以UTF-8传入任务/运行身份、冻结定义revision、触发与字面上下文，stdout以UTF-8返回四类决定、非空理由及JSON result；stdout/stderr共享输出限额。运行记录保存安全错误事实，原生stderr与无效stdout仅进已登记的原始诊断日志。执行前持久checking，检查期间释放管理锁；返回后复核revision。checking恢复时结果未知，不重跑；已有决定与动作只复用原冻结输入和接受身份。试运行的决定、失败及中断均不改变正式生命周期。
 
+rule v1以标准JSON Pointer从同一冻结检查输入选择值，与必填expected按RFC8785规范化JSON比较；对象键顺序不影响相等，数组顺序和bool/number身份保留，数字1与1.0等价。字段缺失表示wait，不能当作JSON null；非法pointer或缺失expected在保存时拒绝。规则不启动脚本或判断模型，不读取当前文件/外部状态；result记录pointer、found、actual和expected，经同一决定事务与条件策略推进。checking中断后可从原冻结输入重算纯规则，与未知脚本结果分开；所有非always决定使用相同不可信正文动作链路。新增可选rule字段不改变已有always/script创建幂等身份，数据库仍schema18。
+
 模型判断器使用显式绑定的独立判断 thread，由现有执行准入启动并保存本次评估与 execution 的关联。自然语言条件连同冻结材料输入判断 thread；它只返回上述判断与理由，不直接修改任务生命周期或自行投递到工作 thread。运行时校验结果后执行动作。判断 thread 的能力与工具按判断任务显式配置，不自动继承工作 thread 的执行权限。
 
 同一任务同一时刻最多一次判断在途。判断请求关联 trigger/run/evaluation identity，不能把别次历史回复当成本次结论；判断执行结束事件不匹配该任务的工作执行结束触发器，避免自我唤醒循环。重复触发的排队或合并策略显式记录，定时任务保留既有 overlap 行为，不把“判断串行”误作所有生成 Job 强制互斥。

@@ -43,7 +43,7 @@ def _configuration(target: str, mode: Literal["context_only", "context_and_run"]
     return {
         "name": "服务就绪", "trigger": {"type_id": "builtin.manual", "version": "1", "interval_seconds": None,
                                       "expression": None, "timezone": "UTC"},
-        "condition": {"type_id": "builtin.always", "version": "1", "script": None},
+        "condition": {"type_id": "builtin.always", "version": "1", "script": None, "rule": None},
         "context": {"type_id": "builtin.literal", "version": "1", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},

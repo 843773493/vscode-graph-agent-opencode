@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from jsonpointer import JsonPointer, JsonPointerException
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.time_schedule import MisfirePolicy, TimeSchedule
@@ -60,14 +68,32 @@ class TaskScriptCheckDTO(BaseModel):
         return self
 
 
+class TaskRuleCheckDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    pointer: str
+    expected: JsonValue
+
+    @field_validator("pointer")
+    @classmethod
+    def validate_pointer(cls, value: str) -> str:
+        try:
+            JsonPointer(value)
+        except JsonPointerException as error:
+            raise ValueError("规则pointer必须是有效JSON Pointer") from error
+        return value
+
+
 class TaskConditionDTO(TaskComponentDTO):
-    type_id: Literal["builtin.always", "builtin.script"]
+    type_id: Literal["builtin.always", "builtin.script", "builtin.rule"]
     script: TaskScriptCheckDTO | None = None
+    rule: TaskRuleCheckDTO | None = None
 
     @model_validator(mode="after")
     def validate_component(self) -> TaskConditionDTO:
-        if (self.type_id == "builtin.script") != (self.script is not None):
-            raise ValueError("只有script判断必须配置script参数，always不能配置script")
+        if ((self.type_id == "builtin.script") != (self.script is not None)
+                or (self.type_id == "builtin.rule") != (self.rule is not None)):
+            raise ValueError("script/rule判断必须配置对应参数，不能配置其它判断器参数")
         return self
 
 

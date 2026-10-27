@@ -2651,6 +2651,12 @@ message TaskConditionDTO {
   string version = 1;
   string type_id = 2;
   optional TaskScriptCheckDTO script = 3;
+  optional TaskRuleCheckDTO rule = 4;
+}
+
+message TaskRuleCheckDTO {
+  string pointer = 1;
+  google.protobuf.Value expected = 2;
 }
 
 message TaskContextDTO {

@@ -2701,6 +2701,12 @@ export interface TaskConditionDTO {
   version: string;
   type_id: string;
   script?: TaskScriptCheckDTO | undefined;
+  rule?: TaskRuleCheckDTO | undefined;
+}
+
+export interface TaskRuleCheckDTO {
+  pointer: string;
+  expected: any | undefined;
 }
 
 export interface TaskContextDTO {
@@ -19618,7 +19624,7 @@ export const TaskScriptCheckDTO: MessageFns<TaskScriptCheckDTO> = {
 };
 
 function createBaseTaskConditionDTO(): TaskConditionDTO {
-  return { version: "", type_id: "", script: undefined };
+  return { version: "", type_id: "", script: undefined, rule: undefined };
 }
 
 export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
@@ -19627,6 +19633,7 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
       script: isSet(object.script) ? TaskScriptCheckDTO.fromJSON(object.script) : undefined,
+      rule: isSet(object.rule) ? TaskRuleCheckDTO.fromJSON(object.rule) : undefined,
     };
   },
 
@@ -19641,6 +19648,9 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     if (message.script !== undefined) {
       obj.script = TaskScriptCheckDTO.toJSON(message.script);
     }
+    if (message.rule !== undefined) {
+      obj.rule = TaskRuleCheckDTO.toJSON(message.rule);
+    }
     return obj;
   },
 
@@ -19654,6 +19664,43 @@ export const TaskConditionDTO: MessageFns<TaskConditionDTO> = {
     message.script = (object.script !== undefined && object.script !== null)
       ? TaskScriptCheckDTO.fromPartial(object.script)
       : undefined;
+    message.rule = (object.rule !== undefined && object.rule !== null)
+      ? TaskRuleCheckDTO.fromPartial(object.rule)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseTaskRuleCheckDTO(): TaskRuleCheckDTO {
+  return { pointer: "", expected: undefined };
+}
+
+export const TaskRuleCheckDTO: MessageFns<TaskRuleCheckDTO> = {
+  fromJSON(object: any): TaskRuleCheckDTO {
+    return {
+      pointer: isSet(object.pointer) ? globalThis.String(object.pointer) : "",
+      expected: isSet(object?.expected) ? object.expected : undefined,
+    };
+  },
+
+  toJSON(message: TaskRuleCheckDTO): unknown {
+    const obj: any = {};
+    if (message.pointer !== "") {
+      obj.pointer = message.pointer;
+    }
+    if (message.expected !== undefined) {
+      obj.expected = message.expected;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskRuleCheckDTO>, I>>(base?: I): TaskRuleCheckDTO {
+    return TaskRuleCheckDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskRuleCheckDTO>, I>>(object: I): TaskRuleCheckDTO {
+    const message = createBaseTaskRuleCheckDTO();
+    message.pointer = object.pointer ?? "";
+    message.expected = object.expected ?? undefined;
     return message;
   },
 };

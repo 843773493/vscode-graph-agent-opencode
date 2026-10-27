@@ -84,6 +84,8 @@ class PersistentTaskStore:
             payload["configuration"]["policies"].pop("match_mode")
         if request.configuration.condition.type_id == "builtin.always":
             payload["configuration"]["condition"].pop("script")
+        if request.configuration.condition.rule is None:
+            payload["configuration"]["condition"].pop("rule")
         preimage = sha256_jcs(payload)
         with self._transaction() as connection:
             row = connection.execute("SELECT task_id,creation_hash FROM persistent_tasks WHERE creation_key=?",

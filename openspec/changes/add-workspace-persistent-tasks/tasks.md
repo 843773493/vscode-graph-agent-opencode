@@ -16,8 +16,9 @@
 - [ ] 3.1 实现统一触发记录与 interval/cron、关联工作执行结束、外部幂等通知及手动触发，持久化计划游标与定义 revision；时间到期由调度器判定，不启动脚本或模型检查时钟。
   - [x] 3.1.1 手动、interval/cron沿同一运行账本触发；计划游标与触发原子提交，保留时区、skip/run_latest/catch_up和冻结定义，恢复期间的新计划只排队。关联工作事件仍待实施；外部通知见3.1.2。
   - [x] 3.1.2 外部通知复用同一触发事务、冻结定义与原运行账本，持久payload/原request_id；覆盖并发同键、异内容冲突、暂停/编辑及真实Backend硬重启后的原接受结果。
-- [ ] 3.2 提供规则判断及脚本判断组件，明确工作区执行位置、结构化输出、运行期限、资源保护与失败诊断，打通服务未就绪到首次就绪的真实入口。
+- [x] 3.2 提供规则判断及脚本判断组件，明确工作区执行位置、结构化输出、运行期限、资源保护与失败诊断，打通服务未就绪到首次就绪的真实入口。
   - [x] 3.2.1 script v1经共用原生监督器执行，冻结结构化输入、工作区cwd、UTF-8结果、期限/内存/输出限制及明确失败；真实入口覆盖服务未就绪到首次就绪、迟到判断和硬重启。规则、外部通知及条件策略另行验收。
+  - [x] 3.2.2 rule v1消费同一冻结输入，用JSON Pointer和JSON值比较返回wait/proceed；真实入口覆盖缺失/null、bool/number、对象/数组、暂停试运行与checking硬重启。Linux本切片通过，Windows完整产品边界仍保留原长路径TODO。
 - [ ] 3.3 提供判断与动作上下文构造组件，保存输入来源/revision，支持一次性事件与同一来源状态更新，不复制上下文 owner 存储。
 - [ ] 3.4 通过现有 thread 执行准入实现模型判断器，绑定独立判断 thread、本次输入与执行身份，校验明确决定与理由，并防止判断重入和自触发。
 - [ ] 3.5 补齐仅发布上下文的业务端口，并复用 source 加 durable wakeup 实现发布后请求执行；覆盖忙时串行投递和明确的投递时机。
@@ -124,3 +125,11 @@
 - 117补充回归有3 passed/1 setup error：并行运行同一script测试文件的两个pytest进程，共用正式文件级workspace，一个准备fixture删除目录时另一个正在打开SQLite；不是运行期任务失败。两进程结束后仅补跑该失败场景，119为1 passed、24.48秒；118的原script决定/接受后冷恢复2 passed、88.81秒。没有修改产品或放宽断言，保留117失败原件。
 - 112 Ruff通过；116新增业务模块Pyright零错误。113扩展到API全文件时发现原有`sse_responses`返回`dict[int,...]`与FastAPI的`dict[int | str,...]`不变性错误，已对照HEAD `a95db93f6`确认原`/events`注解相同，未声称API全文件类型全绿。114真实Web类型、115构建、108 Buf/全部绑定和109 OpenAPI通过，仅既有chunk提示。
 - 命令、源码指纹、原始输出及退出码仍在既有证据目录，产品产物在`out/tests/integration/backend/sessions/test_persistent_task_notifications/`，测试均有进程外期限/4GiB保护。Linux本切片验收通过；Windows产品长路径、模型判断、规则判断、工作执行结束触发、Goal/生成器迁移及主Web管理仍未完成，团队协作继续TODO。
+
+### rule v1与统一条件正文（2026-10-27）
+
+- 规则使用官方jsonpointer解析冻结检查输入，必填expected按RFC8785比较；字段缺失与null、bool与number保持区别，对象键顺序不影响相等，数组顺序保留。非法pointer与缺失expected保存即拒绝。判断结果复用原决定/条件策略事务，所有非always动作复用同一不可信正文链路；不增加数据库结构，仍schema18。
+- `task-rule-product-123`完整matrix为3 passed、109.01秒，真实任务API及model_stream验证嵌套/转义pointer、结构相等、首次命中策略、暂停试运行不消费首次命中，以及checking中硬重启后仍使用原payload/request_id。后续通知排在原检查之后，不读取新输入替代旧输入，也不伪报未知脚本结果。
+- `task-rule-contracts-128`为20 passed，覆盖v16/v17升级、原创建幂等、决定/生命周期原子回滚、协议/SSE与手动真实入口；`task-rule-script-regression-129`为3 passed、111.29秒，核对未就绪到就绪、决定后及接受后硬重启，仍使用原脚本结果与canonical item。所有产品运行有进程外期限/4GiB保护且无源码漂移。
+- 120 Buf/全绑定、122 OpenAPI、124定向后端Pyright、125真实Web类型、126构建和127 Ruff均通过，仅既有构建chunk提示。121在完整源码快照验证直接依赖锁，根目录`uv sync --frozen --offline`成功，无传递包版本变化；根目录setuptools扫描递归node_modules的既有问题未扩展修复。临时完整源码快照及协议staging验证后删除，保留准确命令、指纹、原始输出、退出码和正式产品产物。
+- 模型判断、工作执行结束触发、状态来源更新、Goal/生成器迁移及主Web管理仍未完成；Windows完整产品验收沿用已有长路径TODO，团队协作继续TODO。3.2勾选只对应已实现且经Linux产品验证的规则/脚本组件，不代表上述后续范围已完成。

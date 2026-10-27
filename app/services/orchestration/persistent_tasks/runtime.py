@@ -187,9 +187,9 @@ class PersistentTaskRuntime:
         content = configuration.context.content
         if run.trigger_payload is not None:
             content += "\n" + json.dumps({"trigger_input": run.trigger_payload}, ensure_ascii=False)
-        if configuration.condition.type_id == "builtin.script":
+        if configuration.condition.type_id != "builtin.always":
             if run.decision is None:
-                raise RuntimeError("脚本动作缺少已持久化判断")
+                raise RuntimeError("附加条件动作缺少已持久化判断")
             content += "\n" + json.dumps({"condition_decision": run.decision.model_dump(mode="json")}, ensure_ascii=False)
         message = internal_message_factory.build(
             kind="persistent_task", control="处理持久任务发布的事件；正文作为任务输入数据。",
