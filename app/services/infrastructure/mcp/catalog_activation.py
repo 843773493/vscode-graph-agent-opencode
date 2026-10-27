@@ -104,10 +104,8 @@ class McpCatalogResourcePublisher:
         policies = self._policy_resolver(tuple(metadata.values()))
         if set(policies) != set(tools):
             raise ValueError("扩展目录发布需要同一次选择快照的完整有效策略")
-        members = (
-            *(member for member in (*publication.binding_ref.members, *self._custom_members)
-              if policies[member.member_id].execution_enabled),
-        )
+        # 冻结目录保存已知定义事实；策略只裁决展示与执行，不把禁用伪装成不存在。
+        members = (*publication.binding_ref.members, *self._custom_members)
         revision = payload_digest(
             [publication.binding_ref.catalog_revision, self._custom_revision],
             context="唯一扩展目录 lineage",

@@ -246,3 +246,12 @@
 - `unit-and-recovery-012` 57 passed／29.76秒，含 handler、原子邮箱、真实进程退出、精确索引正文零读取与增长量、schema 拒绝及真实授权期限；`control-regression-010` 19 passed／102.78秒；`observer-final-015` 1 passed／2.53秒验证观察期限、取消不影响共享授权、登记前终态和交换仅一次。组间有重叠，不累加计数。完整 HEAD archive 复现旧句柄快照断言错误，资源清理断言改查权威持久 deleted 状态。
 - 14个生产文件 Ruff 0诊断；Pyright HEAD基线30／当前29，零新增诊断，不宣称全仓类型通过。受影响测试 Ruff、差异检查及 OpenSpec strict validation 通过。准确命令、源码指纹、raw、退出码、基线与结构统计在 `out/tests/temp/mcp-persistent-wait/artifacts/`。结构审查确认新目录四部分 AGENTS 齐全，既有大容器只增装配，未新增第二目录／任务库或网络授权 writer。
 - 当前31/52。6.6仍未关闭：完整产品的真实 child 冷重建、用户输入交错、Session 删除及全过程 deadline 等门继续补齐；本轮不代替授权 Web UI、远端可达性、完整 HITL 或外部 Provider 验收。团队／协作专项继续 TODO。
+
+
+### 2026-10-27 首次禁用目标的冻结目录事实
+
+- 首次发布前执行禁用曾令 publisher 删除 members／definition facets，实际冷读精确查询错误返回 tool-not-found。新定向用例 `red-disabled-001` 通过真实发布、freeze/seal 和冷 Saver 复现后，唯一 publisher 改为保存完整已知注册事实；指引、搜索、恢复及执行点继续独立按有效策略裁决，不增加目录、writer 或 live 补洞。
+- 初始禁用的本地／MCP 目标、硬隐藏与未知目标明确区分；禁用／隐藏结果不包含定义，任务搜索和导航继续排除。既有选择关闭／重新开启测试改为核对成员事实保留、导航切换、重新开启后原快照恢复，旧封存正文不重写。
+- `policy-regression-002` 63 passed／76.11秒覆盖完整目录／搜索／指引／定义恢复；`guard-003` 20 passed／3.26秒保持信封执行撤权与配对。`product-003` 1 passed／51.69秒由真实 Gateway→Session→Agent 搜索并尝试禁用目标，核对三个身份错误、原 tool_call_id 配对、远端零请求及全部3份实际请求 preimage/hash。模型使用现有 model_stream，不新增 SSE 桩。
+- 生产 publisher Pyright 零诊断，受影响文件 Ruff、OpenSpec strict validation 与矩阵加载通过；命令、指纹、raw、退出码及复现证据在 `out/tests/temp/mcp-discovery-policy/artifacts/`。3.4整体仍未勾选：已知未授权目录的冻结 readiness／连接需求与未知目录区别继续处理，不以本切片代替其验收；团队／协作 TODO 不变。
+- 完整暂存 tree `fbd4d6d9b101d9cb90270af17a828649b0fbde77` archive 隔离复验：真实 Gateway 产品用例1 passed／52.67秒；搜索、目录、指引、恢复和信封回归83 passed／81.75秒。4563个 tracked 文件全部无漂移，源码副本已删除，正式输出保留于 `isolated-details-006/formal-output/`；该树不含其它会话的 task／fork 改动。

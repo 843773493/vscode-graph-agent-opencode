@@ -62,6 +62,8 @@ MCP 输入按其声明的 JSON Schema 方言和完整契约校验；未声明方
 
 复用 ToolPolicyResolver 的完整解析结果：`model_visible` 决定自动注入，`execution_enabled` 决定执行；显式搜索可以返回已允许执行、仅关闭自动注入的目标，不修改 selection 或全局开关。`restrictions.model_hidden`／`model_visibility_locked` 是独立硬隐藏，任务搜索、精确查询、能力导航及压缩后定义恢复均不得重新投递其定义；执行禁用目标也不经搜索恢复能力。策略身份复用同一 ToolMetadata，不通过描述猜测分组。历史原件不改写；硬隐藏本身不被扩大解释为执行禁用，真实调用仍独立检查当前执行策略。
 
+父目录 members 与 definition facets 保存同一批完整的已知注册事实，不按 execution_enabled 丢弃目标；展示与执行的权限分别由现有指引／搜索和信封执行点裁决。因此首次发布前已禁用的目标在封存、冷读后仍能返回明确 tool-disabled，而不会伪装成 tool-not-found；硬隐藏同样不投递定义，旧冻结正文不借 live 目录补洞。成员事实不授予连接或调用资格。
+
 默认模型上下文只自动提供有界能力导航和发现用法；用户显式打开 `model_visible` 的目标仍自动获得完整定义。按需搜索结果作为正常 ToolResult 保存，并登记其不可变定义 provenance。CSM／Saver 复用已有资源存储恢复活动定义，原 ToolResult 已在有效上下文中时不重复注入整份正文；压缩后只恢复需要保留的当前定义，来源仍为原冻结资源，不建第二套正文库。
 
 目录与已选定义使用同一个 publication/activation 事实。模型看到旧定义时只能得到旧 binding 对应的执行或明确失败；更新在下一允许边界提供完整替换定义／删除提示，不能只改 dispatcher。schema 切换使用完整定义替换，避免模型靠文本 diff 拼接契约。

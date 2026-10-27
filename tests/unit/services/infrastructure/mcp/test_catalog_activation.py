@@ -688,14 +688,14 @@ async def test_selection_publication_injects_full_definition_at_allowed_boundary
     assert saver.read_resource_activation_payload(frozen, parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread)) == original
 
 
-async def test_disabling_and_reenabling_selection_republishes_members_and_definition(
+async def test_disabling_selection_preserves_known_members_and_republishes_guidance(
     catalog_runtime, catalog_selection,
 ):
     _owner, _factory, registry, scope = catalog_runtime
     before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
     catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (False, False)})
     disabled = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
-    assert disabled.members == ()
+    assert disabled.members == before.members
     assert json.loads(disabled.payload["content"])["navigation"] == []
     catalog_selection.apply_changes(agent_id="default", changes={"mcp__mini__echo": (True, False)})
     assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before

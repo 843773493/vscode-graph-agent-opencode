@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-tool-discovery-policy` 通过真实 Gateway、Agent 和 HTTP MCP 核对首次发布前已禁用目标的身份、硬隐藏、配对拒绝、远端零执行及封存 request_hash，固定160秒／4GiB。
+
 - `integration-mcp-connection-wait` 经真实 Gateway、Agent、OAuth/MCP 与 model_stream 验证原配对等待、无新用户 Turn 的独立 continuation、两种激活边界及 mailbox／dispatcher 崩溃窗口，固定600秒／4GiB；不替代 Web 授权交互或真实 Provider 验收。
 
 - `integration-mcp-connection-control` 经真实 Gateway、Backend、Session 消息及 Agent 发现／信封入口，验证首次 OAuth 未授权时的本地控制、兄弟 Server 调用、受信 operation 身份、短 status、参数拒绝与 disconnect，固定240秒／4GiB；模型复用 model_stream，不替代授权 UI、长等待自动继续或真实 Provider 验收。

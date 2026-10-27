@@ -88,7 +88,15 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
         if getattr(request, "param", None) == "v2":
             from app.services.infrastructure.mcp import catalog_activation
             historical_writer.setattr(catalog_activation, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
-        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=extension_catalog_policy_resolver)
+        policies_for = extension_catalog_policy_resolver
+        if isinstance(getattr(request, "param", None), dict):
+            resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions=request.param)
+
+            def configured_policies(metadata):
+                return {entry.tool_id: resolver.resolve(entry) for entry in metadata}
+
+            policies_for = configured_policies
+        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=policies_for)
         scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
     try:
         yield owner, factory, registry, scope
@@ -185,6 +193,40 @@ async def test_exact_ids_keep_order_errors_and_do_not_disclose_disabled_schema(d
     assert result["results"][2] == result["results"][3]
     assert result["results"][5]["error"]["code"] == "tool-model-hidden"
     assert "input_schema" not in result["results"][5]
+
+
+@pytest.mark.parametrize("catalog_runtime", [{
+    "execution_disabled": ["notes", "mcp__mini__echo"], "model_hidden": ["hidden_ci"],
+}], indirect=True)
+async def test_disabled_before_publication_remains_known_after_freeze_and_cold_read(
+    catalog_runtime, guidance_prepare, registry_db, discovery_tool_factory,
+):
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    wire, frozen = guidance_prepare("initially-disabled-catalog")
+    assembly = saver.get_context_assembly(session, thread, assembly_id=wire["assembly_id"])
+    policy = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={
+        "execution_disabled": ["notes", "mcp__mini__echo"], "model_hidden": ["hidden_ci"],
+    })
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.load_sealed_resource_activation(
+            session, thread_id=thread, assembly_id=assembly.assembly_id,
+            plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
+        )
+        assert restored == frozen
+        catalog = tool_catalog_from_activation(restored, lambda snapshot, binding: cold.read_resource_activation_payload(
+            snapshot, binding, storage_owner=(session, thread),
+        ))
+        tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda current: {
+            entry.metadata.tool_id: policy.resolve(entry.metadata) for entry in current.definitions
+        })
+        exact = json.loads(await tool.ainvoke({"tool_ids": ["notes", "mcp__mini__echo", "hidden_ci", "unknown"]}))
+        assert [entry["error"]["code"] for entry in exact["results"]] == [
+            "tool-disabled", "tool-disabled", "tool-model-hidden", "tool-not-found",
+        ]
+        assert all("input_schema" not in entry and "description" not in entry for entry in exact["results"])
+        ranked = json.loads(await tool.ainvoke({"query": "CI 失败", "limit": 20}))
+        assert {entry["tool_id"] for entry in ranked["results"]} == {"ci_logs", "ci_runs"}
 
 
 async def test_pagination_reduces_entries_without_truncating_schema(discovery_case, discovery_store, registry_db):
