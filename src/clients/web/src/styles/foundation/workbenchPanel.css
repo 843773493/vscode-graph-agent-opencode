@@ -771,15 +771,14 @@
 }
 
 .automation-bottom-panel-content {
+  display: block;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   background: var(--bt-bottom-panel-background);
 }
 
-.automation-bottom-panel-content > .session-generator-manager {
-  flex: 1 1 auto;
-  min-height: 0;
+.automation-bottom-panel-content .session-generator-manager {
   padding: 10px;
 }
 

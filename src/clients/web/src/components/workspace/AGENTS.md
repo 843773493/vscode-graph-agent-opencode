@@ -20,6 +20,7 @@ WorkspaceFileReferenceContext               文件资源引用上下文
 gateway/                                    Gateway 控制中心、连接、诊断、主题
 portForward/                                工作区端口转发面板与端口校验
 mcp/                                        工作区 MCP 连接管理与会话授权入口
+persistentTasks/                            当前工作区持久任务管理、表单及运行记录
 WorkspaceAddDialog.tsx                      添加对话框轻量入口与延迟加载
 └── workspaceAddDialog/                     设备选项模型与目录选择交互
 WorkspaceRenameDialog                       工作区重命名对话框

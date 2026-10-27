@@ -1,0 +1,22 @@
+.persistent-tasks { padding: 12px; min-width: 0; }
+.persistent-task-heading, .persistent-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.persistent-task-heading h2 { font-size: 14px; margin: 0 auto 0 0; }
+.persistent-task-layout { display: grid; grid-template-columns: minmax(180px, 30%) minmax(0, 1fr); gap: 12px; }
+.persistent-task-list { display: flex; flex-direction: column; gap: 6px; }
+.persistent-task-list > button { display: flex; flex-direction: column; text-align: left; gap: 4px; padding: 10px; }
+.persistent-task-list > button[aria-pressed="true"] { border-color: var(--bt-accent); background: var(--bt-active-selection-background); }
+.persistent-task-list small, .persistent-task-detail code, .persistent-task-detail pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+.persistent-task-detail { min-width: 0; border-left: 1px solid var(--bt-panel-border); padding-left: 12px; }
+.persistent-task-detail dd { margin: 4px 0 10px; }
+.persistent-tasks button, .persistent-tasks input, .persistent-tasks textarea, .persistent-tasks select { color: inherit; background: var(--bt-input-background); border: 1px solid var(--bt-panel-border); border-radius: 4px; padding: 5px 8px; }
+.persistent-tasks button { cursor: pointer; }
+.persistent-tasks button:disabled { opacity: .5; cursor: default; }
+.persistent-task-editor, .persistent-task-editor fieldset { display: flex; flex-direction: column; gap: 8px; }
+.persistent-task-editor label { display: flex; flex-direction: column; gap: 4px; }
+.persistent-task-editor fieldset { border: 1px solid var(--bt-panel-border); min-width: 0; margin: 0; }
+.persistent-task-editor textarea { min-height: 70px; resize: vertical; }
+.persistent-task-editor p { margin: 4px 0; }
+.persistent-task-runs { padding-left: 22px; }
+.persistent-task-runs > li { padding: 8px 0; border-bottom: 1px solid var(--bt-panel-border); }
+.persistent-tasks [role="alert"] { color: var(--bt-status-danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .persistent-task-layout { grid-template-columns: minmax(0, 1fr); } .persistent-task-detail { border-left: 0; padding-left: 0; } }

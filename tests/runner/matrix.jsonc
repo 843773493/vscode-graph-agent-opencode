@@ -3,6 +3,7 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-web-persistent-tasks","layer":"integration","client":"web","enabled":true,"timeoutMs":200000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/persistent_tasks/test_management.py"]},
     {"id":"integration-persistent-task-goal-storage","layer":"integration","client":null,"enabled":true,"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_goal_storage.py"]},
     {"id":"integration-persistent-task-models","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_models.py"]},
     {"id":"integration-persistent-task-states","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_states.py"]},

@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-web-persistent-tasks`经真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、另一真实客户端造成的409、管理控制与刷新保留，固定200秒/4GiB；复用既有model_stream产品装具，不代表生成器迁移、模型判断模板、跨工作区切换或完整恢复Web验收。
+
 - `integration-runtime-context-publication` 通过真实 Session、模型准备与公开 fork 入口验证仅发布事件不创建 Job/Turn、已发送请求不变、下一次准备消费及 fork 锚点闭包；提交前/后故障经全新 Saver/dispatcher 核对冷 owner 恢复。复用 model_stream 和正式 fork watchdog，固定240秒/4GiB，不代表持久任务完整运行时、进程重启或主 Web 验收。
 
 - `integration-web-mcp-authorization` 通过真实 Chromium、Gateway、Session/Agent、同一 OAuth/MCP 资产及 model_stream 验证会话授权入口、私有弹窗回调、工作区底部标签持久化、完整定义和真实调用；固定240秒／4GiB，不代替远程 Gateway、真实 Provider 或完整后台等待恢复。
