@@ -18,6 +18,7 @@ import { conversationTurnKey } from "../../state/session/turnIdentity";
 import type { TurnProjectionState } from "../../state/session/turnTimeline";
 import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "../chat/ChatHistoryEmptyState";
+import ToolApprovalPanel from "./ToolApprovalPanel";
 import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
 import ChatTurn from "../chat/turn/ChatTurn";
 import InternalExecutionTranscriptItem from "../chat/InternalExecutionTranscriptItem";
@@ -420,6 +421,8 @@ export default function ChatPanel({
 
   return (
     <section className="chat-stream-shell">
+      {hasActiveSession && sessionId && threadId ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId])}
+        apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
       {hasActiveSession ? <TurnNavigationControls key={scopeKey} conversations={transcriptConversations}
         disabled={!sessionId || !threadId || historyLoading} navigation={navigation} onNavigate={navigateToTurn} /> : null}
       <section

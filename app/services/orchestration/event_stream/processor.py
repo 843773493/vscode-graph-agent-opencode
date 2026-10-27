@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.types import Command, StateSnapshot
 
 from app.abstractions.session_changes import (
     SessionChangesRecorderProtocol,
@@ -126,6 +127,7 @@ async def process_agent_event_stream(
     model_timeout_seconds: float | None = None,
     tool_dispatch_timeout_seconds: float | None = None,
     progress_reporter: Callable[[str], None] | None = None,
+    approval_waiter: Callable[[StateSnapshot], Awaitable[Command]] | None = None,
 ) -> AgentEventStreamResult:
     """消费 DeepAgent 事件流，并发布前端可观察的 trace 事件。"""
     (
@@ -270,6 +272,7 @@ async def process_agent_event_stream(
         idle_model_timeout_seconds=idle_model_timeout_seconds,
         initial_event_timeout_seconds=initial_event_timeout_seconds,
         effective_tool_dispatch_timeout_seconds=effective_tool_dispatch_timeout_seconds,
+        approval_waiter=approval_waiter,
     )
     try:
         async for event in events:

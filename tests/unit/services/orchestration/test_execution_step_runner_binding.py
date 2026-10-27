@@ -45,6 +45,41 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
 
 
+@pytest.mark.parametrize("confirm_envelope", [False, True])
+async def test_checkpoint_approval_projects_inner_or_fixed_envelope_with_original_call_ids(confirm_envelope):
+    from langchain_core.messages import AIMessage, ToolCall
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+
+    from app.agents.tool_confirmation_middleware import (
+        ToolApprovalState,
+        ToolConfirmationMiddleware,
+    )
+    from app.services.orchestration.execution_step.approval import checkpoint_approvals
+
+    middleware = ToolConfirmationMiddleware(
+        frozenset() if confirm_envelope else frozenset({"mcp__mini__echo"}),
+        interrupt_on={"invoke_extension_tool": True} if confirm_envelope else {},
+    )
+    builder = StateGraph(ToolApprovalState)
+    builder.add_node("confirm", middleware.aafter_model)
+    builder.add_edge(START, "confirm")
+    builder.add_edge("confirm", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config: RunnableConfig = {"configurable": {"thread_id": "approval-projection"}}
+    calls = [ToolCall(name="invoke_extension_tool", args={"tool_name": "mcp__mini__echo", "arguments": {"value": "相同参数"}},
+                      id=identity, type="tool_call") for identity in ("first-call", "second-call")]
+    await graph.ainvoke({"messages": [AIMessage(content="", tool_calls=calls)]}, config)
+    snapshot = await graph.aget_state(config)
+    approval, = checkpoint_approvals(snapshot, job_id="job", session_id="session", thread_id="thread")
+    assert approval.approval_id == snapshot.interrupts[0].id
+    assert approval.checkpoint_id == snapshot.config.get("configurable", {})["checkpoint_id"]
+    assert [action.tool_call_id for action in approval.actions] == ["first-call", "second-call"]
+    assert [action.name for action in approval.actions] == ["invoke_extension_tool" if confirm_envelope else "mcp__mini__echo"] * 2
+    assert [action.args for action in approval.actions] == [calls[0]["args"] if confirm_envelope else {"value": "相同参数"}] * 2
+
+
 class _SnapshotConfigService:
     def get_snapshot(self) -> object:
         return "snapshot"

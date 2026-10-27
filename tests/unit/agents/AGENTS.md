@@ -26,7 +26,7 @@ tests/unit/agents/
     │   ├── test_context_source_boundary_audit.py
     │   └── test_*summarization*.py
     ├── 工具装配与调用中间件
-    │   ├── test_custom_tool_confirmation_middleware.py
+    │   ├── test_tool_confirmation_middleware.py
     │   ├── test_structured_tool_call_middleware.py
     │   ├── test_tool_*
     │   └── test_llm_logging_middleware.py

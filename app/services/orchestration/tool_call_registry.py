@@ -33,6 +33,22 @@ class PendingToolCompletion:
 
 
 class StreamToolRegistryMixin:
+    _tool_call_names_by_id: dict[str, str]
+
+    async def complete_tool_approval(self, message: ToolMessage, *, model_call_id: str) -> None:
+        """用户直接拒绝／提供结果也是原调用的一次明确结算，不等待不存在的 SDK callback。"""
+        call_id = self.claim_tool_call_id(model_call_id, message.tool_call_id)
+        attempt_id = f"{call_id}:approval"
+        tool_name = self._tool_call_names_by_id[call_id]
+        await self.start_tool(tool_execution_id=attempt_id, tool_call_id=call_id, tool_name=tool_name)
+        successful = tool_output_status(message) == "success"
+        await self.complete_tool(
+            tool_execution_id=attempt_id, tool_call_id=call_id, tool_name=tool_name,
+            status="succeeded" if successful else "failed", result=message.content,
+            artifact=message.artifact, outcome="success" if successful else "provider_error",
+            completion_reason="user_approval", error=None if successful else tool_result_content_text(message.content),
+        )
+
     def _tool_call_binding(self, callback_run_id: str) -> asyncio.Future[str]:
         binding = self._tool_call_bindings_by_callback_run_id.get(callback_run_id)
         if binding is None:

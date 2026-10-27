@@ -52,3 +52,49 @@ message JobProgress {
   uint32 progress = 4;
   optional string message = 5;
 }
+
+message ToolApprovalAction {
+  string tool_call_id = 1;
+  string name = 2;
+  google.protobuf.Struct args = 3;
+  optional string description = 4;
+  repeated string allowed_decisions = 5;
+}
+
+message ToolApproval {
+  string approval_id = 1;
+  string checkpoint_id = 2;
+  string job_id = 3;
+  string session_id = 4;
+  string thread_id = 5;
+  repeated ToolApprovalAction actions = 6;
+}
+
+message ToolApprovalEditedAction {
+  string name = 1;
+  google.protobuf.Struct args = 2;
+}
+
+message ToolApprovalDecision {
+  string tool_call_id = 1;
+  string type = 2;
+  optional ToolApprovalEditedAction edited_action = 3;
+  optional string message = 4;
+}
+
+message ToolApprovalResponse {
+  string approval_id = 1;
+  repeated ToolApprovalDecision decisions = 2;
+}
+
+message ToolApprovalSubmitRequest {
+  string command_id = 1;
+  string checkpoint_id = 2;
+  repeated ToolApprovalResponse responses = 3;
+}
+
+message ToolApprovalCommand {
+  string command_id = 1;
+  string checkpoint_id = 2;
+  string status = 3;
+}

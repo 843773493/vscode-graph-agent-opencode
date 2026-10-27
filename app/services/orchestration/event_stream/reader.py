@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
+
+from langgraph.types import Command, StateSnapshot
 
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.core.turn_execution_scope import CancellationSignal, ScopeCancelledError
@@ -102,6 +104,7 @@ async def iter_agent_events(
     idle_model_timeout_seconds: float | None,
     initial_event_timeout_seconds: float,
     effective_tool_dispatch_timeout_seconds: float,
+    approval_waiter: Callable[[StateSnapshot], Awaitable[Command]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     event_iterator = agent.astream_events(
         input_payload,
@@ -219,6 +222,25 @@ async def iter_agent_events(
                 next_event_task = None
             except StopAsyncIteration:
                 next_event_task = None
+                if approval_waiter is not None:
+                    # 原 iterator 已按 sync durability 提交中断；读取最新 scheduler，
+                    # 不让旧 checkpoint_id 把成功恢复后的图再次带回原审批。
+                    latest_config = {**stream_config, "configurable": dict(stream_config.get("configurable", {}))}
+                    latest_config["configurable"].pop("checkpoint_id", None)
+                    snapshot = await agent.aget_state(latest_config)
+                    if snapshot.interrupts:
+                        resume = await approval_waiter(snapshot)
+                        stream_config = {**stream_config, "configurable": {
+                            **stream_config.get("configurable", {}), **snapshot.config.get("configurable", {}),
+                        }}
+                        event_iterator = agent.astream_events(
+                            resume, config=stream_config, version="v2", durability="sync",
+                        ).__aiter__()
+                        first_progress_deadline = loop.time() + initial_event_timeout_seconds
+                        model_deadline = tool_dispatch_deadline = None
+                        model_active = False
+                        previous_pending_tool_call_ids = frozenset()
+                        continue
                 return
             consumption_started = loop.time()
             yield event

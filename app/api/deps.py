@@ -71,7 +71,9 @@ from app.services.infrastructure.workspace_files.text_owner import (
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
+from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.communication.service import SessionCommunicationService
+from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing.service import ToolTestService
@@ -86,6 +88,7 @@ class _AppContainerProtocol(Protocol):
     artifact_service: ArtifactService
     event_service: EventService
     job_service: JobServiceProtocol
+    agent_execution_service: AgentExecutionService
     message_service: MessageService
     attachment_blob_store: AttachmentBlobStore
     runtime_service: RuntimeService
@@ -251,6 +254,10 @@ def get_event_service(request: Request) -> EventService:
 
 def get_job_service(request: Request) -> JobServiceProtocol:
     return _require_service(request, "job_service", JobServiceProtocol, "JobService 尚未在应用启动阶段初始化")
+
+
+def get_tool_approval_service(request: Request) -> ToolApprovalService:
+    return _get_container(request).agent_execution_service.tool_approvals
 
 
 def get_workspace_activity_service(request: Request) -> WorkspaceActivityService:

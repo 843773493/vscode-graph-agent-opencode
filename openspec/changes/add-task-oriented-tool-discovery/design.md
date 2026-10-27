@@ -141,6 +141,10 @@ BackgroundTask 在独立 Context 中启动，不继承原 Job 的固定配置、
 
 ### 6. 唯一 MCP owner 内按 Server 监督连接与调用
 
+人工确认请求由原图已提交 checkpoint 的 interrupt 投影，决定通过原 AgentControlInbox 的 `approval.result` 持久投递，再用官方 Command 恢复同一图；不建立第二审批库或新 Job 状态。HTTP 回执只承诺决定已接收，不表示工具已经执行。主窗口的会话区从精确工作区、Session、Thread 查询活动请求，刷新后仍读取同一检查点；切换目标中止旧请求并隔离迟到响应。
+
+直接工具与扩展信封共用同一审批中间件。批准、拒绝、编辑和用户直接提供结果均绑定原 tool_call_id；拒绝及直接结果由既有 canonical owner 结算。编辑决定保存为图的执行控制字段，在原身份绑定后交给同一 ToolNode 执行，禁止改写原模型消息或历史请求。结果消息保留原调用名称，实际目标由审批决定、执行事件与输出归档记录；不存在的编辑目标复用 ToolNode 的配对错误，并沿原结果 writer 结算，不等待不存在的 SDK 回调。该状态和中间件骨架变更将 deep-agent graph revision 提升至16，旧图恢复继续遵守明确版本校验，不引入兼容执行链路。
+
 每个工作区实例装配一个 MCP owner，内部每 Server 一个拥有 session 上下文的监督 task；同进程多工作区的 server ID 相同也不能共用运行态。task 必须在相同生命周期上下文中创建、排空、关闭 MCP/AnyIO session。用现有 LifetimeScope 管理进程内 task，但连接是否停止由领域 owner 决策。
 
 生命周期实现由 `session_runtime.py` 持有每 Server 的原 task，LifetimeScope 登记其关闭回调并等待原 task 退出，不在 release task 中退出 SDK CancelScope。目录 owner 仍独占完整 relist、通知 fencing 与发布；连接 task 的异常会失效已发布目录，启动取消和部分失败排空实际创建的上下文，释放失败阻止重开并保留原异常。连接代际在同一 Owner 重启时单调推进；该生命周期切片不代替后续调用 handle、持久 lease 或配置共同提交协议。
@@ -153,7 +157,7 @@ BackgroundTask 在独立 Context 中启动，不继承原 Job 的固定配置、
 | connection generation | session 新建／替换 | 远端执行身份、迟到 callback fencing |
 | invocation lease | 每个已接纳调用 | 排空、期限和取消归属 |
 
-跨 execution／Turn 的持久资源持有复用唯一 ExternalResourceLeaseLedger 的 `mcp_connection` 与 typed resource-use 记录，真实状态仍由连接 owner 更新。owner 内 generation/handle 的短期调用保留只管理本次执行准入与排空，不另建持久资源账本，也不按任意参数名推断资源占用。
+跨 execution／Turn 的持久资源持有复用唯一 ExternalResourceLeaseLedger 的 `mcp_connection` 与 typed resource-use 记录，真实状态仍由连接 owner 更新。owner 内 generation/handle 的短期调用保留只管理本次执行准入与排空，不另建持久资源账本，也不按任意参数名推断资源占用。execution scope 关闭（含审批中取消）时释放该 scope 下全部待用 model-call 资格；已发送但结果未知的 operation lease 仍单独保留，不能被 scope 清理结算。
 
 目录全量 relist 仍只有一条路径；支持 list_changed 的 Server 消费通知，其余在显式刷新／重连边界更新。无语义变化不推进目录 revision；相同 schema 的连接替换仍推进连接 generation。可调用记录包含 server identity、connection generation、完整 schema hash 与可审计 handle 引用；由 owner 解析，Agent 不再捕获 initial_targets 或回退 live publication。
 

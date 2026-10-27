@@ -9,6 +9,12 @@ export type {
 } from "./protocol_generated/boxteam/workspace/v2/public";
 
 export type {
+  ToolApproval,
+  ToolApprovalAction,
+  ToolApprovalDecision,
+  ToolApprovalDecisionType,
+  ToolApprovalSubmitRequest,
+  ToolApprovalCommand,
   Agent,
   AgentStateMessages,
   ConfigSourceDTO,

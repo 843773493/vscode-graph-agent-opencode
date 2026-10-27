@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         ExternalResourceLeaseLedger,
     )
     from app.services.infrastructure.message_stream_store import MessageStreamStore
+    from app.services.orchestration.execution_step.approval import ToolApprovalService
     from app.services.orchestration.resource_activation import (
         ResourceActivationCoordinator,
     )
@@ -72,5 +73,6 @@ class StepExecutionPorts:
     control_inbox_state_path: Callable[[str, str], Path]
     checkpointer_provider: Callable[[], BaseCheckpointSaver]
     session_service_provider: Callable[[], SessionLookupProtocol]
+    tool_approvals: ToolApprovalService
     external_resource_leases: ExternalResourceLeaseLedger | None = None
     model_timeout_seconds: float | None = None

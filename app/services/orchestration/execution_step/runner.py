@@ -540,32 +540,24 @@ class StepRunner:
                 else admission.execution_id
             )
             turn_scope_token = set_current_turn_execution_scope(turn_scope)
-            if message_stream_writer is not None:
-                control_inbox = AgentControlInbox(
-                    message_stream_writer.turn_stream_id,
-                    session_id=session_id,
-                    state_path=self.ports.control_inbox_state_path(
-                        session_id, message_stream_writer.turn_stream_id
-                    ),
-                )
-                self.execution_scope_registry.register_inbox(
-                    message_stream_writer.turn_stream_id,
-                    control_inbox,
-                )
-                control_loop_stop_event = asyncio.Event()
-                control_loop_task = asyncio.create_task(
-                    AgentLoopControlCoordinator(
-                        scope=turn_scope,
-                        inbox=control_inbox,
-                        writer=message_stream_writer,
-                    ).run(control_loop_stop_event)
-                )
-                if self.ports.external_resource_leases is not None:
-                    turn_scope.register_cleanup(
-                        lambda: self.ports.external_resource_leases.release_turn_leases(
-                            message_stream_writer.turn_stream_id
-                        )
+            control_inbox = AgentControlInbox(
+                turn_scope.turn_stream_id, session_id=session_id,
+                state_path=self.ports.control_inbox_state_path(session_id, turn_scope.turn_stream_id),
+            )
+            self.execution_scope_registry.register_inbox(turn_scope.turn_stream_id, control_inbox)
+            control_loop_stop_event = asyncio.Event()
+            control_loop_task = asyncio.create_task(
+                AgentLoopControlCoordinator(
+                    scope=turn_scope, inbox=control_inbox, writer=message_stream_writer,
+                    command_handlers={"approval.result": self.ports.tool_approvals.process},
+                ).run(control_loop_stop_event)
+            )
+            if message_stream_writer is not None and self.ports.external_resource_leases is not None:
+                turn_scope.register_cleanup(
+                    lambda: self.ports.external_resource_leases.release_turn_leases(
+                        message_stream_writer.turn_stream_id
                     )
+                )
             message_delta_token = set_current_model_delta_sink(message_stream_runtime)
             final_text = ""
             latest_model_content_blocks: tuple[dict[str, object], ...] = ()
@@ -686,6 +678,10 @@ class StepRunner:
                 question_source=question_source,
                 question_communication_id=question_communication_id,
                 resume_from_checkpoint=resume_checkpoint_id is not None,
+                approval_waiter=lambda snapshot: self.ports.tool_approvals.wait(
+                    snapshot, job_id=job_id, session_id=session_id,
+                    thread_id=thread_id, inbox=control_inbox,
+                ),
             )
             final_text = retry_result.final_text
             latest_model_content_blocks = retry_result.latest_model_content_blocks

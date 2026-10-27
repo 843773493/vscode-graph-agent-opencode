@@ -27,7 +27,7 @@
 - [x] 4.1 在唯一 MCP owner 内建立每 Server 所属生命周期 task，统一创建／关闭 SDK session、完整 relist、通知及过期结果 fencing。
 - [ ] 4.2 分离 catalog revision、connection generation 和 invocation lease，冻结精确执行引用；跨 execution／Turn 持有复用 ExternalResourceLeaseLedger 的 mcp_connection 与 typed resource-use，owner 内短期 handle 保留不建第二账本；同名同 schema 新连接不得接管旧调用。
 - [x] 4.3 将 Agent 长期捕获工具对象及 initial/live 两段 resolver 全量迁移至 owner 解析，物理删除旧解析路径。
-- [ ] 4.4 实现有界的已封存调用执行资格及 HITL 等待保留，区分普通替换、禁用、断开和最新权限撤销；退役后不授予新的旧代际资格。
+- [x] 4.4 实现有界的已封存调用执行资格及 HITL 等待保留，区分普通替换、禁用、断开和最新权限撤销；退役后不授予新的旧代际资格。
 - [x] 4.5 统一真实 MCP 结果、isError、structuredContent、媒体／artifact、进度和取消处理；必要时整体替换 LangChain MCP 适配路径并删除旧实现。
   - 已完成结果保真边界：信封复用 BaseTool 结果与错误策略，SDK 保留业务错误／结构化内容／图片／音频，ToolNode 不再将标准媒体 stringify，canonical 与冷恢复保留原正文和 artifact；SSE 仍为派生文本。后继请求不经 AI 正文过滤，Chat 媒体按调用身份送入数据消息，Responses 封存与直接历史共用纯投影。真实本地 HTTP 的两种协议与同步／异步共 4 项验收通过，核对网络正文、请求 hash 和冷恢复；Gateway 产品验收另核并发成功／失败及 3 次封存请求。
   - 进度、取消／断线的 outcome-unknown 已按下方调用生命周期切片验收。真实外部模型的媒体协议支持仍属于第8节产品门，不以模型回放代替真实 Provider 验证。结果切片的准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/mcp-result-preservation/artifacts/`。
@@ -307,3 +307,13 @@
 
 - Saver 按官方 WRITES_IDX_MAP 分离可更新控制槽与普通不可变写入，消除 interrupt 与恢复输出争用 index 0。未改变 SQLite 结构或 schema 版本；普通重试正文冲突继续明确拒绝。
 - `pending-final-011` 为4 passed／5.51秒，包含同步／异步、冷读、普通写入冲突和既有损坏检查；最终类型／Ruff检查及新测试复验 `pending-final-static-014` 退出0。命令、逐文件指纹、raw与实际退出码保留在 `out/tests/temp/mcp-tool-approval/artifacts/runs/`。新合同纳入两项既有历史存储矩阵。完整审批和HITL跨替换仍未勾选。
+
+
+### 4.4 原图审批与资格释放闭合（2026-10-27）
+
+- 审批从已提交 checkpoint interrupts 投影，经原 AgentControlInbox 接受决定，以官方 Command 恢复同一 Job／execution／图；内部执行复用同一入口，不建立审批库或新挂起状态。直接工具与信封目标统一中间件，删除旧实现；私有执行决定不改写原 AIMessage、canonical 调用或封存请求，graph revision 升为16。拒绝、直接应答及不存在的编辑目标沿原 canonical writer 结算；实际编辑目标用于执行与输出归档，结果仍归原调用。
+- 修复取消后的 model-call 资格泄漏：原 owner 按 execution scope 统一释放待用资格，到期不续期，已发送且结果未知的 operation 仍保留独立占用。真实 Gateway／Session／Agent／HTTP MCP 全部9场景通过（582.35秒），覆盖同 schema 替换下 approve／edit／respond＋拒绝、直接工具改为另一已注册目标或未知目标、真实60秒到期、主动断开、撤权和取消；核对远端零请求或唯一原连接收据、原 call ID、三份请求 hash、迟到409与磁盘资格结算。正式矩阵保护期限按测量扩大至720秒，未修改业务期限。
+- 隔离 tree `afcd5bb100f744cbd1a8bab6dde720d62894a0f7` 的真实 Chromium／Gateway／Agent 验收1 passed／72.33秒，页面发消息、刷新同一检查点、编辑及拒绝均通过，真实 MCP 仅收到预期请求且无 pageerror；Web tsc、构建与严格 OpenSpec 校验通过。该 tree 核心回归203 passed，8项新增工具返回形态测试因局部 Command 类型注解求值失败；修正为模块导入后，完整 archive `51b31e56ff449ebd8ce990ae09165e175dc36315` 的13项审批测试通过，未修改产品行为或断言。
+- 补齐固定信封本身要求审批时的精确投影；完整 archive `93d1c1d2236f56cdd2322787b720df442472f9ee` 的审批／runner 21 passed／3.91秒，覆盖同步／异步、直接结果／Command／Command列表及两个相同参数调用的独立 ID。最终仅修正新增测试的 RunnableConfig 注解／import 格式，扩大静态检查为28个文件：完整 HEAD 基线147条／当前143条 Pyright诊断，Ruff基线／当前均6条，零新增，不宣称全仓静态全绿。各组范围重叠，不累计用例数。
+- 命令、tree／逐文件指纹、raw、准确退出码、失败原件与正式产物保留在 `out/tests/temp/mcp-tool-approval/artifacts/`。保留边界场景首次失败、测试断开字段错误、读文件参数错误、隔离副本依赖链接缺失等原件；未放宽身份、顺序、期限、结果未知或 hash 断言。
+- 关闭4.4，当前42/52。4.2的跨执行持续持有、4.6的综合冷恢复／隔离、8.4的跨 Gateway 授权和8.5的真实 Provider token／缓存指标仍按原未勾项推进；本批回放与本地 HTTP 不证明真实 Provider 收益或旧 socket 可恢复。团队／协作 TODO 不变。

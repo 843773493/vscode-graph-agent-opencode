@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.agents.tool_confirmation_middleware import approved_tool_call
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_result_text import tool_output_status
 from app.services.infrastructure.tool_output_store import ToolOutputStore
@@ -69,7 +70,7 @@ class ToolOutputMiddleware(AgentMiddleware):
 
 
 def _tool_identity(request: ToolCallRequest) -> tuple[str, str]:
-    tool_call = request.tool_call
+    tool_call = approved_tool_call(request.state, request.tool_call)
     raw_name = tool_call.get("name")
     if not isinstance(raw_name, str) or not raw_name:
         raise RuntimeError("工具调用缺少 name，无法持久化输出")

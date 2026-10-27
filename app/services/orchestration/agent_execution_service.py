@@ -84,6 +84,7 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
     WorkspaceFileResourceRegistry,
 )
 from app.services.orchestration.event_stream.contracts import AgentEventSource
+from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.execution_step.ports import (
     StepAgentRuntime,
     StepExecutionPorts,
@@ -163,6 +164,7 @@ class AgentExecutionService(JobStepExecutor):
         self._tool_timeout_seconds = tool_timeout_seconds
         self._sweep_task: asyncio.Task[None] | None = None
         self.execution_scope_registry = TurnExecutionScopeRegistry()
+        self.tool_approvals = ToolApprovalService()
         self._step_runner = StepRunner(
             StepExecutionPorts(
                 config_service=config_service,
@@ -177,6 +179,7 @@ class AgentExecutionService(JobStepExecutor):
                 agent_factory=self._acquire_step_agent,
                 checkpointer_provider=dependency_provider.get_checkpointer,
                 session_service_provider=dependency_provider.get_session_service,
+                tool_approvals=self.tool_approvals,
                 external_resource_leases=external_resource_leases,
                 model_timeout_seconds=model_timeout_seconds,
             ),

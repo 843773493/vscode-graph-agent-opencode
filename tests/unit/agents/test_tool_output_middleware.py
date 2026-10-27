@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolCall, ToolMessage
 
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.core.resource_uri import session_artifact_uri
@@ -204,6 +204,7 @@ def test_tool_output_middleware_uses_custom_target_name(
         "Request",
         (),
         {
+            "state": {},
             "tool_call": {
                 "id": "call-custom",
                 "name": "invoke_extension_tool",
@@ -222,6 +223,31 @@ def test_tool_output_middleware_uses_custom_target_name(
     reference = extract_tool_output_reference(result)
     assert reference is not None
     assert reference["tool_name"] == "large_custom_tool"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_approval_edit_materializes_output_under_selected_target(mode, workspace_root, session_bundle_factory):
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    session = "ses_019c49d551f17a0686eed4c785689d2a"
+    session_bundle_factory(workspace_root / ".boxteam/sessions", session)
+    store = ToolOutputStore(workspace_root=workspace_root, max_lines=20, max_bytes=1024)
+    middleware = ToolOutputMiddleware(session_id=session, store=store)
+    original = ToolCall(name="invoke_extension_tool", args={"tool_name": "original_target", "arguments": {}}, id="edited-call", type="tool_call")
+    request = ToolCallRequest(tool_call=original, tool=None, state={"tool_approval_edits": {"edited-call": {
+        **original, "args": {"tool_name": "selected_target", "arguments": {}},
+    }}}, runtime=Mock())
+    source = ToolMessage(content="编辑后的完整结果" * 1000, tool_call_id="edited-call")
+    if mode == "sync":
+        result = middleware.wrap_tool_call(request, lambda _: source)
+    else:
+        async def complete(_request):
+            return source
+        result = await middleware.awrap_tool_call(request, complete)
+    reference = extract_tool_output_reference(result)
+    assert reference is not None and reference["tool_name"] == "selected_target"
+    assert reference["tool_call_id"] == "edited-call"
+    assert request.tool_call["args"]["tool_name"] == "original_target"
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

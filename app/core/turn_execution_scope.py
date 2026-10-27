@@ -573,10 +573,11 @@ class AgentLoopControlCoordinator:
 
     scope: TurnExecutionScope
     inbox: AgentControlInbox
-    writer: MessageStreamCommitter
+    writer: MessageStreamCommitter | None
+    command_handlers: Mapping[str, Callable[[AgentControlCommand], Awaitable[dict[str, object]]]] = field(default_factory=dict)
 
     async def process(self, command: AgentControlCommand) -> dict[str, object]:
-        if command.kind == "interrupt":
+        if command.kind == "interrupt" and self.writer is not None:
             return await TurnControlCoordinator(
                 scope=self.scope,
                 inbox=self.inbox,
@@ -587,6 +588,8 @@ class AgentLoopControlCoordinator:
                 reason=str(command.payload.get("reason") or "user_requested"),
             )
         current = self.inbox.get(command.command_id)
+        if current is None:
+            raise RuntimeError("Agent 控制命令未登记到原 inbox")
         if current.status != "accepted":
             return {"status": current.status, "command_id": current.command_id}
         if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
@@ -595,6 +598,18 @@ class AgentLoopControlCoordinator:
                 "status": "rejected", "command_id": command.command_id,
                 "reason": "turn_not_active",
             }
+        handler = self.command_handlers.get(command.kind)
+        if handler is not None:
+            result = await handler(command)
+            status = result.get("status")
+            if status not in {"consumed", "rejected"}:
+                raise RuntimeError("Agent 控制 handler 必须交付明确消费终态")
+            terminal = self.inbox.get(command.command_id)
+            if terminal is None:
+                raise RuntimeError("Agent 控制 handler 丢失了原命令")
+            if terminal.status != status:
+                self.inbox.mark(command.command_id, str(status))
+            return {**result, "command_id": command.command_id}
         # 这些命令必须由明确的业务 handler 消费；没有 handler 时宁可拒绝，
         # 不能假设审批/资源结果已经安全生效。
         self.inbox.mark(command.command_id, "rejected")

@@ -17,6 +17,44 @@
   min-height: 0;
 }
 
+.chat-tool-approvals {
+  flex: 0 1 auto;
+  max-height: 55%;
+  overflow: auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--bt-overlay-border);
+  background: var(--bt-overlay-background);
+}
+
+.chat-tool-approvals fieldset {
+  margin: 8px 0;
+  min-width: 0;
+  border: 1px solid var(--bt-overlay-border);
+}
+
+.chat-tool-approvals label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.chat-tool-approvals pre {
+  max-height: 120px;
+  overflow: auto;
+}
+
+.chat-tool-approvals input,
+.chat-tool-approvals textarea,
+.chat-tool-approvals select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px;
+  color: var(--bt-text-primary);
+  background: var(--bt-overlay-background);
+  border: 1px solid var(--bt-overlay-border);
+}
+
 .chat-virtual-list {
   height: 100%;
   padding: 0;

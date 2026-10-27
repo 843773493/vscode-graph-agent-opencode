@@ -9,6 +9,7 @@ from datetime import datetime
 
 import pytest
 
+from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.records import CanonicalItemRecord
@@ -102,6 +103,42 @@ def test_committed_unknown_does_not_confirm_an_active_external_operation(lease_c
         assert lease.lease_id.startswith("mcp-invocation:") and lease.status == "active"
     retained = ExternalResourceLeaseLedger(state_path=path).get_lease(lease.lease_id)
     assert retained is not None and retained.status == "reconcile_required"
+
+
+@pytest.mark.parametrize("invoked", [False, True])
+async def test_execution_close_releases_future_qualifications_but_keeps_unknown_operation(lease_case, invoked):
+    owner, ledger, path = lease_case
+    snapshot = owner.binding_snapshot()
+    target = snapshot.resolve("mcp__mini__echo")
+    scope = LifetimeScope("cancelled-execution")
+    for model in ("waiting-first", "waiting-second"):
+        with owner.execution_handles.reserve_model_call(
+            snapshot, session_id="cancelled-session", thread_id="cancelled-thread", model_call_id=model,
+            execution_id="cancelled-execution", execution_scope=scope,
+        ) as retain:
+            retain([{"name": "invoke_extension_tool", "id": "waiting-call", "args": {"tool_name": target.target_id}}])
+    use = McpResourceUse("cancelled-holder", software_tool_operation_id(
+        "mcp_call", "cancelled-session", "cancelled-thread", "waiting-first", "waiting-call",
+    ), "cancelled-session", "cancelled-thread", "waiting-first")
+    if invoked:
+        with owner.execution_handles.execution_target(target, use) as execution:
+            execution.started = True
+            await scope.close()
+            active = [lease for lease in ledger.leases_for_resource(target.connection_ref)
+                      if lease.holder_session_id == "cancelled-session"]
+            assert len(active) == 1 and active[0].lease_id.startswith("mcp-invocation:")
+    else:
+        await scope.close()
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    retained = [lease for lease in cold.leases_for_resource(target.connection_ref)
+                if lease.holder_session_id == "cancelled-session"]
+    assert len(retained) == int(invoked)
+    if invoked:
+        assert retained[0].status == "reconcile_required"
+    with pytest.raises(ExtensionTargetResolutionError), owner.execution_handles.execution_target(target, use):
+        pytest.fail("执行关闭后不能消费审批资格或重放未知调用")
+    # 关闭一个执行不能释放兄弟执行／无该 scope 的原资格。
+    assert any(lease.holder_session_id == "original-session" for lease in cold.leases_for_resource(target.connection_ref))
 
 
 def test_committed_local_edit_or_rejection_does_not_release_sibling_call(lease_case, committed_result):

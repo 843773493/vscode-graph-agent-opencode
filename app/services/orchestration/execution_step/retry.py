@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from langgraph.types import Command, StateSnapshot
+
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -86,6 +88,7 @@ async def run_agent_with_retries(
     question_source: GlobalThreadAddress | None,
     question_communication_id: str | None,
     resume_from_checkpoint: bool = False,
+    approval_waiter: Callable[[StateSnapshot], Awaitable[Command]] | None = None,
 ) -> StepAgentRetryResult:
     if (admission.session_id, admission.thread_id, admission.job_id, admission.turn_id) != (session_id, thread_id, job_id, turn_id):
         raise ValueError("Agent retry 的 Session/Thread/Job/Turn 与 execution admission 不一致")
@@ -137,6 +140,7 @@ async def run_agent_with_retries(
             execution_scope=turn_scope,
             model_timeout_seconds=model_timeout_seconds,
             progress_reporter=progress_reporter,
+            approval_waiter=approval_waiter,
         )
         resume_from_checkpoint = False
         config["configurable"].pop("checkpoint_id", None)

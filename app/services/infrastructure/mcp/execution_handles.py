@@ -134,7 +134,9 @@ class McpExecutionHandles:
 
         def release() -> None:
             with self._lock:
-                self._release(key, reservation)
+                for owned_key, owned in tuple(self._reservations.items()):
+                    if owned.owner_scope is scope:
+                        self._release(owned_key, owned)
 
         scope.register(release, label=f"mcp-execution:{execution_id}")
         return reservation
@@ -164,7 +166,7 @@ class McpExecutionHandles:
                 for target in binding.targets.values() if target.origin == "mcp"
             }
             deadline = inherited.deadline if inherited is not None else datetime.now(UTC) + timedelta(seconds=self._timeout_seconds)
-            reservation = _Reservation(handles, (), deadline)
+            reservation = _Reservation(handles, (), deadline, owner_scope=execution_scope)
             self._register_qualification(key, reservation, prefix="mcp-prepared:v1:",
                                          operation_id=model_call_id, session_id=session_id, thread_id=thread_id)
 

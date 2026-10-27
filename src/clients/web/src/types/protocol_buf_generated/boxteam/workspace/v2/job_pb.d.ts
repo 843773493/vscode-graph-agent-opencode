@@ -129,6 +129,208 @@ export declare type JobProgress = Message<"boxteam.workspace.v2.JobProgress"> & 
 export declare const JobProgressSchema: GenMessage<JobProgress>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ToolApprovalAction
+ */
+export declare type ToolApprovalAction = Message<"boxteam.workspace.v2.ToolApprovalAction"> & {
+  /**
+   * @generated from field: string tool_call_id = 1;
+   */
+  toolCallId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct args = 3;
+   */
+  args?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional string description = 4;
+   */
+  description?: string | undefined;
+
+  /**
+   * @generated from field: repeated string allowed_decisions = 5;
+   */
+  allowedDecisions: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalAction.
+ * Use `create(ToolApprovalActionSchema)` to create a new message.
+ */
+export declare const ToolApprovalActionSchema: GenMessage<ToolApprovalAction>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApproval
+ */
+export declare type ToolApproval = Message<"boxteam.workspace.v2.ToolApproval"> & {
+  /**
+   * @generated from field: string approval_id = 1;
+   */
+  approvalId: string;
+
+  /**
+   * @generated from field: string checkpoint_id = 2;
+   */
+  checkpointId: string;
+
+  /**
+   * @generated from field: string job_id = 3;
+   */
+  jobId: string;
+
+  /**
+   * @generated from field: string session_id = 4;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 5;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ToolApprovalAction actions = 6;
+   */
+  actions: ToolApprovalAction[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApproval.
+ * Use `create(ToolApprovalSchema)` to create a new message.
+ */
+export declare const ToolApprovalSchema: GenMessage<ToolApproval>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApprovalEditedAction
+ */
+export declare type ToolApprovalEditedAction = Message<"boxteam.workspace.v2.ToolApprovalEditedAction"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct args = 2;
+   */
+  args?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalEditedAction.
+ * Use `create(ToolApprovalEditedActionSchema)` to create a new message.
+ */
+export declare const ToolApprovalEditedActionSchema: GenMessage<ToolApprovalEditedAction>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApprovalDecision
+ */
+export declare type ToolApprovalDecision = Message<"boxteam.workspace.v2.ToolApprovalDecision"> & {
+  /**
+   * @generated from field: string tool_call_id = 1;
+   */
+  toolCallId: string;
+
+  /**
+   * @generated from field: string type = 2;
+   */
+  type: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ToolApprovalEditedAction edited_action = 3;
+   */
+  editedAction?: ToolApprovalEditedAction | undefined;
+
+  /**
+   * @generated from field: optional string message = 4;
+   */
+  message?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalDecision.
+ * Use `create(ToolApprovalDecisionSchema)` to create a new message.
+ */
+export declare const ToolApprovalDecisionSchema: GenMessage<ToolApprovalDecision>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApprovalResponse
+ */
+export declare type ToolApprovalResponse = Message<"boxteam.workspace.v2.ToolApprovalResponse"> & {
+  /**
+   * @generated from field: string approval_id = 1;
+   */
+  approvalId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ToolApprovalDecision decisions = 2;
+   */
+  decisions: ToolApprovalDecision[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalResponse.
+ * Use `create(ToolApprovalResponseSchema)` to create a new message.
+ */
+export declare const ToolApprovalResponseSchema: GenMessage<ToolApprovalResponse>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApprovalSubmitRequest
+ */
+export declare type ToolApprovalSubmitRequest = Message<"boxteam.workspace.v2.ToolApprovalSubmitRequest"> & {
+  /**
+   * @generated from field: string command_id = 1;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: string checkpoint_id = 2;
+   */
+  checkpointId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ToolApprovalResponse responses = 3;
+   */
+  responses: ToolApprovalResponse[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalSubmitRequest.
+ * Use `create(ToolApprovalSubmitRequestSchema)` to create a new message.
+ */
+export declare const ToolApprovalSubmitRequestSchema: GenMessage<ToolApprovalSubmitRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ToolApprovalCommand
+ */
+export declare type ToolApprovalCommand = Message<"boxteam.workspace.v2.ToolApprovalCommand"> & {
+  /**
+   * @generated from field: string command_id = 1;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: string checkpoint_id = 2;
+   */
+  checkpointId: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolApprovalCommand.
+ * Use `create(ToolApprovalCommandSchema)` to create a new message.
+ */
+export declare const ToolApprovalCommandSchema: GenMessage<ToolApprovalCommand>;
+
+/**
  * @generated from enum boxteam.workspace.v2.JobStatus
  */
 export enum JobStatus {

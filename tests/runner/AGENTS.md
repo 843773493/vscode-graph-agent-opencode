@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-mcp-tool-approval`沿真实Gateway、Session消息、原图interrupt及HTTP MCP验证逐调用审批、直接工具编辑、同schema替换、期限、撤权与取消；完整9场景实测582秒，保护期限720秒/4GiB。`integration-web-tool-approval`经真实Chromium验证刷新后读取原检查点、编辑与拒绝，固定240秒/4GiB。均复用model_stream，不代表真实外部Provider或旧socket可恢复。
+
 - `integration-mcp-wait-admission`通过真实Gateway、Agent、OAuth/MCP及model_stream验证用户输入与after_turn唤醒串行、活动等待阻挡删除/取消后删除不复活、终态先完成后登记不丢通知，以及原300秒期限不因成功授权续期。固定600秒/4GiB，与原等待崩溃/child恢复套件使用不同测试文件工作区；不代替完整HITL、跨Gateway或真实Provider验收。
 
 - `integration-web-persistent-tasks`经真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、另一真实客户端造成的409、管理控制与刷新保留，固定200秒/4GiB；复用既有model_stream产品装具，不代表生成器迁移、模型判断模板、跨工作区切换或完整恢复Web验收。

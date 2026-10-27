@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import aclosing
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -11,6 +12,7 @@ from app.api.deps import (
     get_event_service,
     get_job_service,
     get_request_id,
+    get_tool_approval_service,
     verify_local_token,
 )
 from app.api.errors import state_conflict_http_error, unimplemented_http_error
@@ -19,6 +21,7 @@ from app.api.sse_heartbeat import (
     SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse, ControlAction
@@ -30,9 +33,15 @@ from app.schemas.internal_v2.job import (
 )
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.sse import sse_responses
+from app.schemas.internal_v2.tool_approval import (
+    ToolApprovalCommandDTO,
+    ToolApprovalDTO,
+    ToolApprovalSubmitRequest,
+)
 from app.services.business.job.control_service import JobControlRuntimeError
 from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.orchestration.execution_step.approval import ToolApprovalService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -74,6 +83,20 @@ def _job_control_http_error(
     return state_conflict_http_error(error)
 
 
+@router.get(
+    "/tool-approvals", response_model=APIResponse[list[ToolApprovalDTO]],
+    summary="读取当前会话线程的活动工具审批",
+)
+async def list_thread_tool_approvals(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    approvals: Annotated[ToolApprovalService, Depends(get_tool_approval_service)],
+):
+    return APIResponse(data=approvals.list_for_thread(session_id, thread_id), request_id=request_id)
+
+
 @router.get("/{job_id}", response_model=APIResponse[JobDTO], summary="获取任务详情")
 async def get_job(
     job_id: str,
@@ -101,6 +124,47 @@ async def list_job_steps(
         result = await job_service.list_steps(job_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{job_id}/approvals", response_model=APIResponse[list[ToolApprovalDTO]],
+    summary="读取当前任务的工具审批",
+)
+async def list_tool_approvals(
+    job_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    approvals: Annotated[ToolApprovalService, Depends(get_tool_approval_service)],
+):
+    try:
+        await job_service.get(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return APIResponse(data=approvals.list(job_id), request_id=request_id)
+
+
+@router.post(
+    "/{job_id}/approvals", response_model=APIResponse[ToolApprovalCommandDTO],
+    summary="向原检查点提交工具审批决定",
+)
+async def submit_tool_approvals(
+    job_id: str,
+    payload: ToolApprovalSubmitRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    approvals: Annotated[ToolApprovalService, Depends(get_tool_approval_service)],
+):
+    try:
+        await job_service.get(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    try:
+        result = approvals.submit(job_id, payload)
+    except ValueError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

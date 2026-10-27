@@ -1,14 +1,57 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Literal
 
 from langchain_core.messages import ToolCall, ToolMessage
-from langgraph.prebuilt.tool_node import ToolNode
+from langchain_core.runnables import RunnableConfig
+from langgraph.prebuilt.tool_node import ToolCallRequest, ToolNode
 from langgraph.types import Command
+
+from app.agents.tool_confirmation_middleware import (
+    approved_tool_call,
+    complete_tool_approval_results,
+)
 
 
 class ContentPreservingToolNode(ToolNode):
     """沿用框架执行，只保留 ToolMessage 已校验的完整内容块。"""
+
+    def _approval_request(self, request: ToolCallRequest) -> ToolCallRequest:
+        edited = approved_tool_call(request.state, request.tool_call)
+        if edited is request.tool_call:
+            return request
+        return replace(request, tool_call=edited, tool=self.tools_by_name.get(edited["name"]))
+
+    # TODO: 上游支持在执行端解析审批覆盖后，移除这两个私有入口适配。
+    # 在现有身份／结果中间件之后覆盖，保证 emitting call 始终取自原 AI carrier。
+    def _execute_tool_sync(self, request: ToolCallRequest, input_type, config: RunnableConfig):
+        approved = self._approval_request(request)
+        result = super()._execute_tool_sync(approved, input_type, config)
+        return self._approval_response(result, request.tool_call, input_type) if approved is not request else result
+
+    async def _execute_tool_async(self, request: ToolCallRequest, input_type, config: RunnableConfig):
+        approved = self._approval_request(request)
+        result = await super()._execute_tool_async(approved, input_type, config)
+        if approved is not request:
+            result = self._approval_response(result, request.tool_call, input_type)
+            if approved.tool is None:
+                assert isinstance(result, ToolMessage)
+                await complete_tool_approval_results(request.state, (result,))
+        return result
+
+    def _approval_response(
+        self, result: ToolMessage | Command | list[Command | ToolMessage], original: ToolCall,
+        input_type: Literal["list", "dict", "tool_calls"],
+    ) -> ToolMessage | Command | list[Command | ToolMessage]:
+        # 结果属于原模型调用；实际执行目标仍由审批决定、工具事件和输出引用记录。
+        if isinstance(result, ToolMessage):
+            return result.model_copy(update={"name": original["name"]})
+        if isinstance(result, Command):
+            return self._validate_tool_command(result, original, input_type)
+        normalized = [item.model_copy(update={"name": original["name"]}) if isinstance(item, ToolMessage) else item
+                      for item in result]
+        return self._validate_tool_command_list(normalized, original, input_type)
 
     # TODO: 上游 ToolNode 的内容白名单支持标准音视频块后，移除此私有协议适配。
     def _normalize_tool_response(

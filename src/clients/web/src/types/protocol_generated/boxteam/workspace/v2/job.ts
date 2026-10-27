@@ -177,6 +177,52 @@ export interface JobProgress {
   message?: string | undefined;
 }
 
+export interface ToolApprovalAction {
+  tool_call_id: string;
+  name: string;
+  args: { [key: string]: any } | undefined;
+  description?: string | undefined;
+  allowed_decisions: string[];
+}
+
+export interface ToolApproval {
+  approval_id: string;
+  checkpoint_id: string;
+  job_id: string;
+  session_id: string;
+  thread_id: string;
+  actions: ToolApprovalAction[];
+}
+
+export interface ToolApprovalEditedAction {
+  name: string;
+  args: { [key: string]: any } | undefined;
+}
+
+export interface ToolApprovalDecision {
+  tool_call_id: string;
+  type: string;
+  edited_action?: ToolApprovalEditedAction | undefined;
+  message?: string | undefined;
+}
+
+export interface ToolApprovalResponse {
+  approval_id: string;
+  decisions: ToolApprovalDecision[];
+}
+
+export interface ToolApprovalSubmitRequest {
+  command_id: string;
+  checkpoint_id: string;
+  responses: ToolApprovalResponse[];
+}
+
+export interface ToolApprovalCommand {
+  command_id: string;
+  checkpoint_id: string;
+  status: string;
+}
+
 function createBaseJob(): Job {
   return {
     job_id: "",
@@ -331,6 +377,309 @@ export const JobProgress: MessageFns<JobProgress> = {
     message.current_step_id = object.current_step_id ?? undefined;
     message.progress = object.progress ?? 0;
     message.message = object.message ?? undefined;
+    return message;
+  },
+};
+
+function createBaseToolApprovalAction(): ToolApprovalAction {
+  return { tool_call_id: "", name: "", args: undefined, description: undefined, allowed_decisions: [] };
+}
+
+export const ToolApprovalAction: MessageFns<ToolApprovalAction> = {
+  fromJSON(object: any): ToolApprovalAction {
+    return {
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      args: isObject(object.args) ? object.args : undefined,
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      allowed_decisions: globalThis.Array.isArray(object?.allowed_decisions)
+        ? object.allowed_decisions.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ToolApprovalAction): unknown {
+    const obj: any = {};
+    if (message.tool_call_id !== "") {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.args !== undefined) {
+      obj.args = message.args;
+    }
+    if (message.description !== undefined) {
+      obj.description = message.description;
+    }
+    if (message.allowed_decisions?.length) {
+      obj.allowed_decisions = message.allowed_decisions;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalAction>, I>>(base?: I): ToolApprovalAction {
+    return ToolApprovalAction.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalAction>, I>>(object: I): ToolApprovalAction {
+    const message = createBaseToolApprovalAction();
+    message.tool_call_id = object.tool_call_id ?? "";
+    message.name = object.name ?? "";
+    message.args = object.args ?? undefined;
+    message.description = object.description ?? undefined;
+    message.allowed_decisions = object.allowed_decisions?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseToolApproval(): ToolApproval {
+  return { approval_id: "", checkpoint_id: "", job_id: "", session_id: "", thread_id: "", actions: [] };
+}
+
+export const ToolApproval: MessageFns<ToolApproval> = {
+  fromJSON(object: any): ToolApproval {
+    return {
+      approval_id: isSet(object.approval_id) ? globalThis.String(object.approval_id) : "",
+      checkpoint_id: isSet(object.checkpoint_id) ? globalThis.String(object.checkpoint_id) : "",
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      actions: globalThis.Array.isArray(object?.actions)
+        ? object.actions.map((e: any) => ToolApprovalAction.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ToolApproval): unknown {
+    const obj: any = {};
+    if (message.approval_id !== "") {
+      obj.approval_id = message.approval_id;
+    }
+    if (message.checkpoint_id !== "") {
+      obj.checkpoint_id = message.checkpoint_id;
+    }
+    if (message.job_id !== "") {
+      obj.job_id = message.job_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.actions?.length) {
+      obj.actions = message.actions.map((e) => ToolApprovalAction.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApproval>, I>>(base?: I): ToolApproval {
+    return ToolApproval.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApproval>, I>>(object: I): ToolApproval {
+    const message = createBaseToolApproval();
+    message.approval_id = object.approval_id ?? "";
+    message.checkpoint_id = object.checkpoint_id ?? "";
+    message.job_id = object.job_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.actions = object.actions?.map((e) => ToolApprovalAction.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseToolApprovalEditedAction(): ToolApprovalEditedAction {
+  return { name: "", args: undefined };
+}
+
+export const ToolApprovalEditedAction: MessageFns<ToolApprovalEditedAction> = {
+  fromJSON(object: any): ToolApprovalEditedAction {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      args: isObject(object.args) ? object.args : undefined,
+    };
+  },
+
+  toJSON(message: ToolApprovalEditedAction): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.args !== undefined) {
+      obj.args = message.args;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalEditedAction>, I>>(base?: I): ToolApprovalEditedAction {
+    return ToolApprovalEditedAction.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalEditedAction>, I>>(object: I): ToolApprovalEditedAction {
+    const message = createBaseToolApprovalEditedAction();
+    message.name = object.name ?? "";
+    message.args = object.args ?? undefined;
+    return message;
+  },
+};
+
+function createBaseToolApprovalDecision(): ToolApprovalDecision {
+  return { tool_call_id: "", type: "", edited_action: undefined, message: undefined };
+}
+
+export const ToolApprovalDecision: MessageFns<ToolApprovalDecision> = {
+  fromJSON(object: any): ToolApprovalDecision {
+    return {
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : "",
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      edited_action: isSet(object.edited_action) ? ToolApprovalEditedAction.fromJSON(object.edited_action) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+    };
+  },
+
+  toJSON(message: ToolApprovalDecision): unknown {
+    const obj: any = {};
+    if (message.tool_call_id !== "") {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.edited_action !== undefined) {
+      obj.edited_action = ToolApprovalEditedAction.toJSON(message.edited_action);
+    }
+    if (message.message !== undefined) {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalDecision>, I>>(base?: I): ToolApprovalDecision {
+    return ToolApprovalDecision.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalDecision>, I>>(object: I): ToolApprovalDecision {
+    const message = createBaseToolApprovalDecision();
+    message.tool_call_id = object.tool_call_id ?? "";
+    message.type = object.type ?? "";
+    message.edited_action = (object.edited_action !== undefined && object.edited_action !== null)
+      ? ToolApprovalEditedAction.fromPartial(object.edited_action)
+      : undefined;
+    message.message = object.message ?? undefined;
+    return message;
+  },
+};
+
+function createBaseToolApprovalResponse(): ToolApprovalResponse {
+  return { approval_id: "", decisions: [] };
+}
+
+export const ToolApprovalResponse: MessageFns<ToolApprovalResponse> = {
+  fromJSON(object: any): ToolApprovalResponse {
+    return {
+      approval_id: isSet(object.approval_id) ? globalThis.String(object.approval_id) : "",
+      decisions: globalThis.Array.isArray(object?.decisions)
+        ? object.decisions.map((e: any) => ToolApprovalDecision.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ToolApprovalResponse): unknown {
+    const obj: any = {};
+    if (message.approval_id !== "") {
+      obj.approval_id = message.approval_id;
+    }
+    if (message.decisions?.length) {
+      obj.decisions = message.decisions.map((e) => ToolApprovalDecision.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalResponse>, I>>(base?: I): ToolApprovalResponse {
+    return ToolApprovalResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalResponse>, I>>(object: I): ToolApprovalResponse {
+    const message = createBaseToolApprovalResponse();
+    message.approval_id = object.approval_id ?? "";
+    message.decisions = object.decisions?.map((e) => ToolApprovalDecision.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseToolApprovalSubmitRequest(): ToolApprovalSubmitRequest {
+  return { command_id: "", checkpoint_id: "", responses: [] };
+}
+
+export const ToolApprovalSubmitRequest: MessageFns<ToolApprovalSubmitRequest> = {
+  fromJSON(object: any): ToolApprovalSubmitRequest {
+    return {
+      command_id: isSet(object.command_id) ? globalThis.String(object.command_id) : "",
+      checkpoint_id: isSet(object.checkpoint_id) ? globalThis.String(object.checkpoint_id) : "",
+      responses: globalThis.Array.isArray(object?.responses)
+        ? object.responses.map((e: any) => ToolApprovalResponse.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ToolApprovalSubmitRequest): unknown {
+    const obj: any = {};
+    if (message.command_id !== "") {
+      obj.command_id = message.command_id;
+    }
+    if (message.checkpoint_id !== "") {
+      obj.checkpoint_id = message.checkpoint_id;
+    }
+    if (message.responses?.length) {
+      obj.responses = message.responses.map((e) => ToolApprovalResponse.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalSubmitRequest>, I>>(base?: I): ToolApprovalSubmitRequest {
+    return ToolApprovalSubmitRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalSubmitRequest>, I>>(object: I): ToolApprovalSubmitRequest {
+    const message = createBaseToolApprovalSubmitRequest();
+    message.command_id = object.command_id ?? "";
+    message.checkpoint_id = object.checkpoint_id ?? "";
+    message.responses = object.responses?.map((e) => ToolApprovalResponse.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseToolApprovalCommand(): ToolApprovalCommand {
+  return { command_id: "", checkpoint_id: "", status: "" };
+}
+
+export const ToolApprovalCommand: MessageFns<ToolApprovalCommand> = {
+  fromJSON(object: any): ToolApprovalCommand {
+    return {
+      command_id: isSet(object.command_id) ? globalThis.String(object.command_id) : "",
+      checkpoint_id: isSet(object.checkpoint_id) ? globalThis.String(object.checkpoint_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+    };
+  },
+
+  toJSON(message: ToolApprovalCommand): unknown {
+    const obj: any = {};
+    if (message.command_id !== "") {
+      obj.command_id = message.command_id;
+    }
+    if (message.checkpoint_id !== "") {
+      obj.checkpoint_id = message.checkpoint_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolApprovalCommand>, I>>(base?: I): ToolApprovalCommand {
+    return ToolApprovalCommand.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolApprovalCommand>, I>>(object: I): ToolApprovalCommand {
+    const message = createBaseToolApprovalCommand();
+    message.command_id = object.command_id ?? "";
+    message.checkpoint_id = object.checkpoint_id ?? "";
+    message.status = object.status ?? "";
     return message;
   },
 };

@@ -1,10 +1,28 @@
 // Web 端公开业务协议的 TypeScript 适配类型。
 // 结构和字段名来自 .proto 生成绑定；这里只处理 JSON API 的字符串枚举、可空时间和动态对象。
 import type * as WorkspaceProtocol from "./protocol_generated/boxteam/workspace/v2/public";
+import type * as JobProtocol from "./protocol_generated/boxteam/workspace/v2/job";
 import type { AttachmentRef as GeneratedAttachmentRef } from "./protocol_generated/boxteam/workspace/v2/message";
 import type { TraceEventDTO } from "../protocol/jsonTypes";
 
 export type JsonObject = Record<string, unknown>;
+export type ToolApprovalDecisionType = "approve" | "edit" | "reject" | "respond";
+export type ToolApprovalAction = Omit<JobProtocol.ToolApprovalAction, "args" | "description" | "allowed_decisions"> & {
+  args: JsonObject;
+  description: string | null;
+  allowed_decisions: ToolApprovalDecisionType[];
+};
+export type ToolApproval = Omit<JobProtocol.ToolApproval, "actions"> & { actions: ToolApprovalAction[] };
+export type ToolApprovalDecision = Omit<JobProtocol.ToolApprovalDecision, "type" | "edited_action"> & {
+  type: ToolApprovalDecisionType;
+  edited_action?: Omit<JobProtocol.ToolApprovalEditedAction, "args"> & { args: JsonObject };
+};
+export type ToolApprovalSubmitRequest = Omit<JobProtocol.ToolApprovalSubmitRequest, "responses"> & {
+  responses: (Omit<JobProtocol.ToolApprovalResponse, "decisions"> & { decisions: ToolApprovalDecision[] })[];
+};
+export type ToolApprovalCommand = Omit<JobProtocol.ToolApprovalCommand, "status"> & {
+  status: "accepted" | "consumed" | "rejected";
+};
 export type DeliveryPolicy = "after_turn" | "after_tool_result" | "after_interrupt";
 export type ConfigSourceLayer =
   | "inline"

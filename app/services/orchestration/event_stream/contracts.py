@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from langgraph.types import Durability, StateSnapshot
+from langgraph.types import Command, Durability, StateSnapshot
 
 from app.schemas.event import ModelTokenUsagePayload
 
@@ -15,7 +15,7 @@ class AgentEventSource(Protocol):
     """只暴露事件迭代能力，不暴露 public service 或 Agent 构建依赖。"""
 
     def astream_events(
-        self, input_payload: dict[str, Any] | None, *, config: dict[str, Any],
+        self, input_payload: dict[str, Any] | Command | None, *, config: dict[str, Any],
         version: str, durability: Durability,
     ) -> AsyncIterator[dict[str, Any]]: ...
 

@@ -8,7 +8,6 @@ from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import (
-    HumanInTheLoopMiddleware,
     InterruptOnConfig,
     ModelRequest,
     ModelResponse,
@@ -19,9 +18,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from app.abstractions.resource_file_content import ResourceFileReader
-from app.agents.custom_tool_confirmation_middleware import (
-    CustomToolConfirmationMiddleware,
-)
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
     InstructionUpdateBinding,
@@ -51,6 +47,7 @@ from app.agents.summarization.factory import (
 from app.agents.summarization.tool_middleware import (
     CachePreservingSummarizationToolMiddleware,
 )
+from app.agents.tool_confirmation_middleware import ToolConfirmationMiddleware
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
@@ -205,12 +202,10 @@ def build_deep_agent_middleware(
 
     # after_model 按注册顺序逆序执行；压缩 continuation 必须先跳到下一
     # model task，避免审批 hook 再次处理历史中已经执行完毕的工具调用。
-    if custom_tool_confirmation_names:
+    if custom_tool_confirmation_names or interrupt_on:
         deepagent_middleware.append(
-            CustomToolConfirmationMiddleware(custom_tool_confirmation_names)
+            ToolConfirmationMiddleware(custom_tool_confirmation_names, interrupt_on=interrupt_on)
         )
-    if interrupt_on:
-        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
 
     deepagent_middleware.extend(
         [

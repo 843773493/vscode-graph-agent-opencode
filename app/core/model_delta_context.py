@@ -9,12 +9,14 @@ from threading import Lock
 from typing import Protocol
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.core.model_request_context import current_summary_candidate
 
 
 class ModelDeltaSink(Protocol):
+    async def complete_tool_approval(self, message: ToolMessage, *, model_call_id: str) -> None: ...
+
     async def prepare_tool_execution(self, model_call_id: str) -> None: ...
 
     async def wait_tool_start(

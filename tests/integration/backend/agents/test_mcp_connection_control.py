@@ -46,7 +46,7 @@ def product_case(recovery_case, free_tcp_port_factory):
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
     @asynccontextmanager
-    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, web=False, oauth_redirect_uri=None, backend_app="tests.support.e2e_control.backend_app:app"):
+    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, confirmation_required=None, web=False, oauth_redirect_uri=None, backend_app="tests.support.e2e_control.backend_app:app", sealed_call_timeout_seconds=None):
         home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
         install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
@@ -55,6 +55,8 @@ def product_case(recovery_case, free_tcp_port_factory):
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
             "secure": secure.configuration(redirect_uri=oauth_redirect_uri or f"http://127.0.0.1:{gateway_port}/mcp-oauth-callback.html") if web else secure.configuration(),
         }}
+        if sealed_call_timeout_seconds is not None:
+            payload["mcp"]["supervision"] = {"sealed_call_timeout_seconds": sealed_call_timeout_seconds}
         payload["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
         payload["llm"] = {"providers": [{
             "id": "control-replay", "endpoint": "https://opencode.ai/zen/v1", "model": "control-replay-model",
@@ -73,6 +75,8 @@ def product_case(recovery_case, free_tcp_port_factory):
         default.setdefault("tools", {})["custom"] = [{"tool_id": "connections.manage"}]
         if tool_restrictions is not None:
             default["tools"].setdefault("policy", {})["restrictions"] = tool_restrictions
+        if confirmation_required is not None:
+            default["tools"]["confirmation_required"] = confirmation_required
         path.write_text(json.dumps(payload), encoding="utf-8")
         with model_stream_replay(
             case.context.artifacts_dir / "model-replay", runtime_root=case.context.artifacts_dir / "replay-runtime",

@@ -27,7 +27,7 @@ app/agents/
 │   ├── context_compaction_adapter.py
 │   └── summarization/              摘要计划、投影、重试和状态
 ├── [运行中间件与调用上下文]
-│   ├── custom_tool_confirmation_middleware.py
+│   ├── tool_confirmation_middleware.py
 │   ├── structured_prompt_validation_middleware.py
 │   ├── structured_tool_call_middleware.py、tool_output_middleware.py
 │   └── llm_logging_middleware.py、upstream_request_trace.py
