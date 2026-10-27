@@ -366,7 +366,7 @@ def test_store_initializes_wal_and_pragmas(store: SessionCatalogStore) -> None:
     )
     assert int(store.connection.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     assert int(store.connection.execute("PRAGMA busy_timeout").fetchone()[0]) == 5000
-    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 10
+    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 11
 
 
 def test_store_does_not_create_sessions_root(
@@ -403,7 +403,7 @@ def test_store_reopens_existing_database(
     second = SessionCatalogStore(database_path, sessions_root)
     try:
         assert second.get_node(folder_id).display_name == "持久文件夹"
-        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 10
+        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 11
     finally:
         second.close()
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.session_catalog_store.contracts import (
+    ForkCapturedPoint,
     ForkSourceCaptureRecord,
     fork_source_capture_relative_locator,
 )
@@ -77,7 +78,8 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
     """source guard 内写 marker；所有快照 bytes fsync 后原子 rename 并 fsync 目录。"""
     _verify_attachment_files(snapshot)
     payload = {
-        "schema": "source-copy-snapshot:v4" if any(isinstance(item, ForkAttachmentDirectorySnapshot) for item in snapshot.attachments) else "source-copy-snapshot:v3", "state": "captured",
+        "schema": "source-copy-snapshot:v5", "state": "captured",
+        "source_point": snapshot.source_point.model_dump(),
         "copy_operation_id": record.copy_operation_id, "preimage_hash": record.preimage_hash,
         "source_snapshot_id": record.snapshot_id, "snapshot_sha256": snapshot.snapshot_sha256,
         "rollout": {
@@ -140,7 +142,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         encoded = marker.read_bytes()
     marker_hash = hashlib.sha256(encoded).hexdigest()
     raw = json.loads(encoded)
-    if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3", "source-copy-snapshot:v4"} or (
+    if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3", "source-copy-snapshot:v4", "source-copy-snapshot:v5"} or (
         raw["state"], raw["copy_operation_id"], raw["preimage_hash"], raw["source_snapshot_id"],
     ) != ("captured", record.copy_operation_id, record.preimage_hash, record.snapshot_id):
         raise RuntimeError("fork captured marker identity/preimage 冲突")
@@ -184,9 +186,13 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         ),
         attachments=tuple(attachment_snapshot_from_payload(item) for item in raw["attachments"]),
         node_debug=NodeDebugSourceCopySnapshot.from_payload(raw["node_debug"]) if raw["node_debug"] is not None else None,
+        # 旧格式只消费显式迁移后 journal 的原冻结坐标，不读取 live source。
+        source_point=ForkCapturedPoint.model_validate(raw["source_point"]) if raw["schema"] == "source-copy-snapshot:v5" else record.captured_point,
     )
+    if record.source_point_json is not None and record.captured_point != snapshot.source_point:
+        raise RuntimeError("fork captured marker 的 source point 与 journal 不一致")
     # v2 仅保留旧封存载荷的读取，不从 live owner 补造其缺少的冻结文件。
-    if raw["schema"] in {"source-copy-snapshot:v3", "source-copy-snapshot:v4"}:
+    if raw["schema"] != "source-copy-snapshot:v2":
         _verify_attachment_files(snapshot)
     claim_ids = sorted(item.claim_id for item in snapshot.attachments if item.claim_id is not None)
     if claim_ids != raw["claim_ids"] or hashlib.sha256(canonical_json_bytes(claim_ids)).hexdigest() != raw["claim_manifest_sha256"] or (

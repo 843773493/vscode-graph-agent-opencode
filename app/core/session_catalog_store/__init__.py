@@ -124,7 +124,7 @@ class SessionCatalogStore(
     创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
-    SCHEMA_VERSION = 10
+    SCHEMA_VERSION = 11
 
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()

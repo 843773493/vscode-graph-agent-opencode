@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import (
+    ForkCapturedPoint,
     ForkSourceCaptureRecord,
     SessionGenerationOriginDTO,
     fork_source_capture_relative_locator,
@@ -38,17 +39,24 @@ class ForkSourceCaptureDTO(BaseModel):
     snapshot_sha256: str | None
     marker_sha256: str | None
     abort_reason: str | None
+    source_point: ForkCapturedPoint | None = None
 
     @classmethod
     def from_record(cls, record: ForkSourceCaptureRecord) -> ForkSourceCaptureDTO:
         payload = asdict(record)
+        point = payload.pop("source_point_json")
+        payload["source_point"] = record.captured_point if point is not None else None
         if payload.pop("snapshot_relative_locator") != fork_source_capture_relative_locator(record.snapshot_id):
             raise RuntimeError("fork capture 内部 locator 与预分配 identity 不一致")
         return cls.model_validate(payload)
 
     def to_record(self) -> ForkSourceCaptureRecord:
         return ForkSourceCaptureRecord(
-            **self.model_dump(), snapshot_relative_locator=fork_source_capture_relative_locator(self.snapshot_id),
+            **self.model_dump(exclude={"source_point"}),
+            source_point_json=self.source_point.frozen_json(
+                preimage_hash=self.preimage_hash, snapshot_sha256=self.snapshot_sha256, marker_sha256=self.marker_sha256,
+            ) if self.source_point is not None else None,
+            snapshot_relative_locator=fork_source_capture_relative_locator(self.snapshot_id),
         )
 
 

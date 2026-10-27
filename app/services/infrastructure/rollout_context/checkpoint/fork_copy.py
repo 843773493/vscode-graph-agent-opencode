@@ -7,6 +7,7 @@ import shutil
 from typing import TYPE_CHECKING
 
 from app.core.atomic_fs import native_io_path
+from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.fork_source import (
@@ -54,22 +55,28 @@ class CheckpointForkCopy:
         source_snapshot: ForkSourceSnapshot, fork_id: str, materialization_id: str,
         mode: str, anchor_mode: str, relationship: str,
         checkpoint_ns: str, source_preflight: RolloutForkResult | None,
-        source_view_id: str | None = None, source_view_revision: int | None = None,
-        anchor_item_id: str | None = None,
         capture_record: ForkSourceCaptureRecord,
         creation_record: SessionCreationRecord | ThreadCreationRecord | None,
     ) -> RolloutForkResult:
         """同 Session child 也必须先退出 source scope，再解析目标 namespace。"""
         storage = self._storage.storage
+        point = capture_record.captured_point
         with storage.fork_paths.fork_source_snapshot_scope(
             session_id=source_session_id, thread_id=source_owner.thread_id,
             captured_root=source_snapshot.captured_root,
         ), session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
             resolved = self._source._resolve_fork_source(
                 source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
-                mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
-                anchor_item_id=anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
+                mode=mode, source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+                anchor_item_id=point.anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
             )
+            if resolved.source_view_id is None or resolved.source_view_revision is None:
+                raise RuntimeError("source-mismatch: captured source 缺少真实 view/revision")
+            if ForkCapturedPoint(
+                source_view_id=resolved.source_view_id, source_view_revision=resolved.source_view_revision,
+                anchor_item_id=resolved.anchor_item_id,
+            ) != point:
+                raise RuntimeError("source-mismatch: captured source point 与冻结 journal 不一致")
             if source_preflight is not None and (
                 resolved.source_checkpoint_id, resolved.source_view_id,
                 resolved.source_view_revision, resolved.anchor_item_id,

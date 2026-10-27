@@ -1529,6 +1529,12 @@ message ResourceNavigationRelayRequest {
   ResourceNavigationRequest navigation = 3;
 }
 
+message ForkCapturedPoint {
+  string source_view_id = 1;
+  int64 source_view_revision = 2;
+  optional string anchor_item_id = 3;
+}
+
 message ForkSourceCaptureDTO {
   string copy_operation_id = 1;
   optional string creation_key = 2;
@@ -1547,6 +1553,7 @@ message ForkSourceCaptureDTO {
   optional string snapshot_sha256 = 14;
   optional string marker_sha256 = 15;
   optional string abort_reason = 16;
+  optional ForkCapturedPoint source_point = 17;
 }
 
 message SessionForkTransferRequest {

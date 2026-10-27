@@ -11,7 +11,10 @@ import pytest
 
 from app.container import AppContainer
 from app.core.session_catalog_store import CatalogMaintenanceRequiredError
-from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
+from app.core.session_catalog_store.contracts import (
+    ForkCapturedPoint,
+    ForkSourceCaptureRecord,
+)
 from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.integration.backend.sessions.test_catalog_startup_creation_records import (
     _close_and_files,
@@ -44,7 +47,10 @@ async def _reserve_capture(container: AppContainer, state: str) -> ForkSourceCap
         request={"relationship": "detached", "checkpoint_ns": "", "target_main_thread_id": target_thread, "label": "冻结请求"},
     )
     if state in {"source_captured", "materialized"}:
-        record = store.mark_fork_source_captured(record, snapshot_sha256="1" * 64, marker_sha256="2" * 64)
+        record = store.mark_fork_source_captured(
+            record, snapshot_sha256="1" * 64, marker_sha256="2" * 64,
+            source_point=ForkCapturedPoint(source_view_id="view/startup", source_view_revision=3, anchor_item_id=None),
+        )
     if state in {"materialized", "aborted"}:
         store.finish_fork_source_capture(record.copy_operation_id, state=state)
     result = store.get_fork_source_capture(copy_operation_id=record.copy_operation_id)
@@ -68,6 +74,8 @@ async def _reserve_capture(container: AppContainer, state: str) -> ForkSourceCap
     ("preparing", "request_json", "[]"),
     ("source_captured", "request_json", "noncanonical"),
     ("materialized", "preimage_hash", "0" * 64),
+    ("source_captured", "source_point_json", None),
+    ("materialized", "source_point_json", "{}"),
 ])
 async def test_container_rejects_corrupt_fork_capture_identity(
     startup_container: AppContainer, monkeypatch: pytest.MonkeyPatch,

@@ -90,6 +90,11 @@ def require_catalog_schema(
             "拒绝重置备份或导航 revision: "
             f"path={database_path}"
         )
+    capture_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(fork_source_captures)")}
+    if current >= 11 and "source_point_json" not in capture_columns:
+        raise CatalogMaintenanceRequiredError(
+            f"{database_label} 缺少实际冻结 source point 列，拒绝自动修复"
+        )
     canonical = sqlite3.connect(":memory:")
     try:
         canonical.execute(_NODES_TABLE_DDL)

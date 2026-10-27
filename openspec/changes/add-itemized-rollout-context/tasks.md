@@ -1185,3 +1185,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 受影响 Python Ruff 通过；4676 项最终候选源码逐文件匹配，16 次运行原始输出、退出码、前后源码和进程组回收机械核验见 `out/tests/temp/fork-item-lookup/artifacts/verification-017.json`。此前装具未启动服务、导入排序／旧 schema 预期、错误假设 replay 会生成非祖先 view、非 matrix 启动拒绝与协调中止原件均保留；未将混合失败运行记为全绿。
 - 二次回放到首轮额外暴露 `context-source-not-tracked: source_id=agents:workspace`，尚未修复或归因为本批，转入 CIL 来源恢复排查。14.2／14.4–14.10 保持未勾，仍保留调用方显式旧 revision 的拒绝；本批未新跑 Pyright、Web、Windows，不代替 task 前缀、一致捕获、重试恢复或团队总门。
 - 后续 CIL 恢复切片已修复上述 AGENTS 首轮前回放缺陷：原恢复 owner 保留自动 tracking 且清空后来的版本，真实二次 replay 1项及恢复边界3项通过；旧源码依赖未变的17项复用。原失败事实保留，详见 CIL 同日 ledger 与 `out/tests/temp/agents-first-replay/artifacts/verification-011.json`；本修复不改变14.2／14.4–14.10的完成状态。
+
+### 2026-10-27 实际捕获坐标的持久回执（14.4／14.5 基础切片）
+
+- 原 capture journal 增加 typed 冻结坐标及 request/snapshot/marker hash 绑定，marker v5 封存同一坐标；传输、目标物化、child 发布证明和最终响应统一消费该事实，不再把请求观察值当实际结果。catalog v11，完整 v10 仅能显式转换一致副本；无法证明原冻结点的 captured/materialized 记录拒绝转换，原库不变。DDL／迁移留 SQL，协调留 Python，未新增 journal 或历史正文副本。
+- `out/tests/temp/fork-capture-point/artifacts/runs/` 保留准确命令、候选 tree、逐文件前后指纹、原始输出、退出码及进程组回收。`unit-004` 368项通过，`migration-negative-017` 的11项含新增4项“旧 captured/materialized 缺精确坐标拒绝转换”反例；`startup-011` 的启动损坏／跨进程协议30项、`product-009` 的公开fork定位3项通过。`types-010` 真实 `bun x tsc`、`build-007` Web构建、`protocol-008` 对087d3556b的生成／breaking核验、`static-015`／`test-static-020` Ruff、`compile-018` 均exit0。早期缺typecheck脚本、Bun直接跑tsc的运行时崩溃及当前/基线均缺Pyright命令保留为未通过原件，不冒称Python类型检查成功。
+- `small-remote-product-019` 真实B→A→C Gateway/SSH、model_stream和用户消息生成历史，1项／146.26秒通过：双端冻结坐标及hash与公开回执一致，fork不调Provider；来源进程停止后，目标真实进程重启、冷历史、原请求重放和新输入通过。固定240秒套件保护与原60秒fork期限；这是小负载合同证据，不替代附件／Goal完整验收，也不代表真实外部Provider或Web交互。
+- TODO(fork-transfer-budget)：完整附件／Goal三端场景在候选`remote-product-012`和原提交087d3556b的`remote-baseline-016`均exit143。原件显示外层中继约8秒返回`federation-deadline-exceeded`，随后60秒watchdog分别在60.052／60.059秒终止运行，阶段均为`fork_from_frozen_attachment`；目标仍完成物化，不能把超时解释为回滚。保留原测试和预算，后续测量整笔传输成本及期限协调，不重复无变化重跑。该失败不是本切片引入，但完整恢复门仍未通过，第二个同套件用例也未执行。
+- 14.2、14.4–14.10保持未勾：本切片只建立后续item-only／task前缀共用的真实捕获事实，不声称已迁齐选择器、revision竞态、冻结前故障与全部task/公开入口验收。最终机械核验见同目录`verification-023.json`。

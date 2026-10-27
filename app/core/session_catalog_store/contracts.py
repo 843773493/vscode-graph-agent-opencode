@@ -10,13 +10,14 @@ JSON 槽的解析 helper（外部改动一律 fail closed）、“只能进入�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from app.core.session_control_store.contracts import ThreadGraphBindingRecord
@@ -78,6 +79,36 @@ def fork_source_capture_relative_locator(snapshot_id: str) -> str:
     return f"fork-source-captures/{snapshot_id}"
 
 
+class ForkCapturedPoint(BaseModel):
+    """实际 capture 的来源坐标；与创建请求中的观察值分开封存。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_view_id: str = Field(min_length=1)
+    source_view_revision: int = Field(ge=0)
+    anchor_item_id: str | None = Field(min_length=1)
+
+    def frozen_json(self, *, preimage_hash: str, snapshot_sha256: str | None, marker_sha256: str | None) -> str:
+        """原 journal 的固定 hash 绑定坐标，marker 清理后仍可校验持久事实。"""
+        point = self.model_dump()
+        binding = json.dumps({"point": point, "preimage_hash": preimage_hash,
+                              "snapshot_sha256": snapshot_sha256, "marker_sha256": marker_sha256},
+                             ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return json.dumps({"point": point, "binding_hash": hashlib.sha256(binding.encode()).hexdigest()},
+                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_frozen_json(cls, encoded: str, *, preimage_hash: str,
+                         snapshot_sha256: str | None, marker_sha256: str | None) -> ForkCapturedPoint:
+        raw = json.loads(encoded)
+        if not isinstance(raw, dict) or set(raw) != {"point", "binding_hash"}:
+            raise ValueError("fork captured point 的冻结 envelope 形状无效")
+        point = cls.model_validate(raw["point"])
+        if point.frozen_json(preimage_hash=preimage_hash, snapshot_sha256=snapshot_sha256, marker_sha256=marker_sha256) != encoded:
+            raise RuntimeError("fork captured point 的 canonical 编码或 journal 绑定 hash 冲突")
+        return point
+
+
 @dataclass(frozen=True, slots=True)
 class ForkSourceCaptureRecord:
     """创建 journal 预分配的 source capture；私有 locator 由存储 owner 核验。"""
@@ -100,6 +131,16 @@ class ForkSourceCaptureRecord:
     snapshot_sha256: str | None
     marker_sha256: str | None
     abort_reason: str | None
+    source_point_json: str | None = None
+
+    @property
+    def captured_point(self) -> ForkCapturedPoint:
+        if self.source_point_json is None:
+            raise RuntimeError("fork capture 尚无实际冻结 source point")
+        return ForkCapturedPoint.from_frozen_json(
+            self.source_point_json, preimage_hash=self.preimage_hash,
+            snapshot_sha256=self.snapshot_sha256, marker_sha256=self.marker_sha256,
+        )
 
 
 @dataclass(frozen=True, slots=True)

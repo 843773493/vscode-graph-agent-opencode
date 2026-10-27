@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from app.core.session_catalog_store.contracts import (
+    ForkCapturedPoint,
     ForkSourceCaptureRecord,
     fork_source_capture_relative_locator,
 )
@@ -60,7 +61,7 @@ def capture_files(tmp_path: Path) -> CaptureFiles:
         captured_root=node, files=_tree_manifest(node / "rollout"), manifest_bytes=manifest,
         manifest_sha256=hashlib.sha256(manifest).hexdigest(),
         control_sha256=hashlib.sha256(CONTROL_DATABASE_NAME.encode() + control).hexdigest(), source_lifecycle_generation=1,
-    ))
+    ), source_point=ForkCapturedPoint(source_view_id="view/io", source_view_revision=1, anchor_item_id=None))
     return CaptureFiles(sessions, root, record, snapshot)
 
 
@@ -68,7 +69,12 @@ def capture_files(tmp_path: Path) -> CaptureFiles:
 def frozen(capture_files: CaptureFiles) -> CaptureFiles:
     item = capture_files
     marker = capture.publish_captured_snapshot(item.record, item.snapshot)
-    return replace(item, record=replace(item.record, state="source_captured", marker_sha256=marker, snapshot_sha256=item.snapshot.snapshot_sha256))
+    return replace(item, record=replace(
+        item.record, state="source_captured", marker_sha256=marker, snapshot_sha256=item.snapshot.snapshot_sha256,
+        source_point_json=item.snapshot.source_point.frozen_json(
+            preimage_hash=item.record.preimage_hash, snapshot_sha256=item.snapshot.snapshot_sha256, marker_sha256=marker,
+        ),
+    ))
 
 
 @pytest.mark.parametrize("phase", ["scan", "file_fsync", "write", "replace", "final_fsync"])

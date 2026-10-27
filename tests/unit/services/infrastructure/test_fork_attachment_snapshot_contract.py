@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
 )
@@ -29,6 +30,7 @@ def historical_fork():
 def source_snapshot(historical_fork, tmp_path: Path) -> ForkSourceSnapshot:
     # 此处只验证封存载荷合同；执行、两次 fork 与恢复另由产品集成覆盖。
     return ForkSourceSnapshot(
+        source_point=ForkCapturedPoint(source_view_id="historical-view", source_view_revision=1, anchor_item_id=None),
         rollout=ForkRolloutSourceSnapshot(
             source_session_id=historical_fork["attachments"][0]["source_session_id"],
             source_thread_id=historical_fork["attachments"][0]["source_thread_id"],

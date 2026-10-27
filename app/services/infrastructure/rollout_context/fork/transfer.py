@@ -126,19 +126,21 @@ def verify_capture_identity(expected: ForkSourceCaptureRecord, received: ForkSou
     if received is None:
         raise RuntimeError("fork transport 缺少 source capture 回执")
     record = received.to_record()
-    ignored = {"state", "snapshot_sha256", "marker_sha256", "abort_reason"}
+    ignored = {"state", "snapshot_sha256", "marker_sha256", "abort_reason", "source_point_json"}
     if {key: value for key, value in asdict(expected).items() if key not in ignored} != {
         key: value for key, value in asdict(record).items() if key not in ignored
     }:
         raise RuntimeError("fork transport operation/preimage/snapshot identity 漂移")
     if expected.snapshot_sha256 not in {None, record.snapshot_sha256} or expected.marker_sha256 not in {None, record.marker_sha256}:
         raise RuntimeError("fork transport 冻结 hash 漂移")
+    if expected.source_point_json not in {None, record.source_point_json}:
+        raise RuntimeError("fork transport 冻结 source point 漂移")
     return record
 
 
 def verify_capture_receipt(expected: ForkSourceCaptureRecord, received: ForkSourceCaptureDTO | None) -> ForkSourceCaptureRecord:
     record = verify_capture_identity(expected, received)
-    if record.state != "source_captured" or record.snapshot_sha256 is None or record.marker_sha256 is None:
+    if record.state != "source_captured" or record.snapshot_sha256 is None or record.marker_sha256 is None or record.source_point_json is None:
         raise RuntimeError("fork transport source 尚未完整 captured")
     return record
 
@@ -147,6 +149,9 @@ async def import_captured_artifact(
     transport: SessionForkTransportProtocol, request: SessionForkRequest,
     sessions_root: Path, record: ForkSourceCaptureRecord,
 ) -> tuple[ForkSourceSnapshot, str]:
+    # TODO(fork-transfer-budget): 大附件/Goal 的真实 B→A→C 请求在基线和本批均触发
+    # 8 秒中继期限，目标随后仍完成物化；测量见 fork-capture-point 的 012/016 原件。
+    # 后续优化整笔传输成本与期限协调，保留当前 60 秒验收预算和持久幂等恢复合同。
     root = capture_directory(sessions_root, record)
 
     async def receive_file(file: ForkTransferFileDTO) -> None:

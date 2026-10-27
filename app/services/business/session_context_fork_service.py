@@ -1041,7 +1041,7 @@ class SessionContextForkService:
         capture = self._session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
         if capture is None or capture.state != "materialized" or (capture.target_session_id, capture.target_thread_id) != (session_id, thread_id):
             raise RuntimeError("fork result 缺少真实目标 committed operation")
-        point = json.loads(capture.request_json)
+        point = capture.captured_point
         request = SessionForkRequest.model_validate(intent["request"])
         target = parse_resource_uri(request.target_container_uri)
         if target.scope_id != session.workspace_id:
@@ -1066,8 +1066,8 @@ class SessionContextForkService:
             target_gateway_id=intent["target_gateway_id"],
             thread_uri=target_thread_uri,
             creation_kind=request.creation_kind, source_uri=intent["source_uri"],
-            source_view_id=point["source_view_id"], source_view_revision=point["source_view_revision"],
-            anchor_item_id=point["anchor_item_id"], mode=request.mode,
+            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+            anchor_item_id=point.anchor_item_id, mode=request.mode,
             resources=resources,
             goal_id=goal["goal_id"] if goal is not None else None,
             export_release=SessionForkExportReleaseDTO(state=release_state, error=release_error) if release_state is not None else None,

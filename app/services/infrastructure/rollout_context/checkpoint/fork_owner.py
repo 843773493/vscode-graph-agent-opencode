@@ -454,9 +454,11 @@ class CheckpointForkOwner:
                     ).fetchone()
                 if row is None or row[2:] != ("committed", capture.snapshot_sha256):
                     raise RuntimeError("fork materialized capture 缺少精确 target committed journal")
-                frozen = json.loads(capture.request_json)
+                point = capture.captured_point
+                if row[1] != point.source_view_id:
+                    raise RuntimeError("source-mismatch: committed journal 与冻结 source point 的 view 不一致")
                 if source_preflight is not None and (
-                    row[0], row[1], frozen["source_view_revision"], frozen["anchor_item_id"],
+                    row[0], row[1], point.source_view_revision, point.anchor_item_id,
                 ) != (
                     source_preflight.source_checkpoint_id, source_preflight.source_view_id,
                     source_preflight.source_view_revision, source_preflight.anchor_item_id,
@@ -464,7 +466,7 @@ class CheckpointForkOwner:
                     raise RuntimeError("source-mismatch: committed journal 与原 creation 的冻结 source point 不一致")
                 return RolloutForkResult(
                     source_checkpoint_id=row[0], source_view_id=row[1],
-                    source_view_revision=frozen["source_view_revision"], anchor_item_id=frozen["anchor_item_id"],
+                    source_view_revision=point.source_view_revision, anchor_item_id=point.anchor_item_id,
                     fork_id=capture.fork_id, materialization_id=capture.materialization_id,
                     journal_state="committed", source_snapshot_sha256=capture.snapshot_sha256,
                 )
@@ -495,7 +497,7 @@ class CheckpointForkOwner:
                         same_storage_owner=True,
                         source_gateway_id=creation_intent["source_gateway_id"] if creation_intent is not None else get_current_gateway_id(),
                     )
-                source_snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
+                    source_snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
             if source_external and source_snapshot.attachments:
                 if self.source.attachment_store is None:
                     raise RuntimeError("fork import 附件缺少目标 AttachmentBlobStore owner")
@@ -504,7 +506,10 @@ class CheckpointForkOwner:
                     source_snapshot.attachments,
                 )
             await observe_phase(operation_id, "copy.source.before_captured_cas")
-            capture = catalog.mark_fork_source_captured(capture, snapshot_sha256=source_snapshot.snapshot_sha256, marker_sha256=marker_hash)
+            capture = catalog.mark_fork_source_captured(
+                capture, snapshot_sha256=source_snapshot.snapshot_sha256, marker_sha256=marker_hash,
+                source_point=source_snapshot.source_point,
+            )
             await observe_phase(operation_id, "copy.source.captured")
             result = await self.copy._afork_from_snapshot(
                 source_session_id=source_session_id,
@@ -520,9 +525,6 @@ class CheckpointForkOwner:
                 relationship=relationship,
                 checkpoint_ns=checkpoint_ns,
                 source_preflight=source_preflight,
-                source_view_id=source_view_id,
-                source_view_revision=source_view_revision,
-                anchor_item_id=anchor_item_id,
                 capture_record=capture,
                 creation_record=creation_record or thread_creation_record,
             )
@@ -595,7 +597,10 @@ class CheckpointForkOwner:
                 remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
                 raise
         snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
-        return catalog.mark_fork_source_captured(capture, snapshot_sha256=snapshot.snapshot_sha256, marker_sha256=marker_hash)
+        return catalog.mark_fork_source_captured(
+            capture, snapshot_sha256=snapshot.snapshot_sha256, marker_sha256=marker_hash,
+            source_point=snapshot.source_point,
+        )
 
     async def release_source_export(self, capture: ForkSourceCaptureRecord, *, committed: bool) -> ForkSourceCaptureRecord:
         """只释放本导出的 artifact/附件 claim；目标生命周期由目标 journal 决定。"""
@@ -638,7 +643,7 @@ class CheckpointForkOwner:
             ).fetchone()
         if row is None or row[:8] + row[9:] != (
             capture.fork_id, capture.source_session_id, capture.source_thread_id,
-            target_session_id, record.child_thread_id, request["source_view_id"],
+            target_session_id, record.child_thread_id, capture.captured_point.source_view_id,
             request["mode"], request["relationship"], capture.snapshot_sha256,
         ) or row[8] not in ({"committed"} if completed else {"prepared", "target_committed", "committed"}):
             raise RuntimeError("fork child 缺少精确 target committed journal/快照证明")

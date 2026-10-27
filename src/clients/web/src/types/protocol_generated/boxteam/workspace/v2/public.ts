@@ -1542,6 +1542,12 @@ export interface ResourceNavigationRelayRequest {
   navigation: ResourceNavigationRequest | undefined;
 }
 
+export interface ForkCapturedPoint {
+  source_view_id: string;
+  source_view_revision: number;
+  anchor_item_id?: string | undefined;
+}
+
 export interface ForkSourceCaptureDTO {
   copy_operation_id: string;
   creation_key?: string | undefined;
@@ -1558,6 +1564,7 @@ export interface ForkSourceCaptureDTO {
   snapshot_sha256?: string | undefined;
   marker_sha256?: string | undefined;
   abort_reason?: string | undefined;
+  source_point?: ForkCapturedPoint | undefined;
 }
 
 export interface SessionForkTransferRequest {
@@ -12738,6 +12745,45 @@ export const ResourceNavigationRelayRequest: MessageFns<ResourceNavigationRelayR
   },
 };
 
+function createBaseForkCapturedPoint(): ForkCapturedPoint {
+  return { source_view_id: "", source_view_revision: 0, anchor_item_id: undefined };
+}
+
+export const ForkCapturedPoint: MessageFns<ForkCapturedPoint> = {
+  fromJSON(object: any): ForkCapturedPoint {
+    return {
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
+    };
+  },
+
+  toJSON(message: ForkCapturedPoint): unknown {
+    const obj: any = {};
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    if (message.anchor_item_id !== undefined) {
+      obj.anchor_item_id = message.anchor_item_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ForkCapturedPoint>, I>>(base?: I): ForkCapturedPoint {
+    return ForkCapturedPoint.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ForkCapturedPoint>, I>>(object: I): ForkCapturedPoint {
+    const message = createBaseForkCapturedPoint();
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
+    message.anchor_item_id = object.anchor_item_id ?? undefined;
+    return message;
+  },
+};
+
 function createBaseForkSourceCaptureDTO(): ForkSourceCaptureDTO {
   return {
     copy_operation_id: "",
@@ -12755,6 +12801,7 @@ function createBaseForkSourceCaptureDTO(): ForkSourceCaptureDTO {
     snapshot_sha256: undefined,
     marker_sha256: undefined,
     abort_reason: undefined,
+    source_point: undefined,
   };
 }
 
@@ -12776,6 +12823,7 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
       snapshot_sha256: isSet(object.snapshot_sha256) ? globalThis.String(object.snapshot_sha256) : undefined,
       marker_sha256: isSet(object.marker_sha256) ? globalThis.String(object.marker_sha256) : undefined,
       abort_reason: isSet(object.abort_reason) ? globalThis.String(object.abort_reason) : undefined,
+      source_point: isSet(object.source_point) ? ForkCapturedPoint.fromJSON(object.source_point) : undefined,
     };
   },
 
@@ -12826,6 +12874,9 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
     if (message.abort_reason !== undefined) {
       obj.abort_reason = message.abort_reason;
     }
+    if (message.source_point !== undefined) {
+      obj.source_point = ForkCapturedPoint.toJSON(message.source_point);
+    }
     return obj;
   },
 
@@ -12849,6 +12900,9 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
     message.snapshot_sha256 = object.snapshot_sha256 ?? undefined;
     message.marker_sha256 = object.marker_sha256 ?? undefined;
     message.abort_reason = object.abort_reason ?? undefined;
+    message.source_point = (object.source_point !== undefined && object.source_point !== null)
+      ? ForkCapturedPoint.fromPartial(object.source_point)
+      : undefined;
     return message;
   },
 };

@@ -22,6 +22,7 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
+from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BYTES
 from app.services.business.session_context_resource import (
@@ -732,7 +733,11 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
         source_capture = _capture_record(source, key)
         capture_root = source.workspace / ".boxteam/navigation" / source_capture["snapshot_relative_locator"]
         marker = json.loads((capture_root / "captured.json").read_bytes())
-        assert marker["schema"] == "source-copy-snapshot:v4"
+        assert marker["schema"] == "source-copy-snapshot:v5"
+        assert marker["source_point"] == {
+            "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+            "anchor_item_id": None,
+        }
         (snapshot,) = marker["attachments"]
         frozen_file = resolve_captured_directory(capture_root / source_session_id, snapshot["source_attachment_id"]) / "original/content"
         assert frozen_file.read_bytes() == attachment_body
@@ -766,6 +771,15 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert target_uri.scope_id == target.workspace_id
     assert target_uri.tail_segments == (target_session_id, "threads", published["thread_id"])
     assert published["export_release"] == {"state": "confirmed", "error": None}
+    for node in (source, target):
+        frozen_capture = _capture_record(node, key)
+        frozen_point = ForkCapturedPoint.from_frozen_json(
+            frozen_capture["source_point_json"], preimage_hash=frozen_capture["preimage_hash"],
+            snapshot_sha256=frozen_capture["snapshot_sha256"], marker_sha256=frozen_capture["marker_sha256"],
+        )
+        assert frozen_point.model_dump() == marker["source_point"] == {
+            field: published[field] for field in ("source_view_id", "source_view_revision", "anchor_item_id")
+        }
     assert _provider_call_count(model) == provider_requests_before_fork
     assert len(published["resources"]) == 1
     attachment_result = published["resources"][0]

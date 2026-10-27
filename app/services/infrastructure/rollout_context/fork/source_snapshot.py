@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
+from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.attachment_blob_catalog.records import (
@@ -74,6 +75,7 @@ class ForkSourceSnapshot:
     """原文件与资源 ref 的冻结合同；正文仅留在既有持久化 owner 中。"""
 
     rollout: ForkRolloutSourceSnapshot
+    source_point: ForkCapturedPoint
     attachments: tuple[ForkAttachmentSnapshot | ForkAttachmentDirectorySnapshot, ...] = ()
     node_debug: NodeDebugSourceCopySnapshot | None = None
 
@@ -98,6 +100,8 @@ class ForkSourceSnapshot:
             "attachments": [item.to_payload() for item in self.attachments],
             "node_debug": self.node_debug.to_payload() if self.node_debug is not None else None,
         }
+        # snapshot hash 标识原文件/资源；选择坐标由 captured marker hash 独立覆盖，
+        # 不重写旧快照的内容身份。
         encoded = json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")

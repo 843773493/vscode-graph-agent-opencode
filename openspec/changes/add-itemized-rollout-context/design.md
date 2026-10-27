@@ -415,6 +415,10 @@ fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一
 
 同一次 source 生命周期 read admission 下，由既有 rollout owner 的一致 SQLite 快照和必要写锁覆盖定位、前缀选择及 snapshot capture；按已有锁顺序建立创建/捕获记录，避免查完 revision 释放保护后再读 latest。task writer 提交调用后退出其写入临界区，再进入 fork owner，不能嵌套自锁。固定 SQLite 与 committed JSONL/detail 的完整性后释放来源保护，物化只读 capture；跨端由来源 owner 执行同一流程，target 不根据自己的观测修订号重选。删除、retention、capture 完成/中止沿原 owner/gate，不能同时持两端 gate，也不把 UI 思考时间纳入持锁窗口。
 
+实际捕获坐标由原 `fork_source_captures` journal 的 `source_point_json` 保存，包含 typed view/revision/anchor，绑定同一 request preimage、snapshot hash 与 marker hash。captured marker 封存同一坐标；marker 发布后与 hash 一起 CAS，终态及重试不得改绑。传输回执使用同一 typed point，目标物化、child 发布证明和最终响应消费已冻结事实，不把请求字段当作实际捕获结果；checkpoint、方向、范围和 owner 继续由原 journal/manifest 合同验证。此处没有新增操作日志或选择凭证；绑定 hash 只在原日志内部检测坐标/关联 hash 被单独损坏。原文件/资源 snapshot 内容 hash 保持既有版本合同，新增坐标由 marker hash 覆盖，不重算历史正文身份。
+
+上述新增结构将 catalog 提升为 v11。v10 只通过 `python -m app.core.session_catalog_store.upgrade_v10 --source <绝对路径> --destination <新绝对路径>` 显式转换一致副本，原库不变，不自动安装或静默升级。旧公开 fork 的 capture 请求已经严格冻结 view/revision/anchor，可据此恢复坐标；无法证明该精确绑定的旧 captured/materialized 记录拒绝转换，保留原件。转换前后核结构、SQLite 完整性、每条 capture 身份与 preimage；失败撤销本次输出。旧 captured marker 只读取其版本合同及迁移后的精确 journal，不读取当前来源补缺。静态 DDL 与迁移语句在 SQL，Python 只协调快照、转换验证及事务。
+
 revision 审计按真实职责处理：
 
 - 活来源输入：source-point/display、preflight、`_resolve_fork_source` 及资源候选中的 view/revision 绑定，改为 prefix 模式的显式/自动选择与一致捕获；可选旧 revision 仅是观察信息，不假装冻结凭证。必须核 view、锚点、有序成员和依赖一致性，不删除保护或改成 <=。其它模式保留各自合同。

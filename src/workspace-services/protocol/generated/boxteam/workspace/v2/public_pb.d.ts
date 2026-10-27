@@ -6640,6 +6640,32 @@ export declare type ResourceNavigationRelayRequest = Message<"boxteam.workspace.
 export declare const ResourceNavigationRelayRequestSchema: GenMessage<ResourceNavigationRelayRequest>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ForkCapturedPoint
+ */
+export declare type ForkCapturedPoint = Message<"boxteam.workspace.v2.ForkCapturedPoint"> & {
+  /**
+   * @generated from field: string source_view_id = 1;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 2;
+   */
+  sourceViewRevision: bigint;
+
+  /**
+   * @generated from field: optional string anchor_item_id = 3;
+   */
+  anchorItemId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ForkCapturedPoint.
+ * Use `create(ForkCapturedPointSchema)` to create a new message.
+ */
+export declare const ForkCapturedPointSchema: GenMessage<ForkCapturedPoint>;
+
+/**
  * @generated from message boxteam.workspace.v2.ForkSourceCaptureDTO
  */
 export declare type ForkSourceCaptureDTO = Message<"boxteam.workspace.v2.ForkSourceCaptureDTO"> & {
@@ -6717,6 +6743,11 @@ export declare type ForkSourceCaptureDTO = Message<"boxteam.workspace.v2.ForkSou
    * @generated from field: optional string abort_reason = 16;
    */
   abortReason?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ForkCapturedPoint source_point = 17;
+   */
+  sourcePoint?: ForkCapturedPoint | undefined;
 };
 
 /**

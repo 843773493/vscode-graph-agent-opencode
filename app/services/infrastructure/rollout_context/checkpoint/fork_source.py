@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_attachment_uri, parse_resource_uri
 from app.core.session_catalog_store import SessionCreationRecord
-from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
+from app.core.session_catalog_store.contracts import (
+    ForkCapturedPoint,
+    ForkSourceCaptureRecord,
+)
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
@@ -227,7 +230,7 @@ class CheckpointForkSource:
                     anchor_item_id=request["anchor_item_id"], anchor_mode=request["anchor_mode"],
                     checkpoint_ns=checkpoint_ns,
                 )
-                if point.source_view_id is None:
+                if point.source_view_id is None or point.source_view_revision is None:
                     raise RuntimeError("source-mismatch: captured resource selection 缺少 view")
                 stage = rollout_snapshot.captured_root / "rollout"
                 with closing(sqlite3.connect(
@@ -329,7 +332,13 @@ class CheckpointForkSource:
                 ))
             if unknown := choices.keys() - known:
                 raise ValueError(f"unknown_fork_resource: 来源冻结选择未登记资源: {sorted(unknown)}")
-            snapshot = ForkSourceSnapshot(rollout=rollout_snapshot, attachments=attachments, node_debug=debug_snapshot)
+            snapshot = ForkSourceSnapshot(
+                rollout=rollout_snapshot, attachments=attachments, node_debug=debug_snapshot,
+                source_point=ForkCapturedPoint(
+                    source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+                    anchor_item_id=point.anchor_item_id,
+                ),
+            )
             await observe_phase(capture_record.copy_operation_id, "copy.attachments.preparing")
             publish_captured_snapshot(capture_record, snapshot)
             await observe_phase(capture_record.copy_operation_id, "copy.source.marker_published")

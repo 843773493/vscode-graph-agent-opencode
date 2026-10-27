@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from app.core.identifier import create_uuid_hex, validate_session_id, validate_thread_id
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
+    ForkCapturedPoint,
     ForkSourceCaptureRecord,
     SessionCreationRecord,
     fork_source_capture_relative_locator,
@@ -51,6 +52,10 @@ def _validate_capture_identity(record: ForkSourceCaptureRecord) -> None:
     encoded, preimage_hash = _capture_request_preimage(json.loads(record.request_json))
     if (record.request_json, record.preimage_hash) != (encoded, preimage_hash):
         raise RuntimeError("fork capture request/preimage owner 冲突")
+    if record.source_point_json is not None:
+        _ = record.captured_point
+    elif record.state in {"source_captured", "materialized"}:
+        raise RuntimeError("fork capture 缺少实际冻结 source point")
 
 
 class ForkSourceCaptureMixin:
@@ -198,7 +203,7 @@ class ForkSourceCaptureMixin:
             expected = asdict(record)
             actual = asdict(receipt)
             # partial import 中止时 target 未承诺 hash；来源回执保留自身已冻结 hash。
-            hashes = {"snapshot_sha256", "marker_sha256"}
+            hashes = {"snapshot_sha256", "marker_sha256", "source_point_json"}
             if any(actual[key] != value for key, value in expected.items() if key not in {"state", "abort_reason", *hashes}) or any(
                 expected[key] is not None and actual[key] != expected[key] for key in hashes
             ):
@@ -229,6 +234,7 @@ class ForkSourceCaptureMixin:
 
     def mark_fork_source_captured(
         self, record: ForkSourceCaptureRecord, *, snapshot_sha256: str, marker_sha256: str,
+        source_point: ForkCapturedPoint,
     ) -> ForkSourceCaptureRecord:
         """marker durability 完成且 source guard 释放后 CAS；不得换 source revision。"""
         with self.write_transaction() as connection:
@@ -238,13 +244,19 @@ class ForkSourceCaptureMixin:
             if row is None or row["preimage_hash"] != record.preimage_hash:
                 raise RuntimeError("fork source capture CAS preimage 不一致")
             if row["state"] in {"source_captured", "materialized"}:
-                if (row["snapshot_sha256"], row["marker_sha256"]) != (snapshot_sha256, marker_sha256):
+                if (row["snapshot_sha256"], row["marker_sha256"], row["source_point_json"]) != (
+                    snapshot_sha256, marker_sha256, source_point.frozen_json(
+                        preimage_hash=record.preimage_hash, snapshot_sha256=snapshot_sha256, marker_sha256=marker_sha256,
+                    ),
+                ):
                     raise RuntimeError("fork source captured hash 冲突")
             elif row["state"] == "preparing":
                 connection.execute(
                     "UPDATE fork_source_captures SET state = 'source_captured', snapshot_sha256 = ?, "
-                    "marker_sha256 = ? WHERE copy_operation_id = ? AND state = 'preparing'",
-                    (snapshot_sha256, marker_sha256, record.copy_operation_id),
+                    "marker_sha256 = ?, source_point_json = ? WHERE copy_operation_id = ? AND state = 'preparing'",
+                    (snapshot_sha256, marker_sha256, source_point.frozen_json(
+                        preimage_hash=record.preimage_hash, snapshot_sha256=snapshot_sha256, marker_sha256=marker_sha256,
+                    ), record.copy_operation_id),
                 )
             else:
                 raise RuntimeError("fork source capture 已终结，拒绝恢复")

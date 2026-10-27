@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS fork_source_captures (
     state TEXT NOT NULL CHECK (state IN ('preparing', 'source_captured', 'materialized', 'aborted')),
     snapshot_sha256 TEXT,
     marker_sha256 TEXT,
+    source_point_json TEXT,
     abort_reason TEXT,
     export_release_state TEXT CHECK (export_release_state IN ('pending', 'confirmed')),
     export_release_error TEXT,
