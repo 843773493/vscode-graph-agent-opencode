@@ -8,6 +8,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.integration.backend.sessions.test_persistent_task_notifications import (
+    _input,
+)
+from tests.integration.backend.sessions.test_persistent_task_scripts import (
+    _inputs,
+    _script_configuration,
+)
 from tests.integration.backend.sessions.test_persistent_tasks import (
     ROOT,
     _configuration,
@@ -101,6 +108,97 @@ async def test_each_interval_uses_the_same_execution_chain_and_preserves_cursor_
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
     assert [run["definition_revision"] for run in runs] == [1, 2, 2]
     case.write_actual("interval-execution", {"task": task, "runs": runs, "requests": case.requests()})
+
+
+@pytest.mark.asyncio
+async def test_enabling_and_disabling_a_condition_preserves_the_task_schedule_and_history(
+    source_case: RuntimeSourceCase, task_clock,
+) -> None:
+    case = source_case
+    clock, advance = task_clock
+    session_id, thread_id, target = await _target(case)
+    configuration = _configuration(target, "context_and_run")
+    configuration["trigger"] = {"type_id": "builtin.interval", "version": "1", "interval_seconds": 60}
+    task = await _create(case, configuration)
+    task_id, anchor = task["task_id"], clock[0]
+    calls = await case.plan(session_id, [{"content": f"按同一计划执行第{index}次工作。"} for index in range(4)])
+
+    for count in (1, 2):
+        advance(60)
+        initial = await _history(case, task, count)
+        latest = initial[-1]
+        assert latest["decision"] == {"decision": "proceed", "reason": "无附加条件，始终通过", "result": {}}
+        await _job(case, latest["delivery"]["job_id"])
+        assert case.call_count(session_id, thread_id) == count
+    assert not (case.workspace / "checks.jsonl").exists()
+
+    # 在两个计划点之间开启真实脚本，不能重置计划或新建任务。
+    advance(10)
+    program = """
+ready = pathlib.Path('ready.txt').read_text(encoding='utf-8') == 'ready'
+print(json.dumps({'decision':'proceed' if ready else 'wait','reason':'scheduled-condition',
+                  'result':{'ready':ready,'scheduled_for':value['trigger']['scheduled_for']}}))
+"""
+    configuration["condition"] = _script_configuration(target, program)["condition"]
+    response = await case.client.put(f"{ROOT}/{task_id}", json={
+        "expected_revision": task["revision"], "configuration": configuration,
+    })
+    assert response.status_code == 200, response.text
+    task = response.json()["data"]
+    assert task["task_id"] == task_id and task["definition_revision"] == 2
+    assert datetime.fromisoformat(task["next_run_at"]) == anchor + timedelta(seconds=180)
+    assert (await case.client.get(f"{ROOT}/{task_id}/runs")).json()["data"]["items"] == initial
+
+    signal = case.workspace / "ready.txt"
+    signal.write_text("waiting", encoding="utf-8")
+    advance(50)
+    waiting = await _history(case, task, 3)
+    assert waiting[:2] == initial
+    assert waiting[-1]["decision"] == {"decision": "wait", "reason": "scheduled-condition", "result": {
+        "ready": False, "scheduled_for": clock[0].isoformat(),
+    }}
+    assert waiting[-1]["phase"] == "checked" and waiting[-1]["delivery"] is None
+    assert case.call_count(session_id, thread_id) == 2
+
+    signal.write_text("ready", encoding="utf-8")
+    advance(60)
+    matched = await _history(case, task, 4)
+    assert matched[:3] == waiting
+    assert matched[-1]["decision"]["result"] == {"ready": True, "scheduled_for": clock[0].isoformat()}
+    await _job(case, matched[-1]["delivery"]["job_id"])
+    assert case.call_count(session_id, thread_id) == 3
+    actual_inputs = _inputs(case.workspace)
+    assert [entry["input"]["trigger"]["scheduled_for"] for entry in actual_inputs] == [
+        (anchor + timedelta(seconds=offset)).isoformat() for offset in (180, 240)
+    ]
+    assert {entry["input"]["task_id"] for entry in actual_inputs} == {task_id}
+    assert [entry["input"]["definition_revision"] for entry in actual_inputs] == [2, 2]
+    assert _input(case, calls[2], "scheduled-condition") == [{"condition_decision": matched[-1]["decision"]}]
+
+    configuration["condition"] = _configuration(target)["condition"]
+    response = await case.client.put(f"{ROOT}/{task_id}", json={
+        "expected_revision": task["revision"], "configuration": configuration,
+    })
+    assert response.status_code == 200, response.text
+    task = response.json()["data"]
+    assert task["task_id"] == task_id and task["definition_revision"] == 3
+    assert datetime.fromisoformat(task["next_run_at"]) == anchor + timedelta(seconds=300)
+    advance(60)
+    final = await _history(case, task, 5)
+    await _job(case, final[-1]["delivery"]["job_id"])
+    assert final[:4] == matched
+    assert [row["definition_revision"] for row in final] == [1, 1, 2, 2, 3]
+    assert [datetime.fromisoformat(row["scheduled_for"]) for row in final] == [
+        anchor + timedelta(seconds=60 * index) for index in range(1, 6)
+    ]
+    assert len({row["run_id"] for row in final}) == 5
+    assert final[-1]["decision"] == {"decision": "proceed", "reason": "无附加条件，始终通过", "result": {}}
+    assert _inputs(case.workspace) == actual_inputs
+    assert case.call_count(session_id, thread_id) == len(case.requests()) == 4
+    assert len((await case.client.get(ROOT)).json()["data"]["items"]) == 1
+    assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions") == [("internal", None)] * 4
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
+    case.write_actual("schedule-condition-edit", {"task": task, "runs": final, "checks": actual_inputs, "requests": case.requests()})
 
 
 @pytest.mark.asyncio
