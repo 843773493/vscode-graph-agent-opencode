@@ -42,6 +42,8 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.processes.workspace import start_backend_process, terminate_process
 
 
@@ -81,16 +83,66 @@ def wait_plan():
             delta = {"content": "已登记等待，结束本次执行。" if index == 1 else "已从授权后独立执行继续。"}
             if operation is not None:
                 delta = {"tool_calls": [_tool_call(call_index=index, name=operation[0], arguments=operation[1])]}
-            interactions.append(build_cassette(
+            interaction = build_cassette(
                 asset_id=f"connection-wait-{index}", model="control-replay-model",
                 url="https://opencode.ai/zen/v1/chat/completions",
                 frames=chat_completion_frames(
                     response_id=f"chatcmpl-connection-wait-{index}", model="control-replay-model",
                     deltas=({"role": "assistant", **delta},), finish_reason="tool_calls" if operation else "stop",
                 ),
-            ).raw["interactions"][0])
+            ).raw["interactions"]
+            assert isinstance(interaction, list) and isinstance(interaction[0], dict)
+            interactions.append(interaction[0])
         return replay.control.plan_model_calls(session, thread, interactions)
     return plan
+
+
+@pytest.fixture
+def idle_child(recovery_case):
+    registry = None
+
+    async def create(client: httpx.AsyncClient, replay: ModelStreamReplay, session: str, main_thread: str) -> str:
+        nonlocal registry
+        seed = build_cassette(
+            asset_id="mcp-child-source", model="control-replay-model",
+            url="https://opencode.ai/zen/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id="chatcmpl-mcp-child-source", model="control-replay-model",
+                deltas=({"role": "assistant", "content": "主线程来源已完成。"},), finish_reason="stop",
+            ),
+        ).raw["interactions"]
+        assert isinstance(seed, list) and isinstance(seed[0], dict)
+        replay.control.plan_model_calls(session, main_thread, [seed[0]])
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            "message": {"content": "准备独立 child 的历史来源。"},
+            "run": {"mode": "single_agent", "agent_id": "default"},
+        })
+        assert response.status_code == 200, response.text
+        await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
+        # 关键 child 和历史由公开 fork 入口创建，不预填 Thread／checkpoint。
+        registry = ForkDeadlineRegistry(recovery_case.context.artifacts_dir)
+        deadline = registry.for_operation(session, "mcp-cold-child")
+        response = await deadline.wait(client.get(f"/api/v1/sessions/{session}/fork-source-point", params={
+            "thread_id": main_thread, "mode": "context_fork",
+        }), "MCP child source point")
+        assert response.status_code == 200, response.text
+        point = response.json()["data"]
+        response = await deadline.wait(client.post(f"/api/v1/sessions/{session}/fork-context", json={
+            "idempotency_key": "mcp-cold-child", "source_uri": point["source_uri"],
+            "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+            "anchor_item_id": point["anchor_item_id"], "mode": "context_fork",
+            "creation_kind": "new_child_thread", "target_container_uri": point["child_container_uri"],
+        }), "MCP child public fork")
+        deadline.complete()
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["session"]["session_id"] == session
+        child = response.json()["data"]["thread_id"]
+        assert child != main_thread
+        return child
+
+    yield create
+    if registry is not None:
+        registry.close()
 
 
 async def task_resource(client, session, task_id, status):
@@ -126,12 +178,13 @@ async def authorize(client, secure, operation_id):
     return callback
 
 
-@pytest.mark.parametrize(("boundary", "fault"), [
-    ("turn", None), ("model_call", None),
-    ("turn", "mcp.wait.mailbox_committed"), ("turn", "mcp.wait.dispatcher_accepted"),
+@pytest.mark.parametrize(("boundary", "fault", "child"), [
+    ("turn", None, False), ("model_call", None, False),
+    ("turn", "mcp.wait.mailbox_committed", False), ("turn", "mcp.wait.dispatcher_accepted", False),
+    pytest.param("turn", "mcp.wait.mailbox_committed", True, id="child-cold-recovery"),
 ])
 async def test_authorization_continues_without_new_user_turn(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, wait_plan, wait_mount, boundary, fault,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, wait_plan, wait_mount, idle_child, boundary, fault, child,
 ):
     backends = []
     async with (
@@ -139,11 +192,20 @@ async def test_authorization_continues_without_new_user_turn(
         product_case(secure, sibling, boundary=boundary, startup_mount=wait_mount, backend_processes=backends) as (client, replay, case),
     ):
         session = await create_session(client, "持久授权等待")
-        thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
+        main_thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
+        thread = await idle_child(client, replay, session, main_thread) if child else main_thread
+        resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
+        inherited = {}
+        inherited_turns = 0
+        if child:
+            with RolloutCheckpointSaver(resolver.sessions_root) as saver:
+                inherited = {item.assembly_id: item.request_hash for item in saver.list_context_assemblies(session, thread)}
+            with closing(sqlite3.connect(resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite")) as database:
+                inherited_turns = database.execute("SELECT count(*) FROM turns").fetchone()[0]
         call_ids = wait_plan(replay, session, thread, "授权完成后检查 secure 的完整定义，再调用 probe 核实连接。")
         operation_id = software_tool_operation_id("mcp_connect", session, thread, str(UUID(call_ids[0])), "debug-e2e-call-0")
         task_id = mcp_wait_task_id(session, thread, operation_id)
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json={
             "message": {"content": "为 secure 发起连接并登记授权后继续，结束本次执行。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
         })
@@ -190,21 +252,26 @@ async def test_authorization_continues_without_new_user_turn(
         async with asyncio.timeout(45):
             while not (replay.artifacts / f"{call_ids[-1]}.json").exists():
                 await asyncio.sleep(0.05)
-        resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
         with closing(sqlite3.connect(resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite")) as database:
-            executions = database.execute("SELECT execution_id,execution_origin,turn_id,job_id FROM executions ORDER BY created_at").fetchall()
+            executions = database.execute(
+                "SELECT execution_id,execution_origin,turn_id,job_id FROM executions "
+                "WHERE session_id=? AND thread_id=? ORDER BY created_at", (session, thread),
+            ).fetchall()
             assert len(executions) == 2 and executions[0][1:3] == ("user_turn", accepted["turn_id"])
             assert executions[1][1:3] == ("internal", None)
-            assert database.execute("SELECT count(*) FROM turns").fetchone()[0] == 1
+            assert database.execute("SELECT count(*) FROM turns").fetchone()[0] == inherited_turns + 1
             assert database.execute("SELECT count(*) FROM runtime_execution_wakeups").fetchone()[0] == 1
         if fault != "mcp.wait.dispatcher_accepted":
             await wait_for_job_done(client, executions[1][3], max_attempts=100)
         records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in call_ids]
         saver = RolloutCheckpointSaver(resolver.sessions_root)
         assert saver.runtime_execution_outcome(session, thread, executions[1][0]) == "completed"
-        assemblies = saver.list_context_assemblies(session, thread)
+        all_assemblies = saver.list_context_assemblies(session, thread)
+        assert {item.assembly_id: item.request_hash for item in all_assemblies if item.assembly_id in inherited} == inherited
+        assemblies = [item for item in all_assemblies if item.assembly_id not in inherited]
         assert len(assemblies) == len(records)
         for assembly, record in zip(assemblies, records, strict=True):
+            assert (assembly.session_id, assembly.thread_id) == (session, thread)
             wire = normalize_wire_request(record)
             assert assembly.request_hash_preimage == wire
             assert assembly.request_hash == context_request_hash(
@@ -221,6 +288,12 @@ async def test_authorization_continues_without_new_user_turn(
         invocation = next(message for message in final_results if message["tool_call_id"] == "debug-e2e-call-3")
         assert json.loads(invocation["content"][0]["text"])["arguments"] == {"proof": "authorized-continuation"}
         assert secure.exchanges == secure.registrations == 1
+        if child:
+            compiled = [event for event in replay.control.events if event["phase"] == "agent.graph.compiled" and event.get("details", {}).get("thread_id") == thread]
+            assert len({event["pid"] for event in compiled}) == 2, "child 必须在原进程和新进程各自真实编译"
+            with closing(sqlite3.connect(resolver.resolve_thread_node(session, main_thread) / "rollout/index.sqlite")) as database:
+                assert database.execute("SELECT count(*) FROM executions").fetchone()[0] == 1
+                assert database.execute("SELECT count(*) FROM runtime_execution_wakeups").fetchone()[0] == 0
         raw = json.dumps(records)
         assert all(secret not in raw for secret in (secure.access_token, secure.refresh_token, callback["code"], callback["state"]))
 
@@ -264,6 +337,7 @@ async def test_cancelling_one_thread_wait_preserves_other_waiter_and_shared_conn
             while not (replay.artifacts / f"{calls[-1]}.json").exists():
                 await asyncio.sleep(0.05)
         resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
+        internal = None
         for selected_session, selected_thread, expected_count in [(cancelled_session, cancelled_thread, 1), (session, thread, 2)]:
             with closing(sqlite3.connect(resolver.resolve_thread_node(selected_session, selected_thread) / "rollout/index.sqlite")) as database:
                 assert database.execute("SELECT count(*) FROM executions").fetchone()[0] == expected_count

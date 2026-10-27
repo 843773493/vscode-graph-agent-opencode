@@ -281,3 +281,9 @@
 - `ui-state-031` 19通过；`web-types-031`、`web-build-031`和`ui-python-static-031`通过，源码无漂移。`ui-types-python-023`的6文件Pyright零诊断，受测Python未变；`ui-backend-operations-027`中连接操作8项通过，静态UI的4项通过／1项失败源于测试日志捕获；该断言修正后的`ui-backend-unit-029`为5通过。共享协议资产、首次多Server启动、未知401、错误callback、交换后初始化／目录失败、到期、断开失败及Agent入口复用5.1—5.5的具名证据，不累计重叠用例数。
 - 命令、源码指纹、raw、实际退出码和失败原件保存在 `out/tests/temp/mcp-discovery-policy/artifacts/`；正式浏览器现场在同名测试输出下的 `run-425c64d795c3`。032误用Bun不支持的语法检查入口而执行到缺少fixture，未启动浏览器；033改用Bun build仅解析脚本并通过，临时解析输出已删除。新增两个源码目录的AGENTS齐全，相关Python AST可解析；已有大型DTO和测试父目录未在本切片扩展重构。
 - 关闭5.6／5.7／8.1—8.3，当前39/52。完整HITL、child冷恢复／用户输入交错／删除期限、跨Gateway授权及其余未勾项继续推进；团队／协作专项TODO不变。
+
+### 6.6 原 child 授权等待冷恢复（2026-10-27）
+
+- 真实 Session 消息生成 main 历史，经公开 source-point／fork-context 创建同 Session child；child 登记授权等待并结束原执行。邮箱已提交、dispatcher 尚未接受时强杀 Backend，重启后原 child 冷编译并完成独立 internal execution，turn_id=None；main 无额外执行或唤醒，继承 assembly hash 不变，新五份请求逐一核对 owner、preimage/hash、工具配对及真实 MCP 回执，OAuth 仅交换一次。模型继续复用 model_stream。
+- `child-wait-product-034` 新场景1通过；仅含 HEAD 与该测试文件的完整 Git 快照 `isolated-child-wait-037` 中 child 通过，组合另一个 main 场景失败于新增测试提前读取空 rollout，尚未进入业务。限定仅 child 读取继承基线后，`isolated-child-wait-038` main 场景1通过／71.79秒，实际退出0；child 分支业务断言未变，复用037证据。038 Ruff、Pyright零诊断及OpenSpec strict通过；037沿同树036复用静态结果，036筛选引号错误未执行产品测试的原件保留。
+- 命令、tree、源码指纹、raw、实际退出码与正式输出保存在 `out/tests/temp/mcp-discovery-policy/artifacts/`；035—038源码副本均核验无漂移后清理。6.6仍未勾选，用户输入交错、Session删除及全过程deadline等产品门继续未完成；团队／协作TODO不变。
