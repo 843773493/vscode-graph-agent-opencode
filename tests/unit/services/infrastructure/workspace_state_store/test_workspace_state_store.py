@@ -39,6 +39,6 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 14
+        assert store.diagnostics().schema_version == 15
     finally:
         store.close()

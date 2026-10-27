@@ -47,6 +47,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp.config import (
+    McpServerConfig,
     parse_mcp_server_configs,
     sealed_call_timeout_seconds,
 )
@@ -315,16 +316,7 @@ class McpCatalogOwner:
                 if not server.enabled:
                     continue
                 failed_server_id = server.server_id
-                self._connection_generation += 1
-                generation = self._connection_generation
-                runtime = McpServerRuntime(
-                    server=server,
-                    generation=generation,
-                    session_factory=self._session_factory,
-                    on_change=self._make_tools_list_changed_callback(server.server_id, generation),
-                    on_failure=self._handle_session_failure, scope=session_scope.child(f"server:{server.server_id}:{generation}"),
-                    on_closed=self._handle_session_closed,
-                )
+                runtime = self._new_runtime(server)
                 with self._publication_lock:
                     self._runtimes[server.server_id] = runtime
                 try:
@@ -585,14 +577,7 @@ class McpCatalogOwner:
             server = proposed.get(key)
             if server is None or not server.enabled:
                 continue
-            self._connection_generation += 1
-            generation = self._connection_generation
-            runtime = McpServerRuntime(
-                server=server, generation=generation, session_factory=self._session_factory,
-                on_change=self._make_tools_list_changed_callback(key, generation),
-                on_failure=self._handle_session_failure, on_closed=self._handle_session_closed,
-                scope=owner_scope.child(f"server:{key}:{generation}"),
-            )
+            runtime = self._new_runtime(server)
             prepared[key] = runtime
             try:
                 await runtime.start()
@@ -650,6 +635,113 @@ class McpCatalogOwner:
                         self._handle_tools_list_changed(key, runtime.generation)
 
         return publish, frozenset(unchanged_ids | tools.keys())
+
+    def server_configuration(self, server_id: str) -> McpServerConfig:
+        with self._publication_lock:
+            self._require_started()
+            for server in self._servers:
+                if server.server_id == server_id:
+                    return server
+        raise LookupError("MCP Server 未配置")
+
+    def _new_runtime(self, server: McpServerConfig, session_factory: McpSessionFactory | None = None) -> McpServerRuntime:
+        """启动、配置替换和显式连接共用唯一 task／scope 创建入口。"""
+        with self._publication_lock:
+            if self._session_scope is None:
+                raise RuntimeError("MCP Owner 缺少连接生命周期 scope")
+            self._connection_generation += 1
+            generation = self._connection_generation
+            return McpServerRuntime(
+                server=server, generation=generation, session_factory=session_factory or self._session_factory,
+                on_change=self._make_tools_list_changed_callback(server.server_id, generation),
+                on_failure=self._handle_session_failure, on_closed=self._handle_session_closed,
+                scope=self._session_scope.child(f"server:{server.server_id}:{generation}"),
+            )
+
+    async def connect_server(
+        self, server_id: str, *, admit: Callable[[], None],
+        session_factory: McpSessionFactory | None = None, on_initialized: Callable[[], None],
+    ) -> None:
+        """用户等待在目录锁之外；只在核实目录后原子发布精确新连接。"""
+        server = self.server_configuration(server_id)
+        if not server.enabled:
+            raise PermissionError("MCP Server 已在配置中禁用")
+        with self._publication_lock:
+            admit()
+            original = self._runtimes.get(server_id)
+            self._retirement.require_replaceable({server_id})
+        if original is not None and original.running:
+            on_initialized()
+            await self._apply_relist((original,), source="connect")
+            with self._publication_lock:
+                admit()
+                if self._runtimes.get(server_id) is not original or not original.running:
+                    raise McpCatalogError("MCP connect 的原连接已改变")
+            return
+        if original is not None and not original.scope.is_closed:
+            async with asyncio.timeout(self._retirement.timeout_seconds):
+                await original.scope.close()
+        runtime = self._new_runtime(server, session_factory)
+        published = False
+        try:
+            await runtime.start()
+            self._leases.register_external(resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace")
+            on_initialized()
+            async with self._catalog_lock:
+                sequence = runtime.relist_sequence
+                remote_tools = await runtime.session.list_tools()
+                with self._publication_lock:
+                    admit()
+                    if (self.server_configuration(server_id) != server or self._runtimes.get(server_id) is not original
+                            or not runtime.running or sequence != runtime.relist_sequence):
+                        raise McpCatalogError("MCP connect 的配置、连接或完整目录准备已过期")
+                    self._retirement.require_replaceable({server_id})
+                    tools = {key: value for key, value in self._tools_by_id.items()
+                             if (value.metadata or {}).get("mcp_server_id") != server_id}
+                    added, descriptors = _adapt_server_tools(
+                        server_id, remote_tools, connection_ref=self._connection_ref(runtime), foreign_tool_ids=set(tools),
+                    )
+                    tools.update(added)
+                    self._runtimes[server_id] = runtime
+                    self._dirty_servers.discard(server_id)
+                    published = True
+                    self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools,
+                        candidate_descriptors={**self._descriptors_by_server, server_id: descriptors})
+        finally:
+            if not published:
+                await runtime.scope.close()
+
+    async def disconnect_server(self, server_id: str, *, admit: Callable[[], None]) -> None:
+        """先撤销新准入及目录成员，再核实 active 与旧退役连接实际关闭。"""
+        async with self._catalog_lock:
+            with self._publication_lock:
+                self.server_configuration(server_id)
+                admit()
+                self._retirement.revoke_server(server_id)
+                runtime = self._runtimes.get(server_id)
+                runtimes = self._retirement.runtimes_for_server(server_id)
+                if runtime is not None:
+                    runtimes = (*runtimes, runtime)
+                for item in runtimes:
+                    item.request_close()
+                tools = {key: value for key, value in self._tools_by_id.items()
+                         if (value.metadata or {}).get("mcp_server_id") != server_id}
+                descriptors = {key: value for key, value in self._descriptors_by_server.items() if key != server_id}
+                self._dirty_servers.discard(server_id)
+                publication_error: Exception | None = None
+                try:
+                    self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools, candidate_descriptors=descriptors)
+                except Exception as error:  # noqa: BLE001 - 广播失败仍须核实原连接关闭，随后合并报告。
+                    publication_error = error
+        errors = [] if publication_error is None else [publication_error]
+        for item in runtimes:
+            try:
+                async with asyncio.timeout(self._retirement.timeout_seconds):
+                    await item.scope.close()
+            except Exception as error:  # noqa: BLE001 - 不能因一个连接失败遗弃同 Server 的其它代际。
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("MCP 断开未完成", errors)
 
     def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)

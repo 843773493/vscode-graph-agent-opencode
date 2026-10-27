@@ -309,6 +309,37 @@ message McpToolDTO {
   string description = 4;
 }
 
+// 工作区连接操作事实；不包含凭据、OAuth state 或敏感授权地址。
+message McpConnectionOperationDTO {
+  string operation_id = 1;
+  string connection_id = 2;
+  string server_id = 3;
+  string action = 4;
+  string status = 5;
+  string stage = 6;
+  double created_at = 7;
+  double deadline = 8;
+  double updated_at = 9;
+  optional string error_code = 10;
+}
+
+message McpConnectionRequestDTO {
+  string operation_id = 1;
+  string server_id = 2;
+  string action = 3;
+}
+
+// 仅通过受保护且 no-store 的授权管理 API 向用户提供，不进入模型与 SSE。
+message McpAuthorizationDTO {
+  string authorization_url = 1;
+}
+
+// 仅以受保护 POST body 交给实际 owner，禁止复制到访问日志。
+message McpAuthorizationCallbackDTO {
+  string code = 1;
+  string state = 2;
+}
+
 message MessageCreateRequest {
   optional string role = 1;
   string content = 2;

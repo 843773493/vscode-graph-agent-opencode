@@ -126,6 +126,7 @@ class WorkspaceLifespan:
             ("resource_platform.close", container.resource_platform.close),
             ("tool_test.shutdown", container.tool_test_service.shutdown),
             ("trace_recorder.stop", container.trace_event_recorder.stop),
+            ("mcp_connections.close", container.mcp_connection_service.close),
             ("activity.close", container.workspace_activity_service.close),
             ("mcp_catalog.shutdown", container.mcp_catalog_owner.shutdown),
             ("workspace_service.stop", container.workspace_service.stop),
@@ -282,6 +283,8 @@ class WorkspaceLifespan:
                 await container.workspace_service.start()
             with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
                 await container.mcp_catalog_owner.start()
+            with _workspace_startup_stage(container, "mcp_connections.start"):
+                container.mcp_connection_service.start()
             with _workspace_startup_stage(container, "workspace_file_resource_registry.start"):
                 await container.workspace_file_resource_registry.start()
             removed = container.workspace_activity_service.prune()

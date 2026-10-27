@@ -1314,6 +1314,136 @@ export declare type McpToolDTO = Message<"boxteam.workspace.v2.McpToolDTO"> & {
 export declare const McpToolDTOSchema: GenMessage<McpToolDTO>;
 
 /**
+ * 工作区连接操作事实；不包含凭据、OAuth state 或敏感授权地址。
+ *
+ * @generated from message boxteam.workspace.v2.McpConnectionOperationDTO
+ */
+export declare type McpConnectionOperationDTO = Message<"boxteam.workspace.v2.McpConnectionOperationDTO"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string connection_id = 2;
+   */
+  connectionId: string;
+
+  /**
+   * @generated from field: string server_id = 3;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string action = 4;
+   */
+  action: string;
+
+  /**
+   * @generated from field: string status = 5;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string stage = 6;
+   */
+  stage: string;
+
+  /**
+   * @generated from field: double created_at = 7;
+   */
+  createdAt: number;
+
+  /**
+   * @generated from field: double deadline = 8;
+   */
+  deadline: number;
+
+  /**
+   * @generated from field: double updated_at = 9;
+   */
+  updatedAt: number;
+
+  /**
+   * @generated from field: optional string error_code = 10;
+   */
+  errorCode?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpConnectionOperationDTO.
+ * Use `create(McpConnectionOperationDTOSchema)` to create a new message.
+ */
+export declare const McpConnectionOperationDTOSchema: GenMessage<McpConnectionOperationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpConnectionRequestDTO
+ */
+export declare type McpConnectionRequestDTO = Message<"boxteam.workspace.v2.McpConnectionRequestDTO"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string server_id = 2;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string action = 3;
+   */
+  action: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpConnectionRequestDTO.
+ * Use `create(McpConnectionRequestDTOSchema)` to create a new message.
+ */
+export declare const McpConnectionRequestDTOSchema: GenMessage<McpConnectionRequestDTO>;
+
+/**
+ * 仅通过受保护且 no-store 的授权管理 API 向用户提供，不进入模型与 SSE。
+ *
+ * @generated from message boxteam.workspace.v2.McpAuthorizationDTO
+ */
+export declare type McpAuthorizationDTO = Message<"boxteam.workspace.v2.McpAuthorizationDTO"> & {
+  /**
+   * @generated from field: string authorization_url = 1;
+   */
+  authorizationUrl: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpAuthorizationDTO.
+ * Use `create(McpAuthorizationDTOSchema)` to create a new message.
+ */
+export declare const McpAuthorizationDTOSchema: GenMessage<McpAuthorizationDTO>;
+
+/**
+ * 仅以受保护 POST body 交给实际 owner，禁止复制到访问日志。
+ *
+ * @generated from message boxteam.workspace.v2.McpAuthorizationCallbackDTO
+ */
+export declare type McpAuthorizationCallbackDTO = Message<"boxteam.workspace.v2.McpAuthorizationCallbackDTO"> & {
+  /**
+   * @generated from field: string code = 1;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string state = 2;
+   */
+  state: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpAuthorizationCallbackDTO.
+ * Use `create(McpAuthorizationCallbackDTOSchema)` to create a new message.
+ */
+export declare const McpAuthorizationCallbackDTOSchema: GenMessage<McpAuthorizationCallbackDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.MessageCreateRequest
  */
 export declare type MessageCreateRequest = Message<"boxteam.workspace.v2.MessageCreateRequest"> & {

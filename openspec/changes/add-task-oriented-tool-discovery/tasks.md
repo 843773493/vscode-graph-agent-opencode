@@ -37,10 +37,10 @@
 ## 5. 本地连接控制与授权流程
 
 - [ ] 5.1 通过现有本地扩展注册 connections.manage 的 list/connect/status/disconnect；贯通首次需授权时的 workspace 启动、owner publication 和必需资源冻结，使同一目录保持本地控制及其它就绪 Server 可达；使用稳定工作区／Server identity 与既有工具 operation 幂等身份，不吞掉未知授权或协议错误。
-- [ ] 5.2 实现独立的连接／授权操作状态、查询和 deadline；选择现有领域持久化入口及受限凭据存储，不写入导航 catalog 或全局会话目录。
-- [ ] 5.3 为受支持 MCP HTTP 授权接入标准 SDK／协议及 state/PKCE 校验；保持 stdio env／HTTP credential reference 现有行为，未知方式明确报错。
+- [x] 5.2 实现独立的连接／授权操作状态、查询和 deadline；选择现有领域持久化入口及受限凭据存储，不写入导航 catalog 或全局会话目录。
+- [x] 5.3 为受支持 MCP HTTP 授权接入标准 SDK／协议及 state/PKCE 校验；保持 stdio env／HTTP credential reference 现有行为，未知方式明确报错。
 - [ ] 5.4 将 Server 授权与上游应用授权分别路由到实际 owner；复用远端已有管理工具，不假设任意 Server 有应用目录或 OAuth 能力。
-- [ ] 5.5 在用户授权后真实核验 token／协议初始化／完整目录，再报告 ready；断开撤销新准入并核实资源关闭，失败保留可复查阶段。
+- [x] 5.5 在用户授权后真实核验 token／协议初始化／完整目录，再报告 ready；断开撤销新准入并核实资源关闭，失败保留可复查阶段。
 - [ ] 5.6 接入产品授权入口与只读状态 API，经 Gateway 透明代理；凭据／短期授权能力不进入模型、日志、SSE 或会话快照。
 - [ ] 5.7 从真实工作区启动及 Agent 入口验证首次 OAuth、多个 Server 仅一个未授权、本地 connect 可达与未知目录不虚构；验证重复 connect、错误 callback、无支持流程的 401、授权成功但 initialize/relist 失败、过期、断开失败和凭据输出边界；完成静态分析。
 
@@ -218,3 +218,13 @@
 - 正式 `integration-mcp-oauth-startup` 的 `matrix-002` 为10 passed／20.53秒：真实 HTTP OAuth／同一 schema_server MCP、SDK PKCE与冷刷新、错误state、token失败、无metadata、issuer／PKCE拒绝、授权成功但目录非法及同名不同endpoint；真实 Backend 启动核authorization_required／ready、无未知工具、200与同request_id。`discovery-regression-001` 为220 passed／114.60秒，保留原目录、策略、信封、SDK生命周期、冻结／恢复及stdio／HTTP取消进度。两组准确命令、前后指纹、raw和实际退出码在 `out/tests/temp/mcp-oauth-startup/artifacts/`，源码无漂移。
 - 10文件Ruff／Pyright零诊断，Buf格式／lint／build及相对真实HEAD e8a66258f 的breaking通过；Web真实tsc及build通过。两份OpenAPI只增加该状态枚举，由完整暂存tree ce5df2655b2dba23bee3f45a622de9591ff3897e 导出，4527个源码blob核验后清理副本，不混入他人fork／task改动。保留首轮凭据文件计数混入前一场景、误用不存在的pyright入口、Pydantic URL类型直接比较导致错误拒绝及类型诊断的原件；修正后才完成最终验证，没有放宽issuer或业务断言。
 - 5.1—5.7和7.1仍按完整任务保留未勾选，进度20/52。当前证明初次启动及官方协议适配，不证明尚待接入的connections.manage、持久操作、实际产品callback／UI、HITL、长等待恢复或Gateway／Web授权；团队／协作专项继续TODO。未做Windows实机或外部Provider验收。
+
+### 5.2／5.3／5.5：持久连接操作与受保护回调（2026-10-27）
+
+- 唯一 WorkspaceStateStore 升级15，SQL资产新增连接操作和幂等 alias。实际 SDK session、完整目录和执行代际继续归原 MCP Owner，启动、配置替换和显式连接共用创建入口；授权等待不持有目录锁。持久重放、短查询、300秒deadline、取消、配置指纹 fencing、断开及重启对账沿同一 service，无第二数据库或工具 dispatcher。
+- 新增受保护操作／状态／取消／授权读取／POST callback API；URL仅用户管理读取且no-store，code／state只在内存交给官方SDK。错误state、重复callback、私有body校验和安全阶段错误不泄漏交换正文。token交换不代表ready，必须继续initialize和完整目录验证；断开即使广播失败仍核实原scope关闭。运行时断开不改JSONC，重启按已启用配置重建。
+- 正式 `integration-mcp-connection-operations`：7 passed／75.82秒，包含真实Backend及HTTP OAuth，验证首次授权、兄弟Server、intent／alias终态重放、错误／重复callback、短观察不取消、运行时断开、OS级退出／重启不重放交换、token／目录失败、期限与迟到回调、配置移除fencing及清理失败。关键状态均由操作产品入口生成；旧14库升级及唯一active／终态fence另有定向5 passed（与其它范围有重叠，不累计）。
+- 相关 MCP／WorkspaceStateStore／请求校验／首次授权回归236 passed／100.78秒；Ruff通过，7个核心文件Pyright零诊断，最终期限逻辑另行Ruff／Pyright通过。container／workspace_lifecycle／http_validation的现有诊断经完整HEAD `8af6e181f` archive复现，对比新增诊断为空；基线4529个blob核验并清理源码副本。
+- Buf格式、lint、build及对真实HEAD的breaking检查通过；Web真实tsc与build通过。OpenAPI从仅含本切片的暂存tree `acfee8c5f0c3c073ef2f80147b7becfb00d8bc97` 导出，只新增上述MCP路径和DTO；4533个源码blob核验后已清理导出副本，未混入并行fork/task字段。最终timer仅改变操作运行态，不改变导出合同。
+- 最终完整暂存tree `c42656df0d0c1f24ef7ac5e9cf011c0a9e6e2fa5` archive隔离复验：同一正式连接操作套件7 passed／77.81秒；核对全部4535个blob未变化后移除源码副本，原正式测试输出保留在 `artifacts/final-source/out/tests/`。该树不含其它agent尚未提交的fork／task改动，不依赖其实现。
+- 准确命令、源码指纹、raw、退出码、类型基线对比及结构索引位于 `out/tests/temp/mcp-connection-operations/artifacts/`；正式测试输出保留在各测试同名目录。当前进度23/52。5.1／5.6／5.7、7.1及后续Agent控制、产品UI、Gateway／Web授权、精确thread后台等待／自动继续门仍未完成；不把Backend API或SDK协议夹具当作这些验收。团队／协作TODO不变，未做Windows或真实外部Provider验收。

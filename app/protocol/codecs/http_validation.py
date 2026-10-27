@@ -113,7 +113,14 @@ async def request_validation_error_response(request: Request, error: RequestVali
     """保持 422 与错误规则，原始输入和自定义异常只留在服务端诊断中。"""
     request_id = get_request_id(request)
     failures = error.errors()
-    logger.warning("请求校验失败 request_id=%s", request_id, exc_info=error)
+    annotation = request.scope["route"].body_field
+    body_type = annotation.field_info.annotation if annotation is not None else None
+    sensitive = isinstance(body_type, type) and issubclass(body_type, BaseModel) and body_type.model_config.get("hide_input_in_errors")
+    if sensitive:
+        # OAuth 回调等显式私有模型不能把输入或 SDK 自由正文复制到日志。
+        logger.warning("私有请求校验失败 request_id=%s error_count=%d", request_id, len(failures))
+    else:
+        logger.warning("请求校验失败 request_id=%s", request_id, exc_info=error)
     schemas = _request_schemas(request)
     inputs = {"body": error.body, "query": dict(request.query_params), "path": request.path_params,
               "header": dict(request.headers), "cookie": request.cookies}

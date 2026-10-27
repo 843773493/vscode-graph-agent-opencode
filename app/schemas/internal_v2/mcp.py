@@ -42,3 +42,43 @@ class McpServerDTO(BaseModel):
     enabled: bool
     status: Literal["disabled", "ready", "failed", "authorization_required"]
     tools: list[McpToolDTO] = Field(default_factory=list)
+
+
+class McpConnectionOperationDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation_id: str
+    connection_id: str
+    server_id: str
+    action: Literal["connect", "disconnect"]
+    status: Literal["pending", "waiting_user", "verifying", "succeeded", "failed", "expired", "cancelled"]
+    stage: Literal["queued", "authorization", "initialize", "catalog", "disconnect", "complete", "cleanup", "reconcile"]
+    created_at: float
+    deadline: float
+    updated_at: float
+    error_code: str | None = None
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in {"succeeded", "failed", "expired", "cancelled"}
+
+
+class McpConnectionRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_:-]+$")
+    server_id: str = Field(min_length=1, max_length=64)
+    action: Literal["connect", "disconnect"]
+
+
+class McpAuthorizationDTO(BaseModel):
+    """仅供已认证用户读取；不得用于普通状态、工具结果或会话正文。"""
+
+    authorization_url: str = Field(repr=False)
+
+
+class McpAuthorizationCallbackDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    code: str = Field(min_length=1, max_length=8192, repr=False)
+    state: str = Field(min_length=1, max_length=1024, repr=False)

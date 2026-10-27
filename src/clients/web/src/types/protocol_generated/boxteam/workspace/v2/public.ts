@@ -308,6 +308,37 @@ export interface McpToolDTO {
   description: string;
 }
 
+/** 工作区连接操作事实；不包含凭据、OAuth state 或敏感授权地址。 */
+export interface McpConnectionOperationDTO {
+  operation_id: string;
+  connection_id: string;
+  server_id: string;
+  action: string;
+  status: string;
+  stage: string;
+  created_at: number;
+  deadline: number;
+  updated_at: number;
+  error_code?: string | undefined;
+}
+
+export interface McpConnectionRequestDTO {
+  operation_id: string;
+  server_id: string;
+  action: string;
+}
+
+/** 仅通过受保护且 no-store 的授权管理 API 向用户提供，不进入模型与 SSE。 */
+export interface McpAuthorizationDTO {
+  authorization_url: string;
+}
+
+/** 仅以受保护 POST body 交给实际 owner，禁止复制到访问日志。 */
+export interface McpAuthorizationCallbackDTO {
+  code: string;
+  state: string;
+}
+
 export interface MessageCreateRequest {
   role?: string | undefined;
   content: string;
@@ -4528,6 +4559,191 @@ export const McpToolDTO: MessageFns<McpToolDTO> = {
     message.server_id = object.server_id ?? "";
     message.remote_name = object.remote_name ?? "";
     message.description = object.description ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpConnectionOperationDTO(): McpConnectionOperationDTO {
+  return {
+    operation_id: "",
+    connection_id: "",
+    server_id: "",
+    action: "",
+    status: "",
+    stage: "",
+    created_at: 0,
+    deadline: 0,
+    updated_at: 0,
+    error_code: undefined,
+  };
+}
+
+export const McpConnectionOperationDTO: MessageFns<McpConnectionOperationDTO> = {
+  fromJSON(object: any): McpConnectionOperationDTO {
+    return {
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      connection_id: isSet(object.connection_id) ? globalThis.String(object.connection_id) : "",
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      stage: isSet(object.stage) ? globalThis.String(object.stage) : "",
+      created_at: isSet(object.created_at) ? globalThis.Number(object.created_at) : 0,
+      deadline: isSet(object.deadline) ? globalThis.Number(object.deadline) : 0,
+      updated_at: isSet(object.updated_at) ? globalThis.Number(object.updated_at) : 0,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+    };
+  },
+
+  toJSON(message: McpConnectionOperationDTO): unknown {
+    const obj: any = {};
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.connection_id !== "") {
+      obj.connection_id = message.connection_id;
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.stage !== "") {
+      obj.stage = message.stage;
+    }
+    if (message.created_at !== 0) {
+      obj.created_at = message.created_at;
+    }
+    if (message.deadline !== 0) {
+      obj.deadline = message.deadline;
+    }
+    if (message.updated_at !== 0) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpConnectionOperationDTO>, I>>(base?: I): McpConnectionOperationDTO {
+    return McpConnectionOperationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpConnectionOperationDTO>, I>>(object: I): McpConnectionOperationDTO {
+    const message = createBaseMcpConnectionOperationDTO();
+    message.operation_id = object.operation_id ?? "";
+    message.connection_id = object.connection_id ?? "";
+    message.server_id = object.server_id ?? "";
+    message.action = object.action ?? "";
+    message.status = object.status ?? "";
+    message.stage = object.stage ?? "";
+    message.created_at = object.created_at ?? 0;
+    message.deadline = object.deadline ?? 0;
+    message.updated_at = object.updated_at ?? 0;
+    message.error_code = object.error_code ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpConnectionRequestDTO(): McpConnectionRequestDTO {
+  return { operation_id: "", server_id: "", action: "" };
+}
+
+export const McpConnectionRequestDTO: MessageFns<McpConnectionRequestDTO> = {
+  fromJSON(object: any): McpConnectionRequestDTO {
+    return {
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+    };
+  },
+
+  toJSON(message: McpConnectionRequestDTO): unknown {
+    const obj: any = {};
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpConnectionRequestDTO>, I>>(base?: I): McpConnectionRequestDTO {
+    return McpConnectionRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpConnectionRequestDTO>, I>>(object: I): McpConnectionRequestDTO {
+    const message = createBaseMcpConnectionRequestDTO();
+    message.operation_id = object.operation_id ?? "";
+    message.server_id = object.server_id ?? "";
+    message.action = object.action ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpAuthorizationDTO(): McpAuthorizationDTO {
+  return { authorization_url: "" };
+}
+
+export const McpAuthorizationDTO: MessageFns<McpAuthorizationDTO> = {
+  fromJSON(object: any): McpAuthorizationDTO {
+    return { authorization_url: isSet(object.authorization_url) ? globalThis.String(object.authorization_url) : "" };
+  },
+
+  toJSON(message: McpAuthorizationDTO): unknown {
+    const obj: any = {};
+    if (message.authorization_url !== "") {
+      obj.authorization_url = message.authorization_url;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpAuthorizationDTO>, I>>(base?: I): McpAuthorizationDTO {
+    return McpAuthorizationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpAuthorizationDTO>, I>>(object: I): McpAuthorizationDTO {
+    const message = createBaseMcpAuthorizationDTO();
+    message.authorization_url = object.authorization_url ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpAuthorizationCallbackDTO(): McpAuthorizationCallbackDTO {
+  return { code: "", state: "" };
+}
+
+export const McpAuthorizationCallbackDTO: MessageFns<McpAuthorizationCallbackDTO> = {
+  fromJSON(object: any): McpAuthorizationCallbackDTO {
+    return {
+      code: isSet(object.code) ? globalThis.String(object.code) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+    };
+  },
+
+  toJSON(message: McpAuthorizationCallbackDTO): unknown {
+    const obj: any = {};
+    if (message.code !== "") {
+      obj.code = message.code;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpAuthorizationCallbackDTO>, I>>(base?: I): McpAuthorizationCallbackDTO {
+    return McpAuthorizationCallbackDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpAuthorizationCallbackDTO>, I>>(object: I): McpAuthorizationCallbackDTO {
+    const message = createBaseMcpAuthorizationCallbackDTO();
+    message.code = object.code ?? "";
+    message.state = object.state ?? "";
     return message;
   },
 };

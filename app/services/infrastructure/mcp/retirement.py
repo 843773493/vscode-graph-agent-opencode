@@ -62,6 +62,10 @@ class McpConnectionRetirement:
             if retired.runtime.server.server_id == server_id:
                 self._retired[connection_ref] = replace(retired, admits_sealed=False)
 
+    def runtimes_for_server(self, server_id: str) -> tuple[McpServerRuntime, ...]:
+        with self._lock:
+            return tuple(item.runtime for item in self._retired.values() if item.runtime.server.server_id == server_id)
+
     def clear_closed(self) -> None:
         with self._lock:
             if any(not retired.runtime.scope.is_closed for retired in self._retired.values()):

@@ -47,6 +47,7 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
@@ -113,6 +114,7 @@ class _AppContainerProtocol(Protocol):
     session_communication_service: SessionCommunicationService
     team_service: TeamCoordinationService
     mcp_catalog_owner: McpCatalogOwner
+    mcp_connection_service: McpConnectionService
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
 
@@ -339,6 +341,10 @@ def get_tool_test_service(request: Request) -> ToolTestService:
 
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
     return _require_service(request, "mcp_catalog_owner", McpCatalogOwner, "McpCatalogOwner 尚未在应用启动阶段初始化")
+
+
+def get_mcp_connection_service(request: Request) -> McpConnectionService:
+    return _require_service(request, "mcp_connection_service", McpConnectionService, "MCP 连接操作服务尚未初始化")
 
 
 def get_workspace_service(request: Request) -> WorkspaceService:

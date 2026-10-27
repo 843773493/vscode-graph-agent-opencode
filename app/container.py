@@ -124,6 +124,7 @@ from app.services.infrastructure.gateway_session_context_client import (
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.fork import (
@@ -413,6 +414,7 @@ class AppContainer:
     rollout_checkpoint_runtime: RolloutCheckpointRuntime
     checkpointer: RolloutCheckpointSaver
     mcp_catalog_owner: McpCatalogOwner
+    mcp_connection_service: McpConnectionService
     pending_request_store: PendingRequestStore
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
@@ -677,6 +679,9 @@ def _build_app_container(
         publication_lock=config_service.publication_lock,
     )
     config_service.set_mcp_cleanup_provider(mcp_catalog_owner.cleanup_diagnostics)
+    mcp_connection_service = McpConnectionService(
+        owner=mcp_catalog_owner, store=workspace_activity_service.store, workspace_id=workspace_id,
+    )
     message_service = MessageService(
         main_thread_resolver=session_path_resolver.main_thread_id,
         checkpointer=checkpointer,
@@ -1165,6 +1170,7 @@ def _build_app_container(
         checkpointer=checkpointer,
         mcp_catalog_owner=mcp_catalog_owner,
         pending_request_store=pending_request_store,
+        mcp_connection_service=mcp_connection_service,
         workspace_activity_service=workspace_activity_service,
         message_stream_store=message_stream_store,
     )
