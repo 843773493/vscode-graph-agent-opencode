@@ -44,7 +44,7 @@ def browser_runner():
         artifacts.mkdir()
         command = ["bun", "tests/integration/clients/web/mcp_connection_authorization.mjs"]
         result = await asyncio.to_thread(subprocess.run, command,
-            cwd=case.context.project_root, timeout=130, check=False, capture_output=True, text=True,
+            cwd=case.context.project_root, timeout=400 if mode == "errors" else 130, check=False, capture_output=True, text=True,
             env={**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                  "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
                      "baseUrl": base_url, "sessionTitle": session_title, "mode": mode,
@@ -53,7 +53,7 @@ def browser_runner():
         (artifacts / "browser.raw").write_text(result.stdout + result.stderr, encoding="utf-8")
         (artifacts / "receipt.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}))
         assert result.returncode == 0, (artifacts / "browser.raw").read_text()
-        filename = "authorization-result.json" if mode == "authorize" else "execution-result.json"
+        filename = {"authorize": "authorization-result.json", "execute": "execution-result.json", "errors": "connection-errors-result.json"}[mode]
         return json.loads((artifacts / filename).read_text())
     return run
 

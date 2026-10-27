@@ -39,10 +39,12 @@ class OAuthEndpoint:
     issuer_matches: bool = True
     pkce_supported: bool = True
     fail_token: bool = False
+    deny_next_authorization: bool = False
     expires_in: int = 3600
     registrations: int = 0
     exchanges: int = 0
     refreshes: int = 0
+    denials: int = 0
     metadata: OAuthClientMetadata | None = None
     codes: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     authorizations: list[dict[str, str]] = field(default_factory=list, repr=False)
@@ -86,6 +88,12 @@ class OAuthEndpoint:
                 or self.metadata is None
                 or values.get("redirect_uri") not in [str(uri) for uri in self.metadata.redirect_uris or []]):
             return Response(status_code=400)
+        if self.deny_next_authorization:
+            self.deny_next_authorization = False
+            self.denials += 1
+            return RedirectResponse(values["redirect_uri"] + "?" + urlencode({
+                "error": "access_denied", "state": values["state"],
+            }), status_code=303)
         code = secrets.token_urlsafe(24)
         self.codes[code] = values
         self.authorizations.append({**values, "code": code})

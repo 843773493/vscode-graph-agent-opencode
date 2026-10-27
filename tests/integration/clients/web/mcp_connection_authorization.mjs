@@ -72,7 +72,68 @@ try {
     assert.equal(response.headers()["x-request-id"], body.request_id);
     return body.data.job_id;
   }
-  if (fixture.mode === "authorize") {
+  if (fixture.mode === "errors") {
+    if (await page.getByRole("button", { name: "切换底部面板", exact: true }).getAttribute("aria-pressed") !== "true") {
+      await page.getByRole("button", { name: "切换底部面板", exact: true }).click();
+    }
+    await page.getByRole("tab", { name: "MCP 连接", exact: true }).click();
+    const panel = page.getByTestId("mcp-connections-panel");
+    const secure = panel.getByRole("region", { name: "MCP Server secure", exact: true });
+    const sibling = panel.getByRole("region", { name: "MCP Server schema", exact: true });
+    await sibling.getByText("连接可用", { exact: true }).waitFor();
+    const operations = [];
+    async function submit(name) {
+      const accepted = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/mcp/connection-operations" && response.request().method() === "POST");
+      await secure.getByRole("button", { name, exact: true }).click();
+      const response = await accepted;
+      assert.equal(response.status(), 200);
+      const body = await response.json();
+      assert.equal(response.headers()["x-request-id"], body.request_id);
+      operations.push(body.data);
+      return body.data;
+    }
+    async function authorize() {
+      const opened = page.waitForEvent("popup");
+      await secure.getByRole("button", { name: "打开授权页面", exact: true }).click();
+      const popup = await opened;
+      if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 30000 });
+    }
+    await submit("连接");
+    await authorize();
+    await panel.getByRole("alert").filter({ hasText: "授权已拒绝" }).waitFor();
+    assert.doesNotMatch(await secure.innerText(), /连接可用/);
+    assert.equal(callbackPosts.length, 0);
+    assert.equal(callbacks.length, 1);
+    assert.equal(callbacks[0].searchParams.get("error"), "access_denied");
+    await secure.getByRole("button", { name: "取消连接操作", exact: true }).click();
+    await secure.getByRole("status").filter({ hasText: "连接：已取消" }).waitFor();
+
+    // 使用真实产品300秒期限，不改时钟或持久记录；页面通过原owner轮询取得过期事实。
+    const expiring = await submit("连接");
+    assert(Math.abs(expiring.deadline - expiring.created_at - 300) < 1);
+    await secure.getByRole("alert").filter({ hasText: "deadline_exceeded" }).waitFor({ timeout: 330000 });
+    const expiryObservedAt = Date.now() / 1000;
+    assert(expiryObservedAt >= expiring.deadline);
+    await secure.getByRole("status").filter({ hasText: "连接：已过期" }).waitFor();
+    assert.doesNotMatch(await secure.innerText(), /连接可用/);
+
+    await submit("连接");
+    await authorize();
+    await secure.getByText("连接可用", { exact: true }).waitFor({ timeout: 30000 });
+    await submit("断开");
+    await secure.getByRole("status").filter({ hasText: "断开：操作已完成" }).waitFor();
+    assert.doesNotMatch(await secure.innerText(), /连接可用/);
+    assert.equal(await secure.getByRole("button", { name: "断开", exact: true }).isDisabled(), true);
+    assert.equal(await secure.getByRole("button", { name: "连接", exact: true }).isEnabled(), true);
+    await sibling.getByText("连接可用", { exact: true }).waitFor();
+    assert.equal(callbacks.length, 2);
+    assert.equal(callbackPosts.length, 1);
+    await writeFile(path.join(artifacts, "connection-errors-result.json"), JSON.stringify({
+      operationIds: operations.map((operation) => operation.operation_id),
+      deadline: expiring.deadline, expiryObservedAt, denialVisible: true, expiryVisible: true,
+      disconnectVerified: true, siblingReady: true, noPageErrors: errors.length === 0,
+    }, null, 2));
+  } else if (fixture.mode === "authorize") {
     const jobId = await send("发现 secure 工具并发起工作区连接，等待用户授权。");
     const managementPromise = page.waitForEvent("popup");
     await page.getByRole("link", { name: "查看此工作区的 MCP 授权与连接状态" }).first().click({ timeout: 60000 });

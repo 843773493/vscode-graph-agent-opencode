@@ -25,6 +25,8 @@
 
 - `integration-web-mcp-remote-authorization` 复用上述浏览器交互与协议资产，经三个独立工作区、Gateway 和真实 localhost SSH，分别核对 turn/model_call 下 A 页面回调到 B、唯一远端调用、请求 hash、凭据归属及 A/C 操作隔离，固定480秒／4GiB。远程投影只发送 Gateway 选择头，本地目标仍核对 Backend UUID；不代表真实外部 Provider、跨执行持续持有或完整错误展示验收。
 
+- `integration-web-mcp-connection-errors` 复用同一 Chromium、Gateway、OAuth/MCP 与 model_stream 装具，从底部面板实际产生拒绝、取消、原300秒期限到期、重新授权和断开；按精确操作ID核对历史和原资源账本，不预填状态或缩短业务期限，固定480秒／4GiB。不代表自动continuation、外部Provider或进程重启验收。
+
 - `integration-tool-discovery-policy` 通过真实 Gateway、Agent 和 HTTP MCP 核对首次发布前已禁用目标的身份、硬隐藏、配对拒绝、远端零执行及封存 request_hash，固定160秒／4GiB。
 
 - `integration-mcp-connection-wait` 经真实 Gateway、Agent、OAuth/MCP 与 model_stream 验证原配对等待、无新用户 Turn 的独立 continuation、两种激活边界及 mailbox／dispatcher 崩溃窗口，固定600秒／4GiB；不替代 Web 授权交互或真实 Provider 验收。

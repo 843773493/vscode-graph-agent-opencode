@@ -68,7 +68,7 @@
 - [x] 8.1 在主窗口会话流程展示产品授权入口、等待／失败／激活状态；工作区连接管理使用底部面板或既有工作区设置，状态来自后端完整对象。
 - [x] 8.2 完成真实前端类型检查及 `bun run --cwd src/clients/web build`；只修改 Web 客户端，不预写 Electron／移动适配。
 - [x] 8.3 沿实际 Gateway、目标工作区和页面初始化链路执行浏览器操作，验证任务搜索→连接授权→完整定义→真实 MCP 执行；授权需测试 OAuth/MCP Server 实际接收请求，不能只 mock helper 或检查健康接口。
-- [ ] 8.4 验证 model_call 与 turn 下均能通过有效 continuation 和 after_turn 独立内部执行自动恢复，新执行冻结新目录且原 Turn 不变，无需用户再发继续；验证未过准入时的等待事实、拒绝／过期／断开错误可见、原 thread 恢复和远程 owner 回调可达性，缺少环境时记录具体未验证范围。
+- [x] 8.4 验证 model_call 与 turn 下均能通过有效 continuation 和 after_turn 独立内部执行自动恢复，新执行冻结新目录且原 Turn 不变，无需用户再发继续；验证未过准入时的等待事实、拒绝／过期／断开错误可见、原 thread 恢复和远程 owner 回调可达性，缺少环境时记录具体未验证范围。
 - [ ] 8.5 验证同轮多个信封调用各自确认、取消和结果配对；记录完整定义输入 token、首次调用成功率、发现轮次和真实 Provider 可用时的 cached tokens，不把 mock 当缓存收益证据。
 
 ## 9. 回归证据与交付检查
@@ -335,3 +335,12 @@
 - 原测试驱动错误地给远程投影发送本地 Backend UUID 头，001在创建会话时被真实 Gateway 明确拒绝400，尚未执行授权。驱动现在遵守现有产品请求头合同，并分别断言远程回调无该头、本地回调保持精确 UUID；未放宽 Gateway 验证或修改产品行为。相同驱动的 `local-header-regression-008` 为1 passed／98.08秒、退出0。
 - 新测试 Pyright零诊断、Ruff通过；首次类型命令因缺少bunx未启动；改用既有uv临时Pyright入口，收窄两处JSON配置类型后完成。运行均带进程外期限和4GiB保护，源码前后相同；准确命令、tree、指纹、raw、退出码及Web资产指纹保留在 `out/tests/temp/mcp-remote-authorization/artifacts/`，正式输出在各完整archive的同名测试路径。新增矩阵保护480秒；两种参数分别执行，不宣称额外完整矩阵重跑。未改Web源码或协议，复用此前已通过的Web类型／构建结果。
 - 进度保持42/52。8.4的完整错误展示组合、4.2持续资源持有、4.6剩余综合门与8.5真实Provider指标仍待完成；此处远程场景通过第二次用户消息验证调用，不将它冒充自动continuation。自动after_turn、原child冷恢复和原期限复用第6节未变产品证据；团队／协作TODO不变。
+
+
+### 8.4 授权错误与原期限的页面验收（2026-10-27）
+
+- 复用原 Chromium 脚本、Gateway/Backend 装具、同一 OAuth/MCP handler 和 model_stream；OAuth 资产仅补一次标准 access_denied 重定向。页面从工作区底部面板真实创建连接，验证拒绝提示且不提交空code；显式取消后再次连接，等待原产品300秒期限，再重新授权和断开。四个精确operation ID均由页面POST产生，历史逐ID回读，未向数据库、时钟或检查点预填状态。
+- 完整 tree `0d20c1ad2a73ba196def1435b892f2b2972409ff` 的正式 `integration-web-mcp-connection-errors`（`errors-matrix-005`）为1 passed／348.14秒、退出0；原期限到达后页面显示expired及deadline_exceeded，后续连接有新身份且只进行一次成功token交换，零业务工具调用。最终断开由原资源owner核实stopped，启动时已存在的兄弟连接仍running，页面无pageerror。真实期限和观测延迟见正式产物`error-owner.json`。
+- 004已完成拒绝/取消并进入真实期限等待；源码复查发现新测试误将“每Server最新操作”列表当历史列表，因此主动SIGINT中断，实际退出130，保留原件。最终按页面取得的ID逐条读取现有详情API，另核对最新列表仍只返回最新一项，未改变或放宽产品API。新测试额外核唯一资源账本，避免仅凭页面文字或操作接收回执宣称关闭。
+- 001三文件Pyright零诊断、Ruff与Bun脚本解析通过；005相对001仅修改新测试和矩阵注册，最终006 Pyright/007 Ruff均零诊断，复用未变OAuth资产与脚本检查。正式套件固定480秒/4GiB，外层540秒；准确命令、tree、源码前后指纹、raw、退出码与中断原件在`out/tests/temp/mcp-web-errors/artifacts/`，正式工作区和输出保留在各archive同名测试路径。未改产品Web源码/协议，复用此前Web类型及构建结果。
+- 结合第6节turn/model_call自动after_turn、原child冷重建、原期限与准入，以及上方三节点联邦Web回调证据关闭8.4，当前43/52。4.2持续持有、4.6剩余综合门、8.5真实Provider指标和第9节最终交付检查继续未完成；团队/协作TODO不变。
