@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import replace
-from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
@@ -261,10 +263,12 @@ async def test_actual_output_middleware_keeps_schema_reference_complete(discover
     tool, _catalog, _policies, _frozen, _read = discovery_case
     _saver, session, _connection, _accepted = registry_db
     args = {"tool_ids": ["huge"], "max_response_bytes": 262144}
-    call = {"type": "tool_call", "id": "large-discovery", "name": tool.name, "args": args}
+    call = ToolCall(type="tool_call", id="large-discovery", name=tool.name, args=args)
     message = await tool.ainvoke(call)
     middleware = ToolOutputMiddleware(session_id=session, store=discovery_store)
-    bounded = await middleware.awrap_tool_call(SimpleNamespace(tool_call=call), lambda _request: tool.ainvoke(call))
+    request = ToolCallRequest(tool_call=call, tool=tool, state={}, runtime=Mock())
+    bounded = await middleware.awrap_tool_call(request, lambda _request: tool.ainvoke(call))
+    assert isinstance(bounded, ToolMessage) and isinstance(bounded.content, str)
     assert bounded == message
     assert len(bounded.content.encode()) <= discovery_store.inline_byte_limit
     entry, = json.loads(bounded.content)["results"]
@@ -273,17 +277,42 @@ async def test_actual_output_middleware_keeps_schema_reference_complete(discover
     assert hashlib.sha256(original).hexdigest() == entry["content_sha256"]
 
 
-async def test_materialization_failure_is_paired_and_never_forges_reference(discovery_case, discovery_tool_factory):
-    _tool, catalog, policies, _frozen, _read = discovery_case
+@pytest.mark.parametrize("failure", [
+    PermissionError(13, "拒绝写入", "/private/workspace/tool-results/definition.json"),
+    OSError(22, "写入失败", r"C:\private\workspace\tool-results\definition.json"),
+    OSError(5, "写入失败", r"\\target\private\workspace\tool-results\definition.json"),
+    RuntimeError("正文冲突: /private/workspace/tool-results/definition.json"),
+], ids=["posix", "windows-drive", "windows-unc", "body-conflict"])
+async def test_materialization_failure_is_paired_and_never_forges_reference(
+    discovery_case, discovery_tool_factory, discovery_store, registry_db, caplog, failure,
+):
+    recovered_tool, catalog, policies, frozen, read = discovery_case
 
     async def failed(_definition, _entry):
-        raise PermissionError("controlled write failure")
+        raise failure
 
     tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda _: policies, definition_writer=failed)
-    message = await tool.ainvoke({"type": "tool_call", "id": "write-failure", "name": tool.name,
-                                 "args": {"tool_ids": ["huge"], "max_response_bytes": 4096}})
+    call = {"type": "tool_call", "id": "write-failure", "name": tool.name,
+            "args": {"tool_ids": ["huge"], "max_response_bytes": 4096}}
+    with caplog.at_level(logging.ERROR, logger="app.services.infrastructure.mcp.tool_search"):
+        message = await tool.ainvoke(call)
     assert message.tool_call_id == "write-failure" and message.status == "error"
-    assert "definition-materialization-failed" in message.content and "schema_ref" not in message.content
+    assert message.content == f"definition-materialization-failed: error_type={type(failure).__name__}"
+    assert message.artifact is None
+    diagnostic, = [record for record in caplog.records if record.name == "app.services.infrastructure.mcp.tool_search"]
+    assert diagnostic.exc_info is not None and diagnostic.exc_info[1] is failure
+    assert str(failure) in caplog.text
+    # 显式重试复用原冻结正文，失败不生成可读取引用或改写目录。
+    assert tool_catalog_from_activation(frozen, read) == catalog
+    recovered = await recovered_tool.ainvoke(call)
+    assert recovered.tool_call_id == "write-failure" and recovered.status == "success"
+    entry, = json.loads(recovered.content)["results"]
+    assert entry["schema_state"] == "needs_read"
+    _saver, session, _connection, _accepted = registry_db
+    stored = discovery_store.read(session, entry["read_path"], entry["byte_count"]).data
+    assert hashlib.sha256(stored).hexdigest() == entry["content_sha256"]
+    definition, = [definition for definition in catalog.definitions if definition.metadata.tool_id == "huge"]
+    assert json.loads(stored)["input_schema"] == definition.input_schema
 
 
 async def test_reference_exceeding_effective_policy_budget_is_an_explicit_error(discovery_case, discovery_tool_factory):

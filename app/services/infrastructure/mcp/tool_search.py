@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping
@@ -21,6 +22,8 @@ from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolDefinition,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputReference
+
+logger = logging.getLogger(__name__)
 
 
 class ToolSearchConflict(ValueError):
@@ -169,7 +172,10 @@ async def search_tool_catalog(
                 try:
                     reference = await materialize(definition, entry)
                 except (OSError, RuntimeError) as error:
-                    raise ToolSearchStorageError(f"definition-materialization-failed: {error}") from error
+                    logger.exception("工具定义物化失败: tool_id=%s", tool_id)
+                    raise ToolSearchStorageError(
+                        f"definition-materialization-failed: error_type={type(error).__name__}"
+                    ) from error
                 entry = {key: value for key, value in entry.items() if key != "input_schema"}
                 entry.update({
                     "schema_state": "needs_read", "schema_ref": reference.path,

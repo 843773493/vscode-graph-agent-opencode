@@ -80,6 +80,12 @@
 - [ ] 9.5 对照全部新增／修改规格场景核验并运行 OpenSpec 严格校验；仅在实际实现和验收完成时勾选任务，不把规划修订或结构校验当作功能完成。
 - [ ] 9.6 规格同步／归档前确认 unify-product-runtime-logging 已先同步主规格并归档；重新读取最新主规格，核对两个共享 MODIFIED Requirement 保留 Gateway logging.runtime、仅日志热应用及混合 Gateway 候选场景，再同步／归档本变更。前置未完成或正文漂移时先修订 delta，禁止逆序覆盖，不改动日志 change 的文件。
 
+### 3.3／9.4 定义物化错误边界（2026-10-27）
+
+- 大定义物化仍走原 ToolOutputStore；原错误边界只公开稳定失败码和异常类型，完整异常及 cause 留在具名诊断日志，不复制自由正文、不做路径文本替换，也不自动重试或伪造引用。POSIX、Windows 盘符、UNC 和正文冲突四种反例在完整旧实现均失败；新实现核配对 tool-call、无 artifact、诊断原异常、原冻结目录不变，以及显式重试后的完整定义与 hash。
+- 首轮相关发现、恢复及真实 stdio schema 回归为58 passed／1 failed／98.11秒；失败是既有中间件测试缺少 request.state，在完整HEAD上1 failed／4.07秒复现。该装具迁到正式 ToolCallRequest，不改正文断言；最终完整搜索文件26 passed／29.01秒。生产实现与首轮相同，只有该测试及导入变化；两轮范围重叠，不累计通过数。
+- 最终固定tree `1a8a65dd5663420dcda5ed765d51e84586560886`、4669文件指纹一致，无进程组残留；Ruff与compileall通过。Pyright基线7项、最终2项，按文件／最小AST归属／完整消息比较无新增，修正装具消除5项旧诊断。准确命令、raw、退出码及复用核验在 `out/tests/temp/mcp-definition-storage-errors/artifacts/verification-016.json`。这是冻结目录／工具入口与故障回调验证，未新增Gateway、Web、Windows或完整进程恢复验收；4.2／4.6／9.x整体继续未勾，团队协作TODO不变。
+
 ### 8.5 真实 Provider 发现及并行参数保真（2026-10-27）
 
 - 沿真实 Gateway 初始化、Session／消息入口及 Agent，以既有 backup_3 Provider 自主搜索受控 MCP 并读取完整定义，两次执行共一次搜索、四次实际信封调用，均首次成功。两轮各有同一模型响应中的两个调用；原 MCP handler 的四份回执、冷检查点配对、五次真实 Provider 请求 preimage／hash、固定 ToolSet 和 epoch 均核对通过。受控 MCP 资产不冒充外部服务 E2E；逐调用 HITL、拒绝、编辑、取消与资格结算复用本 change 已有审批产品证据，不以真实模型成功样本替代那些确定性场景。

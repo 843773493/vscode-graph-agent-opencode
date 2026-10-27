@@ -17,6 +17,8 @@
 
 ## 2. 三层分离与不变量
 
+2026-10-27 工具发现物化失败边界补验：原 `search_tools` 不再将底层异常正文复制进模型可见错误，稳定失败码、异常类型、配对调用及诊断原异常保持。四类路径／正文冲突反例在旧实现均失败；最终搜索26项通过，相关恢复与真实stdio回归的58项通过证据按未变生产依赖复用，既有装具失败已在原HEAD复现并迁齐。固定源码、静态基线、准确命令与原始输出见 `out/tests/temp/mcp-definition-storage-errors/artifacts/verification-016.json` 及工具发现change同日3.3／9.4收据；未验证Gateway／Web／Windows或全部持久化与模型组装出口，2.2／7.2继续未勾。
+
 - [x] 2.1 定义三层职责的类型与持久化边界：`ResourceIdentity`（不透明、稳定、revision-free、不依赖激活工作区、持久化）、`URI`（可解析、持久化、允许悬空、禁 revision/hash）、`real path`（资源访问只在原生 owner 的最终点临时使用，不进模型、普通 DTO、解析结果或跨 Gateway 资源投影）；物理 workspace root 按多工作区 change 的唯一 Gateway binding 持久化，未注册目录根只按本 owner 的具名原生目录根绑定持久化。
   - 2026-10-20 类型入口闭包：实际 Registry 的 derivation descriptor/snapshot、资源依赖和来源 lineage 身份复用既有 validate_resource_identity，路径/URI/credential 形态在登记或发布前明确拒绝，capture/current/last_valid 不变；不新增身份规则、parser 或兼容表示，保留 namespace ID、独立 revision 与内部聚合必填 null URI。resource-identity-ingress-unit-001 为432 passed/3.25s（含45个身份负例与4个合法身份跨revision场景），static-001 两文件Ruff exit0；正式matrix resource-identity-ingress-aggregate-001 为2 passed/28.38s，真实 factory→Registry→execution/model-call→seal→SQLite→cold-read/fork 在两种Provider均保留绑定、null和原hash，删源后目标仍独立可读。独立限定复核确认原生产类型缺口已闭合。结合既有2.3/2.4/2.5及8.6的身份/解析结果/唯一原生根持久化证据，本项类型和职责边界完成；全部普通响应/业务记录审计仍由2.2/7.2承担，不据此宣称其完成。原始命令、源码前后指纹、输出与退出码在 out/tests/temp/openspec_takeover/artifacts/runs/resource-identity-ingress-*。
 - [ ] 2.2 落实 **real path 不变量**的可机械检查：资源响应、普通响应 DTO、解析结果、联邦资源投影、业务持久化记录或系统生成的模型资源引用出现 real path 即为缺陷；具名的工作区/原生目录 root binding 以及两个新 requirement 登记的 Gateway 原始诊断日志/Browser 页面 URL 是限定例外，原生目录选择/注册及普通文件原生路径是具名请求输入边界，均不扩张输出许可；给出序列化/落盘/模型组装检查点与显式失败行为，禁止用脱敏或截断静默掩盖。
