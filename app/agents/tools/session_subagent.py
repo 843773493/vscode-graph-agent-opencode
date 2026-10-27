@@ -26,7 +26,7 @@ def create_session_subagent_tool(
         "task",
         description=(
             "为复杂、可独立执行的工作在当前会话内创建一个持久化 child thread。"
-            "默认空历史；context.mode=context_fork 继承当前 Thread 最近完成的安全上下文。"
+            "默认空历史；context.mode=last_completed_turn_fork 继承当前 Thread 最近完成的安全上下文。"
             "本工具返回 child_thread_id 与真实委派 admission 状态，"
             "结果稍后由后端自动回报父 Thread。当后端未装配真实 "
             "thread binder 时本工具直接报错（fail closed），不会创建无法执行 "

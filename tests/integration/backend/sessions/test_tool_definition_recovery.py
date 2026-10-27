@@ -97,11 +97,11 @@ async def test_discovered_definition_survives_real_compaction_cold_read_and_fork
     await runner._complete_job(case, session, thread, timeout_seconds=25)
     assert len(tuple(definition_source_values(case.model_dispatches[-1].snapshot))) == 1
     forks = case.runner.container.session_context_fork_service
-    point = await forks.source_point(session_id=session, thread_id=thread, mode="context_fork")
+    point = await forks.source_point(session_id=session, thread_id=thread, mode="last_completed_turn_fork")
     request = SessionForkRequest(
         idempotency_key="discovered-definition-fork", source_uri=point.source_uri,
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-        mode="context_fork", creation_kind="new_child_thread", target_container_uri=point.child_container_uri,
+        mode="last_completed_turn_fork", creation_kind="new_child_thread", target_container_uri=point.child_container_uri,
     )
     deadline = fork_deadlines.for_operation(
         target=f"{case.runner.container.workspace_service.workspace_id}/{request.target_container_uri}",

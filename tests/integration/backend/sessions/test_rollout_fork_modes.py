@@ -817,7 +817,7 @@ async def test_direct_service_fork_completes_deadline_after_durable_result(
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
     request = await _fork_request(
-        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+        context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork",
     )
 
     class RecordingDeadline:
@@ -2195,7 +2195,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         fork_context,
         source.session_id,
         creation_kind="new_session_main",
-        mode="context_fork",
+        mode="last_completed_turn_fork",
         title="typed observation cold target",
     )
     successful_result = await fork_context.forks.fork(successful_request)
@@ -2333,7 +2333,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         fork_context,
         source.session_id,
         creation_kind="new_session_main",
-        mode="context_fork",
+        mode="last_completed_turn_fork",
         title="tampered typed observation target",
     )
     assert invalid_request.idempotency_key != successful_request.idempotency_key
@@ -2387,7 +2387,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("local_override", [False, True])
 async def test_fork_first_provider_recompiles_typed_root_without_rewriting_imports(
     fork_context: ForkIntegrationContext, fork_provider_prepare,
@@ -2611,7 +2611,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork"])
 @pytest.mark.parametrize("failure", ["invalid_json", "body_tamper", "missing_body"])
 async def test_prefix_selected_required_detail_rejects_corruption_before_publication(
     fork_context: ForkIntegrationContext, fork_provider_prepare,
@@ -2707,7 +2707,7 @@ async def test_prefix_selected_required_detail_rejects_corruption_before_publica
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 async def test_public_fork_modes_copy_only_explicit_portable_debug_configurations(
     fork_provider_prepare, fork_context: ForkIntegrationContext,
@@ -2890,7 +2890,7 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_all_fork_modes_preserve_independent_original_history(
     fork_provider_prepare, fork_context: ForkIntegrationContext, mode: SessionForkMode,
     monkeypatch: pytest.MonkeyPatch,
@@ -2938,7 +2938,7 @@ async def test_all_fork_modes_preserve_independent_original_history(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_successor_fork_keeps_original_a_and_b_history_after_both_sources_are_deleted(
     fork_context: ForkIntegrationContext, fork_provider_prepare, mode: SessionForkMode,
 ) -> None:
@@ -3449,7 +3449,7 @@ async def test_stale_fork_anchor_is_rejected_before_target_creation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("materialized", [False, True])
 @pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
 async def test_empty_rollout_forks_without_execution(
@@ -3929,7 +3929,7 @@ async def test_view_prefix_click_keeps_exact_completed_turn_root_or_middle_item(
 @pytest.mark.parametrize(("compaction_order", "mode"), [
     ("after_provider", "view_prefix_fork"),
     ("before_provider", "view_prefix_fork"),
-    ("before_provider", "context_fork"),
+    ("before_provider", "last_completed_turn_fork"),
 ])
 async def test_compaction_fork_keeps_only_required_body_backing(
     fork_context: ForkIntegrationContext, fork_provider_prepare,
@@ -4257,7 +4257,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork"])
 async def test_fork_rejects_orphan_tool_result_before_publication(
     fork_context: ForkIntegrationContext, fork_provider_prepare, mode: SessionForkMode,
 ) -> None:
@@ -4392,7 +4392,7 @@ async def test_default_fork_does_not_materialize_running_tail(
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
 
-    child = (await fork_context.forks.fork(await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="context_fork"))).session
+    child = (await fork_context.forks.fork(await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork"))).session
     restored = await _get_tuple(fork_context, child.session_id)
 
     assert restored is not None
@@ -4441,7 +4441,7 @@ async def test_context_fork_turn_id_resolves_latest_active_lineage_view(
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
 
-    child = (await fork_context.forks.fork(await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="context_fork", turn_id="turn-1"))).session
+    child = (await fork_context.forks.fork(await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork", turn_id="turn-1"))).session
     restored = await _get_tuple(fork_context, child.session_id)
 
     assert restored is not None
@@ -4649,7 +4649,7 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
     with pytest.raises(ValueError, match="fork_source_not_completed"):
         await fork_context.forks.source_point(
             session_id=source.session_id, source_view_id=display.source_view_id,
-            source_view_revision=display.source_view_revision, mode="context_fork",
+            source_view_revision=display.source_view_revision, mode="last_completed_turn_fork",
         )
     point = await fork_context.forks.source_point(
         session_id=source.session_id, source_view_id=display.source_view_id,
@@ -4780,7 +4780,7 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
-    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork", relationship="pinned", target_container_uri=source.uri)
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork", relationship="pinned", target_container_uri=source.uri)
     catalog = context.sessions.path_resolver.catalog_store
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
@@ -5741,7 +5741,7 @@ async def test_remote_source_preserves_default_thread_and_context_anchor(
     source = await _seed_source(source_context, fork_provider_prepare)
     source_main_thread_id = source_context.sessions.path_resolver.main_thread_id(source.session_id)
     selected = await _fork_request(
-        source_context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+        source_context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork",
     )
     assert selected.anchor_item_id is not None
     target, transport = remote_fork_target
@@ -6586,7 +6586,7 @@ async def test_production_lifespan_recovers_unpublished_fork(
         source_messages = await acheckpoint_messages(context.saver, source_checkpoint)
     assert [message.type for message in source_messages] == ["human", "ai"]
     assert [message.content for message in source_messages] == ["问题一", [{"type": "text", "text": "回答一"}]]
-    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork", relationship="pinned")
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork", relationship="pinned")
     operation_deadlines: list[ForkOperationDeadline] = []
     for_operation = ForkDeadlineRegistry.for_operation
 
@@ -6691,7 +6691,7 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
     request_token = set_current_request_id("qualified-local-fork-preparation")
     try:
         request = await _fork_request(
-            context, source.session_id, creation_kind=creation_kind, mode="context_fork",
+            context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork",
             target_container_uri=(
                 workspace_session_inventory_uri(
                     source.workspace_id, gateway_authority="gateway_bc453186347b952303da1c0634d46150",
@@ -6846,11 +6846,11 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
         scope="workspace", scope_id=source.workspace_id, kind="session", tail_segments=(parent.session_id,),
     ) if creation_kind == "new_child_thread" else None)
     partial_request = await _fork_request(
-        context, source.session_id, creation_kind=creation_kind, mode="context_fork",
+        context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork",
         relationship="pinned", target_container_uri=target_uri,
     )
     complete_request = await _fork_request(
-        context, source.session_id, creation_kind=creation_kind, mode="context_fork", target_container_uri=target_uri,
+        context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork", target_container_uri=target_uri,
     )
     partial_key = context.forks._creation_key(partial_request.idempotency_key)
     complete_key = context.forks._creation_key(complete_request.idempotency_key)
@@ -7013,7 +7013,7 @@ async def test_cancelled_source_copy_holds_read_lease_until_worker_finishes(
     source_root = storage.root(source.session_id, thread_id=thread_id)
     original_jsonl = (source_root / "rollout.jsonl").read_bytes()
     request = await _fork_request(
-        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+        context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork",
     )
     operation_key = context.forks._creation_key(request.idempotency_key)
     started = asyncio.Event()
@@ -7120,7 +7120,7 @@ async def test_local_capture_waiters_do_not_borrow_another_task_shared_hold(
     storage = context.saver._storage.storage
     original = storage.jsonl_path(source.session_id, thread_id=thread_id).read_bytes()
     request = await _fork_request(
-        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+        context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork",
     )
     operation_key = context.forks._creation_key(request.idempotency_key)
     reached, release_capture = asyncio.Event(), asyncio.Event()
@@ -7203,7 +7203,7 @@ async def test_fork_startup_rejects_corrupted_capture_proof(
     source_session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
     source_node = _main_thread_node(context, source.session_id)
     source_jsonl = (source_node / "rollout/rollout.jsonl").read_bytes()
-    request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")
+    request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")
     key = context.forks._creation_key(request.idempotency_key)
     phase = "copy.source.captured" if fault in {"committed_missing", "marker_hash"} else "copy.source.before_captured_cas"
     reached = asyncio.Event()
@@ -7445,7 +7445,7 @@ async def _seed_retry_tool_source(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork"])
 @pytest.mark.parametrize("reverse_membership", [False, True])
 async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
     fork_provider_prepare,
@@ -7554,7 +7554,7 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork"])
 async def test_completed_turn_fork_excludes_later_internal_input_header(
     fork_provider_prepare,
     production_fork_container: AppContainer,
@@ -7671,7 +7671,7 @@ async def test_completed_turn_fork_excludes_later_internal_input_header(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
     fork_provider_prepare,
     production_fork_container: AppContainer, mode: str,
@@ -7942,7 +7942,7 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_detached_fork_uses_frozen_lineage_after_source_deletion(
     fork_provider_prepare,
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch, mode: str,
@@ -7970,7 +7970,7 @@ async def test_detached_fork_uses_frozen_lineage_after_source_deletion(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_generation_fork_reuses_one_durable_target_after_source_deletion(
     fork_provider_prepare,
     production_fork_container: AppContainer,
@@ -8086,11 +8086,11 @@ async def test_live_fork_defaults_to_zero_attach(
     source = await _seed_source(context, fork_provider_prepare)
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     rid = resource["resource_id"]
-    point = await context.forks.source_point(session_id=source.session_id, mode="context_fork")
+    point = await context.forks.source_point(session_id=source.session_id, mode="last_completed_turn_fork")
     candidate = next(item for item in point.live_resources if item.resource_id == rid)
     assert candidate.model_dump(mode="json")["source_thread"] == resource["source_thread"]
     assert candidate.owner_revision == resource["owner_revision"] and candidate.kind == kind
-    request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")
+    request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")
     result = await context.forks.fork(request)
     current = await owner.get_resource(rid)
     assert current["thread_associations"] == resource["thread_associations"]
@@ -8113,7 +8113,7 @@ async def test_live_fork_explicit_attach_reuses_instance_and_frozen_retry(
     source = await _seed_source(context, fork_provider_prepare)
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     rid = resource["resource_id"]
-    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
+    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
     source_ref = owner._store.get(rid).source_thread
@@ -8160,7 +8160,7 @@ async def test_live_fork_source_delete_retains_committed_target_and_instance(
     external = live_resource_transport_factory(production_fork_container, kind)
     source = fork_execution_source
     _owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
-    request = (await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")).model_copy(
+    request = (await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
     result = await context.forks.fork(request)
@@ -8191,7 +8191,7 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
     source = await _seed_source(context, fork_provider_prepare)
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id,
         scope="thread" if fault == "thread_scope" else "workspace")
-    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork")
     choice = _fork_live_choice(resource)
     if fault == "stale_revision":
         await owner.command(resource["resource_id"], action="attach", expected_revision=resource["owner_revision"],
@@ -8237,7 +8237,7 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
         production_fork_container, kind, source.session_id, scope="thread",
     )
     request = (await _fork_request(
-        context, source.session_id, creation_kind="new_child_thread", mode="context_fork",
+        context, source.session_id, creation_kind="new_child_thread", mode="last_completed_turn_fork",
     )).model_copy(update={"resources": [_fork_live_choice(resource)]})
     session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
     control_path = session_node / "session-control.sqlite"
@@ -8286,7 +8286,7 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
     source = fork_execution_source
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     rid = resource["resource_id"]
-    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
+    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
     key = context.forks._creation_key(request.idempotency_key)
@@ -8387,7 +8387,7 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
     external = live_resource_transport_factory(production_fork_container, kind)
     source = fork_execution_source
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
-    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
+    request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
     async with main.lifespan(main.app), httpx.AsyncClient(
@@ -8395,7 +8395,7 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "live-fork-wire"},
     ) as client:
-        point = await client.get(f"/api/v1/sessions/{source.session_id}/fork-source-point", params={"mode": "context_fork"})
+        point = await client.get(f"/api/v1/sessions/{source.session_id}/fork-source-point", params={"mode": "last_completed_turn_fork"})
         assert point.status_code == 200, point.text
         candidate = next(item for item in point.json()["data"]["live_resources"] if item["resource_id"] == resource["resource_id"])
         assert candidate["kind"] == kind and candidate["source_thread"] == resource["source_thread"]
@@ -8537,7 +8537,7 @@ async def test_generation_implicit_latest_fork_replays_frozen_request_after_sour
     assert intent["request"] == request.model_dump(mode="json")
     assert intent["source_session_id"] == source.session_id
     assert intent["source_thread_id"] == _main_thread_id(context, source.session_id)
-    assert request.mode == "context_fork" and request.title == ""
+    assert request.mode == "last_completed_turn_fork" and request.title == ""
     assert request.source_view_id and request.source_view_revision >= 0 and request.anchor_item_id is not None
     assert "request_intent_json" not in json.loads((context.sessions.path_resolver.resolve_session_node(target.session_id)
                                                    / "session.json").read_text())
@@ -8567,7 +8567,7 @@ async def test_folder_move_keeps_context_fork_kind_across_restart(
     """真实 fork 发布后移动 folder，只改 catalog 父关系，重启保持来源与 manifest。"""
     context = _production_fork_context(production_fork_container)
     parent = await _seed_source(context, fork_provider_prepare)
-    child = (await context.forks.fork(await _fork_request(context, parent.session_id, creation_kind="new_session_main", title="上下文副本", mode="context_fork", target_container_uri=parent.uri, turn_id="turn-1"))).session
+    child = (await context.forks.fork(await _fork_request(context, parent.session_id, creation_kind="new_session_main", title="上下文副本", mode="last_completed_turn_fork", target_container_uri=parent.uri, turn_id="turn-1"))).session
     resolver = context.sessions.path_resolver
     manifest_path = resolver.resolve_session_node(child.session_id) / "session.json"
     manifest_before = manifest_path.read_bytes()
@@ -8627,7 +8627,7 @@ async def test_moving_parent_session_carries_complete_child_tree(
     """真实 fork 随父会话逻辑移动，物理节点、子关系与来源保持一致。"""
     context = _production_fork_context(production_fork_container)
     parent = await _seed_source(context, fork_provider_prepare)
-    child = (await context.forks.fork(await _fork_request(context, parent.session_id, creation_kind="new_session_main", title="Child", mode="context_fork", target_container_uri=parent.uri, turn_id="turn-1"))).session
+    child = (await context.forks.fork(await _fork_request(context, parent.session_id, creation_kind="new_session_main", title="Child", mode="last_completed_turn_fork", target_container_uri=parent.uri, turn_id="turn-1"))).session
     resolver = context.sessions.path_resolver
     child_path_before = resolver.resolve_session_node(child.session_id)
     manifest_before = (child_path_before / "session.json").read_bytes()
@@ -8660,7 +8660,7 @@ async def test_moving_parent_session_carries_complete_child_tree(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_fork_preserves_internal_admission_audit_and_target_reader_rejects(
     fork_provider_prepare,
     production_fork_container: AppContainer, mode: str,
@@ -9170,7 +9170,7 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_catalog_deleting_rejects_fork_before_local_fence_closes(
     fork_provider_prepare,
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch, mode: str,
@@ -9233,7 +9233,7 @@ async def test_source_deletion_before_pinned_claim_aborts_prepared_target(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("fault", ["completion_proof", "publish_parent_cas"])
 async def test_unpublished_fork_proof_or_publish_failure_releases_exact_retention(
     fork_provider_prepare,
@@ -9292,7 +9292,7 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
     assert [message.tool_call_id for message in source_messages if isinstance(message, ToolMessage)] == source_calls
     assert all("fork-source-body" in str(message.content) for message in source_messages if isinstance(message, ToolMessage))
     source_items = context.saver._storage.storage.read_items(source.session_id, source_owner.thread_id)
-    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork")
     capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def capture_then_delete(**kwargs: object):
@@ -9377,7 +9377,7 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("fault", ["lineage_digest", "lineage_members", "snapshot_hash"])
 async def test_fork_empty_activation_rejects_corruption_before_publication(
     fork_context: ForkIntegrationContext, fork_provider_prepare, mode: SessionForkMode, fault: str,
@@ -9474,7 +9474,7 @@ async def test_fork_empty_activation_rejects_corruption_before_publication(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("fault", ["missing_call", "null_assembly", "missing_assembly", "item_execution", "assembly_execution"])
 async def test_imported_fork_rejects_missing_or_misbound_model_call(
     fork_context: ForkIntegrationContext, fork_provider_prepare, mode: SessionForkMode, fault: str,
@@ -9541,7 +9541,7 @@ async def test_imported_fork_rejects_missing_or_misbound_model_call(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_fork_preserves_failed_call_retry_reusing_one_assembly(
     fork_context: ForkIntegrationContext, fork_provider_prepare, mode: SessionForkMode,
 ) -> None:
@@ -9658,7 +9658,7 @@ async def test_turn_finalize_keeps_each_provider_assembly_outcome_in_full_fork(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
     fork_provider_prepare,
     production_fork_container: AppContainer, mode: str, monkeypatch: pytest.MonkeyPatch,
@@ -9737,7 +9737,7 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
     assert head == (first_checkpoint.checkpoint["id"],)
     assert first_checkpoint.checkpoint["id"] != "cp-retry-final"
     await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
-    second_request = await _fork_request(context, first.session_id, creation_kind="new_session_main", mode="context_fork")
+    second_request = await _fork_request(context, first.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork")
     cutoff = next(ordinal for item_id, ordinal in expected_visible if item_id == second_request.anchor_item_id)
     expected_visible = [row for row in expected_visible if row[1] <= cutoff]
     with monkeypatch.context() as patch:

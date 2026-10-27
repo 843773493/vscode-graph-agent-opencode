@@ -314,7 +314,7 @@ class CheckpointForkOwner:
         thread_creation_record: ThreadCreationRecord | None = None,
         fork_id: str | None = None,
         materialization_id: str | None = None,
-        mode: str = "context_fork",
+        mode: str = "last_completed_turn_fork",
         anchor_mode: str = "inclusive",
         relationship: str = "detached",
         checkpoint_ns: str = "",

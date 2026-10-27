@@ -1319,7 +1319,7 @@ async def test_cross_domain_fork_import_does_not_merge_unrelated_target_upload(f
         thread = target._path_resolver.main_thread_id(SESSION_B)
         (existing,) = await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", body)], thread_id=thread, message_id="msg_existing")
         source_domain, target_domain = source.workspace_id, target.workspace_id
-        request = SessionForkRequest(idempotency_key="independent-import", mode="context_fork", source_view_id="source-view", source_view_revision=0,
+        request = SessionForkRequest(idempotency_key="independent-import", mode="last_completed_turn_fork", source_view_id="source-view", source_view_revision=0,
             source_uri=f"boxteam://workspace/{source_domain}/resources/session/{SESSION_A}/threads/{initial.source_thread_id}",
             target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions", creation_kind="new_session_main",
             resources=[{"resource_uri": ref.file_id, "action": "copy_snapshot"}])
@@ -1379,7 +1379,7 @@ async def fork_import_target(fork_capture, tmp_path, session_bundle_factory):
     source_domain = source._path_resolver.catalog_store.get_node(SESSION_A).workspace_id
     target_domain = target._path_resolver.catalog_store.get_node(SESSION_B).workspace_id
     request = SessionForkRequest(
-        idempotency_key="import-staging", mode="context_fork", source_view_id="source-view", source_view_revision=0,
+        idempotency_key="import-staging", mode="last_completed_turn_fork", source_view_id="source-view", source_view_revision=0,
         source_uri=f"boxteam://workspace/{source_domain}/resources/session/{SESSION_A}/threads/{initial.source_thread_id}",
         target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions",
         creation_kind="new_session_main", resources=[{"resource_uri": ref.file_id, "action": "copy_snapshot"}],

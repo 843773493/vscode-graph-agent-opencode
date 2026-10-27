@@ -1397,7 +1397,7 @@ def _read_fork_commit_signal(descriptor: int) -> bytes:
 def cold_fork_process(source_case: RuntimeSourceCase, cold_fork_deadlines: ForkDeadlineRegistry):
     case = source_case
 
-    async def invoke(session_id: str, thread_id: str, target_session_id: str = "", *, phase: str = "read", mode: str = "context_fork"):
+    async def invoke(session_id: str, thread_id: str, target_session_id: str = "", *, phase: str = "read", mode: str = "last_completed_turn_fork"):
         command = [sys.executable, "-c", _COLD_FORK_PROCESS,
                    str(case.container.checkpointer._storage.storage.sessions_dir), session_id,
                    thread_id, target_session_id, phase, mode]
@@ -1490,7 +1490,7 @@ def _assert_cold_fork_checkpoints(source: dict[str, object], target: dict[str, o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceCase, cold_fork_process, mode: str) -> None:
     case = source_case
@@ -1678,7 +1678,7 @@ async def completed_empty_seed_source(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
     source_case: RuntimeSourceCase, completed_empty_seed_source, cold_fork_process, mode: str,
 ) -> None:
@@ -1719,7 +1719,7 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
         assert actual["detail_owners"] == source["detail_owners"]
     third_session = await create_session(case.client, "H5 本地冻结空上下文再 fork")
     third = await cold_fork_process(
-        second_session, second["thread_id"], third_session, phase="fork", mode="context_fork",
+        second_session, second["thread_id"], third_session, phase="fork", mode="last_completed_turn_fork",
     )
     _assert_cold_fork_checkpoints(second, third)
     assert third["head_checkpoint"]["head_message_sequence"] == 0

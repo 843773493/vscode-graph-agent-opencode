@@ -337,7 +337,7 @@ class CheckpointForkSource:
 
     async def preflight_fork(
         self, *, source_session_id: str, source_owner: MutationIntentOwner | None = None,
-        mode: str = "context_fork", source_view_id: str | None = None,
+        mode: str = "last_completed_turn_fork", source_view_id: str | None = None,
         source_view_revision: int | None = None, anchor_item_id: str | None = None,
         anchor_mode: str = "inclusive", checkpoint_ns: str = "",
     ) -> RolloutForkResult:
@@ -582,7 +582,7 @@ class CheckpointForkSource:
         anchor_item_id: str | None, anchor_mode: str, checkpoint_ns: str,
     ) -> RolloutForkResult:
         """三种公开 mode 共用同一冻结索引解析入口。"""
-        if mode not in {"context_fork", "view_prefix_fork", "full_rollout_copy"}:
+        if mode not in {"last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"}:
             raise ValueError(f"不支持的 fork mode: {mode}")
         if anchor_mode not in {"inclusive", "before"}:
             raise ValueError("fork anchor_mode 必须是 inclusive 或 before")
@@ -611,7 +611,7 @@ class CheckpointForkSource:
             if mode == "full_rollout_copy":
                 if anchor_item_id is not None or anchor_mode != "inclusive":
                     raise ValueError("full_rollout_copy 不能携带截断锚点")
-            elif mode == "context_fork":
+            elif mode == "last_completed_turn_fork":
                 completed = self._completed_fork_anchor(connection, source_view_id)
                 if completed is None:
                     if connection.execute(
@@ -661,7 +661,7 @@ class CheckpointForkSource:
                     require_historical_scope(connection, completed[1], completed[2])
                 expected_anchor = completed[0] if completed is not None else None
                 if anchor_item_id is not None and anchor_item_id != expected_anchor:
-                    raise ValueError("source-mismatch: context_fork 自动截止点与冻结 source point 不一致")
+                    raise ValueError("source-mismatch: last_completed_turn_fork 自动截止点与冻结 source point 不一致")
                 anchor_item_id = expected_anchor
             if anchor_item_id is not None and connection.execute(
                 "SELECT 1 FROM context_view_items WHERE view_id=? AND item_id=? AND visible=1 AND context_selected=1",
@@ -697,7 +697,7 @@ class CheckpointForkSource:
                      1 if anchor_mode == "before" else 0, checkpoint_ns),
                 ).fetchone()
                 source_checkpoint_id = selected_checkpoint[0] if selected_checkpoint is not None else None
-                if mode == "context_fork" and source_checkpoint_id is None:
+                if mode == "last_completed_turn_fork" and source_checkpoint_id is None:
                     raise ValueError("source-mismatch: 完成截止点缺少同 lineage、成员和执行绑定的 checkpoint")
             return RolloutForkResult(
                 source_checkpoint_id=source_checkpoint_id, source_view_id=source_view_id,

@@ -286,7 +286,7 @@ class SessionContextForkService:
                 or source_thread_id is not None and intent["source_thread_id"] != source_thread_id
                 or intent["generation_origin"] != origin.model_dump(mode="json")
                 or frozen.title != title or frozen.target_container_uri != target_uri
-                or frozen.creation_kind != "new_session_main" or frozen.mode != "context_fork"):
+                or frozen.creation_kind != "new_session_main" or frozen.mode != "last_completed_turn_fork"):
                 raise RuntimeError("generation fork 同稳定 key 的请求意图冲突")
             return frozen
         if source_thread_id is None:
@@ -300,7 +300,7 @@ class SessionContextForkService:
             source_uri=thread_resource_uri(self._session_service.workspace_id, source_session_id, source_thread_id,
                                            gateway_authority=gateway_id),
             source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-            anchor_item_id=point.anchor_item_id, mode="context_fork", target_container_uri=target_uri,
+            anchor_item_id=point.anchor_item_id, mode="last_completed_turn_fork", target_container_uri=target_uri,
             creation_kind="new_session_main", title=title,
         )
 
@@ -559,8 +559,8 @@ class SessionContextForkService:
             raise RuntimeError("fork owner 返回的来源 URI 与固定请求不一致")
         if (point.source_view_id, point.source_view_revision) != (request.source_view_id, request.source_view_revision):
             raise RuntimeError("fork owner 返回的来源 view/revision 与固定请求不一致")
-        # context_fork 未指定 anchor 时仍由来源 owner 解析安全截止点。
-        if (request.mode != "context_fork" or request.anchor_item_id is not None) and point.anchor_item_id != request.anchor_item_id:
+        # last_completed_turn_fork 未指定 anchor 时仍由来源 owner 解析安全截止点。
+        if (request.mode != "last_completed_turn_fork" or request.anchor_item_id is not None) and point.anchor_item_id != request.anchor_item_id:
             raise RuntimeError("fork owner 返回的来源 anchor 与固定请求不一致")
         return actual_session, actual_thread
 
@@ -961,7 +961,7 @@ class SessionContextForkService:
             else:
                 owner = self._checkpointer.forks.source.resolve_thread_owner(session_id, parent_thread_id)
                 point = await self._checkpointer.forks.source.preflight_fork(
-                    source_session_id=session_id, source_owner=owner, mode="context_fork",
+                    source_session_id=session_id, source_owner=owner, mode="last_completed_turn_fork",
                 )
                 if point.source_view_id is None or point.source_view_revision is None:
                     raise RuntimeError("task context source point 缺少真实 view/revision")
@@ -969,7 +969,7 @@ class SessionContextForkService:
                     idempotency_key=key,
                     source_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
                     source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-                    anchor_item_id=point.anchor_item_id, mode="context_fork",
+                    anchor_item_id=point.anchor_item_id, mode="last_completed_turn_fork",
                     target_container_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
                     creation_kind="new_child_thread", title=str(collaboration_member["title"]),
                 )

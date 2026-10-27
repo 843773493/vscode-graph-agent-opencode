@@ -18,7 +18,7 @@ from .team import TeamBoardDTO
 from .workspace_resource import WorkspaceResourceDTO
 
 TitleSource = Literal["default", "user", "auto"]
-SessionForkMode = Literal["context_fork", "view_prefix_fork", "full_rollout_copy"]
+SessionForkMode = Literal["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"]
 ChildThreadStatus = Literal["idle", "pending", "running", "completed", "failed"]
 SessionForkCreationKind = Literal["new_session_main", "new_child_thread"]
 SessionForkResourceAction = Literal["reuse_reference", "retain_reference", "copy_snapshot", "omit", "unsupported"]
@@ -35,11 +35,11 @@ class SessionCreateRequest(BaseModel):
 class SessionTaskContext(BaseModel):
     """委派 child 的历史初始化选择；来源固定为实际调用 task 的 Thread。"""
 
-    # TODO(task-prefix-selector): 模型输出调用会推进历史 revision；冻结前缀选择凭证落地后再开放显式前缀。
+    # TODO(task-prefix-selector): 按第14节接入 item-only/显式 view 前缀定位与一致捕获。
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    mode: Literal["empty", "context_fork"] = "empty"
+    mode: Literal["empty", "last_completed_turn_fork"] = "empty"
 
 
 class SessionForkOwnerReference(BaseModel):

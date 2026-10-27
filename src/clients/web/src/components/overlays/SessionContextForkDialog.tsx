@@ -69,7 +69,7 @@ export default function SessionContextForkDialog({
       source_uri: sourcePoint.source_uri,
       source_view_id: sourcePoint.source_view_id,
       source_view_revision: sourcePoint.source_view_revision,
-      anchor_item_id: mode === "full_rollout_copy" ? null : mode === "context_fork" ? null : sourcePoint.anchor_item_id,
+      anchor_item_id: mode === "full_rollout_copy" ? null : mode === "last_completed_turn_fork" ? null : sourcePoint.anchor_item_id,
       mode,
       anchor_mode: mode === "view_prefix_fork" ? anchorMode : "inclusive",
       target_container_uri: targetContainerUri.trim(),
@@ -113,7 +113,7 @@ export default function SessionContextForkDialog({
               void onSelectionChange({ mode: event.target.value as SessionForkMode, anchorMode: "inclusive" });
             }}>
               <option value="view_prefix_fork">截至所选消息</option>
-              <option value="context_fork">截至最近已完成的上下文</option>
+              <option value="last_completed_turn_fork">截至最近已完成的上下文</option>
               <option value="full_rollout_copy">完整历史</option>
             </select>
           </label>

@@ -263,7 +263,7 @@ class ForkMaterializationMixin:
             raise ValueError("fork 不能覆盖来源 Thread")
         source_checkpoint_id = optional_text(source_checkpoint_id, field="source_checkpoint_id")
         source_view_id = optional_text(source_view_id, field="source_view_id")
-        fork_mode = one_of_text(fork_mode, {"context_fork", "view_prefix_fork", "full_rollout_copy"},
+        fork_mode = one_of_text(fork_mode, {"last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"},
                                 field="fork_mode")
         relationship = one_of_text(relationship, {"detached", "pinned"}, field="relationship")
         source_snapshot_sha256 = required_sha256(source_snapshot_sha256, field="source_snapshot_sha256")

@@ -86,7 +86,7 @@ async def test_task_returns_child_thread_identity_not_subagent_final_text():
 
 
 @pytest.mark.parametrize("context", [
-    {"mode": "context_fork"},
+    {"mode": "last_completed_turn_fork"},
     {"mode": "empty"},
 ])
 async def test_task_schema_passes_typed_context(context):
@@ -107,11 +107,12 @@ async def test_task_schema_passes_typed_context(context):
 
 
 @pytest.mark.parametrize("context", [
+    {"mode": "context_fork"},
     {"mode": "view_prefix_fork"},
     {"mode": "view_prefix_fork", "source_view_id": "v", "source_view_revision": 1},
     {"mode": "empty", "anchor_item_id": "i"},
-    {"mode": "context_fork", "anchor_mode": "before"},
-    {"mode": "context_fork", "source_view_id": "v"},
+    {"mode": "last_completed_turn_fork", "anchor_mode": "before"},
+    {"mode": "last_completed_turn_fork", "source_view_id": "v"},
     {"mode": "full_rollout_copy"},
     {"mode": "view_prefix_fork", "source_view_id": "v", "source_view_revision": True, "anchor_item_id": "i"},
     {"mode": "empty", "source_uri": "another-thread"},

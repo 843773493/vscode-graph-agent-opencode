@@ -4608,7 +4608,7 @@ async function runNavigationOptimism(surfaces) {
     await Promise.all(peerContext.pages().map(drainPageResponseBodies));
     await peerContext.close();
     peerContext = null;
-    const pinned = await forkOwner(first, { mode: "context_fork", relationship: "pinned" });
+    const pinned = await forkOwner(first, { mode: "last_completed_turn_fork", relationship: "pinned" });
     await openOwner(first);
     isolation.beforeRejectedDelete = await navigationContextState(first, sourceTurn.calls);
     const blocked = await match("navigation.before_commit", { kind: "delete_folder", target_node_id: canonicalRoot }, "blocked-subtree-delete");
@@ -4826,7 +4826,7 @@ async function runNavigationDates(surfaces) {
     installPageDiagnostics(childPage);
     await ensureGuest(childPage, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
     const child = { ...first, page: childPage, threadId: childThread, child: true };
-    const fork = await forkOwner(first, { mode: "context_fork" });
+    const fork = await forkOwner(first, { mode: "last_completed_turn_fork" });
     const forkNode = await sessionCatalogNode(fork.owner);
     const lineage = await readControl(first, "SELECT * FROM thread_creation_records WHERE child_thread_id=?", [childThread]);
     assert.equal(lineage.length, 1);
@@ -5218,8 +5218,8 @@ function sameForkContainerUriIdentity(leftUri, rightUri, localGatewayId) {
 }
 
 function forkResponseAnchorMatchesFrozenRequest(fork, request) {
-  // context_fork 的 null 代表由来源 owner 按冻结 view 解析安全截止点。
-  if (request?.mode === "context_fork" && request.anchor_item_id == null) {
+  // last_completed_turn_fork 的 null 代表由来源 owner 按冻结 view 解析安全截止点。
+  if (request?.mode === "last_completed_turn_fork" && request.anchor_item_id == null) {
     return Object.hasOwn(fork, "anchor_item_id")
       && (fork.anchor_item_id === null
         || typeof fork.anchor_item_id === "string" && fork.anchor_item_id.length > 0);
@@ -5409,18 +5409,18 @@ async function runForkDeadlineClassifierSelfTest() {
   assert.equal(forkOperationDeadlines.has(request.idempotency_key), false);
 
   const contextForkRequest = { ...request, idempotency_key: "context-fork-safe-anchor",
-    mode: "context_fork", anchor_item_id: null, resources: [] };
-  const contextForkPayload = makePayload([], "context_fork", "item-safe-context-cutoff");
+    mode: "last_completed_turn_fork", anchor_item_id: null, resources: [] };
+  const contextForkPayload = makePayload([], "last_completed_turn_fork", "item-safe-context-cutoff");
   const resolvedSafeAnchor = createDeadline(contextForkRequest.idempotency_key);
   assert.equal(await classifyForkResponse(resolvedSafeAnchor, 200, contextForkPayload,
     contextForkRequest, localGatewayId), "completed",
-  "context_fork 未指定锚点时允许来源 owner 返回冻结 view 的规范安全截止 item");
+  "last_completed_turn_fork 未指定锚点时允许来源 owner 返回冻结 view 的规范安全截止 item");
   assert.equal(resolvedSafeAnchor.completed, 1,
     "规范安全截止 item 与其它冻结来源/目标身份匹配后结束原 deadline");
 
   const emptyContextAnchor = createDeadline("context-fork-empty-source-anchor");
   assert.equal(await classifyForkResponse(emptyContextAnchor, 200,
-    makePayload([], "context_fork", null), contextForkRequest, localGatewayId), "completed",
+    makePayload([], "last_completed_turn_fork", null), contextForkRequest, localGatewayId), "completed",
   "来源 owner 对没有安全截止 item 的冻结 view 可以返回显式 null");
   assert.equal(emptyContextAnchor.completed, 1);
 
@@ -5429,7 +5429,7 @@ async function runForkDeadlineClassifierSelfTest() {
   delete missingResolvedAnchorPayload.data.anchor_item_id;
   assert.equal(await classifyForkResponse(missingResolvedAnchor, 200, missingResolvedAnchorPayload,
     contextForkRequest, localGatewayId), "pending",
-  "未返回 context_fork anchor 字段不能冒充来源 owner 已解析安全截止点");
+  "未返回 last_completed_turn_fork anchor 字段不能冒充来源 owner 已解析安全截止点");
   assert.equal(missingResolvedAnchor.completed, 0);
 
   const invalidResolvedAnchor = createDeadline("context-fork-empty-safe-anchor");
@@ -5444,14 +5444,14 @@ async function runForkDeadlineClassifierSelfTest() {
     idempotency_key: "context-fork-explicit-anchor", anchor_item_id: "item-context-requested-anchor" };
   const explicitContextAnchorMismatch = createDeadline(explicitContextAnchorRequest.idempotency_key);
   assert.equal(await classifyForkResponse(explicitContextAnchorMismatch, 200,
-    makePayload([], "context_fork", "item-context-other-anchor"),
+    makePayload([], "last_completed_turn_fork", "item-context-other-anchor"),
     explicitContextAnchorRequest, localGatewayId), "pending",
-  "context_fork 显式请求 anchor 时，响应中的不同 ID 仍必须保持 pending");
+  "last_completed_turn_fork 显式请求 anchor 时，响应中的不同 ID 仍必须保持 pending");
   assert.equal(explicitContextAnchorMismatch.completed, 0);
 
   const explicitContextAnchorMatch = createDeadline("context-fork-explicit-anchor-match");
   assert.equal(await classifyForkResponse(explicitContextAnchorMatch, 200,
-    makePayload([], "context_fork", "item-context-requested-anchor"),
+    makePayload([], "last_completed_turn_fork", "item-context-requested-anchor"),
     explicitContextAnchorRequest, localGatewayId), "completed");
   assert.equal(explicitContextAnchorMatch.completed, 1);
 
@@ -5947,8 +5947,8 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
   assert.deepEqual([fork.mode, fork.creation_kind, fork.source_view_id, fork.source_view_revision],
     [request.mode, request.creation_kind, request.source_view_id, request.source_view_revision],
     "发布结果必须绑定原冻结请求，不能在恢复或重试时替换复制范围与来源");
-  const anchorItemId = request.mode === "context_fork" ? sourceEvidence.completedAnchorItemId : request.anchor_item_id;
-  if (request.mode === "context_fork" && request.anchor_item_id !== null) assert.equal(request.anchor_item_id, anchorItemId);
+  const anchorItemId = request.mode === "last_completed_turn_fork" ? sourceEvidence.completedAnchorItemId : request.anchor_item_id;
+  if (request.mode === "last_completed_turn_fork" && request.anchor_item_id !== null) assert.equal(request.anchor_item_id, anchorItemId);
   assert.equal(fork.anchor_item_id, anchorItemId, "context 自动截止点必须来自源端最新完成且可见的事实");
   assert.equal(dto.workspace_id, targetSurface.workspaceIdentity);
   assert.equal(dto.scope, "workspace");
@@ -7663,7 +7663,7 @@ async function runPublicForks(surfaces) {
     ]);
     const remoteHistory = await forkHistoryEvidence(remote);
     const copiedModes = [];
-    for (const mode of ["context_fork", "view_prefix_fork", "full_rollout_copy"]) {
+    for (const mode of ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"]) {
       const fork = await forkOwner(remote, { mode }, surface);
       owners.push(fork.owner);
       assert.equal(fork.result.export_release.state, "confirmed");
@@ -7696,7 +7696,7 @@ async function runPublicForks(surfaces) {
       assert.ok(JSON.stringify(wire).includes("建立可正常读取的已完成源上下文。"));
       copiedModes.push({ mode, request: fork.request, result: fork.result, successor, history: fork.targetHistory });
     }
-    const pinnedRequest = await freezeForkRequest(remote, { mode: "context_fork", relationship: "pinned" }, surface);
+    const pinnedRequest = await freezeForkRequest(remote, { mode: "last_completed_turn_fork", relationship: "pinned" }, surface);
     const localCatalogBefore = await readCatalog(surface, catalogCounts);
     const remoteCatalogBefore = await readCatalog(remote, catalogCounts);
     const remoteContextBefore = await readRollout(remote, contextCounts);
@@ -7712,7 +7712,7 @@ async function runPublicForks(surfaces) {
   const copyOfCopy = await forkOwner(detached.owner);
   owners.push(detached.owner, copyOfCopy.owner);
   const deletingRequests = [];
-  for (const options of [{ mode: "context_fork", relationship: "pinned" }, { mode: "full_rollout_copy" }]) {
+  for (const options of [{ mode: "last_completed_turn_fork", relationship: "pinned" }, { mode: "full_rollout_copy" }]) {
     deletingRequests.push({ options, request: await freezeForkRequest(detached.owner, options) });
   }
   const deleteFirst = await prepareNavigationIntent(detached.owner, { kind: "delete_session", target_node_id: detached.owner.sessionId });
@@ -7735,7 +7735,7 @@ async function runPublicForks(surfaces) {
   await testControl({ action: "release", ...deleteFirstBarrier });
   const deletedBeforeFork = await navigationTerminal(detached.owner, deleteFirst);
   const before = await forkHistoryEvidence(source);
-  const pinnedRequest = await freezeForkRequest(source, { mode: "context_fork", relationship: "pinned" });
+  const pinnedRequest = await freezeForkRequest(source, { mode: "last_completed_turn_fork", relationship: "pinned" });
   const operationId = forkOperationId(pinnedRequest);
   const forkId = await testControl({ action: "next_uuid", namespace: "fork/identity" });
   const claimBarrier = { operation_id: operationId, phase: "fork.retention.claimed" };
@@ -7768,7 +7768,7 @@ async function runPublicForks(surfaces) {
   owners.push(pinned.owner);
   const pinnedDelete = await deleteOwner(pinned.owner);
 
-  const recoveringRequest = await freezeForkRequest(source, { mode: "context_fork", relationship: "pinned" });
+  const recoveringRequest = await freezeForkRequest(source, { mode: "last_completed_turn_fork", relationship: "pinned" });
   const recoveringOperation = forkOperationId(recoveringRequest);
   const commitBarrier = { operation_id: recoveringOperation, phase: "fork.target_committed" };
   await testControl({ action: "arm", ...commitBarrier });
@@ -7804,7 +7804,7 @@ async function runPublicForks(surfaces) {
   const releaseRecoveries = [];
   const sourceNode = await sessionCatalogNode(source);
   for (const phase of ["fork.retention.release.prepared", "fork.retention.release.source_ref_released", "fork.retention.release.source_released"]) {
-    const target = await forkOwner(source, { mode: "context_fork", relationship: "pinned" });
+    const target = await forkOwner(source, { mode: "last_completed_turn_fork", relationship: "pinned" });
     owners.push(target.owner);
     const targetNode = await sessionCatalogNode(target.owner);
     const retention = (await readCatalog(source, "SELECT * FROM fork_retention_claims WHERE target_session_id=?", [target.owner.sessionId]))[0];

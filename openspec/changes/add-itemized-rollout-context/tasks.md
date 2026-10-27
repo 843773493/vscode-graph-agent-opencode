@@ -1156,9 +1156,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - [x] 13.5 回归普通公开 idle fork 与团队默认空历史委派；完成受影响静态分析和定向检查，所有 fork 操作沿既有固定 60 秒 deadline/watchdog、套件进程外超时与内存保护。将准确命令、源码指纹、输出、退出码及未验证范围登记到 Verification ledger，不外推团队整体完成。
 - 13.6 原延期方案已被 2026-10-27 决定取代：不再以新增冻结前缀选择凭证为前置；改为第 14 节的 item-only/显式 view 和一致捕获。此处不记实现完成，也不重复建立验收 checklist。
 
-## 14. fork 范围命名与 item-only 前缀定位（2026-10-27，仅规划，待实施）
+## 14. fork 范围命名与 item-only 前缀定位（2026-10-27，分切片实施）
 
-- [ ] 14.1 全仓盘齐范围模式的公开输入、工具、API、DTO/协议与生成类型、前端、日志/lineage/物化恢复枚举、直接间接调用和测试，将模式 context_fork 物理统一为 last_completed_turn_fork，不留 alias/双读/旧死代码。区分独立 Session kind/创建 purpose/方法职责；保留 active-lineage 最近完成 normal Turn、已完成 internal 来源和真实空来源行为。现有持久化实验数据按原 owner 版本合同处理，不静默改写历史 preimage/hash 或加兼容层。
+- [x] 14.1 全仓盘齐范围模式的公开输入、工具、API、DTO/协议与生成类型、前端、日志/lineage/物化恢复枚举、直接间接调用和测试，将模式 context_fork 物理统一为 last_completed_turn_fork，不留 alias/双读/旧死代码。区分独立 Session kind/创建 purpose/方法职责；保留 active-lineage 最近完成 normal Turn、已完成 internal 来源和真实空来源行为。现有持久化实验数据按原 owner 版本合同处理，不静默改写历史 preimage/hash 或加兼容层。
 - [ ] 14.2 迁齐 task 判别 schema、委派协议/服务与公开 fork/source-point/transfer/UI 消费者：task 默认 empty；last_completed_turn_fork 不接受前缀 selector；view_prefix_fork 只需 item_id，支持显式 view_id 与 inclusive/before。公开 API 将既有 anchor_item_id/source_view_id 归一到同一 typed selector，不并行接受字段 alias；prefix 输入不强制 view/revision 成对，调用方观察 revision 与后端冻结 revision 分离。工具来源取真实 execution admission，禁止 Thread/Session/URI 覆盖。
 - [ ] 14.3 在既有 source owner 下实现精确来源 Thread、既定 namespace 的全分支 item 定位：依据已有持久提交顺序及有效 context membership 选择最新 view，排除 hidden/backing/provenance 候选；需要补索引时只在该 owner 补最小索引。显式 view 只校验该 view，不借 resolve_turn_anchor 的 active lineage 替代全分支查找；选中候选后协议不闭合或正文缺失立即拒绝，不回退旧 view、不扩大或移动锚点。
 - [ ] 14.4 核对所有 revision 校验及调用方：freeze_display_point、preflight/_resolve_fork_source、资源候选、服务/transfer 的输入与来源响应检查按职责改造。以同一一致快照或既有 owner 保护覆盖定位、前缀冻结和 capture，消除查 revision 后释放保护的窗口；task canonical tool-call 已提交后再定位，写入临界区与 fork 捕获不自锁。select_view_prefix/capture manifest、committed offsets、hash/length、owner、资源 CAS 等冻结原件校验继续严格，full_rollout_copy/rewind/replay/compaction 不顺带放宽；不能简单删检查、改 <=、补当前 revision 或新建复杂凭证系统。
@@ -1168,3 +1168,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - [ ] 14.8 覆盖首次冻结后更晚候选出现、同 tool-call 重试及启动恢复不换原 view/anchor/capture；在冻结与 capture、staging、物化、发布/绑定边界故障或取消后核唯一身份、不可见半成品与原 owner 中止。Session 删除继续排空 live holder、清理 abandoned 创建，不重选来源、不复活目标；准确区分服务实例恢复与 OS 强杀重启证据。
 - [ ] 14.9 回归 task 默认 empty 不读取父 rollout、改名模式的 normal/internal/空来源、精确 child caller 及结果回报、普通公开 fork idle/no-member/no-initial-intent，以及未改模式的既有校验。完成受影响静态/真实类型检查和协议生成校验；涉及 Web 消费者时完成真实类型检查及 `bun run --cwd src/clients/web build`，按实际影响补真实 Gateway/Web 入口验证。
 - [ ] 14.10 全部测试保留既有进程外超时/内存保护及固定 60 秒 fork deadline/watchdog，不放宽单次预算。日志和工作区沿原 tests 输出规范；登记准确命令、源码指纹、原始输出、实际退出码与通过/失败/未验证范围。旧 124 单测、11 集成及其它历史 PASS 不代替本节新合同验收；Goal 与其它团队 TODO 不计入本切片完成。
+
+
+### 2026-10-27 14.1 fork 范围模式统一命名
+
+- 将范围模式统一为 `last_completed_turn_fork`，迁齐工具、API/DTO、Web/OpenAPI、物化/lineage/恢复及直接间接调用；独立 Session kind/purpose 保持原职责。旧范围输入明确拒绝，不提供 alias、不改写历史 preimage/hash，SQLite 结构和 protobuf string 字段形状不变。
+- 完整候选 tree `b5a24d9d2dee4081f7249c723ffa19385e671249`：214 单测、11 项公开 fork、11 项 task fork 集成（385.18 秒）及 19 项 Web hook 通过；真实 TypeScript、Web build、协议检查、Ruff、compileall 均 exit0。全部运行源码前后一致、进程组无残留，固定60秒fork期限保持。剩余旧模式字面量仅为独立 Session kind/purpose 或两项拒绝旧输入的负例。
+- 原件及机械核验见 `out/tests/temp/fork-scope-mode-rename/artifacts/verification-017.json`；副本漏接 Web 独立 node_modules 导致的三次失败保留，补依赖链接后通过，未改产品源码。driver classifier 仅自测，不是真实浏览器验收；本批未新跑 Python Pyright，也不代替14.2–14.10或团队整体门。

@@ -1641,11 +1641,11 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert summary_text not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False)
     assert all(marker not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False) for marker in repeated_markers)
     forks = case.runner.container.session_context_fork_service
-    point = await forks.source_point(session_id=session_id, thread_id=thread_id, mode="context_fork")
+    point = await forks.source_point(session_id=session_id, thread_id=thread_id, mode="last_completed_turn_fork")
     fork_request = SessionForkRequest(
         idempotency_key="runtime-compacted-fork", source_uri=point.source_uri,
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-        mode="context_fork", creation_kind="new_child_thread", target_container_uri=point.child_container_uri,
+        mode="last_completed_turn_fork", creation_kind="new_child_thread", target_container_uri=point.child_container_uri,
     )
     fork_deadline = fork_deadlines.for_operation(
         target=(f"{case.runner.container.workspace_service.workspace_id}/"

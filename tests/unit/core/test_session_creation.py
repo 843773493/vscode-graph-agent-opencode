@@ -466,7 +466,7 @@ async def test_context_fork_request_intent_is_frozen_without_entering_business_m
     sessions_root: Path,
 ) -> None:
     metadata = make_metadata(kind="context_fork", context_source_session_id=make_node_id())
-    request_intent = {"request": {"mode": "context_fork"}, "goal_snapshot": None}
+    request_intent = {"request": {"mode": "last_completed_turn_fork"}, "goal_snapshot": None}
     kwargs = {
         "idempotency_key": "fork-intent-key", "title": "冻结请求的分叉",
         "title_source": "auto", "parent_node_id": None, "purpose": "context_fork",

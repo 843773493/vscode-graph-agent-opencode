@@ -39,7 +39,7 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("mutation", ["append", "rewind"])
 @pytest.mark.parametrize("captured", [False, True], ids=["before-capture", "after-capture"])

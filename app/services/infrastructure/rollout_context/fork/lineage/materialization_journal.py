@@ -46,7 +46,7 @@ class ForkMaterializationJournalMixin:
         source_checkpoint_id = optional_text(source_checkpoint_id, field="source_checkpoint_id")
         source_view_id = optional_text(source_view_id, field="source_view_id")
         fork_mode = one_of_text(
-            fork_mode, {"context_fork", "view_prefix_fork", "full_rollout_copy"},
+            fork_mode, {"last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"},
             field="fork_mode",
         )
         relationship = one_of_text(relationship, {"detached", "pinned"}, field="relationship")
@@ -265,7 +265,7 @@ class ForkMaterializationJournalMixin:
                 optional_text(row[5], field="fork_materializations.source_view_id"),
                 one_of_text(
                     row[6],
-                    {"context_fork", "view_prefix_fork", "full_rollout_copy"},
+                    {"last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"},
                     field="fork_materializations.fork_mode",
                 ),
                 one_of_text(

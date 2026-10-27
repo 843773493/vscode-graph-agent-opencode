@@ -73,10 +73,10 @@ async def _idle_child(case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry, 
     deadline = deadlines.for_operation(target=session_id, operation_key=key)
     source = case.container.checkpointer.forks.source
     point = await deadline.wait(source.preflight_fork(
-        source_session_id=session_id, source_owner=source.resolve_thread_owner(session_id, main), mode="context_fork",
+        source_session_id=session_id, source_owner=source.resolve_thread_owner(session_id, main), mode="last_completed_turn_fork",
     ), "public fork source")
     request = SessionForkRequest(
-        idempotency_key=key, source_uri=uri, target_container_uri=uri, mode="context_fork",
+        idempotency_key=key, source_uri=uri, target_container_uri=uri, mode="last_completed_turn_fork",
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision, anchor_item_id=point.anchor_item_id,
     )
     with _seed_trace({"gateway_id": case.gateway_id, "request_id": None}):
@@ -101,7 +101,7 @@ def _seed_trace(seed):
         reset_current_gateway_id(gateway)
 
 
-@pytest.mark.parametrize("mode", ["empty", "context_fork"])
+@pytest.mark.parametrize("mode", ["empty", "last_completed_turn_fork"])
 async def test_model_task_first_request_uses_selected_history(
     source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry, mode: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -109,8 +109,8 @@ async def test_model_task_first_request_uses_selected_history(
     case = source_case
     session_id, parent_thread = await _completed_parent(case)
     selection = None
-    if mode == "context_fork":
-        selection = {"mode": "context_fork"}
+    if mode == "last_completed_turn_fork":
+        selection = {"mode": "last_completed_turn_fork"}
     arguments = {"description": "task-private-seed-unique：独立完成检查"}
     if selection is not None:
         arguments["context"] = selection
@@ -144,7 +144,7 @@ async def test_model_task_first_request_uses_selected_history(
     wire = _wire_text(case.request(child_call)["messages"])
     assert "task-private-seed-unique" in wire
     assert ("task-history-question-unique" in wire) == (mode != "empty")
-    assert ("task-history-answer-unique" in wire) == (mode == "context_fork")
+    assert ("task-history-answer-unique" in wire) == (mode == "last_completed_turn_fork")
     assert "task-parent-inflight-unique" not in wire
     assert "call_task_context" not in wire
     assert member.state == "published" and member.child_thread_id == child_thread
@@ -165,7 +165,7 @@ async def test_model_task_first_request_uses_selected_history(
     historical_lines = [line for line in parent_lines
                         if b"task-history-question-unique" in line or b"task-history-answer-unique" in line]
     assert historical_lines
-    assert all((line in child_lines) == (mode == "context_fork") for line in historical_lines)
+    assert all((line in child_lines) == (mode == "last_completed_turn_fork") for line in historical_lines)
 
     # 父线程已经新增 Turn/报告；同调用重试不得再取来源 latest。
     async def unexpected_preflight(**_kwargs):
@@ -185,7 +185,7 @@ async def test_model_task_first_request_uses_selected_history(
         assert repeated.child_thread_id == child_thread and repeated.frozen_job_id == intent.job_id
         with pytest.raises(RuntimeError, match="冲突|conflict"):
             await case.container.session_subagent_service.delegate(
-                **kwargs, context=SessionTaskContext(mode="context_fork" if mode == "empty" else "empty"),
+                **kwargs, context=SessionTaskContext(mode="last_completed_turn_fork" if mode == "empty" else "empty"),
             )
     assert reference["parent_thread_id"] == parent_thread
     with factory.for_owner_session(session_id) as owner:
@@ -207,7 +207,7 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
     forks = container.session_context_fork_service
     delegate = {"parent_session_id": session_id, "parent_thread_id": parent_thread, "parent_agent_id": "default",
                 "parent_job_id": "task-recovery-parent", "parent_tool_call_id": "task-recovery-call",
-                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": SessionTaskContext(mode="context_fork")}
+                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": SessionTaskContext(mode="last_completed_turn_fork")}
     deadline = deadlines.for_operation(target=session_id, operation_key="task-recovery")
     original_materialize = forks._materialize
     original_publish = SessionControlStore.publish_thread_creation_record
@@ -301,7 +301,7 @@ async def test_child_task_uses_exact_caller_history_and_reports_to_caller(
         "session_id": session_id, "execution_origin": "internal",
     })
     await case.plan(session_id, [
-        _tool_reply("task", {"description": "nested-task-private-seed", "context": {"mode": "context_fork"}}, "call_nested_task"),
+        _tool_reply("task", {"description": "nested-task-private-seed", "context": {"mode": "last_completed_turn_fork"}}, "call_nested_task"),
         {"content": "nested-task-dispatched"}, {"content": "nested-task-report-ack"},
     ], thread_id=parent)
     deadline = deadlines.for_operation(target=parent, operation_key="nested-model-task")
@@ -371,7 +371,7 @@ async def test_task_context_abort_and_session_deletion_use_original_owner(
             return await container.session_subagent_service.delegate(
                 parent_session_id=session_id, parent_thread_id=parent, parent_agent_id="default",
                 parent_job_id="task-abort-parent", parent_tool_call_id="task-abort-call",
-                description="task-abort-seed", subagent_type="general-purpose", context=SessionTaskContext(mode="context_fork"),
+                description="task-abort-seed", subagent_type="general-purpose", context=SessionTaskContext(mode="last_completed_turn_fork"),
             )
 
     source_bytes = container.checkpointer._storage.storage.jsonl_path(session_id, thread_id=parent).read_bytes()

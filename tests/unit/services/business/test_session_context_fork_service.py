@@ -391,7 +391,7 @@ async def test_remote_fork_rejects_changed_creation_kind(
         ({"source_view_id": "view-other"}, "来源 view/revision"),
         ({"source_view_revision": 8}, "来源 view/revision"),
         ({"anchor_item_id": "item-other"}, "来源 anchor"),
-        ({"mode": "context_fork"}, "mode 与固定请求"),
+        ({"mode": "last_completed_turn_fork"}, "mode 与固定请求"),
     ],
     ids=["view", "revision", "anchor", "mode"],
 )
@@ -499,7 +499,7 @@ async def test_remote_fork_preserves_source_owner_default_context_anchor(
     fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
     resolved_anchor: str | None,
 ) -> None:
-    request = SessionForkRequest.model_validate({**fork_request.model_dump(mode="json"), "mode": "context_fork"})
+    request = SessionForkRequest.model_validate({**fork_request.model_dump(mode="json"), "mode": "last_completed_turn_fork"})
     published = SessionForkResultDTO.model_validate({
         **fork_result.model_dump(mode="json"), "mode": request.mode, "anchor_item_id": resolved_anchor,
     })
@@ -508,14 +508,14 @@ async def test_remote_fork_preserves_source_owner_default_context_anchor(
     assert await fork_boundary.service.fork(request) is published
 
 
-@pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("mode", ["last_completed_turn_fork", "full_rollout_copy"])
 async def test_remote_fork_rejects_changed_explicit_or_full_copy_anchor(
     fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
     mode: str,
 ) -> None:
     request = SessionForkRequest.model_validate({
         **fork_request.model_dump(mode="json"), "mode": mode,
-        "anchor_item_id": "item-selected" if mode == "context_fork" else None,
+        "anchor_item_id": "item-selected" if mode == "last_completed_turn_fork" else None,
     })
     published = SessionForkResultDTO.model_validate({
         **fork_result.model_dump(mode="json"), "mode": request.mode, "anchor_item_id": "item-other",

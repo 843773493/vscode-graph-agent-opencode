@@ -228,7 +228,7 @@ async def test_context_only_fork_keeps_consumed_source_without_importing_later_o
     deadline = fork_deadlines.for_operation(session_id, "context-only-fork")
     try:
         response = await deadline.wait(case.client.get(f"/api/v1/sessions/{session_id}/fork-source-point", params={
-            "thread_id": main_thread, "mode": "context_fork",
+            "thread_id": main_thread, "mode": "last_completed_turn_fork",
         }), "context-only source point")
         case.write_actual("fork-source-point", {"status": response.status_code, "body": response.text})
         assert response.status_code == 200, response.text
@@ -236,7 +236,7 @@ async def test_context_only_fork_keeps_consumed_source_without_importing_later_o
         response = await deadline.wait(case.client.post(f"/api/v1/sessions/{session_id}/fork-context", json={
             "idempotency_key": "context-only-fork", "source_uri": point["source_uri"],
             "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
-            "anchor_item_id": point["anchor_item_id"], "mode": "context_fork",
+            "anchor_item_id": point["anchor_item_id"], "mode": "last_completed_turn_fork",
             "creation_kind": "new_child_thread", "target_container_uri": point["child_container_uri"],
         }), "context-only public fork")
     except Exception:

@@ -93,7 +93,7 @@ export function parseChildThreadStatus(value: unknown): ChildThreadStatus {
   throw new Error(`child thread status 协议值无效: ${String(value)}`);
 }
 
-export type SessionForkMode = "view_prefix_fork" | "context_fork" | "full_rollout_copy";
+export type SessionForkMode = "view_prefix_fork" | "last_completed_turn_fork" | "full_rollout_copy";
 export type SessionForkCreationKind = "new_session_main" | "new_child_thread";
 export type SessionForkResourceAction = "reuse_reference" | "retain_reference" | "copy_snapshot" | "omit" | "unsupported";
 export type SessionForkOwnerReference = Omit<WorkspaceProtocol.SessionForkOwnerReference, "kind"> & {

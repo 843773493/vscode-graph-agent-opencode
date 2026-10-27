@@ -46,7 +46,7 @@ class RolloutForkRecoveryMixin:
         source_session_id = required_text(source_session_id, field="source_session_id")
         relationship = one_of_text(relationship, {"detached", "pinned"}, field="relationship")
         required_sha256(digest, field="source_snapshot_sha256")
-        one_of_text(mode, {"context_fork", "view_prefix_fork", "full_rollout_copy"}, field="fork_mode")
+        one_of_text(mode, {"last_completed_turn_fork", "view_prefix_fork", "full_rollout_copy"}, field="fork_mode")
         if status == "prepared":
             raise RuntimeError(
                 f"fork_materialization_pending: {materialization_id}；必须由冻结创建 intent 恢复"

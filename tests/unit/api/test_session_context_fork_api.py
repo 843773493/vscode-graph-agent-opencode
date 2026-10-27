@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.api.sessions import (
@@ -118,7 +120,7 @@ def _request(mode: SessionForkMode, creation_kind: SessionForkCreationKind, rela
     ("mode", "creation_kind", "relationship"),
     [
         ("view_prefix_fork", "new_child_thread", "detached"),
-        ("context_fork", "new_child_thread", "pinned"),
+        ("last_completed_turn_fork", "new_child_thread", "pinned"),
         ("full_rollout_copy", "new_session_main", "detached"),
     ],
 )
@@ -151,6 +153,15 @@ async def test_fork_route_passes_exact_remote_thread_to_business_boundary(fork_s
         request_id="req_session_link_fork", fork_service=fork_service,
     )
     assert fork_service.calls == [payload] and fork_service.calls[0].source_uri == source_uri
+
+
+def test_old_fork_scope_is_rejected_without_rewriting_frozen_request() -> None:
+    payload = _request("last_completed_turn_fork", "new_child_thread", "detached").model_dump(mode="json")
+    payload["mode"] = "context_fork"
+    frozen = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    with pytest.raises(ValidationError, match="mode"):
+        SessionForkRequest.model_validate(payload)
+    assert json.dumps(payload, ensure_ascii=False, sort_keys=True) == frozen
 
 
 async def test_full_source_point_route_serializes_absent_anchor(fork_service: _ForkService) -> None:

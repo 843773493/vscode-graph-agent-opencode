@@ -404,7 +404,7 @@ describe("上下文分支候选与冻结重试", () => {
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
       .mockResolvedValueOnce(sourcePointFixture())
       .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: null, resource_mode: "full_rollout_copy" }))
-      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: "item-completed", resource_mode: "context_fork" }))
+      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: "item-completed", resource_mode: "last_completed_turn_fork" }))
       .mockResolvedValueOnce(sourcePointFixture());
     spies.push(read);
     const mounted = mountHook();
@@ -414,7 +414,7 @@ describe("上下文分支候选与冻结重试", () => {
     }); });
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "full_rollout_copy" }); });
     expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBeNull();
-    await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "context_fork" }); });
+    await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "last_completed_turn_fork" }); });
     expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBe("item-completed");
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "view_prefix_fork" }); });
     expect(mounted.hook().forkDialog!.error).toBeNull();

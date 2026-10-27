@@ -128,14 +128,14 @@ def idle_child(recovery_case):
         registry = ForkDeadlineRegistry(recovery_case.context.artifacts_dir)
         deadline = registry.for_operation(session, "mcp-cold-child")
         response = await deadline.wait(client.get(f"/api/v1/sessions/{session}/fork-source-point", params={
-            "thread_id": main_thread, "mode": "context_fork",
+            "thread_id": main_thread, "mode": "last_completed_turn_fork",
         }), "MCP child source point")
         assert response.status_code == 200, response.text
         point = response.json()["data"]
         response = await deadline.wait(client.post(f"/api/v1/sessions/{session}/fork-context", json={
             "idempotency_key": "mcp-cold-child", "source_uri": point["source_uri"],
             "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
-            "anchor_item_id": point["anchor_item_id"], "mode": "context_fork",
+            "anchor_item_id": point["anchor_item_id"], "mode": "last_completed_turn_fork",
             "creation_kind": "new_child_thread", "target_container_uri": point["child_container_uri"],
         }), "MCP child public fork")
         deadline.complete()
