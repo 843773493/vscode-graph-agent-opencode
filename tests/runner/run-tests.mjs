@@ -15,9 +15,8 @@ const isWindows = process.platform === "win32";
 const isPosix = !isWindows;
 const windowsJobRunnerPath = path.join(
   projectRoot,
-  "tests",
-  "support",
-  "processes",
+  "app",
+  "runtime",
   "windows_job.py",
 );
 

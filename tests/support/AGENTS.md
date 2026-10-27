@@ -16,7 +16,6 @@
 │   ├── processes/scope.py                    进程句柄登记及作用域释放
 │   ├── processes/workspace.py                Workspace后端、日志、端口预检与HTTP就绪
 │   ├── processes/gateway.py                  Gateway进程、配置和就绪
-│   ├── processes/windows_job.py               Windows Job Object整树内存限制与回收
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放
 ├── 会话与历史数据前提（`rollout/skill_catalog.py` 构造局部冻结输入，经正式 load 激活）

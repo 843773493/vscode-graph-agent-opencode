@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import subprocess
 import sys
@@ -15,9 +16,6 @@ import win32event
 import win32file
 import win32job
 import win32process
-
-# TODO: 在真实 Windows VMware 上验证矩阵 runner 和远端目标入口的 pywin32 Job 生命周期。
-
 
 class _CompletionPort(ctypes.Structure):
     _fields_ = [("key", ctypes.c_void_p), ("port", wintypes.HANDLE)]
@@ -118,6 +116,11 @@ def run_windows_job(
         ):
             raise ctypes.WinError(ctypes.get_last_error())
 
+        startup = win32process.STARTUPINFO()
+        startup.dwFlags |= win32con.STARTF_USESTDHANDLES
+        startup.hStdInput = win32api.GetStdHandle(win32api.STD_INPUT_HANDLE)
+        startup.hStdOutput = win32api.GetStdHandle(win32api.STD_OUTPUT_HANDLE)
+        startup.hStdError = win32api.GetStdHandle(win32api.STD_ERROR_HANDLE)
         process, thread, _, _ = win32process.CreateProcess(
             None,
             subprocess.list2cmdline(command),
@@ -127,7 +130,7 @@ def run_windows_job(
             win32con.CREATE_SUSPENDED,
             None,
             None,
-            win32process.STARTUPINFO(),
+            startup,
         )
         handles.callback(process.Close)
         handles.callback(thread.Close)
@@ -157,21 +160,13 @@ def run_windows_job(
 
 
 def main(arguments: list[str]) -> int:
-    try:
-        separator = arguments.index("--")
-    except ValueError as error:
-        raise ValueError("Windows Job Object runner 缺少命令分隔符 --") from error
-    if (
-        separator != 2
-        or arguments[0] != "--memory-limit-kb"
-        or not arguments[1].isdecimal()
-    ):
-        raise ValueError("Windows Job Object runner 参数无效")
-    memory_limit_kb = int(arguments[1])
-    command = arguments[separator + 1 :]
-    if memory_limit_kb <= 0 or not command:
-        raise ValueError("Windows Job Object runner 需要正内存上限和非空命令")
-    return run_windows_job(command, memory_bytes=memory_limit_kb * 1024)
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument("--memory-limit-kb", type=int, required=True)
+    parser.add_argument("--timeout-seconds", type=float)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    options = parser.parse_args(arguments)
+    command = options.command[1:] if options.command[:1] == ["--"] else options.command
+    return run_windows_job(command, memory_bytes=options.memory_limit_kb * 1024, timeout_seconds=options.timeout_seconds)
 
 
 if __name__ == "__main__":

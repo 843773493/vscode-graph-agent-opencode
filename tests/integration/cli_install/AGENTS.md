@@ -10,7 +10,7 @@
 # 不可修改内容
 
 - 不执行真实全局 npm 安装或访问公共 registry。
-- 不修改 Windows Job Object 共用 helper；它由 `tests.support.processes` 持有。
+- 不修改 Windows Job Object 共用 helper；它由 `app/runtime/windows_job.py` 持有。
 
 # 规范
 

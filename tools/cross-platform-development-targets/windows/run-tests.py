@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
-windows_job = importlib.import_module("tests.support.processes.windows_job")
+windows_job = importlib.import_module("app.runtime.windows_job")
 
 TIMEOUT_SECONDS = 600
 MEMORY_BYTES = 4 * 1024**3

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_windows_npm_cmd_execution_is_bounded() -> None:
-    from tests.support.processes.windows_job import run_windows_job
+    from app.runtime.windows_job import run_windows_job
 
     exit_code = run_windows_job(
         ["bun", "test", "scripts/install/windows-npm-execution.test.mjs"],

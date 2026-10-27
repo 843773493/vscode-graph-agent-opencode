@@ -18,6 +18,9 @@ app/runtime/
 │   └── embeddings.py         按 provider 配置执行 Embedding 调用
 ├── ChatGPT 凭据
 │   └── chatgpt_auth.py       OAuth 凭据目录、Codex 凭据迁移与模型能力
+├── 原生命令保护
+│   ├── posix_job.py           独立期限、每进程数据段限额及进程组回收
+│   └── windows_job.py         Windows Job Object整树内存、期限及退出回收
 └── 可替换运行时端口
     └── runtime_ports.py      后端启动时注入的时钟端口
 ```
@@ -42,3 +45,5 @@ app/runtime/
 - 失败必须显式抛出包含上下文的异常，禁止静默降级。
 - 本目录的单元测试放在 `tests/unit/runtime/`，外部边界（模型、认证服务）必须显式替换。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+命令保护由持久任务脚本检查、测试matrix及Windows开发目标按平台复用；Windows原生库只在Windows入口加载，不在测试支持目录保留副本。

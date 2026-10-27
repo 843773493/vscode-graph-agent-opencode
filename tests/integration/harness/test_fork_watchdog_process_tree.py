@@ -81,9 +81,9 @@ def watchdog_case(request: pytest.FixtureRequest) -> Iterator[tuple[Path, Path, 
     workspace.mkdir(parents=True)
     (workspace / 'tests/runner').mkdir(parents=True)
     if sys.platform == 'win32':
-        guard = workspace / 'tests/support/processes/windows_job.py'
+        guard = workspace / 'app/runtime/windows_job.py'
         guard.parent.mkdir(parents=True)
-        shutil.copyfile(root / 'tests/support/processes/windows_job.py', guard)
+        shutil.copyfile(root / 'app/runtime/windows_job.py', guard)
     matrix = {'schemaVersion': 1, 'suites': [{
         'id': 'fork-watchdog-probe', 'enabled': True,
         'timeoutMs': 10_000, 'dataLimitKb': 4194304,

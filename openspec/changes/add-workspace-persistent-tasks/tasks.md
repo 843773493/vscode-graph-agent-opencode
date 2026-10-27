@@ -65,6 +65,13 @@
 
 ## 实施证据
 
+### 脚本检查的共用进程保护边界（2026-10-27）
+
+- Windows Job Object实现从测试支持目录移入 `app/runtime/windows_job.py`，matrix、Windows开发目标及安装测试全量迁移，旧文件物理删除。补齐标准流传递与可选执行期限；POSIX独立监督器提供每进程数据段限额、执行期限和退出后的进程组回收。两平台的内存限制语义不同，未宣称POSIX具有Windows整树提交内存限额。
+- `native-guard-linux-072`：9 passed；`native-guard-target-contract-073`：39 passed、1 Windows专用skip；POSIX定向Pyright零错误，相关Ruff通过。真实标准流/cwd、非零退出、内存超限、超时/中断及根命令退出后的后代回收均由原生子进程核实。
+- `native-guard-windows-074`在测试启动前发现pywin32标准流常量的模块归属错误；经目标原生库查询修正后，快照 `e08dfade0eb2` 在 `hyf_win` 通过16项、跳过1项POSIX信号场景（075），覆盖Job绑定/通知失败、内存、期限、后代回收、matrix watchdog及两种安装入口。原始命令、源码指纹、输出和退出码保存在既有证据目录；未把首次启动失败记为测试通过。
+- 这一步只完成脚本判断的进程保护基础；脚本配置、结构化输出、判断持久化与迟到/重启协调仍待实现，3.2不勾选。
+
 ### 1.1—1.3 调用闭包与行为映射（2026-10-27）
 
 - design补齐Goal、Gateway生成器、工作区SessionGeneration及其工具/API/前端/协议/配置/恢复消费者，特别登记工作区运行账本、Session内消息intent与fork preparing节点goal.json检查。不是只移动cron或替换GoalRuntimeService名称；团队协作保持TODO。

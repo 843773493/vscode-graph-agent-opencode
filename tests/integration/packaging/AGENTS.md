@@ -11,7 +11,7 @@
 
 - 不执行真实全局安装、不访问公共 registry、不覆盖用户安装目录。
 - 不在这里修改生产打包实现；生产代码归 `packaging/runtime/` 或 `scripts/install/`。
-- 不修改共用进程保护 helper；它由 `tests.support.processes` 持有。
+- 不修改共用进程保护 helper；它由 `app/runtime/windows_job.py` 持有。
 
 # 规范
 
