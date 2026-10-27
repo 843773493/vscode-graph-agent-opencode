@@ -108,3 +108,91 @@ async def test_offline_or_changed_owner_never_falls_back(migration_case):
         assert (root / "generators/gen_old.json").exists()
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["source", "backup"])
+async def test_retry_verifies_all_frozen_files_before_publishing_and_can_restore_backup(migration_case, monkeypatch, changed):
+    root, _registry, client, _api, sent = migration_case
+    path = root / "generators/gen_old.json"
+    original = path.read_bytes()
+    async def offline(*args, **kwargs):
+        raise httpx.ConnectError("目标离线 /private/native/path")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(client, "post", offline)
+            failed, = await migrate(migration_case)
+        assert failed["status"] == "failed" and sent == []
+        assert path.read_bytes() == original
+        snapshot, = (root / "migration-backups/session-generators").glob("*/snapshot.json")
+        backup = snapshot.parent
+        archived = backup / path.relative_to(root)
+        assert archived.read_bytes() == original
+        damaged = path if changed == "source" else archived
+        damaged.write_bytes(b"damaged migration input")
+        failed, = await migrate(migration_case)
+        assert failed["status"] == "failed" and sent == []
+        assert not (backup / "receipt.json").exists()
+        # 只恢复迁移前原件；没有重启旧producer或将新运行结果回写旧文件。
+        damaged.write_bytes(original)
+        recovered, = await migrate(migration_case)
+        assert recovered["status"] == "imported" and len(sent) == 1
+        assert archived.read_bytes() == original and not path.exists()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_changed_late_backup_cannot_partially_retire_sources_after_acceptance(migration_case, monkeypatch):
+    root, _registry, client, _api, sent = migration_case
+    definition = root / "generators/gen_old.json"
+    schedule = root / "generator-schedules/gen_old.json"
+    original_schedule = schedule.read_bytes()
+    original_post = client.post
+
+    async def change_after_acceptance(*args, **kwargs):
+        response = await original_post(*args, **kwargs)
+        snapshot, = (root / "migration-backups/session-generators").glob("*/snapshot.json")
+        (snapshot.parent / schedule.relative_to(root)).write_bytes(b"damaged after target acceptance")
+        return response
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(client, "post", change_after_acceptance)
+            failed, = await migrate(migration_case)
+        assert failed["status"] == "failed" and len(sent) == 1
+        assert definition.is_file() and schedule.is_file()
+        snapshot, = (root / "migration-backups/session-generators").glob("*/snapshot.json")
+        assert (snapshot.parent / "receipt.json").is_file()
+        (snapshot.parent / schedule.relative_to(root)).write_bytes(original_schedule)
+        recovered, = await migrate(migration_case)
+        assert recovered["status"] == "imported" and len(sent) == 1
+        assert not definition.exists() and not schedule.exists()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lost_target_acknowledgement_retries_identical_snapshot(migration_case, monkeypatch):
+    root, _registry, client, _api, sent = migration_case
+    original_post = client.post
+
+    async def lose_acknowledgement(*args, **kwargs):
+        response = await original_post(*args, **kwargs)
+        raise httpx.ReadError("导入已接受但响应丢失", request=response.request)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(client, "post", lose_acknowledgement)
+            failed, = await migrate(migration_case)
+        assert failed["status"] == "failed" and len(sent) == 1
+        assert (root / "generators/gen_old.json").is_file()
+        snapshot, = (root / "migration-backups/session-generators").glob("*/snapshot.json")
+        assert not (snapshot.parent / "receipt.json").exists()
+        recovered, = await migrate(migration_case)
+        assert recovered["status"] == "imported" and len(sent) == 2
+        assert sent[0].content == sent[1].content
+        assert (await migrate(migration_case)) == [recovered] and len(sent) == 2
+    finally:
+        await client.aclose()

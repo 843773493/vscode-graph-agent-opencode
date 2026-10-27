@@ -10,11 +10,10 @@ from pathlib import Path
 import httpx
 import portalocker
 
-from app.core.atomic_fs import atomic_write_bytes
+from app.core.atomic_fs import atomic_write_bytes, fsync_directory
 from app.core.resource_uri import resource_display_uri
 from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
-from app.gateway.control.storage import atomic_write_json
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.schemas.internal_v2.generator_import import SessionGeneratorImportRequest
 from app.schemas.internal_v2.legacy_generators import GeneratorDefinitionDTO
@@ -99,8 +98,8 @@ def _bundle(root: Path, definition: GeneratorDefinitionDTO, registry: GatewayWor
     }), sources
 
 
-def _retire(root: Path, backup: Path, sources: dict[str, str]) -> None:
-    # 回执先于删除，重启可逐项核对已删除前缀，不会重新构造不同快照。
+def _verified_sources(root: Path, backup: Path, sources: dict[str, str]) -> list[Path]:
+    remaining: list[Path] = []
     for relative, digest in sources.items():
         source, archived = root / relative, backup / relative
         if not source.resolve().is_relative_to(root) or not archived.resolve().is_relative_to(backup):
@@ -110,7 +109,8 @@ def _retire(root: Path, backup: Path, sources: dict[str, str]) -> None:
         if source.exists():
             if hashlib.sha256(_source(source)).hexdigest() != digest:
                 raise RuntimeError("旧生成器在迁移期间变化，停止退休源文件")
-            source.unlink()
+            remaining.append(source)
+    return remaining
 
 
 async def _install(root: Path, backup: Path, snapshot: dict, *, registry: GatewayWorkspaceRegistry,
@@ -118,6 +118,8 @@ async def _install(root: Path, backup: Path, snapshot: dict, *, registry: Gatewa
     bundle = SessionGeneratorImportRequest.model_validate(snapshot["request"])
     result = {"task_id": bundle.task_id, "workspace_id": snapshot["workspace_id"], "source_hash": bundle.source_hash, "status": "imported"}
     receipt = backup / "receipt.json"
+    # 先核验整个冻结快照；损坏或变化的输入不能先在目标创建可调度任务。
+    _verified_sources(root, backup, snapshot["files"])
     if not receipt.exists():
         target = registry.resolve(snapshot["workspace_id"])
         if target.backend_workspace_id != snapshot["owner"]:
@@ -127,10 +129,13 @@ async def _install(root: Path, backup: Path, snapshot: dict, *, registry: Gatewa
         response.raise_for_status()
         if response.json()["data"]["task_id"] != bundle.task_id:
             raise RuntimeError("旧生成器导入回执身份不匹配")
-        atomic_write_json(receipt, result)
+        atomic_write_bytes(receipt, (json.dumps(result, ensure_ascii=False, indent=2) + "\n").encode())
     elif json.loads(_source(receipt)) != result:
         raise RuntimeError("旧生成器迁移回执与快照冲突")
-    _retire(root, backup, snapshot["files"])
+    # 目标接受期间源文件仍可能变化；全量重验后才退休，回执支持断点重试。
+    for source in _verified_sources(root, backup, snapshot["files"]):
+        source.unlink()
+        fsync_directory(source.parent)
     return result
 
 
@@ -169,7 +174,7 @@ async def _import_all(*, root: Path, registry: GatewayWorkspaceRegistry,
                     if archived.exists() and _source(archived) != raw:
                         raise RuntimeError("旧生成器备份内容冲突")
                     atomic_write_bytes(archived, raw)
-                atomic_write_json(backup / "snapshot.json", snapshot)
+                atomic_write_bytes(backup / "snapshot.json", (json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode())
             snapshots[backup] = snapshot
         except (LookupError, ValueError, RuntimeError, OSError) as error:
             logger.exception("旧生成器迁移准备失败: task=%s request_id=%s", generator_id, request_id)
