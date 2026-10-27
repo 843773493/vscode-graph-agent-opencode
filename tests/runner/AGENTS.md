@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-fork-item-lookup` 通过真实消息、回放和完整 fork 入口生成非活跃、非祖先分支，核对 item-only/显式 view 来源及展示 revision 的既有拒绝回归，固定180秒/4GiB。业务 HTTP 使用 ASGI transport，Gateway 管理来源与 Terminal/Browser 为真实服务；不替代真实 Gateway 代理、task 前缀创建、一致捕获或恢复验收。
+
 - `integration-mcp-real-provider-discovery` 使用现有 `CCTQ_API_KEY`、真实 Provider 与受控 MCP，经 Gateway／Session／Agent 验证完整定义、两轮多调用、冷配对和请求 hash；固定660秒／4GiB。显式选择该 suite 前须将现有凭据加入进程环境，缺失时报告 UNMET_PREREQUISITE，不回退到回放；token 估算、Provider用量和缓存观测各自保留，不代表稳定命中或跨执行持有。
 
 - `integration-mcp-tool-approval`沿真实Gateway、Session消息、原图interrupt及HTTP MCP验证逐调用审批、直接工具编辑、同schema替换、期限、撤权与取消；完整9场景实测582秒，保护期限720秒/4GiB。`integration-web-tool-approval`经真实Chromium验证刷新后读取原检查点、编辑与拒绝，固定240秒/4GiB。均复用model_stream，不代表真实外部Provider或旧socket可恢复。

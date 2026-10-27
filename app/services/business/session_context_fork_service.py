@@ -222,7 +222,7 @@ class SessionContextForkService:
         if thread_id is None:
             thread_id = await self._session_service.resolve_main_thread(session_id)
         owner = self._checkpointer.forks.source.resolve_thread_owner(session_id, thread_id)
-        if (source_view_id is None) != (source_view_revision is None):
+        if mode != "view_prefix_fork" and (source_view_id is None) != (source_view_revision is None):
             raise ValueError("来源必须同时携带 source view/revision")
         if source_view_id is not None and turn_id is None and item_id is None:
             point = await self._checkpointer.forks.source.preflight_fork(

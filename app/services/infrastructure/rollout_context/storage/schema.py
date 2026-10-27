@@ -20,9 +20,11 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 25
+ROLLOUT_SCHEMA_VERSION = 26
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "sql/execution_queue.sql")
 SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "sql/skill_selection_024_025.sql")
+VIEW_CREATION_SCHEMA_SQL = load_sql(__package__, "sql/view_creation.sql")
+VIEW_CREATION_MIGRATION_SQL = load_sql(__package__, "sql/view_creation_025_026.sql") + VIEW_CREATION_SCHEMA_SQL
 
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
@@ -77,6 +79,7 @@ def initialize_rollout_schema(
         + CHANNEL_VALUES_SCHEMA_SQL
         + MESSAGES_SCHEMA_SQL
         + load_sql(__package__, "sql/rollout.sql")
+        + VIEW_CREATION_SCHEMA_SQL
         + ASSEMBLY_CONTENT_SCHEMA_SQL
         + VIEW_MEMBERSHIP_SCHEMA_SQL
         + EXECUTION_QUEUE_SCHEMA_SQL

@@ -1160,7 +1160,7 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - [x] 14.1 全仓盘齐范围模式的公开输入、工具、API、DTO/协议与生成类型、前端、日志/lineage/物化恢复枚举、直接间接调用和测试，将模式 context_fork 物理统一为 last_completed_turn_fork，不留 alias/双读/旧死代码。区分独立 Session kind/创建 purpose/方法职责；保留 active-lineage 最近完成 normal Turn、已完成 internal 来源和真实空来源行为。现有持久化实验数据按原 owner 版本合同处理，不静默改写历史 preimage/hash 或加兼容层。
 - [ ] 14.2 迁齐 task 判别 schema、委派协议/服务与公开 fork/source-point/transfer/UI 消费者：task 默认 empty；last_completed_turn_fork 不接受前缀 selector；view_prefix_fork 只需 item_id，支持显式 view_id 与 inclusive/before。公开 API 将既有 anchor_item_id/source_view_id 归一到同一 typed selector，不并行接受字段 alias；prefix 输入不强制 view/revision 成对，调用方观察 revision 与后端冻结 revision 分离。工具来源取真实 execution admission，禁止 Thread/Session/URI 覆盖。
-- [ ] 14.3 在既有 source owner 下实现精确来源 Thread、既定 namespace 的全分支 item 定位：依据已有持久提交顺序及有效 context membership 选择最新 view，排除 hidden/backing/provenance 候选；需要补索引时只在该 owner 补最小索引。显式 view 只校验该 view，不借 resolve_turn_anchor 的 active lineage 替代全分支查找；选中候选后协议不闭合或正文缺失立即拒绝，不回退旧 view、不扩大或移动锚点。
+- [x] 14.3 在既有 source owner 下实现精确来源 Thread、既定 namespace 的全分支 item 定位：依据已有持久提交顺序及有效 context membership 选择最新 view，排除 hidden/backing/provenance 候选；需要补索引时只在该 owner 补最小索引。显式 view 只校验该 view，不借 resolve_turn_anchor 的 active lineage 替代全分支查找；选中候选后协议不闭合或正文缺失立即拒绝，不回退旧 view、不扩大或移动锚点。
 - [ ] 14.4 核对所有 revision 校验及调用方：freeze_display_point、preflight/_resolve_fork_source、资源候选、服务/transfer 的输入与来源响应检查按职责改造。以同一一致快照或既有 owner 保护覆盖定位、前缀冻结和 capture，消除查 revision 后释放保护的窗口；task canonical tool-call 已提交后再定位，写入临界区与 fork 捕获不自锁。select_view_prefix/capture manifest、committed offsets、hash/length、owner、资源 CAS 等冻结原件校验继续严格，full_rollout_copy/rewind/replay/compaction 不顺带放宽；不能简单删检查、改 <=、补当前 revision 或新建复杂凭证系统。
 - [ ] 14.5 复用原创建/capture/物化/证明/发布/清理/恢复链：原始 selector 进入请求 preimage，解析 view/revision/item/方向/前缀与 capture 进入原日志；同 tool-call 首次冻结后优先复用原记录，不重新定位。显式 view、item、方向、模式或任务变化返回冲突，capture 未完成只能按原冻结前缀继续或中止；无 idle fork 后补委派、第二 journal/复制器或重复 child/member/initial intent/Job。
 - [ ] 14.6 验证真实模型 task 入口：模型只提交 item_id，断言 task 调用已在 canonical history 提交后进入定位，child 首个 Provider 请求包含选定前缀及自身 seed/reference，排除截止点后的 task 调用/新增消息/活跃执行。覆盖非 active 且非祖先分支中的最新候选、显式旧 view、多个 view、hidden/backing 非候选、跨 Thread 相同历史 ID、无候选和非法来源覆盖；新测试必须能区分 active-lineage 或跨 owner 误选实现。
@@ -1175,3 +1175,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 将范围模式统一为 `last_completed_turn_fork`，迁齐工具、API/DTO、Web/OpenAPI、物化/lineage/恢复及直接间接调用；独立 Session kind/purpose 保持原职责。旧范围输入明确拒绝，不提供 alias、不改写历史 preimage/hash，SQLite 结构和 protobuf string 字段形状不变。
 - 完整候选 tree `b5a24d9d2dee4081f7249c723ffa19385e671249`：214 单测、11 项公开 fork、11 项 task fork 集成（385.18 秒）及 19 项 Web hook 通过；真实 TypeScript、Web build、协议检查、Ruff、compileall 均 exit0。全部运行源码前后一致、进程组无残留，固定60秒fork期限保持。剩余旧模式字面量仅为独立 Session kind/purpose 或两项拒绝旧输入的负例。
 - 原件及机械核验见 `out/tests/temp/fork-scope-mode-rename/artifacts/verification-017.json`；副本漏接 Web 独立 node_modules 导致的三次失败保留，补依赖链接后通过，未改产品源码。driver classifier 仅自测，不是真实浏览器验收；本批未新跑 Python Pyright，也不代替14.2–14.10或团队整体门。
+
+
+### 2026-10-27 14.3 全分支 item 来源定位
+
+- 来源 owner 按精确 Thread、namespace 的有效 membership 定位 item；自动选择最新创建的候选，显式 view 仅校验自身，排除 hidden、未选中及 checkpoint backing view。复用 checkpoint 归属和分支父子关系，完整 fork 的独立 active root 不截断历史 namespace；后续协议／正文校验继续沿原链路失败，不回退候选。
+- active successor 沿用 control_sequence，不能据此判断创建先后。因此 schema 26 在原 context_views 增加不可变唯一 creation_sequence，由原 SQLite 写事务分配；25→26 按原 rowid 顺序初始化。静态结构和迁移均在 SQL，Python 只协调；历史 assembly bytes、JSONL、hash 不改写，18–25 旧库按原 owner 显式顺序升级。
+- 完整候选 `ad0e881d643672aa816f27b6c7a93580b6dfb998` 的定位／迁移 20 项与损坏、缺失正文、来源绑定负例 8 项通过。最终候选 `91e3a36c2a3b34620bdb36179f1e60f45bca58bd` 仅调整新产品测试和 runner 目录说明，产品源码逐字不变；正式 matrix 为3 passed／98.49秒，真实消息／回放生成关键历史并经公开 full-copy 创建 child，核对非 active 且非祖先的 item-only 和显式旧 view。业务 HTTP 为 ASGI transport；Gateway 管理来源与 Terminal／Browser 为真实服务，不称真实 Gateway 业务代理验收。
+- 受影响 Python Ruff 通过；4676 项最终候选源码逐文件匹配，16 次运行原始输出、退出码、前后源码和进程组回收机械核验见 `out/tests/temp/fork-item-lookup/artifacts/verification-017.json`。此前装具未启动服务、导入排序／旧 schema 预期、错误假设 replay 会生成非祖先 view、非 matrix 启动拒绝与协调中止原件均保留；未将混合失败运行记为全绿。
+- 二次回放到首轮额外暴露 `context-source-not-tracked: source_id=agents:workspace`，尚未修复或归因为本批，转入 CIL 来源恢复排查。14.2／14.4–14.10 保持未勾，仍保留调用方显式旧 revision 的拒绝；本批未新跑 Pyright、Web、Windows，不代替 task 前缀、一致捕获、重试恢复或团队总门。

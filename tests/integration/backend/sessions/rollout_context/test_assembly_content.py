@@ -25,6 +25,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
@@ -207,6 +208,11 @@ def test_schema21_upgrade_preserves_historical_jcs_hashes_and_jsonl(shared_assem
                                          migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL)
     saver._storage.storage.migrate_schema(thread, session_id=session, to_version=25,
                                          migration_name="skill_selection_024_025", migration_sql=SKILL_SELECTION_MIGRATION_SQL)
+
+    saver._storage.storage.migrate_schema(
+        thread, session_id=session, to_version=26,
+        migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     for original in (first, second):
         assert cold.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict() == original.to_dict()

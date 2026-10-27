@@ -274,7 +274,7 @@ class RolloutSchemaIntrospectionMixin:
         if schema_version < expected_version:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
-                "18/19/20/21/22/23/24版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24→25；其余旧实验库不支持转换，原始数据保留；"
+                "18/19/20/21/22/23/24/25版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24→25→26；其余旧实验库不支持转换，原始数据保留；"
                 f"current={schema_version}, target={expected_version}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:
@@ -289,6 +289,16 @@ class RolloutSchemaIntrospectionMixin:
             raise RuntimeError(
                 "schema-incompatible: rollout 缺少必需的 canonical ToolResult identity 索引"
             )
+        if schema_version >= 26:
+            columns = {column[1] for column in connection.execute("PRAGMA table_info(context_views)")}
+            required = {"context_views_creation_sequence", "context_views_assign_creation_sequence", "context_views_preserve_creation_sequence"}
+            registered = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE tbl_name='context_views' AND type IN ('index','trigger')",
+            )}
+            if "creation_sequence" not in columns or not required <= registered:
+                raise RuntimeError("schema-incompatible: rollout 缺少 view 创建顺序结构")
+            if connection.execute("SELECT 1 FROM context_views WHERE creation_sequence<=0 LIMIT 1").fetchone() is not None:
+                raise RuntimeError("source-mismatch: context view 缺少已提交创建顺序")
         validate_schema_journal(connection, schema_version)
 
     @staticmethod

@@ -11,8 +11,21 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 
 
+def restore_schema25(connection: sqlite3.Connection) -> None:
+    """还原创建顺序列引入前的真实结构，保留原 view rowid 插入顺序。"""
+    connection.execute("DROP TRIGGER context_views_assign_creation_sequence")
+    connection.execute("DROP TRIGGER context_views_preserve_creation_sequence")
+    connection.execute("DROP INDEX context_views_creation_sequence")
+    connection.execute("ALTER TABLE context_views DROP COLUMN creation_sequence")
+    connection.execute("UPDATE database_meta SET schema_version=25")
+    connection.execute("UPDATE schema_migrations SET to_version=25,migration_name='rollout_sqlite_v25',migration_checksum=? WHERE from_version=0",
+                       (hashlib.sha256(b"rollout_sqlite_v25").hexdigest(),))
+    connection.commit()
+
+
 def restore_schema24(connection: sqlite3.Connection) -> None:
     """还原选择次序引入前的结构；业务内容仍由真实产品写入方生成。"""
+    restore_schema25(connection)
     for table in ("context_source_control_states", "checkpoint_context_source_states"):
         connection.execute(f"ALTER TABLE {table} DROP COLUMN latest_visible_selection_sequence")
         connection.execute(f"ALTER TABLE {table} DROP COLUMN selection_sequence")

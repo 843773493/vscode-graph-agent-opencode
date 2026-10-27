@@ -54,7 +54,8 @@
         CREATE TABLE IF NOT EXISTS context_views (
             view_id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, parent_view_id TEXT,
             view_kind TEXT NOT NULL, head_turn_id TEXT, head_message_sequence INTEGER NOT NULL,
-            logical_turn_count INTEGER NOT NULL, control_sequence INTEGER, created_at TEXT NOT NULL
+            logical_turn_count INTEGER NOT NULL, control_sequence INTEGER, created_at TEXT NOT NULL,
+            creation_sequence INTEGER NOT NULL DEFAULT 0 CHECK(creation_sequence >= 0)
         );
         CREATE TABLE IF NOT EXISTS context_view_ranges (
             view_id TEXT NOT NULL, range_index INTEGER NOT NULL, source_kind TEXT NOT NULL,

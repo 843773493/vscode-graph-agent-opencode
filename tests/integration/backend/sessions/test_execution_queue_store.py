@@ -26,6 +26,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    VIEW_CREATION_MIGRATION_SQL,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
@@ -213,6 +214,11 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(store_c
                            migration_name="execution_queue_023_024", migration_sql=EXECUTION_QUEUE_SCHEMA_SQL)
     storage.migrate_schema(case.thread, session_id=case.session, to_version=25,
                            migration_name="skill_selection_024_025", migration_sql=SKILL_SELECTION_MIGRATION_SQL)
+
+    storage.migrate_schema(
+        case.thread, session_id=case.session, to_version=26,
+        migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
     await case.store.migrate_schema(case.session)
     assert not path.exists() and storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original
     recovered, = await case.store.records()

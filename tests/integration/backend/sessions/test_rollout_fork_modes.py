@@ -3346,8 +3346,16 @@ async def test_first_fork_click_rejects_stale_actual_history_snapshot(
     selection = {"turn_id": displayed.turn_id} if click == "user_root" else {
         "item_id": next(part.source.item_id for part in displayed.response_parts if part.final),
     }
-    with pytest.raises(ValueError, match="source-mismatch: 消息点击必须携带实际历史读取"):
-        await fork_context.forks.source_point(session_id=source.session_id, thread_id=thread_id, **selection)
+    if click == "assistant_item":
+        automatic = await fork_context.forks.source_point(
+            session_id=source.session_id, thread_id=thread_id, **selection,
+        )
+        assert automatic.anchor_item_id == selection["item_id"]
+        assert automatic.source_view_revision == displayed.source_view_revision
+    else:
+        # Turn 入口仍按展示 view 解析 root；item-only 的全分支定位不修改 Turn 合同。
+        with pytest.raises(ValueError, match="source-mismatch: 消息点击必须携带实际历史读取"):
+            await fork_context.forks.source_point(session_id=source.session_id, thread_id=thread_id, **selection)
     frozen = await fork_context.forks.source_point(
         session_id=source.session_id, thread_id=thread_id, **selection,
         source_view_id=displayed.source_view_id, source_view_revision=displayed.source_view_revision,

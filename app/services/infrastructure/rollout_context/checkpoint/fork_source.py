@@ -458,9 +458,9 @@ class CheckpointForkSource:
         """点击用户消息取真实 root item；响应直接使用 projection 的稳定 item。"""
         if turn_id is not None and item_id is not None:
             raise ValueError("fork source point 不能同时选择 Turn root 和响应 item")
-        if (source_view_id is None) != (source_view_revision is None):
+        if mode != "view_prefix_fork" and (source_view_id is None) != (source_view_revision is None):
             raise ValueError("fork source point 必须同时携带 source view/revision")
-        if mode == "view_prefix_fork" and (turn_id is not None or item_id is not None) and source_view_id is None:
+        if mode == "view_prefix_fork" and turn_id is not None and source_view_id is None:
             raise ValueError("source-mismatch: 消息点击必须携带实际历史读取的 source view/revision")
         async with self._source_read_admission(source_session_id):
             source_owner = self._require_thread_owner(source_session_id, source_owner)
@@ -489,6 +489,10 @@ class CheckpointForkSource:
                     display_revision = source_view_revision if source_view_revision is not None else head[1]
                     if display_revision != head[1]:
                         raise ValueError("source-mismatch: 展示快照 revision 已变化")
+                    if item_id is not None:
+                        display_view = self._locate_item_view(
+                            connection, checkpoint_ns=checkpoint_ns, item_id=item_id, view_id=source_view_id,
+                        )
                     if turn_id is not None:
                         root = connection.execute(
                             "SELECT turn.root_input_item_id FROM context_view_turns turn "
@@ -512,6 +516,32 @@ class CheckpointForkSource:
                     mode="view_prefix_fork", source_view_id=display_view, source_view_revision=display_revision,
                     anchor_item_id=item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
                 )
+
+    @staticmethod
+    def _locate_item_view(
+        connection: sqlite3.Connection, *, checkpoint_ns: str,
+        item_id: str, view_id: str | None,
+    ) -> str:
+        """在同 namespace 的全部分支定位有效成员；选定后不再回退候选。"""
+        candidates = connection.execute(
+            "WITH RECURSIVE namespace_branches(branch_id) AS ("
+            "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns=? UNION "
+            "SELECT branch_id FROM checkpoints WHERE checkpoint_ns=? UNION "
+            "SELECT branch.parent_branch_id FROM branches branch JOIN namespace_branches scope "
+            "ON branch.branch_id=scope.branch_id WHERE branch.parent_branch_id IS NOT NULL UNION "
+            "SELECT branch.branch_id FROM branches branch JOIN namespace_branches scope "
+            "ON branch.parent_branch_id=scope.branch_id) "
+            "SELECT view.view_id FROM context_view_items member "
+            "JOIN context_views view ON view.view_id=member.view_id "
+            "JOIN namespace_branches scope ON scope.branch_id=view.branch_id "
+            "WHERE member.item_id=? AND member.visible=1 AND member.context_selected=1 "
+            "AND view.view_kind<>'checkpoint_messages' AND (? IS NULL OR view.view_id=?) "
+            "ORDER BY view.creation_sequence DESC LIMIT 1",
+            (checkpoint_ns, checkpoint_ns, item_id, view_id, view_id),
+        ).fetchall()
+        if not candidates:
+            raise ValueError("source-mismatch: 点击 item 不属于冻结 source view 的有效上下文或来源 namespace")
+        return candidates[0][0]
 
     @staticmethod
     def _completed_fork_anchor(connection: sqlite3.Connection, view_id: str) -> tuple[str, str, str] | None:
@@ -602,8 +632,11 @@ class CheckpointForkSource:
             ):
                 raise ValueError("source-mismatch: source view revision 已变化")
             if mode == "view_prefix_fork":
-                if source_view_id is None or source_view_revision is None or anchor_item_id is None:
-                    raise ValueError("view_prefix_fork 必须固定 source view/revision/item")
+                if anchor_item_id is None:
+                    raise ValueError("view_prefix_fork 必须提供点击 item")
+                source_view_id = self._locate_item_view(
+                    connection, checkpoint_ns=checkpoint_ns, item_id=anchor_item_id, view_id=source_view_id,
+                )
             else:
                 if source_view_id is not None and source_view_id != active_view:
                     raise ValueError("source-mismatch: source point 已不是 active view")

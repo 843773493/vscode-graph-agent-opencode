@@ -541,3 +541,9 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 最终完整暂存 tree `c11986a2cf66b08a21e3263704d529d3d5c34447` 隔离他人 task／fork 改动后，相关单元／原配置发布／架构 89 passed／55.79秒，共享与私有真实 HTTP → Gateway → Workspace → Session 消息 → model_stream 产品 2 passed／300.44秒；加载、四层覆盖、显式 rebind、手动／一分钟周期、请求 hash 与冷恢复沿原产品断言。4557个受测 blob 逐项核验不变，正式输出保留，完整临时源码已清理。邻近消费者 `consumer-closure-002` 为306 passed／68.50秒（早于回滚修复，受测 app 当时不变，仅新测试文件发生变化）；修复后受影响 owner、Gateway consumer 与产品由隔离批重新覆盖。配置定向 `config-contract-008` 为25 passed，不能与重叠批次相加作为独立总场景数。
 - 19文件 Ruff 基线／最终均零诊断；Pyright 基线／最终均9项既有诊断，零新增，类型检查本身 exit1。新增 typed 继承已显式 frozen，未忽略类型错误。AST／目录审查无新增结构问题：获取协议留在来源目录，通知不存正文，acceptance 不进入 CSM／数据库 writer；大文件仅迁移原字段／调用，未增加无关职责。公共 DTO／Proto／Web 源码均未变化，Web真实类型与构建按上一边界未变依赖复用，未声称本轮重跑或实际浏览器／外部 Provider／Windows验证。
 - 准确命令、源码指纹、原始输出、实际退出码、静态基线和隔离产品原件位于 `out/tests/temp/skill-source-capabilities/artifacts/`。关闭9.9，当前69/76；团队／协作延期项及其余全量验收门仍保持未完成。
+
+
+### 2026-10-27 回放至首轮的来源跟踪待排查
+
+- TODO：产品消息生成两轮历史后，先改写第二轮，再回放至首轮，模型准备失败于 `context-source-not-tracked: source_id=agents:workspace`；即便使用已发布 AGENTS 的 model_tool_test_workspace 仍复现。尚未修复或完成修改前基线归因，不能据此关闭来源恢复或完整执行门。
+- 原件为 `out/tests/temp/fork-item-lookup/artifacts/runs/product-007/`（主断言1 failed／其余4 passed；teardown因准备失败导致4次model call仅3次response而报错）。当前全分支定位改用第二、三轮回放及公开完整 fork 验收；这不证明首轮回放问题已解决。
