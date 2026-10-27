@@ -64,7 +64,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 21
+        assert store.diagnostics().schema_version == 22
     finally:
         store.close()
 
@@ -165,7 +165,7 @@ def test_model_evaluation_reference_is_immutable_and_does_not_publish_a_decision
         assert recorded.decision is None and recorded.delivery is None and tasks.get(task.task_id).revision == 1
 
 
-@pytest.mark.parametrize("old_version", [16, 17, 18, 19, 20])
+@pytest.mark.parametrize("old_version", [16, 17, 18, 19, 20, 21])
 def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch, old_version):
     original = {
         "idempotency_key": "old-create", "enabled": True, "configuration": {
@@ -182,7 +182,7 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
     database = SQLiteStateDatabase(path=workspace_root / ".boxteam/state/workspace.sqlite",
                                    schema_version=old_version, migrations=_WORKSPACE_MIGRATIONS[:old_version])
     with closing(database.connection()) as connection, connection:
-        connection.execute("INSERT INTO persistent_tasks VALUES ('ptask_old','ws_old','old-create',?,1,1,'active',NULL,?,?)",
+        connection.execute("INSERT INTO persistent_tasks (task_id,workspace_id,creation_key,creation_hash,revision,definition_revision,lifecycle,reason,created_at,updated_at) VALUES ('ptask_old','ws_old','old-create',?,1,1,'active',NULL,?,?)",
                            (sha256_jcs(original), now.isoformat(), now.isoformat()))
         connection.execute("INSERT INTO persistent_task_definitions VALUES ('ptask_old',1,?)", (json.dumps(original["configuration"]),))
         if old_version == 16:

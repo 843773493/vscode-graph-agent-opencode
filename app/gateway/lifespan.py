@@ -30,12 +30,9 @@ from app.gateway.config import (
     load_gateway_config,
 )
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
-from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
-from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.control.user_access import UserAccessService
 from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.control.view_state import UserViewStateStore
@@ -270,12 +267,6 @@ async def lifespan(app: FastAPI):
         app.state.workspace_navigation_store = WorkspaceNavigationStore(
             storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
         )
-        app.state.session_generator_store = SessionGeneratorStore(root=_gateway_root())
-        app.state.session_generator_coordinator = SessionGeneratorCoordinator(
-            registry=registry,
-            store=app.state.session_generator_store,
-            http_client=app.state.http_client,
-        )
         app.state.session_catalog_search_service = GatewaySessionCatalogSearchService(
             registry=registry,
             http_client=app.state.http_client,
@@ -293,14 +284,7 @@ async def lifespan(app: FastAPI):
             registry=registry,
             http_client=app.state.http_client,
         )
-        app.state.session_generator_scheduler = SessionGeneratorScheduler(
-            store=app.state.session_generator_store,
-            coordinator=app.state.session_generator_coordinator,
-            poll_interval_seconds=gateway_config.session_generator_poll_interval_seconds,
-        )
-        coordinator_started = False
         catalog_search_started = False
-        scheduler_started = False
         user_access_cleanup_task = asyncio.create_task(
             _cleanup_user_access_periodically(
                 app.state.user_access_service,
@@ -403,12 +387,8 @@ async def lifespan(app: FastAPI):
         try:
             await app.state.federation_channel_owner.start()
             await gateway_config_reload.start()
-            await app.state.session_generator_coordinator.start()
-            coordinator_started = True
             await app.state.session_catalog_search_service.start()
             catalog_search_started = True
-            await app.state.session_generator_scheduler.start()
-            scheduler_started = True
             app.state.attach_frontend_urls = {
                 "terminal": os.environ.get(
                     "BOXTEAM_TERMINAL_FRONTEND_URL",
@@ -542,11 +522,6 @@ async def lifespan(app: FastAPI):
                     GatewaySessionCatalogSearchService,
                 ):
                     app.state.session_catalog_search_service.assert_healthy()
-                if isinstance(
-                    app.state.session_generator_scheduler,
-                    SessionGeneratorScheduler,
-                ):
-                    app.state.session_generator_scheduler.assert_healthy()
                 if isinstance(
                     app.state.workspace_runtime_controller,
                     GatewayWorkspaceRuntimeController,
@@ -713,15 +688,9 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(*restore_tasks, return_exceptions=True)
             user_access_cleanup_task.cancel()
             await asyncio.gather(user_access_cleanup_task, return_exceptions=True)
-            if scheduler_started:
-                logger.info("Gateway 正在停止会话生成器调度器")
-                await app.state.session_generator_scheduler.stop()
             if catalog_search_started:
                 logger.info("Gateway 正在停止会话目录索引同步器")
                 await app.state.session_catalog_search_service.stop()
-            if coordinator_started:
-                logger.info("Gateway 正在停止会话生成协调器")
-                await app.state.session_generator_coordinator.stop()
             logger.info("Gateway 正在关闭 HTTP 连接池")
             shutdown_errors: list[Exception] = []
             try:

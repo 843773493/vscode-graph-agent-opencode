@@ -10,12 +10,11 @@ session_generation/
 ├── definition.py        保存校验与执行共用的 provider、版本及配置解析
 ├── naming.py            目标工作区导航命名模板与路径段校验，不推导物理 locator
 ├── providers.py         生成器类型合同与内置 prompt 生成器
-├── reporting.py         子 Job 终态观察、结果回写与报告任务恢复
-├── message_dispatch.py  消息意图持久化、execution identity 预留与幂等派发
-└── service.py           请求入口、策略执行、运行账本与冷启动恢复
+├── reporting.py         从原 canonical 结果构造分支回报
+└── service.py           Provider、目录命名、定义校验与幂等会话创建规则
 ```
 
-沿调用方向阅读时，先从 `service.py` 找状态 owner 和策略入口，再跟进消息派发与终态报告的副作用边界；`providers.py` 只负责把类型化配置转换为 prompt。这个划分可复用于“一个服务持有运行状态，窄模块分别负责提交和收口外部副作用”的业务链路。
+调度与执行进度由统一持久任务运行时持有；本目录不保存运行账本、不订阅Job终态、不创建恢复后台任务。新建和fork均通过原创建journal的稳定幂等身份恢复，不扫描会话列表猜测运行目标。
 
 # 可修改内容
 

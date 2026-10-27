@@ -194,7 +194,6 @@ async def section8_product_nodes(
     project = Path.cwd().resolve()
     context = TestRunContext.from_test_file(Path(request.node.path), project_root=project)
     context.workspace_root = section8_output_root / "workspace"
-    context.artifacts_dir = section8_output_root / "artifacts/section8-product"
     context.artifacts_dir.mkdir(parents=True, exist_ok=True)
     phase_path = section8_output_root / "artifacts/basic-chat-tool-loop-phases.log"
     with phase_path.open("a") as phase_output:

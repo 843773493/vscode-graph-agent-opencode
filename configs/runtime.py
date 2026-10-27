@@ -68,6 +68,9 @@ def validate_config_payload(
     if schema_domain == "workspace":
         require_current_workspace_config(config)
     if schema_domain == "gateway":
+        features = config.get("features")
+        if isinstance(features, dict) and "session_generators" in features:
+            raise ValueError("Gateway 生成器轮询配置已迁入工作区；停止服务后执行 uv run python -m configs.boxteam migrate-runtime-logging，再通过 /api/gateway/migrations/session-generators 显式导入旧任务")
         logging = config.get("logging")
         runtime = logging.get("runtime") if isinstance(logging, dict) else None
         if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):

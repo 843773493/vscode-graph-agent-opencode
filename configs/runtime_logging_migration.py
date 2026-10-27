@@ -14,7 +14,7 @@ from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contr
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 3, "workspace": 2}
+TARGET_CONFIG_VERSIONS = {"gateway": 4, "workspace": 2}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (
@@ -92,6 +92,7 @@ class RuntimeLoggingMigrationPlan:
         return {
             "validation_stage": "logging_preflight",
             "target_config_versions": dict(TARGET_CONFIG_VERSIONS),
+            "retired_gateway_fields": ["/features/session_generators"],
             "settings": self.settings,
             "preserve_gateway_layers": self.settings is None,
             "explicit_choices": self.choices,

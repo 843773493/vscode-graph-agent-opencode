@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayWorkspace } from "../../types/backend";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import {
   apiSuccessResponse,
   installGatewayFetch,
@@ -13,11 +12,6 @@ import SessionResourceExplorer from "./SessionResourceExplorer";
 
 afterEach(restoreGatewayTestEnvironment);
 
-const generatorResources = {
-  generators: null,
-  generationRuns: new Map(),
-  generatorError: null,
-} as unknown as SessionGeneratorResourcesController;
 
 function navigationNode(workspaceId: string, name: string) {
   return {
@@ -73,9 +67,6 @@ async function renderWithBranchItem(
         total: branchItems.length,
       });
     }
-    if (request.path.includes("/api/gateway/session-generators")) {
-      return apiSuccessResponse({ revision: "generators", items: [] });
-    }
     return undefined;
   });
 
@@ -110,7 +101,6 @@ async function renderWithBranchItem(
         onOpenConnectionManager={() => undefined}
         onReconnectWorkspace={async () => undefined}
         onStartWorkspace={async () => undefined}
-        generatorResources={generatorResources}
       />,
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 20));

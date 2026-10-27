@@ -33,7 +33,6 @@ from app.gateway.config import (
     load_gateway_config,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (
     get_gateway_config_reload_service,
@@ -99,10 +98,6 @@ async def health(
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
-    scheduler = getattr(request.app.state, "session_generator_scheduler", None)
-    if not isinstance(scheduler, SessionGeneratorScheduler):
-        raise RuntimeError("会话生成器调度器尚未初始化")
-    scheduler.assert_healthy()
     request.app.state.federation_channel_owner.assert_healthy()
     return APIResponse(
         data=GatewayHealthDTO(

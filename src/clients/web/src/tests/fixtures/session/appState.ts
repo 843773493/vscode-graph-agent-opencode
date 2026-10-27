@@ -1,18 +1,6 @@
 import type { Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
 import type { SetAppState } from "../../../hooks/contentViewLoaderTypes";
-import type {
-  SessionGeneratorResourcesController,
-} from "../../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
-
-export function createEmptyGeneratorResourcesController(): SessionGeneratorResourcesController {
-  return {
-    generators: null,
-    generationRuns: new Map(),
-    generatorError: null,
-  } as unknown as SessionGeneratorResourcesController;
-}
-
 /** 把最新 AppState 镜像到闭包，并把 setState 桥接成委托更新。 */
 export function createAppStateMirror(initial: AppState): {
   readonly setState: SetAppState;

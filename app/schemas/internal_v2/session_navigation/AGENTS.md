@@ -5,7 +5,7 @@
 # 可修改内容
 
 - 会话目录节点、分页、breadcrumb、搜索和文件夹操作协议。
-- 工作区 Session Generator 执行请求与结果协议。
+- 工作区会话动作配置、执行请求、结果协议和generation_state.py中的任务运行进度；已接受的消息正文归canonical owner。
 
 # 不可修改内容
 

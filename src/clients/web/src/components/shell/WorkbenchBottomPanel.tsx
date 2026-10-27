@@ -1,5 +1,4 @@
 import { lazy, Suspense, type PointerEvent as ReactPointerEvent } from "react";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type { WorkspaceTerminalController } from "../../hooks/workspace/useWorkspaceTerminalResources";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { OutputDiagnostic, WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
@@ -40,18 +39,13 @@ interface WorkbenchBottomPanelProps {
   diagnostic: OutputDiagnostic | null;
   workspace: GatewayWorkspace | null;
   workspaceName: string;
-  currentSessionId: string;
   terminalController: WorkspaceTerminalController;
   terminalThread: ResourceThreadRef | null;
   terminalThreadTargetUnavailable: boolean;
-  generatorResources: SessionGeneratorResourcesController;
-  workspaces: GatewayWorkspace[];
   onUpdateState: (patch: Partial<WorkspaceBottomPanelState>) => void;
   onStartResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResetHeight: () => void;
-  onOpenConnectionManager: () => void;
-  onReconnectWorkspace: (workspaceId: string) => Promise<void>;
-  onStartWorkspace: (workspaceId: string) => Promise<void>;
+  onOpenSession: (workspaceId: string, sessionId: string) => Promise<void>;
   onStatusChange: (text: string) => void;
 }
 
@@ -67,18 +61,13 @@ export default function WorkbenchBottomPanel({
   diagnostic,
   workspace,
   workspaceName,
-  currentSessionId,
   terminalController,
   terminalThread,
   terminalThreadTargetUnavailable,
-  generatorResources,
-  workspaces,
   onUpdateState,
   onStartResize,
   onResetHeight,
-  onOpenConnectionManager,
-  onReconnectWorkspace,
-  onStartWorkspace,
+  onOpenSession,
   onStatusChange,
 }: WorkbenchBottomPanelProps) {
   if (!visible) {
@@ -128,16 +117,11 @@ export default function WorkbenchBottomPanel({
         ) : state.tab === "automation" ? (
           <AutomationPanel
             apiPort={apiPort}
-            generatorResources={generatorResources}
-            workspaces={workspaces}
-            activeWorkspaceId={workspaceId}
-            currentSessionId={currentSessionId}
+            workspace={workspace}
             workspaceName={workspace?.name ?? workspaceName}
             height={state.height}
             onStatusChange={onStatusChange}
-            onOpenConnectionManager={onOpenConnectionManager}
-            onReconnectWorkspace={onReconnectWorkspace}
-            onStartWorkspace={onStartWorkspace}
+            onOpenSession={onOpenSession}
             onSwitchTab={switchTab}
             onClose={close}
           />

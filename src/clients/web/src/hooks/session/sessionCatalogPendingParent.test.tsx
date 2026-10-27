@@ -17,7 +17,6 @@ import {
   TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
   withDefaultGatewayApiResponses,
 } from "../../tests/fixtures/session/gatewayEnvironment";
-import { createEmptyGeneratorResourcesController } from "../../tests/fixtures/session/appState";
 import {
   createSessionResourceExplorerProps,
 } from "../../tests/fixtures/session/sessionResourceExplorer";
@@ -174,7 +173,7 @@ async function mountPendingParent(options: {
   const access = testGatewayUserAccess();
   runtime.activatePrincipal(access);
   cleanup.push(() => runtime.dispose());
-  const generatorResources = createEmptyGeneratorResourcesController();
+
   const workspaces = [{ ...TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, name: "待提交父目录工作区" }] as GatewayWorkspace[];
   const sessions = new Map();
   let explorer!: ReturnType<typeof useSessionResourceExplorer>;
@@ -186,7 +185,7 @@ async function mountPendingParent(options: {
     explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({
       sessionCatalogOutboxRuntime: runtime, sessionCatalogOutboxSnapshot: snapshot,
       gatewayUserAccess: access,
-    }), generatorResources });
+    }) });
     actions = useSessionCatalogActions({
       apiPort: 49_459, activeGatewayWorkspaceId: "ws-test", activeSessionId: null,
       sessionsByWorkspace: sessions, gatewayWorkspaces: workspaces,
@@ -579,11 +578,11 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     const access = testGatewayUserAccess();
     runtime.activatePrincipal(access);
     let renderer!: ReactTestRenderer;
-    const generatorResources = createEmptyGeneratorResourcesController();
+
     function Harness() {
       const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
       explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({ sessionCatalogOutboxRuntime: runtime,
-        sessionCatalogOutboxSnapshot: snapshot, gatewayUserAccess: access }), generatorResources });
+        sessionCatalogOutboxSnapshot: snapshot, gatewayUserAccess: access }) });
       return null;
     }
     try {

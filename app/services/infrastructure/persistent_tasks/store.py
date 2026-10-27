@@ -28,6 +28,10 @@ from app.schemas.internal_v2.persistent_task import (
     TaskLifecycle,
     TaskRunPhase,
 )
+from app.schemas.internal_v2.session_navigation.generation_state import (
+    GENERATION_STATE,
+    GenerationActionState,
+)
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 from .goals import TaskGoals
@@ -269,8 +273,7 @@ class PersistentTaskStore(TaskGoals):
                                (lifecycle, reason, now.isoformat(), task_id))
             return self._task(connection, task_id)
 
-    @staticmethod
-    def _run(row: sqlite3.Row) -> PersistentTaskRunDTO:
+    def _run(self, row: sqlite3.Row) -> PersistentTaskRunDTO:
         return PersistentTaskRunDTO(
             run_id=row["run_id"], task_id=row["task_id"], task_revision=row["task_revision"],
             definition_revision=row["definition_revision"], trigger_key=row["trigger_key"], check_only=bool(row["check_only"]),
@@ -278,6 +281,9 @@ class PersistentTaskStore(TaskGoals):
             trigger_type=row["trigger_type"], scheduled_for=row["scheduled_for"],
             trigger_payload=json.loads(row["trigger_payload_json"]) if row["trigger_payload_json"] is not None else None,
             evaluation=TaskEvaluationDTO.model_validate_json(row["evaluation_json"]) if row["evaluation_json"] else None,
+            generation=GENERATION_STATE.validate_json(row["generation_json"]).result(
+                run_id=row["run_id"], workspace_id=self.workspace_id, error=row["error"],
+            ) if row["generation_json"] else None,
             phase=row["phase"], decision=TaskDecisionDTO.model_validate_json(row["decision_json"]) if row["decision_json"] else None,
             delivery=TaskDeliveryDTO.model_validate_json(row["delivery_json"]) if row["delivery_json"] else None,
             error=row["error"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -290,6 +296,35 @@ class PersistentTaskStore(TaskGoals):
             rows = connection.execute(f"SELECT * FROM persistent_task_runs WHERE task_id=? {condition} ORDER BY run_sequence",
                                       (task_id,)).fetchall()
             return [self._run(row) for row in rows]
+
+    def generation_state(self, run: PersistentTaskRunDTO) -> GenerationActionState | None:
+        with closing(self._store.connection()) as connection:
+            self._task(connection, run.task_id)
+            row = connection.execute("SELECT generation_json FROM persistent_task_runs WHERE run_id=? AND task_id=?",
+                                     (run.run_id, run.task_id)).fetchone()
+            if row is None:
+                raise KeyError(f"持久任务运行不存在: {run.run_id}")
+            state = GENERATION_STATE.validate_json(row[0]) if row[0] else None
+            if state is not None and not isinstance(state, GenerationActionState):
+                raise RuntimeError("不可推进迁移的历史终态")
+            return state
+
+    def record_generation(self, run: PersistentTaskRunDTO, state: GenerationActionState, now: datetime, *,
+                          phase: TaskRunPhase = "delivering", error: str | None = None,
+                          delivery: TaskDeliveryDTO | None = None, lifecycle: TaskLifecycle | None = None) -> None:
+        with self._transaction() as connection:
+            changed = connection.execute(
+                "UPDATE persistent_task_runs SET generation_json=?,phase=?,error=?,updated_at=?,delivery_json=COALESCE(?,delivery_json) "
+                "WHERE run_id=? AND task_id=? AND phase=?",
+                (state.model_dump_json(), phase, error, now.isoformat(), delivery.model_dump_json() if delivery is not None else None,
+                 run.run_id, run.task_id, run.phase),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("会话动作运行阶段发生并发冲突")
+            if lifecycle is not None:
+                connection.execute("UPDATE persistent_tasks SET lifecycle=?,revision=revision+1,reason=?,updated_at=? "
+                                   "WHERE task_id=? AND revision=? AND lifecycle='active'",
+                                   (lifecycle, error, now.isoformat(), run.task_id, run.task_revision))
 
     def trigger(self, task_id: str, request: PersistentTaskCheckRequest | PersistentTaskNotificationRequest, now: datetime, *,
                 request_id: str | None) -> PersistentTaskRunDTO:

@@ -55,7 +55,6 @@ import { useSessionCatalogActions } from "./hooks/shell/useSessionCatalogActions
 import { useWorkbenchLayoutPreferences } from "./hooks/shell/useWorkbenchLayoutPreferences";
 import { useSessionChangesPreview } from "./hooks/shell/useSessionChangesPreview";
 import { projectWorkspacePreviewTabs } from "./hooks/shell/previewTabProjection";
-import { useSessionGeneratorResources } from "./hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { createSessionConnection } from "./api/gateway/sessionConnections";
 import {
   DEFAULT_MAIN_AREA_RATIOS,
@@ -289,10 +288,6 @@ export default function AppShell() {
     onSafeRestart: safeRestartBackend, onForceRestart: forceRestartBackend,
     onRefresh: refreshGatewayState,
   });
-  const generatorResources = useSessionGeneratorResources(
-    resolvedApiPort,
-    panelVisible && bottomPanelState.tab === "automation",
-  );
   const sortedSessions = useMemo(
     () => [...state.sessions].sort(
       (a, b) =>
@@ -803,7 +798,6 @@ export default function AppShell() {
               session_sidebar: updater(current.session_sidebar),
             }));
           }}
-          generatorResources={generatorResources}
         />
         {agentSessionsVisible && workbenchView === "sessions" ? (
           <button
@@ -1318,19 +1312,14 @@ export default function AppShell() {
           ? outputDiagnostic.diagnostic : null}
         workspace={bottomPanelWorkspace}
         workspaceName={state.workspaceName ?? ""}
-        currentSessionId={activeSession?.session_id ?? ""}
         terminalController={workspaceTerminals}
         terminalThread={terminalResourceTarget.thread}
         terminalThreadTargetUnavailable={terminalResourceTarget.unavailable}
-        generatorResources={generatorResources}
-        workspaces={state.gatewayWorkspaces}
         onUpdateState={updateBottomPanelState}
         onStartResize={startBottomPanelResize}
         onResetHeight={resetBottomPanelHeight}
-        onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
-        onReconnectWorkspace={reconnectGatewayWorkspace}
-        onStartWorkspace={startManagedGatewayWorkspaceBackend}
         onStatusChange={setStatus}
+        onOpenSession={handleSelectAgentSession}
       />
         </div>
       </div>

@@ -9,7 +9,6 @@ import {
   listGatewayUiAssets,
   listGatewayWorkspaces,
   removeGatewayWorkspace,
-  runSessionGenerator,
   searchGatewaySessionCatalog,
   uploadGatewayUiAsset,
 } from "../../gatewayApi";
@@ -73,7 +72,6 @@ describe("Gateway API 超时常量收敛", () => {
     const cases: Array<[string, () => Promise<unknown>]> = [
       ["diagnostics", () => getGatewayDiagnostics(49_970)],
       ["session-catalog search", () => searchGatewaySessionCatalog(49_971, "q")],
-      ["session generator run", () => runSessionGenerator(49_972, "gen_1")],
     ];
     for (const [label, run] of cases) {
       stubFailingFetch();

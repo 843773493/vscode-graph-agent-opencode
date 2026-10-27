@@ -3,6 +3,9 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-task-generations","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_generations.py"]},
+    {"id":"integration-task-generation-strategies","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_session_generation_strategies.py"]},
+    {"id":"integration-gateway-generator-import","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_session_generator_control.py"]},
     {"id":"integration-web-persistent-tasks","layer":"integration","client":"web","enabled":true,"timeoutMs":200000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/persistent_tasks/test_management.py"]},
     {"id":"integration-persistent-task-goal-storage","layer":"integration","client":null,"enabled":true,"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_goal_storage.py"]},
     {"id":"integration-persistent-task-models","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_models.py"]},

@@ -27,6 +27,9 @@ def migrated_payload(
     if domain == "workspace":
         result.pop("logger", None)
     else:
+        features = result.get("features")
+        if isinstance(features, dict):
+            features.pop("session_generators", None)
         if "workspaces" in result:
             entries = _normalize_connection_ids(
                 result, config_path=Path.cwd(), state_store=None, previous_entries=connection_entries,

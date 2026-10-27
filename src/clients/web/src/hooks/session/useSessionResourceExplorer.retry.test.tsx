@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
-import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import {
   isNavigationBackpressureStatus,
   NAVIGATION_BACKPRESSURE_STATUSES,
@@ -37,10 +36,9 @@ function mountExplorer(apiPort: number) {
   installVisibleTestDocument();
   let explorer: SessionResourceExplorerController | null = null;
   function Harness(): React.ReactNode {
-    const generatorResources = useSessionGeneratorResources(apiPort);
+
     explorer = useSessionResourceExplorer({
       ...createSessionResourceExplorerProps({ apiPort, activeWorkspaceId: "ws-test" }),
-      generatorResources,
     });
     return null;
   }

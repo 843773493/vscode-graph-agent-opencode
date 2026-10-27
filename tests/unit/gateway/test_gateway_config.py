@@ -20,9 +20,7 @@ from app.gateway.config import (
 from app.gateway.config.sources import _gateway_persisted_source_details
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.health_config import gateway_config_sources
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
@@ -117,43 +115,30 @@ async def test_gateway_runtime_apply_rolls_back_consumers_on_partial_failure(
             storage_path=tmp_path / "navigation.json"
         ),
     )
-    scheduler = SessionGeneratorScheduler(
-        store=SessionGeneratorStore(root=tmp_path / "generators"),
-        coordinator=SimpleNamespace(),
-    )
     initial = GatewayConfig(
         payload={"logging": {"runtime": {"level": "info", "pretty": True}}},
         session_catalog_refresh_interval_seconds=30,
         session_catalog_max_concurrency=8,
         session_catalog_request_timeout_seconds=30,
-        session_generator_poll_interval_seconds=1,
     )
     candidate = GatewayConfig(
         payload=initial.payload,
         session_catalog_refresh_interval_seconds=5,
         session_catalog_max_concurrency=2,
         session_catalog_request_timeout_seconds=6,
-        session_generator_poll_interval_seconds=2,
     )
     app = SimpleNamespace(
         state=SimpleNamespace(
             gateway_config=initial,
             session_catalog_search_service=catalog,
-            session_generator_scheduler=scheduler,
         )
     )
 
-    def fail_scheduler_update(self, *, poll_interval_seconds: float) -> None:
-        del self, poll_interval_seconds
-        raise RuntimeError("模拟 scheduler prepare/apply 失败")
+    def fail_catalog_health(self, **kwargs):
+        raise RuntimeError("模拟 catalog health 失败")
 
-    monkeypatch.setattr(
-        SessionGeneratorScheduler,
-        "update_runtime_config",
-        fail_scheduler_update,
-    )
-
-    with pytest.raises(RuntimeError, match="模拟 scheduler prepare/apply 失败"):
+    monkeypatch.setattr(GatewaySessionCatalogSearchService, "runtime_health_proof", fail_catalog_health)
+    with pytest.raises(RuntimeError, match="模拟 catalog health 失败"):
         await _apply_gateway_runtime_config(app, candidate, initial)
 
     assert app.state.gateway_config is initial
@@ -177,7 +162,6 @@ def test_gateway_runtime_consumer_generation_is_unique_for_same_config(
     app = SimpleNamespace(
         state=SimpleNamespace(
             session_catalog_search_service=catalog,
-            session_generator_scheduler=None,
             workspace_runtime_controller=None,
         )
     )
@@ -210,7 +194,6 @@ def test_gateway_runtime_consumer_health_proof_carries_fencing_digest(
     app = SimpleNamespace(
         state=SimpleNamespace(
             session_catalog_search_service=catalog,
-            session_generator_scheduler=None,
             workspace_runtime_controller=None,
         )
     )
@@ -242,11 +225,6 @@ def test_gateway_pending_proof_collects_all_runtime_consumer_digests(
         ),
     )
     catalog._task = SimpleNamespace(done=lambda: False)  # type: ignore[assignment]
-    scheduler = SessionGeneratorScheduler(
-        store=SessionGeneratorStore(root=tmp_path / "generators"),
-        coordinator=SimpleNamespace(),
-    )
-    scheduler._task = SimpleNamespace(done=lambda: False)  # type: ignore[assignment]
     controller = GatewayWorkspaceRuntimeController(
         registry=registry,
         project_root=tmp_path,
@@ -261,7 +239,6 @@ def test_gateway_pending_proof_collects_all_runtime_consumer_digests(
         state=SimpleNamespace(
             registry=registry,
             session_catalog_search_service=catalog,
-            session_generator_scheduler=scheduler,
             workspace_runtime_controller=controller,
             port_forward_manager=port_forward_manager,
         )
@@ -274,7 +251,7 @@ def test_gateway_pending_proof_collects_all_runtime_consumer_digests(
     )
 
     assert set(digests) == {
-        "catalog-generator-scheduler",
+        "session-catalog",
         "health-controller",
         "registry-batch",
         "ssh-tunnel-proxy",

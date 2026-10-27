@@ -24,7 +24,6 @@ import WorkspaceRenameDialog from '../../workspace/WorkspaceRenameDialog';
 import WorkspaceAddDialog from '../../workspace/WorkspaceAddDialog';
 import AnchoredOverlay from '../../overlays/AnchoredOverlay';
 import WarmActionDialog from '../../overlays/WarmActionDialog';
-import type { SessionGeneratorResourcesController } from '../../../hooks/sessionResourceExplorer/useSessionGeneratorResources';
 import type {
   SessionCatalogOutboxRuntime,
   SessionCatalogOutboxSnapshot,
@@ -119,7 +118,6 @@ interface AgentSessionsPanelProps {
       current: WebUiSessionSidebarSettings,
     ) => Partial<WebUiSessionSidebarSettings>,
   ) => void;
-  generatorResources: SessionGeneratorResourcesController;
 }
 
 export default function AgentSessionsPanel({
@@ -170,7 +168,6 @@ export default function AgentSessionsPanel({
   flexRatio,
   preferences,
   onPreferencesChange,
-  generatorResources,
 }: AgentSessionsPanelProps) {
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [workspaceContextMenu, setWorkspaceContextMenu] =
@@ -521,7 +518,6 @@ export default function AgentSessionsPanel({
                 onOpenConnectionManager={onOpenGatewayControl}
                 onReconnectWorkspace={onReconnectWorkspace}
                 onStartWorkspace={handleStartWorkspace}
-                generatorResources={generatorResources}
               />
             </React.Suspense>
           ) : null}

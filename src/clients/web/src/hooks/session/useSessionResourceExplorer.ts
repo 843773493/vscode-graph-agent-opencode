@@ -39,7 +39,6 @@ import {
   type SessionCatalogOutboxRuntime,
   type SessionCatalogOutboxSnapshot,
 } from "./sessionCatalogOutboxRuntime";
-import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
@@ -203,7 +202,6 @@ export function useSessionResourceExplorer({
   workspaceNavigationSyncKey,
   catalogSyncKeys,
   catalogRefreshVersions,
-  generatorResources,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
   gatewayUserAccess,
@@ -217,7 +215,6 @@ export function useSessionResourceExplorer({
   workspaceNavigationSyncKey: string;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
-  generatorResources: SessionGeneratorResourcesController;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
   gatewayUserAccess?: GatewayUserAccess | null;
@@ -248,16 +245,6 @@ export function useSessionResourceExplorer({
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [catalogViewVersion, setCatalogViewVersion] = useState(0);
-  const {
-    generators,
-    generationRuns,
-    generatorError,
-    createGenerator,
-    refreshGenerationRuns,
-    runGenerator,
-    updateGenerator,
-    deleteGenerator,
-  } = generatorResources;
   const currentSessionRevealKeyRef = useRef<string | null>(null);
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
@@ -279,7 +266,6 @@ export function useSessionResourceExplorer({
   >(new Map());
   const catalogSyncKeysRef = useRef(catalogSyncKeys);
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
-  const generationOutputSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
   const terminalOutboxSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
   const trackedOutboxOperationKeysRef = useRef<Set<string>>(new Set());
 
@@ -1488,39 +1474,6 @@ export function useSessionResourceExplorer({
   ]);
 
   useEffect(() => {
-    const nextOutputSyncKeys = new Map<string, string[]>();
-    for (const runs of generationRuns.values()) {
-      for (const run of runs) {
-        for (const output of run.outputs) {
-          const keys = nextOutputSyncKeys.get(output.workspace_id) ?? [];
-          keys.push(`${run.run_id}\u0000${run.status}\u0000${output.session_id}`);
-          nextOutputSyncKeys.set(output.workspace_id, keys);
-        }
-      }
-    }
-    const normalizedOutputSyncKeys = new Map(
-      [...nextOutputSyncKeys.entries()].map(([workspaceId, keys]) => [
-        workspaceId,
-        keys.sort().join("\u0001"),
-      ]),
-    );
-    const previousOutputSyncKeys = generationOutputSyncKeysRef.current;
-    generationOutputSyncKeysRef.current = normalizedOutputSyncKeys;
-    const changedWorkspaceIds = [...normalizedOutputSyncKeys.keys()].filter(
-      (workspaceId) =>
-        previousOutputSyncKeys.get(workspaceId)
-        !== normalizedOutputSyncKeys.get(workspaceId),
-    );
-    if (changedWorkspaceIds.length === 0) {
-      return;
-    }
-    void Promise.all(changedWorkspaceIds.map((workspaceId) => refreshCatalogWorkspace(workspaceId)))
-      .catch(() => {
-        // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
-      });
-  }, [generationRuns, refreshCatalogWorkspace]);
-
-  useEffect(() => {
     if (!activeWorkspaceId) {
       return;
     }
@@ -1633,9 +1586,6 @@ export function useSessionResourceExplorer({
     searchResults,
     searching,
     searchError,
-    generators,
-    generationRuns,
-    generatorError,
     refreshNavigation,
     refreshResourceTree,
     loadBranch,
@@ -1653,23 +1603,14 @@ export function useSessionResourceExplorer({
     moveCatalogNode,
     reconcileCatalogBranches,
     assignSessionFolder,
-    createGenerator,
-    refreshGenerationRuns,
-    runGenerator,
-    updateGenerator,
-    deleteGenerator,
   }), [
     projectedBranches,
-    createGenerator,
     createSessionFolder,
     createWorkspaceFolder,
     deleteSessionFolder,
     deleteWorkspaceFolder,
     assignSessionFolder,
     expandedIds,
-    generatorError,
-    generators,
-    generationRuns,
     loadBranch,
     navigation,
     navigationError,
@@ -1677,20 +1618,16 @@ export function useSessionResourceExplorer({
     placeWorkspaceNode,
     moveSessionFolder,
     moveCatalogNode,
-    refreshGenerationRuns,
     refreshNavigation,
     refreshResourceTree,
     renameSessionFolder,
     renameWorkspaceFolder,
     revealSearchResult,
     reconcileCatalogBranches,
-    runGenerator,
     searchError,
     searchResults,
     searching,
     toggleExpanded,
-    updateGenerator,
-    deleteGenerator,
   ]);
 }
 

@@ -15,7 +15,6 @@ from app.gateway.auxiliary_proxy import (
     _proxy_request_headers as _auxiliary_proxy_headers,
 )
 from app.gateway.config import GatewayConfig
-from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.federation.channel_owner import FederationChannelOwner
 from app.gateway.main import app
 from app.gateway.routes._shared import get_registry
@@ -30,15 +29,11 @@ class _GatewayRegistryStub:
 def gateway_client() -> Iterator[TestClient]:
     app.dependency_overrides[get_registry] = lambda: _GatewayRegistryStub()
     app.state.gateway_id = "gateway_test_id"
-    app.state.session_generator_scheduler = MagicMock(
-        spec=SessionGeneratorScheduler
-    )
     app.state.federation_channel_owner = MagicMock(spec=FederationChannelOwner)
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
-        del app.state.session_generator_scheduler
         del app.state.federation_channel_owner
         del app.state.gateway_id
 

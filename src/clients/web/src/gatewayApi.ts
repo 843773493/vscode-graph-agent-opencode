@@ -25,18 +25,12 @@ import type {
   GatewayUiAsset,
   GatewayUiAssetList,
   GatewaySessionSearchResults,
-  GenerationRun,
-  GenerationRunList,
-  SessionGeneratorDefinition,
-  SessionGeneratorList,
   WorkspaceNavigationTree,
   CreateGatewayPortForwardRequest,
   ChangeGatewayPortForwardLocalPortRequest,
   ChangeGatewayPortForwardLabelRequest,
   GatewayPortForwardList,
   GatewayResourceList,
-  GeneratorDefinitionCreateRequest,
-  GeneratorDefinitionUpdateRequest,
   WorkspaceFolderCreateRequest,
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
@@ -298,82 +292,6 @@ export async function searchGatewaySessionCatalog(
       port,
       `/api/gateway/session-catalog/search?${params.toString()}`,
       { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS, signal },
-    ),
-  );
-}
-
-export async function listSessionGenerators(
-  port: number,
-): Promise<SessionGeneratorList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<SessionGeneratorList>>(
-      port,
-      "/api/gateway/session-generators",
-    ),
-  );
-}
-
-export async function createSessionGenerator(
-  port: number,
-  payload: GeneratorDefinitionCreateRequest,
-): Promise<SessionGeneratorDefinition> {
-  return unwrapApiData(
-    await requestJson<APIResponse<SessionGeneratorDefinition>>(
-      port,
-      "/api/gateway/session-generators",
-      { method: "POST", body: JSON.stringify(payload) },
-    ),
-  );
-}
-
-export async function runSessionGenerator(
-  port: number,
-  generatorId: string,
-): Promise<GenerationRun> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GenerationRun>>(
-      port,
-      `/api/gateway/session-generators/${encodeURIComponent(generatorId)}/run`,
-      { method: "POST", body: "{}", timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
-    ),
-  );
-}
-
-export async function listSessionGeneratorRuns(
-  port: number,
-  generatorId: string,
-): Promise<GenerationRunList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GenerationRunList>>(
-      port,
-      `/api/gateway/session-generators/${encodeURIComponent(generatorId)}/runs`,
-    ),
-  );
-}
-
-export async function updateSessionGenerator(
-  port: number,
-  generatorId: string,
-  payload: GeneratorDefinitionUpdateRequest,
-): Promise<SessionGeneratorDefinition> {
-  return unwrapApiData(
-    await requestJson<APIResponse<SessionGeneratorDefinition>>(
-      port,
-      `/api/gateway/session-generators/${encodeURIComponent(generatorId)}`,
-      { method: "PATCH", body: JSON.stringify(payload) },
-    ),
-  );
-}
-
-export async function deleteSessionGenerator(
-  port: number,
-  generatorId: string,
-): Promise<SessionGeneratorDefinition> {
-  return unwrapApiData(
-    await requestJson<APIResponse<SessionGeneratorDefinition>>(
-      port,
-      `/api/gateway/session-generators/${encodeURIComponent(generatorId)}`,
-      { method: "DELETE" },
     ),
   );
 }

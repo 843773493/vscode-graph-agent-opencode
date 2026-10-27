@@ -114,7 +114,6 @@ class WorkspaceLifespan:
             ("persistent_tasks.stop", container.persistent_task_runtime.stop),
             ("node_debug.close", container.node_debug_service.close),
             ("terminal_steering.shutdown", container.terminal_steering_service.shutdown),
-            ("session_generation.shutdown", container.session_generation_service.shutdown),
             ("activity.unregister", partial(container.job_event_bus.unregister_durable_listener, self.record_session_activity)),
             ("thread_initial_execution.unregister", partial(container.job_event_bus.unregister_durable_listener, container.thread_initial_execution_service.on_event)),
             ("thread_initial_execution.stop", container.thread_initial_execution_service.stop),
@@ -388,8 +387,6 @@ class WorkspaceLifespan:
                 await container.runtime_source_dispatcher.start()
             with _workspace_startup_stage(container, "persistent_task_runtime.start"):
                 await container.persistent_task_runtime.start()
-            with _workspace_startup_stage(container, "session_generation_service.start"):
-                await container.session_generation_service.start()
             with _workspace_startup_stage(container, "terminal_steering_service.start"):
                 await container.terminal_steering_service.start()
             with _workspace_startup_stage(container, "navigation_operations.start"):

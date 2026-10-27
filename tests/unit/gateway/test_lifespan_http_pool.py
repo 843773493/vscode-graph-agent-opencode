@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import app.gateway.lifespan as gateway_lifespan
+from app.gateway.config import GatewayConfig
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerStage,
     GatewayRuntimeHealthProof,
@@ -78,13 +79,13 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     registry = Mock(active_workspace_id=None)
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
-    config = SimpleNamespace(
+    config = GatewayConfig(
         payload={"logging": {"runtime": {"level": "info", "pretty": True}}}, revision="pool-lifecycle-config", default_workspace_skill_groups=[],
         gateway_process_health_poll_interval_seconds=1,
         gateway_process_health_request_timeout_seconds=1,
         gateway_process_connection_drain_timeout_seconds=1,
         session_catalog_refresh_interval_seconds=1, session_catalog_max_concurrency=1,
-        session_catalog_request_timeout_seconds=1, session_generator_poll_interval_seconds=1,
+        session_catalog_request_timeout_seconds=1,
     )
     channel_owner = service("channel")
     port_forward = Mock(
@@ -115,14 +116,12 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "SshPortForwardManager", Mock(return_value=port_forward))
     for name in (
         "UserAccessService", "UserProfileStore", "UserViewStateStore", "FederationCredentialStore",
-        "GatewayWorkspaceRuntimeController", "WorkspaceNavigationStore", "SessionGeneratorStore",
+        "GatewayWorkspaceRuntimeController", "WorkspaceNavigationStore",
         "GatewayResourceCatalogService",
     ):
         monkeypatch.setattr(gateway_lifespan, name, Mock())
     for name, label in (
-        ("SessionGeneratorCoordinator", "coordinator"),
         ("GatewaySessionCatalogSearchService", "catalog"),
-        ("SessionGeneratorScheduler", "scheduler"),
     ):
         monkeypatch.setattr(gateway_lifespan, name, Mock(return_value=service(label)))
     monkeypatch.setattr(gateway_lifespan, "_cleanup_user_access_periodically", AsyncMock())
@@ -160,4 +159,4 @@ async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: 
     assert all(client.is_closed for client in lifespan_case.clients)
     assert all(transport.close_calls == 1 for transport in lifespan_case.transports)
     assert lifespan_case.events[-1] == "pool-close-0"
-    assert {"scheduler", "catalog", "coordinator", "channel", "ssh", "registry", "config", "state"} <= set(lifespan_case.events)
+    assert {"catalog", "channel", "ssh", "registry", "config", "state"} <= set(lifespan_case.events)

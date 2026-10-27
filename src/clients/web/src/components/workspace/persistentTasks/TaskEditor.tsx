@@ -1,4 +1,9 @@
 import { useState, type FormEvent } from "react";
+import { getWorkspace } from "../../../api/workspace";
+import { getSessionMainThread } from "../../../api/session/sessions";
+import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
+import GenerationActionEditor, { initialGeneration } from "./GenerationActionEditor";
+import { errorMessage } from "../../../utils/errorMessage";
 import type { PersistentTaskConfigurationDTO } from "../../../api/persistentTasks";
 
 const triggers: Record<string, string> = { "builtin.manual": "手动", "builtin.interval": "固定间隔", "builtin.cron": "Cron", "builtin.external": "外部通知", "builtin.execution_end": "工作执行结束" };
@@ -9,7 +14,9 @@ export function configurationProblem(config: PersistentTaskConfigurationDTO): st
   if (components.some((component) => !component || component.version !== "1")) return "任务包含缺失组件或不支持的组件版本，不能编辑";
   if (!config.trigger || !(config.trigger.type_id in triggers)) return `不支持的触发器：${config.trigger?.type_id}`;
   if (!config.condition || !(config.condition.type_id in conditions)) return `不支持的判断器：${config.condition?.type_id}`;
-  if (config.context?.type_id !== "builtin.literal" || config.action?.type_id !== "builtin.runtime_source") return "此动作或上下文组件尚不能在当前表单编辑";
+  if (config.context?.type_id !== "builtin.literal" || !["builtin.runtime_source", "builtin.session_generation"].includes(config.action?.type_id ?? "")) return "此动作或上下文组件尚不能在当前表单编辑";
+  const generation = config.action?.generation;
+  if (config.action?.type_id === "builtin.session_generation" && (!generation || generation.generator_type?.type_id !== "builtin.agent_prompt" || generation.generator_type.version !== "1")) return "不支持的会话生成器类型或版本";
   return null;
 }
 
@@ -22,14 +29,16 @@ function initialConfiguration(): PersistentTaskConfigurationDTO {
   };
 }
 
-export default function TaskEditor({ configuration, busy, onSave, onCancel }: {
-  configuration?: PersistentTaskConfigurationDTO; busy: boolean;
+export default function TaskEditor({ apiPort, target, configuration, busy, onSave, onCancel }: {
+  apiPort: number; target: GatewayWorkspaceRequestTarget; configuration?: PersistentTaskConfigurationDTO; busy: boolean;
   onSave: (configuration: PersistentTaskConfigurationDTO) => Promise<boolean>; onCancel: () => void;
 }) {
   const [draft, setDraft] = useState(configuration ?? initialConfiguration);
   const [ruleValue, setRuleValue] = useState(JSON.stringify(configuration?.condition?.rule ? configuration.condition.rule.expected : true));
   const [error, setError] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
   const problem = configurationProblem(draft);
+  busy = busy || resolving;
   const { trigger, condition, context, action, policies } = draft;
   if (problem || !trigger || !condition || !context || !action || !policies) return <div role="alert">{problem ?? "任务缺少策略配置"}<button onClick={onCancel}>关闭编辑</button></div>;
 
@@ -52,7 +61,25 @@ export default function TaskEditor({ configuration, busy, onSave, onCancel }: {
       catch { setError("规则比较值必须是有效 JSON"); return; }
       next = { ...draft, condition: { ...condition, rule: { ...condition.rule, expected } } };
     }
-    if (await onSave(next)) onCancel();
+    setResolving(true);
+    try {
+      const generation = next.action?.generation;
+      if (generation?.session_strategy && generation.context_source) {
+        let strategy = generation.session_strategy;
+        let source = generation.context_source;
+        if (strategy.target && !strategy.target.thread_id) {
+          const owner = await getSessionMainThread(apiPort, strategy.target.session_id, target);
+          strategy = { ...strategy, target: { ...strategy.target, thread_id: owner.thread_id } };
+        }
+        if (source.kind === "live_session" && source.session_id && !source.thread_id) {
+          const owner = await getSessionMainThread(apiPort, source.session_id, target);
+          source = { ...source, thread_id: owner.thread_id };
+        }
+        next = { ...next, action: { ...next.action!, generation: { ...generation, session_strategy: strategy, context_source: source } } };
+      }
+      if (await onSave(next)) onCancel();
+    } catch (cause) { setError(errorMessage(cause)); }
+    finally { setResolving(false); }
   };
 
   return <form className="persistent-task-editor" aria-label={configuration ? "编辑持久任务" : "创建持久任务"} onSubmit={(event) => void submit(event)}>
@@ -86,16 +113,30 @@ export default function TaskEditor({ configuration, busy, onSave, onCancel }: {
       </> : null}
     </fieldset>
     <fieldset disabled={busy}><legend>携带内容与工作目标</legend>
-      <label>提示内容<textarea aria-label="提示内容" required value={context.content} onChange={(event) => setDraft({ ...draft, context: { ...context, content: event.target.value } })} /></label>
+      <label>提示内容<textarea aria-label="提示内容" required={!action.generation} value={context.content} onChange={(event) => setDraft({ ...draft, context: { ...context, content: event.target.value } })} /></label>
+      <label>工作动作<select aria-label="工作动作" value={action.type_id} onChange={(event) => {
+        if (event.target.value === "builtin.runtime_source") {
+          setDraft({ ...draft, action: { type_id: "builtin.runtime_source", version: "1", target_uri: "", delivery_mode: "context_and_run", delivery_policy: "after_turn" } });
+        } else {
+          setResolving(true); setError(null);
+          void getWorkspace(apiPort, target.workspace_id).then((workspace) => {
+            setDraft({ ...draft, context: { ...context, mode: "event" }, action: { type_id: "builtin.session_generation", version: "1", generation: initialGeneration(workspace.workspace_id) } });
+          }).catch((cause: unknown) => setError(errorMessage(cause))).finally(() => setResolving(false));
+        }
+      }}><option value="builtin.runtime_source">向指定 Thread 发布内容</option><option value="builtin.session_generation">生成或继续会话</option></select></label>
+      {action.generation ? <GenerationActionEditor apiPort={apiPort} target={target} name={draft.name} value={action.generation} onChange={(generation) => setDraft({ ...draft, action: { ...action, generation } })} /> : <>
       <label>工作 Thread URI<input aria-label="工作 Thread URI" required value={action.target_uri} onChange={(event) => setDraft({ ...draft, action: { ...action, target_uri: event.target.value } })} /></label>
       <label>动作<select aria-label="动作" value={action.delivery_mode} onChange={(event) => setDraft({ ...draft, action: { ...action, delivery_mode: event.target.value } })}><option value="context_and_run">发布内容并请求执行</option><option value="context_only">仅发布内容</option></select></label>
+      </>}
       <label>结束策略<select aria-label="结束策略" value={policies.completion} onChange={(event) => setDraft({ ...draft, policies: { ...policies, completion: event.target.value } })}><option value="continuous">持续等待后续触发</option><option value="after_delivery">首次投递后结束</option></select></label>
     </fieldset>
     <details><summary>高级配置</summary><fieldset disabled={busy}>
       <label>条件触发策略<select aria-label="条件触发策略" value={policies.match_mode} onChange={(event) => setDraft({ ...draft, policies: { ...policies, match_mode: event.target.value } })}><option value="each_match">每次满足</option><option value="first_match">首次满足</option><option value="rising_edge">未满足后再次满足</option></select></label>
       <label>错过计划<select aria-label="错过计划" value={policies.misfire} onChange={(event) => setDraft({ ...draft, policies: { ...policies, misfire: event.target.value } })}><option value="skip">跳过</option><option value="run_latest">只补最近一次</option><option value="catch_up">补齐计划点</option></select></label>
+      {!action.generation ? <>
       <label>投递时机<select aria-label="投递时机" value={action.delivery_policy} onChange={(event) => setDraft({ ...draft, action: { ...action, delivery_policy: event.target.value } })}><option value="after_turn">当前 Turn 后</option><option value="after_tool_result">工具结果后</option><option value="after_interrupt">中断后</option></select></label>
       <label>内容模式<select aria-label="内容模式" value={context.mode ?? "event"} onChange={(event) => setDraft({ ...draft, context: { ...context, mode: event.target.value } })}><option value="event">独立事件</option><option value="state">同一来源的最新状态</option></select></label>
+      </> : null}
       {condition.script ? <>
         <label>内存上限（MiB）<input aria-label="内存上限（MiB）" required type="number" min={16} value={condition.script.memory_limit_mb} onChange={(event) => setDraft({ ...draft, condition: { ...condition, script: { ...condition.script!, memory_limit_mb: Number(event.target.value) } } })} /></label>
         <label>输出上限（字节）<input aria-label="输出上限（字节）" required type="number" min={1} value={condition.script.output_limit_bytes} onChange={(event) => setDraft({ ...draft, condition: { ...condition, script: { ...condition.script!, output_limit_bytes: Number(event.target.value) } } })} /></label>

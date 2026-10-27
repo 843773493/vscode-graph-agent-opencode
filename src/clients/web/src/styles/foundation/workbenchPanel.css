@@ -778,19 +778,6 @@
   background: var(--bt-bottom-panel-background);
 }
 
-.automation-bottom-panel-content .session-generator-manager {
-  padding: 10px;
-}
-
-.automation-bottom-panel-content .session-automation-header h2 {
-  font-size: 14px;
-}
-
-.automation-bottom-panel-content .session-automation-summary {
-  margin-top: 8px;
-  padding: 6px 0;
-}
-
 @media (max-width: 720px) {
   .gateway-log-panel {
     flex-basis: min(360px, 44vh);

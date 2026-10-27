@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayWorkspace, SessionCatalogNode, SessionCatalogPage } from "../../types/backend";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import { sessionCatalogOutboxScopeKey } from "../../hooks/session/sessionCatalogOutboxRuntime";
 import {
   addCatalogOutboxIntent,
@@ -25,11 +24,6 @@ import SessionResourceExplorer from "./SessionResourceExplorer";
 
 afterEach(restoreGatewayTestEnvironment);
 
-const generatorResources = {
-  generators: null,
-  generationRuns: new Map(),
-  generatorError: null,
-} as unknown as SessionGeneratorResourcesController;
 
 /** 带可读 detail 的错误信封：HttpRequestError 从顶层 detail/message 取诊断文本。 */
 function apiErrorResponse(detail: string): Response {
@@ -135,9 +129,6 @@ async function renderExplorer(options: {
         total: 0,
       });
     }
-    if (request.path.includes("/api/gateway/session-generators")) {
-      return apiSuccessResponse({ revision: "generators", items: [] });
-    }
     return undefined;
   });
 
@@ -172,7 +163,6 @@ async function renderExplorer(options: {
         onOpenConnectionManager={() => undefined}
         onReconnectWorkspace={async () => undefined}
         onStartWorkspace={async () => undefined}
-        generatorResources={generatorResources}
       />,
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 20));

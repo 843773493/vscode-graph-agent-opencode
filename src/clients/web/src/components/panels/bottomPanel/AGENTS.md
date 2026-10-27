@@ -7,7 +7,7 @@
 - `components/panels/`：其它可停靠面板容器（对话、事件、请求、资源树、Agent 状态、子会话等）；本目录只承载底部面板这一条链路。
 - `components/panels/resourceTree/`：会话级可重连资源树；本目录的终端标签页只复用 App 传入的 Gateway 扩展资源条目，不渲染资源树。
 - `components/workspace/`：端口面板内容实现 WorkspacePortForwardPanel 位于 `components/workspace/`，本目录只做底部面板外壳接入。
-- `components/workspace/persistentTasks/`：当前工作区持久任务的完整对象列表、组件表单及运行记录；本目录自动化标签只做外壳组合。既有SessionGeneratorManager在生成器owner迁移前保留原功能入口。
+- `components/workspace/persistentTasks/`：当前工作区持久任务的完整对象列表、组件表单及运行记录；会话生成是同一任务的动作，本目录自动化标签只做外壳组合。
 - `state/workspaceBottomPanel.ts`：底部面板当前标签与高度的权威状态；本目录不持有该状态。
 
 # 可修改内容

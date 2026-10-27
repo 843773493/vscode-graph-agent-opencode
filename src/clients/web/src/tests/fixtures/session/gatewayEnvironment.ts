@@ -164,8 +164,7 @@ export function restoreGatewayTestEnvironment(): void {
 }
 
 /**
- * 先让用例自己的 handler 认领请求，未认领的导航/生成器探测回落到默认空响应。
- * 只覆盖这两条每个用例都会被动触发、但极少真正关心的路由。
+ * 先让用例自己的 handler 认领请求，未认领的导航探测返回默认空响应。
  */
 export function withDefaultGatewayApiResponses(
   handler: GatewayFetchHandler,
@@ -175,9 +174,6 @@ export function withDefaultGatewayApiResponses(
     if (claimed !== undefined) return claimed;
     if (request.path.includes("/api/gateway/workspace-navigation")) {
       return apiSuccessResponse({ revision: "navigation", nodes: [] });
-    }
-    if (request.path.includes("/api/gateway/session-generators")) {
-      return apiSuccessResponse({ revision: "generators", items: [] });
     }
     return undefined;
   };

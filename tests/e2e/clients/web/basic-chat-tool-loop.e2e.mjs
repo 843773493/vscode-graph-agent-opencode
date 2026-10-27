@@ -9405,33 +9405,49 @@ async function createGeneratedReport(target, label, responses) {
   const generatedThread = `thr_${await testControl({ action: "next_uuid", namespace: "thr" })}`;
   const branchCalls = await planChatCalls(generatedId, generatedThread, [finalResponse(`generated-${label}-private-final`, privateResult)]);
   const reportCalls = await planChatCalls(target.sessionId, target.threadId, responses);
-  const definition = (await ownerApi(target, "/api/gateway/session-generators", {
+  const definition = (await ownerApi(target, "/api/v1/persistent-tasks", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-      name: `固定会话生成 ${label}`, generator_type: { type_id: "builtin.agent_prompt", version: "1" }, enabled: true,
-      trigger: { type: "manual", timezone: "UTC" }, placement: { kind: "workspace", workspace_id: target.gatewayWorkspaceId },
-      execution_workspace_id: target.gatewayWorkspaceId, context_source: { kind: "fresh" }, naming: { title_template: "生成结果验收", path_template: [] },
-      session_strategy: { mode: "fork_new_and_report_back", target: { workspace_id: target.gatewayWorkspaceId, session_id: target.sessionId, thread_id: target.threadId }, concurrency: "queue", report_back: "continue_agent" },
-      config: { prompt, session_title: "生成结果验收" },
+      idempotency_key: `section8-generation-task-${target.sessionId}`, configuration: {
+        name: `固定会话生成 ${label}`, trigger: { type_id: "builtin.manual", version: "1" },
+        condition: { type_id: "builtin.always", version: "1" },
+        context: { type_id: "builtin.literal", version: "1", content: "" },
+        action: { type_id: "builtin.session_generation", version: "1", generation: {
+          generator_type: { type_id: "builtin.agent_prompt", version: "1" },
+          placement: { kind: "workspace", workspace_id: target.workspaceIdentity },
+          context_source: { kind: "fresh" }, title_template: "生成结果验收", path_template: [],
+          session_strategy: { mode: "fork_new_and_report_back", target: { workspace_id: target.workspaceIdentity, session_id: target.sessionId, thread_id: target.threadId }, concurrency: "queue", report_back: "continue_agent" },
+          config: { prompt, session_title: "生成结果验收" }, gateway_id: target.gatewayId,
+        } },
+      },
     }),
   })).data;
-  assert.equal(definition.status, "ready");
+  assert.equal(definition.lifecycle, "active");
+  assert.equal(definition.workspace_id, target.workspaceIdentity);
   const manualKey = `section8-generated-${target.sessionId}`;
-  const run = (await ownerApi(target, `/api/gateway/session-generators/${definition.generator_id}/run`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotency_key: manualKey }),
+  let run = (await ownerApi(target, `/api/v1/persistent-tasks/${definition.task_id}/checks`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotency_key: manualKey, expected_revision: definition.revision }),
   })).data;
-  assert.equal(run.outputs.length, 1);
-  assert.equal(run.outputs[0].session_id, generatedId);
+  await waitUntil(async () => {
+    const current = (await ownerApi(target, `/api/v1/persistent-tasks/${definition.task_id}/runs`)).data.items.find((item) => item.run_id === run.run_id);
+    assert.ok(current, "已接受的运行必须存在于同一任务账本");
+    if (["failed", "suppressed"].includes(current.phase)) throw new Error(`生成会话失败: ${JSON.stringify(current)}`);
+    run = current;
+    return run.delivery !== null;
+  }, "会话动作取得原执行接受回执", 180_000);
+  assert.equal(run.generation.outputs.length, 1);
+  assert.equal(run.generation.outputs[0].session_id, generatedId);
   const generated = { ...target, sessionId: generatedId, threadId: generatedThread, child: false };
   await sessionCatalogNode(generated);
-  await waitForJobStatus(generated, run.job_id);
+  await waitForJobStatus(generated, run.generation.job_id);
   let terminal;
   await waitUntil(async () => {
-    terminal = (await ownerApi(target, `/api/gateway/session-generators/${definition.generator_id}/runs`)).data.items.find((item) => item.run_id === run.run_id);
-    if (terminal?.status === "failed") throw new Error(`生成会话失败: ${JSON.stringify(terminal)}`);
-    return terminal?.status === "completed";
+    terminal = (await ownerApi(target, `/api/v1/persistent-tasks/${definition.task_id}/runs`)).data.items.find((item) => item.run_id === run.run_id);
+    if (terminal?.phase === "failed") throw new Error(`生成会话失败: ${JSON.stringify(terminal)}`);
+    return terminal?.phase === "delivered";
   }, "真实生成分支与主会话 internal 回报结束", 180_000);
-  assert.equal(typeof terminal.report_back_job_id, "string");
-  await waitForJobStatus(target, terminal.report_back_job_id);
+  assert.equal(terminal.generation.status, "completed");
+  assert.equal(typeof terminal.generation.report_back_job_id, "string");
+  await waitForJobStatus(target, terminal.generation.report_back_job_id);
   await waitForPlannedExecutions(target, reportCalls);
   await waitForPlannedExecutions(generated, branchCalls);
   assert.ok(branchCalls.length > 0, "生成分支必须有真实 Provider 调用");
@@ -9473,17 +9489,17 @@ async function runGeneratedInternalHistory(surfaces) {
   assert.deepEqual(roots, [{ turns: before.items.length, roots: before.items.length }], "生成回报不能增加用户根或 Turn");
   const admissions = await readRollout(target,
     "SELECT e.session_id,e.thread_id,e.execution_id,e.job_id,e.execution_origin,e.turn_id,e.accepted_ingress_id,e.admission_idempotency_key,e.admission_payload_hash,c.commit_id,c.status AS commit_status,c.commit_mode,c.jsonl_record_count,c.metadata_json FROM executions e JOIN storage_commits c ON c.subject_id=e.execution_id AND c.commit_kind='execution_admission' AND c.idempotency_key='internal-admission:'||e.admission_idempotency_key WHERE e.job_id=?",
-    [terminal.report_back_job_id]);
+    [terminal.generation.report_back_job_id]);
   assert.equal(admissions.length, 1);
   const admission = admissions[0];
   assert.equal(admission.turn_id, null);
   assert.equal(admission.accepted_ingress_id, null);
   assert.equal(admission.execution_origin, "internal");
   assert.deepEqual([admission.session_id, admission.thread_id, admission.job_id],
-    [target.sessionId, target.threadId, terminal.report_back_job_id]);
+    [target.sessionId, target.threadId, terminal.generation.report_back_job_id]);
   const reportCallRows = await readRollout(target,
     `SELECT m.model_call_id,m.session_id AS model_session_id,m.thread_id AS model_thread_id,m.execution_id AS model_execution_id,m.outcome AS model_outcome,m.dispatch_state,e.execution_id,e.job_id,e.session_id AS execution_session_id,e.thread_id AS execution_thread_id,e.execution_origin,e.turn_id,e.accepted_ingress_id,e.outcome AS execution_outcome FROM model_calls m JOIN executions e ON e.execution_id=m.execution_id WHERE m.model_call_id IN (${reportCalls.map(() => "?").join(",")}) AND e.job_id=? ORDER BY m.attempt`,
-    [...reportCalls, terminal.report_back_job_id]);
+    [...reportCalls, terminal.generation.report_back_job_id]);
   assert.deepEqual(reportCallRows.map((row) => row.model_call_id).sort(), [...reportCalls].sort(),
     "每个计划的 report-back ModelCall 都必须属于唯一 admission 的 job");
   for (const row of reportCallRows) {
@@ -9631,7 +9647,7 @@ async function runGeneratedInternalHistory(surfaces) {
   await assertTranscriptDom(target, history, "generated live");
   await assertInternalHistory(target, history, "generated live");
   const html = await target.page.locator(".chat-internal-execution-display").evaluateAll((elements) => elements.map((element) => element.outerHTML).join(""));
-  for (const hidden of [prompt, privateResult, generatedId, generatedThread, run.run_id, definition.generator_id, admission.execution_id, admission.job_id]) assert.ok(!html.includes(hidden), "notice DOM 只允许安全文本和固定标签");
+  for (const hidden of [prompt, privateResult, generatedId, generatedThread, run.run_id, definition.task_id, admission.execution_id, admission.job_id]) assert.ok(!html.includes(hidden), "notice DOM 只允许安全文本和固定标签");
   const defaultInclude = await loadCompleteThreadHistory(target, { include: undefined });
   assert.ok(defaultInclude.internal_executions.flatMap((entry) => entry.display_parts).some((part) => part.item_id === safe.item_id), "默认 include 必须保留 internal 安全 notice");
   const assemblies = await readRollout(target, "SELECT session_id,thread_id,execution_id,turn_id,assembly_id,model_call_id,status,outcome FROM context_assemblies WHERE execution_id=?", [admission.execution_id]);
@@ -9649,11 +9665,11 @@ async function runGeneratedInternalHistory(surfaces) {
   await openOwner(target);
   await assertTranscriptDom(target, history, "generated refresh");
   await assertInternalHistory(target, history, "generated refresh");
-  const duplicate = (await ownerApi(target, `/api/gateway/session-generators/${definition.generator_id}/run`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotency_key: manualKey }),
+  const duplicate = (await ownerApi(target, `/api/v1/persistent-tasks/${definition.task_id}/checks`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotency_key: manualKey, expected_revision: definition.revision }),
   })).data;
   assert.equal(duplicate.run_id, run.run_id);
-  assert.deepEqual(duplicate.outputs, terminal.outputs);
+  assert.deepEqual(duplicate.generation, terminal.generation);
   assert.equal((await readRollout(target, "SELECT COUNT(*) AS count FROM executions WHERE job_id=?", [admission.job_id]))[0].count, 1);
   // 同一 revision 下按首次上界读完双 lane；Turn lane 先耗尽不能重读 root。
   const frozenFirst = await loadThreadHistory(target, { direction: "tail", turns: 1 });
@@ -9736,7 +9752,7 @@ async function runGeneratedInternalHistory(surfaces) {
   await assertTranscriptDom(head, zero, "generated zero Turn");
   await assertInternalHistory(head, zero, "generated zero Turn");
   const headHtml = await head.page.locator(".chat-internal-execution-display").evaluateAll((elements) => elements.map((element) => element.outerHTML).join(""));
-  for (const hidden of [headReport.prompt, headReport.privateResult, headReport.generatedId, headReport.generatedThread, headReport.run.run_id, headReport.definition.generator_id]) assert.ok(!headHtml.includes(hidden));
+  for (const hidden of [headReport.prompt, headReport.privateResult, headReport.generatedId, headReport.generatedThread, headReport.run.run_id, headReport.definition.task_id]) assert.ok(!headHtml.includes(hidden));
   const firstHeadTurn = await completeOwnerTurn(head, "首部 notice 之后的第一条真实用户消息。", [
     finalResponse("generated-head-first-user", "第一条用户轮独立完成。"),
   ]);

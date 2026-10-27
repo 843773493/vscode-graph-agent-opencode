@@ -2,7 +2,6 @@ import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import WorkspaceFileTree from "../../../../src/clients/web/src/components/workspace/fileTree/WorkspaceFileTree";
 import { useSessionResourceExplorer } from "../../../../src/clients/web/src/hooks/session/useSessionResourceExplorer";
-import { useSessionGeneratorResources } from "../../../../src/clients/web/src/hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type { WorkspaceFileOperationReceipt } from "../../../../src/clients/web/src/types/backend";
 import "../../../../src/clients/web/src/index.css";
 import "../../../../src/clients/web/src/styles/foundation/theme.css";
@@ -329,12 +328,11 @@ function MeasurementHarness() {
       `${config.workspaceUri}/d${String(index).padStart(3, "0")}`
     )),
   ]);
-  const generatorResources = useSessionGeneratorResources(config.gatewayPort);
   const explorer = useSessionResourceExplorer({
     apiPort: config.gatewayPort, workspaces, activeWorkspaceId: config.workspaceId,
     searchOpen: false, searchQuery: "", currentSessionId: "",
     workspaceNavigationSyncKey: "measurement", catalogSyncKeys,
-    catalogRefreshVersions, generatorResources,
+    catalogRefreshVersions,
   });
   window.navigationHarness = { ready: Boolean(explorer.navigation?.nodes.length && fileStatusObserverReady),
     observerReady: fileStatusObserverReady, fileStatusEvents, pendingTerminals, fileUiSnapshots,

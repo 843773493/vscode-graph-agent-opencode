@@ -92,7 +92,7 @@ def test_cli_preview_empty_home_does_not_install_or_create_databases(
     _cli(monkeypatch, "--preview")
     report = json.loads(capsys.readouterr().out)
     assert report["validation_stage"] == "logging_preflight"
-    assert report["target_config_versions"] == {"gateway": 3, "workspace": 2}
+    assert report["target_config_versions"] == {"gateway": 4, "workspace": 2}
     assert report["settings"] is None
     assert report["conflicts"] == report["unsettled"] == []
     assert all(source["presence"] == "absent" for source in report["sources"])
@@ -175,7 +175,7 @@ def test_invalid_workspace_logging_is_rejected_even_with_explicit_choices(
     {"logging": None}, {"logging": {"runtime": []}},
     {"logging": {"runtime": {"level": "trace"}}},
     {"logging": {"runtime": {"pretty": 1}}},
-    {"logging": {"runtime": {"format": "json"}}}, {"config_version": 4},
+    {"logging": {"runtime": {"format": "json"}}}, {"config_version": 5},
 ])
 def test_invalid_gateway_logging_is_rejected(migration_home: Path, payload: dict[str, object]) -> None:
     _write(migration_home / "config/gateway.jsonc", payload)
@@ -543,7 +543,7 @@ def test_gateway_connection_ids_are_frozen_once_and_reuse_existing_identity(
     assert identity
     if registered:
         assert identity == "connection_original"
-    assert migrated["config_version"] == 3
+    assert migrated["config_version"] == 4
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
     assert json.loads(path.read_text())["workspaces"][0]["connection_id"] == identity
 
@@ -597,3 +597,19 @@ async def test_shared_source_owner_resumes_existing_generation_after_migration(
         assert current is not None and current.source_generation == observed.source_generation + 1
         assert owner.list_journal()[0] == history[0]
         assert owner.list_journal()[-1].layer_digest == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_gateway_v3_migration_retires_generator_config_with_backup(migration_home: Path) -> None:
+    path = migration_home / "config/gateway.jsonc"
+    _write(path, {"config_version": 3, "features": {"session_generators": {"poll_interval_seconds": 3}},
+                  "logging": {"runtime": {"level": "debug", "pretty": False}}})
+    original = path.read_bytes()
+    preview = preview_runtime_logging_migration(boxteam_home=migration_home).report()
+    assert preview["target_config_versions"]["gateway"] == 4
+    assert path.read_bytes() == original
+    result = commit_runtime_logging_migration(boxteam_home=migration_home)
+    migrated = json.loads(path.read_text())
+    assert migrated["config_version"] == 4 and "session_generators" not in migrated["features"]
+    assert migrated["logging"]["runtime"] == {"level": "debug", "pretty": False}
+    assert result["state"] == "completed"
+    assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"

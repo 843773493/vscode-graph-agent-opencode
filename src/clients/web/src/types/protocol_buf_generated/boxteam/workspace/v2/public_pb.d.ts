@@ -11636,19 +11636,24 @@ export declare type TaskActionDTO = Message<"boxteam.workspace.v2.TaskActionDTO"
   typeId: string;
 
   /**
-   * @generated from field: string target_uri = 3;
+   * @generated from field: optional string target_uri = 3;
    */
-  targetUri: string;
+  targetUri?: string | undefined;
 
   /**
-   * @generated from field: string delivery_mode = 4;
+   * @generated from field: optional string delivery_mode = 4;
    */
-  deliveryMode: string;
+  deliveryMode?: string | undefined;
 
   /**
-   * @generated from field: string delivery_policy = 5;
+   * @generated from field: optional string delivery_policy = 5;
    */
-  deliveryPolicy: string;
+  deliveryPolicy?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGenerationActionConfigDTO generation = 6;
+   */
+  generation?: SessionGenerationActionConfigDTO | undefined;
 };
 
 /**
@@ -11998,6 +12003,11 @@ export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.Persist
    * @generated from field: optional boxteam.workspace.v2.TaskEvaluationDTO evaluation = 17;
    */
   evaluation?: TaskEvaluationDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGenerationExecuteResultDTO generation = 18;
+   */
+  generation?: SessionGenerationExecuteResultDTO | undefined;
 };
 
 /**
@@ -12480,4 +12490,325 @@ export declare type SessionGenerationValidationDTO = Message<"boxteam.workspace.
  * Use `create(SessionGenerationValidationDTOSchema)` to create a new message.
  */
 export declare const SessionGenerationValidationDTOSchema: GenMessage<SessionGenerationValidationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationUIPolicyDTO
+ */
+export declare type SessionGenerationUIPolicyDTO = Message<"boxteam.workspace.v2.SessionGenerationUIPolicyDTO"> & {
+  /**
+   * @generated from field: string on_run_started = 1;
+   */
+  onRunStarted: string;
+
+  /**
+   * @generated from field: string on_run_completed = 2;
+   */
+  onRunCompleted: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationUIPolicyDTO.
+ * Use `create(SessionGenerationUIPolicyDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationUIPolicyDTOSchema: GenMessage<SessionGenerationUIPolicyDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationActionConfigDTO
+ */
+export declare type SessionGenerationActionConfigDTO = Message<"boxteam.workspace.v2.SessionGenerationActionConfigDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationGeneratorTypeDTO generator_type = 1;
+   */
+  generatorType?: SessionGenerationGeneratorTypeDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct config = 2;
+   */
+  config?: JsonObject | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationPlacementDTO placement = 3;
+   */
+  placement?: SessionGenerationPlacementDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationContextSourceDTO context_source = 4;
+   */
+  contextSource?: SessionGenerationContextSourceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationStrategyDTO session_strategy = 5;
+   */
+  sessionStrategy?: SessionGenerationStrategyDTO | undefined;
+
+  /**
+   * @generated from field: string title_template = 6;
+   */
+  titleTemplate: string;
+
+  /**
+   * @generated from field: repeated string path_template = 7;
+   */
+  pathTemplate: string[];
+
+  /**
+   * @generated from field: optional string created_from_uri = 8;
+   */
+  createdFromUri?: string | undefined;
+
+  /**
+   * @generated from field: optional string gateway_id = 9;
+   */
+  gatewayId?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationUIPolicyDTO ui_policy = 10;
+   */
+  uiPolicy?: SessionGenerationUIPolicyDTO | undefined;
+
+  /**
+   * @generated from field: string mount_missing = 11;
+   */
+  mountMissing: string;
+
+  /**
+   * @generated from field: string delete_outputs = 12;
+   */
+  deleteOutputs: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationActionConfigDTO.
+ * Use `create(SessionGenerationActionConfigDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationActionConfigDTOSchema: GenMessage<SessionGenerationActionConfigDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationOutputDTO
+ */
+export declare type SessionGenerationOutputDTO = Message<"boxteam.workspace.v2.SessionGenerationOutputDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 3;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: optional string title = 4;
+   */
+  title?: string | undefined;
+
+  /**
+   * @generated from field: repeated string navigation_path = 5;
+   */
+  navigationPath: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationOutputDTO.
+ * Use `create(SessionGenerationOutputDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationOutputDTOSchema: GenMessage<SessionGenerationOutputDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationExecuteResultDTO
+ */
+export declare type SessionGenerationExecuteResultDTO = Message<"boxteam.workspace.v2.SessionGenerationExecuteResultDTO"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: string status = 2;
+   */
+  status: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionGenerationOutputDTO outputs = 3;
+   */
+  outputs: SessionGenerationOutputDTO[];
+
+  /**
+   * @generated from field: optional string message_id = 4;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * @generated from field: optional string job_id = 5;
+   */
+  jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string report_back_job_id = 6;
+   */
+  reportBackJobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string error = 7;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationExecuteResultDTO.
+ * Use `create(SessionGenerationExecuteResultDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationExecuteResultDTOSchema: GenMessage<SessionGenerationExecuteResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LegacyGenerationRun
+ */
+export declare type LegacyGenerationRun = Message<"boxteam.workspace.v2.LegacyGenerationRun"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: string generator_id = 2;
+   */
+  generatorId: string;
+
+  /**
+   * @generated from field: string idempotency_key = 3;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string trigger_type = 5;
+   */
+  triggerType: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp scheduled_for = 6;
+   */
+  scheduledFor?: Timestamp | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionGenerationOutputDTO outputs = 7;
+   */
+  outputs: SessionGenerationOutputDTO[];
+
+  /**
+   * @generated from field: optional string execution_workspace_id = 8;
+   */
+  executionWorkspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string message_id = 9;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * @generated from field: optional string job_id = 10;
+   */
+  jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string report_back_job_id = 11;
+   */
+  reportBackJobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string error = 12;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp started_at = 13;
+   */
+  startedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp ended_at = 14;
+   */
+  endedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LegacyGenerationRun.
+ * Use `create(LegacyGenerationRunSchema)` to create a new message.
+ */
+export declare const LegacyGenerationRunSchema: GenMessage<LegacyGenerationRun>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGeneratorImportRequest
+ */
+export declare type SessionGeneratorImportRequest = Message<"boxteam.workspace.v2.SessionGeneratorImportRequest"> & {
+  /**
+   * @generated from field: string task_id = 1;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: string source_hash = 2;
+   */
+  sourceHash: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskConfigurationDTO configuration = 3;
+   */
+  configuration?: PersistentTaskConfigurationDTO | undefined;
+
+  /**
+   * @generated from field: int64 revision = 4;
+   */
+  revision: bigint;
+
+  /**
+   * @generated from field: string lifecycle = 5;
+   */
+  lifecycle: string;
+
+  /**
+   * @generated from field: optional string reason = 6;
+   */
+  reason?: string | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 7;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 8;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp next_run_at = 9;
+   */
+  nextRunAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: map<string, string> workspace_ids = 10;
+   */
+  workspaceIds: { [key: string]: string };
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.LegacyGenerationRun runs = 11;
+   */
+  runs: LegacyGenerationRun[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGeneratorImportRequest.
+ * Use `create(SessionGeneratorImportRequestSchema)` to create a new message.
+ */
+export declare const SessionGeneratorImportRequestSchema: GenMessage<SessionGeneratorImportRequest>;
 

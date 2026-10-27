@@ -24,7 +24,6 @@ from app.gateway.config import (
 )
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.scheduler import SessionGeneratorScheduler
 from app.gateway.control.user_access import UserAccessService
 from app.gateway.control.view_state import UserViewStateStore
 from app.gateway.federation.policy import (
@@ -242,37 +241,6 @@ def _gateway_runtime_consumer_stages(
             )
         )
 
-    scheduler = getattr(app.state, "session_generator_scheduler", None)
-    if isinstance(scheduler, SessionGeneratorScheduler):
-        stages.append(
-            GatewayRuntimeConsumerStage(
-                consumer_id="session-generator-scheduler",
-                generation=generation,
-                prepare=lambda: scheduler.prepare_runtime_config(
-                    poll_interval_seconds=(
-                        candidate.session_generator_poll_interval_seconds
-                    )
-                ),
-                apply=lambda: scheduler.update_runtime_config(
-                    poll_interval_seconds=(
-                        candidate.session_generator_poll_interval_seconds
-                    )
-                ),
-                health=lambda: scheduler.runtime_health_proof(
-                    generation=generation,
-                    fencing_token_digest=fencing_token_digest,
-                ),
-                promote=lambda: None,
-                rollback=lambda: scheduler.update_runtime_config(
-                    poll_interval_seconds=(
-                        previous.session_generator_poll_interval_seconds
-                    )
-                ),
-                fencing_token_digest=fencing_token_digest,
-                fence_check=fence_check,
-            )
-        )
-
     runtime_controller = getattr(app.state, "workspace_runtime_controller", None)
     if isinstance(runtime_controller, GatewayWorkspaceRuntimeController):
         stages.append(
@@ -408,9 +376,6 @@ def _gateway_pending_consumer_health_digests(
     catalog = getattr(app.state, "session_catalog_search_service", None)
     if not isinstance(catalog, GatewaySessionCatalogSearchService):
         raise RuntimeError("Gateway pending proof 缺少 session catalog consumer")
-    scheduler = getattr(app.state, "session_generator_scheduler", None)
-    if not isinstance(scheduler, SessionGeneratorScheduler):
-        raise RuntimeError("Gateway pending proof 缺少 generator scheduler consumer")
     controller = getattr(app.state, "workspace_runtime_controller", None)
     if not isinstance(controller, GatewayWorkspaceRuntimeController):
         raise RuntimeError("Gateway pending proof 缺少 health controller consumer")
@@ -422,13 +387,9 @@ def _gateway_pending_consumer_health_digests(
         generation=generation,
         fencing_token_digest=fencing_token_digest,
     )
-    scheduler_proof = scheduler.runtime_health_proof(
-        generation=generation,
-        fencing_token_digest=fencing_token_digest,
-    )
     digests = {
-        "catalog-generator-scheduler": _runtime_health_proof_digest(
-            (catalog_proof, scheduler_proof)
+        "session-catalog": _runtime_health_proof_digest(
+            (catalog_proof,)
         ),
         "health-controller": _runtime_health_proof_digest(
             (

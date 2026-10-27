@@ -34,10 +34,13 @@ from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
+    SessionGenerationActionDTO,
     TaskDecisionDTO,
     TaskDeliveryDTO,
     TaskEvaluationDTO,
 )
+from app.services.business.message_service import MessageService
+from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
@@ -46,6 +49,7 @@ from app.services.infrastructure.persistent_tasks.store import PersistentTaskSto
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.persistent_tasks.conditions import (
     TaskCheckError,
     condition_input,
@@ -53,6 +57,7 @@ from app.services.orchestration.persistent_tasks.conditions import (
     model_decision,
 )
 from app.services.orchestration.persistent_tasks.contexts import action_context
+from app.services.orchestration.persistent_tasks.generation import advance_generation
 from app.services.orchestration.persistent_tasks.goal import (
     GoalWork,
     GoalWorkKind,
@@ -67,10 +72,15 @@ class PersistentTaskRuntime:
     def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionOrchestratorProtocol,
                  dispatcher: RuntimeSourceDispatcher, sessions: SessionService, events: EventChannel[PersistentTaskChanged],
                  clock: Callable[[], datetime], workspace_root: Path, saver: RolloutCheckpointSaver,
-                 job_events: JobEventBusProtocol, goals: SessionGoalService, jobs: JobServiceProtocol, concurrency: int = 4) -> None:
+                 job_events: JobEventBusProtocol, goals: SessionGoalService, jobs: JobServiceProtocol,
+                 generation: SessionGenerationService, messages: MessageService, trace: TraceEventStore, concurrency: int = 4) -> None:
         if concurrency < 1:
             raise ValueError("持久任务并发数必须为正")
         self.goals = goals
+        self.generation = generation
+        self.messages = messages
+        self._waiting_actions: set[str] = set()
+        self.trace = trace
         self.jobs = jobs
         self._goal_job_owners: dict[str, str] = {}
         self._application_work: dict[str, deque[tuple[GoalWork, asyncio.Future[None] | None]]] = {}
@@ -139,6 +149,7 @@ class PersistentTaskRuntime:
                 self._queue_goal(GoalWork(job.session_id, kinds[event.type], job=job,
                                          tokens=event.payload.token_usage.total_tokens if event.type == EventType.AGENT_END else 0))
             self._waiting_checks.clear()
+            self._waiting_actions.clear()
             if self._accepting:
                 self._execution_pending.update(task.task_id for task in self.store.list_automations()
                                                if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
@@ -214,6 +225,7 @@ class PersistentTaskRuntime:
         self._closing = False
         self._failure = None
         self._waiting_checks.clear()
+        self._waiting_actions.clear()
         self._worker = asyncio.create_task(self._run(initialized), name="persistent-task-runtime")
         self._worker.add_done_callback(self._finished)
         await initialized
@@ -278,7 +290,7 @@ class PersistentTaskRuntime:
                     if len(self._inflight) >= self._concurrency:
                         break
                     if (task.task_id in self._recovering or task.task_id in self._execution_pending
-                            or self.store.runs(task.task_id, pending_only=True)):
+                            or any(run.run_id not in self._waiting_actions for run in self.store.runs(task.task_id, pending_only=True))):
                         self._execution_pending.discard(task.task_id)
                         running = asyncio.create_task(self._process_task(task.task_id), name=f"persistent-task:{task.task_id}")
                         running.add_done_callback(lambda _task: self._wake.set())
@@ -320,6 +332,8 @@ class PersistentTaskRuntime:
     async def _process_task(self, task_id: str) -> None:
         await self._collect_execution_completions(task_id)
         for run in self.store.runs(task_id, pending_only=True):
+            if run.run_id in self._waiting_actions:
+                continue
             if self._closing:
                 return
             async with self.action_admission() as admitted:
@@ -366,6 +380,9 @@ class PersistentTaskRuntime:
                 return
             run = checked
         action = configuration.action
+        if isinstance(action, SessionGenerationActionDTO):
+            await advance_generation(self, configuration, run)
+            return
         resource, session_id, thread_id = parse_session_thread_uri(action.target_uri)
         if thread_id is None:
             raise RuntimeError("已验证的持久任务定义缺少 Thread")

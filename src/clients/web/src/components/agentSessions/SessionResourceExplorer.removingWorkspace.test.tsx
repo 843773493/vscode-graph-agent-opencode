@@ -7,7 +7,6 @@ import {
   type ReactTestRenderer,
 } from "react-test-renderer";
 import type { GatewayWorkspace, WorkspaceNavigationNode } from "../../types/backend";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import {
   apiSuccessResponse,
   installGatewayFetch,
@@ -23,11 +22,6 @@ import SessionResourceExplorer from "./SessionResourceExplorer";
 
 afterEach(restoreGatewayTestEnvironment);
 
-const generatorResources = {
-  generators: null,
-  generationRuns: new Map(),
-  generatorError: null,
-} as unknown as SessionGeneratorResourcesController;
 
 function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
   return {
@@ -84,9 +78,6 @@ async function mountExplorer(options: {
         total: 0,
       });
     }
-    if (request.path.includes("/api/gateway/session-generators")) {
-      return apiSuccessResponse({ revision: "generators", items: [] });
-    }
     return undefined;
   });
 
@@ -121,7 +112,6 @@ async function mountExplorer(options: {
         onOpenConnectionManager={() => undefined}
         onReconnectWorkspace={async () => undefined}
         onStartWorkspace={async () => undefined}
-        generatorResources={generatorResources}
       />,
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 20));

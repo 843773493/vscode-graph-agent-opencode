@@ -130,6 +130,30 @@ class SessionGenerationStrategyDTO(BaseModel):
         return self
 
 
+class SessionGenerationUIPolicyDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    on_run_started: Literal["stay", "open_generated"] = "stay"
+    on_run_completed: Literal["none", "notify", "open_generated", "open_on_failure"] = "notify"
+
+
+class SessionGenerationActionConfigDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    generator_type: SessionGenerationGeneratorTypeDTO
+    config: dict[str, object] = Field(default_factory=dict)
+    placement: SessionGenerationPlacementDTO
+    context_source: SessionGenerationContextSourceDTO
+    session_strategy: SessionGenerationStrategyDTO
+    title_template: str = Field(default="{generator.name}", min_length=1, max_length=500)
+    path_template: list[str] = Field(default_factory=list, max_length=20)
+    created_from_uri: str | None = None
+    gateway_id: str | None = None
+    ui_policy: SessionGenerationUIPolicyDTO = Field(default_factory=SessionGenerationUIPolicyDTO)
+    mount_missing: Literal["pause", "fail"] = "pause"
+    delete_outputs: Literal["keep", "cascade"] = "keep"
+
+
 class SessionGenerationDefinitionDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -218,7 +242,7 @@ class SessionGenerationExecuteResultDTO(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     run_id: str
-    status: Literal["completed", "queued", "reporting", "failed", "skipped"]
+    status: Literal["completed", "queued", "reporting", "failed", "skipped", "partial", "cancelled"]
     outputs: list[SessionGenerationOutputDTO] = Field(default_factory=list)
     message_id: str | None = None
     job_id: str | None = None

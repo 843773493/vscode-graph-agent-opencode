@@ -141,7 +141,7 @@ async def goal_runtime(goal_service, job_service, session_orchestrator):
     runtime = PersistentTaskRuntime(
         store=store, orchestrator=session_orchestrator, dispatcher=Mock(), sessions=_Sessions(),
         events=Mock(), clock=lambda: datetime.now(UTC), workspace_root=Path.cwd(), saver=Mock(),
-        job_events=_Bus(), goals=goal_service, jobs=job_service,
+        job_events=_Bus(), goals=goal_service, jobs=job_service, generation=Mock(), messages=Mock(), trace=Mock(),
     )
     await runtime.start()
     yield runtime

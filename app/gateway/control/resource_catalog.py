@@ -90,7 +90,7 @@ class GatewayResourceCatalogService:
         request_id: str,
         params: dict[str, str] | None = None,
     ) -> object:
-        url, headers = self._target_request(target, path, request_id=request_id)
+        url, headers = self.target_request(target, path, request_id=request_id)
         response = await self._http_client.get(
             url,
             headers=headers,
@@ -108,7 +108,7 @@ class GatewayResourceCatalogService:
             )
         return data
 
-    def _target_request(
+    def target_request(
         self,
         target: WorkspaceTarget,
         path: str,

@@ -277,14 +277,6 @@ def load_gateway_config(
             "request_timeout_seconds",
             default=30,
         ),
-        session_generator_poll_interval_seconds=_positive_number_config(
-            raw_gateway_config,
-            "features",
-            "session_generators",
-            "scheduler",
-            "poll_interval_seconds",
-            default=1,
-        ),
         gateway_process_health_request_timeout_seconds=_positive_number_config(
             raw_gateway_config,
             "runtime",

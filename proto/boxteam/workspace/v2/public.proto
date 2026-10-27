@@ -2676,9 +2676,10 @@ message TaskContextDTO {
 message TaskActionDTO {
   string version = 1;
   string type_id = 2;
-  string target_uri = 3;
-  string delivery_mode = 4;
-  string delivery_policy = 5;
+  optional string target_uri = 3;
+  optional string delivery_mode = 4;
+  optional string delivery_policy = 5;
+  optional SessionGenerationActionConfigDTO generation = 6;
 }
 
 message TaskPoliciesDTO {
@@ -2755,6 +2756,7 @@ message PersistentTaskRunDTO {
   optional google.protobuf.Timestamp scheduled_for = 15;
   optional google.protobuf.Struct trigger_payload = 16;
   optional TaskEvaluationDTO evaluation = 17;
+  optional SessionGenerationExecuteResultDTO generation = 18;
 }
 
 message PersistentTaskCreateRequest {
@@ -2864,4 +2866,73 @@ message SessionGenerationValidationDTO {
   string workspace_id = 1;
   bool provider_available = 2;
   optional string reason = 3;
+}
+
+message SessionGenerationUIPolicyDTO {
+  string on_run_started = 1;
+  string on_run_completed = 2;
+}
+
+message SessionGenerationActionConfigDTO {
+  SessionGenerationGeneratorTypeDTO generator_type = 1;
+  google.protobuf.Struct config = 2;
+  SessionGenerationPlacementDTO placement = 3;
+  SessionGenerationContextSourceDTO context_source = 4;
+  SessionGenerationStrategyDTO session_strategy = 5;
+  string title_template = 6;
+  repeated string path_template = 7;
+  optional string created_from_uri = 8;
+  optional string gateway_id = 9;
+  SessionGenerationUIPolicyDTO ui_policy = 10;
+  string mount_missing = 11;
+  string delete_outputs = 12;
+}
+
+message SessionGenerationOutputDTO {
+  string kind = 1;
+  string workspace_id = 2;
+  string session_id = 3;
+  optional string title = 4;
+  repeated string navigation_path = 5;
+}
+
+message SessionGenerationExecuteResultDTO {
+  string run_id = 1;
+  string status = 2;
+  repeated SessionGenerationOutputDTO outputs = 3;
+  optional string message_id = 4;
+  optional string job_id = 5;
+  optional string report_back_job_id = 6;
+  optional string error = 7;
+}
+
+message LegacyGenerationRun {
+  string run_id = 1;
+  string generator_id = 2;
+  string idempotency_key = 3;
+  string status = 4;
+  string trigger_type = 5;
+  google.protobuf.Timestamp scheduled_for = 6;
+  repeated SessionGenerationOutputDTO outputs = 7;
+  optional string execution_workspace_id = 8;
+  optional string message_id = 9;
+  optional string job_id = 10;
+  optional string report_back_job_id = 11;
+  optional string error = 12;
+  optional google.protobuf.Timestamp started_at = 13;
+  optional google.protobuf.Timestamp ended_at = 14;
+}
+
+message SessionGeneratorImportRequest {
+  string task_id = 1;
+  string source_hash = 2;
+  PersistentTaskConfigurationDTO configuration = 3;
+  int64 revision = 4;
+  string lifecycle = 5;
+  optional string reason = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp next_run_at = 9;
+  map<string, string> workspace_ids = 10;
+  repeated LegacyGenerationRun runs = 11;
 }

@@ -2726,9 +2726,10 @@ export interface TaskContextDTO {
 export interface TaskActionDTO {
   version: string;
   type_id: string;
-  target_uri: string;
-  delivery_mode: string;
-  delivery_policy: string;
+  target_uri?: string | undefined;
+  delivery_mode?: string | undefined;
+  delivery_policy?: string | undefined;
+  generation?: SessionGenerationActionConfigDTO | undefined;
 }
 
 export interface TaskPoliciesDTO {
@@ -2807,6 +2808,7 @@ export interface PersistentTaskRunDTO {
   scheduled_for?: string | undefined;
   trigger_payload?: { [key: string]: any } | undefined;
   evaluation?: TaskEvaluationDTO | undefined;
+  generation?: SessionGenerationExecuteResultDTO | undefined;
 }
 
 export interface PersistentTaskCreateRequest {
@@ -2916,6 +2918,80 @@ export interface SessionGenerationValidationDTO {
   workspace_id: string;
   provider_available: boolean;
   reason?: string | undefined;
+}
+
+export interface SessionGenerationUIPolicyDTO {
+  on_run_started: string;
+  on_run_completed: string;
+}
+
+export interface SessionGenerationActionConfigDTO {
+  generator_type: SessionGenerationGeneratorTypeDTO | undefined;
+  config: { [key: string]: any } | undefined;
+  placement: SessionGenerationPlacementDTO | undefined;
+  context_source: SessionGenerationContextSourceDTO | undefined;
+  session_strategy: SessionGenerationStrategyDTO | undefined;
+  title_template: string;
+  path_template: string[];
+  created_from_uri?: string | undefined;
+  gateway_id?: string | undefined;
+  ui_policy: SessionGenerationUIPolicyDTO | undefined;
+  mount_missing: string;
+  delete_outputs: string;
+}
+
+export interface SessionGenerationOutputDTO {
+  kind: string;
+  workspace_id: string;
+  session_id: string;
+  title?: string | undefined;
+  navigation_path: string[];
+}
+
+export interface SessionGenerationExecuteResultDTO {
+  run_id: string;
+  status: string;
+  outputs: SessionGenerationOutputDTO[];
+  message_id?: string | undefined;
+  job_id?: string | undefined;
+  report_back_job_id?: string | undefined;
+  error?: string | undefined;
+}
+
+export interface LegacyGenerationRun {
+  run_id: string;
+  generator_id: string;
+  idempotency_key: string;
+  status: string;
+  trigger_type: string;
+  scheduled_for: string | undefined;
+  outputs: SessionGenerationOutputDTO[];
+  execution_workspace_id?: string | undefined;
+  message_id?: string | undefined;
+  job_id?: string | undefined;
+  report_back_job_id?: string | undefined;
+  error?: string | undefined;
+  started_at?: string | undefined;
+  ended_at?: string | undefined;
+}
+
+export interface SessionGeneratorImportRequest {
+  task_id: string;
+  source_hash: string;
+  configuration: PersistentTaskConfigurationDTO | undefined;
+  revision: number;
+  lifecycle: string;
+  reason?: string | undefined;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+  next_run_at?: string | undefined;
+  workspace_ids: { [key: string]: string };
+  runs: LegacyGenerationRun[];
+}
+
+export interface SessionGeneratorImportRequest_WorkspaceIdsEntry {
+  key: string;
+  value: string;
 }
 
 function createBaseAPIResponse(): APIResponse {
@@ -19899,7 +19975,14 @@ export const TaskContextDTO: MessageFns<TaskContextDTO> = {
 };
 
 function createBaseTaskActionDTO(): TaskActionDTO {
-  return { version: "", type_id: "", target_uri: "", delivery_mode: "", delivery_policy: "" };
+  return {
+    version: "",
+    type_id: "",
+    target_uri: undefined,
+    delivery_mode: undefined,
+    delivery_policy: undefined,
+    generation: undefined,
+  };
 }
 
 export const TaskActionDTO: MessageFns<TaskActionDTO> = {
@@ -19907,9 +19990,10 @@ export const TaskActionDTO: MessageFns<TaskActionDTO> = {
     return {
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
-      target_uri: isSet(object.target_uri) ? globalThis.String(object.target_uri) : "",
-      delivery_mode: isSet(object.delivery_mode) ? globalThis.String(object.delivery_mode) : "",
-      delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : "",
+      target_uri: isSet(object.target_uri) ? globalThis.String(object.target_uri) : undefined,
+      delivery_mode: isSet(object.delivery_mode) ? globalThis.String(object.delivery_mode) : undefined,
+      delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : undefined,
+      generation: isSet(object.generation) ? SessionGenerationActionConfigDTO.fromJSON(object.generation) : undefined,
     };
   },
 
@@ -19921,14 +20005,17 @@ export const TaskActionDTO: MessageFns<TaskActionDTO> = {
     if (message.type_id !== "") {
       obj.type_id = message.type_id;
     }
-    if (message.target_uri !== "") {
+    if (message.target_uri !== undefined) {
       obj.target_uri = message.target_uri;
     }
-    if (message.delivery_mode !== "") {
+    if (message.delivery_mode !== undefined) {
       obj.delivery_mode = message.delivery_mode;
     }
-    if (message.delivery_policy !== "") {
+    if (message.delivery_policy !== undefined) {
       obj.delivery_policy = message.delivery_policy;
+    }
+    if (message.generation !== undefined) {
+      obj.generation = SessionGenerationActionConfigDTO.toJSON(message.generation);
     }
     return obj;
   },
@@ -19940,9 +20027,12 @@ export const TaskActionDTO: MessageFns<TaskActionDTO> = {
     const message = createBaseTaskActionDTO();
     message.version = object.version ?? "";
     message.type_id = object.type_id ?? "";
-    message.target_uri = object.target_uri ?? "";
-    message.delivery_mode = object.delivery_mode ?? "";
-    message.delivery_policy = object.delivery_policy ?? "";
+    message.target_uri = object.target_uri ?? undefined;
+    message.delivery_mode = object.delivery_mode ?? undefined;
+    message.delivery_policy = object.delivery_policy ?? undefined;
+    message.generation = (object.generation !== undefined && object.generation !== null)
+      ? SessionGenerationActionConfigDTO.fromPartial(object.generation)
+      : undefined;
     return message;
   },
 };
@@ -20343,6 +20433,7 @@ function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
     scheduled_for: undefined,
     trigger_payload: undefined,
     evaluation: undefined,
+    generation: undefined,
   };
 }
 
@@ -20366,6 +20457,7 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
       scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
       trigger_payload: isObject(object.trigger_payload) ? object.trigger_payload : undefined,
       evaluation: isSet(object.evaluation) ? TaskEvaluationDTO.fromJSON(object.evaluation) : undefined,
+      generation: isSet(object.generation) ? SessionGenerationExecuteResultDTO.fromJSON(object.generation) : undefined,
     };
   },
 
@@ -20422,6 +20514,9 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     if (message.evaluation !== undefined) {
       obj.evaluation = TaskEvaluationDTO.toJSON(message.evaluation);
     }
+    if (message.generation !== undefined) {
+      obj.generation = SessionGenerationExecuteResultDTO.toJSON(message.generation);
+    }
     return obj;
   },
 
@@ -20452,6 +20547,9 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     message.trigger_payload = object.trigger_payload ?? undefined;
     message.evaluation = (object.evaluation !== undefined && object.evaluation !== null)
       ? TaskEvaluationDTO.fromPartial(object.evaluation)
+      : undefined;
+    message.generation = (object.generation !== undefined && object.generation !== null)
+      ? SessionGenerationExecuteResultDTO.fromPartial(object.generation)
       : undefined;
     return message;
   },
@@ -21223,6 +21321,562 @@ export const SessionGenerationValidationDTO: MessageFns<SessionGenerationValidat
     message.workspace_id = object.workspace_id ?? "";
     message.provider_available = object.provider_available ?? false;
     message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationUIPolicyDTO(): SessionGenerationUIPolicyDTO {
+  return { on_run_started: "", on_run_completed: "" };
+}
+
+export const SessionGenerationUIPolicyDTO: MessageFns<SessionGenerationUIPolicyDTO> = {
+  fromJSON(object: any): SessionGenerationUIPolicyDTO {
+    return {
+      on_run_started: isSet(object.on_run_started) ? globalThis.String(object.on_run_started) : "",
+      on_run_completed: isSet(object.on_run_completed) ? globalThis.String(object.on_run_completed) : "",
+    };
+  },
+
+  toJSON(message: SessionGenerationUIPolicyDTO): unknown {
+    const obj: any = {};
+    if (message.on_run_started !== "") {
+      obj.on_run_started = message.on_run_started;
+    }
+    if (message.on_run_completed !== "") {
+      obj.on_run_completed = message.on_run_completed;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationUIPolicyDTO>, I>>(base?: I): SessionGenerationUIPolicyDTO {
+    return SessionGenerationUIPolicyDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationUIPolicyDTO>, I>>(object: I): SessionGenerationUIPolicyDTO {
+    const message = createBaseSessionGenerationUIPolicyDTO();
+    message.on_run_started = object.on_run_started ?? "";
+    message.on_run_completed = object.on_run_completed ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionGenerationActionConfigDTO(): SessionGenerationActionConfigDTO {
+  return {
+    generator_type: undefined,
+    config: undefined,
+    placement: undefined,
+    context_source: undefined,
+    session_strategy: undefined,
+    title_template: "",
+    path_template: [],
+    created_from_uri: undefined,
+    gateway_id: undefined,
+    ui_policy: undefined,
+    mount_missing: "",
+    delete_outputs: "",
+  };
+}
+
+export const SessionGenerationActionConfigDTO: MessageFns<SessionGenerationActionConfigDTO> = {
+  fromJSON(object: any): SessionGenerationActionConfigDTO {
+    return {
+      generator_type: isSet(object.generator_type)
+        ? SessionGenerationGeneratorTypeDTO.fromJSON(object.generator_type)
+        : undefined,
+      config: isObject(object.config) ? object.config : undefined,
+      placement: isSet(object.placement) ? SessionGenerationPlacementDTO.fromJSON(object.placement) : undefined,
+      context_source: isSet(object.context_source)
+        ? SessionGenerationContextSourceDTO.fromJSON(object.context_source)
+        : undefined,
+      session_strategy: isSet(object.session_strategy)
+        ? SessionGenerationStrategyDTO.fromJSON(object.session_strategy)
+        : undefined,
+      title_template: isSet(object.title_template) ? globalThis.String(object.title_template) : "",
+      path_template: globalThis.Array.isArray(object?.path_template)
+        ? object.path_template.map((e: any) => globalThis.String(e))
+        : [],
+      created_from_uri: isSet(object.created_from_uri) ? globalThis.String(object.created_from_uri) : undefined,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : undefined,
+      ui_policy: isSet(object.ui_policy) ? SessionGenerationUIPolicyDTO.fromJSON(object.ui_policy) : undefined,
+      mount_missing: isSet(object.mount_missing) ? globalThis.String(object.mount_missing) : "",
+      delete_outputs: isSet(object.delete_outputs) ? globalThis.String(object.delete_outputs) : "",
+    };
+  },
+
+  toJSON(message: SessionGenerationActionConfigDTO): unknown {
+    const obj: any = {};
+    if (message.generator_type !== undefined) {
+      obj.generator_type = SessionGenerationGeneratorTypeDTO.toJSON(message.generator_type);
+    }
+    if (message.config !== undefined) {
+      obj.config = message.config;
+    }
+    if (message.placement !== undefined) {
+      obj.placement = SessionGenerationPlacementDTO.toJSON(message.placement);
+    }
+    if (message.context_source !== undefined) {
+      obj.context_source = SessionGenerationContextSourceDTO.toJSON(message.context_source);
+    }
+    if (message.session_strategy !== undefined) {
+      obj.session_strategy = SessionGenerationStrategyDTO.toJSON(message.session_strategy);
+    }
+    if (message.title_template !== "") {
+      obj.title_template = message.title_template;
+    }
+    if (message.path_template?.length) {
+      obj.path_template = message.path_template;
+    }
+    if (message.created_from_uri !== undefined) {
+      obj.created_from_uri = message.created_from_uri;
+    }
+    if (message.gateway_id !== undefined) {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.ui_policy !== undefined) {
+      obj.ui_policy = SessionGenerationUIPolicyDTO.toJSON(message.ui_policy);
+    }
+    if (message.mount_missing !== "") {
+      obj.mount_missing = message.mount_missing;
+    }
+    if (message.delete_outputs !== "") {
+      obj.delete_outputs = message.delete_outputs;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationActionConfigDTO>, I>>(
+    base?: I,
+  ): SessionGenerationActionConfigDTO {
+    return SessionGenerationActionConfigDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationActionConfigDTO>, I>>(
+    object: I,
+  ): SessionGenerationActionConfigDTO {
+    const message = createBaseSessionGenerationActionConfigDTO();
+    message.generator_type = (object.generator_type !== undefined && object.generator_type !== null)
+      ? SessionGenerationGeneratorTypeDTO.fromPartial(object.generator_type)
+      : undefined;
+    message.config = object.config ?? undefined;
+    message.placement = (object.placement !== undefined && object.placement !== null)
+      ? SessionGenerationPlacementDTO.fromPartial(object.placement)
+      : undefined;
+    message.context_source = (object.context_source !== undefined && object.context_source !== null)
+      ? SessionGenerationContextSourceDTO.fromPartial(object.context_source)
+      : undefined;
+    message.session_strategy = (object.session_strategy !== undefined && object.session_strategy !== null)
+      ? SessionGenerationStrategyDTO.fromPartial(object.session_strategy)
+      : undefined;
+    message.title_template = object.title_template ?? "";
+    message.path_template = object.path_template?.map((e) => e) || [];
+    message.created_from_uri = object.created_from_uri ?? undefined;
+    message.gateway_id = object.gateway_id ?? undefined;
+    message.ui_policy = (object.ui_policy !== undefined && object.ui_policy !== null)
+      ? SessionGenerationUIPolicyDTO.fromPartial(object.ui_policy)
+      : undefined;
+    message.mount_missing = object.mount_missing ?? "";
+    message.delete_outputs = object.delete_outputs ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionGenerationOutputDTO(): SessionGenerationOutputDTO {
+  return { kind: "", workspace_id: "", session_id: "", title: undefined, navigation_path: [] };
+}
+
+export const SessionGenerationOutputDTO: MessageFns<SessionGenerationOutputDTO> = {
+  fromJSON(object: any): SessionGenerationOutputDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : undefined,
+      navigation_path: globalThis.Array.isArray(object?.navigation_path)
+        ? object.navigation_path.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionGenerationOutputDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.title !== undefined) {
+      obj.title = message.title;
+    }
+    if (message.navigation_path?.length) {
+      obj.navigation_path = message.navigation_path;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationOutputDTO>, I>>(base?: I): SessionGenerationOutputDTO {
+    return SessionGenerationOutputDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationOutputDTO>, I>>(object: I): SessionGenerationOutputDTO {
+    const message = createBaseSessionGenerationOutputDTO();
+    message.kind = object.kind ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.title = object.title ?? undefined;
+    message.navigation_path = object.navigation_path?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseSessionGenerationExecuteResultDTO(): SessionGenerationExecuteResultDTO {
+  return {
+    run_id: "",
+    status: "",
+    outputs: [],
+    message_id: undefined,
+    job_id: undefined,
+    report_back_job_id: undefined,
+    error: undefined,
+  };
+}
+
+export const SessionGenerationExecuteResultDTO: MessageFns<SessionGenerationExecuteResultDTO> = {
+  fromJSON(object: any): SessionGenerationExecuteResultDTO {
+    return {
+      run_id: isSet(object.run_id) ? globalThis.String(object.run_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      outputs: globalThis.Array.isArray(object?.outputs)
+        ? object.outputs.map((e: any) => SessionGenerationOutputDTO.fromJSON(e))
+        : [],
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      report_back_job_id: isSet(object.report_back_job_id) ? globalThis.String(object.report_back_job_id) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationExecuteResultDTO): unknown {
+    const obj: any = {};
+    if (message.run_id !== "") {
+      obj.run_id = message.run_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.outputs?.length) {
+      obj.outputs = message.outputs.map((e) => SessionGenerationOutputDTO.toJSON(e));
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.job_id !== undefined) {
+      obj.job_id = message.job_id;
+    }
+    if (message.report_back_job_id !== undefined) {
+      obj.report_back_job_id = message.report_back_job_id;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationExecuteResultDTO>, I>>(
+    base?: I,
+  ): SessionGenerationExecuteResultDTO {
+    return SessionGenerationExecuteResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationExecuteResultDTO>, I>>(
+    object: I,
+  ): SessionGenerationExecuteResultDTO {
+    const message = createBaseSessionGenerationExecuteResultDTO();
+    message.run_id = object.run_id ?? "";
+    message.status = object.status ?? "";
+    message.outputs = object.outputs?.map((e) => SessionGenerationOutputDTO.fromPartial(e)) || [];
+    message.message_id = object.message_id ?? undefined;
+    message.job_id = object.job_id ?? undefined;
+    message.report_back_job_id = object.report_back_job_id ?? undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLegacyGenerationRun(): LegacyGenerationRun {
+  return {
+    run_id: "",
+    generator_id: "",
+    idempotency_key: "",
+    status: "",
+    trigger_type: "",
+    scheduled_for: undefined,
+    outputs: [],
+    execution_workspace_id: undefined,
+    message_id: undefined,
+    job_id: undefined,
+    report_back_job_id: undefined,
+    error: undefined,
+    started_at: undefined,
+    ended_at: undefined,
+  };
+}
+
+export const LegacyGenerationRun: MessageFns<LegacyGenerationRun> = {
+  fromJSON(object: any): LegacyGenerationRun {
+    return {
+      run_id: isSet(object.run_id) ? globalThis.String(object.run_id) : "",
+      generator_id: isSet(object.generator_id) ? globalThis.String(object.generator_id) : "",
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      trigger_type: isSet(object.trigger_type) ? globalThis.String(object.trigger_type) : "",
+      scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
+      outputs: globalThis.Array.isArray(object?.outputs)
+        ? object.outputs.map((e: any) => SessionGenerationOutputDTO.fromJSON(e))
+        : [],
+      execution_workspace_id: isSet(object.execution_workspace_id)
+        ? globalThis.String(object.execution_workspace_id)
+        : undefined,
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      report_back_job_id: isSet(object.report_back_job_id) ? globalThis.String(object.report_back_job_id) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      started_at: isSet(object.started_at) ? globalThis.String(object.started_at) : undefined,
+      ended_at: isSet(object.ended_at) ? globalThis.String(object.ended_at) : undefined,
+    };
+  },
+
+  toJSON(message: LegacyGenerationRun): unknown {
+    const obj: any = {};
+    if (message.run_id !== "") {
+      obj.run_id = message.run_id;
+    }
+    if (message.generator_id !== "") {
+      obj.generator_id = message.generator_id;
+    }
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.trigger_type !== "") {
+      obj.trigger_type = message.trigger_type;
+    }
+    if (message.scheduled_for !== undefined) {
+      obj.scheduled_for = message.scheduled_for;
+    }
+    if (message.outputs?.length) {
+      obj.outputs = message.outputs.map((e) => SessionGenerationOutputDTO.toJSON(e));
+    }
+    if (message.execution_workspace_id !== undefined) {
+      obj.execution_workspace_id = message.execution_workspace_id;
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.job_id !== undefined) {
+      obj.job_id = message.job_id;
+    }
+    if (message.report_back_job_id !== undefined) {
+      obj.report_back_job_id = message.report_back_job_id;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.started_at !== undefined) {
+      obj.started_at = message.started_at;
+    }
+    if (message.ended_at !== undefined) {
+      obj.ended_at = message.ended_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LegacyGenerationRun>, I>>(base?: I): LegacyGenerationRun {
+    return LegacyGenerationRun.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LegacyGenerationRun>, I>>(object: I): LegacyGenerationRun {
+    const message = createBaseLegacyGenerationRun();
+    message.run_id = object.run_id ?? "";
+    message.generator_id = object.generator_id ?? "";
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.status = object.status ?? "";
+    message.trigger_type = object.trigger_type ?? "";
+    message.scheduled_for = object.scheduled_for ?? undefined;
+    message.outputs = object.outputs?.map((e) => SessionGenerationOutputDTO.fromPartial(e)) || [];
+    message.execution_workspace_id = object.execution_workspace_id ?? undefined;
+    message.message_id = object.message_id ?? undefined;
+    message.job_id = object.job_id ?? undefined;
+    message.report_back_job_id = object.report_back_job_id ?? undefined;
+    message.error = object.error ?? undefined;
+    message.started_at = object.started_at ?? undefined;
+    message.ended_at = object.ended_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGeneratorImportRequest(): SessionGeneratorImportRequest {
+  return {
+    task_id: "",
+    source_hash: "",
+    configuration: undefined,
+    revision: 0,
+    lifecycle: "",
+    reason: undefined,
+    created_at: undefined,
+    updated_at: undefined,
+    next_run_at: undefined,
+    workspace_ids: {},
+    runs: [],
+  };
+}
+
+export const SessionGeneratorImportRequest: MessageFns<SessionGeneratorImportRequest> = {
+  fromJSON(object: any): SessionGeneratorImportRequest {
+    return {
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      source_hash: isSet(object.source_hash) ? globalThis.String(object.source_hash) : "",
+      configuration: isSet(object.configuration)
+        ? PersistentTaskConfigurationDTO.fromJSON(object.configuration)
+        : undefined,
+      revision: isSet(object.revision) ? globalThis.Number(object.revision) : 0,
+      lifecycle: isSet(object.lifecycle) ? globalThis.String(object.lifecycle) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      next_run_at: isSet(object.next_run_at) ? globalThis.String(object.next_run_at) : undefined,
+      workspace_ids: isObject(object.workspace_ids)
+        ? (globalThis.Object.entries(object.workspace_ids) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      runs: globalThis.Array.isArray(object?.runs)
+        ? object.runs.map((e: any) => LegacyGenerationRun.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionGeneratorImportRequest): unknown {
+    const obj: any = {};
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.source_hash !== "") {
+      obj.source_hash = message.source_hash;
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = PersistentTaskConfigurationDTO.toJSON(message.configuration);
+    }
+    if (message.revision !== 0) {
+      obj.revision = Math.round(message.revision);
+    }
+    if (message.lifecycle !== "") {
+      obj.lifecycle = message.lifecycle;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.next_run_at !== undefined) {
+      obj.next_run_at = message.next_run_at;
+    }
+    if (message.workspace_ids) {
+      const entries = globalThis.Object.entries(message.workspace_ids) as [string, string][];
+      if (entries.length > 0) {
+        obj.workspace_ids = {};
+        entries.forEach(([k, v]) => {
+          obj.workspace_ids[k] = v;
+        });
+      }
+    }
+    if (message.runs?.length) {
+      obj.runs = message.runs.map((e) => LegacyGenerationRun.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGeneratorImportRequest>, I>>(base?: I): SessionGeneratorImportRequest {
+    return SessionGeneratorImportRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGeneratorImportRequest>, I>>(
+    object: I,
+  ): SessionGeneratorImportRequest {
+    const message = createBaseSessionGeneratorImportRequest();
+    message.task_id = object.task_id ?? "";
+    message.source_hash = object.source_hash ?? "";
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? PersistentTaskConfigurationDTO.fromPartial(object.configuration)
+      : undefined;
+    message.revision = object.revision ?? 0;
+    message.lifecycle = object.lifecycle ?? "";
+    message.reason = object.reason ?? undefined;
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    message.next_run_at = object.next_run_at ?? undefined;
+    message.workspace_ids = (globalThis.Object.entries(object.workspace_ids ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    message.runs = object.runs?.map((e) => LegacyGenerationRun.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSessionGeneratorImportRequest_WorkspaceIdsEntry(): SessionGeneratorImportRequest_WorkspaceIdsEntry {
+  return { key: "", value: "" };
+}
+
+export const SessionGeneratorImportRequest_WorkspaceIdsEntry: MessageFns<
+  SessionGeneratorImportRequest_WorkspaceIdsEntry
+> = {
+  fromJSON(object: any): SessionGeneratorImportRequest_WorkspaceIdsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: SessionGeneratorImportRequest_WorkspaceIdsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGeneratorImportRequest_WorkspaceIdsEntry>, I>>(
+    base?: I,
+  ): SessionGeneratorImportRequest_WorkspaceIdsEntry {
+    return SessionGeneratorImportRequest_WorkspaceIdsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGeneratorImportRequest_WorkspaceIdsEntry>, I>>(
+    object: I,
+  ): SessionGeneratorImportRequest_WorkspaceIdsEntry {
+    const message = createBaseSessionGeneratorImportRequest_WorkspaceIdsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };

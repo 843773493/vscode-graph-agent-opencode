@@ -18,6 +18,7 @@ from app.api.sse_heartbeat import (
 )
 from app.core.exceptions import NotFoundError
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.generator_import import SessionGeneratorImportRequest
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
     PersistentTaskControlRequest,
@@ -31,6 +32,9 @@ from app.schemas.internal_v2.persistent_task import (
 )
 from app.schemas.internal_v2.sse import sse_responses
 from app.services.business.persistent_task_service import PersistentTaskService
+from app.services.orchestration.persistent_tasks.generator_import import (
+    import_generator,
+)
 
 router = APIRouter(prefix="/persistent-tasks", tags=["persistent-tasks"], dependencies=[Depends(verify_local_token)])
 Result = TypeVar("Result")
@@ -78,6 +82,12 @@ async def task_events(service: TaskService):
 
     return StreamingResponse(stream_sse_with_heartbeat(stream(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
                                                        close_source_on_exit=True), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+@router.post("/imports/session-generators", response_model=APIResponse[dict[str, str]])
+async def import_session_generator(payload: SessionGeneratorImportRequest, request_id: RequestId, service: TaskService):
+    task_id = await _apply(lambda: import_generator(service.runtime, payload))
+    return APIResponse(data={"task_id": task_id}, request_id=request_id)
 
 
 @router.get("/{task_id}", response_model=APIResponse[PersistentTaskDTO])

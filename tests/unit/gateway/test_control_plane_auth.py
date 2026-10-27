@@ -62,8 +62,7 @@ def test_workspace_navigation_rejects_wrong_local_token(gateway_app: FastAPI) ->
 # 缺凭据必须在依赖注入阶段 fail-closed 返回 401，MUST NOT 返回 200 与业务数据。
 _UNPROTECTED_CONTROL_PLANE_REQUESTS: tuple[tuple[str, str, dict[str, object] | None], ...] = (
     ("GET", "/api/gateway/session-catalog/search?query=a", None),
-    ("GET", "/api/gateway/session-generators", None),
-    ("GET", "/api/gateway/session-generators/gen-1/runs", None),
+    ("POST", "/api/gateway/migrations/session-generators", None),
     ("GET", "/api/gateway/workspace-navigation/nodes/node-1/breadcrumb", None),
 )
 

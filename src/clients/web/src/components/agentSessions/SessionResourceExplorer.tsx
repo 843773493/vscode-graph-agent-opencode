@@ -11,7 +11,6 @@ import type {
   SessionCatalogOutboxSnapshot,
 } from "../../hooks/session/sessionCatalogOutboxRuntime";
 import type { CatalogProjectedNode } from "../../state/session/sessionCatalogProjection";
-import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import SessionActivityIndicator from "./SessionActivityIndicator";
 import {
   workspaceFailurePresentation,
@@ -74,7 +73,6 @@ interface SessionResourceExplorerProps {
   onOpenConnectionManager: () => void;
   onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
-  generatorResources: SessionGeneratorResourcesController;
 }
 
 function Chevron({ expanded }: { expanded: boolean }) {
@@ -117,7 +115,6 @@ export default function SessionResourceExplorer({
   onOpenConnectionManager,
   onReconnectWorkspace,
   onStartWorkspace,
-  generatorResources,
 }: SessionResourceExplorerProps): ReactNode {
   const [actionError, setActionError] = useState<{
     title: string;
@@ -143,7 +140,6 @@ export default function SessionResourceExplorer({
     workspaceNavigationSyncKey: buildWorkspaceNavigationSyncKey(workspaces),
     catalogSyncKeys,
     catalogRefreshVersions,
-    generatorResources,
     sessionCatalogOutboxRuntime,
     sessionCatalogOutboxSnapshot,
     gatewayUserAccess,

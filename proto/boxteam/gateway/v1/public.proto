@@ -3,7 +3,6 @@ syntax = "proto3";
 package boxteam.gateway.v1;
 
 import "google/protobuf/struct.proto";
-import "google/protobuf/timestamp.proto";
 
 // Gateway 控制面公开 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
@@ -525,156 +524,6 @@ message GatewayWorkspaceListDTO {
   repeated GatewayWorkspaceDTO items = 2;
 }
 
-message GenerationOutputDTO {
-  reserved 6;
-  reserved "storage_relative_path";
-
-  optional string kind = 1;
-  string workspace_id = 2;
-  string session_id = 3;
-  optional string title = 4;
-  repeated string navigation_path = 5;
-}
-
-message GenerationRunDTO {
-  string run_id = 1;
-  string generator_id = 2;
-  string idempotency_key = 3;
-  string status = 4;
-  string trigger_type = 5;
-  google.protobuf.Timestamp scheduled_for = 6;
-  repeated GenerationOutputDTO outputs = 7;
-  optional string execution_workspace_id = 8;
-  optional string message_id = 9;
-  optional string job_id = 10;
-  optional string report_back_job_id = 11;
-  optional string error = 12;
-  optional google.protobuf.Timestamp started_at = 13;
-  optional google.protobuf.Timestamp ended_at = 14;
-}
-
-message GenerationRunListDTO {
-  repeated GenerationRunDTO items = 1;
-}
-
-message GeneratorContextSourceDTO {
-  optional string kind = 1;
-  optional string workspace_id = 2;
-  optional string session_id = 3;
-  optional string snapshot_id = 4;
-  optional string thread_id = 5;
-}
-
-message GeneratorDefinitionCreateRequest {
-  string name = 1;
-  optional GeneratorTypeRefDTO generator_type = 2;
-  optional bool enabled = 3;
-  optional GeneratorTriggerDTO trigger = 4;
-  GeneratorPlacementDTO placement = 5;
-  string execution_workspace_id = 6;
-  optional GeneratorContextSourceDTO context_source = 7;
-  optional SessionLocatorDTO created_from = 8;
-  optional GeneratorNamingDTO naming = 9;
-  optional GeneratorSessionStrategyDTO session_strategy = 10;
-  optional GeneratorPoliciesDTO policies = 11;
-  optional GeneratorUIPolicyDTO ui_policy = 12;
-  optional google.protobuf.Struct config = 13;
-}
-
-message GeneratorDefinitionDTO {
-  string name = 1;
-  optional GeneratorTypeRefDTO generator_type = 2;
-  optional bool enabled = 3;
-  optional GeneratorTriggerDTO trigger = 4;
-  GeneratorPlacementDTO placement = 5;
-  string execution_workspace_id = 6;
-  optional GeneratorContextSourceDTO context_source = 7;
-  optional SessionLocatorDTO created_from = 8;
-  optional GeneratorNamingDTO naming = 9;
-  optional GeneratorSessionStrategyDTO session_strategy = 10;
-  optional GeneratorPoliciesDTO policies = 11;
-  optional GeneratorUIPolicyDTO ui_policy = 12;
-  optional google.protobuf.Struct config = 13;
-  string generator_id = 14;
-  optional string status = 15;
-  optional string status_reason = 16;
-  optional int64 revision = 17;
-  google.protobuf.Timestamp created_at = 18;
-  google.protobuf.Timestamp updated_at = 19;
-}
-
-message GeneratorDefinitionListDTO {
-  string revision = 1;
-  repeated GeneratorDefinitionDTO items = 2;
-}
-
-message GeneratorDefinitionUpdateRequest {
-  optional string name = 1;
-  optional bool enabled = 2;
-  optional GeneratorTriggerDTO trigger = 3;
-  optional GeneratorPlacementDTO placement = 4;
-  optional string execution_workspace_id = 5;
-  optional GeneratorContextSourceDTO context_source = 6;
-  optional GeneratorNamingDTO naming = 7;
-  optional GeneratorSessionStrategyDTO session_strategy = 8;
-  optional GeneratorPoliciesDTO policies = 9;
-  optional GeneratorUIPolicyDTO ui_policy = 10;
-  optional google.protobuf.Struct config = 11;
-}
-
-message GeneratorManualRunRequest {
-  optional string idempotency_key = 1;
-}
-
-message GeneratorNamingDTO {
-  optional string title_template = 1;
-  repeated string path_template = 2;
-}
-
-message GeneratorPlacementDTO {
-  string kind = 1;
-  string workspace_id = 2;
-  optional string session_id = 3;
-  optional string folder_id = 4;
-}
-
-message GeneratorPoliciesDTO {
-  optional string overlap = 1;
-  optional string misfire = 2;
-  optional string mount_missing = 3;
-  optional string delete_outputs = 4;
-}
-
-message GeneratorTargetDTO {
-  string workspace_id = 1;
-  string session_id = 2;
-  string thread_id = 3;
-}
-
-message GeneratorSessionStrategyDTO {
-  optional string mode = 1;
-  optional GeneratorTargetDTO target = 2;
-  optional string concurrency = 3;
-  optional string report_back = 4;
-}
-
-message GeneratorTriggerDTO {
-  optional string type = 1;
-  optional string expression = 2;
-  optional int64 interval_seconds = 3;
-  optional string timezone = 4;
-}
-
-message GeneratorTypeRefDTO {
-  string type_id = 1;
-  string version = 2;
-}
-
-message GeneratorUIPolicyDTO {
-  optional string on_run_started = 1;
-  optional string on_run_completed = 2;
-}
-
 message PortForwardDTO {
   string forward_id = 1;
   string workspace_id = 2;
@@ -704,11 +553,6 @@ message ResolvedGatewayThemeDTO {
   string color_scheme = 3;
   google.protobuf.Struct tokens = 4;
   optional string background_image_url = 5;
-}
-
-message SessionLocatorDTO {
-  string workspace_id = 1;
-  string session_id = 2;
 }
 
 message SshConnectionOptionDTO {

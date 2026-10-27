@@ -247,16 +247,6 @@ import type {
   GatewaySessionSearchMatchDTO,
   GatewaySessionSearchResultsDTO,
   GatewaySessionSearchWorkspaceStatusDTO,
-  GenerationOutputDTO,
-  GenerationRunDTO,
-  GenerationRunListDTO,
-  GeneratorDefinitionDTO,
-  GeneratorDefinitionCreateRequest as GeneratedGeneratorDefinitionCreateRequest,
-  GeneratorDefinitionListDTO,
-  GeneratorDefinitionUpdateRequest as GeneratedGeneratorDefinitionUpdateRequest,
-  GeneratorManualRunRequest as GeneratedGeneratorManualRunRequest,
-  GeneratorSessionStrategyDTO,
-  SessionLocatorDTO,
   WorkspaceNavigationNodeDTO,
   WorkspaceFolderCreateRequest as GeneratedWorkspaceFolderCreateRequest,
   WorkspaceNavigationNodeUpdateRequest as GeneratedWorkspaceNavigationNodeUpdateRequest,
@@ -375,25 +365,6 @@ export type CreateGatewayUserRequest = GeneratedCreateGatewayUserRequest;
 export type AcquireGatewayUserRequest = import("./gatewayProtocol").AcquireGatewayUserRequest;
 export type GatewayUserViewStateUpdateRequest =
   GeneratedGatewayUserViewStateUpdateRequest;
-type GeneratorNamingRequest = Omit<
-  NonNullable<GeneratedGeneratorDefinitionCreateRequest["naming"]>,
-  "path_template"
-> & {
-  path_template?: string[];
-};
-export type GeneratorDefinitionCreateRequest = Omit<
-  GeneratedGeneratorDefinitionCreateRequest,
-  "naming"
-> & {
-  naming?: GeneratorNamingRequest;
-};
-export type GeneratorDefinitionUpdateRequest = Omit<
-  GeneratedGeneratorDefinitionUpdateRequest,
-  "naming"
-> & {
-  naming?: GeneratorNamingRequest | null;
-};
-export type GeneratorManualRunRequest = GeneratedGeneratorManualRunRequest;
 export type WorkspaceFolderCreateRequest = GeneratedWorkspaceFolderCreateRequest;
 export type WorkspaceNavigationNodeUpdateRequest =
   GeneratedWorkspaceNavigationNodeUpdateRequest;
@@ -737,48 +708,6 @@ export type GatewaySessionSearchResults = Omit<
   items: GatewaySessionSearchMatch[];
   workspaces: GatewaySessionSearchWorkspaceStatus[];
 };
-
-export type GeneratorSessionStrategyMode = NonNullable<
-  GeneratorSessionStrategyDTO["mode"]
->;
-
-export type SessionGeneratorDefinition = Omit<
-  GeneratorDefinitionDTO,
-  "name" | "enabled" | "status" | "revision" | "trigger" | "placement" | "session_strategy" | "naming" | "config"
-> & {
-  name: string;
-  enabled: boolean;
-  status: NonNullable<GeneratorDefinitionDTO["status"]>;
-  revision: number;
-  trigger: NonNullable<GeneratorDefinitionDTO["trigger"]>;
-  placement: NonNullable<GeneratorDefinitionDTO["placement"]>;
-  session_strategy: Omit<
-    NonNullable<GeneratorDefinitionDTO["session_strategy"]>,
-    "mode"
-  > & {
-    mode: GeneratorSessionStrategyMode;
-  };
-  naming: Required<NonNullable<GeneratorDefinitionDTO["naming"]>>;
-  config: Record<string, unknown>;
-};
-
-export type SessionGeneratorList = Omit<GeneratorDefinitionListDTO, "items"> & {
-  items: SessionGeneratorDefinition[];
-};
-
-type GenerationOutput = Omit<GenerationOutputDTO, "kind" | "navigation_path"> & {
-  kind: "session";
-  navigation_path: string[];
-};
-
-export type GenerationRun = Omit<GenerationRunDTO, "outputs"> & {
-  outputs: GenerationOutput[];
-};
-
-export type GenerationRunList = Omit<GenerationRunListDTO, "items"> & {
-  items: GenerationRun[];
-};
-
 
 export type SshConnectionOption = SshConnectionOptionDTO;
 

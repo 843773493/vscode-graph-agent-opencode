@@ -589,6 +589,7 @@ class SessionService:
             parent_session_id=parent_session_id,
             generation_origin=generation_origin,
             parent_node_id=parent_node_id,
+            idempotency_key="session-generation:" + sha256_jcs(generation_origin.model_dump(mode="json")),
         )
 
     async def _create(
@@ -600,8 +601,22 @@ class SessionService:
         parent_session_id: str | None = None,
         generation_origin: SessionGenerationOriginDTO | None = None,
         parent_node_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> SessionDTO:
-        idempotency_key = f"session-{uuid4().hex}"
+        if idempotency_key is not None:
+            try:
+                existing = self._path_resolver.catalog_store.get_creation_record(idempotency_key)
+            except KeyError:
+                existing = None
+            if existing is not None:
+                if (existing.display_name != (title or "新会话") or existing.parent_node_id != parent_node_id
+                        or json.loads(existing.session_metadata_json)["generation_origin"] != (
+                            generation_origin.model_dump(mode="json") if generation_origin is not None else None)):
+                    raise ValueError("同一会话生成创建身份对应不同请求")
+                result = await self._creation_service.publish_prepared(existing)
+                return await self.get(result.session_id)
+        else:
+            idempotency_key = f"session-{uuid4().hex}"
         record = await self._prepare_creation(
             idempotency_key=idempotency_key,
             title=title,

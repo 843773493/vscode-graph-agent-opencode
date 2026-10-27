@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
@@ -9,11 +10,7 @@ from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
-from app.gateway.control.coordinator import (
-    GeneratorCapabilityMissingError,
-    SessionGeneratorCoordinator,
-)
-from app.gateway.control.generators import SessionGeneratorStore
+from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.credentials import FederationCredentialStore
@@ -24,13 +21,6 @@ from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
 from app.schemas.gateway_control import (
     GatewayResourceListDTO,
     GatewaySessionSearchResultsDTO,
-    GenerationRunDTO,
-    GenerationRunListDTO,
-    GeneratorDefinitionCreateRequest,
-    GeneratorDefinitionDTO,
-    GeneratorDefinitionListDTO,
-    GeneratorDefinitionUpdateRequest,
-    GeneratorManualRunRequest,
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
     WorkspaceNavigationNodeUpdateRequest,
@@ -54,20 +44,6 @@ def _navigation_store(request: Request) -> WorkspaceNavigationStore:
     value = getattr(request.app.state, "workspace_navigation_store", None)
     if not isinstance(value, WorkspaceNavigationStore):
         raise RuntimeError("Gateway 工作区导航存储尚未初始化")
-    return value
-
-
-def _generator_store(request: Request) -> SessionGeneratorStore:
-    value = getattr(request.app.state, "session_generator_store", None)
-    if not isinstance(value, SessionGeneratorStore):
-        raise RuntimeError("Gateway 会话生成器存储尚未初始化")
-    return value
-
-
-def _coordinator(request: Request) -> SessionGeneratorCoordinator:
-    value = getattr(request.app.state, "session_generator_coordinator", None)
-    if not isinstance(value, SessionGeneratorCoordinator):
-        raise RuntimeError("Gateway 会话生成协调器尚未初始化")
     return value
 
 
@@ -349,179 +325,17 @@ async def get_workspace_navigation_breadcrumb(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get(
-    "/session-generators",
-    response_model=APIResponse[GeneratorDefinitionListDTO],
-)
-async def list_session_generators(
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-):
-    return APIResponse(data=store.list_definitions(), request_id=request_id)
-
-
-@router.post(
-    "/session-generators",
-    response_model=APIResponse[GeneratorDefinitionDTO],
-)
-async def create_session_generator(
-    payload: GeneratorDefinitionCreateRequest,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-    coordinator: SessionGeneratorCoordinator = Depends(_coordinator),
-):
-    try:
-        capability_error: str | None = None
-        try:
-            await coordinator.validate_definition_capability(
-                payload,
-                request_id=request_id,
-            )
-        except GeneratorCapabilityMissingError as error:
-            capability_error = str(error)
-        except (httpx.HTTPStatusError, httpx.RequestError) as error:
-            if payload.policies.mount_missing != "pause":
-                raise
-            capability_error = f"目标工作区能力不可用: {type(error).__name__}: {error}"
-        result = store.create_definition(payload)
-        if capability_error is not None:
-            result = store.set_definition_status(
-                result.generator_id,
-                status="blocked",
-                reason=capability_error,
-            )
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except httpx.HTTPStatusError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "目标工作区拒绝生成能力查询: "
-                f"status={error.response.status_code}, body={error.response.text[:1000]}"
-            ),
-        ) from error
-    except httpx.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"无法连接会话生成目标工作区以校验能力: {error}",
-        ) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.patch(
-    "/session-generators/{generator_id}",
-    response_model=APIResponse[GeneratorDefinitionDTO],
-)
-async def update_session_generator(
-    generator_id: str,
-    payload: GeneratorDefinitionUpdateRequest,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-    coordinator: SessionGeneratorCoordinator = Depends(_coordinator),
-):
-    try:
-        current = store.get_definition(generator_id)
-        candidate = GeneratorDefinitionDTO.model_validate({
-            **current.model_dump(mode="json"),
-            **payload.model_dump(mode="json", exclude_unset=True),
-        })
-        await coordinator.validate_definition_capability(
-            candidate,
-            request_id=request_id,
-        )
-        result = store.update_definition(generator_id, payload)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except (LookupError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except httpx.HTTPStatusError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "目标工作区拒绝生成能力查询: "
-                f"status={error.response.status_code}, body={error.response.text[:1000]}"
-            ),
-        ) from error
-    except httpx.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"无法连接会话生成目标工作区以校验能力: {error}",
-        ) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.delete(
-    "/session-generators/{generator_id}",
-    response_model=APIResponse[GeneratorDefinitionDTO],
-)
-async def delete_session_generator(
-    generator_id: str,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-):
-    try:
-        result = store.delete_definition(generator_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/session-generators/{generator_id}/runs",
-    response_model=APIResponse[GenerationRunListDTO],
-)
-async def list_generation_runs(
-    generator_id: str,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-):
-    try:
-        store.get_definition(generator_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    return APIResponse(data=store.list_runs(generator_id), request_id=request_id)
-
-
-@router.post(
-    "/session-generators/{generator_id}/run",
-    response_model=APIResponse[GenerationRunDTO],
-)
-async def run_session_generator(
-    generator_id: str,
-    payload: GeneratorManualRunRequest,
+@router.post("/migrations/session-generators", response_model=APIResponse[list[dict[str, str]]])
+async def migrate_session_generators(
     request: Request,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    coordinator: SessionGeneratorCoordinator = Depends(_coordinator),
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(_registry)],
+    api: Annotated[GatewayResourceCatalogService, Depends(_resource_catalog)],
+    preview: Annotated[bool, Query()] = True,
 ):
-    try:
-        result = await coordinator.run_manual(
-            generator_id,
-            payload,
-            request=request,
-        )
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except httpx.HTTPStatusError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "目标工作区拒绝会话生成: "
-                f"status={error.response.status_code}, body={error.response.text[:1000]}"
-            ),
-        ) from error
-    except httpx.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"无法连接会话生成目标工作区: {error}",
-        ) from error
+    result = await import_session_generators(
+        root=get_gateway_root(), registry=registry, api=api, http_client=request.app.state.http_client, gateway_id=request.app.state.gateway_id,
+        request_id=request_id, preview=preview,
+    )
     return APIResponse(data=result, request_id=request_id)

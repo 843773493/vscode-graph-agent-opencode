@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from jsonpointer import JsonPointer, JsonPointerException
 from pydantic import (
@@ -19,6 +19,10 @@ from app.core.resource_uri import parse_session_thread_uri
 from app.core.time_schedule import MisfirePolicy, TimeSchedule
 from app.schemas.internal_v2.goal import SessionGoalDTO
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
+from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationActionConfigDTO,
+    SessionGenerationExecuteResultDTO,
+)
 
 TaskLifecycle = Literal["active", "paused", "complete", "terminated", "needs_attention"]
 TaskRunPhase = Literal["pending", "checking", "delivering", "delivered", "checked", "failed", "suppressed", "skipped"]
@@ -121,22 +125,30 @@ class TaskConditionDTO(TaskComponentDTO):
 
 class TaskContextDTO(TaskComponentDTO):
     type_id: Literal["builtin.literal"]
-    content: str = Field(min_length=1)
+    content: str
     mode: Literal["event", "state"] = "event"
 
 
-class TaskActionDTO(TaskComponentDTO):
+class RuntimeSourceActionDTO(TaskComponentDTO):
     type_id: Literal["builtin.runtime_source"]
     target_uri: str
     delivery_mode: Literal["context_only", "context_and_run"]
     delivery_policy: DeliveryPolicy = "after_turn"
 
     @model_validator(mode="after")
-    def require_thread(self) -> TaskActionDTO:
+    def require_thread(self) -> RuntimeSourceActionDTO:
         _resource, _session_id, thread_id = parse_session_thread_uri(self.target_uri)
         if thread_id is None:
             raise ValueError("持久任务动作必须指向明确 Thread URI")
         return self
+
+
+class SessionGenerationActionDTO(TaskComponentDTO):
+    type_id: Literal["builtin.session_generation"]
+    generation: SessionGenerationActionConfigDTO
+
+
+TaskActionDTO = Annotated[RuntimeSourceActionDTO | SessionGenerationActionDTO, Field(discriminator="type_id")]
 
 
 class TaskPoliciesDTO(BaseModel):
@@ -159,13 +171,24 @@ class PersistentTaskConfigurationDTO(BaseModel):
 
     @model_validator(mode="after")
     def isolate_model_thread(self) -> PersistentTaskConfigurationDTO:
+        if isinstance(self.action, RuntimeSourceActionDTO) and not self.context.content:
+            raise ValueError("上下文动作需要非空提示内容")
+        if isinstance(self.action, SessionGenerationActionDTO) and self.context.mode != "event":
+            raise ValueError("会话动作的附加上下文必须是一次事件")
         if self.condition.model is not None:
             def identity(uri: str) -> tuple[str, str, str | None]:
                 resource, session_id, thread_id = parse_session_thread_uri(uri)
                 return resource.scope_id, session_id, thread_id
 
             judge = identity(self.condition.model.thread_uri)
-            if judge == identity(self.action.target_uri) or (self.trigger.source_uri is not None and judge == identity(self.trigger.source_uri)):
+            action_target = (
+                identity(self.action.target_uri) if isinstance(self.action, RuntimeSourceActionDTO)
+                else (self.action.generation.session_strategy.target.workspace_id,
+                      self.action.generation.session_strategy.target.session_id,
+                      self.action.generation.session_strategy.target.thread_id)
+                if self.action.generation.session_strategy.target is not None else None
+            )
+            if judge == action_target or (self.trigger.source_uri is not None and judge == identity(self.trigger.source_uri)):
                 raise ValueError("判断Thread必须与动作Thread及执行结束来源Thread分离，避免自触发")
         return self
 
@@ -242,6 +265,7 @@ class PersistentTaskRunDTO(BaseModel):
     scheduled_for: datetime | None = None
     trigger_payload: dict[str, JsonValue] | None = None
     evaluation: TaskEvaluationDTO | None = None
+    generation: SessionGenerationExecuteResultDTO | None = None
     check_only: bool
     phase: TaskRunPhase
     decision: TaskDecisionDTO | None = None

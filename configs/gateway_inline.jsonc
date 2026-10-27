@@ -1,6 +1,6 @@
 {
   "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
-  "config_version": 3,
+  "config_version": 4,
   "logging": {
     "runtime": {
       "level": "info",
@@ -29,11 +29,6 @@
         "refresh_interval_seconds": 30, // GatewaySessionCatalogSearchService 同步周期已接入配置。
         "max_concurrency": 8, // GatewaySessionCatalogSearchService 同步并发已接入配置。
         "request_timeout_seconds": 30 // GatewaySessionCatalogSearchService 请求超时已接入配置。
-      }
-    },
-    "session_generators": {
-      "scheduler": {
-        "poll_interval_seconds": 1 // SessionGeneratorScheduler 轮询周期已接入配置。
       }
     },
     "session_history": {

@@ -62,7 +62,7 @@ class ConfiguredTheme:
 GatewayHistoryLoadingConfig = HistoryLoadingConfig
 REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS = frozenset(
     {
-        "catalog-generator-scheduler",
+        "session-catalog",
         "health-controller",
         "registry-batch",
         "ssh-tunnel-proxy",
@@ -78,7 +78,6 @@ class GatewayConfig:
     session_catalog_refresh_interval_seconds: float = 30
     session_catalog_max_concurrency: int = 8
     session_catalog_request_timeout_seconds: float = 30
-    session_generator_poll_interval_seconds: float = 1
     gateway_process_health_request_timeout_seconds: float = 2
     gateway_process_health_poll_interval_seconds: float = 0.5
     gateway_process_connection_drain_timeout_seconds: float = 2

@@ -1,6 +1,6 @@
 {
   "$schema": "./gateway_schema.jsonc",
-  "config_version": 3,
+  "config_version": 4,
   "logging": {
     "runtime": {
       "level": "info",

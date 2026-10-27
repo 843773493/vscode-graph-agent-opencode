@@ -13,7 +13,11 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskNotificationRequest,
     PersistentTaskRunDTO,
     PersistentTaskUpdateRequest,
+    SessionGenerationActionDTO,
     TaskLifecycle,
+)
+from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationValidateRequest,
 )
 from app.services.business.session_service import SessionService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
@@ -43,7 +47,22 @@ class PersistentTaskService:
         return uri
 
     async def _validate_target(self, configuration: PersistentTaskConfigurationDTO) -> PersistentTaskConfigurationDTO:
-        action = configuration.action.model_copy(update={"target_uri": await self._validate_thread_uri(configuration.action.target_uri)})
+        if isinstance(configuration.action, SessionGenerationActionDTO):
+            generation = configuration.action.generation
+            if generation.gateway_id is not None and generation.gateway_id != get_current_gateway_id():
+                raise ValueError("会话动作目标必须属于当前 Gateway")
+            result = await self.runtime.generation.validate_definition(SessionGenerationValidateRequest(
+                name=configuration.name, execution_workspace_id=self._sessions.workspace_id,
+                **generation.model_dump(exclude={"created_from_uri", "gateway_id", "ui_policy", "mount_missing", "delete_outputs"}),
+            ))
+            if not result.provider_available:
+                raise ValueError(result.reason)
+            if generation.created_from_uri is not None:
+                parse_session_thread_uri(generation.created_from_uri)
+            generation = generation.model_copy(update={"gateway_id": get_current_gateway_id()})
+            action = configuration.action.model_copy(update={"generation": generation})
+        else:
+            action = configuration.action.model_copy(update={"target_uri": await self._validate_thread_uri(configuration.action.target_uri)})
         trigger = configuration.trigger
         if trigger.source_uri is not None:
             trigger = trigger.model_copy(update={"source_uri": await self._validate_thread_uri(trigger.source_uri)})

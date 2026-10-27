@@ -940,12 +940,16 @@ def _build_app_container(
         ),
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
+    session_generation_service = SessionGenerationService(
+        session_service=session_service, session_catalog_service=session_catalog_service,
+        session_context_fork_service=session_context_fork_service, providers=[AgentPromptGenerationProvider()],
+    )
     persistent_task_runtime = PersistentTaskRuntime(
         store=persistent_task_store,
         orchestrator=session_orchestrator, dispatcher=runtime_source_dispatcher, sessions=session_service,
         events=task_channel(job_event_bus.event_channel_service, workspace_id), clock=clock_ports.wall,
         workspace_root=resolved_workspace_root, saver=checkpointer, job_events=job_event_bus,
-        goals=goal_service, jobs=job_service,
+        goals=goal_service, jobs=job_service, generation=session_generation_service, messages=message_service, trace=trace_event_store,
     )
     persistent_task_service = PersistentTaskService(runtime=persistent_task_runtime, sessions=session_service)
     session_communication_service = SessionCommunicationService(
@@ -957,17 +961,6 @@ def _build_app_container(
     terminal_steering_service = TerminalSteeringService(
         terminal_client=terminal_resource_owner,
         session_orchestrator=session_orchestrator,
-    )
-    session_generation_service = SessionGenerationService(
-        workspace_root=resolved_workspace_root,
-        session_service=session_service,
-        session_catalog_service=session_catalog_service,
-        session_context_fork_service=session_context_fork_service,
-        session_orchestrator=session_orchestrator,
-        job_event_bus=job_event_bus,
-        message_service=message_service,
-        trace_event_store=trace_event_store,
-        providers=[AgentPromptGenerationProvider()],
     )
     thread_initial_execution_service = ThreadInitialExecutionService(
         factory=thread_creation_factory, sessions=session_service, saver=checkpointer,

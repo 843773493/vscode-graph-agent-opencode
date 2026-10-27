@@ -109,23 +109,45 @@ async def _plan_reply(client: httpx.AsyncClient, replay: ModelStreamReplay, sess
     return call_id
 
 
-async def _execute_new_owner(
-    client: httpx.AsyncClient, replay: ModelStreamReplay, payload: dict[str, object],
-) -> tuple[httpx.Response, str]:
-    # 生成目标只能由真实入口创建。先挡住本次 user execution，在响应公开 owner 后精确规划。
-    # 不等 runtime 冷启动、不改原 Job 等待预算；本文件的生成入口串行且先前 Job 已终态。
-    barrier = str(payload["run_id"])
-    replay.control.arm_match(barrier, "thread.runtime.acquired", {"execution_origin": "user_turn"})
+async def _create_generation(client: httpx.AsyncClient, configuration: dict, key: str) -> tuple[dict, dict]:
+    response = await client.post("/api/v1/persistent-tasks", json={"idempotency_key": key, "configuration": configuration})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    task = response.json()["data"]
+    return task, await _check_generation(client, task, key)
+
+
+async def _check_generation(client: httpx.AsyncClient, task: dict, key: str) -> dict:
+    response = await client.post(f"/api/v1/persistent-tasks/{task['task_id']}/checks", json={
+        "idempotency_key": key, "expected_revision": task["revision"],
+    })
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+async def _accepted_generation(client: httpx.AsyncClient, task: dict, run: dict) -> dict:
+    async with asyncio.timeout(30):
+        while True:
+            response = await client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
+            assert response.status_code == 200, response.text
+            current, = [item for item in response.json()["data"]["items"] if item["run_id"] == run["run_id"]]
+            assert current["phase"] not in {"failed", "suppressed"}, current
+            if current["delivery"] is not None:
+                return current
+            await asyncio.sleep(0.02)
+
+
+async def _execute_new_owner(client: httpx.AsyncClient, replay: ModelStreamReplay, configuration: dict, key: str) -> tuple[dict, dict, str]:
+    replay.control.arm_match(key, "thread.runtime.acquired", {"execution_origin": "user_turn"})
     try:
-        response = await client.post("/api/v1/session-generations/execute", json=payload)
-        assert response.status_code == 200, response.text
-        output = response.json()["data"]["outputs"][0]
+        task, run = await _create_generation(client, configuration, key)
+        current = await _accepted_generation(client, task, run)
+        output, = current["generation"]["outputs"]
         assert set(output) == {"kind", "workspace_id", "session_id", "title", "navigation_path"}
-        session_id = output["session_id"]
-        call_id = await _plan_reply(client, replay, session_id)
-        return response, call_id
+        call_id = await _plan_reply(client, replay, output["session_id"])
+        return task, current, call_id
     finally:
-        replay.control._dispatch({"action": "release_match", "barrier_id": barrier})
+        replay.control._dispatch({"action": "release_match", "barrier_id": key})
 
 
 @pytest.mark.asyncio
@@ -268,48 +290,23 @@ async def _assert_generated_storage(
     ] == expected_breadcrumb
 
 
-def _execute_payload(
-    *,
-    run_id: str,
-    idempotency_key: str,
-    mode: str,
-    workspace_id: str,
-    target_thread_id: str | None = None,
-    target_session_id: str | None = None,
-    placement_session_id: str | None = None,
-    report_back: str = "none",
-) -> dict[str, object]:
-    target = (
-        {"workspace_id": workspace_id, "session_id": target_session_id, "thread_id": target_thread_id}
-        if target_session_id is not None
-        else None
-    )
-    placement_anchor_id = placement_session_id or target_session_id
+def _generation_configuration(*, mode: str, workspace_id: str, target_thread_id: str | None = None,
+                              target_session_id: str | None = None, placement_session_id: str | None = None,
+                              report_back: str = "none") -> dict:
+    target = {"workspace_id": workspace_id, "session_id": target_session_id, "thread_id": target_thread_id} if target_session_id else None
+    anchor = placement_session_id or target_session_id
     return {
-        "run_id": run_id,
-        "generator_id": "gen_generation_e2e",
-        "idempotency_key": idempotency_key,
-        "generator_type": {
-            "type_id": "builtin.agent_prompt",
-            "version": "1",
-        },
-        "name": f"strategy-{mode}",
-        "config": {"prompt": f"执行 {mode} E2E，不调用工具"},
-        "placement": {
-            "kind": "session" if placement_anchor_id is not None else "workspace",
-            "workspace_id": workspace_id,
-            "session_id": placement_anchor_id,
-        },
-        "execution_workspace_id": workspace_id,
-        "context_source": {"kind": "fresh"},
-        "session_strategy": {
-            "mode": mode,
-            "target": target,
-            "concurrency": "queue",
-            "report_back": report_back,
-        },
-        "title": f"Generated {mode}",
-        "navigation_path": ["自动化", mode],
+        "name": f"strategy-{mode}", "trigger": {"type_id": "builtin.manual", "version": "1"},
+        "condition": {"type_id": "builtin.always", "version": "1"},
+        "context": {"type_id": "builtin.literal", "version": "1", "content": ""},
+        "action": {"type_id": "builtin.session_generation", "version": "1", "generation": {
+            "generator_type": {"type_id": "builtin.agent_prompt", "version": "1"},
+            "config": {"prompt": f"执行 {mode} E2E，不调用工具"},
+            "placement": {"kind": "session" if anchor else "workspace", "workspace_id": workspace_id, "session_id": anchor},
+            "context_source": {"kind": "fresh"},
+            "session_strategy": {"mode": mode, "target": target, "concurrency": "queue", "report_back": report_back},
+            "title_template": f"Generated {mode}", "path_template": ["自动化", mode],
+        }},
     }
 
 
@@ -362,8 +359,7 @@ async def test_preview_resolves_target_catalog_and_rejects_invalid_locators(
     assert await _catalog_nodes(generation_client) == before
     assert _session_manifest_count(generation_backend[1]) == manifest_count
     removed = await generation_client.post("/api/gateway/session-generators/preview-placement", json={})
-    # 同路径仍匹配通用 /{generator_id} 的 PATCH/DELETE，因此已移除的 POST 返回405。
-    assert removed.status_code == 405, removed.text
+    assert removed.status_code == 404, removed.text
 
 
 @pytest.mark.asyncio
@@ -415,37 +411,23 @@ async def test_definition_validation_uses_target_provider_catalog_and_thread(
     assert split.status_code == 400, split.text
     assert "execution_workspace_id" in split.text
 
-    # 同一真实 Gateway 创建和嵌套编辑，校验不得被 pause 策略误吞成能力缺失。
-    alias = client.headers["X-BoxTeam-Workspace-Id"]
-    gateway_payload = {
-        "name": payload["name"], "config": payload["config"],
-        "execution_workspace_id": alias, "placement": {"kind": "workspace", "workspace_id": alias},
-        "trigger": {"type": "manual", "timezone": "UTC"},
-        "policies": {"mount_missing": "pause"},
-    }
-    invalid = await client.post("/api/gateway/session-generators", json={**gateway_payload, "config": {"prompt": 123}})
-    assert invalid.status_code == 400, invalid.text
-    created = await client.post("/api/gateway/session-generators", json=gateway_payload)
+    # 同一任务完整对象编辑，校验不能被缺失挂载策略吞成成功。
+    configuration = _generation_configuration(mode="new_per_run", workspace_id=workspace_id)
+    created = await client.post("/api/v1/persistent-tasks", json={"idempotency_key": "definition-edit", "configuration": configuration})
     assert created.status_code == 200, created.text
-    generator_id = created.json()["data"]["generator_id"]
-    patch = {
-        "config": {"prompt": "已编辑"},
-        "placement": {"kind": "session_folder", "workspace_id": alias, "folder_id": folder_id},
-        "session_strategy": {"mode": "continue_existing", "target": {"workspace_id": alias, "session_id": session_id, "thread_id": thread_id}},
-    }
-    updated = await client.patch(f"/api/gateway/session-generators/{generator_id}", json=patch)
+    task = created.json()["data"]
+    configuration["action"]["generation"].update({
+        "config": {"prompt": "已编辑"}, "placement": {"kind": "session_folder", "workspace_id": workspace_id, "folder_id": folder_id},
+        "session_strategy": {"mode": "continue_existing", "target": {"workspace_id": workspace_id, "session_id": session_id, "thread_id": thread_id}},
+    })
+    updated = await client.put(f"/api/v1/persistent-tasks/{task['task_id']}", json={"expected_revision": task["revision"], "configuration": configuration})
     assert updated.status_code == 200, updated.text
-    assert updated.json()["data"]["placement"]["folder_id"] == folder_id
-    assert updated.json()["data"]["session_strategy"]["target"]["thread_id"] == thread_id
-    reread = await client.get("/api/gateway/session-generators")
-    saved = next(item for item in reread.json()["data"]["items"] if item["generator_id"] == generator_id)
-    assert saved == updated.json()["data"]
-    rejected = await client.patch(f"/api/gateway/session-generators/{generator_id}", json={"placement": {"kind": "session", "workspace_id": alias, "session_id": folder_id}})
+    saved = updated.json()["data"]
+    assert saved["task_id"] == task["task_id"] and saved["configuration"]["action"]["generation"]["session_strategy"]["target"]["thread_id"] == thread_id
+    assert (await client.get(f"/api/v1/persistent-tasks/{task['task_id']}")).json()["data"] == saved
+    configuration["action"]["generation"]["placement"] = {"kind": "session", "workspace_id": workspace_id, "session_id": folder_id}
+    rejected = await client.put(f"/api/v1/persistent-tasks/{task['task_id']}", json={"expected_revision": saved["revision"], "configuration": configuration})
     assert rejected.status_code == 400, rejected.text
-    blocked = await client.post("/api/gateway/session-generators", json={**gateway_payload, "generator_type": {"type_id": "missing.provider", "version": "1"}})
-    assert blocked.status_code == 200, blocked.text
-    assert blocked.json()["data"]["status"] == "blocked"
-    assert blocked.json()["data"]["status_reason"]
     assert await _catalog_nodes(client) == before
     assert _session_manifest_count(generation_backend[1]) == manifests
 
@@ -469,10 +451,8 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     before_ids = {
         item["session_id"] for item in before_response.json()["data"]["items"]
     }
-    payload = _execute_payload(
-        workspace_id=generation_client.headers["X-BoxTeam-Workspace-Id"],
-        run_id="grun_new_per_run_e2e",
-        idempotency_key="new-per-run-e2e-key",
+    payload = _generation_configuration(
+        workspace_id=(await generation_client.get("/api/v1/workspace")).json()["data"]["workspace_id"],
         mode="new_per_run",
         placement_session_id=anchor_session_id,
     )
@@ -498,21 +478,15 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     ]
     assert await _catalog_nodes(generation_client) == nodes_before_preview
     assert _session_manifest_count(generation_backend[1]) == manifest_count_before
-    payload["title"] = preview["title"]
-    payload["navigation_path"] = preview["path_segments"]
-    first_response, _ = await _execute_new_owner(generation_client, generation_replay, payload)
-    assert first_response.status_code == 200, first_response.text
-    first = first_response.json()["data"]
+    payload["action"]["generation"]["title_template"] = preview["title"]
+    task, accepted, _ = await _execute_new_owner(generation_client, generation_replay, payload, "new-per-run-e2e-key")
+    first = accepted["generation"]
     assert first["status"] == "queued"
     generated_session_id = first["outputs"][0]["session_id"]
     manifest_count_after_first = _session_manifest_count(generation_backend[1])
     assert manifest_count_after_first == manifest_count_before + 1
-    repeated_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
-    )
-    assert repeated_response.status_code == 200, repeated_response.text
-    assert repeated_response.json()["data"] == first
+    repeated = await _check_generation(generation_client, task, "new-per-run-e2e-key")
+    assert repeated["generation"] == first
     assert _session_manifest_count(generation_backend[1]) == manifest_count_after_first
 
     after_response = await generation_client.get("/api/v1/sessions")
@@ -526,8 +500,8 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     )
     assert detail_response.status_code == 200, detail_response.text
     origin = detail_response.json()["data"]["generation_origin"]
-    assert origin["generator_id"] == "gen_generation_e2e"
-    assert origin["run_id"] == "grun_new_per_run_e2e"
+    assert origin["generator_id"] == task["task_id"]
+    assert origin["run_id"] == accepted["run_id"]
     assert detail_response.json()["data"]["parent_session_id"] == anchor_session_id
     # TODO：首次生成 Job 仍可能超过原20次等待窗口；本轮账本最终完成，保留期限待优化冷启动。
     await wait_for_job_done(generation_client, first["job_id"], max_attempts=20)
@@ -548,26 +522,8 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     anchor_after = (await _catalog_nodes(generation_client))[anchor_session_id]
     assert _storage_path(generation_backend[1], anchor_after) == anchor_storage_before
 
-    ledger_files = list(
-        (generation_backend[1] / ".boxteam" / "generation-runs").glob("*/*.json")
-    )
-    assert len(ledger_files) == 1
-    ledger = json.loads(ledger_files[0].read_text(encoding="utf-8"))
-    assert ledger["result"]["outputs"] == first["outputs"]
-    assert "storage_relative_path" not in ledger_files[0].read_text(encoding="utf-8")
-    original = ledger_files[0].read_bytes()
-    ledger["result"]["outputs"][0]["storage_relative_path"] = "2026/10/21/private-generation-locator"
-    ledger_files[0].write_text(json.dumps(ledger), encoding="utf-8")
-    rejected_bytes = ledger_files[0].read_bytes()
-    try:
-        rejected = await generation_client.post("/api/v1/session-generations/execute", json=payload)
-        assert rejected.status_code == 400, rejected.text
-        assert "storage_relative_path" in rejected.text
-        assert "2026/10/21/private-generation-locator" not in rejected.text
-        assert rejected.headers["x-request-id"] == rejected.json()["request_id"]
-        assert ledger_files[0].read_bytes() == rejected_bytes
-    finally:
-        ledger_files[0].write_bytes(original)
+    assert not (generation_backend[1] / ".boxteam/generation-runs").exists()
+    assert not list((generation_backend[1] / ".boxteam/sessions").rglob("generation_intents"))
 
 
 @pytest.mark.asyncio
@@ -589,21 +545,16 @@ async def test_continue_existing_reuses_target_session(
     before_ids = {
         item["session_id"] for item in before_response.json()["data"]["items"]
     }
-    payload = _execute_payload(
-        workspace_id=generation_client.headers["X-BoxTeam-Workspace-Id"],
-        run_id="grun_continue_existing_e2e",
-        idempotency_key="continue-existing-e2e-key",
+    payload = _generation_configuration(
+        workspace_id=(await generation_client.get("/api/v1/workspace")).json()["data"]["workspace_id"],
         mode="continue_existing",
         target_session_id=target_session_id,
         target_thread_id=(await generation_client.get(f"/api/v1/sessions/{target_session_id}/main-thread")).json()["data"]["thread_id"],
     )
     await _plan_reply(generation_client, generation_replay, target_session_id)
-    execute_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
-    )
-    assert execute_response.status_code == 200, execute_response.text
-    result = execute_response.json()["data"]
+    task, run = await _create_generation(generation_client, payload, "continue-existing-e2e-key")
+    accepted = await _accepted_generation(generation_client, task, run)
+    result = accepted["generation"]
     assert result["outputs"][0]["session_id"] == target_session_id
     after_response = await generation_client.get("/api/v1/sessions")
     assert {
@@ -611,12 +562,7 @@ async def test_continue_existing_reuses_target_session(
     } == before_ids
     assert _session_manifest_count(generation_backend[1]) == manifest_count_before
     await wait_for_job_done(generation_client, result["job_id"], max_attempts=20)
-    repeated_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
-    )
-    assert repeated_response.status_code == 200, repeated_response.text
-    repeated = repeated_response.json()["data"]
+    repeated = (await _check_generation(generation_client, task, "continue-existing-e2e-key"))["generation"]
     assert repeated["status"] == "completed"
     assert repeated["outputs"] == result["outputs"]
     assert repeated["message_id"] == result["message_id"]
@@ -677,10 +623,8 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     target_before = (await _catalog_nodes(generation_client))[target_session_id]
     target_storage_before = _storage_path(generation_backend[1], target_before)
     manifest_count_before = _session_manifest_count(generation_backend[1])
-    payload = _execute_payload(
-        workspace_id=generation_client.headers["X-BoxTeam-Workspace-Id"],
-        run_id="grun_fork_report_e2e",
-        idempotency_key="fork-report-e2e-key",
+    payload = _generation_configuration(
+        workspace_id=(await generation_client.get("/api/v1/workspace")).json()["data"]["workspace_id"],
         mode="fork_new_and_report_back",
         target_session_id=target_session_id,
         target_thread_id=(await generation_client.get(f"/api/v1/sessions/{target_session_id}/main-thread")).json()["data"]["thread_id"],
@@ -688,14 +632,13 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     )
     report_call = await _plan_reply(generation_client, generation_replay, target_session_id)
     deadline = fork_deadlines.for_operation(
-        generation_client.headers["X-BoxTeam-Workspace-Id"], str(payload["idempotency_key"]),
+        generation_client.headers["X-BoxTeam-Workspace-Id"], "fork-report-e2e-key",
     )
-    execute_response, child_call = await deadline.wait(
-        _execute_new_owner(generation_client, generation_replay, payload), "generation_fork_publish",
+    task, accepted, child_call = await deadline.wait(
+        _execute_new_owner(generation_client, generation_replay, payload, "fork-report-e2e-key"), "generation_fork_publish",
     )
-    assert execute_response.status_code == 200, execute_response.text
-    result = execute_response.json()["data"]
-    assert result["status"] == "reporting"
+    result = accepted["generation"]
+    assert result["status"] == "queued"
     generated_session_id = result["outputs"][0]["session_id"]
     assert generated_session_id != target_session_id
     manifest_count_after_first = _session_manifest_count(generation_backend[1])
@@ -706,26 +649,20 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     assert child_response.status_code == 200, child_response.text
     child = child_response.json()["data"]
     assert child["parent_session_id"] == target_session_id
-    assert child["generation_origin"]["run_id"] == "grun_fork_report_e2e"
+    assert child["generation_origin"]["run_id"] == accepted["run_id"]
     assert child["title"] == "Generated fork_new_and_report_back"
     deadline.complete()
     await wait_for_job_done(generation_client, result["job_id"], max_attempts=20)
     final_status: dict[str, object] | None = None
     # TODO：真实汇报实测约6秒，原40×0.1秒窗口内仍可能reporting；保持期限，待后续优化。
     for _ in range(40):
-        status_response = await generation_client.get(
-            "/api/v1/session-generations/status",
-            params={
-                "generator_id": payload["generator_id"],
-                "idempotency_key": payload["idempotency_key"],
-            },
-        )
-        assert status_response.status_code == 200, status_response.text
-        candidate = status_response.json()["data"]
+        runs = await generation_client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
+        assert runs.status_code == 200, runs.text
+        candidate = next(item["generation"] for item in runs.json()["data"]["items"] if item["run_id"] == accepted["run_id"])
         if candidate["status"] == "completed":
             final_status = candidate
             break
-        assert candidate["status"] == "reporting", candidate
+        assert candidate["status"] in {"queued", "reporting"}, candidate
         await asyncio.sleep(0.1)
     assert final_status is not None
     assert final_status["report_back_job_id"]
@@ -735,14 +672,12 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         max_attempts=20,
     )
     replay_deadline = fork_deadlines.for_operation(
-        generation_client.headers["X-BoxTeam-Workspace-Id"], str(payload["idempotency_key"]),
+        generation_client.headers["X-BoxTeam-Workspace-Id"], "fork-report-e2e-key",
     )
-    repeated_response = await replay_deadline.wait(
-        generation_client.post("/api/v1/session-generations/execute", json=payload),
-        "generation_fork_idempotent_replay",
+    repeated = await replay_deadline.wait(
+        _check_generation(generation_client, task, "fork-report-e2e-key"), "generation_fork_idempotent_replay",
     )
-    assert repeated_response.status_code == 200, repeated_response.text
-    assert repeated_response.json()["data"] == final_status
+    assert repeated["generation"] == final_status
     replay_deadline.complete()
     assert _session_manifest_count(generation_backend[1]) == manifest_count_after_first
     await _assert_generated_storage(

@@ -1,7 +1,7 @@
 {
   // BoxTeam Gateway 控制面配置模式定义。
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://boxteam.dev/schemas/gateway-config-v3.json",
+  "$id": "https://boxteam.dev/schemas/gateway-config-v4.json",
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
     { "pattern": "/resources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -16,7 +16,6 @@
     { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions/federation/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/features/session_catalog/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/features/session_generators/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/process/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
     { "pattern": "/workspaces", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
     { "pattern": "/workspaces/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": "connection_id" }
@@ -35,8 +34,8 @@
     },
     "config_version": {
       "type": "integer",
-      "enum": [1, 2, 3],
-      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-logging 推进到 v3。Gateway workspaces 变化属于 restart_gateway。"
+      "enum": [1, 2, 3, 4],
+      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-logging 推进到 v4，移除迁至工作区的生成器轮询设置。Gateway workspaces 变化属于 restart_gateway。"
     },
     "logging": {
       "type": "object",
@@ -196,19 +195,6 @@
                 "refresh_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 },
                 "max_concurrency": { "type": "integer", "minimum": 1, "default": 8 },
                 "request_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
-              }
-            }
-          }
-        },
-        "session_generators": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "scheduler": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 1 }
               }
             }
           }
