@@ -1,6 +1,7 @@
 import { lazy, Suspense, type PointerEvent as ReactPointerEvent } from "react";
 import type { WorkspaceTerminalController } from "../../hooks/workspace/useWorkspaceTerminalResources";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
+import type { TaskThreadTargetDTO } from "../../api/persistentTasks";
 import type { OutputDiagnostic, WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import type { GatewayWorkspace } from "../../types/backend";
 
@@ -48,6 +49,7 @@ interface WorkbenchBottomPanelProps {
   onOpenSession: (workspaceId: string, sessionId: string) => Promise<void>;
   goalSessionId: string | null;
   onManageGoal: (sessionId: string) => Promise<void>;
+  onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
   onStatusChange: (text: string) => void;
 }
 
@@ -72,6 +74,7 @@ export default function WorkbenchBottomPanel({
   onOpenSession,
   goalSessionId,
   onManageGoal,
+  onOpenThread,
   onStatusChange,
 }: WorkbenchBottomPanelProps) {
   if (!visible) {
@@ -128,6 +131,7 @@ export default function WorkbenchBottomPanel({
             onOpenSession={onOpenSession}
             goalSessionId={goalSessionId}
             onManageGoal={onManageGoal}
+            onOpenThread={onOpenThread}
             onSwitchTab={switchTab}
             onClose={close}
           />

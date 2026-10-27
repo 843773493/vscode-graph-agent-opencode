@@ -125,6 +125,22 @@ try {
   assert.deepEqual(updatedTask.configuration.trigger, createdBody.data.configuration.trigger);
   await panel.getByRole("button", { name: "立即检查", exact: true }).click();
   await panel.getByText("内容已保存，尚不代表模型已消费", { exact: false }).waitFor();
+  const deliveredRow = panel.locator(".persistent-task-runs > li").filter({ hasText: "内容已保存，尚不代表模型已消费" });
+  const inspected = page.waitForResponse((response) => new URL(response.url()).pathname.startsWith(`/api/v1/persistent-tasks/${taskId}/runs/`));
+  await deliveredRow.getByRole("button", { name: "查看运行详情", exact: true }).click();
+  const inspectedResponse = await inspected;
+  assert.equal(inspectedResponse.status(), 200);
+  const detail = (await inspectedResponse.json()).data;
+  assert.equal(detail.run.definition_revision, 2);
+  assert.equal(detail.configuration.context.content, "浏览器编辑后的提示正文");
+  assert(detail.action_content.includes("浏览器编辑后的提示正文"));
+  assert.equal(detail.consumption, null);
+  await deliveredRow.getByText("尚无输入进入派发请求的证据。", { exact: true }).waitFor();
+  const decisionResult = deliveredRow.locator("details").filter({ has: page.locator("summary", { hasText: "结构化判断结果" }) });
+  await decisionResult.locator("summary").click();
+  assert.deepEqual(JSON.parse(await decisionResult.locator("pre").innerText()), { pointer: "/trigger/type", found: true, actual: "manual", expected: "manual" });
+  await page.screenshot({ path: path.join(artifacts, "run-detail.png"), fullPage: true });
+  await deliveredRow.getByRole("button", { name: "打开工作 Thread", exact: true }).click();
   // 模拟另一真实客户端在本次请求发出后编辑；原请求继续到后端产生真实409。
   let conflict = false;
   await page.route(`**/persistent-tasks/${taskId}/control`, async (route) => {

@@ -1,6 +1,7 @@
 import BottomPanelTabs from "./BottomPanelTabs";
 import type { GatewayWorkspace, WebUiBottomPanelTab } from "../../../types/backend";
 import PersistentTasks from "../../workspace/persistentTasks/PersistentTasks";
+import type { TaskThreadTargetDTO } from "../../../api/persistentTasks";
 
 interface AutomationPanelProps {
   apiPort: number;
@@ -11,11 +12,12 @@ interface AutomationPanelProps {
   onOpenSession: (workspaceId: string, sessionId: string) => Promise<void>;
   goalSessionId: string | null;
   onManageGoal: (sessionId: string) => Promise<void>;
+  onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
   onSwitchTab: (tab: WebUiBottomPanelTab) => void;
   onClose: () => void;
 }
 
-export default function AutomationPanel({ apiPort, workspace, workspaceName, height, goalSessionId, onManageGoal, onStatusChange, onOpenSession, onSwitchTab, onClose }: AutomationPanelProps) {
+export default function AutomationPanel({ apiPort, workspace, workspaceName, height, goalSessionId, onManageGoal, onOpenThread, onStatusChange, onOpenSession, onSwitchTab, onClose }: AutomationPanelProps) {
   return <section className="automation-bottom-panel" style={{ flexBasis: `${height}px` }} data-testid="automation-panel">
     <header className="automation-bottom-panel-header">
       <BottomPanelTabs selected="automation" prefix="automation-bottom-panel" onSelect={onSwitchTab} />
@@ -25,7 +27,7 @@ export default function AutomationPanel({ apiPort, workspace, workspaceName, hei
       </div>
     </header>
     <div className="automation-bottom-panel-content">
-      {workspace ? <PersistentTasks key={`${apiPort}:${workspace.workspace_id}:${workspace.backend_workspace_id}:${workspace.connection_kind}`} apiPort={apiPort} target={workspace} goalSessionId={goalSessionId} onManageGoal={onManageGoal} onStatusChange={onStatusChange} onOpenSession={(sessionId) => onOpenSession(workspace.workspace_id, sessionId)} /> : <p>请先选择工作区。</p>}
+      {workspace ? <PersistentTasks key={`${apiPort}:${workspace.workspace_id}:${workspace.backend_workspace_id}:${workspace.connection_kind}`} apiPort={apiPort} target={workspace} goalSessionId={goalSessionId} onManageGoal={onManageGoal} onOpenThread={onOpenThread} onStatusChange={onStatusChange} onOpenSession={(sessionId) => onOpenSession(workspace.workspace_id, sessionId)} /> : <p>请先选择工作区。</p>}
     </div>
   </section>;
 }

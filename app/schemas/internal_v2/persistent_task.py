@@ -275,6 +275,30 @@ class PersistentTaskRunDTO(BaseModel):
     updated_at: datetime
 
 
+class TaskThreadTargetDTO(BaseModel, frozen=True):
+    session_id: str
+    thread_id: str
+    uri: str
+
+
+class TaskInputConsumptionDTO(BaseModel, frozen=True):
+    execution_id: str
+    model_call_id: str
+    assembly_id: str
+    request_hash: str
+
+
+class PersistentTaskRunDetailDTO(BaseModel, frozen=True):
+    run: PersistentTaskRunDTO
+    configuration: PersistentTaskConfigurationDTO
+    check_input: dict[str, JsonValue]
+    work_target: TaskThreadTargetDTO | None = None
+    evaluation_target: TaskThreadTargetDTO | None = None
+    action_content: str | None = None
+    execution_outcome: str | None = None
+    consumption: TaskInputConsumptionDTO | None = None
+
+
 class PersistentTaskCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

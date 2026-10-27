@@ -12017,6 +12017,114 @@ export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.Persist
 export declare const PersistentTaskRunDTOSchema: GenMessage<PersistentTaskRunDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.TaskThreadTargetDTO
+ */
+export declare type TaskThreadTargetDTO = Message<"boxteam.workspace.v2.TaskThreadTargetDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string uri = 3;
+   */
+  uri: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskThreadTargetDTO.
+ * Use `create(TaskThreadTargetDTOSchema)` to create a new message.
+ */
+export declare const TaskThreadTargetDTOSchema: GenMessage<TaskThreadTargetDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskInputConsumptionDTO
+ */
+export declare type TaskInputConsumptionDTO = Message<"boxteam.workspace.v2.TaskInputConsumptionDTO"> & {
+  /**
+   * @generated from field: string execution_id = 1;
+   */
+  executionId: string;
+
+  /**
+   * @generated from field: string model_call_id = 2;
+   */
+  modelCallId: string;
+
+  /**
+   * @generated from field: string assembly_id = 3;
+   */
+  assemblyId: string;
+
+  /**
+   * @generated from field: string request_hash = 4;
+   */
+  requestHash: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskInputConsumptionDTO.
+ * Use `create(TaskInputConsumptionDTOSchema)` to create a new message.
+ */
+export declare const TaskInputConsumptionDTOSchema: GenMessage<TaskInputConsumptionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskRunDetailDTO
+ */
+export declare type PersistentTaskRunDetailDTO = Message<"boxteam.workspace.v2.PersistentTaskRunDetailDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskRunDTO run = 1;
+   */
+  run?: PersistentTaskRunDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.PersistentTaskConfigurationDTO configuration = 2;
+   */
+  configuration?: PersistentTaskConfigurationDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct check_input = 3;
+   */
+  checkInput?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskThreadTargetDTO work_target = 4;
+   */
+  workTarget?: TaskThreadTargetDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskThreadTargetDTO evaluation_target = 5;
+   */
+  evaluationTarget?: TaskThreadTargetDTO | undefined;
+
+  /**
+   * @generated from field: optional string action_content = 6;
+   */
+  actionContent?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_outcome = 7;
+   */
+  executionOutcome?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskInputConsumptionDTO consumption = 8;
+   */
+  consumption?: TaskInputConsumptionDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskRunDetailDTO.
+ * Use `create(PersistentTaskRunDetailDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskRunDetailDTOSchema: GenMessage<PersistentTaskRunDetailDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.PersistentTaskCreateRequest
  */
 export declare type PersistentTaskCreateRequest = Message<"boxteam.workspace.v2.PersistentTaskCreateRequest"> & {

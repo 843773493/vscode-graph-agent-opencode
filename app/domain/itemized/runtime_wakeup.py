@@ -43,3 +43,13 @@ class RuntimeExecutionProgress:
     outcome: str
     updated_at: str
     total_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeInputConsumption:
+    """输入进入已派发请求的只读证据，不推断 Provider 是否实际收到。"""
+
+    execution_id: str
+    model_call_id: str
+    assembly_id: str
+    request_hash: str

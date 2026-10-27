@@ -96,6 +96,13 @@ async def test_all_model_decisions_use_explicit_execution_and_only_proceed_runs_
             assert run["run_id"] in _wire_text(case.request(work_calls[0]))
         else:
             assert actual["delivery"] is None
+        response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+        assert response.status_code == 200, response.text
+        detail = response.json()["data"]
+        assert detail["evaluation_target"] == {"session_id": judge_id, "thread_id": judge_thread, "uri": evaluation["thread_uri"]}
+        assert detail["work_target"]["session_id"] == work_id and detail["work_target"]["thread_id"] == work_thread
+        assert detail["check_input"]["run_id"] == run["run_id"]
+        assert (detail["consumption"] is not None) == (decision == "proceed")
     assert case.call_count(work_id, work_thread) == 1 and case.call_count(judge_id, judge_thread) == 4
 
 

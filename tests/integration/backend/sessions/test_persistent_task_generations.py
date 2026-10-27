@@ -144,6 +144,12 @@ async def test_generation_wait_releases_worker_and_preserves_overlap_and_busy_qu
         state = generation_state(case, run)
         assert state["prepared_message"] is None
         assert state["execution_identity"]["job_id"] == run["generation"]["job_id"]
+        response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+        assert response.status_code == 200, response.text
+        detail = response.json()["data"]
+        assert detail["work_target"]["session_id"] == session_id and detail["work_target"]["thread_id"] == thread_id
+        assert "generation-original-private" in detail["action_content"]
+        assert detail["execution_outcome"] == "completed" and detail["consumption"] is not None
     rows = admission_rows(case, state)
     assert len(rows) == 2 and len({row[0] for row in rows}) == len({row[1] for row in rows}) == 2
     for call in calls:

@@ -1326,6 +1326,19 @@ export default function AppShell() {
           await handleSelectAgentSession(bottomPanelWorkspaceId, sessionId);
           openAuxiliaryTab("goal");
         }}
+        onOpenThread={async (target) => {
+          if (!bottomPanelWorkspace) throw new Error("请先选择工作区");
+          const main = await getSessionMainThread(resolvedApiPort, target.session_id, bottomPanelWorkspace);
+          await handleSelectAgentSession(bottomPanelWorkspace.workspace_id, target.session_id);
+          setForkChildOwner(null);
+          if (main.thread_id === target.thread_id) {
+            childConversation.close();
+            setChatVisible(true);
+          } else {
+            childConversation.selectThreadForOwner({ workspaceId: bottomPanelWorkspace.workspace_id, sessionId: target.session_id }, target.thread_id);
+            openAuxiliaryTab("resources");
+          }
+        }}
       />
         </div>
       </div>

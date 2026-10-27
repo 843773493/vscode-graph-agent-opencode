@@ -26,6 +26,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskDTO,
     PersistentTaskListDTO,
     PersistentTaskNotificationRequest,
+    PersistentTaskRunDetailDTO,
     PersistentTaskRunDTO,
     PersistentTaskRunListDTO,
     PersistentTaskUpdateRequest,
@@ -132,3 +133,8 @@ async def task_runs(task_id: str, request_id: RequestId,
 async def notify_task(task_id: str, payload: PersistentTaskNotificationRequest, request_id: RequestId,
                       service: TaskService):
     return APIResponse(data=await _apply(lambda: service.check(task_id, payload)), request_id=request_id)
+
+
+@router.get("/{task_id}/runs/{run_id}", response_model=APIResponse[PersistentTaskRunDetailDTO])
+async def inspect_task_run(task_id: str, run_id: str, request_id: RequestId, service: TaskService):
+    return APIResponse(data=await _apply(lambda: service.inspect_run(task_id, run_id)), request_id=request_id)

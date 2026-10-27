@@ -72,6 +72,7 @@ async def test_state_coalesces_unchanged_input_and_accepts_a_b_a_without_fake_tu
     assert case.sql(session_id, thread_id, "SELECT latest_revision,latest_visible_committed_revision FROM context_source_control_states") == [(revision_a, None)]
     calls = await case.plan(session_id, [{"content": "状态已读取。"} for _ in range(4)])
     expected = []
+    first_consumption = None
     for index, status in enumerate((None, "ready", "offline", "ready")):
         if status is not None:
             publication = await _notify(case, task, f"update-{index}", status)
@@ -82,6 +83,16 @@ async def test_state_coalesces_unchanged_input_and_accepts_a_b_a_without_fake_tu
         if index != 1:
             expected.append(publication["delivery"]["source_revision"])
         assert _applied(case, session_id, thread_id, task) == expected
+        response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{publication['run_id']}")
+        assert response.status_code == 200, response.text
+        detail = response.json()["data"]
+        assert detail["consumption"] is not None
+        assert detail["run"]["delivery"]["source_revision"] == publication["delivery"]["source_revision"]
+        if index == 0:
+            first_consumption = detail["consumption"]
+        original = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{first['run_id']}")
+        assert original.status_code == 200, original.text
+        assert original.json()["data"]["consumption"] == first_consumption
         if index == 2:
             assert publication["delivery"]["source_revision"] != revision_a
         if index == 3:

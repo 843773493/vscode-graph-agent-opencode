@@ -37,6 +37,7 @@ from app.domain.itemized.runtime import ModelCallRecord
 from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionProgress,
     RuntimeExecutionWakeup,
+    RuntimeInputConsumption,
 )
 from app.prompting import internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
@@ -66,6 +67,18 @@ if TYPE_CHECKING:
 
 class RuntimeExecutionOwnerMixin:
     _storage: RolloutContextStore
+
+    def runtime_input_consumption(
+        self, session_id: str, thread_id: str, *, item_id: str, source_id: str,
+        source_revision: str | None = None,
+    ) -> RuntimeInputConsumption | None:
+        return self._storage.assemblies.runtime_input_consumption(
+            session_id, thread_id, item_id=item_id, source_id=source_id, source_revision=source_revision,
+        )
+
+    def accepted_user_input(self, session_id: str, *, thread_id: str, job_id: str) -> CanonicalItemRecord:
+        admission = self._storage.executions.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id)
+        return self._storage.executions.accepted_user_input(admission)
 
     def execution_completions(self, session_id: str, thread_id: str, *,
                               after_commit_id: int | None) -> ExecutionCompletionPage:

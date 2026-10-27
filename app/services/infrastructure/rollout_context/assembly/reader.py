@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import TYPE_CHECKING
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.runtime_wakeup import RuntimeInputConsumption
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     optional_detail_ref_key,
@@ -29,9 +31,59 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
 
 class ContextAssemblyReaderMixin:
     """只读取已提交 assembly，不读取当前 middleware 或实时 ledger。"""
+
+    _storage: RolloutStorage
+
+    def runtime_input_consumption(
+        self, session_id: str, thread_id: str, *, item_id: str,
+        source_id: str, source_revision: str | None = None,
+    ) -> RuntimeInputConsumption | None:
+        """按精确 item 或来源版本查派发证据，候选索引仍须通过原 assembly 校验。"""
+        if source_revision is None:
+            predicate = "selection.ref_type='canonical_item' AND selection.ref_id=? AND selection.ref_thread_id=?"
+            values = (item_id, thread_id)
+        else:
+            predicate = "json_extract(contribution.binding_manifest_json,'$.source_binding.source_ref')=? AND contribution.source_revision=?"
+            values = (source_id, source_revision)
+        with self._storage.open_read_snapshot(session_id, thread_id, "") as snapshot:
+            connection = snapshot.connection
+            row = connection.execute(
+                "SELECT assembly.assembly_id,call.model_call_id,call.execution_id FROM context_assemblies assembly "
+                "JOIN model_calls call ON call.assembly_id=assembly.assembly_id "
+                "AND call.session_id=assembly.session_id AND call.thread_id=assembly.thread_id "
+                "AND call.execution_id=assembly.execution_id "
+                "WHERE assembly.session_id=? AND assembly.thread_id=? AND call.dispatch_state IN ('dispatched','completed') "
+                "AND assembly.status IN ('sealed','terminal') "
+                "AND json_extract(assembly.snapshot_json,'$.selection_policy')<>'summary_candidate' AND EXISTS ("
+                "SELECT 1 FROM context_assembly_selections selection LEFT JOIN context_assembly_contributions contribution "
+                "ON contribution.assembly_id=selection.assembly_id AND contribution.contribution_id=selection.contribution_id "
+                "WHERE selection.assembly_id=assembly.assembly_id AND selection.included=1 AND " + predicate + ") "
+                "ORDER BY assembly.rowid,call.attempt LIMIT 1", (session_id, thread_id, *values),
+            ).fetchone()
+            if row is None:
+                return None
+            assembly, _ = self._read_context_assembly_connection(
+                connection, session_id, thread_id, assembly_id=row[0], checkpoint_ns="",
+            )
+            if source_revision is None:
+                included = any(entry.included and entry.ref.ref_type == "canonical_item"
+                               and entry.ref.ref_id == item_id and entry.ref.thread_id == thread_id for entry in assembly.selection)
+            else:
+                included = assembly.seal_binding is not None and any(
+                    source.source_id == source_id and source.revision == source_revision
+                    for source in assembly.seal_binding.source_revisions
+                )
+            if not included:
+                raise RuntimeError("输入消费索引与封存 assembly 不一致")
+            return RuntimeInputConsumption(row[2], row[1], row[0], assembly.request_hash)
 
     def get_context_assembly(
         self,

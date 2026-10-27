@@ -1,11 +1,12 @@
 import { useState } from "react";
-import type { PersistentTaskDTO, PersistentTaskRunDTO } from "../../../api/persistentTasks";
+import type { PersistentTaskDTO, TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { useGenerationActivity } from "../../../hooks/persistentTasks/useGenerationActivity";
 import { usePersistentTasks } from "../../../hooks/persistentTasks/usePersistentTasks";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
 import TaskEditor, { configurationProblem, type TaskTemplate } from "./TaskEditor";
+import TaskRunHistory from "./TaskRunHistory";
 import "../../../styles/workspace/persistentTasks.css";
 
 const labels: Record<string, string> = {
@@ -17,23 +18,9 @@ const labels: Record<string, string> = {
 };
 const label = (value: string) => labels[value] ?? value;
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : "—";
-const deliveryLabels: Record<string, string> = { saved: "内容已保存，尚不代表模型已消费", accepted: "执行已接受，尚不代表执行已完成" };
-
-function RunHistory({ runs, onOpenSession }: { runs: PersistentTaskRunDTO[]; onOpenSession: (sessionId: string) => Promise<void> }) {
-  return <ol className="persistent-task-runs">{runs.map((run) => <li key={run.run_id}>
-    <strong>{run.check_only ? "检查试运行" : label(run.trigger_type)} · {label(run.phase)}</strong>
-    <div>{time(run.scheduled_for ?? run.created_at)} · 定义版本 {run.definition_revision}</div>
-    {run.decision ? <p>{label(run.decision.decision)}：{run.decision.reason}</p> : null}
-    {run.delivery ? <p>{deliveryLabels[run.delivery.state] ?? `未知投递状态：${run.delivery.state}`}<br />来源：<code>{run.delivery.source_id}</code>{run.delivery.execution_id ? <><br />执行：<code>{run.delivery.execution_id}</code></> : null}</p> : null}
-    {run.evaluation ? <p>判断 Thread：<code>{run.evaluation.thread_uri}</code><br />判断执行：<code>{run.evaluation.execution_id}</code></p> : null}
-    {run.generation ? <div><strong>会话动作：{run.generation.status}</strong>{run.generation.outputs.map((output) => <p key={output.session_id}><button onClick={() => void onOpenSession(output.session_id)}>{output.title || output.session_id}</button> · {output.navigation_path.join("/") || "工作区根"}</p>)}{run.generation.job_id ? <p>工作执行：<code>{run.generation.job_id}</code></p> : null}{run.generation.report_back_job_id ? <p>回报执行：<code>{run.generation.report_back_job_id}</code></p> : null}</div> : null}
-    {run.error ? <div role="alert">{run.error}</div> : null}
-    <details><summary>触发与判断记录</summary><pre>{JSON.stringify({ run_id: run.run_id, trigger_key: run.trigger_key, trigger_payload: run.trigger_payload, result: run.decision?.result, evaluation: run.evaluation, delivery: run.delivery, request_id: run.request_id }, null, 2)}</pre></details>
-  </li>)}</ol>;
-}
-
-export default function PersistentTasks({ apiPort, target, goalSessionId, onManageGoal, onStatusChange, onOpenSession }: {
+export default function PersistentTasks({ apiPort, target, goalSessionId, onManageGoal, onStatusChange, onOpenSession, onOpenThread }: {
   apiPort: number; target: GatewayWorkspaceRequestTarget; goalSessionId: string | null;
+  onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
   onManageGoal: (sessionId: string) => Promise<void>; onStatusChange: (message: string) => void; onOpenSession: (sessionId: string) => Promise<void>;
 }) {
   const state = usePersistentTasks(apiPort, target);
@@ -99,7 +86,7 @@ export default function PersistentTasks({ apiPort, target, goalSessionId, onMana
             <dl><dt>工作目标</dt><dd><code>{editable.action?.target_uri ?? editable.action?.generation?.session_strategy?.mode}</code></dd><dt>下次触发</dt><dd>{time(task.next_run_at)}</dd><dt>提示内容（当前定义）</dt><dd><pre>{editable.context?.content}</pre></dd></dl>
             <details><summary>完整任务定义</summary><pre>{JSON.stringify(editable, null, 2)}</pre></details>
             <h4>运行记录</h4>
-            {state.history?.loading ? <p role="status">正在读取运行记录…</p> : state.history?.error ? <div role="alert">{state.history.error}</div> : state.history?.runs.length ? <RunHistory runs={state.history.runs} onOpenSession={onOpenSession} /> : <p>暂无运行记录。</p>}
+            {state.history?.loading ? <p role="status">正在读取运行记录…</p> : state.history?.error ? <div role="alert">{state.history.error}</div> : state.history?.runs.length ? <TaskRunHistory apiPort={apiPort} target={target} runs={state.history.runs} onOpenSession={onOpenSession} onOpenThread={onOpenThread} /> : <p>暂无运行记录。</p>}
           </> : task.goal ? <>
             <p>目标属于会话 <code>{task.goal.session_id}</code> 的主 Thread。目标与预算在该会话右侧的 Goal 标签管理。</p>
             <button onClick={() => void manageGoal(task.goal!.session_id)}>管理会话 Goal</button>

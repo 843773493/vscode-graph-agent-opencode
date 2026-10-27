@@ -159,10 +159,12 @@ async def test_component_validation_revision_and_real_dry_run(source_case: Runti
 
 
 @pytest.mark.asyncio
-async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_case: RuntimeSourceCase) -> None:
+@pytest.mark.parametrize("context_mode", ["event", "state"])
+async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_case: RuntimeSourceCase, context_mode: str) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)
     configuration = _configuration(target)
+    configuration["context"]["mode"] = context_mode
     configuration["policies"]["completion"] = "after_delivery"
     task = await _create(case, configuration)
     run = await _check(case, task)
@@ -174,6 +176,14 @@ async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_
     assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == "complete"
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions") == [(0,)]
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM runtime_execution_wakeups") == [(0,)]
+    endpoint = f"{ROOT}/{task['task_id']}/runs/{run['run_id']}"
+    response = await case.client.get(endpoint)
+    assert response.status_code == 200, response.text
+    before = response.json()["data"]
+    assert before["configuration"] == task["configuration"]
+    assert before["work_target"] == {"session_id": session_id, "thread_id": thread_id, "uri": task["configuration"]["action"]["target_uri"]}
+    assert "task-original-private" in before["action_content"]
+    assert before["consumption"] is None and before["execution_outcome"] is None
     call, = await case.plan(session_id, [{"content": "已读取任务状态。"}])
     accepted = await _send(case, session_id, "读取当前服务状态。")
     await _job(case, accepted["job_id"])
@@ -181,7 +191,44 @@ async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(1,)]
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM item_catalog WHERE item_id=?",
                     (actual["delivery"]["item_id"],)) == [(1,)]
+    response = await case.client.get(endpoint)
+    assert response.status_code == 200, response.text
+    consumed = response.json()["data"]
+    assert consumed["configuration"] == before["configuration"] and consumed["action_content"] == before["action_content"]
+    proof = consumed["consumption"]
+    assert proof is not None
+    assert case.sql(session_id, thread_id, "SELECT m.execution_id,m.model_call_id,a.assembly_id,a.request_hash "
+                    "FROM model_calls m JOIN context_assemblies a USING(assembly_id) WHERE m.dispatch_state='completed'") == [(
+        proof["execution_id"], proof["model_call_id"], proof["assembly_id"], proof["request_hash"],
+    )]
+    assert consumed["execution_outcome"] is None
     case.write_actual("context-only-task", {"task": task, "run": actual, "request": case.request(call)})
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_uses_frozen_definition_after_target_and_content_edit(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    session_id, thread_id, target = await _target(case)
+    task = await _create(case, _configuration(target))
+    run = await _run(case, task, await _check(case, task))
+    other_session, other_thread, other_target = await _target(case)
+    changed = deepcopy(task["configuration"])
+    changed["name"] = "更新后的任务"
+    changed["context"]["content"] = "later-private：新输入不得冒充原运行"
+    changed["action"]["target_uri"] = other_target
+    response = await case.client.put(f"{ROOT}/{task['task_id']}", json={"expected_revision": task["revision"], "configuration": changed})
+    assert response.status_code == 200, response.text
+    response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+    assert response.status_code == 200, response.text
+    detail = response.json()["data"]
+    assert detail["configuration"] == task["configuration"] and detail["run"] == run
+    assert detail["check_input"]["context"] == task["configuration"]["context"]
+    assert detail["work_target"]["session_id"] == session_id and detail["work_target"]["thread_id"] == thread_id
+    assert "task-original-private" in detail["action_content"] and "later-private" not in detail["action_content"]
+    other_task = await _create(case, _configuration(other_target), key="other-task")
+    assert (await case.client.get(f"{ROOT}/{other_task['task_id']}/runs/{run['run_id']}")).status_code == 404
+    assert case.requests() == []
+    case.write_actual("run-inspection-frozen", {"detail": detail, "other_target": [other_session, other_thread]})
 
 
 @pytest.mark.asyncio
@@ -201,6 +248,7 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
     case.control.arm(first_call, "model.response_ready")
     case.control.arm_match("task-accepted", "task.action.accepted_before_record", {"task_id": task["task_id"]})
     user = await _send(case, session_id, "先处理用户工作。")
+    recorded = False
     try:
         await asyncio.to_thread(case.control.acknowledged, first_call, "model.response_ready", 30)
         run = await _check(case, task)
@@ -212,8 +260,17 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
         assert response.status_code == 200, response.text
         assert response.json()["data"]["status"] == "queued"
         assert case.call_count(session_id, thread_id) == 1
-    finally:
         _release_match(case, "task-accepted")
+        recorded = True
+        await _run(case, task, run)
+        response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+        assert response.status_code == 200, response.text
+        detail = response.json()["data"]
+        assert detail["run"]["delivery"]["state"] == "accepted"
+        assert detail["consumption"] is None and detail["execution_outcome"] == "unknown"
+    finally:
+        if not recorded:
+            _release_match(case, "task-accepted")
         case.control.release(first_call, "model.response_ready")
     actual = await _run(case, task, run)
     delivery = actual["delivery"]
@@ -221,6 +278,11 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
     assert delivery["job_id"] == barrier["details"]["job_id"]
     await _job(case, user["job_id"])
     await _job(case, delivery["job_id"])
+    response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+    assert response.status_code == 200, response.text
+    detail = response.json()["data"]
+    assert detail["consumption"]["execution_id"] == delivery["execution_id"]
+    assert detail["execution_outcome"] == "completed"
     assert _wire_text(case.request(task_call)["messages"]).count("task-original-private") == 1
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions ORDER BY created_at") == [
         ("user_turn", user["turn_id"]), ("internal", None),

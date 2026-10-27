@@ -1,12 +1,12 @@
 import type { APIResponse } from "../types/backend";
-import type { PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskListDTO, PersistentTaskRunDTO, PersistentTaskRunListDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
+import type { PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskListDTO, PersistentTaskRunDTO, PersistentTaskRunListDTO, PersistentTaskRunDetailDTO, TaskThreadTargetDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { validatePersistentTaskListDTO } from "../../../../shared/sseRuntimeValidators.js";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sse/sseClient";
 import { validateSseError } from "../sse/sseRuntimeSchemas";
 import { gatewayWorkspaceRequestHeaders, requestGatewayResponse, requestJson, unwrapApiData } from "./http";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 
-export type { PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskRunDTO };
+export type { PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskRunDTO, PersistentTaskRunDetailDTO, TaskThreadTargetDTO };
 export type TaskControl = "pause" | "resume" | "terminate";
 const root = "/api/v1/persistent-tasks";
 
@@ -54,4 +54,8 @@ export function checkPersistentTask(port: number, target: GatewayWorkspaceReques
 
 export async function listPersistentTaskRuns(port: number, target: GatewayWorkspaceRequestTarget, taskId: string, signal: AbortSignal) {
   return (await request<PersistentTaskRunListDTO>(port, target, `/${encodeURIComponent(taskId)}/runs`, signal)).items;
+}
+
+export function inspectPersistentTaskRun(port: number, target: GatewayWorkspaceRequestTarget, taskId: string, runId: string, signal: AbortSignal) {
+  return request<PersistentTaskRunDetailDTO>(port, target, `/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}`, signal);
 }

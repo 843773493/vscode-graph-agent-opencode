@@ -2759,6 +2759,30 @@ message PersistentTaskRunDTO {
   optional SessionGenerationExecuteResultDTO generation = 18;
 }
 
+message TaskThreadTargetDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string uri = 3;
+}
+
+message TaskInputConsumptionDTO {
+  string execution_id = 1;
+  string model_call_id = 2;
+  string assembly_id = 3;
+  string request_hash = 4;
+}
+
+message PersistentTaskRunDetailDTO {
+  PersistentTaskRunDTO run = 1;
+  PersistentTaskConfigurationDTO configuration = 2;
+  google.protobuf.Struct check_input = 3;
+  optional TaskThreadTargetDTO work_target = 4;
+  optional TaskThreadTargetDTO evaluation_target = 5;
+  optional string action_content = 6;
+  optional string execution_outcome = 7;
+  optional TaskInputConsumptionDTO consumption = 8;
+}
+
 message PersistentTaskCreateRequest {
   string idempotency_key = 1;
   PersistentTaskConfigurationDTO configuration = 2;

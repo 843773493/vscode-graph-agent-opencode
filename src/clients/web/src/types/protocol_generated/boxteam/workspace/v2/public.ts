@@ -2811,6 +2811,30 @@ export interface PersistentTaskRunDTO {
   generation?: SessionGenerationExecuteResultDTO | undefined;
 }
 
+export interface TaskThreadTargetDTO {
+  session_id: string;
+  thread_id: string;
+  uri: string;
+}
+
+export interface TaskInputConsumptionDTO {
+  execution_id: string;
+  model_call_id: string;
+  assembly_id: string;
+  request_hash: string;
+}
+
+export interface PersistentTaskRunDetailDTO {
+  run: PersistentTaskRunDTO | undefined;
+  configuration: PersistentTaskConfigurationDTO | undefined;
+  check_input: { [key: string]: any } | undefined;
+  work_target?: TaskThreadTargetDTO | undefined;
+  evaluation_target?: TaskThreadTargetDTO | undefined;
+  action_content?: string | undefined;
+  execution_outcome?: string | undefined;
+  consumption?: TaskInputConsumptionDTO | undefined;
+}
+
 export interface PersistentTaskCreateRequest {
   idempotency_key: string;
   configuration: PersistentTaskConfigurationDTO | undefined;
@@ -20550,6 +20574,176 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
       : undefined;
     message.generation = (object.generation !== undefined && object.generation !== null)
       ? SessionGenerationExecuteResultDTO.fromPartial(object.generation)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseTaskThreadTargetDTO(): TaskThreadTargetDTO {
+  return { session_id: "", thread_id: "", uri: "" };
+}
+
+export const TaskThreadTargetDTO: MessageFns<TaskThreadTargetDTO> = {
+  fromJSON(object: any): TaskThreadTargetDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+    };
+  },
+
+  toJSON(message: TaskThreadTargetDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskThreadTargetDTO>, I>>(base?: I): TaskThreadTargetDTO {
+    return TaskThreadTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskThreadTargetDTO>, I>>(object: I): TaskThreadTargetDTO {
+    const message = createBaseTaskThreadTargetDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.uri = object.uri ?? "";
+    return message;
+  },
+};
+
+function createBaseTaskInputConsumptionDTO(): TaskInputConsumptionDTO {
+  return { execution_id: "", model_call_id: "", assembly_id: "", request_hash: "" };
+}
+
+export const TaskInputConsumptionDTO: MessageFns<TaskInputConsumptionDTO> = {
+  fromJSON(object: any): TaskInputConsumptionDTO {
+    return {
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : "",
+      model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : "",
+      assembly_id: isSet(object.assembly_id) ? globalThis.String(object.assembly_id) : "",
+      request_hash: isSet(object.request_hash) ? globalThis.String(object.request_hash) : "",
+    };
+  },
+
+  toJSON(message: TaskInputConsumptionDTO): unknown {
+    const obj: any = {};
+    if (message.execution_id !== "") {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.model_call_id !== "") {
+      obj.model_call_id = message.model_call_id;
+    }
+    if (message.assembly_id !== "") {
+      obj.assembly_id = message.assembly_id;
+    }
+    if (message.request_hash !== "") {
+      obj.request_hash = message.request_hash;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskInputConsumptionDTO>, I>>(base?: I): TaskInputConsumptionDTO {
+    return TaskInputConsumptionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskInputConsumptionDTO>, I>>(object: I): TaskInputConsumptionDTO {
+    const message = createBaseTaskInputConsumptionDTO();
+    message.execution_id = object.execution_id ?? "";
+    message.model_call_id = object.model_call_id ?? "";
+    message.assembly_id = object.assembly_id ?? "";
+    message.request_hash = object.request_hash ?? "";
+    return message;
+  },
+};
+
+function createBasePersistentTaskRunDetailDTO(): PersistentTaskRunDetailDTO {
+  return {
+    run: undefined,
+    configuration: undefined,
+    check_input: undefined,
+    work_target: undefined,
+    evaluation_target: undefined,
+    action_content: undefined,
+    execution_outcome: undefined,
+    consumption: undefined,
+  };
+}
+
+export const PersistentTaskRunDetailDTO: MessageFns<PersistentTaskRunDetailDTO> = {
+  fromJSON(object: any): PersistentTaskRunDetailDTO {
+    return {
+      run: isSet(object.run) ? PersistentTaskRunDTO.fromJSON(object.run) : undefined,
+      configuration: isSet(object.configuration)
+        ? PersistentTaskConfigurationDTO.fromJSON(object.configuration)
+        : undefined,
+      check_input: isObject(object.check_input) ? object.check_input : undefined,
+      work_target: isSet(object.work_target) ? TaskThreadTargetDTO.fromJSON(object.work_target) : undefined,
+      evaluation_target: isSet(object.evaluation_target)
+        ? TaskThreadTargetDTO.fromJSON(object.evaluation_target)
+        : undefined,
+      action_content: isSet(object.action_content) ? globalThis.String(object.action_content) : undefined,
+      execution_outcome: isSet(object.execution_outcome) ? globalThis.String(object.execution_outcome) : undefined,
+      consumption: isSet(object.consumption) ? TaskInputConsumptionDTO.fromJSON(object.consumption) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskRunDetailDTO): unknown {
+    const obj: any = {};
+    if (message.run !== undefined) {
+      obj.run = PersistentTaskRunDTO.toJSON(message.run);
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = PersistentTaskConfigurationDTO.toJSON(message.configuration);
+    }
+    if (message.check_input !== undefined) {
+      obj.check_input = message.check_input;
+    }
+    if (message.work_target !== undefined) {
+      obj.work_target = TaskThreadTargetDTO.toJSON(message.work_target);
+    }
+    if (message.evaluation_target !== undefined) {
+      obj.evaluation_target = TaskThreadTargetDTO.toJSON(message.evaluation_target);
+    }
+    if (message.action_content !== undefined) {
+      obj.action_content = message.action_content;
+    }
+    if (message.execution_outcome !== undefined) {
+      obj.execution_outcome = message.execution_outcome;
+    }
+    if (message.consumption !== undefined) {
+      obj.consumption = TaskInputConsumptionDTO.toJSON(message.consumption);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskRunDetailDTO>, I>>(base?: I): PersistentTaskRunDetailDTO {
+    return PersistentTaskRunDetailDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskRunDetailDTO>, I>>(object: I): PersistentTaskRunDetailDTO {
+    const message = createBasePersistentTaskRunDetailDTO();
+    message.run = (object.run !== undefined && object.run !== null)
+      ? PersistentTaskRunDTO.fromPartial(object.run)
+      : undefined;
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? PersistentTaskConfigurationDTO.fromPartial(object.configuration)
+      : undefined;
+    message.check_input = object.check_input ?? undefined;
+    message.work_target = (object.work_target !== undefined && object.work_target !== null)
+      ? TaskThreadTargetDTO.fromPartial(object.work_target)
+      : undefined;
+    message.evaluation_target = (object.evaluation_target !== undefined && object.evaluation_target !== null)
+      ? TaskThreadTargetDTO.fromPartial(object.evaluation_target)
+      : undefined;
+    message.action_content = object.action_content ?? undefined;
+    message.execution_outcome = object.execution_outcome ?? undefined;
+    message.consumption = (object.consumption !== undefined && object.consumption !== null)
+      ? TaskInputConsumptionDTO.fromPartial(object.consumption)
       : undefined;
     return message;
   },

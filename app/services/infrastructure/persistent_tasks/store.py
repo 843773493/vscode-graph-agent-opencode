@@ -297,6 +297,14 @@ class PersistentTaskStore(TaskGoals):
                                       (task_id,)).fetchall()
             return [self._run(row) for row in rows]
 
+    def run(self, task_id: str, run_id: str) -> PersistentTaskRunDTO:
+        with closing(self._store.connection()) as connection:
+            self._task(connection, task_id)
+            row = connection.execute("SELECT * FROM persistent_task_runs WHERE task_id=? AND run_id=?", (task_id, run_id)).fetchone()
+            if row is None:
+                raise KeyError(f"持久任务运行不存在: {run_id}")
+            return self._run(row)
+
     def generation_state(self, run: PersistentTaskRunDTO) -> GenerationActionState | None:
         with closing(self._store.connection()) as connection:
             self._task(connection, run.task_id)
