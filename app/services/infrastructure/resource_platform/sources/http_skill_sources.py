@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Callable
 from contextvars import Context
 from dataclasses import dataclass, field
 from typing import Literal
@@ -14,6 +15,7 @@ import httpx
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.lifecycle import LifetimeScope
 from app.core.resource_uri import parse_resource_uri
+from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.gateway.skill_sources import GatewaySkillSourceEntryDTO
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
@@ -56,14 +58,14 @@ class HttpSkillSources:
 
     def __init__(self, *, scope: Literal["gateway", "workspace"], scope_id: str, channel: ResourceObservationChannel) -> None:
         self._scope: Literal["gateway", "workspace"] = scope
-        self._scope_id, self._channel = scope_id, channel
+        self.owner_id, self._channel = scope_id, channel
         self.directory_id = "skill-directory:" + hashlib.sha256(f"skill-http-sources:{scope}:{scope_id}".encode()).hexdigest()
         self._client = httpx.AsyncClient(trust_env=False, follow_redirects=True)
         self._generations: set[HttpSkillGeneration] = set()
         self.current: HttpSkillGeneration | None = None
 
     def _empty_entry(self, config: SkillSourceConfig) -> GatewaySkillSourceEntryDTO:
-        source_id, identity, uri = http_skill_identity(self._scope, self._scope_id, config.id)
+        source_id, identity, uri = http_skill_identity(self._scope, self.owner_id, config.id)
         return GatewaySkillSourceEntryDTO(
             name=config.name, source_id=source_id, entry_identity=identity, display_uri=uri,
             revision=None, byte_length=0, content="", available=False, error_code="source-unavailable",
@@ -95,7 +97,7 @@ class HttpSkillSources:
                         if generation is self.current:
                             await self._reconcile(generation, source_ids=(source_id,))
 
-                task = asyncio.create_task(poll(), name=f"http-skill-source:{self._scope}:{self._scope_id}:{key}", context=Context())
+                task = asyncio.create_task(poll(), name=f"http-skill-source:{self._scope}:{self.owner_id}:{key}", context=Context())
                 generation.tasks.append(task)
 
                 async def stop(current: asyncio.Task[None] = task) -> None:
@@ -129,9 +131,34 @@ class HttpSkillSources:
                 raise RuntimeError("HTTP Skill 观察任务意外退出")
         return tuple(state.entry for state in self.current.sources.values())
 
+    @property
+    def publication_revision(self) -> str:
+        return sha256_jcs({"owner": self.directory_id, "entries": [entry.model_dump(exclude={"content"}) for entry in self.entries()]})
+
+    async def prepare_config(self, configs: tuple[SkillSourceConfig, ...], scope: LifetimeScope) -> Callable[[], None]:
+        """配置 shadow 持有所选代次；无关重载复用当前接受事实，不触发 manual 获取。"""
+        previous = self.current
+        unchanged = previous is not None and tuple(state.config for state in previous.sources.values()) == configs
+        generation = previous if unchanged else await self.prepare(configs)
+        assert generation is not None
+
+        async def release() -> None:
+            # 每次 shadow 都持有当前选择：失败释放候选，提交后释放退役代次。
+            # 最终仍在使用的代次由进程 owner.close 释放。
+            if self.current is not generation:
+                await self.close_generation(generation)
+
+        scope.register(release, label="workspace-http-skill-generation")
+
+        def activate() -> None:
+            if self.current is not generation:
+                self.activate(generation)
+
+        return activate
+
     def read(self, uri: str, _max_bytes: int) -> ResourceFileContent:
         parsed = parse_resource_uri(uri)
-        if parsed.gateway_authority is not None or parsed.scope != self._scope or parsed.scope_id != self._scope_id:
+        if parsed.gateway_authority is not None or parsed.scope != self._scope or parsed.scope_id != self.owner_id:
             raise PermissionError("HTTP Skill 来源 owner 不符")
         entry = next((entry for entry in self.entries() if entry.display_uri == parsed.display_uri), None)
         if entry is None or not entry.available:
@@ -185,7 +212,7 @@ class HttpSkillSources:
                 try:
                     entry, etag, modified = await self._fetch(state)
                 except (httpx.HTTPError, OSError, ValueError, TimeoutError) as error:
-                    logger.error("HTTP Skill 来源获取失败: scope=%s scope_id=%s source_id=%s error_type=%s", self._scope, self._scope_id, key, type(error).__name__, exc_info=error)
+                    logger.error("HTTP Skill 来源获取失败: scope=%s scope_id=%s source_id=%s error_type=%s", self._scope, self.owner_id, key, type(error).__name__, exc_info=error)
                     if strict:
                         raise RuntimeError(f"HTTP Skill source unavailable: source_id={key}, error={type(error).__name__}") from error
                     entry, etag, modified = state.entry.model_copy(update={"available": False, "error_code": "source-unavailable"}), state.etag, state.last_modified

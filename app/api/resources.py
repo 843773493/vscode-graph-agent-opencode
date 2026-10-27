@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
     get_browser_resource_owner,
+    get_http_skill_sources,
     get_request_id,
     get_resource_navigation,
     get_terminal_resource_owner,
@@ -31,6 +32,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.schemas.internal_v2.skill_sources import SkillSourcesRefreshDTO
 from app.schemas.internal_v2.text_mutation import (
     TextMutationReceiptDTO,
     TextMutationRequest,
@@ -53,6 +55,9 @@ from app.services.business.workspace_resources.owner import (
     WorkspaceResourceOwner,
 )
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
+    HttpSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
@@ -70,6 +75,16 @@ from app.services.infrastructure.workspace_files.text_transfer import (
 )
 
 router = APIRouter(prefix="/resources", tags=["resources"])
+
+
+@router.post("/skill-sources/refresh", response_model=APIResponse[SkillSourcesRefreshDTO])
+async def refresh_skill_sources(
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[HttpSkillSources, Depends(get_http_skill_sources)],
+) -> APIResponse[SkillSourcesRefreshDTO]:
+    await owner.refresh()
+    return APIResponse(data=SkillSourcesRefreshDTO(workspace_id=owner.owner_id,
+        revision=owner.publication_revision, available=all(entry.available for entry in owner.entries())), request_id=request_id)
 
 
 @router.post("/navigation", response_model=APIResponse[ResourceNavigationResultDTO])

@@ -45,6 +45,7 @@ class HttpSkillServer:
     url: str
     body: bytes = (FRONTMATTER + "共享网络初始正文 Ω\n").encode()
     etag: str = '"initial"'
+    variants: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     requests: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -56,15 +57,15 @@ def http_skill_server(request: pytest.FixtureRequest) -> Iterator[HttpSkillServe
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             state.requests.append(dict(self.headers))
-            if self.headers.get("If-None-Match") == state.etag:
+            body, etag = state.variants.get(self.path, (state.body, state.etag))
+            if self.headers.get("If-None-Match") == etag:
                 self.send_response(304)
                 self.end_headers()
                 return
-            body = state.body
             self.send_response(200)
             self.send_header("Content-Type", "text/markdown; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("ETag", state.etag)
+            self.send_header("ETag", etag)
             self.send_header("Last-Modified", "Mon, 26 Oct 2026 10:00:00 GMT")
             self.end_headers()
             self.wfile.write(body)

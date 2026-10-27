@@ -50,6 +50,10 @@ from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
+from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
+    HttpSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
 )
@@ -357,6 +361,13 @@ def get_text_mutations(request: Request) -> WorkspaceTextMutationOwner:
 
 def get_resource_navigation(request: Request) -> ResourceNavigation:
     return _require_service(request, "resource_navigation", ResourceNavigation, "ResourceNavigation 尚未在应用启动阶段初始化")
+
+
+def get_http_skill_sources(request: Request) -> HttpSkillSources:
+    platform = _require_service(request, "resource_platform", ResourcePlatform, "ResourcePlatform 尚未在应用启动阶段初始化")
+    if platform.http_skill_sources is None:
+        raise RuntimeError("Workspace HTTP Skill source owner 尚未初始化")
+    return platform.http_skill_sources
 
 
 def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchService:

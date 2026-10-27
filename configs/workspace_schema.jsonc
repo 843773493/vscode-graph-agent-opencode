@@ -32,6 +32,8 @@
     { "pattern": "/runtime/gateway/connection/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/gateway_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
     { "pattern": "/mcp/servers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -91,6 +93,34 @@
           "additionalProperties": false,
           "required": ["gateway_updates"],
           "properties": {
+            "sources": {
+              "type": "array", "default": [],
+              "description": "Workspace owner 获取的私有网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["id", "name", "fetch"],
+                "properties": {
+                  "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
+                  "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
+                  "priority": {"type": "integer", "default": 0},
+                  "fetch": {
+                    "type": "object", "additionalProperties": false, "required": ["protocol", "url"],
+                    "properties": {
+                      "protocol": {"const": "http"},
+                      "url": {"type": "string", "pattern": "^https?://[^/]+", "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"},
+                      "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 30}
+                    }
+                  },
+                  "updates": {
+                    "type": "object", "additionalProperties": false, "required": ["mode"],
+                    "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
+                    "properties": {"mode": {"enum": ["poll", "manual"]}, "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}},
+                    "if": {"properties": {"mode": {"const": "poll"}}},
+                    "then": {"required": ["poll_interval"], "properties": {"poll_interval": {"type": "string"}}},
+                    "else": {"properties": {"poll_interval": {"type": "null"}}}
+                  }
+                }
+              }
+            },
             "gateway_updates": {
               "type": "object",
               "description": "Gateway 快照获取触发策略；对象按配置层递归合并，经配置 shadow 提交时切换，原订阅随后排空。",

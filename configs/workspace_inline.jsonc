@@ -190,6 +190,7 @@
   },
   "resources": {
     "skill_sources": {
+      "sources": [], // 此工作区 owner 获取的私有 HTTP Skill；数组整体替换。
       "gateway_updates": {
         "mode": "event", // event、poll、manual 或显式 event_poll；经配置 shadow 提交时切换并排空旧订阅。
         "poll_interval": null // poll/event_poll 必填，例如 "5m" 或 "1h"；其它模式必须为 null。

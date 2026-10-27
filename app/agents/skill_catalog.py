@@ -41,6 +41,9 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
 )
+from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
+    HttpSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -106,6 +109,7 @@ class SkillCatalogSource:
     display_uri: str
     entry_identity: str
     source_id: str
+    directory_id: str
     priority: int = 0
 
 
@@ -169,10 +173,11 @@ def build_workspace_skill_catalog(
     project_root: Path | None = None,
     gateway_id: str | None = None,
     gateway_sources: GatewaySkillSources | None = None,
+    http_sources: HttpSkillSources | None = None,
 ) -> PublishedSkillCatalog:
-    """构建三层权威 SkillCatalog 并向 ResourceRegistry 发布 immutable revision。
+    """构建四层权威 SkillCatalog 并向 ResourceRegistry 发布 immutable revision。
 
-    按 workspace > gateway-global > inline 解析唯一 entry;同名高优先级
+    按 workspace > gateway > network > inline 解析唯一 entry;同名高优先级
     层覆盖低优先级层,origin provenance 保留在 entry identity 中。
     """
     resolved_workspace_root = workspace_root or get_workspace_root()
@@ -195,6 +200,10 @@ def build_workspace_skill_catalog(
         for layer, (root, scope_id, names) in roots.items()
     }
     resolved_gateway_id = gateway_id if gateway_id is not None else get_current_gateway_id()
+    if http_sources is not None:
+        if http_sources.owner_id != workspace_id:
+            raise _SkillSourceError("HTTP Skill source Workspace owner mismatch")
+        directory_ids["network"] = http_sources.directory_id
     if gateway_sources is not None and resolved_gateway_id is None:
         raise _SkillSourceError("Gateway Skill source 缺少请求级 Gateway 身份绑定")
     if resolved_gateway_id is not None:
@@ -202,7 +211,7 @@ def build_workspace_skill_catalog(
             raise _SkillSourceError("Gateway Skill 来源必须由认证 Gateway source owner 发布")
         directory_ids["gateway"] = gateway_sources.directory_id(gateway_id=resolved_gateway_id)
     batch = _accepted_skill_sources(
-        directory_ids, file_registry=file_registry, gateway_sources=gateway_sources, gateway_id=resolved_gateway_id,
+        directory_ids, file_registry=file_registry, gateway_sources=gateway_sources, gateway_id=resolved_gateway_id, http_sources=http_sources,
     )
     catalog = _publish_workspace_skill_catalog(
         batch,
@@ -218,6 +227,7 @@ def _accepted_skill_sources(
     directory_ids: Mapping[str, str], *, file_registry: WorkspaceFileResourceRegistry,
     gateway_sources: GatewaySkillSources | None = None,
     gateway_id: str | None = None,
+    http_sources: HttpSkillSources | None = None,
     previous_sources: tuple[SkillCatalogSource, ...] = (),
 ) -> _SkillSourceBatch:
     """一次性捕获 typed owner 已接受的目录和 raw revision；零 I/O、零解析。"""
@@ -225,7 +235,19 @@ def _accepted_skill_sources(
     sources: list[SkillCatalogSource] = []
     diagnostics: list[str] = []
     for layer, directory_id in directory_ids.items():
-        if layer == "gateway":
+        if layer == "network":
+            if http_sources is None or http_sources.directory_id != directory_id:
+                raise _SkillSourceError("HTTP Skill source owner mismatch")
+            entries = http_sources.entries()
+            available = all(entry.available for entry in entries)
+            revisions[directory_id] = _AcceptedSkillRevision(http_sources.publication_revision, "", available,
+                                                           None if available else "Workspace HTTP Skill source unavailable")
+            for entry in entries:
+                source = SkillCatalogSource(entry.layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id, directory_id, entry.priority)
+                sources.append(source)
+                revisions[source.source_id] = _AcceptedSkillRevision(entry.revision or "", entry.content, entry.available,
+                                                                    None if entry.available else "Workspace HTTP Skill source unavailable")
+        elif layer == "gateway":
             if gateway_sources is None or gateway_id is None or gateway_sources.directory_id(gateway_id=gateway_id) != directory_id:
                 raise _SkillSourceError("Gateway Skill source owner mismatch")
             try:
@@ -237,7 +259,7 @@ def _accepted_skill_sources(
                 revisions[directory_id] = _AcceptedSkillRevision(remote.revision, "", remote.available, remote.error_code)
                 for entry in remote.entries:
                     source = SkillCatalogSource(
-                        entry.layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id, entry.priority,
+                        entry.layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id, directory_id, entry.priority,
                     )
                     sources.append(source)
                     revisions[source.source_id] = _AcceptedSkillRevision(
@@ -255,7 +277,7 @@ def _accepted_skill_sources(
             for entry in directory.entries:
                 source = SkillCatalogSource(
                     layer, entry.name, entry.path, entry.uri,
-                    entry.entry_identity, entry.source_id,
+                    entry.entry_identity, entry.source_id, directory_id,
                 )
                 sources.append(source)
                 raw = file_registry.snapshot(entry.uri)
@@ -268,7 +290,7 @@ def _accepted_skill_sources(
         boundary = revisions[directory_id]
         if not boundary.available:
             # 目录失败不能把 partial entries 或上一批正文冒充当前有效来源。
-            known = {source.source_id: source for source in (*previous_sources, *sources) if source.layer == layer or (layer == "gateway" and source.layer == "network")}
+            known = {source.source_id: source for source in (*previous_sources, *sources) if source.directory_id == directory_id}
             for source in known.values():
                 if source not in sources:
                     sources.append(source)
@@ -344,6 +366,7 @@ def start_workspace_skill_catalog_publication(
     file_registry: WorkspaceFileResourceRegistry,
     lifetime_scope: LifetimeScope,
     gateway_sources: GatewaySkillSources | None = None,
+    http_sources: HttpSkillSources | None = None,
 ) -> None:
     """在应用 loop 消费既有来源通知，生命周期严格归当前 generation。"""
     loop = asyncio.get_running_loop()
@@ -362,6 +385,7 @@ def start_workspace_skill_catalog_publication(
         batch = _accepted_skill_sources(
             catalog.directory_ids, file_registry=file_registry, gateway_sources=gateway_sources,
             gateway_id=catalog.gateway_id, previous_sources=catalog.sources,
+            http_sources=http_sources,
         )
         catalog = _publish_workspace_skill_catalog(
             batch, registry=registry, directory_ids=catalog.directory_ids, gateway_id=catalog.gateway_id,

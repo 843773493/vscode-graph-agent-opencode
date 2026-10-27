@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import httpx
 import pytest
 
+from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
 )
@@ -235,3 +236,33 @@ def test_source_ids_are_unique_and_default_policy_is_explicit(source_config: Ski
         validate_skill_sources([source_config, source_config])
     default = SkillSourceConfig.model_validate(source_config.model_dump(exclude={"updates"}))
     assert default.updates == SourceUpdatePolicy(mode="poll", poll_interval="1h")
+
+
+async def test_shadow_reuses_manual_generation_then_drains_after_actual_source_change(http_case: HttpCase, source_config: SkillSourceConfig) -> None:
+    case = http_case
+    first, second, third = (LifetimeScope(f"config-{index}") for index in range(3))
+    (await case.owner.prepare_config((source_config,), first))()
+    original = case.owner.current
+    (await case.owner.prepare_config((source_config,), second))()
+    await first.close()
+    assert case.owner.current is original and case.owner._generations == {original}
+    assert len(case.requests) == 1, "无关 shadow 切换不触发 manual 获取"
+    activate = await case.owner.prepare_config((source_config.model_copy(update={"priority": 2}),), third)
+    assert case.owner.current is original
+    activate()
+    await second.close()
+    assert original not in case.owner._generations and len(case.owner._generations) == 1
+    assert case.owner.entries()[0].priority == 2
+    await third.close()
+    assert case.owner.current is not None  # 当前代次由进程 owner 关闭。
+
+
+async def test_unpublished_shadow_closes_only_candidate(http_case: HttpCase, source_config: SkillSourceConfig) -> None:
+    case = http_case
+    await _start(case, source_config)
+    previous = case.owner.current
+    scope = LifetimeScope("rejected-config")
+    await case.owner.prepare_config((source_config.model_copy(update={"priority": 1}),), scope)
+    assert len(case.owner._generations) == 2
+    await scope.close()
+    assert case.owner.current is previous and case.owner._generations == {previous}

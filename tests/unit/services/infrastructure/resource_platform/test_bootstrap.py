@@ -5,12 +5,14 @@ from __future__ import annotations
 import pytest
 
 from app.core.lifecycle import LifetimeScope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
 )
 from app.services.infrastructure.resource_platform.bootstrap import (
     bootstrap_resource_platform,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 def test_bootstrap_assembles_platform_with_fixed_capabilities(tmp_path) -> None:
@@ -129,3 +131,40 @@ async def test_bootstrap_preserves_release_and_event_failure(
     assert notification_error is event_error
     assert platform.process_root_scope.state == "close_failed"
     assert platform.process_root_scope.snapshot().resource_count == 1
+
+
+@pytest.mark.asyncio
+async def test_private_sources_have_workspace_owner_without_gateway_transport(tmp_path) -> None:
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    platform = bootstrap_resource_platform(workspace_root=tmp_path, workspace_id=workspace_id,
+        file_paths=WorkspaceFilePaths(workspace=tmp_path, workspace_id=workspace_id, bindings=None))
+    scope = LifetimeScope("workspace-config")
+    try:
+        assert platform.gateway_skill_sources is None
+        assert platform.http_skill_sources is not None
+        activate = await platform.prepare_config({"resources": {"skill_sources": {
+            "gateway_updates": {"mode": "event"}, "sources": [],
+        }}}, scope)
+        activate()
+        assert platform.http_skill_sources.owner_id == workspace_id
+        assert platform.http_skill_sources.entries() == ()
+    finally:
+        await scope.close()
+        await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_private_sources_require_explicit_workspace_owner(tmp_path) -> None:
+    platform = bootstrap_resource_platform(workspace_root=tmp_path)
+    scope = LifetimeScope("invalid-config")
+    try:
+        with pytest.raises(RuntimeError, match="精确 Workspace owner"):
+            await platform.prepare_config({"resources": {"skill_sources": {
+                "gateway_updates": {"mode": "event"}, "sources": [{
+                    "id": "private", "name": "demo",
+                    "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"},
+                }],
+            }}}, scope)
+    finally:
+        await scope.close()
+        await platform.close()

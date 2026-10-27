@@ -33,6 +33,9 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
+from app.services.infrastructure.resource_platform.sources.skill_source_config import (
+    validate_skill_sources,
+)
 from configs.runtime import require_current_workspace_config, validate_config_payload
 
 if TYPE_CHECKING:
@@ -57,6 +60,7 @@ class ConfigSnapshotMixin:
         schema = self._load_schema(schema_path)
         if validate_schema:
             validate_config_payload(config, schema=schema)
+        validate_skill_sources(config["resources"]["skill_sources"].get("sources", []))
         # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
         # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
         with self.use_snapshot(build_config_snapshot(

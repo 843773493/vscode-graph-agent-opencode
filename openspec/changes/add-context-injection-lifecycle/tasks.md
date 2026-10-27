@@ -348,12 +348,12 @@
 - [x] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
 - [ ] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
 - [x] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
-- [ ] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
-- [ ] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
+- [x] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
+- [x] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
 - [x] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
-- [ ] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
+- [x] 9.14 增加来源策略与目录集成验证：事件／轮询切换、订阅首次窗口／重连／gap、先发布后通知、乱序不回退、共享网络来源只由Gateway获取、validator与正文变化区分、非法组合失败；覆盖四层覆盖、层内优先级冲突、稳定身份与已tracked不改绑。真实HTTP来源、Gateway认证快照和Workspace accepted链路均须经过实际入口，不以resolver stub或手动observe代替。
 - [x] 9.15 从真实R01／R02配置与外部文件变更开始，经配置reload、owner版本发布和下一允许激活边界核对实际模型请求，复用现有R01真实更新测试并补缺口；验证默认权威入口、R02身份事实、文件显式失败、观察处理结果与旧sealed字节不变。分别报告generation重建与model-call能力，不能只证明CSM能计算diff。
-- [ ] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
+- [x] 9.16 按受影响切片完成静态分析、真实类型检查及必要构建、定向单元／集成验证与OpenSpec strict validation；测试均用进程外超时和内存保护，按仓库规范保留准确命令、源码指纹、原始输出及退出码。对新旧分组使用相同输入核对语义、顺序和引用差异；旧收据仅按未变依赖复用，不代替新增验收，不重新启动已延期的团队／协作专项工作。
 
 ### 2026-10-26 9.3 明确观察处理结果
 
@@ -518,3 +518,14 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 仅本切片暂存tree `54788ba84cd676b6ba95fc4fe461d80b68f175e8` 完整archive隔离其它task/fork改动后，同一产品用例1 passed／119.82秒；4544个受测blob逐个核验一致。首次产品失败来自复制模板相同UUID，修正测试副本经真实初始化取得独立身份；原始失败与正式产物保留，未改产品身份校验。
 - Web真实TypeScript检查、production build、Buf lint/build/format及对HEAD的breaking检查、compileall和OpenSpec strict通过。扩大静态检查Ruff基线/当前均10条，Pyright均24条，零新增；不称全仓全绿。结构自审无新增边界问题；Skill runtime794行仅透传layer/priority，后续扩展需先拆清catalog职责。既有大测试文件本次只迁hash编码，不扩展测试正文。
 - 准确命令、源码指纹、原始输出、退出码、OpenAPI结构对照和隔离原件位于 `out/tests/temp/gateway-http-skills/artifacts/`；纯临时archive源码已清理，正式测试证据保留。本切片不勾选9.9/9.11/9.12/9.14/9.16整体任务：Workspace私有HTTP接线、跨来源覆盖/已有tracked不改绑与冷恢复总验收继续推进。没有进行Web交互、外部Provider或Windows验收；团队/协作专项继续TODO。
+
+### 2026-10-27 Workspace 私有 HTTP Skill 与网络目录验收
+
+- Workspace 在自己的 `resources.skill_sources.sources` 配置域接入同一个 HttpSkillSources，复用 Gateway 共享来源的获取／条件请求／正文校验实现。原配置 shadow 准备和发布代次，候选失败回收候选、提交后排空旧代次；无关配置重载复用当前代次，manual 不额外联网。私有来源经 accepted／facet／四层 catalog／CSM 和原资源导航消费，未新增快照或追踪事实源。目录失败按显式 directory identity 保留对应旧来源，不混淆两个 owner 的 network 条目。
+- 新工作区管理刷新入口及 Proto、Pydantic、全部生成绑定和两份 OpenAPI 镜像迁齐；刷新回执只含 workspace_id、JCS publication revision 和原始获取可用性。API 只转交原 owner，沿现有认证／目标工作区路由／request_id，不暴露 URL 或正文。未授权刷新零上游请求；冷启动与候选均验证来源协议／组合及 id 唯一性。
+- `private-product-032` 为1 passed／205.06秒，经真实 HTTP、Gateway、Backend、公开 Session 消息及现有 model_stream 验证初始 tracked、只读导航零联网、无关重载、手动刷新、实际1分钟 poll、优先级覆盖不自动改绑、显式 snapshot 切换及重启恢复。八份模型请求保留冻结前缀，当前上游正文不能代替历史；不代表外部 Provider 或主窗口交互验收。
+- 仅本切片暂存 tree `18d1e19b82380d0c25f8ead1849f02aea38703e6` 完整 archive 隔离其它会话 fork／task 改动，`private-isolated-048` 重新验收共享／私有两条真实产品链路，2 passed／300.77秒；全部4554个 tracked blob 前后核验一致。提交前其后只修正一行目录优先级 docstring及本收据／勾选，生产逻辑未变。临时完整源码与依赖 symlink 已清理，正式输出保留 `private-isolated-product-048-formal-output/`。
+- 完整配置回归 `private-config-full-043` 为117 passed；HTTP／目录／优先级批 `private-focused-045` 为73 passed／1 failed，唯一失败是新增直接 Workspace 装具遗漏原文件路径 owner，按真实装配合同补齐后 `private-bootstrap-047` 为7 passed；不放宽生产校验。公开 OpenAPI／SSE／上下文契约26 passed，前端真实 tsc、Web build、协议生成／check／breaking、Buf format和compileall均退出0。两份 OpenAPI 逐结构比对只增加该刷新路径和两个响应 schema。
+- 静态扩大到本切片和整个 config_service：Ruff 基线27／当前27，Pyright基线201／当前201，零新增，不声称全仓静态全绿。架构审查确认 Http owner 只持有获取事实，catalog 独占派生发布，中间件消费冻结值；未增加源码目录、兼容别名或第二获取实现。生成绑定按原生成器保留尾部空行，忽略该生成格式后差异检查通过。
+- 首轮刷新回执暴露原始 SHA 与 JCS revision 校验混用；配置检查暴露首次快照跳过 schema 时也漏掉新来源合同。两项均已修正并由上述产品／完整配置验收覆盖。最初100秒配置批次的退出124、命令文件名／脚本名错误、装具缺依赖等失败原件保留，不改写为成功。准确命令、源码指纹、raw、退出码、基线与结构对照均在 `out/tests/temp/gateway-http-skills/artifacts/`，汇集入口 `private-passed-checks.json` 及 `private-isolated-product-048.json`；各组有重叠，不累计用例数。
+- 关闭9.11／9.12／9.14／9.16。9.9 的获取能力组合仍未完成；团队／协作延期项和其它完整验收门继续保留未完成。

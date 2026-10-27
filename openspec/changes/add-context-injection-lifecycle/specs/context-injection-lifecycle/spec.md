@@ -442,7 +442,13 @@ Gateway本地来源默认由Gateway观察并发布，Workspace默认接收发布
 - **WHEN** 来源在初始快照获取和订阅建立之间变化，或订阅重连、收到gap
 - **THEN** Workspace主动对账到当前已发布版本，重复或旧通知不使accepted快照回退；无需持续高频轮询或重放每个中间版本
 
-Gateway 共享网络来源 SHALL通过 `resources.skill_sources.sources` 显式配置稳定id、逻辑name、层内priority、HTTP获取参数与独立更新策略；数组整体替换，id在owner内唯一。HTTP获取当前仅支持poll/manual，默认poll/1h；没有已登记事件协议时event/event_poll MUST明确拒绝。获取地址MUST保持owner私有，稳定identity和display URI MUST按owner及配置id产生，不随正文、获取URL或目录优先级变化。200正文MUST有界且为严格UTF-8；304 MUST对应带validator的条件请求、存在accepted正文且响应正文为空。validator变化本身不得制造内容revision。候选失败MUST保留原generation及accepted事实，旧代次的迟到正文与错误不得发布；普通导航只读取已接受快照。
+Gateway 共享与 Workspace 私有网络来源 SHALL在各自配置域通过 `resources.skill_sources.sources` 显式配置稳定id、逻辑name、层内priority、HTTP获取参数与独立更新策略；数组整体替换，id在owner内唯一。HTTP获取当前仅支持poll/manual，默认poll/1h；没有已登记事件协议时event/event_poll MUST明确拒绝。获取地址MUST保持owner私有，稳定identity和display URI MUST按owner及配置id产生，不随正文、获取URL或目录优先级变化。200正文MUST有界且为严格UTF-8；304 MUST对应带validator的条件请求、存在accepted正文且响应正文为空。validator变化本身不得制造内容revision。候选失败MUST保留原generation及accepted事实，旧代次的迟到正文与错误不得发布；普通导航只读取已接受快照。
+
+#### Scenario: Workspace 私有来源复用配置 shadow 与原获取 owner
+- **WHEN** 管理者配置私有 HTTP Skill、重载无关配置或明确刷新该工作区来源
+- **THEN** Workspace 复用共享来源相同的获取／校验实现，但独占其来源身份和 accepted 快照；无关重载 MUST复用当前代次且不触发 manual 获取，实际来源变更先准备候选、提交后排空旧代次，失败不污染旧正文、validator 或发布版本
+- **AND** `POST /api/v1/resources/skill-sources/refresh` SHALL遵守现有工作区管理授权和精确目标路由，返回无获取地址及正文的 workspace_id、publication revision 与原始来源可用性；publication revision 使用 `sha256:jcs:v1:` 合同，原始正文 revision 仍为原字节 `sha256:`
+- **AND** 原始来源进入同一个 network 层目录／facet／CSM，优先级变更 MUST NOT自动改绑现有 tracked 来源；显式 skill_load 可按新目录切换并冻结，进程重启 MUST按封存正文恢复历史，不按当前 URL 重建
 
 #### Scenario: 网络来源按owner获取且validator不充当内容版本
 

@@ -344,6 +344,46 @@ def test_gateway_skill_update_policy_defaults_to_events_and_reports_current_scop
     assert not decision.policy_missing and decision.policy == "immediate_read" and decision.activation_scope == "current"
 
 
+def test_private_http_sources_load_through_effective_workspace_config(tmp_path: Path) -> None:
+    from app.services.infrastructure.config.policy import workspace_config_policy
+
+    sources = [{"id": "private-one", "name": "demo", "priority": 2,
+                "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"},
+                "updates": {"mode": "poll", "poll_interval": "7m"}}]
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
+        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": sources}}},
+    ))
+    assert service._get_effective_config()["resources"]["skill_sources"]["sources"] == sources
+    for path in ("/resources/skill_sources/sources", "/resources/skill_sources/sources/0/fetch/url"):
+        decision, = workspace_config_policy().classify((path,))
+        assert not decision.policy_missing and decision.policy == "immediate_read" and decision.activation_scope == "current"
+
+
+@pytest.mark.parametrize("change", [
+    {"fetch": {"protocol": "ftp", "url": "https://example.test/SKILL.md"}},
+    {"fetch": {"protocol": "http", "url": "https://example.test/#fragment"}},
+    {"updates": {"mode": "event"}}, {"updates": {"mode": "poll"}},
+    {"updates": {"mode": "manual", "poll_interval": "1h"}}, {"priority": True},
+])
+def test_private_http_sources_reject_invalid_effective_config(tmp_path: Path, change: dict) -> None:
+    source = {"id": "private-one", "name": "demo", "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"}}
+    sources = [{**source, **change}]
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
+        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": sources}}},
+    ))
+    with pytest.raises((ValueError, jsonschema.ValidationError)):
+        service._get_effective_config()
+
+
+def test_private_http_source_ids_are_unique_in_effective_workspace_config(tmp_path: Path) -> None:
+    source = {"id": "private-one", "name": "demo", "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"}}
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
+        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": [source, source]}}},
+    ))
+    with pytest.raises(ValueError, match="id 重复"):
+        service._get_effective_config()
+
+
 def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
     config = _base_config()
     config["runtime"] = {"agent": {"run": {"timeout_seconds": 12.5}}}

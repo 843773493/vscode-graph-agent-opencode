@@ -858,6 +858,7 @@ def _build_app_container(
         external_resource_leases=external_resource_leases,
         workspace_file_resource_registry=workspace_file_resource_registry,
         gateway_skill_sources=resource_platform.gateway_skill_sources,
+        http_skill_sources=resource_platform.http_skill_sources,
         graph_binding_store=SessionControlGraphBindingStore(
             session_control_store_factory=lambda session_id: SessionControlStore(
                 session_path_resolver.resolve_session_node(session_id)

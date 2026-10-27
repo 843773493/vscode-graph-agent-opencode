@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+// 工作区私有网络来源的管理刷新回执，不携带获取地址或正文。
+message SkillSourcesRefreshDTO {
+  string workspace_id = 1;
+  string revision = 2;
+  bool available = 3;
+}
