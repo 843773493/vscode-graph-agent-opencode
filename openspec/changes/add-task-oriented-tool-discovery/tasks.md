@@ -326,3 +326,12 @@
 - 最终完整 tree `3736255c08416d6a1ea16f7c6393d8c06d0658fc` 的9项恢复检查（`approval-restart-unit-final-070`）为9 passed／10.26秒，覆盖已有success／failure／cancelled／unknown结果、幂等、事务失败回滚、2／3调用的真实冷 Saver 与官方 Delta 快照替换。另29项准入／工具 checkpoint 回归（`approval-restart-admission-069`）通过／17.60秒；106项通过的扩大 carrier／seal 检查原件在060，该轮新增两用例因未声明 Delta 快照失败，修正装具后9项最终检查通过，未放宽声明唯一性。完整 archive 变异067仅还原旧消息移除逻辑，两用例分别精确检出残留成员，退出1，证明测试区分已知缺陷。
 - 六文件 Pyright 相对完整 HEAD `1f552af5e` 基线52条／当前38条，零新增；最终 Ruff 零诊断，严格 OpenSpec 校验通过。最终相对产品 tree 仅整理 TYPE_CHECKING imports 与单测上下文写法，复用未变产品行为的正式验收。失败原件、准确命令、tree／逐文件指纹、raw及退出码保留在 `out/tests/temp/mcp-tool-approval/artifacts/`；正式产品产物位于对应 archive 的 `out/tests/integration/backend/agents/test_mcp_tool_approval_recovery/`。未改Web或协议合同，不重复前端构建。
 - 进度保持42/52；4.2持续持有、4.6其余综合门、8.4跨 Gateway 授权及8.5真实 Provider 指标继续推进，团队／协作 TODO 不变。
+
+
+### 8.4 跨 Gateway Web 授权回调验收（2026-10-27）
+
+- 新增独立工作区的远程授权场景，复用既有浏览器交互、OAuth/MCP handler 和 model_stream。三个独立 Backend/Gateway 经真实 localhost SSH 联邦；A 托管 Web，B 唯一配置 secure 授权，C 为兄弟工作区。页面沿实际初始化、会话授权入口、私有弹窗回调、底部 MCP 标签刷新及完整定义调用运行，不补写关键业务状态或维护第二套 SSE。
+- 完整 tree `085e8f0a86b7e16178b64c77fedc0804d3144824` 的 `remote-turn-004` 为1 passed／155.57秒；仅增矩阵注册的 tree `fdfe3628f1e0e8cc659f85586f5fdfc3072960c1` 的 `remote-model-call-009` 为1 passed／161.17秒，均退出0。每种边界核对六份实际请求 preimage/hash、唯一远端 MCP 收据、原操作成功、B 凭据独占、A/C 查询404及捕获的三节点服务日志无授权秘密。模型回放不代表外部 Provider 或缓存收益。
+- 原测试驱动错误地给远程投影发送本地 Backend UUID 头，001在创建会话时被真实 Gateway 明确拒绝400，尚未执行授权。驱动现在遵守现有产品请求头合同，并分别断言远程回调无该头、本地回调保持精确 UUID；未放宽 Gateway 验证或修改产品行为。相同驱动的 `local-header-regression-008` 为1 passed／98.08秒、退出0。
+- 新测试 Pyright零诊断、Ruff通过；首次类型命令因缺少bunx未启动；改用既有uv临时Pyright入口，收窄两处JSON配置类型后完成。运行均带进程外期限和4GiB保护，源码前后相同；准确命令、tree、指纹、raw、退出码及Web资产指纹保留在 `out/tests/temp/mcp-remote-authorization/artifacts/`，正式输出在各完整archive的同名测试路径。新增矩阵保护480秒；两种参数分别执行，不宣称额外完整矩阵重跑。未改Web源码或协议，复用此前已通过的Web类型／构建结果。
+- 进度保持42/52。8.4的完整错误展示组合、4.2持续资源持有、4.6剩余综合门与8.5真实Provider指标仍待完成；此处远程场景通过第二次用户消息验证调用，不将它冒充自动continuation。自动after_turn、原child冷恢复和原期限复用第6节未变产品证据；团队／协作TODO不变。

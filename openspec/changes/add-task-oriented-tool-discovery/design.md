@@ -205,6 +205,8 @@ turn-bound MCP 目录的原执行在首次模型发送前保留精确连接资�
 
 Gateway 仅透明路由 `/api/v1/*` 连接业务 API 和事件，维持同一 request_id；连接 owner 位于目标工作区。远程工作区授权页面打开在用户客户端，但回调必须到实际 owner 可达的地址；不具备回调通道时明确报告不支持，不误用客户端 localhost。
 
+Web 独立回调页可以位于用户正在访问的 Gateway origin；原管理窗口必须通过冻结的远程投影目标，将私有 callback POST 透明代理到实际工作区 owner。客户端向远程投影只发送 Gateway 选择头，Backend UUID 校验头仍限定于本地目标；不能将客户端可达的 localhost 解释成远端本机地址。操作和 OAuth 凭据只归远端工作区，入口 Gateway 与兄弟工作区不创建本次操作或其 OAuth 凭据。
+
 授权入口及等待状态显示在当前会话流程；连接列表／管理属于工作区层级，展示入口位于主窗口的底部面板或既有工作区设置。保持浏览器客户端既有术语和数据归属；不扩展 Electron／移动原生实现。用户关闭授权页不等同于连接成功。
 
 普通并发以同一轮多个既有信封调用表达，每个保留独立 ID、冻结 binding、HITL、scope 和结果；依赖关系通过后续模型步骤推进。保留既有 `tool_name+arguments` 输入，不引入 batch 数组第二形状或多套 dispatcher。

@@ -48,7 +48,7 @@ try {
       if (url === "/api/v1/workspace") {
         if (!owner) throw new Error("Gateway 未登记目标 Backend 工作区");
         headers["X-BoxTeam-Workspace-Id"] = owner.workspace_id;
-        headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
+        if (owner.connection_kind === "local") headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
       }
       const response = await fetch(url, { headers });
       const body = await response.json();
@@ -109,7 +109,7 @@ try {
     assert.equal(payload.state, callback.searchParams.get("state"));
     const headers = await callbackPosts[0].allHeaders();
     assert.equal(headers["x-boxteam-workspace-id"], initialization.owner.workspace_id);
-    assert.equal(headers["x-boxteam-backend-workspace-id"], fixture.workspaceId);
+    assert.equal(headers["x-boxteam-backend-workspace-id"], initialization.owner.connection_kind === "local" ? fixture.workspaceId : undefined);
     const secrets = [payload.code, payload.state];
     for (const request of requests) {
       assert(secrets.every((secret) => !request.headers.referer?.includes(secret)), "Referer 含私有回调参数");
