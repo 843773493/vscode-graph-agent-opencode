@@ -30,21 +30,26 @@ class TaskComponentDTO(BaseModel):
 
 
 class TaskTriggerDTO(TaskComponentDTO):
-    type_id: Literal["builtin.manual", "builtin.interval", "builtin.cron", "builtin.external"]
+    type_id: Literal["builtin.manual", "builtin.interval", "builtin.cron", "builtin.external", "builtin.execution_end"]
     interval_seconds: int | None = Field(default=None, ge=1)
     expression: str | None = None
     timezone: str = "UTC"
+    source_uri: str | None = None
 
     def schedule(self) -> TimeSchedule | None:
-        if self.type_id in {"builtin.manual", "builtin.external"}:
+        if self.type_id in {"builtin.manual", "builtin.external", "builtin.execution_end"}:
             return None
         kind = "interval" if self.type_id == "builtin.interval" else "cron"
         return TimeSchedule(kind, self.interval_seconds, self.expression, self.timezone)
 
     @model_validator(mode="after")
     def validate_schedule(self) -> TaskTriggerDTO:
-        if self.type_id in {"builtin.manual", "builtin.external"} and (self.interval_seconds is not None or self.expression is not None or self.timezone != "UTC"):
+        if self.type_id in {"builtin.manual", "builtin.external", "builtin.execution_end"} and (self.interval_seconds is not None or self.expression is not None or self.timezone != "UTC"):
             raise ValueError("非时间触发不能配置时间计划")
+        if (self.type_id == "builtin.execution_end") != (self.source_uri is not None):
+            raise ValueError("只有execution_end触发必须配置source_uri")
+        if self.source_uri is not None and parse_session_thread_uri(self.source_uri)[2] is None:
+            raise ValueError("执行结束来源必须明确Thread URI")
         if self.type_id == "builtin.interval" and self.expression is not None:
             raise ValueError("interval trigger 不能配置 cron expression")
         if self.type_id == "builtin.cron" and self.interval_seconds is not None:
@@ -174,7 +179,7 @@ class PersistentTaskRunDTO(BaseModel):
     definition_revision: int
     trigger_key: str
     request_id: str | None = None
-    trigger_type: Literal["manual", "interval", "cron", "external"] = "manual"
+    trigger_type: Literal["manual", "interval", "cron", "external", "execution_end"] = "manual"
     scheduled_for: datetime | None = None
     trigger_payload: dict[str, JsonValue] | None = None
     check_only: bool

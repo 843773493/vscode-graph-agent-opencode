@@ -11468,6 +11468,11 @@ export declare type TaskTriggerDTO = Message<"boxteam.workspace.v2.TaskTriggerDT
    * @generated from field: string timezone = 5;
    */
   timezone: string;
+
+  /**
+   * @generated from field: optional string source_uri = 6;
+   */
+  sourceUri?: string | undefined;
 };
 
 /**

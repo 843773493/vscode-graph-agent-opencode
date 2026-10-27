@@ -2638,6 +2638,7 @@ message TaskTriggerDTO {
   optional int64 interval_seconds = 3;
   optional string expression = 4;
   string timezone = 5;
+  optional string source_uri = 6;
 }
 
 message TaskScriptCheckDTO {

@@ -9,8 +9,10 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.exceptions import NotFoundError
+from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_session_thread_uri
@@ -21,6 +23,7 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.prompting import PromptSection, internal_message_factory
+from app.schemas.event import Event
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
@@ -30,6 +33,9 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
 from app.services.infrastructure.persistent_tasks.events import PersistentTaskChanged
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.orchestration.persistent_tasks.conditions import (
     TaskCheckError,
     evaluate_condition,
@@ -42,7 +48,8 @@ logger = logging.getLogger(__name__)
 class PersistentTaskRuntime:
     def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionOrchestratorProtocol,
                  dispatcher: RuntimeSourceDispatcher, sessions: SessionService, events: EventChannel[PersistentTaskChanged],
-                 clock: Callable[[], datetime], workspace_root: Path, concurrency: int = 4) -> None:
+                 clock: Callable[[], datetime], workspace_root: Path, saver: RolloutCheckpointSaver,
+                 job_events: JobEventBusProtocol, concurrency: int = 4) -> None:
         if concurrency < 1:
             raise ValueError("持久任务并发数必须为正")
         self.store = store
@@ -53,6 +60,9 @@ class PersistentTaskRuntime:
         self.events = events
         self.clock = clock
         self._workspace_root = workspace_root
+        self._saver = saver
+        self._job_events = job_events
+        self._execution_pending: set[str] = set()
         self._concurrency = concurrency
         self._wake = asyncio.Event()
         self._closing = False
@@ -70,6 +80,27 @@ class PersistentTaskRuntime:
 
     def recovering(self, task_id: str) -> bool:
         return task_id in self._recovering
+
+    def reconcile_execution_source(self, task_id: str) -> None:
+        self._execution_pending.add(task_id)
+        self._wake.set()
+
+    async def execution_source_cursor(self, configuration: PersistentTaskConfigurationDTO) -> int | None:
+        uri = configuration.trigger.source_uri
+        if uri is None:
+            return None
+        _resource, session_id, thread_id = parse_session_thread_uri(uri)
+        assert thread_id is not None
+        async with self._sessions.session_read_admission(session_id):
+            self._sessions.path_resolver.resolve_thread_node(session_id, thread_id)
+            return self._saver.execution_completions(session_id, thread_id, after_commit_id=None).through_commit_id
+
+    async def on_event(self, event: Event) -> None:
+        # 事件只唤醒原worker；恢复读取canonical终态提交，不依赖内存通知完整性。
+        if event.type in {EventType.JOB_COMPLETED, EventType.JOB_FAILED, EventType.JOB_CANCELLED} and not self._closing:
+            self._execution_pending.update(task.task_id for task in self.store.list()
+                                           if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
+            self._wake.set()
 
     def notify(self, task_id: str, run_id: str | None = None) -> None:
         task = self.store.get(task_id)
@@ -114,11 +145,13 @@ class PersistentTaskRuntime:
         failure: BaseException | None = None
         try:
             self._recovering = {task.task_id for task in self.store.list()}
+            await self._job_events.register_durable_listener(self.on_event)
             self._accepting = True
             initialized.set_result(None)
             # 初始化回执先交还工作区 owner，再推进任何逐任务恢复。
             await asyncio.sleep(0)
             while not self._closing:
+                self._wake.clear()
                 for task_id, running in tuple(self._inflight.items()):
                     if running.done():
                         del self._inflight[task_id]
@@ -131,11 +164,12 @@ class PersistentTaskRuntime:
                         continue
                     if len(self._inflight) >= self._concurrency:
                         break
-                    if task.task_id in self._recovering or self.store.runs(task.task_id, pending_only=True):
+                    if (task.task_id in self._recovering or task.task_id in self._execution_pending
+                            or self.store.runs(task.task_id, pending_only=True)):
+                        self._execution_pending.discard(task.task_id)
                         running = asyncio.create_task(self._process_task(task.task_id), name=f"persistent-task:{task.task_id}")
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[task.task_id] = running
-                self._wake.clear()
                 next_run = self.store.next_schedule_at()
                 if next_run is None:
                     await self._wake.wait()
@@ -154,6 +188,7 @@ class PersistentTaskRuntime:
                 initialized.set_exception(error)
             raise
         finally:
+            await self._job_events.unregister_durable_listener(self.on_event)
             # 不取消已接受的 Job；当前动作走原身份结算后再归还运行时。
             if self._inflight:
                 results = await asyncio.gather(*self._inflight.values(), return_exceptions=True)
@@ -164,12 +199,39 @@ class PersistentTaskRuntime:
                             raise result
 
     async def _process_task(self, task_id: str) -> None:
+        await self._collect_execution_completions(task_id)
         for run in self.store.runs(task_id, pending_only=True):
             if self._closing:
                 return
             await self._process_run(run)
         self._recovering.discard(task_id)
         self.notify(task_id)
+
+    async def _collect_execution_completions(self, task_id: str) -> None:
+        async with self.locks.lock_for(task_id):
+            task = self.store.get(task_id)
+            uri = task.configuration.trigger.source_uri
+            if uri is None or task.lifecycle != "active":
+                return
+            _resource, session_id, thread_id = parse_session_thread_uri(uri)
+            assert thread_id is not None
+            try:
+                async with self._sessions.session_read_admission(session_id):
+                    self._sessions.path_resolver.resolve_thread_node(session_id, thread_id)
+                    cursor = self.store.execution_cursor(task_id)
+                    page = self._saver.execution_completions(session_id, thread_id, after_commit_id=cursor)
+            except NotFoundError as error:
+                self.store.control(task_id, expected_revision=task.revision, lifecycle="needs_attention",
+                                   now=self.clock(), reason=f"执行结束来源已删除: {error}")
+                self.notify(task_id)
+                return
+            if page.records:
+                await observe_phase(task_id, "task.execution_source.read_before_accept", details={"task_id": task_id})
+            self.store.accept_execution_completions(task_id, expected_revision=task.revision, after_commit_id=cursor,
+                                                     page=page, now=self.clock())
+            if page.records:
+                self.reconcile_execution_source(task_id)
+                self.notify(task_id)
 
     async def _process_run(self, run: PersistentTaskRunDTO) -> None:
         await observe_phase(run.run_id, "task.run.loaded", details={"task_id": run.task_id})

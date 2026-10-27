@@ -68,6 +68,38 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
     )
 
 
+def test_terminal_pages_keep_first_end_order_when_control_correction_follows_another_execution(
+    saver: RolloutCheckpointSaver,
+) -> None:
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
+    with saver:
+        for suffix in ("first", "second"):
+            intent = InternalExecutionIntent(message_id=f"msg-{suffix}", execution_id=f"exe-{suffix}",
+                                             admission_idempotency_key=f"completion-{suffix}")
+            saver.admit_internal_execution(SESSION_ID, thread_id=thread_id, job_id=f"job-{suffix}",
+                                            intent=intent, message=_internal_notice(intent.message_id))
+        lost = saver.converge_execution(SESSION_ID, thread_id=thread_id, turn_id=None,
+                                        execution_id="exe-first", outcome="execution_lost", turn_status=None)
+        second = saver.converge_execution(SESSION_ID, thread_id=thread_id, turn_id=None,
+                                          execution_id="exe-second", outcome="cancelled", turn_status=None)
+        correction = saver.converge_execution(SESSION_ID, thread_id=thread_id, turn_id=None,
+                                              execution_id="exe-first", outcome="cancelled", turn_status=None)
+        assert lost < second < correction
+        owner = saver._storage.executions
+        first_page = owner.execution_completions(SESSION_ID, thread_id, after_commit_id=0, limit=1)
+        first_event, = first_page.records
+        assert (first_event.execution_id, first_event.outcome, first_event.commit_id) == ("exe-first", "cancelled", correction)
+        assert first_event.cursor_commit_id == first_page.through_commit_id == lost
+        second_page = owner.execution_completions(SESSION_ID, thread_id, after_commit_id=first_page.through_commit_id, limit=1)
+        second_event, = second_page.records
+        assert second_event.execution_id == "exe-second" and second_event.commit_id == second
+        assert second_event.cursor_commit_id == second_page.through_commit_id == second
+        final = owner.execution_completions(SESSION_ID, thread_id, after_commit_id=second_page.through_commit_id, limit=1)
+        assert final.records == () and final.through_commit_id == correction
+        # 已结束的执行不能因后续控制修正再次进入已有订阅。
+        assert owner.execution_completions(SESSION_ID, thread_id, after_commit_id=lost, limit=1).records == (second_event,)
+
+
 @pytest.mark.parametrize("timestamps", [
     ("2026-10-04T12:00:02+00:00", "2026-10-04T12:00:01+00:00"),
     ("2026-10-04T12:00:01+00:00", "2026-10-04T12:00:01+00:00"),

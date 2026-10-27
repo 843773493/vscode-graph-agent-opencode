@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.execution_admission import (
@@ -13,6 +14,8 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.domain.itemized.execution_queue import (
+    ExecutionCompletion,
+    ExecutionCompletionPage,
     ExecutionQueueInput,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
@@ -25,8 +28,47 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
 
 class RolloutExecutionQueueMixin:
+    _storage: RolloutStorage
+
+    def execution_completions(self, session_id: str, thread_id: str, *,
+                              after_commit_id: int | None, limit: int = 100) -> ExecutionCompletionPage:
+        """以原终态提交顺序增量读取；None只取得新订阅的起点。"""
+        if limit < 1 or (after_commit_id is not None and after_commit_id < 0):
+            raise ValueError("执行终态游标及页大小非法")
+        try:
+            with self._storage.read_connection(session_id, thread_id) as connection:
+                upper = connection.execute("SELECT COALESCE(MAX(commit_id),0) FROM storage_commits WHERE status='committed'").fetchone()[0]
+                if after_commit_id is None:
+                    return ExecutionCompletionPage((), upper)
+                if after_commit_id > upper:
+                    raise RuntimeError("执行终态来源游标超过原owner历史，拒绝重置")
+                rows = connection.execute(
+                    "WITH terminals AS (SELECT e.execution_id,MIN(c.commit_id) AS first_commit_id,MAX(c.commit_id) AS commit_id FROM executions e "
+                    "JOIN storage_commits c ON (c.subject_id=e.execution_id AND e.execution_origin='internal') "
+                    "OR (c.subject_id=e.turn_id AND e.execution_origin='user_turn' AND c.idempotency_key IN "
+                    "('terminal:'||e.turn_id||':'||e.execution_id||':'||c.outcome,'execution-lost:'||e.turn_id||':'||e.execution_id)) "
+                    "WHERE c.status='committed' AND c.commit_kind='terminal_convergence' "
+                    "AND e.session_id=? AND e.thread_id=? GROUP BY e.execution_id HAVING MIN(c.commit_id)>?) "
+                    "SELECT c.commit_id,e.execution_id,e.job_id,c.outcome,json_extract(q.input_json,'$.request_id'),t.first_commit_id "
+                    "FROM terminals t JOIN storage_commits c ON c.commit_id=t.commit_id JOIN executions e ON e.execution_id=t.execution_id "
+                    "LEFT JOIN execution_queue q ON q.execution_id=e.execution_id AND q.checkpoint_ns='' "
+                    "WHERE c.commit_id<=? "
+                    "ORDER BY t.first_commit_id LIMIT ?", (session_id, thread_id, after_commit_id, upper, limit),
+                ).fetchall()
+                records = tuple(ExecutionCompletion(*row) for row in rows)
+                return ExecutionCompletionPage(records, records[-1].cursor_commit_id if len(rows) == limit else upper)
+        except RolloutNotMaterializedError:
+            if after_commit_id not in {None, 0}:
+                raise RuntimeError("已订阅的执行终态来源历史缺失，拒绝重置") from None
+            return ExecutionCompletionPage((), 0)
+
     def publish_execution_queue_input(
         self, connection: sqlite3.Connection, admission: ExecutionAdmission,
         queue_input: ExecutionQueueInput, *, checkpoint_ns: str,

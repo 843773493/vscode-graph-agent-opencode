@@ -90,3 +90,22 @@ class ExecutionQueueRecord:
 class ExecutionQueueSnapshot:
     records: tuple[ExecutionQueueRecord, ...]
     revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionCompletion:
+    """原终态提交的只读引用，不复制执行正文或当前可变状态。"""
+
+    commit_id: int
+    execution_id: str
+    job_id: str
+    outcome: str
+    request_id: str | None
+    # 遍历按首次结束位置推进，精确终态引用可指向之后的控制修正。
+    cursor_commit_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionCompletionPage:
+    records: tuple[ExecutionCompletion, ...]
+    through_commit_id: int

@@ -13,9 +13,10 @@
 
 ## 3. 触发、条件判断与可靠投递纵向链路
 
-- [ ] 3.1 实现统一触发记录与 interval/cron、关联工作执行结束、外部幂等通知及手动触发，持久化计划游标与定义 revision；时间到期由调度器判定，不启动脚本或模型检查时钟。
+- [x] 3.1 实现统一触发记录与 interval/cron、关联工作执行结束、外部幂等通知及手动触发，持久化计划游标与定义 revision；时间到期由调度器判定，不启动脚本或模型检查时钟。
   - [x] 3.1.1 手动、interval/cron沿同一运行账本触发；计划游标与触发原子提交，保留时区、skip/run_latest/catch_up和冻结定义，恢复期间的新计划只排队。关联工作事件仍待实施；外部通知见3.1.2。
   - [x] 3.1.2 外部通知复用同一触发事务、冻结定义与原运行账本，持久payload/原request_id；覆盖并发同键、异内容冲突、暂停/编辑及真实Backend硬重启后的原接受结果。
+  - [x] 3.1.3 执行结束绑定明确Thread URI，从原canonical终态提交恢复；原运行引用与来源游标原子接受，覆盖用户/内部执行、取消修正、重复事件、暂停/编辑/换源及丢失通知后的硬重启。
 - [x] 3.2 提供规则判断及脚本判断组件，明确工作区执行位置、结构化输出、运行期限、资源保护与失败诊断，打通服务未就绪到首次就绪的真实入口。
   - [x] 3.2.1 script v1经共用原生监督器执行，冻结结构化输入、工作区cwd、UTF-8结果、期限/内存/输出限制及明确失败；真实入口覆盖服务未就绪到首次就绪、迟到判断和硬重启。规则、外部通知及条件策略另行验收。
   - [x] 3.2.2 rule v1消费同一冻结输入，用JSON Pointer和JSON值比较返回wait/proceed；真实入口覆盖缺失/null、bool/number、对象/数组、暂停试运行与checking硬重启。Linux本切片通过，Windows完整产品边界仍保留原长路径TODO。
@@ -133,3 +134,12 @@
 - `task-rule-contracts-128`为20 passed，覆盖v16/v17升级、原创建幂等、决定/生命周期原子回滚、协议/SSE与手动真实入口；`task-rule-script-regression-129`为3 passed、111.29秒，核对未就绪到就绪、决定后及接受后硬重启，仍使用原脚本结果与canonical item。所有产品运行有进程外期限/4GiB保护且无源码漂移。
 - 120 Buf/全绑定、122 OpenAPI、124定向后端Pyright、125真实Web类型、126构建和127 Ruff均通过，仅既有构建chunk提示。121在完整源码快照验证直接依赖锁，根目录`uv sync --frozen --offline`成功，无传递包版本变化；根目录setuptools扫描递归node_modules的既有问题未扩展修复。临时完整源码快照及协议staging验证后删除，保留准确命令、指纹、原始输出、退出码和正式产品产物。
 - 模型判断、工作执行结束触发、状态来源更新、Goal/生成器迁移及主Web管理仍未完成；Windows完整产品验收沿用已有长路径TODO，团队协作继续TODO。3.2勾选只对应已实现且经Linux产品验证的规则/脚本组件，不代表上述后续范围已完成。
+
+### 执行结束触发与原终态引用（2026-10-27）
+
+- `builtin.execution_end`绑定同工作区、当前Gateway的明确Thread URI。Job事件只唤醒原worker，从canonical已提交终态增量对账；引用原execution/job/request_id，不复制执行正文或维护第二份事件账本。新建/换源从当前明确起点订阅，改名保留游标，暂停后恢复跳过未接受的暂停期间结束事件。来源删除显示needs_attention，历史回退或缺失明确失败。
+- Workspace SQL19扩展原运行表并新增来源订阅游标；原v18历史、接受序号、冻结定义与幂等身份保留，旧表物理删除。运行引用与来源游标同一事务提交。134合同/迁移/发行资源验证25 passed，覆盖v16/v17/v18升级及接受失败后的事务回滚；Gateway仍schema17。
+- 初轮133为2 passed/2 failed：取消先出现execution_lost再修正cancelled，读取改为接受前快照中的最新终态；不存在来源测试原来使用格式非法ID，改用格式合法但不存在的SessionID，仍严格断言404。141修复后完整4场景通过。随后分页审查发现按修正位置推进会跳过其他执行，改为按首次结束位置排序/推进、另存精确终态引用。144为7 passed，通过真实owner创建A/B两次执行并依次收敛lost(A)、cancelled(B)、cancelled修正(A)，limit=1仍严格返回A、B且不重复；来源游标倒退也明确拒绝。
+- 最终`task-events-final-order-product-145`完整matrix为4 passed、184.93秒，覆盖真实用户与内部执行、取消、重复事件、动作结束不误触发来源、暂停/改名/换源，以及canonical已完成但任务未接受时硬杀Backend、两次重启后复用原运行。138定向手动/忙时/冷恢复/慢恢复/worker失败7 passed，139定时完整回归7 passed；全部有进程外期限/4GiB保护且无源码漂移。
+- 130 Buf/全部绑定、131 OpenAPI、135真实Web类型、136构建、147最终Ruff均通过；146任务业务模块Pyright零错误。140/142扩展检查原执行mixin时分别有82/17个诊断，补齐新读取端口真实storage类型后新增方法无诊断，剩余为未修改方法的既有索引/content/兄弟方法类型问题，未扩大修理或声称这些文件全部类型通过。构建仍仅既有chunk提示。
+- 准确命令、源码指纹、原始输出与实际退出码在`out/tests/temp/persistent-task-migration/artifacts/`，正式产品产物在`out/tests/integration/backend/sessions/test_persistent_task_execution_events/`。一次读取最多100项，长历史查询耗时尚未测量，不宣称扫描成本有界。模型判断隔离、状态来源更新、Goal/生成器迁移和主Web管理仍未完成，Windows产品长路径及团队协作继续TODO。

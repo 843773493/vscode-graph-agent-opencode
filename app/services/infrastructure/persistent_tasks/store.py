@@ -11,6 +11,7 @@ from datetime import datetime
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.identifier import create_prefixed_id
 from app.core.time_schedule import evaluate_schedule
+from app.domain.itemized.execution_queue import ExecutionCompletionPage
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
@@ -72,8 +73,10 @@ class PersistentTaskStore:
                 "SELECT task_id FROM persistent_tasks WHERE workspace_id=? ORDER BY created_at,task_id", (self.workspace_id,),
             ).fetchall()]
 
-    def create(self, request: PersistentTaskCreateRequest, now: datetime) -> PersistentTaskDTO:
+    def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
         payload = request.model_dump(mode="json")
+        if request.configuration.trigger.source_uri is None:
+            payload["configuration"]["trigger"].pop("source_uri")
         # 缺省时间配置不改变既有手动创建请求的幂等身份。
         if request.configuration.trigger.type_id == "builtin.manual":
             for field in ("interval_seconds", "expression", "timezone"):
@@ -102,6 +105,7 @@ class PersistentTaskStore:
             connection.execute("INSERT INTO persistent_task_definitions VALUES (?,1,?)",
                                (task_id, request.configuration.model_dump_json()))
             self._set_schedule(connection, task_id, request.configuration, 1, now)
+            self._set_execution_source(connection, task_id, request.configuration, 1, source_cursor)
             return self._task(connection, task_id)
 
     @staticmethod
@@ -112,7 +116,7 @@ class PersistentTaskStore:
             raise ClientStateConflictError("持久任务已终结")
 
     def update(self, task_id: str, *, expected_revision: int, configuration: PersistentTaskConfigurationDTO,
-               now: datetime) -> PersistentTaskDTO:
+               now: datetime, source_cursor: int | None = None) -> PersistentTaskDTO:
         with self._transaction() as connection:
             task = self._task(connection, task_id)
             self._require_revision(task, expected_revision)
@@ -125,7 +129,70 @@ class PersistentTaskStore:
                 self._set_schedule(connection, task_id, configuration, revision, now)
             else:
                 connection.execute("UPDATE persistent_task_schedules SET definition_revision=? WHERE task_id=?", (revision, task_id))
+            if task.configuration.trigger.source_uri != configuration.trigger.source_uri:
+                self._set_execution_source(connection, task_id, configuration, revision, source_cursor)
+            else:
+                connection.execute("UPDATE persistent_task_execution_sources SET definition_revision=? WHERE task_id=?", (revision, task_id))
             return self._task(connection, task_id)
+
+    @staticmethod
+    def _set_execution_source(connection: sqlite3.Connection, task_id: str, configuration: PersistentTaskConfigurationDTO,
+                              revision: int, cursor: int | None) -> None:
+        if configuration.trigger.source_uri is None:
+            connection.execute("DELETE FROM persistent_task_execution_sources WHERE task_id=?", (task_id,))
+            return
+        if cursor is None or cursor < 0:
+            raise ValueError("执行结束触发需要明确的来源提交游标")
+        previous = connection.execute("SELECT source_uri,after_commit_id FROM persistent_task_execution_sources WHERE task_id=?", (task_id,)).fetchone()
+        if previous is not None and previous[0] == configuration.trigger.source_uri and cursor < previous[1]:
+            raise RuntimeError("执行结束来源历史已回退，拒绝重新订阅")
+        connection.execute("INSERT INTO persistent_task_execution_sources VALUES (?,?,?,?) "
+                           "ON CONFLICT(task_id) DO UPDATE SET definition_revision=excluded.definition_revision,"
+                           "source_uri=excluded.source_uri,after_commit_id=excluded.after_commit_id",
+                           (task_id, revision, configuration.trigger.source_uri, cursor))
+
+    def execution_cursor(self, task_id: str) -> int:
+        with closing(self._store.connection()) as connection:
+            task = self._task(connection, task_id)
+            row = connection.execute("SELECT definition_revision,source_uri,after_commit_id FROM persistent_task_execution_sources WHERE task_id=?",
+                                     (task_id,)).fetchone()
+            if row is None or tuple(row[:2]) != (task.definition_revision, task.configuration.trigger.source_uri):
+                raise RuntimeError("执行结束触发游标与原定义不一致")
+            return row[2]
+
+    def accept_execution_completions(self, task_id: str, *, expected_revision: int, after_commit_id: int,
+                                     page: ExecutionCompletionPage, now: datetime) -> list[str]:
+        """原终态引用与游标一次提交；不复制执行正文或另建事件账本。"""
+        with self._transaction() as connection:
+            task = self._task(connection, task_id)
+            if task.revision != expected_revision or task.lifecycle != "active":
+                return []
+            source_uri = task.configuration.trigger.source_uri
+            changed = connection.execute("UPDATE persistent_task_execution_sources SET after_commit_id=? "
+                                         "WHERE task_id=? AND after_commit_id=? AND definition_revision=? AND source_uri=?",
+                                         (page.through_commit_id, task_id, after_commit_id, task.definition_revision, source_uri)).rowcount
+            if changed != 1 or page.through_commit_id < after_commit_id:
+                raise RuntimeError("执行结束来源游标冲突")
+            run_ids = []
+            for event in page.records:
+                if not after_commit_id < event.cursor_commit_id <= page.through_commit_id:
+                    raise ValueError("执行结束引用不属于当前来源页")
+                key = f"execution-end:{source_uri}:{event.execution_id}"
+                payload = {"source_uri": source_uri, "commit_id": event.commit_id, "execution_id": event.execution_id,
+                           "job_id": event.job_id, "outcome": event.outcome}
+                digest = sha256_jcs(payload)
+                row = connection.execute("SELECT trigger_hash FROM persistent_task_runs WHERE task_id=? AND trigger_key=?",
+                                         (task_id, key)).fetchone()
+                if row is not None:
+                    if row[0] != digest:
+                        raise RuntimeError("原执行终态引用发生冲突")
+                    continue
+                run_id = create_prefixed_id("ptrun")
+                connection.execute(_INSERT_RUN, (run_id, task_id, task.revision, task.definition_revision,
+                    key, digest, event.request_id or create_prefixed_id("req"), 0, "pending", None, None, None,
+                    now.isoformat(), now.isoformat(), "execution_end", None, json.dumps(payload, ensure_ascii=False)))
+                run_ids.append(run_id)
+            return run_ids
 
     @staticmethod
     def _set_schedule(connection: sqlite3.Connection, task_id: str, configuration: PersistentTaskConfigurationDTO,
@@ -140,10 +207,12 @@ class PersistentTaskStore:
                                (task_id, definition_revision, now.isoformat(), schedule.next_time(now).isoformat()))
 
     def control(self, task_id: str, *, expected_revision: int, lifecycle: TaskLifecycle,
-                now: datetime, reason: str | None = None) -> PersistentTaskDTO:
+                now: datetime, reason: str | None = None, source_cursor: int | None = None) -> PersistentTaskDTO:
         with self._transaction() as connection:
             task = self._task(connection, task_id)
             self._require_revision(task, expected_revision)
+            if lifecycle == "active" and task.lifecycle != "active" and task.configuration.trigger.source_uri is not None:
+                self._set_execution_source(connection, task_id, task.configuration, task.definition_revision, source_cursor)
             connection.execute("UPDATE persistent_tasks SET revision=revision+1,lifecycle=?,reason=?,updated_at=? WHERE task_id=?",
                                (lifecycle, reason, now.isoformat(), task_id))
             return self._task(connection, task_id)

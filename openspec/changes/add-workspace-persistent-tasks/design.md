@@ -101,6 +101,8 @@ Goal 的 `active/paused/blocked/usage_limited/budget_limited/complete` 及预算
 
 后端恢复时先对账在途判断与动作，再推进计划。已存在 durable execution/wakeup 的动作复用原身份，未确认脚本副作用的运行显示中断或结果未知，不盲目重放。missed schedule 沿用显式 skip/run_latest/catch_up；进程停机不承诺执行。任务事件经现有 SSE 传播，错误必须可见。
 
+`builtin.execution_end`绑定同工作区明确Thread来源URI。Job终态事件仅唤醒统一worker；worker从原rollout的已提交terminal_convergence读取有界页，用户与内部执行共用原执行身份，每个execution只接受一次；接受前采用同一快照中已收敛的终态修正，游标之前已结束的执行不会因后续控制修正再次触发。任务只保存来源/definition revision/提交游标，原终态引用、运行及游标在Workspace schema19的同一事务提交；断电丢失通知后仍从canonical恢复，不复制执行正文或新建事件账本。分页按首次结束提交推进，精确终态引用允许指向之后的控制修正，不能按修正位置排序而跨页跳过另一执行。新建、更换来源从明确读取时的当前提交起点开始；非来源编辑保留游标。暂停后恢复从当前提交重新订阅，跳过暂停期间未接受的结束事件，已接受记录保留并遵守revision抑制。来源缺失报needs_attention，来源历史回退或损坏直接报错，不能重置游标伪装成功。模型判断thread必须与工作来源分离，防自触发在模型切片补齐。
+
 ### 6.1 启动只等待通用运行时就绪，任务恢复由受管理 worker 处理
 
 工作区生命周期只调用通用运行时的 `start()`/`stop()`。`start()` 等待任务存储可用、事件入口完成订阅、当前 generation 的调度权建立及受管理 worker 初始化回执，然后返回；不在启动代码里 `await` 遍历所有任务、执行条件脚本、等待判断模型或等待工作 thread 完成。启动就绪表示运行时具备接收和恢复能力，不表示所有任务已经恢复或续跑成功。

@@ -9,6 +9,10 @@ import pytest
 
 from app.core.resource_uri import thread_resource_uri
 from app.core.sqlite_state import SQLiteStateDatabase
+from app.domain.itemized.execution_queue import (
+    ExecutionCompletion,
+    ExecutionCompletionPage,
+)
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
@@ -59,7 +63,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 18
+        assert store.diagnostics().schema_version == 19
     finally:
         store.close()
 
@@ -98,7 +102,41 @@ def test_task_decision_and_lifecycle_roll_back_together(workspace_root):
         store.close()
 
 
-@pytest.mark.parametrize("old_version", [16, 17])
+def test_execution_event_and_source_cursor_roll_back_together(workspace_root):
+    now = datetime(2026, 10, 27, tzinfo=UTC)
+    uri = thread_resource_uri("ws_atomic", "ses_atomic", "thr_atomic")
+    request = PersistentTaskCreateRequest.model_validate({
+        "idempotency_key": "atomic-end", "configuration": {
+            "name": "终态接受事务", "trigger": {"type_id": "builtin.execution_end", "version": "1", "source_uri": uri},
+            "condition": {"type_id": "builtin.always", "version": "1"},
+            "context": {"type_id": "builtin.literal", "version": "1", "content": "原终态引用"},
+            "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": uri, "delivery_mode": "context_only"},
+        },
+    })
+    with WorkspaceStateStore(workspace_root=workspace_root) as store:
+        tasks = PersistentTaskStore(store, workspace_id="ws_atomic")
+        task = tasks.create(request, now, source_cursor=10)
+        page = ExecutionCompletionPage((ExecutionCompletion(12, "exe_original", "job_original", "completed", "req_original", 12),), 15)
+        with closing(store.connection()) as connection:
+            connection.execute("CREATE TRIGGER stop_event BEFORE INSERT ON persistent_task_runs BEGIN SELECT RAISE(ABORT,'event-write-fault'); END")
+        with pytest.raises(sqlite3.IntegrityError, match="event-write-fault"):
+            tasks.accept_execution_completions(task.task_id, expected_revision=1, after_commit_id=10, page=page, now=now)
+        assert tasks.execution_cursor(task.task_id) == 10 and tasks.runs(task.task_id) == []
+        with closing(store.connection()) as connection:
+            connection.execute("DROP TRIGGER stop_event")
+        run_id, = tasks.accept_execution_completions(task.task_id, expected_revision=1, after_commit_id=10, page=page, now=now)
+        run, = tasks.runs(task.task_id)
+        assert run.run_id == run_id and run.request_id == "req_original" and tasks.execution_cursor(task.task_id) == 15
+        assert tasks.accept_execution_completions(task.task_id, expected_revision=1, after_commit_id=15,
+                                                 page=ExecutionCompletionPage((), 15), now=now) == []
+        assert tasks.runs(task.task_id) == [run]
+        tasks.control(task.task_id, expected_revision=1, lifecycle="paused", now=now)
+        with pytest.raises(RuntimeError, match="历史已回退"):
+            tasks.control(task.task_id, expected_revision=2, lifecycle="active", now=now, source_cursor=4)
+        assert tasks.get(task.task_id).lifecycle == "paused" and tasks.execution_cursor(task.task_id) == 15
+
+
+@pytest.mark.parametrize("old_version", [16, 17, 18])
 def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch, old_version):
     original = {
         "idempotency_key": "old-create", "enabled": True, "configuration": {
@@ -121,8 +159,11 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
         if old_version == 16:
             connection.execute("INSERT INTO persistent_task_runs VALUES ('ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?)",
                                (now.isoformat(), now.isoformat()))
-        else:
+        elif old_version == 17:
             connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL)",
+                               (now.isoformat(), now.isoformat()))
+        else:
+            connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL,NULL)",
                                (now.isoformat(), now.isoformat()))
     database.close()
     store = WorkspaceStateStore(workspace_root=workspace_root)
@@ -139,7 +180,8 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert connection.execute("SELECT name FROM sqlite_master WHERE name='persistent_task_runs_v16'").fetchall() == []
             assert connection.execute("SELECT name FROM sqlite_master WHERE name='persistent_task_runs_v17'").fetchall() == []
-            assert connection.execute("SELECT run_sequence FROM persistent_task_runs WHERE run_id='ptrun_old'").fetchone()[0] == (37 if old_version == 17 else 1)
+            assert connection.execute("SELECT name FROM sqlite_master WHERE name='persistent_task_runs_v18'").fetchall() == []
+            assert connection.execute("SELECT run_sequence FROM persistent_task_runs WHERE run_id='ptrun_old'").fetchone()[0] == (1 if old_version == 16 else 37)
         scheduled = request.configuration.model_copy(update={"trigger": TaskTriggerDTO(type_id="builtin.interval", version="1", interval_seconds=60)})
         tasks.update(task.task_id, expected_revision=1, configuration=scheduled, now=now)
         due = now + timedelta(seconds=60)

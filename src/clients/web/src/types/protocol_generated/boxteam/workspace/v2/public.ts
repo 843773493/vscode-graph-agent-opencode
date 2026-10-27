@@ -2688,6 +2688,7 @@ export interface TaskTriggerDTO {
   interval_seconds?: number | undefined;
   expression?: string | undefined;
   timezone: string;
+  source_uri?: string | undefined;
 }
 
 export interface TaskScriptCheckDTO {
@@ -19531,7 +19532,14 @@ export const TextMutationTransferDTO: MessageFns<TextMutationTransferDTO> = {
 };
 
 function createBaseTaskTriggerDTO(): TaskTriggerDTO {
-  return { version: "", type_id: "", interval_seconds: undefined, expression: undefined, timezone: "" };
+  return {
+    version: "",
+    type_id: "",
+    interval_seconds: undefined,
+    expression: undefined,
+    timezone: "",
+    source_uri: undefined,
+  };
 }
 
 export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
@@ -19542,6 +19550,7 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
       interval_seconds: isSet(object.interval_seconds) ? globalThis.Number(object.interval_seconds) : undefined,
       expression: isSet(object.expression) ? globalThis.String(object.expression) : undefined,
       timezone: isSet(object.timezone) ? globalThis.String(object.timezone) : "",
+      source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : undefined,
     };
   },
 
@@ -19562,6 +19571,9 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
     if (message.timezone !== "") {
       obj.timezone = message.timezone;
     }
+    if (message.source_uri !== undefined) {
+      obj.source_uri = message.source_uri;
+    }
     return obj;
   },
 
@@ -19575,6 +19587,7 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
     message.interval_seconds = object.interval_seconds ?? undefined;
     message.expression = object.expression ?? undefined;
     message.timezone = object.timezone ?? "";
+    message.source_uri = object.source_uri ?? undefined;
     return message;
   },
 };

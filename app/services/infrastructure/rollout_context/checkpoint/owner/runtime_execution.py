@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
@@ -20,6 +21,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
 )
 from app.domain.itemized.execution_queue import (
+    ExecutionCompletionPage,
     ExecutionQueueInput,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
@@ -49,8 +51,17 @@ from app.services.mapping.itemized.thread_seed import (
     frozen_thread_seed,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
+
 
 class RuntimeExecutionOwnerMixin:
+    _storage: RolloutContextStore
+
+    def execution_completions(self, session_id: str, thread_id: str, *,
+                              after_commit_id: int | None) -> ExecutionCompletionPage:
+        return self._storage.executions.execution_completions(session_id, thread_id, after_commit_id=after_commit_id)
+
     def import_execution_queue(self, session_id: str, thread_id: str,
                                inputs: tuple[tuple[str, ExecutionQueueInput], ...]) -> None:
         self._storage.executions.import_execution_queue(session_id, thread_id, inputs)
