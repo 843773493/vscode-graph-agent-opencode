@@ -175,11 +175,14 @@ class CheckpointForkOwner:
         ):
             raise ValueError("fork_owner_overlap: target capture 与 creation 来源不一致")
         frozen = SessionForkRequest.model_validate(intent["request"])
-        point = RolloutForkResult(**intent["source_point"])
+        selector = frozen.item_selector
+        point = RolloutForkResult(**intent["source_point"]) if selector is None else None
         # 域值核对原 creation 的持久授权；不从域相等或 release 缺省推导实际 owner。
         if request != {
-            "source_uri": intent["source_uri"], "source_view_id": point.source_view_id,
-            "source_view_revision": point.source_view_revision, "anchor_item_id": point.anchor_item_id,
+            "source_uri": intent["source_uri"],
+            "source_view_id": selector.view_id if selector is not None else point.source_view_id,
+            "source_view_revision": frozen.source_view_revision if selector is not None else point.source_view_revision,
+            "anchor_item_id": selector.item_id if selector is not None else point.anchor_item_id,
             "mode": frozen.mode, "anchor_mode": frozen.anchor_mode, "relationship": frozen.relationship,
             "checkpoint_ns": "", "creation_kind": frozen.creation_kind,
             "resources": [choice.model_dump(mode="json") for choice in self.materialized_resource_choices(frozen, intent)],

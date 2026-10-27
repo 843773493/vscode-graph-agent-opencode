@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import TypeAdapter
 
 from app.core import thread_creation
 from app.core.resource_uri import thread_resource_uri
@@ -19,9 +20,18 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.schemas.internal_v2.session import SessionForkRequest, SessionTaskContext
+from app.schemas.internal_v2.session import (
+    SessionForkRequest,
+    SessionTaskCompletedContext,
+    SessionTaskContext,
+    SessionTaskEmptyContext,
+)
 from app.services.business import session_context_fork_service as fork_module
 from app.services.business.session_context_fork_service import SessionContextForkService
+from app.services.infrastructure.rollout_context.checkpoint import fork_owner
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    read_captured_snapshot,
+)
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
 )
@@ -58,6 +68,16 @@ async def _completed_parent(case: RuntimeSourceCase) -> tuple[str, str]:
     accepted = await _send(case, session_id, "task-history-question-unique")
     job = await _job(case, accepted["job_id"])
     return session_id, job["thread_id"]
+
+
+def _first_response_item(case: RuntimeSourceCase, session_id: str, thread_id: str) -> str:
+    """选真正可见的正文 item，避免误把 Turn 结束项当作回答起点。"""
+    item_id, = case.sql(session_id, thread_id,
+        "SELECT member.item_id FROM checkpoint_namespace_state namespace JOIN branches branch "
+        "ON branch.branch_id=namespace.active_branch_id JOIN context_view_items member ON member.view_id=branch.head_view_id "
+        "JOIN item_catalog item USING(item_id) WHERE namespace.checkpoint_ns='' AND member.visible=1 "
+        "AND member.context_selected=1 AND item.semantic_kind='assistant_output' ORDER BY member.context_ordinal LIMIT 1")[0]
+    return item_id
 
 
 async def _send_thread(case: RuntimeSourceCase, session_id: str, thread_id: str, content: str):
@@ -101,7 +121,7 @@ def _seed_trace(seed):
         reset_current_gateway_id(gateway)
 
 
-@pytest.mark.parametrize("mode", ["empty", "last_completed_turn_fork"])
+@pytest.mark.parametrize("mode", ["empty", "last_completed_turn_fork", "view_prefix_fork", "view_prefix_before"])
 async def test_model_task_first_request_uses_selected_history(
     source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry, mode: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -111,6 +131,27 @@ async def test_model_task_first_request_uses_selected_history(
     selection = None
     if mode == "last_completed_turn_fork":
         selection = {"mode": "last_completed_turn_fork"}
+    if mode.startswith("view_prefix"):
+        item_id = _first_response_item(case, session_id, parent_thread)
+        selection = {"mode": "view_prefix_fork", "item_id": item_id}
+        if mode == "view_prefix_before":
+            selection["anchor_mode"] = "before"
+        source = case.container.checkpointer.forks.source
+        original_capture = source._capture_fork_source_snapshot
+
+        async def capture_after_committed_call(**kwargs):
+            storage = case.container.checkpointer._storage.storage
+            rows = [json.loads(line) for line in storage.jsonl_path(session_id, thread_id=parent_thread).read_bytes().splitlines()]
+            calls = [row for row in rows if row.get("semantic_kind") == "tool_call" and "call_task_context" in json.dumps(row)]
+            assert calls, "task canonical tool-call 必须先提交，再进入 item 定位/capture"
+            assert all(case.sql(session_id, parent_thread, "SELECT 1 FROM item_catalog WHERE item_id=?", (row["item_id"],)) for row in calls)
+            return await original_capture(**kwargs)
+
+        async def reject_preflight(**kwargs):
+            raise AssertionError("item-only task 不得先冻结预览再捕获")
+
+        monkeypatch.setattr(source, "_capture_fork_source_snapshot", capture_after_committed_call)
+        monkeypatch.setattr(source, "preflight_fork", reject_preflight)
     arguments = {"description": "task-private-seed-unique：独立完成检查"}
     if selection is not None:
         arguments["context"] = selection
@@ -144,7 +185,7 @@ async def test_model_task_first_request_uses_selected_history(
     wire = _wire_text(case.request(child_call)["messages"])
     assert "task-private-seed-unique" in wire
     assert ("task-history-question-unique" in wire) == (mode != "empty")
-    assert ("task-history-answer-unique" in wire) == (mode == "last_completed_turn_fork")
+    assert ("task-history-answer-unique" in wire) == (mode in {"last_completed_turn_fork", "view_prefix_fork"})
     assert "task-parent-inflight-unique" not in wire
     assert "call_task_context" not in wire
     assert member.state == "published" and member.child_thread_id == child_thread
@@ -165,7 +206,20 @@ async def test_model_task_first_request_uses_selected_history(
     historical_lines = [line for line in parent_lines
                         if b"task-history-question-unique" in line or b"task-history-answer-unique" in line]
     assert historical_lines
-    assert all((line in child_lines) == (mode == "last_completed_turn_fork") for line in historical_lines)
+    if mode in {"empty", "last_completed_turn_fork"}:
+        assert all((line in child_lines) == (mode == "last_completed_turn_fork") for line in historical_lines)
+    if mode.startswith("view_prefix"):
+        assert json.loads(capture.request_json)["source_view_id"] is None
+        assert json.loads(record.request_intent_json)["source_point"] is None
+        assert capture.captured_point.anchor_item_id == item_id
+
+    if mode.startswith("view_prefix"):
+        newest, = case.sql(session_id, parent_thread,
+            "SELECT view.view_id FROM context_views view JOIN context_view_items member USING(view_id) "
+            "WHERE member.item_id=? AND member.visible=1 AND member.context_selected=1 AND view.view_kind<>'checkpoint_messages' "
+            "ORDER BY view.creation_sequence DESC LIMIT 1", (item_id,))[0]
+        assert newest != capture.captured_point.source_view_id
+        frozen_capture = capture
 
     # 父线程已经新增 Turn/报告；同调用重试不得再取来源 latest。
     async def unexpected_preflight(**_kwargs):
@@ -180,13 +234,17 @@ async def test_model_task_first_request_uses_selected_history(
     with _seed_trace(seed):
         replay = deadlines.for_operation(target=child_thread, operation_key="task-replay")
         repeated = await replay.wait(case.container.session_subagent_service.delegate(
-            **kwargs, context=SessionTaskContext.model_validate(seed["context"])), "task replay")
+            **kwargs, context=TypeAdapter(SessionTaskContext).validate_python(seed["context"])), "task replay")
         replay.complete()
         assert repeated.child_thread_id == child_thread and repeated.frozen_job_id == intent.job_id
         with pytest.raises(RuntimeError, match="冲突|conflict"):
             await case.container.session_subagent_service.delegate(
-                **kwargs, context=SessionTaskContext(mode="last_completed_turn_fork" if mode == "empty" else "empty"),
+                **kwargs, context=SessionTaskCompletedContext() if mode == "empty" else SessionTaskEmptyContext(),
             )
+    if mode.startswith("view_prefix"):
+        assert case.container.session_service.path_resolver.catalog_store.get_fork_source_capture(
+            creation_key=record.thread_creation_idempotency_key,
+        ) == frozen_capture
     assert reference["parent_thread_id"] == parent_thread
     with factory.for_owner_session(session_id) as owner:
         assert len(owner.control_store.list_initial_execution_intents()) == 1
@@ -196,7 +254,8 @@ async def test_model_task_first_request_uses_selected_history(
                       "job_id": intent.job_id})
 
 
-@pytest.mark.parametrize("phase", ["thread.creation.prepared", "copy.target.prepared", "materialized", "published"])
+@pytest.mark.parametrize("phase", ["thread.creation.prepared", "copy.target.prepared", "materialized", "published",
+                                    "copy.source.before_captured_cas", "copy.source.captured"])
 async def test_task_context_recovers_original_creation_and_initial_intent(
     source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry, monkeypatch: pytest.MonkeyPatch, phase: str,
 ) -> None:
@@ -207,7 +266,12 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
     forks = container.session_context_fork_service
     delegate = {"parent_session_id": session_id, "parent_thread_id": parent_thread, "parent_agent_id": "default",
                 "parent_job_id": "task-recovery-parent", "parent_tool_call_id": "task-recovery-call",
-                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": SessionTaskContext(mode="last_completed_turn_fork")}
+                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": SessionTaskCompletedContext()}
+    prefix = phase.startswith("copy.source.")
+    if prefix:
+        delegate["context"] = TypeAdapter(SessionTaskContext).validate_python({
+            "mode": "view_prefix_fork", "item_id": _first_response_item(case, session_id, parent_thread),
+        })
     deadline = deadlines.for_operation(target=session_id, operation_key="task-recovery")
     original_materialize = forks._materialize
     original_publish = SessionControlStore.publish_thread_creation_record
@@ -225,7 +289,9 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
         raise asyncio.CancelledError("模拟发布后中断")
 
     with monkeypatch.context() as failure:
-        if phase in {"thread.creation.prepared", "copy.target.prepared"}:
+        if prefix:
+            failure.setattr(fork_owner, "observe_phase", stop_at_phase)
+        elif phase in {"thread.creation.prepared", "copy.target.prepared"}:
             failure.setattr(thread_creation if phase.startswith("thread") else fork_module, "observe_phase", stop_at_phase)
         elif phase == "materialized":
             failure.setattr(forks, "_materialize", materialize_then_stop)
@@ -241,7 +307,12 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
         assert frozen.state == ("published" if phase == "published" else "preparing")
         assert len(owner.control_store.list_child_thread_rows()) == (1 if phase == "published" else 0)
         assert len(owner.control_store.list_initial_execution_intents()) == (1 if phase == "published" else 0)
-    if phase == "materialized":
+    if prefix:
+        capture = container.session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
+        assert capture.state == ("preparing" if phase.endswith("before_captured_cas") else "source_captured")
+        snapshot, marker_hash = read_captured_snapshot(container.checkpointer._storage.storage.sessions_dir, capture)
+        actual_point = snapshot.source_point
+    if phase == "materialized" or prefix:
         await case.plan(session_id, [{"content": "task-recovery-later-answer"}])
         later = await _send(case, session_id, "task-recovery-later-question")
         await _job(case, later["job_id"])
@@ -279,6 +350,10 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
                 worker.stop()
         assert owner.control_store.get_initial_execution_intent(key).job_id == intent.job_id
         assert owner.control_store.get_initial_execution_intent(key).state == "bound"
+    if prefix:
+        recovered = container.session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
+        assert recovered.state == "materialized"
+        assert (recovered.snapshot_id, recovered.marker_sha256, recovered.captured_point) == (capture.snapshot_id, marker_hash, actual_point)
     admission = container.checkpointer.execution_admission(session_id, thread_id=record.child_thread_id, execution_id=intent.execution_binding_id)
     assert admission.job_id == intent.job_id
     assert b"task-recovery-later" not in container.checkpointer._storage.storage.jsonl_path(
@@ -371,7 +446,7 @@ async def test_task_context_abort_and_session_deletion_use_original_owner(
             return await container.session_subagent_service.delegate(
                 parent_session_id=session_id, parent_thread_id=parent, parent_agent_id="default",
                 parent_job_id="task-abort-parent", parent_tool_call_id="task-abort-call",
-                description="task-abort-seed", subagent_type="general-purpose", context=SessionTaskContext(mode="last_completed_turn_fork"),
+                description="task-abort-seed", subagent_type="general-purpose", context=SessionTaskCompletedContext(),
             )
 
     source_bytes = container.checkpointer._storage.storage.jsonl_path(session_id, thread_id=parent).read_bytes()

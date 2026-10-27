@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -32,14 +32,36 @@ class SessionCreateRequest(BaseModel):
     folder_id: str | None = None
 
 
-class SessionTaskContext(BaseModel):
-    """委派 child 的历史初始化选择；来源固定为实际调用 task 的 Thread。"""
-
-    # TODO(task-prefix-selector): 按第14节接入 item-only/显式 view 前缀定位与一致捕获。
+class ForkItemSelector(BaseModel):
+    """精确来源 Thread 内的 item 前缀选择；不携带调用方观察 revision。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    mode: Literal["empty", "last_completed_turn_fork"] = "empty"
+    item_id: str = Field(min_length=1)
+    view_id: str | None = Field(default=None, min_length=1)
+    anchor_mode: Literal["inclusive", "before"] = "inclusive"
+
+
+class SessionTaskEmptyContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["empty"] = "empty"
+
+
+class SessionTaskCompletedContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["last_completed_turn_fork"] = "last_completed_turn_fork"
+
+
+class SessionTaskPrefixContext(ForkItemSelector):
+    mode: Literal["view_prefix_fork"] = "view_prefix_fork"
+
+
+SessionTaskContext = Annotated[
+    SessionTaskEmptyContext | SessionTaskCompletedContext | SessionTaskPrefixContext,
+    Field(discriminator="mode"),
+]
 
 
 class SessionForkOwnerReference(BaseModel):
@@ -94,8 +116,8 @@ class SessionForkRequest(BaseModel):
 
     idempotency_key: str = Field(min_length=1)
     source_uri: str = Field(min_length=1, description="精确来源 Thread URI；Session 兼容入口由 service 按 catalog main 归一。")
-    source_view_id: str = Field(min_length=1, description="来源 Thread 中所选历史 view 的冻结身份。")
-    source_view_revision: int = Field(ge=0, description="冻结所选来源 view 时的历史 revision；提交后不得追随 latest。")
+    source_view_id: str | None = Field(default=None, min_length=1, description="显式 view 约束；前缀模式省略时按 item 定位。")
+    source_view_revision: int | None = Field(default=None, ge=0, description="前缀模式为调用方观察位置；其它模式保持严格 revision 约束。")
     anchor_item_id: str | None = Field(default=None, min_length=1, description="冻结来源 view 中点击的稳定 item 身份。")
     mode: SessionForkMode = "view_prefix_fork"
     anchor_mode: Literal["inclusive", "before"] = Field(default="inclusive", description="inclusive 包含点击 item；before 不包含点击 item。")
@@ -110,6 +132,8 @@ class SessionForkRequest(BaseModel):
     def validate_fork_point(self) -> Self:
         if self.mode == "view_prefix_fork" and self.anchor_item_id is None:
             raise ValueError("view_prefix_fork 必须提供点击 item")
+        if self.mode != "view_prefix_fork" and (self.source_view_id is None or self.source_view_revision is None):
+            raise ValueError("非前缀 fork 必须提供 source view/revision")
         if self.mode == "full_rollout_copy" and (self.anchor_item_id is not None or self.anchor_mode != "inclusive"):
             raise ValueError("full_rollout_copy 不能携带截断锚点")
         if self.creation_kind == "new_child_thread" and self.goal is not None:
@@ -122,6 +146,13 @@ class SessionForkRequest(BaseModel):
         if len(set(identities)) != len(identities):
             raise ValueError("同一 fork resource 不能重复选择")
         return self
+
+    @property
+    def item_selector(self) -> ForkItemSelector | None:
+        if self.mode != "view_prefix_fork":
+            return None
+        assert self.anchor_item_id is not None
+        return ForkItemSelector(item_id=self.anchor_item_id, view_id=self.source_view_id, anchor_mode=self.anchor_mode)
 
 
 class SessionForkResourceSourceDTO(BaseModel):

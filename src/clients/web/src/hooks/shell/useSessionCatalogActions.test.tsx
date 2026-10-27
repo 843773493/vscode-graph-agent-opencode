@@ -451,6 +451,27 @@ describe("上下文分支候选与冻结重试", () => {
     expect(submitted).toEqual([{ ...request, mode: "full_rollout_copy" }]);
   });
 
+  test("前缀预览接受尾部推进的revision，保持显式view与锚点约束", async () => {
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint")
+      .mockResolvedValueOnce(sourcePointFixture({ source_view_revision: 10 }))
+      .mockResolvedValueOnce(sourcePointFixture({ source_view_revision: 11, resource_anchor_mode: "before" }))
+      .mockResolvedValueOnce(sourcePointFixture({ source_view_id: "wrong-view", source_view_revision: 12, resource_anchor_mode: "inclusive" }));
+    spies.push(read);
+    const mounted = mountHook({});
+    await mounted.mount();
+    await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source", {
+      threadId: "tid-source", itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
+    }); });
+    expect(mounted.hook().forkDialog!.error).toBeNull();
+    expect(mounted.hook().forkDialog!.sourcePoint!.source_view_revision).toBe(10);
+    await act(async () => { await mounted.hook().updateForkDialogSelection({ anchorMode: "before" }); });
+    expect(mounted.hook().forkDialog!.error).toBeNull();
+    expect(mounted.hook().forkDialog!.sourcePoint!.source_view_revision).toBe(11);
+    expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBe("item-source");
+    await act(async () => { await mounted.hook().updateForkDialogSelection({ anchorMode: "inclusive" }); });
+    expect(mounted.hook().forkDialog!.error).toContain("附件候选回执与冻结的来源");
+  });
+
   test("真实分支对话框默认不关联，显选发送typed身份，部分失败打开目标并冻结原请求", async () => {
     const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
     const priorDocument = Object.getOwnPropertyDescriptor(globalThis, "document");

@@ -95,6 +95,24 @@ class _FailingForkService:
         raise self.error
 
 
+@pytest.mark.parametrize("selection", [{}, {"source_view_id": "view-explicit"}, {"source_view_revision": 0}])
+def test_prefix_request_normalizes_optional_view_and_observed_revision(selection):
+    request = SessionForkRequest(
+        idempotency_key="item-only", source_uri="source", target_container_uri="target",
+        anchor_item_id="item-selected", **selection,
+    )
+    assert request.item_selector.item_id == "item-selected"
+    assert request.item_selector.view_id == selection.get("source_view_id")
+    assert request.item_selector.anchor_mode == "inclusive"
+
+
+@pytest.mark.parametrize("mode", ["full_rollout_copy", "last_completed_turn_fork"])
+@pytest.mark.parametrize("selection", [{}, {"source_view_id": "view-explicit"}, {"source_view_revision": 0}])
+def test_nonprefix_request_keeps_required_view_and_revision(mode, selection):
+    with pytest.raises(ValidationError, match="非前缀 fork 必须提供 source view/revision"):
+        SessionForkRequest(idempotency_key="strict", source_uri="source", target_container_uri="target", mode=mode, **selection)
+
+
 @pytest.fixture
 def fork_service() -> _ForkService:
     return _ForkService()

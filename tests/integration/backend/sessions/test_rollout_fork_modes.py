@@ -3330,7 +3330,7 @@ async def test_history_replay_reuses_turn_root_without_execution(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("click", ["user_root", "assistant_item"])
-async def test_first_fork_click_rejects_stale_actual_history_snapshot(
+async def test_first_fork_click_preserves_prefix_after_unrelated_tail_append(
     fork_context: ForkIntegrationContext, fork_provider_prepare, click: str,
 ) -> None:
     source, _ = await _seed_retry_tool_source(fork_context, fork_provider_prepare)
@@ -3369,11 +3369,12 @@ async def test_first_fork_click_rejects_stale_actual_history_snapshot(
         admission_idempotency_key="stale-click-next-admission", payload="新的真实准入更新历史修订",
         root_item_id="stale-click-next-root",
     )
-    with pytest.raises(ValueError, match="source-mismatch: 展示快照 revision 已变化"):
-        await fork_context.forks.source_point(
-            session_id=source.session_id, thread_id=thread_id, **selection,
-            source_view_id=displayed.source_view_id, source_view_revision=displayed.source_view_revision,
-        )
+    refreshed = await fork_context.forks.source_point(
+        session_id=source.session_id, thread_id=thread_id, **selection,
+        source_view_id=displayed.source_view_id, source_view_revision=displayed.source_view_revision,
+    )
+    assert refreshed.source_view_revision > displayed.source_view_revision
+    assert (refreshed.source_view_id, refreshed.anchor_item_id) == (frozen.source_view_id, frozen.anchor_item_id)
     assert _fork_origins(fork_context, source.session_id) == []
     assert (await fork_context.sessions.list(limit=100)).total == 1
 
@@ -4591,8 +4592,9 @@ async def test_context_and_history_preflight_rejects_before_target_creation(
     request = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main")
     with pytest.raises(ValueError, match="source-mismatch"):
         await fork_context.forks.fork(request.model_copy(update={"source_view_id": "view-does-not-exist"}))
+    strict = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
     with pytest.raises(ValueError, match="source view revision 已变化"):
-        await fork_context.forks.fork(request.model_copy(update={"source_view_revision": request.source_view_revision + 1}))
+        await fork_context.forks.fork(strict.model_copy(update={"source_view_revision": strict.source_view_revision + 1}))
 
     after = await fork_context.sessions.list(limit=100)
     assert after.total == before.total == 1

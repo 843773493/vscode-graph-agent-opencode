@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.abstractions.session_subagent import SessionSubagentAccepted
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -88,6 +88,8 @@ async def test_task_returns_child_thread_identity_not_subagent_final_text():
 @pytest.mark.parametrize("context", [
     {"mode": "last_completed_turn_fork"},
     {"mode": "empty"},
+    {"mode": "view_prefix_fork", "item_id": "item-only"},
+    {"mode": "view_prefix_fork", "item_id": "item-explicit", "view_id": "old-view", "anchor_mode": "before"},
 ])
 async def test_task_schema_passes_typed_context(context):
     service = _SessionSubagentService()
@@ -103,7 +105,7 @@ async def test_task_schema_passes_typed_context(context):
     finally:
         invocation.reset_tool_call_id(tool_token)
         reset_current_job_id(job_token)
-    assert service.calls[0]["context"] == SessionTaskContext.model_validate(context)
+    assert service.calls[0]["context"] == TypeAdapter(SessionTaskContext).validate_python(context)
 
 
 @pytest.mark.parametrize("context", [
@@ -116,6 +118,14 @@ async def test_task_schema_passes_typed_context(context):
     {"mode": "full_rollout_copy"},
     {"mode": "view_prefix_fork", "source_view_id": "v", "source_view_revision": True, "anchor_item_id": "i"},
     {"mode": "empty", "source_uri": "another-thread"},
+    {"mode": "empty", "item_id": "i"},
+    {"mode": "last_completed_turn_fork", "item_id": "i"},
+    {"mode": "view_prefix_fork", "item_id": "i", "source_uri": "another-thread"},
+    {"mode": "view_prefix_fork", "item_id": "i", "thread_id": "another-thread"},
+    {"mode": "view_prefix_fork", "item_id": "i", "session_id": "another-session"},
+    {"mode": "view_prefix_fork", "item_id": ""},
+    {"mode": "view_prefix_fork", "item_id": "i", "view_id": ""},
+    {"mode": "view_prefix_fork", "item_id": "i", "anchor_mode": "after"},
 ])
 async def test_task_context_rejects_ambiguous_or_foreign_selection(context):
     service = _SessionSubagentService()

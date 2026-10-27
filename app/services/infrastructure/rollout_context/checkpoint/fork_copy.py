@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from typing import TYPE_CHECKING
 
@@ -61,14 +62,18 @@ class CheckpointForkCopy:
         """同 Session child 也必须先退出 source scope，再解析目标 namespace。"""
         storage = self._storage.storage
         point = capture_record.captured_point
+        selection = json.loads(capture_record.request_json)
         with storage.fork_paths.fork_source_snapshot_scope(
             session_id=source_session_id, thread_id=source_owner.thread_id,
             captured_root=source_snapshot.captured_root,
         ), session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
             resolved = self._source._resolve_fork_source(
                 source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
-                mode=mode, source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-                anchor_item_id=point.anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
+                mode=mode,
+                source_view_id=selection["source_view_id"] if mode == "view_prefix_fork" else point.source_view_id,
+                source_view_revision=point.source_view_revision,
+                anchor_item_id=selection["anchor_item_id"] if mode == "view_prefix_fork" else point.anchor_item_id,
+                anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
             )
             if resolved.source_view_id is None or resolved.source_view_revision is None:
                 raise RuntimeError("source-mismatch: captured source 缺少真实 view/revision")

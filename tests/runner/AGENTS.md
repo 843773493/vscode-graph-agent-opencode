@@ -15,7 +15,9 @@
 
 - `integration-fork-capture-receipts` 使用真实 B→A→C Gateway/SSH 和 model_stream，从用户消息入口生成来源，核冻结坐标、双端 journal、公开回执及来源离线后目标进程重启、幂等重试和新输入。固定240秒/4GiB及原60秒fork预算；小负载合同验收不替代完整附件/Goal负载的期限与恢复验收。
 
-- `integration-fork-item-lookup` 通过真实消息、回放和完整 fork 入口生成非活跃、非祖先分支，核对 item-only/显式 view 来源及展示 revision 的既有拒绝回归，固定180秒/4GiB。业务 HTTP 使用 ASGI transport，Gateway 管理来源与 Terminal/Browser 为真实服务；不替代真实 Gateway 代理、task 前缀创建、一致捕获或恢复验收。
+- `integration-fork-prefix-integrity` 核对缺失／损坏必需正文时不发布目标，以及非前缀模式的严格 revision，固定180秒/4GiB和原60秒fork监督器。
+- `integration-fork-prefix-receipts` 复用三端回执装具，以 item-only 和过期观察 revision 创建真实远端前缀，核对尾部排除、实际捕获坐标及来源离线后的目标进程重启与重试；固定240秒/4GiB和单次60秒fork期限。
+- `integration-fork-item-lookup` 通过真实消息、回放、前缀和完整 fork 入口生成非活跃、非祖先分支，核对 item-only/显式 view、inclusive/before 的真实有序前缀及观察 revision 推进，固定180秒/4GiB。业务 HTTP 使用 ASGI transport，Gateway 管理来源与 Terminal/Browser 为真实服务；不替代真实 Gateway 代理、task 前缀创建、一致捕获或恢复验收。
 
 - `integration-mcp-real-provider-discovery` 使用现有 `CCTQ_API_KEY`、真实 Provider 与受控 MCP，经 Gateway／Session／Agent 验证完整定义、两轮多调用、冷配对和请求 hash；固定660秒／4GiB。显式选择该 suite 前须将现有凭据加入进程环境，缺失时报告 UNMET_PREREQUISITE，不回退到回放；token 估算、Provider用量和缓存观测各自保留，不代表稳定命中或跨执行持有。
 

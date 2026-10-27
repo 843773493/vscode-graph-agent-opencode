@@ -24,20 +24,29 @@ from tests.support.api_helpers import create_session
 
 
 async def test_real_capture_receipt_survives_source_offline_and_target_restart(transfer_triad):
+    await _capture_receipt(transfer_triad, prefix=False)
+
+
+async def test_real_item_only_receipt_survives_source_offline_and_target_restart(transfer_triad):
+    await _capture_receipt(transfer_triad, prefix=True)
+
+
+async def _capture_receipt(transfer_triad, *, prefix: bool):
     nodes, model, artifacts, _control, deadlines = transfer_triad
     source, target = nodes["b"], nodes["c"]
     original = "capture-receipt-source-question"
     source_reply = "capture-receipt-source-answer"
     source_session = await create_session(source.client, "冻结点回执来源")
     await _send(source, source_session, original, model=model, reply=source_reply)
+    mode = "view_prefix_fork" if prefix else "full_rollout_copy"
     response = await source.client.get(
-        f"/api/v1/sessions/{source_session}/fork-source-point", params={"mode": "full_rollout_copy"},
+        f"/api/v1/sessions/{source_session}/fork-source-point", params={"mode": mode},
     )
     assert response.status_code == 200, response.text
     point = response.json()["data"]
     source_uri = parse_resource_uri(point["source_uri"])
     request = {
-        "idempotency_key": "real-capture-receipt", "mode": "full_rollout_copy",
+        "idempotency_key": "real-prefix-receipt" if prefix else "real-capture-receipt", "mode": mode,
         "source_uri": resource_display_uri(
             scope=source_uri.scope, scope_id=source_uri.scope_id, kind=source_uri.kind,
             tail_segments=source_uri.tail_segments, gateway_authority=source.gateway_id,
@@ -46,6 +55,16 @@ async def test_real_capture_receipt_survives_source_offline_and_target_restart(t
         "target_container_uri": workspace_session_inventory_uri(target.workspace_id, gateway_authority=target.gateway_id),
         "creation_kind": "new_session_main",
     }
+    if prefix:
+        del request["source_view_id"]
+        request["anchor_item_id"] = point["anchor_item_id"]
+        await _send(source, source_session, "capture-receipt-excluded-tail", model=model, reply="capture-receipt-excluded-answer")
+        response = await source.client.get(f"/api/v1/sessions/{source_session}/fork-source-point", params={
+            "mode": mode, "item_id": point["anchor_item_id"],
+        })
+        assert response.status_code == 200, response.text
+        point = response.json()["data"]
+        assert point["source_view_revision"] > request["source_view_revision"]
     calls_before = _provider_call_count(model)
     response = await _post_fork(
         source, source_session, request, _fork_deadline(target, request, deadlines), stage="real capture transfer",
@@ -63,7 +82,7 @@ async def test_real_capture_receipt_survives_source_offline_and_target_restart(t
         )
         assert frozen.model_dump() == {
             "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
-            "anchor_item_id": None,
+            "anchor_item_id": point["anchor_item_id"] if prefix else None,
         } == {field: published[field] for field in ("source_view_id", "source_view_revision", "anchor_item_id")}
     assert source_capture["source_point_json"] == target_capture["source_point_json"]
     assert source_capture["marker_sha256"] == target_capture["marker_sha256"]
@@ -78,6 +97,7 @@ async def test_real_capture_receipt_survives_source_offline_and_target_restart(t
     response = await target.client.get(f"/api/v1/sessions/{target_session}/messages")
     assert response.status_code == 200, response.text
     assert original in response.text and source_reply in response.text
+    assert "capture-receipt-excluded" not in response.text
     repeated = await _post_fork(
         target, source_session, request, _fork_deadline(target, request, deadlines), stage="offline cold receipt replay",
     )

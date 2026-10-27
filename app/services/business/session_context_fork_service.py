@@ -545,8 +545,8 @@ class SessionContextForkService:
             raise RuntimeError("fork request conflict: 同 idempotency_key 不同冻结请求")
 
     @staticmethod
-    def _validate_source_response(
-        request: SessionForkRequest, source_uri: str, point: RolloutForkResult | SessionForkResultDTO,
+    def _validate_source_identity(
+        request: SessionForkRequest, source_uri: str,
     ) -> tuple[str, str]:
         expected, expected_session, expected_thread = parse_session_thread_uri(request.source_uri)
         actual, actual_session, actual_thread = parse_session_thread_uri(source_uri)
@@ -557,12 +557,23 @@ class SessionContextForkService:
             or (expected_thread is not None and actual_thread != expected_thread)
         ):
             raise RuntimeError("fork owner 返回的来源 URI 与固定请求不一致")
-        if (point.source_view_id, point.source_view_revision) != (request.source_view_id, request.source_view_revision):
+        return actual_session, actual_thread
+
+    @staticmethod
+    def _validate_source_response(
+        request: SessionForkRequest, source_uri: str, point: RolloutForkResult | SessionForkResultDTO,
+    ) -> tuple[str, str]:
+        owner = SessionContextForkService._validate_source_identity(request, source_uri)
+        if request.mode == "view_prefix_fork":
+            if (not point.source_view_id or point.source_view_revision is None or point.source_view_revision < 0
+                or request.source_view_id is not None and point.source_view_id != request.source_view_id):
+                raise RuntimeError("fork owner 返回的实际来源 view/revision 与前缀选择不一致")
+        elif (point.source_view_id, point.source_view_revision) != (request.source_view_id, request.source_view_revision):
             raise RuntimeError("fork owner 返回的来源 view/revision 与固定请求不一致")
         # last_completed_turn_fork 未指定 anchor 时仍由来源 owner 解析安全截止点。
         if (request.mode != "last_completed_turn_fork" or request.anchor_item_id is not None) and point.anchor_item_id != request.anchor_item_id:
             raise RuntimeError("fork owner 返回的来源 anchor 与固定请求不一致")
-        return actual_session, actual_thread
+        return owner
 
     async def _request_source_intent(self, request: SessionForkRequest) -> tuple[dict[str, object], str, str, str | None]:
         """临时 instance 回执只用于本次活 owner 核实，不进入 creation/capture。"""
@@ -589,11 +600,13 @@ class SessionContextForkService:
                     raise KeyError(f"fork source intent 缺少字段: {field}")
             if intent["source_gateway_id"] != source.gateway_authority:
                 raise RuntimeError("fork source owner 返回了其它 Gateway，拒绝改绑")
-            point = RolloutForkResult(**intent["source_point"])
-            point = TypeAdapter(RolloutForkResult).validate_json(json.dumps(asdict(point)), strict=True)
-            frozen_owner = self._validate_source_response(
-                request, intent["source_uri"], point,
-            )
+            if request.mode == "view_prefix_fork":
+                if intent["source_point"] is not None:
+                    raise ValueError("fork 前缀来源意图不能将预览当作实际 capture")
+                frozen_owner = self._validate_source_identity(request, intent["source_uri"])
+            else:
+                point = TypeAdapter(RolloutForkResult).validate_json(json.dumps(intent["source_point"]), strict=True)
+                frozen_owner = self._validate_source_response(request, intent["source_uri"], point)
             if (intent["source_session_id"], intent["source_thread_id"]) != frozen_owner:
                 raise RuntimeError("fork source owner 返回的 Session/Thread 与来源 URI 不一致")
             GraphBinding(**intent["source_graph_binding"])
@@ -657,7 +670,7 @@ class SessionContextForkService:
             source_session_id=source_session_id, source_owner=source_owner, mode=request.mode,
             source_view_id=request.source_view_id, source_view_revision=request.source_view_revision,
             anchor_item_id=request.anchor_item_id, anchor_mode=request.anchor_mode,
-        )
+        ) if request.item_selector is None else None
         with self._threads.for_owner_session(source_session_id) as thread_owner:
             binding = thread_owner.control_store.get_thread_graph_binding(source_thread_id)
         if binding is None or binding.as_tuple() != DEEP_AGENT_GRAPH_BINDING.selector_fields():
@@ -682,7 +695,7 @@ class SessionContextForkService:
                 "target_storage_domain_id": self._session_service.workspace_id,
                 "capture_owner": "local",
             },
-            "source_point": asdict(point), "source_graph_binding": asdict(binding),
+            "source_point": asdict(point) if point is not None else None, "source_graph_binding": asdict(binding),
             "display_title": request.title or f"{session.title}（上下文分支）",
             "source_agent_id": session.current_agent_id, "goal_snapshot": goal_snapshot,
         }
@@ -692,7 +705,11 @@ class SessionContextForkService:
         *, creation: SessionCreationRecord | None = None, child: ThreadCreationRecord | None = None,
     ) -> RolloutForkResult:
         source_owner = MutationIntentOwner(session_id=intent["source_session_id"], thread_id=intent["source_thread_id"])
-        point = RolloutForkResult(**intent["source_point"])
+        selector = request.item_selector
+        point = RolloutForkResult(**intent["source_point"]) if selector is None else None
+        source_view_id = selector.view_id if selector is not None else point.source_view_id
+        source_view_revision = request.source_view_revision if selector is not None else point.source_view_revision
+        anchor_item_id = selector.item_id if selector is not None else point.anchor_item_id
         if creation is not None:
             key = creation.session_creation_idempotency_key
         elif child is not None:
@@ -709,8 +726,8 @@ class SessionContextForkService:
         resource_choices = owner.materialized_resource_choices(request, intent)
         transfer_request = request.model_copy(update={
             "source_uri": intent["source_uri"], "target_container_uri": self._qualified_target_uri(request),
-            "source_view_id": point.source_view_id, "source_view_revision": point.source_view_revision,
-            "anchor_item_id": point.anchor_item_id, "resources": resource_choices,
+            "source_view_id": source_view_id, "source_view_revision": source_view_revision,
+            "anchor_item_id": anchor_item_id, "resources": resource_choices,
         }) if source_external else None
         catalog = self._session_service.path_resolver.catalog_store
         capture = catalog.get_fork_source_capture(copy_operation_id=key)
@@ -738,8 +755,8 @@ class SessionContextForkService:
             source_uri=intent["source_uri"], source_owner=source_owner,
             creation_record=creation, thread_creation_record=child,
             mode=request.mode, anchor_mode=request.anchor_mode, relationship=request.relationship,
-            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-            anchor_item_id=point.anchor_item_id, source_preflight=point,
+            source_view_id=source_view_id, source_view_revision=source_view_revision,
+            anchor_item_id=anchor_item_id, source_preflight=point,
             resource_choices=[choice.model_dump(mode="json") for choice in resource_choices],
             source_storage_domain_id=source_domain, target_storage_domain_id=target_domain,
             source_transport=self._transport if source_external else None,
@@ -959,20 +976,30 @@ class SessionContextForkService:
                     or intent["source_session_id"] != session_id or intent["source_thread_id"] != parent_thread_id):
                     raise RuntimeError("task context conflict: 同 key 的上下文选择或来源冲突")
             else:
-                owner = self._checkpointer.forks.source.resolve_thread_owner(session_id, parent_thread_id)
-                point = await self._checkpointer.forks.source.preflight_fork(
-                    source_session_id=session_id, source_owner=owner, mode="last_completed_turn_fork",
-                )
-                if point.source_view_id is None or point.source_view_revision is None:
-                    raise RuntimeError("task context source point 缺少真实 view/revision")
-                request = SessionForkRequest(
-                    idempotency_key=key,
-                    source_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
-                    source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-                    anchor_item_id=point.anchor_item_id, mode="last_completed_turn_fork",
-                    target_container_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
-                    creation_kind="new_child_thread", title=str(collaboration_member["title"]),
-                )
+                if context.mode == "view_prefix_fork":
+                    request = SessionForkRequest(
+                        idempotency_key=key,
+                        source_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
+                        source_view_id=context.view_id, anchor_item_id=context.item_id,
+                        anchor_mode=context.anchor_mode, mode=context.mode,
+                        target_container_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
+                        creation_kind="new_child_thread", title=str(collaboration_member["title"]),
+                    )
+                else:
+                    owner = self._checkpointer.forks.source.resolve_thread_owner(session_id, parent_thread_id)
+                    point = await self._checkpointer.forks.source.preflight_fork(
+                        source_session_id=session_id, source_owner=owner, mode=context.mode,
+                    )
+                    if point.source_view_id is None or point.source_view_revision is None:
+                        raise RuntimeError("task context source point 缺少真实 view/revision")
+                    request = SessionForkRequest(
+                        idempotency_key=key,
+                        source_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
+                        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+                        anchor_item_id=point.anchor_item_id, mode=context.mode,
+                        target_container_uri=thread_resource_uri(self._session_service.workspace_id, session_id, parent_thread_id),
+                        creation_kind="new_child_thread", title=str(collaboration_member["title"]),
+                    )
                 intent = await self._new_intent(request, session_id, parent_thread_id, None)
             return await self._create_context_child(
                 service=service, key=key, target_session_id=session_id, intent=intent,

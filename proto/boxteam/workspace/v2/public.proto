@@ -1148,10 +1148,10 @@ message SessionForkRequest {
   // 精确来源 Thread；Session 兼容入口由 service 按 catalog main 归一。
   string source_uri = 6;
   string idempotency_key = 7;
-  // 来源 Thread 中所选历史 view 的冻结身份。
-  string source_view_id = 8;
-  // 冻结所选来源 view 的 revision，不追随 latest。
-  int64 source_view_revision = 9;
+  // 来源 Thread 的显式 view 约束；前缀模式省略时由 item 定位。
+  optional string source_view_id = 8;
+  // 前缀模式仅记录调用方观察位置；其它模式保持严格 revision 约束。
+  optional int64 source_view_revision = 9;
   // 冻结来源 view 中点击的稳定 item 身份。
   optional string anchor_item_id = 10;
   // 创建容器；结果 thread_uri/thread_id 才是实际新目标 Thread。

@@ -23,7 +23,7 @@ from app.agents.graph_binding import (
     compute_capability_profile_hash,
 )
 from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
-from app.schemas.internal_v2.session import SessionTaskContext
+from app.schemas.internal_v2.session import SessionTaskContext, SessionTaskEmptyContext
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBinder,
 )
@@ -121,7 +121,7 @@ class SessionSubagentService:
         context: SessionTaskContext | None = None,
     ) -> SessionSubagentAccepted:
         normalized_description = description.strip()
-        context = context if context is not None else SessionTaskContext()
+        context = context if context is not None else SessionTaskEmptyContext()
         if not normalized_description:
             raise ValueError("description 不能为空")
         if subagent_type != GENERAL_PURPOSE_SUBAGENT:

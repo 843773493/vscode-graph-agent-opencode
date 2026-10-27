@@ -5016,18 +5016,18 @@ export declare type SessionForkRequest = Message<"boxteam.workspace.v2.SessionFo
   idempotencyKey: string;
 
   /**
-   * 来源 Thread 中所选历史 view 的冻结身份。
+   * 来源 Thread 的显式 view 约束；前缀模式省略时由 item 定位。
    *
-   * @generated from field: string source_view_id = 8;
+   * @generated from field: optional string source_view_id = 8;
    */
-  sourceViewId: string;
+  sourceViewId?: string | undefined;
 
   /**
-   * 冻结所选来源 view 的 revision，不追随 latest。
+   * 前缀模式仅记录调用方观察位置；其它模式保持严格 revision 约束。
    *
-   * @generated from field: int64 source_view_revision = 9;
+   * @generated from field: optional int64 source_view_revision = 9;
    */
-  sourceViewRevision: bigint;
+  sourceViewRevision?: bigint | undefined;
 
   /**
    * 冻结来源 view 中点击的稳定 item 身份。

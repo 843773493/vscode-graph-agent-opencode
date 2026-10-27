@@ -31,7 +31,10 @@ from app.core.session_lifecycle_gate import (
 from app.core.sqlite_state import sqlite_file_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.schemas.internal_v2.session import SessionForkResourceSourceDTO
+from app.schemas.internal_v2.session import (
+    ForkItemSelector,
+    SessionForkResourceSourceDTO,
+)
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
@@ -226,7 +229,8 @@ class CheckpointForkSource:
                 point = self._resolve_fork_source(
                     source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
                     mode=mode, source_view_id=request["source_view_id"],
-                    source_view_revision=request["source_view_revision"],
+                    # prefix 的原始 revision 仅属调用方观察；冻结坐标来自此一致快照。
+                    source_view_revision=request["source_view_revision"] if mode != "view_prefix_fork" else None,
                     anchor_item_id=request["anchor_item_id"], anchor_mode=request["anchor_mode"],
                     checkpoint_ns=checkpoint_ns,
                 )
@@ -350,7 +354,7 @@ class CheckpointForkSource:
         source_view_revision: int | None = None, anchor_item_id: str | None = None,
         anchor_mode: str = "inclusive", checkpoint_ns: str = "",
     ) -> RolloutForkResult:
-        """在创建目标之前固定真实 view/revision/item，不反序列化全 checkpoint。"""
+        """预览来源；prefix 的实际冻结只在 capture 一致快照中完成。"""
         async with self._source_read_admission(source_session_id):
             source_owner = self._require_thread_owner(source_session_id, source_owner)
             if source_view_id is None and source_view_revision is None and anchor_item_id is None:
@@ -360,7 +364,8 @@ class CheckpointForkSource:
             ):
                 return self._resolve_fork_source(
                     source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
-                    mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
+                    mode=mode, source_view_id=source_view_id,
+                    source_view_revision=source_view_revision if mode != "view_prefix_fork" else None,
                     anchor_item_id=anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
                 )
 
@@ -389,7 +394,8 @@ class CheckpointForkSource:
             ):
                 point = self._resolve_fork_source(
                     source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
-                    mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
+                    mode=mode, source_view_id=source_view_id,
+                    source_view_revision=source_view_revision if mode != "view_prefix_fork" else None,
                     anchor_item_id=anchor_item_id if mode == "view_prefix_fork" else None,
                     anchor_mode=anchor_mode, checkpoint_ns="",
                 )
@@ -397,8 +403,8 @@ class CheckpointForkSource:
                     revision = connection.execute(
                         "SELECT history_view_revision FROM database_meta WHERE singleton_id=1",
                     ).fetchone()[0]
-                    if revision != source_view_revision:
-                        raise ValueError("source-mismatch: 附件候选的冻结历史 revision 已变化")
+                    if revision != point.source_view_revision:
+                        raise ValueError("source-mismatch: 附件候选读取期间来源 revision 已变化")
                     if mode == "full_rollout_copy":
                         references = connection.execute(
                             "SELECT ref.resource_uri,MAX(CASE WHEN member.item_id IS NULL THEN 0 ELSE 1 END) "
@@ -495,9 +501,8 @@ class CheckpointForkSource:
                     if head is None or head[0] is None:
                         raise ValueError("source-mismatch: source rollout 缺少真实 active view")
                     display_view = source_view_id if source_view_id is not None else head[0]
-                    display_revision = source_view_revision if source_view_revision is not None else head[1]
-                    if display_revision != head[1]:
-                        raise ValueError("source-mismatch: 展示快照 revision 已变化")
+                    # 此处只读展示预览，实际 revision 与 view/锚点来自同一次受保护读取。
+                    display_revision = head[1]
                     if item_id is not None:
                         display_view = self._locate_item_view(
                             connection, checkpoint_ns=checkpoint_ns, item_id=item_id, view_id=source_view_id,
@@ -641,10 +646,9 @@ class CheckpointForkSource:
             ):
                 raise ValueError("source-mismatch: source view revision 已变化")
             if mode == "view_prefix_fork":
-                if anchor_item_id is None:
-                    raise ValueError("view_prefix_fork 必须提供点击 item")
+                selector = ForkItemSelector(item_id=anchor_item_id, view_id=source_view_id, anchor_mode=anchor_mode)
                 source_view_id = self._locate_item_view(
-                    connection, checkpoint_ns=checkpoint_ns, item_id=anchor_item_id, view_id=source_view_id,
+                    connection, checkpoint_ns=checkpoint_ns, item_id=selector.item_id, view_id=selector.view_id,
                 )
             else:
                 if source_view_id is not None and source_view_id != active_view:

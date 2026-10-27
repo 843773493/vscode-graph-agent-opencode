@@ -413,6 +413,8 @@ fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一
 
 工具采用 item_id/view_id；公开 fork API 保留已有 anchor_item_id/source_view_id 字段并允许前缀输入省略 view/revision。这是入口 DTO 到同一 typed selector 的一次归一，不在同一入口同时接受两套字段 alias。source-point/UI 预览不能成为第二冻结事实：消息按钮显式传所展示 view，最终确认再由同一来源 owner 冻结实际前缀。公开 fork 仍 idle，task 仍 running 委派。
 
+实现将 prefix creation intent 的 `source_point` 明确留空：原始 selector 与观察 revision 保存在原请求 preimage 中，来源解析只在 capture 的一致磁盘快照内执行。实际坐标沿原 v5 marker／v11 capture journal 发布；物化时重新在该冻结快照按原 selector 解析，并与 journal 实际坐标逐字段核对。非 prefix 继续保存并严格复核原 preflight point。来源 handshake 对 prefix 只固定 owner、graph 与原 selector，不预先选 view。资源候选和 Web 弹窗是预览，prefix 不以观察 revision 相等作为提交条件，显式 view、锚点与方向仍固定。
+
 同一次 source 生命周期 read admission 下，由既有 rollout owner 的一致 SQLite 快照和必要写锁覆盖定位、前缀选择及 snapshot capture；按已有锁顺序建立创建/捕获记录，避免查完 revision 释放保护后再读 latest。task writer 提交调用后退出其写入临界区，再进入 fork owner，不能嵌套自锁。固定 SQLite 与 committed JSONL/detail 的完整性后释放来源保护，物化只读 capture；跨端由来源 owner 执行同一流程，target 不根据自己的观测修订号重选。删除、retention、capture 完成/中止沿原 owner/gate，不能同时持两端 gate，也不把 UI 思考时间纳入持锁窗口。
 
 实际捕获坐标由原 `fork_source_captures` journal 的 `source_point_json` 保存，包含 typed view/revision/anchor，绑定同一 request preimage、snapshot hash 与 marker hash。captured marker 封存同一坐标；marker 发布后与 hash 一起 CAS，终态及重试不得改绑。传输回执使用同一 typed point，目标物化、child 发布证明和最终响应消费已冻结事实，不把请求字段当作实际捕获结果；checkpoint、方向、范围和 owner 继续由原 journal/manifest 合同验证。此处没有新增操作日志或选择凭证；绑定 hash 只在原日志内部检测坐标/关联 hash 被单独损坏。原文件/资源 snapshot 内容 hash 保持既有版本合同，新增坐标由 marker hash 覆盖，不重算历史正文身份。

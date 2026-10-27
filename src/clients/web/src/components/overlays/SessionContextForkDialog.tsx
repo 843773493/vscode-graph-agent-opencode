@@ -104,7 +104,7 @@ export default function SessionContextForkDialog({
             : <p>在所属会话中新建等待新消息的线程，并在主窗口右侧侧边栏打开。</p>}
           <p>来源会话：{state.sourceTitle ? `${state.sourceTitle} · ` : null}<code>{state.sourceSessionId}</code></p>
           <p style={{ overflowWrap: "anywhere" }}>来源线程：<code>{sourcePoint.source_uri}</code></p>
-          <p>冻结历史位置：<code>{sourcePoint.source_view_id}</code>，版本 {sourcePoint.source_view_revision}</p>
+          <p>所选历史位置：<code>{sourcePoint.source_view_id}</code>，观察版本 {sourcePoint.source_view_revision}</p>
           {mode === "view_prefix_fork" ? <p>截止消息：<code>{sourcePoint.anchor_item_id ?? "未选择消息"}</code></p> : null}
           {mode === "view_prefix_fork" && !sourcePoint.anchor_item_id ? <p role="status">当前来源没有可用的默认截止消息，请选择复制范围。</p> : null}
           <p>来源 Goal：{sourcePoint.goal_available ? "可选择继承到新会话" : "没有可继承的 Goal"}</p>

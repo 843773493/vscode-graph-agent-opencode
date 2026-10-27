@@ -1,4 +1,4 @@
-"""通过消息和回放入口生成分支，验证 item-only 来源预览。"""
+"""通过消息和回放生成分支，验证 item-only 来源与公开前缀捕获。"""
 
 from __future__ import annotations
 
@@ -81,6 +81,44 @@ async def test_item_only_source_point_finds_latest_nonancestor_branch(
     assert explicit.json()["data"]["source_view_id"] == old_view
     missing = await case.client.get(endpoint, params={**params, "item_id": "missing-item"})
     assert missing.status_code == 400, missing.text
+
+    # 真正创建沿同一 selector/capture 链路；显式旧 view 不得被更晚候选覆盖。
+    for key, view, before in (("item-prefix-auto", None, False), ("item-prefix-explicit", old_view, True)):
+        body = {
+            "idempotency_key": key, "mode": "view_prefix_fork", "source_uri": latest["source_uri"],
+            "source_view_revision": latest["source_view_revision"] - 1,
+            "anchor_item_id": item_id, "anchor_mode": "before" if before else "inclusive",
+            "target_container_uri": latest["child_container_uri"],
+        }
+        if view is not None:
+            body["source_view_id"] = view
+        deadline = deadlines.for_operation(target=latest["child_container_uri"], operation_key=key)
+        response = await deadline.wait(case.client.post(f"/api/v1/sessions/{session}/fork-context", json=body), "公开前缀fork")
+        assert response.status_code == 200, response.text
+        deadline.complete()
+        result = response.json()["data"]
+        selected_view = view or latest["source_view_id"]
+        assert result["source_view_id"] == selected_view
+        assert result["source_view_revision"] > body["source_view_revision"]
+        assert result["anchor_item_id"] == item_id
+        comparison = "<" if before else "<="
+        expected = case.sql(session, thread,
+            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1 AND context_selected=1 "
+            f"AND context_ordinal{comparison}(SELECT context_ordinal FROM context_view_items WHERE view_id=? AND item_id=?) "
+            "ORDER BY context_ordinal", (selected_view, selected_view, item_id))
+        actual = case.sql(session, result["thread_id"],
+            "SELECT member.item_id FROM checkpoint_namespace_state namespace JOIN branches branch "
+            "ON branch.branch_id=namespace.active_branch_id JOIN context_view_items member ON member.view_id=branch.head_view_id "
+            "WHERE namespace.checkpoint_ns='' AND member.visible=1 AND member.context_selected=1 ORDER BY member.context_ordinal")
+        assert actual == expected
+        assert bool((item_id,) in actual) != before
+        # 同 key 回执必须来自原 capture，不能把观察 revision 改写为当前再保存。
+        repeated = deadlines.for_operation(target=latest["child_container_uri"], operation_key=key + "-retry")
+        retry = await repeated.wait(case.client.post(f"/api/v1/sessions/{session}/fork-context", json=body), "重试原前缀fork")
+        assert retry.status_code == 200, retry.text
+        repeated.complete()
+        assert retry.json()["data"]["thread_id"] == result["thread_id"]
+        assert retry.json()["data"]["source_view_revision"] == result["source_view_revision"]
 
     # 完整副本建立独立 active root；历史 checkpoint 仍标识原 namespace，不能丢失旧分支。
     full = await case.client.get(endpoint, params={"thread_id": thread, "mode": "full_rollout_copy"})

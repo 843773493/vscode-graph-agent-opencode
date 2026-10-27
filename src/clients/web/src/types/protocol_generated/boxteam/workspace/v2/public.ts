@@ -1133,10 +1133,14 @@ export interface SessionForkRequest {
   /** 精确来源 Thread；Session 兼容入口由 service 按 catalog main 归一。 */
   source_uri: string;
   idempotency_key: string;
-  /** 来源 Thread 中所选历史 view 的冻结身份。 */
-  source_view_id: string;
-  /** 冻结所选来源 view 的 revision，不追随 latest。 */
-  source_view_revision: number;
+  /** 来源 Thread 的显式 view 约束；前缀模式省略时由 item 定位。 */
+  source_view_id?:
+    | string
+    | undefined;
+  /** 前缀模式仅记录调用方观察位置；其它模式保持严格 revision 约束。 */
+  source_view_revision?:
+    | number
+    | undefined;
   /** 冻结来源 view 中点击的稳定 item 身份。 */
   anchor_item_id?:
     | string
@@ -10348,8 +10352,8 @@ function createBaseSessionForkRequest(): SessionForkRequest {
     anchor_mode: undefined,
     source_uri: "",
     idempotency_key: "",
-    source_view_id: "",
-    source_view_revision: 0,
+    source_view_id: undefined,
+    source_view_revision: undefined,
     anchor_item_id: undefined,
     target_container_uri: "",
     creation_kind: undefined,
@@ -10367,8 +10371,10 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
       anchor_mode: isSet(object.anchor_mode) ? globalThis.String(object.anchor_mode) : undefined,
       source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : "",
       idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
-      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
-      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : undefined,
+      source_view_revision: isSet(object.source_view_revision)
+        ? globalThis.Number(object.source_view_revision)
+        : undefined,
       anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
       target_container_uri: isSet(object.target_container_uri) ? globalThis.String(object.target_container_uri) : "",
       creation_kind: isSet(object.creation_kind) ? globalThis.String(object.creation_kind) : undefined,
@@ -10395,10 +10401,10 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
     if (message.idempotency_key !== "") {
       obj.idempotency_key = message.idempotency_key;
     }
-    if (message.source_view_id !== "") {
+    if (message.source_view_id !== undefined) {
       obj.source_view_id = message.source_view_id;
     }
-    if (message.source_view_revision !== 0) {
+    if (message.source_view_revision !== undefined) {
       obj.source_view_revision = Math.round(message.source_view_revision);
     }
     if (message.anchor_item_id !== undefined) {
@@ -10434,8 +10440,8 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
     message.anchor_mode = object.anchor_mode ?? undefined;
     message.source_uri = object.source_uri ?? "";
     message.idempotency_key = object.idempotency_key ?? "";
-    message.source_view_id = object.source_view_id ?? "";
-    message.source_view_revision = object.source_view_revision ?? 0;
+    message.source_view_id = object.source_view_id ?? undefined;
+    message.source_view_revision = object.source_view_revision ?? undefined;
     message.anchor_item_id = object.anchor_item_id ?? undefined;
     message.target_container_uri = object.target_container_uri ?? "";
     message.creation_kind = object.creation_kind ?? undefined;

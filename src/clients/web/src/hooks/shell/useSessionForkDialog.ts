@@ -74,7 +74,6 @@ export function useSessionForkDialog({
       if (dialogRequestVersion.current !== requestVersion) return;
       if (sourceSelection.sourceViewId !== undefined && (
         sourcePoint.source_view_id !== sourceSelection.sourceViewId
-        || sourcePoint.source_view_revision !== sourceSelection.sourceViewRevision
         || sourceSelection.itemId !== undefined && sourcePoint.anchor_item_id !== sourceSelection.itemId
       )) throw new Error("来源回执与实际展示快照不一致");
       setForkDialog((currentDialog) => currentDialog ? {
@@ -108,7 +107,7 @@ export function useSessionForkDialog({
       if (dialogRequestVersion.current !== requestVersion) return;
       if (sourcePoint.source_uri !== frozenSourcePoint.source_uri
         || sourcePoint.source_view_id !== frozenSourcePoint.source_view_id
-        || sourcePoint.source_view_revision !== frozenSourcePoint.source_view_revision
+        || nextDialog.mode !== "view_prefix_fork" && sourcePoint.source_view_revision !== frozenSourcePoint.source_view_revision
         || nextDialog.mode === "view_prefix_fork" && (sourcePoint.anchor_item_id ?? null) !== previousDialog.sourceAnchorItemId
         || nextDialog.mode === "full_rollout_copy" && sourcePoint.anchor_item_id != null
         || sourcePoint.resource_mode !== nextDialog.mode

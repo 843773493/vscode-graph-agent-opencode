@@ -389,11 +389,11 @@ async def test_remote_fork_rejects_changed_creation_kind(
     ("changed", "error"),
     [
         ({"source_view_id": "view-other"}, "来源 view/revision"),
-        ({"source_view_revision": 8}, "来源 view/revision"),
+        ({"source_view_revision": -1}, "来源 view/revision"),
         ({"anchor_item_id": "item-other"}, "来源 anchor"),
         ({"mode": "last_completed_turn_fork"}, "mode 与固定请求"),
     ],
-    ids=["view", "revision", "anchor", "mode"],
+    ids=["view", "negative_revision", "anchor", "mode"],
 )
 async def test_remote_fork_rejects_a_different_published_source_point(
     fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
@@ -411,6 +411,28 @@ async def test_remote_fork_rejects_a_different_published_source_point(
     with pytest.raises(RuntimeError, match=error):
         await fork_boundary.service.fork(request)
     assert len(fork_boundary.transport.calls) == 1
+    fork_boundary.main_owner.assert_not_awaited()
+    fork_boundary.child_owner.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["view_prefix_fork", "full_rollout_copy", "last_completed_turn_fork"])
+async def test_remote_fork_revision_is_observation_only_for_prefix(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO, mode: str,
+) -> None:
+    request = SessionForkRequest.model_validate({
+        **fork_request.model_dump(mode="json"), "mode": mode,
+        "anchor_item_id": "item-selected" if mode == "view_prefix_fork" else None,
+    })
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(result=fork_result.model_copy(update={
+        "mode": mode, "anchor_item_id": request.anchor_item_id, "source_view_revision": 8,
+    }))
+    if mode == "view_prefix_fork":
+        result = await fork_boundary.service.fork(request)
+        assert result.source_view_revision == 8
+        assert fork_boundary.transport.calls[0].request.source_view_revision == 7
+    else:
+        with pytest.raises(RuntimeError, match="来源 view/revision"):
+            await fork_boundary.service.fork(request)
     fork_boundary.main_owner.assert_not_awaited()
     fork_boundary.child_owner.assert_not_awaited()
 
