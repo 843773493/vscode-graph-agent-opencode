@@ -59,7 +59,9 @@ try {
   const goalCard = page.getByRole("region", { name: "当前 Goal", exact: true });
   await goalCard.getByRole("button", { name: "编辑", exact: true }).click();
   const goalEditor = page.getByRole("dialog", { name: "编辑 Goal", exact: true });
-  await goalEditor.getByLabel("目标", { exact: true }).fill("同一owner的编辑目标");
+  const objective = goalEditor.getByRole("textbox");
+  assert.equal(await objective.inputValue(), "同一owner的暂停目标");
+  await objective.fill("同一owner的编辑目标");
   await goalEditor.getByRole("button", { name: "保存 Goal", exact: true }).click();
   await panel.getByRole("button", { name: /同一owner的编辑目标/ }).waitFor();
   await page.getByRole("region", { name: "当前会话关联任务", exact: true }).getByRole("button", { name: "同一owner的编辑目标", exact: true }).waitFor();

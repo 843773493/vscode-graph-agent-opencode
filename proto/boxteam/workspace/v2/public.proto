@@ -2810,8 +2810,15 @@ message PersistentTaskNotificationRequest {
   google.protobuf.Struct payload = 2;
 }
 
+message TaskRuntimeStatusDTO {
+  string state = 1;
+  int32 recovering_tasks = 2;
+  optional string error = 3;
+}
+
 message PersistentTaskListDTO {
   repeated PersistentTaskDTO items = 1;
+  TaskRuntimeStatusDTO runtime = 2;
 }
 
 message PersistentTaskRunListDTO {

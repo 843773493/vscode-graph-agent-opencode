@@ -12240,6 +12240,32 @@ export declare type PersistentTaskNotificationRequest = Message<"boxteam.workspa
 export declare const PersistentTaskNotificationRequestSchema: GenMessage<PersistentTaskNotificationRequest>;
 
 /**
+ * @generated from message boxteam.workspace.v2.TaskRuntimeStatusDTO
+ */
+export declare type TaskRuntimeStatusDTO = Message<"boxteam.workspace.v2.TaskRuntimeStatusDTO"> & {
+  /**
+   * @generated from field: string state = 1;
+   */
+  state: string;
+
+  /**
+   * @generated from field: int32 recovering_tasks = 2;
+   */
+  recoveringTasks: number;
+
+  /**
+   * @generated from field: optional string error = 3;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskRuntimeStatusDTO.
+ * Use `create(TaskRuntimeStatusDTOSchema)` to create a new message.
+ */
+export declare const TaskRuntimeStatusDTOSchema: GenMessage<TaskRuntimeStatusDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.PersistentTaskListDTO
  */
 export declare type PersistentTaskListDTO = Message<"boxteam.workspace.v2.PersistentTaskListDTO"> & {
@@ -12247,6 +12273,11 @@ export declare type PersistentTaskListDTO = Message<"boxteam.workspace.v2.Persis
    * @generated from field: repeated boxteam.workspace.v2.PersistentTaskDTO items = 1;
    */
   items: PersistentTaskDTO[];
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TaskRuntimeStatusDTO runtime = 2;
+   */
+  runtime?: TaskRuntimeStatusDTO | undefined;
 };
 
 /**

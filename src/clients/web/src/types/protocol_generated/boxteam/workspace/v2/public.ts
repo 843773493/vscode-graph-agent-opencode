@@ -2862,8 +2862,15 @@ export interface PersistentTaskNotificationRequest {
   payload: { [key: string]: any } | undefined;
 }
 
+export interface TaskRuntimeStatusDTO {
+  state: string;
+  recovering_tasks: number;
+  error?: string | undefined;
+}
+
 export interface PersistentTaskListDTO {
   items: PersistentTaskDTO[];
+  runtime: TaskRuntimeStatusDTO | undefined;
 }
 
 export interface PersistentTaskRunListDTO {
@@ -20941,14 +20948,54 @@ export const PersistentTaskNotificationRequest: MessageFns<PersistentTaskNotific
   },
 };
 
+function createBaseTaskRuntimeStatusDTO(): TaskRuntimeStatusDTO {
+  return { state: "", recovering_tasks: 0, error: undefined };
+}
+
+export const TaskRuntimeStatusDTO: MessageFns<TaskRuntimeStatusDTO> = {
+  fromJSON(object: any): TaskRuntimeStatusDTO {
+    return {
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      recovering_tasks: isSet(object.recovering_tasks) ? globalThis.Number(object.recovering_tasks) : 0,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: TaskRuntimeStatusDTO): unknown {
+    const obj: any = {};
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.recovering_tasks !== 0) {
+      obj.recovering_tasks = Math.round(message.recovering_tasks);
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskRuntimeStatusDTO>, I>>(base?: I): TaskRuntimeStatusDTO {
+    return TaskRuntimeStatusDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskRuntimeStatusDTO>, I>>(object: I): TaskRuntimeStatusDTO {
+    const message = createBaseTaskRuntimeStatusDTO();
+    message.state = object.state ?? "";
+    message.recovering_tasks = object.recovering_tasks ?? 0;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
 function createBasePersistentTaskListDTO(): PersistentTaskListDTO {
-  return { items: [] };
+  return { items: [], runtime: undefined };
 }
 
 export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
   fromJSON(object: any): PersistentTaskListDTO {
     return {
       items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => PersistentTaskDTO.fromJSON(e)) : [],
+      runtime: isSet(object.runtime) ? TaskRuntimeStatusDTO.fromJSON(object.runtime) : undefined,
     };
   },
 
@@ -20956,6 +21003,9 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
     const obj: any = {};
     if (message.items?.length) {
       obj.items = message.items.map((e) => PersistentTaskDTO.toJSON(e));
+    }
+    if (message.runtime !== undefined) {
+      obj.runtime = TaskRuntimeStatusDTO.toJSON(message.runtime);
     }
     return obj;
   },
@@ -20966,6 +21016,9 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
   fromPartial<I extends Exact<DeepPartial<PersistentTaskListDTO>, I>>(object: I): PersistentTaskListDTO {
     const message = createBasePersistentTaskListDTO();
     message.items = object.items?.map((e) => PersistentTaskDTO.fromPartial(e)) || [];
+    message.runtime = (object.runtime !== undefined && object.runtime !== null)
+      ? TaskRuntimeStatusDTO.fromPartial(object.runtime)
+      : undefined;
     return message;
   },
 };

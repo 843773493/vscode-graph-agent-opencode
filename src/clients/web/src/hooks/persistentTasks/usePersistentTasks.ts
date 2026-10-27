@@ -9,7 +9,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   const current = useRef(scope);
   current.current = scope;
   const [version, setVersion] = useState(0);
-  const [view, setView] = useState({ scope, items: [] as api.PersistentTaskDTO[], loaded: false, error: null as string | null, busy: false });
+  const [view, setView] = useState({ scope, items: [] as api.PersistentTaskDTO[], runtime: null as api.TaskRuntimeStatusDTO | null, loaded: false, error: null as string | null, busy: false });
   const [selection, setSelection] = useState({ scope, id: "" });
   const items = view.scope === scope ? view.items : [];
   const selected = items.find((item) => selection.scope === scope && item.task_id === selection.id) ?? null;
@@ -18,7 +18,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   useEffect(() => {
     const controller = new AbortController();
     scope.controller = controller;
-    setView({ scope, items: [], loaded: false, error: null, busy: false });
+    setView({ scope, items: [], runtime: null, loaded: false, error: null, busy: false });
     setSelection({ scope, id: "" });
     return () => { controller.abort(); scope.reader.abort(); };
   }, [scope]);
@@ -27,8 +27,8 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
     const reader = new AbortController();
     scope.reader = reader;
     const valid = () => current.current === scope && !reader.signal.aborted;
-    const publish = (next: api.PersistentTaskDTO[]) => {
-      if (valid()) setView((previous) => ({ ...previous, scope, items: next, loaded: true }));
+    const publish = (next: api.PersistentTaskSnapshot) => {
+      if (valid()) setView((previous) => ({ ...previous, scope, ...next, loaded: true }));
     };
     void (async () => {
       try {
@@ -76,7 +76,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
       if (current.current === scope && !scope.controller.signal.aborted) {
         try {
           const next = await api.listPersistentTasks(port, owner, scope.controller.signal, sessionId);
-          if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, items: next, loaded: true }));
+          if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, ...next, loaded: true }));
         } catch (cause) {
           if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, error: [previous.error, `刷新失败：${errorMessage(cause)}`].filter(Boolean).join("；") }));
         }
@@ -95,6 +95,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   return {
     items, selected, loaded: view.scope === scope && view.loaded, busy: view.scope === scope && view.busy,
     error: view.scope === scope ? view.error : null,
+    runtime: view.scope === scope ? view.runtime : null,
     history: history.scope === scope && history.taskId === selected?.task_id ? history : null,
     select,
     refresh: () => act(async () => null),

@@ -31,13 +31,13 @@ def browser_runner():
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "持久任务Web验收需要Chromium"
 
-    async def run(case, client, *, target_uri, title, other_session_id):
+    async def run(case, client, *, target_uri, title, other_session_id, script="management", environment=None):
         artifacts = case.context.artifacts_dir / "browser"
         artifacts.mkdir()
-        command = ["bun", "tests/integration/clients/web/persistent_tasks/management.mjs"]
+        command = ["bun", f"tests/integration/clients/web/persistent_tasks/{script}.mjs"]
         result = await asyncio.to_thread(subprocess.run, command, cwd=case.context.project_root,
             timeout=130, check=False, capture_output=True, text=True,
-            env={**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
+            env={**os.environ, **(environment or {}), "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                  "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
                      "baseUrl": str(client.base_url), "workspaceId": case.mount.workspace_id,
                      "targetUri": target_uri, "sessionTitle": title, "otherSessionId": other_session_id,

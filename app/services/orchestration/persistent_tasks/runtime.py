@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
@@ -38,6 +39,7 @@ from app.schemas.internal_v2.persistent_task import (
     TaskDecisionDTO,
     TaskDeliveryDTO,
     TaskEvaluationDTO,
+    TaskRuntimeStatusDTO,
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_generation import SessionGenerationService
@@ -110,12 +112,25 @@ class PersistentTaskRuntime:
 
     def assert_healthy(self) -> None:
         if self._failure is not None:
-            raise RuntimeError(f"持久任务 worker 已失败: {type(self._failure).__name__}: {self._failure}") from self._failure
+            raise RuntimeError(self.status().error) from self._failure
         if not self._accepting or self._worker is None or self._worker.done():
             raise RuntimeError("持久任务运行时未接受调度")
 
     def recovering(self, task_id: str) -> bool:
         return task_id in self._recovering
+
+    def status(self) -> TaskRuntimeStatusDTO:
+        if self._failure is not None:
+            return TaskRuntimeStatusDTO(state="failed", recovering_tasks=len(self._recovering),
+                error=f"持久任务后台运行失败（{type(self._failure).__name__}），请查看原始诊断日志")
+        state: Literal["stopped", "stopping", "running", "starting"]
+        if self._worker is None or self._worker.done():
+            state = "stopped"
+        elif self._closing:
+            state = "stopping"
+        else:
+            state = "running" if self._accepting else "starting"
+        return TaskRuntimeStatusDTO(state=state, recovering_tasks=len(self._recovering))
 
     def reconcile_execution_source(self, task_id: str) -> None:
         self._execution_pending.add(task_id)
@@ -186,15 +201,15 @@ class PersistentTaskRuntime:
                 done.set_exception(error)
             raise
         else:
-            if work.recovering:
-                assert work.goal is not None
-                self._recovering.discard(work.goal.goal_id)
-                self.events.publish(PersistentTaskChanged())
             if done is not None:
                 done.set_result(None)
         finally:
             reset_current_gateway_id(gateway_token)
             reset_current_request_id(request_token)
+        if work.recovering:
+            assert work.goal is not None
+            self._recovering.discard(work.goal.goal_id)
+            self.events.publish(PersistentTaskChanged())
 
     @asynccontextmanager
     async def action_admission(self) -> AsyncIterator[bool]:
@@ -254,6 +269,7 @@ class PersistentTaskRuntime:
         if self._failure is not None:
             self._accepting = False
             logger.error("持久任务 worker 已失败", exc_info=(type(self._failure), self._failure, self._failure.__traceback__))
+        self.events.publish(PersistentTaskChanged())
 
     async def _run(self, initialized: asyncio.Future[None]) -> None:
         failure: BaseException | None = None
@@ -262,6 +278,7 @@ class PersistentTaskRuntime:
             self._recovering = {task.task_id for task in self.store.list_automations()} | {goal.goal_id for goal in goals}
             await self._job_events.register_durable_listener(self.on_event)
             self._accepting = True
+            self.events.publish(PersistentTaskChanged())
             initialized.set_result(None)
             # 初始化回执先交还工作区 owner，再推进任何逐任务恢复。
             await asyncio.sleep(0)
@@ -309,6 +326,7 @@ class PersistentTaskRuntime:
             self._failure = error
             self._accepting = False
             self._closing = True
+            self.events.publish(PersistentTaskChanged())
             if not initialized.done():
                 initialized.set_exception(error)
             raise
@@ -330,6 +348,8 @@ class PersistentTaskRuntime:
                     raise errors[0]
 
     async def _process_task(self, task_id: str) -> None:
+        if task_id in self._recovering:
+            await observe_phase(task_id, "task.recovery.started", details={"task_id": task_id})
         await self._collect_execution_completions(task_id)
         for run in self.store.runs(task_id, pending_only=True):
             if run.run_id in self._waiting_actions:

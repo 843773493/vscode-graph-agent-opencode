@@ -336,8 +336,15 @@ class PersistentTaskNotificationRequest(BaseModel):
     payload: dict[str, JsonValue]
 
 
+class TaskRuntimeStatusDTO(BaseModel, frozen=True):
+    state: Literal["starting", "running", "stopping", "stopped", "failed"]
+    recovering_tasks: int = Field(ge=0)
+    error: str | None = None
+
+
 class PersistentTaskListDTO(BaseModel):
     items: list[PersistentTaskDTO]
+    runtime: TaskRuntimeStatusDTO
 
 
 class PersistentTaskRunListDTO(BaseModel):

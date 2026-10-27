@@ -30,6 +30,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import control_request
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 ROOT = "/api/v1/persistent-tasks"
 
@@ -500,11 +501,16 @@ async def test_worker_failures_are_visible_and_shutdown_retrieves_the_failure(
             async with asyncio.timeout(3):
                 while runtime._failure is None:
                     await asyncio.sleep(0.01)
-        with pytest.raises(RuntimeError, match="task-storage-fault"):
+        with pytest.raises(RuntimeError, match="后台运行失败（RuntimeError）"):
             runtime.assert_healthy()
         response = await case.client.get("/api/v1/health")
         assert response.status_code == 500, response.text
-        assert "task-storage-fault" in response.text
+        assert "后台运行失败（RuntimeError）" in response.text
+        assert "task-storage-fault" not in response.text
+        monkeypatch.setattr(runtime.store, "list_automations", original)
+        snapshot = (await case.client.get(ROOT)).json()["data"]
+        assert snapshot["runtime"]["state"] == "failed"
+        assert "原始诊断日志" in snapshot["runtime"]["error"]
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         with pytest.raises(RuntimeError, match="task-storage-fault"):
             await runtime.stop()
@@ -568,6 +574,48 @@ async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tas
     finally:
         release.set()
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_deleted_session_leaves_no_goal_recovery_progress(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = source_case
+    session_id, thread_id, _target_uri = await _target(case)
+    runtime, goals = case.container.persistent_task_runtime, case.container.goal_service
+    await runtime.stop()
+    goal = await goals.set(session_id, objective="恢复期间删除会话")
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = goals.get
+
+    async def slow_goal(identity: str):
+        current = asyncio.current_task()
+        if identity == session_id and current is not None and current.get_name() == f"persistent-task:goal:{session_id}":
+            entered.set()
+            await release.wait()
+        return await original(identity)
+
+    monkeypatch.setattr(goals, "get", slow_goal)
+    try:
+        await runtime.start()
+        await asyncio.wait_for(entered.wait(), 1)
+        assert runtime.recovering(goal.goal_id)
+        # ASGI 装具显式给出受信 Gateway 的 actor；此处不验证 Gateway 鉴权。
+        case.client.headers["X-BoxTeam-Navigation-Actor"] = "user:test-user"
+        receipt = await submit_navigation_operation(case.client, "delete_session", target_node_id=session_id,
+                                                    wait_for_settlement=True)
+        assert receipt["state"] == "committed" and receipt["settlement"] == "settled", receipt
+        release.set()
+        async with asyncio.timeout(5):
+            while f"goal:{session_id}" in runtime._inflight or runtime._application_work:
+                await asyncio.sleep(0.01)
+        snapshot = (await case.client.get(ROOT)).json()["data"]
+        assert snapshot["items"] == []
+        assert snapshot["runtime"] == {"state": "running", "recovering_tasks": 0, "error": None}
+        assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
+    finally:
+        release.set()
 
 
 @pytest.mark.asyncio

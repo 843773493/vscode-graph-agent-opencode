@@ -46,7 +46,7 @@ def product_case(recovery_case, free_tcp_port_factory):
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
     @asynccontextmanager
-    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, web=False, oauth_redirect_uri=None):
+    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, web=False, oauth_redirect_uri=None, backend_app="tests.support.e2e_control.backend_app:app"):
         home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
         install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
@@ -80,7 +80,7 @@ def product_case(recovery_case, free_tcp_port_factory):
         ) as replay:
             backend = await asyncio.to_thread(
                 start_backend_process, workspace_root=str(case.mount.workspace_root), port=backend_port,
-                log_name="mcp-local-control", asgi_app="tests.support.e2e_control.backend_app:app",
+                log_name="mcp-local-control", asgi_app=backend_app,
                 startup_mount=startup_mount,
                 env_overrides={**replay.environment, "BOXTEAM_HOME": str(home), "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}"},
             )

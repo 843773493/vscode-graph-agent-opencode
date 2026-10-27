@@ -14,6 +14,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskControlRequest,
     PersistentTaskCreateRequest,
     PersistentTaskDTO,
+    PersistentTaskListDTO,
     PersistentTaskNotificationRequest,
     PersistentTaskRunDetailDTO,
     PersistentTaskRunDTO,
@@ -95,6 +96,9 @@ class PersistentTaskService:
             generated = self._store.generated_for_session(session_id)
             tasks = [task for task in tasks if task.task_id in generated or self._references_session(task, session_id)]
         return [self.get(task.task_id) for task in tasks]
+
+    def snapshot(self, session_id: str | None = None) -> PersistentTaskListDTO:
+        return PersistentTaskListDTO(items=self.list(session_id), runtime=self.runtime.status())
 
     @staticmethod
     def _references_session(task: PersistentTaskDTO, session_id: str) -> bool:

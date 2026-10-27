@@ -56,7 +56,7 @@ async def _apply(operation: Callable[[], Awaitable[Result]]) -> Result:
 
 @router.get("", response_model=APIResponse[PersistentTaskListDTO])
 async def list_tasks(request_id: RequestId, service: TaskService, session_id: str | None = None):
-    return APIResponse(data=PersistentTaskListDTO(items=service.list(session_id)), request_id=request_id)
+    return APIResponse(data=service.snapshot(session_id), request_id=request_id)
 
 
 @router.post("", response_model=APIResponse[PersistentTaskDTO])
@@ -73,11 +73,11 @@ async def task_events(service: TaskService, session_id: str | None = None):
     async def stream():
         subscription = channel.subscribe(label="persistent-task-management")
         try:
-            yield "event: snapshot\ndata: " + PersistentTaskListDTO(items=service.list(session_id)).model_dump_json() + "\n\n"
+            yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
             while True:
                 await subscription.next()
                 # gap 直接推送权威完整列表，不能用丢失通知猜测任务状态。
-                yield "event: snapshot\ndata: " + PersistentTaskListDTO(items=service.list(session_id)).model_dump_json() + "\n\n"
+                yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
         finally:
             channel.unsubscribe(subscription)
 

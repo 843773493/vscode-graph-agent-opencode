@@ -8,6 +8,7 @@ import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
 import TaskEditor, { configurationProblem, type TaskTemplate } from "./TaskEditor";
 import TaskRunHistory from "./TaskRunHistory";
+import TaskRuntimeStatus from "./TaskRuntimeStatus";
 import "../../../styles/workspace/persistentTasks.css";
 
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : "—";
@@ -42,7 +43,8 @@ export default function PersistentTasks({ apiPort, target, goalSessionId, onMana
     {activityError ? <div role="alert">{activityError}</div> : null}
     {state.error ? <div role="alert">{state.error}</div> : null}
     {!state.loaded && !state.error ? <p role="status">正在读取工作区任务…</p> : null}
-    {state.loaded ? <p role="status">{state.items.filter((item) => item.recovering).length ? `${state.items.filter((item) => item.recovering).length} 个任务仍在恢复；其他任务独立推进。` : `当前工作区共 ${state.items.length} 个任务。`}</p> : null}
+    <TaskRuntimeStatus runtime={state.runtime} />
+    {state.loaded ? <p>当前工作区共 {state.items.length} 个任务。</p> : null}
     <div className="persistent-task-layout">
       <div className="persistent-task-list" aria-label="持久任务列表">
         {state.loaded && state.items.length === 0 ? <p>还没有持久任务。</p> : null}
