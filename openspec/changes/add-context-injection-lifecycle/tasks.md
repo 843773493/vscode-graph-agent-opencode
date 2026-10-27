@@ -508,3 +508,13 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 真实 Gateway→受管 Backend→公开 Session／消息→共享 model_stream 的产品流程1 passed／153.89秒，实际分钟轮询60.07秒，核手动刷新、权限拒绝、发布通知、模型请求正文、稳定身份与冷重启后的 manual 策略。仅暂存树 `bd07f815f639a8d06bb4a8f82e301d05003a6eec` 完整 archive 隔离 task/fork 改动后，同一正式 suite 再为1 passed／158.29秒；4537个受测blob均与该tree一致。
 - 14文件Ruff及4核心模块Pyright零诊断；扩大范围Ruff基线／最终均10项、Pyright均7项，零新增，不称全仓静态全绿。OpenSpec strict通过，结构自审无新增findings。全部检查带进程外超时及4GiB保护；准确命令、源码指纹、raw、退出码和隔离正式产物位于 `out/tests/temp/gateway-local-skill-updates/artifacts/`。纯临时隔离源码已删除，验证原件保留。
 - 关闭9.10，当前64/76；9.9获取能力组合、9.11网络来源、9.12四层目录、9.14／9.16总门继续未完成。没有修改Web源码或生成类型，未重跑Web、外部Provider或Windows；团队／协作专项继续TODO。
+
+
+### 2026-10-27 Gateway 共享 HTTP Skill 纵向切片
+
+- Gateway 的 `resources.skill_sources.sources` 显式配置稳定 id/name、HTTP 获取、更新策略与层内 priority；HTTP 默认 poll/1h，仅登记 poll/manual，事件能力缺失明确拒绝。获取 owner 统一执行条件请求、完整200/有基准空304、512KiB/严格UTF-8校验与原始字节revision；URL不进入普通来源/模型引用。配置候选复用 runtime consumer 的准备、健康、切换、CAS回退和旧代次排空；迟到正文与错误受fencing。
+- 网络条目经原 Gateway 认证快照→Workspace accepted→facet/catalog→CSM链路；名称解析统一四层和层内优先级，同优先级同名明确冲突。普通单文件导航读取同一 accepted 正文，复用原文件投影，不联网也不跌回宿主文件。公开DTO/Proto及全部生成绑定同批更新；Gateway OpenAPI逐结构核对仅新增layer/priority，路由和路径不变。
+- 既有相关回归120 passed；新HTTP/优先级23 passed，配置切换/回滚及最终schema11 passed；最终定向118 passed（各组有交集，含新增非法URL/ID、导航、路由及配置检查）。真实HTTP→Gateway→两个受管Workspace→公开Session消息→Agent/model_stream流程1 passed／95.56秒：首次上游仅Gateway获取一次，导航/模型准备/skill_load不增请求，validator-only及304不改publication，更新后两Workspace的tracked正文均推进。
+- 仅本切片暂存tree `54788ba84cd676b6ba95fc4fe461d80b68f175e8` 完整archive隔离其它task/fork改动后，同一产品用例1 passed／119.82秒；4544个受测blob逐个核验一致。首次产品失败来自复制模板相同UUID，修正测试副本经真实初始化取得独立身份；原始失败与正式产物保留，未改产品身份校验。
+- Web真实TypeScript检查、production build、Buf lint/build/format及对HEAD的breaking检查、compileall和OpenSpec strict通过。扩大静态检查Ruff基线/当前均10条，Pyright均24条，零新增；不称全仓全绿。结构自审无新增边界问题；Skill runtime794行仅透传layer/priority，后续扩展需先拆清catalog职责。既有大测试文件本次只迁hash编码，不扩展测试正文。
+- 准确命令、源码指纹、原始输出、退出码、OpenAPI结构对照和隔离原件位于 `out/tests/temp/gateway-http-skills/artifacts/`；纯临时archive源码已清理，正式测试证据保留。本切片不勾选9.9/9.11/9.12/9.14/9.16整体任务：Workspace私有HTTP接线、跨来源覆盖/已有tracked不改绑与冷恢复总验收继续推进。没有进行Web交互、外部Provider或Windows验收；团队/协作专项继续TODO。

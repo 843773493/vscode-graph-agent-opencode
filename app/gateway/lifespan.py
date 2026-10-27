@@ -202,6 +202,7 @@ async def lifespan(app: FastAPI):
         GatewaySkillSourceOwner(
             gateway_id=gateway_id, skills_root=get_boxteam_home() / "skills",
             update_policy=gateway_config.local_skill_updates,
+            sources=gateway_config.skill_sources,
         ).lifespan() as skill_source_owner,
     ):
         app.state.skill_source_owner = skill_source_owner

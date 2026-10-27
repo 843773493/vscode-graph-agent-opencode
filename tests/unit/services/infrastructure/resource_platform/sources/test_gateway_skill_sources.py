@@ -44,6 +44,9 @@ from app.services.infrastructure.resource_platform.sources.gateway_skill_sources
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
+from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
+    gateway_skill_revision,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -629,10 +632,7 @@ async def test_initial_binding_does_not_retry_authenticated_rejection_or_unavail
         payload = publication.model_dump()
         payload["available"] = False
         payload["error_code"] = "source-unavailable"
-        payload["revision"] = "sha256:" + hashlib.sha256(
-            canonical_json_bytes({"gateway_id": GATEWAY_ID, "available": False,
-                "entries": [(entry.source_id, entry.revision, entry.available) for entry in publication.entries]}),
-        ).hexdigest()
+        payload["revision"] = gateway_skill_revision(GATEWAY_ID, False, publication.entries)
         return httpx.Response(200, json={"data": payload, "request_id": request.headers["X-Request-ID"]},
                               headers={"X-Request-ID": request.headers["X-Request-ID"]})
 

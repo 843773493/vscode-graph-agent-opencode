@@ -20,6 +20,9 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
+from app.services.infrastructure.resource_platform.sources.skill_source_config import (
+    validate_skill_sources,
+)
 from configs.installer import resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 
@@ -313,6 +316,7 @@ def load_gateway_config(
         local_skill_updates=SourceUpdatePolicy.model_validate(
             _nested_config_value(raw_gateway_config, "resources", "skill_sources", "local_updates") or {}
         ),
+        skill_sources=validate_skill_sources(_nested_config_value(raw_gateway_config, "resources", "skill_sources", "sources") or []),
         history_loading=_history_loading_config(raw_gateway_config),
         revision=config_revision(raw_gateway_config),
         schema_path=resolved_schema_path,

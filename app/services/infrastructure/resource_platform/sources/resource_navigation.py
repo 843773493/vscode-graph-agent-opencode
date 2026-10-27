@@ -119,6 +119,7 @@ class ResourceNavigation:
         file_paths: WorkspaceFilePaths | None = None,
         gateway_navigation: GatewayResourceNavigation | None = None,
         artifact_reader: ResourceFileReader | None = None,
+        network_skill_reader: ResourceFileReader | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("导航 owner 必须且只能绑定 Workspace 或 Gateway Skill 域")
@@ -137,6 +138,7 @@ class ResourceNavigation:
         self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
         self._gateway_id = gateway_id
         self._artifact_reader = artifact_reader
+        self._network_skill_reader = network_skill_reader
 
     def input_uri(self, value: str) -> str:
         """原生输入只在固定文件 owner 解释；资源 URI 留给唯一 grammar 校验。"""
@@ -227,8 +229,11 @@ class ResourceNavigation:
         artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         self._check_deadline(deadline)
+        if parsed.kind == "skills" and parsed.tail_segments[0].startswith("http_"):
+            return self._navigate_owned_file(parsed, request, gateway_id, deadline, self._network_skill_reader,
+                                             owner_id=self._workspace_id if self._workspace_root is not None else self._gateway_id)
         if parsed.session_artifact_kind is not None:
-            return self._navigate_artifact(parsed, request, gateway_id, deadline, artifact_reader or self._artifact_reader)
+            return self._navigate_owned_file(parsed, request, gateway_id, deadline, artifact_reader or self._artifact_reader, owner_id=self._workspace_id)
         root, children = self._root(parsed)
         path = self._contained(root, children, parsed)
         node = self._node(parsed, path)
@@ -240,7 +245,7 @@ class ResourceNavigation:
             if parsed.kind == "attachments":
                 # 原件无扩展名；MIME 与完整性仍由附件 owner 决定，正文投影复用原读取链。
                 # 工作区附件按工作区权限访问；Session 私有产物才消费调用者的精确 capability。
-                return self._navigate_artifact(parsed, request, gateway_id, deadline, self._artifact_reader)
+                return self._navigate_owned_file(parsed, request, gateway_id, deadline, self._artifact_reader, owner_id=self._workspace_id)
             return self._read(path, node, request, deadline)
         binding = hashlib.sha256(json.dumps(
             {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
@@ -302,11 +307,11 @@ class ResourceNavigation:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
         return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches)), request, deadline)
 
-    def _navigate_artifact(
+    def _navigate_owned_file(
         self, parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str,
-        deadline: float, reader: ResourceFileReader | None,
+        deadline: float, reader: ResourceFileReader | None, *, owner_id: str | None,
     ) -> ResourceNavigationResultDTO:
-        if parsed.gateway_authority is not None or parsed.scope_id != self._workspace_id or reader is None:
+        if parsed.gateway_authority is not None or parsed.scope_id != owner_id or reader is None:
             raise ResourceUriResolveError("capability_denied", "会话产物缺少此目标的原 owner 读取能力")
         node = ResourceNavigationNodeDTO.model_validate(resource_navigation_node(parsed, resource_shape="file"))
         if request.operation not in node.operations:

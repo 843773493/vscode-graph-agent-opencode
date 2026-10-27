@@ -21,7 +21,6 @@ from app.core.resource_uri import (
     skill_display_uri,
 )
 from app.core.trace_middleware import require_current_request_id
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillSourcesDTO,
@@ -49,6 +48,10 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
     ResourceNavigation,
     navigation_deadline,
     navigation_deadline_at,
+)
+from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
+    gateway_skill_revision,
+    http_skill_identity,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -359,15 +362,24 @@ class GatewaySkillSources:
     def _accept_snapshot(self, snapshot: GatewaySkillSourcesDTO, *, gateway_id: str) -> None:
         if snapshot.gateway_id != gateway_id or snapshot.workspace_id != self._workspace_id:
             raise ValueError("Gateway Skill source owner/audience mismatch")
-        names: set[str] = set()
+        identities: set[str] = set()
         for entry in snapshot.entries:
-            if entry.name in names or entry.name in {".", ".."} or "/" in entry.name or "\\" in entry.name:
+            if entry.entry_identity in identities or entry.name in {".", ".."} or "/" in entry.name or "\\" in entry.name:
                 raise ValueError("Gateway Skill source entry identity 无效")
-            names.add(entry.name)
+            identities.add(entry.entry_identity)
+            if entry.layer == "network":
+                parsed = parse_resource_uri(entry.display_uri)
+                source_key = parsed.tail_segments[0].removeprefix("http_")
+                expected_source, expected_identity, expected_uri = http_skill_identity("gateway", gateway_id, source_key)
+            else:
+                expected_source, expected_identity, expected_uri = (
+                    f"gateway-skill-source:{gateway_id}:{entry.name}",
+                    f"skill-entry:gateway:{gateway_id}:{entry.name}",
+                    skill_display_uri(scope="gateway", scope_id=gateway_id, skill_name=entry.name),
+                )
             if (
-                entry.entry_identity != f"skill-entry:gateway:{gateway_id}:{entry.name}"
-                or entry.source_id != f"gateway-skill-source:{gateway_id}:{entry.name}"
-                or entry.display_uri != skill_display_uri(scope="gateway", scope_id=gateway_id, skill_name=entry.name)
+                entry.entry_identity != expected_identity or entry.source_id != expected_source
+                or entry.display_uri != expected_uri
             ):
                 raise ValueError("Gateway Skill source entry provenance mismatch")
             raw = entry.content.encode("utf-8")
@@ -375,10 +387,7 @@ class GatewaySkillSources:
                 entry.available and entry.revision != "sha256:" + hashlib.sha256(raw).hexdigest()
             ):
                 raise ValueError("Gateway Skill source byte revision mismatch")
-        expected_revision = "sha256:" + hashlib.sha256(canonical_json_bytes({
-            "gateway_id": gateway_id, "available": snapshot.available,
-            "entries": [(entry.source_id, entry.revision, entry.available) for entry in snapshot.entries],
-        })).hexdigest()
+        expected_revision = gateway_skill_revision(gateway_id, snapshot.available, snapshot.entries)
         if snapshot.revision != expected_revision:
             raise ValueError("Gateway Skill source publication revision mismatch")
         state = self._state(gateway_id)

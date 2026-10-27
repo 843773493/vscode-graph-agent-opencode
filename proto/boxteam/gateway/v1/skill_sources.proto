@@ -13,6 +13,8 @@ message GatewaySkillSourceEntryDTO {
   string content = 7;
   bool available = 8;
   optional string error_code = 9;
+  string layer = 10;
+  int64 priority = 11;
 }
 
 message GatewaySkillSourcesDTO {

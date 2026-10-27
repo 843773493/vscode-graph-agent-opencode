@@ -442,6 +442,8 @@ Gateway本地来源默认由Gateway观察并发布，Workspace默认接收发布
 - **WHEN** 来源在初始快照获取和订阅建立之间变化，或订阅重连、收到gap
 - **THEN** Workspace主动对账到当前已发布版本，重复或旧通知不使accepted快照回退；无需持续高频轮询或重放每个中间版本
 
+Gateway 共享网络来源 SHALL通过 `resources.skill_sources.sources` 显式配置稳定id、逻辑name、层内priority、HTTP获取参数与独立更新策略；数组整体替换，id在owner内唯一。HTTP获取当前仅支持poll/manual，默认poll/1h；没有已登记事件协议时event/event_poll MUST明确拒绝。获取地址MUST保持owner私有，稳定identity和display URI MUST按owner及配置id产生，不随正文、获取URL或目录优先级变化。200正文MUST有界且为严格UTF-8；304 MUST对应带validator的条件请求、存在accepted正文且响应正文为空。validator变化本身不得制造内容revision。候选失败MUST保留原generation及accepted事实，旧代次的迟到正文与错误不得发布；普通导航只读取已接受快照。
+
 #### Scenario: 网络来源按owner获取且validator不充当内容版本
 
 - **WHEN** 两个Workspace消费同一Gateway共享HTTP Skill，或者该链接的ETag变化但正文语义不变

@@ -513,7 +513,7 @@ def test_graph_keeps_current_raw_lineage_when_ignored_fields_do_not_change_facet
     assert activation.revision == entry.activation_revision
     assert current.catalog_revision == first.catalog_revision
     catalog_spec = registry.descriptor(current.catalog_snapshot.resource_id)
-    assert catalog_spec.loader_version == "skill-catalog:v1"
+    assert catalog_spec.loader_version == "skill-catalog:v2"
     assert set(catalog_spec.source_ids) == set(current.directory_ids.values())
     assert {entry.metadata_resource_id, entry.activation_resource_id} <= set(catalog_spec.dependency_resource_ids)
     assert registry.descriptor(entry.metadata_resource_id).loader_version == "skill-frontmatter:v1"

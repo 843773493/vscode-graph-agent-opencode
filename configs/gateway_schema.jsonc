@@ -8,6 +8,8 @@
     { "pattern": "/resources/skill_sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/local_updates", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/local_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/ui/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -62,6 +64,34 @@
           "additionalProperties": false,
           "required": ["local_updates"],
           "properties": {
+            "sources": {
+              "type": "array", "default": [],
+              "description": "Gateway 统一获取的共享网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["id", "name", "fetch"],
+                "properties": {
+                  "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
+                  "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
+                  "priority": {"type": "integer", "default": 0},
+                  "fetch": {
+                    "type": "object", "additionalProperties": false, "required": ["protocol", "url"],
+                    "properties": {
+                      "protocol": {"const": "http"},
+                      "url": {"type": "string", "pattern": "^https?://[^/]+", "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"},
+                      "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 30}
+                    }
+                  },
+                  "updates": {
+                    "type": "object", "additionalProperties": false, "required": ["mode"],
+                    "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
+                    "properties": {"mode": {"enum": ["poll", "manual"]}, "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}},
+                    "if": {"properties": {"mode": {"const": "poll"}}},
+                    "then": {"required": ["poll_interval"], "properties": {"poll_interval": {"type": "string"}}},
+                    "else": {"properties": {"poll_interval": {"type": "null"}}}
+                  }
+                }
+              }
+            },
             "local_updates": {
               "type": "object",
               "description": "Gateway 本机 Skill 观察策略；经原配置候选 prepare/apply/health/promotion/rollback 热切换，旧订阅在结算后排空。",

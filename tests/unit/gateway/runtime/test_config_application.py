@@ -118,6 +118,53 @@ async def test_local_skill_hot_policy_and_management_refresh_share_accepted_owne
     assert not case.config.service.status().restart_required
 
 
+@pytest.mark.parametrize("failure", [None, "prepare", "promotion"])
+async def test_http_skill_config_switch_is_atomic_and_drains_old_generation(
+    skill_application: SkillApplicationCase, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    case = skill_application
+    status = 200
+
+    async def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=b"accepted body", headers={"ETag": '"accepted"'})
+
+    await case.owner.http_sources._client.aclose()
+    case.owner.http_sources._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+    async def configure(priority: int) -> None:
+        case.config.path.write_text(json.dumps({"config_version": 3, "resources": {"skill_sources": {"sources": [{
+            "id": "shared", "name": "demo", "priority": priority,
+            "fetch": {"protocol": "http", "url": "https://source.example.test/private"},
+            "updates": {"mode": "manual"},
+        }]}}}))
+        await case.config.service.reload()
+
+    empty = case.owner.http_sources.current
+    await configure(0)
+    previous = case.owner.http_sources.current
+    assert previous is not empty and len(case.owner.http_sources._generations) == 1
+    accepted = case.owner.snapshot(workspace_id="workspace")
+    assert any(entry.layer == "network" and entry.priority == 0 for entry in accepted.entries)
+    if failure == "prepare":
+        status = 503
+    elif failure == "promotion":
+        def reject_promotion(**kwargs: object) -> None:
+            raise ConfigConflictError("HTTP source 最终 CAS 冲突")
+        monkeypatch.setattr(case.config.store, "promote_active_config_snapshot", reject_promotion)
+    if failure is not None:
+        expected = ConfigConflictError if failure == "promotion" else RuntimeError
+        with pytest.raises(expected, match="stage=promotion|stage=runtime_apply"):
+            await configure(2)
+        assert case.owner.http_sources.current is previous
+        assert case.owner.snapshot(workspace_id="workspace") == accepted
+    else:
+        await configure(2)
+        assert case.owner.http_sources.current is not previous
+        assert any(entry.layer == "network" and entry.priority == 2 for entry in case.owner.snapshot(workspace_id="workspace").entries)
+        assert not case.config.service.status().restart_required
+    assert len(case.owner.http_sources._generations) == 1
+
+
 @pytest.mark.parametrize("mode", ["poll", "event_poll"])
 async def test_local_skill_poll_uses_configured_policy_and_same_reconciler(
     skill_application: SkillApplicationCase, monkeypatch: pytest.MonkeyPatch, mode: str,

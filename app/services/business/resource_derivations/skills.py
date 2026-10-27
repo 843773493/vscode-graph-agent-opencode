@@ -26,6 +26,7 @@ class SkillDerivationEntry:
     entry_identity: str
     source_id: str
     display_uri: str
+    priority: int = 0
 
     def resource_id(self, facet: str) -> str:
         return f"{self.entry_identity}:{facet}"
@@ -75,23 +76,32 @@ class SkillFacetLoader:
 
 @dataclass(frozen=True, slots=True)
 class SkillCatalogLoader:
-    """按 workspace > gateway > inline 从同一图的 facets 派生唯一 catalog。"""
+    """按四层及显式来源优先级选择，同层同优先级的名称冲突明确失败。"""
 
-    version: ClassVar[str] = "skill-catalog:v1"
+    version: ClassVar[str] = "skill-catalog:v2"
     entries: tuple[SkillDerivationEntry, ...]
 
     def __call__(self, inputs: Mapping[str, SemanticInput]) -> SemanticPayload:
-        layer_priority = {"inline": 0, "gateway": 1, "workspace": 2}
+        layer_priority = {"inline": 0, "network": 1, "gateway": 2, "workspace": 3}
         effective_by_name: dict[str, dict[str, str]] = {}
-        priority_by_name: dict[str, int] = {}
+        priority_by_name: dict[str, tuple[int, int]] = {}
+        candidates: set[tuple[str, int, str]] = set()
         for entry in self.entries:
-            priority = layer_priority.get(entry.layer)
-            if priority is None or priority_by_name.get(entry.name, -1) > priority:
+            layer = layer_priority.get(entry.layer)
+            if layer is None:
+                return SemanticPayload(available=False, error=f"Skill catalog 来源层未登记: layer={entry.layer}")
+            name = entry.name.strip()
+            candidate = (entry.layer, entry.priority, name)
+            if candidate in candidates:
+                return SemanticPayload(available=False, error=f"Skill catalog source conflict: layer={entry.layer}, priority={entry.priority}, name={name}")
+            candidates.add(candidate)
+            priority = (layer, entry.priority)
+            if name in priority_by_name and priority_by_name[name] > priority:
                 continue
             metadata_id = entry.resource_id("metadata")
             activation_id = entry.resource_id("activation")
-            effective_by_name[entry.name] = {
-                "name": entry.name,
+            effective_by_name[name] = {
+                "name": name,
                 "layer": entry.layer,
                 "entry_identity": entry.entry_identity,
                 "display_uri": entry.display_uri,
@@ -100,7 +110,7 @@ class SkillCatalogLoader:
                 "metadata_revision": inputs[metadata_id].revision,
                 "activation_revision": inputs[activation_id].revision,
             }
-            priority_by_name[entry.name] = priority
+            priority_by_name[name] = priority
         return SemanticPayload(
             payload={
                 "entries": [

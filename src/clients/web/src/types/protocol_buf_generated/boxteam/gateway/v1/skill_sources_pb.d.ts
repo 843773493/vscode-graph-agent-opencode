@@ -60,6 +60,16 @@ export declare type GatewaySkillSourceEntryDTO = Message<"boxteam.gateway.v1.Gat
    * @generated from field: optional string error_code = 9;
    */
   errorCode?: string | undefined;
+
+  /**
+   * @generated from field: string layer = 10;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: int64 priority = 11;
+   */
+  priority: bigint;
 };
 
 /**

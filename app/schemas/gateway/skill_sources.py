@@ -19,6 +19,8 @@ class GatewaySkillSourceEntryDTO(BaseModel):
     content: str
     available: bool
     error_code: Literal["source-unavailable"] | None = None
+    layer: Literal["gateway", "network"] = "gateway"
+    priority: int = Field(default=0, strict=True)
 
 
 class GatewaySkillSourcesDTO(BaseModel):

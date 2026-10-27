@@ -172,6 +172,11 @@ def _gateway_runtime_consumer_stages(
     generation = f"gateway-runtime:{candidate.revision}:{uuid4().hex}"
     fencing_token_digest = runtime_fencing_token_digest(fencing_token)
     stages: list[GatewayRuntimeConsumerStage] = []
+    if candidate.skill_sources != previous.skill_sources:
+        stages.append(app.state.skill_source_owner.sources_stage(
+            sources=candidate.skill_sources, generation=generation,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+        ))
     if candidate.local_skill_updates != previous.local_skill_updates:
         skill_sources = app.state.skill_source_owner
         if not isinstance(skill_sources, GatewaySkillSourceOwner):

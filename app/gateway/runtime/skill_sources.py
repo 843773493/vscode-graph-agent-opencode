@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -11,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.lifecycle import LifetimeScope
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerStage,
     GatewayRuntimeHealthProof,
@@ -34,8 +32,18 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
+from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
+    HttpSkillGeneration,
+    HttpSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
+)
+from app.services.infrastructure.resource_platform.sources.skill_source_config import (
+    SkillSourceConfig,
+)
+from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
+    gateway_skill_revision,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     FileSourceObservation,
@@ -56,9 +64,9 @@ class _GatewaySkillPublication:
 class GatewaySkillSourceOwner:
     """只从已接受文件事实派生可跨进程传输的无路径快照。"""
 
-    def __init__(self, *, gateway_id: str, skills_root: Path, update_policy: SourceUpdatePolicy | None = None) -> None:
+    def __init__(self, *, gateway_id: str, skills_root: Path, update_policy: SourceUpdatePolicy | None = None,
+                 sources: tuple[SkillSourceConfig, ...] = ()) -> None:
         self.gateway_id = gateway_id
-        self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root)
         self._scope = LifetimeScope("gateway-skill-sources")
         watcher = WorkspaceFileWatchService(workspace_root=skills_root)
         self.file_registry = WorkspaceFileResourceRegistry(
@@ -67,6 +75,11 @@ class GatewaySkillSourceOwner:
         )
         self._scope.register(watcher.shutdown, label="gateway-skill-file-watcher")
         self._scope.register(self.file_registry.stop, label="gateway-skill-files")
+        self.http_sources = HttpSkillSources(scope="gateway", scope_id=gateway_id, channel=self.file_registry.observation_channel)
+        self._source_configs = sources
+        self._scope.register(self.http_sources.close, label="gateway-http-skills")
+        self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root,
+                                              network_skill_reader=self.http_sources.read)
         self._directory_id = self.file_registry.register_skill_directory(
             root=skills_root, scope="gateway", scope_id=gateway_id,
         ).directory_id
@@ -117,9 +130,52 @@ class GatewaySkillSourceOwner:
             fencing_token_digest=fencing_token_digest, fence_check=fence_check,
         )
 
-    def refresh(self) -> GatewaySkillRefreshDTO:
+    def sources_stage(
+        self, *, sources: tuple[SkillSourceConfig, ...], generation: str,
+        fencing_token_digest: str | None, fence_check: Callable[[], None] | None,
+    ) -> GatewayRuntimeConsumerStage:
+        previous = self.http_sources.current
+        candidate: HttpSkillGeneration | None = None
+
+        async def prepare() -> None:
+            nonlocal candidate
+            candidate = await self.http_sources.prepare(sources)
+
+        def apply() -> None:
+            if candidate is None:
+                raise RuntimeError("HTTP Skill 来源候选尚未准备")
+            self.http_sources.activate(candidate)
+            self._publish()
+
+        def health() -> GatewayRuntimeHealthProof:
+            if self.http_sources.current is not candidate:
+                raise RuntimeError("HTTP Skill 来源代次不一致")
+            self.http_sources.entries()
+            return GatewayRuntimeHealthProof(
+                consumer_id="gateway-http-skills", generation=generation, state="healthy",
+                details={"source_ids": [source.id for source in sources]}, fencing_token_digest=fencing_token_digest,
+            )
+
+        def rollback() -> None:
+            if candidate is not None and self.http_sources.current is candidate and previous is not None:
+                self.http_sources.activate(previous)
+                self._publish()
+
+        async def finalize() -> None:
+            stale = previous if self.http_sources.current is candidate else candidate
+            if stale is not None:
+                await self.http_sources.close_generation(stale)
+
+        return GatewayRuntimeConsumerStage(
+            consumer_id="gateway-http-skills", generation=generation, prepare=prepare, apply=apply, health=health,
+            promote=lambda: None, rollback=rollback, finalize=finalize,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+        )
+
+    async def refresh(self) -> GatewaySkillRefreshDTO:
         self.file_registry.check_running()
         self.file_registry.reconcile()
+        await self.http_sources.refresh()
         self._publish()
         if self._publication is None:
             raise RuntimeError("Gateway Skill source owner 尚未就绪")
@@ -141,12 +197,11 @@ class GatewaySkillSourceOwner:
                 available=raw.available,
                 error_code=None if raw.available else "source-unavailable",
             ))
+        if self.http_sources.current is not None:
+            entries.extend(self.http_sources.entries())
         available = directory.available and all(entry.available for entry in entries)
         # revision 只组合 owner 已接受的原始 revision，不重新读取或 hash 全套正文。
-        revision = "sha256:" + hashlib.sha256(canonical_json_bytes({
-            "gateway_id": self.gateway_id, "available": available,
-            "entries": [(entry.source_id, entry.revision, entry.available) for entry in entries],
-        })).hexdigest()
+        revision = gateway_skill_revision(self.gateway_id, available, entries)
         publication = _GatewaySkillPublication(revision, tuple(entries), available)
         if publication == self._publication:
             return
@@ -196,6 +251,7 @@ class GatewaySkillSourceOwner:
             label="gateway-skill-observation",
         )
         await self.file_registry.start()
+        self.http_sources.activate(await self.http_sources.prepare(self._source_configs))
         self._publish()
 
         async def observe() -> None:
@@ -223,6 +279,7 @@ class GatewaySkillSourceOwner:
             raise RuntimeError("Gateway Skill source publication 意外退出")
         if self._task is not None:
             self.file_registry.check_running()
+            self.http_sources.entries()
         publication = self._publication
         return GatewaySkillSourcesDTO(
             gateway_id=self.gateway_id, workspace_id=workspace_id,

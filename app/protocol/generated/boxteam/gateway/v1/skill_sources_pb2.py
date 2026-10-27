@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&boxteam/gateway/v1/skill_sources.proto\x12\x12\x62oxteam.gateway.v1\"\xcf\x02\n\x1aGatewaySkillSourceEntryDTO\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12%\n\x0e\x65ntry_identity\x18\x02 \x01(\tR\rentryIdentity\x12\x1b\n\tsource_id\x18\x03 \x01(\tR\x08sourceId\x12\x1f\n\x0b\x64isplay_uri\x18\x04 \x01(\tR\ndisplayUri\x12\x1f\n\x08revision\x18\x05 \x01(\tH\x00R\x08revision\x88\x01\x01\x12\x1f\n\x0b\x62yte_length\x18\x06 \x01(\x04R\nbyteLength\x12\x18\n\x07\x63ontent\x18\x07 \x01(\tR\x07\x63ontent\x12\x1c\n\tavailable\x18\x08 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\t \x01(\tH\x01R\terrorCode\x88\x01\x01\x42\x0b\n\t_revisionB\r\n\x0b_error_code\"\x91\x02\n\x16GatewaySkillSourcesDTO\x12\x1d\n\ngateway_id\x18\x01 \x01(\tR\tgatewayId\x12!\n\x0cworkspace_id\x18\x02 \x01(\tR\x0bworkspaceId\x12\x1a\n\x08revision\x18\x03 \x01(\tR\x08revision\x12H\n\x07\x65ntries\x18\x04 \x03(\x0b\x32..boxteam.gateway.v1.GatewaySkillSourceEntryDTOR\x07\x65ntries\x12\x1c\n\tavailable\x18\x05 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\x06 \x01(\tH\x00R\terrorCode\x88\x01\x01\x42\r\n\x0b_error_codeb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&boxteam/gateway/v1/skill_sources.proto\x12\x12\x62oxteam.gateway.v1\"\x81\x03\n\x1aGatewaySkillSourceEntryDTO\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12%\n\x0e\x65ntry_identity\x18\x02 \x01(\tR\rentryIdentity\x12\x1b\n\tsource_id\x18\x03 \x01(\tR\x08sourceId\x12\x1f\n\x0b\x64isplay_uri\x18\x04 \x01(\tR\ndisplayUri\x12\x1f\n\x08revision\x18\x05 \x01(\tH\x00R\x08revision\x88\x01\x01\x12\x1f\n\x0b\x62yte_length\x18\x06 \x01(\x04R\nbyteLength\x12\x18\n\x07\x63ontent\x18\x07 \x01(\tR\x07\x63ontent\x12\x1c\n\tavailable\x18\x08 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\t \x01(\tH\x01R\terrorCode\x88\x01\x01\x12\x14\n\x05layer\x18\n \x01(\tR\x05layer\x12\x1a\n\x08priority\x18\x0b \x01(\x03R\x08priorityB\x0b\n\t_revisionB\r\n\x0b_error_code\"\x91\x02\n\x16GatewaySkillSourcesDTO\x12\x1d\n\ngateway_id\x18\x01 \x01(\tR\tgatewayId\x12!\n\x0cworkspace_id\x18\x02 \x01(\tR\x0bworkspaceId\x12\x1a\n\x08revision\x18\x03 \x01(\tR\x08revision\x12H\n\x07\x65ntries\x18\x04 \x03(\x0b\x32..boxteam.gateway.v1.GatewaySkillSourceEntryDTOR\x07\x65ntries\x12\x1c\n\tavailable\x18\x05 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\x06 \x01(\tH\x00R\terrorCode\x88\x01\x01\x42\r\n\x0b_error_codeb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,7 +32,7 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.gateway.v1.skill_so
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_GATEWAYSKILLSOURCEENTRYDTO']._serialized_start=63
-  _globals['_GATEWAYSKILLSOURCEENTRYDTO']._serialized_end=398
-  _globals['_GATEWAYSKILLSOURCESDTO']._serialized_start=401
-  _globals['_GATEWAYSKILLSOURCESDTO']._serialized_end=674
+  _globals['_GATEWAYSKILLSOURCEENTRYDTO']._serialized_end=448
+  _globals['_GATEWAYSKILLSOURCESDTO']._serialized_start=451
+  _globals['_GATEWAYSKILLSOURCESDTO']._serialized_end=724
 # @@protoc_insertion_point(module_scope)

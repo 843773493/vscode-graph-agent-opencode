@@ -460,6 +460,7 @@ class SkillCatalogSource:
     display_uri: str
     entry_identity: str
     source_id: str
+    priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,7 +591,7 @@ def _accepted_skill_sources(
                 revisions[directory_id] = _AcceptedSkillRevision(remote.revision, "", remote.available, remote.error_code)
                 for entry in remote.entries:
                     source = SkillCatalogSource(
-                        layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id,
+                        entry.layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id, entry.priority,
                     )
                     sources.append(source)
                     revisions[source.source_id] = _AcceptedSkillRevision(
@@ -621,7 +622,7 @@ def _accepted_skill_sources(
         boundary = revisions[directory_id]
         if not boundary.available:
             # 目录失败不能把 partial entries 或上一批正文冒充当前有效来源。
-            known = {source.source_id: source for source in (*previous_sources, *sources) if source.layer == layer}
+            known = {source.source_id: source for source in (*previous_sources, *sources) if source.layer == layer or (layer == "gateway" and source.layer == "network")}
             for source in known.values():
                 if source not in sources:
                     sources.append(source)
@@ -640,6 +641,7 @@ def _publish_workspace_skill_catalog(
     """唯一 Skill 发布链：accepted vector → graph facets → catalog。"""
     derivations = tuple(SkillDerivationEntry(
         source.name, source.layer, source.entry_identity, source.source_id, source.display_uri,
+        source.priority,
     ) for source in batch.sources)
     catalog_id = "skill-entry:workspace:catalog:catalog"
     with registry.publication():

@@ -19,6 +19,8 @@ export interface GatewaySkillSourceEntryDTO {
   content: string;
   available: boolean;
   error_code?: string | undefined;
+  layer: string;
+  priority: number;
 }
 
 export interface GatewaySkillSourcesDTO {
@@ -41,6 +43,8 @@ function createBaseGatewaySkillSourceEntryDTO(): GatewaySkillSourceEntryDTO {
     content: "",
     available: false,
     error_code: undefined,
+    layer: "",
+    priority: 0,
   };
 }
 
@@ -56,6 +60,8 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
       content: isSet(object.content) ? globalThis.String(object.content) : "",
       available: isSet(object.available) ? globalThis.Boolean(object.available) : false,
       error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      priority: isSet(object.priority) ? globalThis.Number(object.priority) : 0,
     };
   },
 
@@ -88,6 +94,12 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
     if (message.error_code !== undefined) {
       obj.error_code = message.error_code;
     }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.priority !== 0) {
+      obj.priority = Math.round(message.priority);
+    }
     return obj;
   },
 
@@ -105,6 +117,8 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
     message.content = object.content ?? "";
     message.available = object.available ?? false;
     message.error_code = object.error_code ?? undefined;
+    message.layer = object.layer ?? "";
+    message.priority = object.priority ?? 0;
     return message;
   },
 };

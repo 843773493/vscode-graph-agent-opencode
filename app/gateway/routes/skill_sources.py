@@ -53,7 +53,7 @@ async def refresh_local_skill_sources(
     request_id: str = Depends(get_request_id),
 ) -> APIResponse[GatewaySkillRefreshDTO]:
     """仅本机管理权限可触发获取；既有联邦只读授权不扩大为刷新权。"""
-    return APIResponse(data=owner.refresh(), request_id=request_id)
+    return APIResponse(data=await owner.refresh(), request_id=request_id)
 
 
 async def _source_request(
