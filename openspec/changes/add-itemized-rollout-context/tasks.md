@@ -498,6 +498,13 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 
 ## Verification ledger
 
+### 2026-10-27 task 初始化当前 HEAD 集成复核
+
+- 在 HEAD `4cb65fc59` 加完整共享改动的固定源码副本上复核第 13 节，实施提交 `100c66f0b`。核心 tree `83a16234a3dbe883888ce39a585c3601f8ea07d4`：124 单测通过（7.58 秒），正式 matrix 的真实模型 task/child 首次请求、精确 caller、重试、恢复、取消与删除共 11 集成通过（383.73 秒）。源码前后指纹一致，原 60 秒 fork deadline/watchdog 未改。
+- 公开 fork 的相邻回归先发现装具仍 mock 已删除的生成器 start/shutdown；生产 HEAD 已迁到持久任务运行时。本批将装具和原生命周期次数断言一起迁到现有 owner，未恢复旧 API。最终 tree `0c031f0e74c8a02d976516af4ae123a0318c7dd3` 的 `integration-fork-scope-contract` 11 项通过（42.83 秒），导航 lifespan 恢复及冲突清理 1 项通过（11.25 秒）；只在装具和 suite 注册发生变化，核心业务证据按相同文件字节复用。
+- 受影响 Ruff、catalog 包 Ruff、compileall、全部 47 份 OpenSpec strict 通过。真实 Pyright 基线/候选各 189 项既有诊断，无新增；两次 exit 1，不称类型全绿。保留直接 pytest 不符合 watchdog 启动合同的 setup 失败与装具过时失败，未以其作为业务结果。
+- 完整源码 tree/指纹、准确命令、原始输出、实际退出码和进程回收结果：`out/tests/temp/task-context-integration-finalize/artifacts/verification-018.json` 及 `runs/`。未验证真实外部 Provider、完整 Web/Gateway、Windows 或 OS 强杀重启；本次不关闭第 14 节新合同、Goal 或其他团队 TODO。
+
 ### 2026-10-26 task empty/context_fork 统一创建切片
 
 - 历史适用边界（2026-10-27）：以下 PASS 仅对应当时 empty/context_fork 和前缀未开放的实现；名称迁移、item-only 定位及新的 revision 职责按第 14 节重新验收，不用原 schema 拒绝前缀的测试证明新能力通过。
