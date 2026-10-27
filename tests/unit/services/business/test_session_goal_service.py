@@ -16,18 +16,18 @@ class _GoalStoreFake:
     def __init__(self):
         self.goal = None
 
-    def read(self, session_id):
+    def goal_read(self, session_id):
         return self.goal
 
-    def write(self, goal):
+    def goal_write(self, goal):
         self.goal = goal
 
-    def clear(self, session_id):
+    def goal_clear(self, session_id):
         existed = self.goal is not None
         self.goal = None
         return existed
 
-    def list_existing(self):
+    def goal_list(self):
         return [] if self.goal is None else [self.goal]
 
 
@@ -183,7 +183,7 @@ async def test_goal_responses_carry_authoritative_main_thread(
     read = await goal_service.get("sess_1")
     assert read is not None
     assert read.thread_id == "thr_sess_1"
-    # store 的内存 DTO 保留归属；goal.json 排除该派生字段由 store 测试证明。
+    # store 的内存 DTO 保留归属；任务应用状态排除该派生字段由 store 测试证明。
     assert goal_store.goal.thread_id == "thr_sess_1"
 
 

@@ -998,6 +998,7 @@ class SessionContextForkService:
             return
         await self._checkpointer.forks.abort_prepared_capture(current, reason)
         await self._checkpointer.forks.recovery.release_prepared_fork_retentions(current)
+        await self._goals.abort_fork_goal(current)
         await self._session_service.abort_prepared_context_fork(current, reason)
 
     async def _recover_prepared_fork(

@@ -26,6 +26,7 @@ from app.services.infrastructure.config.contracts import (
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
+from app.services.infrastructure.persistent_tasks.goal_import import import_legacy_goals
 
 if TYPE_CHECKING:
     from app.container import AppContainer
@@ -341,6 +342,8 @@ class WorkspaceLifespan:
                 await container.job_event_bus.register_durable_listener(self.record_session_activity)
             with _workspace_startup_stage(container, "pending_request_store.migrate_all"):
                 await container.pending_request_store.migrate_all()
+            with _workspace_startup_stage(container, "persistent_tasks.import_legacy_goals"):
+                import_legacy_goals(container.persistent_task_runtime.store)
             with _workspace_startup_stage(container, "runtime_service.reconcile_stale_executions"):
                 await container.checkpointer.recover_internal_interrupts()
                 reconciled = await container.runtime_service.reconcile_stale_executions()

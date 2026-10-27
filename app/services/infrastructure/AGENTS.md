@@ -39,7 +39,6 @@ infrastructure/
     │   ├── pending_queue_migration.py
     │   ├── pending_request_store.py
     │   ├── session_changes_store.py
-    │   ├── session_goal_store.py
     │   ├── session_message_idempotency_store.py
     │   ├── background_work_handlers.py
     │   └── background_work_store.py

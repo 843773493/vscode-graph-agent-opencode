@@ -23,17 +23,17 @@ class _Sessions:
 class _Store:
     goal = None
 
-    def read(self, session_id):
+    def goal_read(self, session_id):
         return self.goal
 
-    def write(self, goal):
+    def goal_write(self, goal):
         self.goal = goal
 
-    def clear(self, session_id):
+    def goal_clear(self, session_id):
         self.goal = None
         return True
 
-    def list_existing(self):
+    def goal_list(self):
         return [] if self.goal is None else [self.goal]
 
 

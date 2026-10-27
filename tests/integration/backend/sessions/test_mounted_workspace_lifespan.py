@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sqlite3
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -432,10 +433,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
                 lock = goals.lock_for(session_id)
                 await lock.acquire()
                 locks.append(lock)
-                goal_paths.append(
-                    container.session_service.path_resolver.resolve_session_node(session_id)
-                    / "goal.json"
-                )
+                goal_paths.append(runtime.store._store.path)
                 ready.set()
                 await close_requested.wait()
                 if terminal_status == JobStatus.failed:
@@ -468,7 +466,9 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
             await asyncio.wait_for(task, 8)
         else:
             await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 8)
-    assert json.loads(goal_paths[0].read_text(encoding="utf-8"))["status"] == expected_status.value
+    with sqlite3.connect(goal_paths[0]) as connection:
+        assert connection.execute("SELECT json_extract(application_json,'$.status') FROM persistent_tasks "
+                                  "WHERE application_type='goal' AND retired_at IS NULL").fetchone()[0] == expected_status.value
     assert not containers[0].persistent_task_runtime._inflight
     assert not containers[0].job_service._finalization_tasks
     assert controller.transport.call_count == 1

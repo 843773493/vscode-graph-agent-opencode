@@ -21,7 +21,7 @@ from app.services.business.persistent_tasks.goal import (
     normalize_objective,
 )
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.session_goal_store import SessionGoalStore
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 
 _UNSET = object()
 # Goal 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
@@ -30,7 +30,7 @@ GOAL_LOCK_SHARDS = 64
 
 class SessionGoalService:
     def __init__(
-        self, *, store: SessionGoalStore, session_service: SessionService, job_event_bus
+        self, *, store: PersistentTaskStore, session_service: SessionService, job_event_bus
     ) -> None:
         self._store = store
         self._session_service = session_service
@@ -51,7 +51,7 @@ class SessionGoalService:
 
     def started_owner(self, session_id: str, thread_id: str) -> str | None:
         """JOB_STARTED 同步发布边界冻结归属；无 await，不与同进程写入交错。"""
-        goal = self._store.read(session_id)
+        goal = self._store.goal_read(session_id)
         if goal is not None and goal.thread_id == thread_id and goal.status == GoalStatus.active:
             return goal.goal_id
         return None
@@ -59,7 +59,7 @@ class SessionGoalService:
     async def get(self, session_id: str) -> SessionGoalDTO | None:
         await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            return self._store.read(session_id)
+            return self._store.goal_read(session_id)
 
     async def install_fork_goal(self, record: SessionCreationRecord) -> str | None:
         """发布前消费冻结目标；恢复只复验，不重置已发布后用户修改的 Goal。"""
@@ -78,13 +78,17 @@ class SessionGoalService:
             token_budget=snapshot["token_budget"], created_at=created_at, updated_at=created_at,
         )
         async with self.lock_for(record.session_id):
-            current = self._store.read(record.session_id, creation=record)
+            current = self._store.goal_read(record.session_id, creation=record)
             if current is not None:
                 if current != goal:
                     raise RuntimeError("fork Goal 与冻结创建意图不一致")
             else:
-                self._store.write(goal, creation=record)
+                self._store.goal_write(goal, creation=record)
         return goal.goal_id
+
+    async def abort_fork_goal(self, record: SessionCreationRecord) -> None:
+        async with self.lock_for(record.session_id):
+            self._store.goal_abort_fork(record)
 
     async def set(
         self,
@@ -103,7 +107,7 @@ class SessionGoalService:
         ):
             raise ValueError("token_budget 必须大于 0")
         async with self.lock_for(session_id):
-            current = self._store.read(session_id)
+            current = self._store.goal_read(session_id)
             now = datetime.now(UTC)
             if current is None or replace:
                 if objective is None:
@@ -132,7 +136,7 @@ class SessionGoalService:
                     updates["token_budget"] = token_budget
                 current = current.model_copy(update=updates)
             current = enforce_budget(current)
-            self._store.write(current)
+            self._store.goal_write(current)
             await self._publish_updated(current)
             return current
 
@@ -143,7 +147,7 @@ class SessionGoalService:
         if token_budget is not None and token_budget <= 0:
             raise ValueError("token_budget 必须大于 0")
         async with self.lock_for(session_id):
-            existing = self._store.read(session_id)
+            existing = self._store.goal_read(session_id)
             if existing is not None and existing.status in UNFINISHED_GOAL_STATUSES:
                 raise RuntimeError("当前会话已有未完成 Goal，不能由 Agent 覆盖")
             now = datetime.now(UTC)
@@ -157,7 +161,7 @@ class SessionGoalService:
                 created_at=now,
                 updated_at=now,
             )
-            self._store.write(goal)
+            self._store.goal_write(goal)
             await self._publish_updated(goal)
             return goal
 
@@ -167,7 +171,7 @@ class SessionGoalService:
         if status == GoalStatus.paused:
             thread_id = await self._session_service.resolve_main_thread(session_id)
             async with self.lock_for(session_id):
-                current = self._store.read(session_id)
+                current = self._store.goal_read(session_id)
                 if current is None or current.status != GoalStatus.active:
                     raise ValueError("当前没有进行中的 Goal 可以暂停")
                 paused = current.model_copy(
@@ -179,7 +183,7 @@ class SessionGoalService:
                 )
                 if paused.thread_id != thread_id:
                     raise ValueError("Goal 只能更新权威 main Thread")
-                self._store.write(paused)
+                self._store.goal_write(paused)
                 await self._publish_updated(paused)
                 return paused
         if status not in {GoalStatus.complete, GoalStatus.blocked}:
@@ -189,7 +193,7 @@ class SessionGoalService:
     async def clear(self, session_id: str) -> SessionGoalClearResultDTO:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            cleared = self._store.clear(session_id)
+            cleared = self._store.goal_clear(session_id)
             if cleared:
                 await self._job_event_bus.publish(
                     job_id=f"goal:{session_id}",
@@ -209,14 +213,14 @@ class SessionGoalService:
         close_time: bool = False,
     ) -> SessionGoalDTO | None:
         async with self.lock_for(session_id):
-            goal = self._store.read(session_id)
+            goal = self._store.goal_read(session_id)
             if goal is None:
                 return goal
             goal = account_job(
                 goal, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed_seconds,
                 close_time=close_time, now=datetime.now(UTC),
             )
-            self._store.write(goal)
+            self._store.goal_write(goal)
             await self._publish_updated(goal)
             return goal
 
@@ -228,7 +232,7 @@ class SessionGoalService:
     ) -> bool:
         """在同一 Goal 锁内认领并派发，避免 pause/clear 与续跑穿插。"""
         async with self.lock_for(session_id):
-            goal = self._store.read(session_id)
+            goal = self._store.goal_read(session_id)
             if (
                 goal is None
                 or goal.status != GoalStatus.active
@@ -242,7 +246,7 @@ class SessionGoalService:
                     "updated_at": datetime.now(UTC),
                 }
             )
-            self._store.write(goal)
+            self._store.goal_write(goal)
             try:
                 await dispatch(goal)
             except BaseException:
@@ -252,7 +256,7 @@ class SessionGoalService:
                         "updated_at": datetime.now(UTC),
                     }
                 )
-                self._store.write(rolled_back)
+                self._store.goal_write(rolled_back)
                 raise
             return True
 
@@ -269,7 +273,7 @@ class SessionGoalService:
         )
 
     def list_existing(self) -> list[SessionGoalDTO]:
-        return self._store.list_existing()
+        return self._store.goal_list()
 
 
 TOKEN_BUDGET_UNSET = _UNSET

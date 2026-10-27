@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.identifier import create_prefixed_id
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.time_schedule import evaluate_schedule
 from app.domain.itemized.execution_queue import ExecutionCompletionPage
 from app.domain.itemized.hashing import sha256_jcs
@@ -28,6 +29,8 @@ from app.schemas.internal_v2.persistent_task import (
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
+from .goals import TaskGoals
+
 _INSERT_RUN = (
     "INSERT INTO persistent_task_runs (run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,"
     "request_id,check_only,phase,decision_json,delivery_json,error,created_at,updated_at,trigger_type,scheduled_for,trigger_payload_json) "
@@ -35,10 +38,12 @@ _INSERT_RUN = (
 )
 
 
-class PersistentTaskStore:
-    def __init__(self, store: WorkspaceStateStore, *, workspace_id: str) -> None:
+class PersistentTaskStore(TaskGoals):
+    def __init__(self, store: WorkspaceStateStore, *, workspace_id: str,
+                 paths: SessionCatalogPathResolver | None = None) -> None:
         self._store = store
         self.workspace_id = workspace_id
+        self._paths = paths
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -50,7 +55,7 @@ class PersistentTaskStore:
         row = connection.execute(
             "SELECT t.*,d.configuration_json FROM persistent_tasks t JOIN persistent_task_definitions d "
             "ON d.task_id=t.task_id AND d.definition_revision=t.definition_revision "
-            "WHERE t.task_id=? AND t.workspace_id=?", (task_id, self.workspace_id),
+            "WHERE t.task_id=? AND t.workspace_id=? AND t.application_type='automation'", (task_id, self.workspace_id),
         ).fetchone()
         if row is None:
             raise KeyError(f"持久任务不存在: {task_id}")
@@ -69,9 +74,10 @@ class PersistentTaskStore:
             return self._task(connection, task_id)
 
     def list(self) -> list[PersistentTaskDTO]:
+        # TODO：2.1/4.2 迁齐通用应用 DTO 后展示 Goal；当前 Goal 专用 API 已直接消费本 owner。
         with closing(self._store.connection()) as connection:
             return [self._task(connection, row[0]) for row in connection.execute(
-                "SELECT task_id FROM persistent_tasks WHERE workspace_id=? ORDER BY created_at,task_id", (self.workspace_id,),
+                "SELECT task_id FROM persistent_tasks WHERE workspace_id=? AND application_type='automation' ORDER BY created_at,task_id", (self.workspace_id,),
             ).fetchall()]
 
     def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
@@ -103,7 +109,9 @@ class PersistentTaskStore:
                     raise ClientStateConflictError("持久任务创建幂等键对应不同内容")
                 return self._task(connection, row[0])
             task_id = create_prefixed_id("ptask")
-            connection.execute("INSERT INTO persistent_tasks VALUES (?,?,?,?,1,1,?,NULL,?,?)", (
+            connection.execute("INSERT INTO persistent_tasks "
+                               "(task_id,workspace_id,creation_key,creation_hash,revision,definition_revision,lifecycle,reason,created_at,updated_at) "
+                               "VALUES (?,?,?,?,1,1,?,NULL,?,?)", (
                 task_id, self.workspace_id, request.idempotency_key, preimage,
                 "active" if request.enabled else "paused", now.isoformat(), now.isoformat(),
             ))

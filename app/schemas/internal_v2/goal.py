@@ -27,7 +27,7 @@ class SessionGoalDTO(BaseModel):
     goal_id: str
     session_id: str
     # Goal 只属于 main thread；该字段是权威 catalog 指针的响应投影，
-    # 由服务层解析回填，不写入 goal.json（避免出现第二 main 指针）。
+    # 由服务层解析回填，不写入任务应用状态（避免出现第二 main 指针）。
     thread_id: str
     objective: str
     status: GoalStatus

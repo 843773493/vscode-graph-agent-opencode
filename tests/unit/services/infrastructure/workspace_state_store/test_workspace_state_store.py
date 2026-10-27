@@ -64,7 +64,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 20
+        assert store.diagnostics().schema_version == 21
     finally:
         store.close()
 
@@ -165,7 +165,7 @@ def test_model_evaluation_reference_is_immutable_and_does_not_publish_a_decision
         assert recorded.decision is None and recorded.delivery is None and tasks.get(task.task_id).revision == 1
 
 
-@pytest.mark.parametrize("old_version", [16, 17, 18, 19])
+@pytest.mark.parametrize("old_version", [16, 17, 18, 19, 20])
 def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch, old_version):
     original = {
         "idempotency_key": "old-create", "enabled": True, "configuration": {
@@ -191,8 +191,11 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
         elif old_version == 17:
             connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL)",
                                (now.isoformat(), now.isoformat()))
-        else:
+        elif old_version < 20:
             connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL,NULL)",
+                               (now.isoformat(), now.isoformat()))
+        else:
+            connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL,NULL,NULL)",
                                (now.isoformat(), now.isoformat()))
     database.close()
     store = WorkspaceStateStore(workspace_root=workspace_root)

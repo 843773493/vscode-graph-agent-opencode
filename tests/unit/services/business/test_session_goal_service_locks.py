@@ -11,16 +11,16 @@ class _SessionService:
 
 
 class _Store:
-    def read(self, session_id):
+    def goal_read(self, session_id):
         return None
 
-    def write(self, goal):
+    def goal_write(self, goal):
         pass
 
-    def clear(self, session_id):
+    def goal_clear(self, session_id):
         return False
 
-    def list_existing(self):
+    def goal_list(self):
         return []
 
 

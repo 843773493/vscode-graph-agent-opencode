@@ -161,7 +161,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
-from app.services.infrastructure.session_goal_store import SessionGoalStore
 from app.services.infrastructure.session_message_idempotency_store import (
     SessionMessageIdempotencyStore,
 )
@@ -710,8 +709,11 @@ def _build_app_container(
     session_service.register_change_listener(
         file_tree_settings_service.handle_session_change
     )
+    persistent_task_store = PersistentTaskStore(
+        workspace_activity_service.store, workspace_id=workspace_id, paths=session_path_resolver,
+    )
     goal_service = SessionGoalService(
-        store=SessionGoalStore(session_path_resolver),
+        store=persistent_task_store,
         session_service=session_service,
         job_event_bus=job_event_bus,
     )
@@ -939,7 +941,7 @@ def _build_app_container(
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
     persistent_task_runtime = PersistentTaskRuntime(
-        store=PersistentTaskStore(workspace_activity_service.store, workspace_id=workspace_id),
+        store=persistent_task_store,
         orchestrator=session_orchestrator, dispatcher=runtime_source_dispatcher, sessions=session_service,
         events=task_channel(job_event_bus.event_channel_service, workspace_id), clock=clock_ports.wall,
         workspace_root=resolved_workspace_root, saver=checkpointer, job_events=job_event_bus,
@@ -1058,6 +1060,7 @@ def _build_app_container(
             runtime_source_dispatcher.recover_context_publications(session_id)
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
+            persistent_task_store.goal_clear(session_id)
             await session_communication_service.observations.drain_session(session_id)
             await team_fanout_service.drain_session(session_id)
             # 所有领域资源排空后关闭本 Session 的真实 graph scope；旧

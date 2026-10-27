@@ -763,17 +763,11 @@ class SessionCreationService:
             entries = sorted(entry.name for entry in directory.iterdir())
         required_entries = {_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME, "threads"}
         allowed_entries = required_entries
-        if (record.purpose == "context_fork" and record.request_intent_json is not None
-            and json.loads(record.request_intent_json)["goal_snapshot"] is not None):
-            allowed_entries = allowed_entries | {"goal.json"}
         if not required_entries.issubset(entries) or set(entries) - allowed_entries:
             raise _creation_conflict(
                 record, stage, "条目集与预期不一致（外部改动或上次准备中断，fail closed）",
                 directory=directory, required=sorted(required_entries), actual=entries,
             )
-        goal_path = directory / "goal.json"
-        if goal_path.is_symlink() or (goal_path.exists() and not goal_path.is_file()):
-            raise _creation_conflict(record, stage, "Goal 必须是普通文件", path=goal_path)
         threads_root = directory / "threads"
         if threads_root.is_symlink() or not threads_root.is_dir():
             raise _creation_conflict(record, stage, "threads 必须是普通目录", path=threads_root)

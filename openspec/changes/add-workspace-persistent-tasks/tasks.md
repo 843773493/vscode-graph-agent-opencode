@@ -37,8 +37,8 @@
 ## 4. 将 Goal 迁入统一运行时
 
 - [x] 4.1 将目标提示、预算记账及完成/阻塞审计构建为 Goal 应用组件，保持 main-thread 限定和既有状态语义。
-- [ ] 4.2 平移激活、目标更新、启动恢复、Agent/Job 事件处理并验证去重；Goal 工具和 API 直接操作统一任务 owner。
-- [ ] 4.3 实现可重试的一次性 goal.json 导入，保留稳定身份、预算、revision 和已续跑标记；迁齐fork冻结Goal、preparing节点安装、发布/取消/恢复及旧文件校验消费者，独立fork Goal保持新身份和零用量，child不获得Goal；迁齐消费者后物理移除旧 Goal 状态存储与专用调度实现。
+- [x] 4.2 平移激活、目标更新、启动恢复、Agent/Job 事件处理并验证去重；Goal 工具和 API 直接操作统一任务 owner。
+- [x] 4.3 实现可重试的一次性 goal.json 导入，保留稳定身份、预算、revision 和已续跑标记；迁齐fork冻结Goal、preparing节点安装、发布/取消/恢复及旧文件校验消费者，独立fork Goal保持新身份和零用量，child不获得Goal；迁齐消费者后物理移除旧 Goal 状态存储与专用调度实现。
 - [x] 4.4 物理删除 GoalRuntimeService 及其文件、import、容器字段与装配、独立事件订阅/注销和 close-admission/shutdown 步骤，删除 workspace_lifecycle 中 goal_runtime_service.resume_active_goals 启动 hook；由通用运行时统一接管，禁止保留转发包装层或改名后的独立 Goal 调度器。
 
 ## 5. 将定时生成器迁入统一运行时
@@ -191,3 +191,15 @@
 - 229相关Runtime/Goal应用Pyright零错误，231本批Ruff通过；232核对API的27项B008诊断与HEAD完全一致，未声称全仓静态分析全绿。全仓app/tests/scripts检索旧类、字段、恢复hook及测试selector无命中。没有协议、数据库或前端改动，不需要schema提升及Web构建。
 - 226产品测试发现naive Job时间与UTC观察时间相减错误，改为timestamp差并补齐四种时间组合；227/228已通过。210/211/220的日志调度、类型及非法测试Gateway身份错误均保留原件，最终对应检查通过。216原Goal/Terminal/interrupt综合测试exit124、150秒超时，仅输出一个点，不能算完整通过；221多挂载关闭首项在既有ready.wait 8秒、模型准备前失败，随后生命周期未关闭导致其余5项失败，未放宽期限，也不将这些场景计为通过。性能TODO及Windows既有长路径范围保留。
 - 准确命令、HEAD/源码指纹、原始输出和退出码保留在out/tests/temp/persistent-task-migration/artifacts/；正式产品产物沿对应测试路径保存。Goal存储/fork、生成器和主Web管理仍未完成，团队协作继续TODO。
+
+
+### Goal唯一任务owner与旧文件导入（2026-10-27）
+
+- Goal工具/API、共享worker、fork安装与取消统一使用容器显式复用的PersistentTaskStore；物理删除SessionGoalStore及原测试文件。Workspace SQL21在原任务表保存Goal应用状态、Session归属和退休标记，原定义表保存版本化目标/预算；main Thread只从catalog派生。用量/续跑变化复用原定义，普通任务不消费Goal定义。通用生命周期列由Goal应用状态同事务派生，不是独立可修改的第二状态源。
+- 旧goal.json仅由启动时显式导入器消费，目标与原字节指纹同事务提交，随后删除并fsync；删除失败重试不覆盖后续编辑，不复活已清除/替换的Goal，异内容或现有owner冲突明确失败并保留原件。导入枚举原catalog active节点和精确preparing创建记录，不扫盘吸收新Session。SQL16—20升级保留旧任务/运行/计划身份，实际结构变化才将Workspace schema升至21。
+- fork仍使用原冻结Goal ID与目标创建时间，preparing由原journal限定能力且不出现在Goal恢复列表；发布后重试不重装，失败先退休任务再由原创建owner清理。移除SessionCreationService允许/校验goal.json的旧物化分支；Session删除排空时也退休当前Goal。现有child Goal拒绝合同保持不变，Goal API与外部DTO不改变。
+- 239 **58 passed／4.01秒**，包括导入删除失败、清除/替换后重试、指纹冲突、事务回滚及SQL旧库升级、Goal业务/工具/worker行为；248最终存储检查 **9 passed／1.15秒**，增加定义缺失明确报错，不将损坏误读为空Goal。242调用方、导航生命周期、建库及发行SQL资产 **78 passed／31.64秒**；245 fork业务单测 **51 passed／2.04秒**。
+- 243真实API/SDK/model_stream的激活到模型完成与慢恢复暂停场景 **2 passed／34.99秒**。247完整正式matrix **2 passed／63.74秒**：真实Backend三次重启保留修改并不复活已清除Goal；真实Terminal/Browser与公开fork入口验证准备不可见、独立身份/零用量、发布后编辑不被重放覆盖及安装后发布前失败的撤销。关键状态由产品入口生成；迁移单测手工准备旧文件仅用于验证旧库输入。
+- 249新增存储/导入模块、251完整任务store及共享worker应用Pyright均零错误；246本批Ruff及250最终变更文件Ruff通过。所有最终运行具进程外期限/4GiB保护且source_changes为空。无公开协议/前端源码变化，不需要重新生成绑定或Web构建；全仓搜索旧store/import/测试selector无生产调用。
+- 235为51 passed/7 failed，237同样发现导入枚举漏传必填workspace_id，236因此主动停止（exit130、两个setup error）；修正后239/240通过。241为1 passed/1 failed：空历史测试误用必须有点击item的view_prefix_fork；改用既有full_rollout_copy。244亦1 passed/1 failed，实际故障已通过HTTP返回500但测试误期待Python异常；改为严格核对500、原故障事实、request_id及原创建aborted/任务退休，最终247通过。失败原件均保留。
+- 本切片完成4.2/4.3的实现与定向验证；通用应用传输/列表仍由2.1及6.5迁齐，store中已留明确TODO，不将旧自动化DTO强行解析Goal。完整Goal在途进程恢复及fork发布窗口的硬重启组合继续由7.4追踪；原多挂载准备长尾、Windows长路径、团队协作TODO不扩大本次范围。准确命令、HEAD/源码指纹、原始输出和退出码沿既有证据目录保留，正式新增产物在out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。

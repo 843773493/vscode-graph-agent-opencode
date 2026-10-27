@@ -4,6 +4,8 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
 @pytest.mark.asyncio
@@ -36,8 +38,11 @@ async def test_goal_api_persistence_replace_events_and_clear(
         ).resolve_session_node(session_id)
         / "goal.json"
     )
-    assert goal_path.is_file()
-    assert '"thread_id"' not in goal_path.read_text(encoding="utf-8")
+    assert not goal_path.exists()
+    with WorkspaceStateStore(workspace_root=Path(e2e_workspace_root_path)) as state:
+        resolver = get_session_path_resolver(Path(e2e_workspace_root_path) / ".boxteam" / "sessions")
+        tasks = PersistentTaskStore(state, workspace_id=resolver.workspace_id, paths=resolver)
+        assert tasks.goal_read(session_id).model_dump(mode="json") == first
 
     edited = await client.put(
         f"/api/v1/sessions/{session_id}/goal",

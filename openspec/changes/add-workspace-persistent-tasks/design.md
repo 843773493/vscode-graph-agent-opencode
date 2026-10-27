@@ -237,4 +237,11 @@ v16历史按原可观察顺序迁入新接受序号，原run_id、定义、reque
 
 ### Goal调度迁移的当前边界（2026-10-27）
 
-GoalRuntimeService已物理删除，其事件、激活及恢复工作由PersistentTaskRuntime唯一worker排队并共享并发槽位；Goal应用函数只处理单个工作项，没有独立恢复循环或生命周期。工作区启动仅等待共享worker初始化回执，关闭先停止动作准入，再排空Job终态和worker。事件同步冻结Goal归属、请求身份及观察时间；终态携带Job快照，避免注册表删除后的延迟读取。当前goal.json仍是唯一Goal状态来源，尚未完成统一任务owner及fork存储迁移；后续必须迁齐这些消费者并一次性导入后物理删除SessionGoalStore，不能把瞬态工作队列视为持久owner。
+GoalRuntimeService已物理删除，其事件、激活及恢复工作由PersistentTaskRuntime唯一worker排队并共享并发槽位；Goal应用函数只处理单个工作项，没有独立恢复循环或生命周期。工作区启动仅等待共享worker初始化回执，关闭先停止动作准入，再排空Job终态和worker。事件同步冻结Goal归属、请求身份及观察时间；终态携带Job快照，避免注册表删除后的延迟读取。后续的存储切片已将Goal迁入同一任务owner，见下一节；瞬态工作队列不作为持久事实源。
+
+
+### Goal应用的唯一持久状态（2026-10-27）
+
+Workspace schema21扩展原任务表，以application_type=goal、owner_session_id及application_json保存Goal身份、状态/用量/续跑标记；目标和预算在原不可变定义表版本化，用量更新不复制定义。Goal六状态是权威应用状态，通用lifecycle列仅为同事务派生索引；main Thread来自catalog，不持久第二指针。清除/替换退休原任务并保留原导入身份，既有Goal API返回合同不变。通用列表的typed应用投影仍由2.1/6.5实施，不能把Goal定义当普通自动化配置读取。
+
+启动在恢复fork及启动共享worker之前显式一次性导入旧goal.json；原始字节指纹与目标写入同一事务，核验成功后删除并fsync。重试只核对原导入回执，不能覆盖后续用户修改或复活已退休的Goal。fork继续按原creation journal安装、发布和撤销，准备阶段不可被调度；创建目录不再允许或要求goal.json。容器显式复用唯一PersistentTaskStore，旧SessionGoalStore已物理删除。完整进程窗口组合验收继续由7.4追踪，当前定向证据见tasks.md。

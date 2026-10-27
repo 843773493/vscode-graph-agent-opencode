@@ -51,8 +51,9 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.session_goal_store import SessionGoalStore
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.node_debug_dependencies import node_debug_file_paths
 from tests.support.workspaces import prepare_test_workspace
@@ -191,8 +192,9 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         job_executor=_InstantJobExecutor(),
         session_lifecycle_guard=session_service.assert_session_active,
     )
+    task_state = WorkspaceStateStore(workspace_root=workspace.workspace_root)
     goal_service = SessionGoalService(
-        store=SessionGoalStore(workspace.resolver),
+        store=PersistentTaskStore(task_state, workspace_id=workspace.workspace_id, paths=workspace.resolver),
         session_service=session_service,
         job_event_bus=JobEventBus(),
     )
@@ -240,6 +242,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
                 compactor=compactor,
             )
         finally:
+            task_state.close()
             workspace.close()
 
 

@@ -24,7 +24,7 @@ def operation_store(workspace_root):
     database.close()
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
-        assert store.diagnostics().schema_version == 20
+        assert store.diagnostics().schema_version == 21
         with closing(store.connection()) as connection:
             assert connection.execute("SELECT layer_digest FROM config_source_layers WHERE config_key = 'original'").fetchone()[0] == "old-digest"
         yield McpConnectionOperationStore(store), store
