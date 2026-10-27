@@ -11,7 +11,8 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.gateway.skill_sources import GatewaySkillSourceEntryDTO
 
 
-def http_skill_identity(scope: Literal["gateway", "workspace"], scope_id: str, source_id: str) -> tuple[str, str, str]:
+def configured_skill_identity(scope: Literal["gateway", "workspace"], scope_id: str, source_id: str) -> tuple[str, str, str]:
+    # v1 身份字节固定；http 是既有身份命名，不决定获取协议或触发方式。
     # 下划线不属于合法 Skill name，避免与本地同名 Skill 的资源根混用。
     return (
         f"skill-source:{scope}:{scope_id}:http:{source_id}",

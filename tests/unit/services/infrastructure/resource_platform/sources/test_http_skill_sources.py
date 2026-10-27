@@ -16,11 +16,18 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
-from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
-    HttpSkillSources,
+from app.services.infrastructure.resource_platform.sources import skill_source_config
+from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
+    ConfiguredSkillSources,
+)
+from app.services.infrastructure.resource_platform.sources.http_skill_fetch import (
+    HttpSkillFetch,
 )
 from app.services.infrastructure.resource_platform.sources.observed_source import (
     MAX_STABLE_READ_BYTES,
+)
+from app.services.infrastructure.resource_platform.sources.skill_fetch_contracts import (
+    SkillFetchCapability,
 )
 from app.services.infrastructure.resource_platform.sources.skill_source_config import (
     SkillSourceConfig,
@@ -30,7 +37,7 @@ from app.services.infrastructure.resource_platform.sources.skill_source_config i
 
 @dataclass
 class HttpCase:
-    owner: HttpSkillSources
+    owner: ConfiguredSkillSources
     requests: list[httpx.Request] = field(default_factory=list)
     status: int = 200
     body: bytes = b"initial body"
@@ -54,11 +61,14 @@ def source_config() -> SkillSourceConfig:
 
 
 @pytest.fixture
-async def http_case() -> AsyncIterator[HttpCase]:
-    owner = HttpSkillSources(scope="gateway", scope_id="gateway_0123456789abcdef0123456789abcdef", channel=ResourceObservationChannel())
-    await owner._client.aclose()
+async def http_case(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HttpCase]:
+    owner = ConfiguredSkillSources(scope="gateway", scope_id="gateway_0123456789abcdef0123456789abcdef", channel=ResourceObservationChannel())
     case = HttpCase(owner)
-    owner._client = httpx.AsyncClient(transport=httpx.MockTransport(case.respond))
+    capability = skill_source_config.skill_fetch_capability("http")
+    monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
+        "http": SkillFetchCapability(config_type=capability.config_type,
+            create=lambda: HttpSkillFetch(httpx.AsyncClient(transport=httpx.MockTransport(case.respond)))),
+    })
     try:
         yield case
     finally:
@@ -211,7 +221,7 @@ async def test_poll_and_manual_use_same_reconciler(http_case: HttpCase, source_c
     assert len(case.requests) == count
     await case.owner.refresh()
     assert case.owner.entries()[0].content == "manual update"
-    assert all(task.done() for task in old.tasks) and not manual.tasks
+    assert all(task.done() for task in old.tasks.values()) and not manual.tasks
 
 
 @pytest.mark.parametrize("change", [

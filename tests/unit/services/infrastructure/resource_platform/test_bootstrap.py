@@ -141,13 +141,13 @@ async def test_private_sources_have_workspace_owner_without_gateway_transport(tm
     scope = LifetimeScope("workspace-config")
     try:
         assert platform.gateway_skill_sources is None
-        assert platform.http_skill_sources is not None
+        assert platform.configured_skill_sources is not None
         activate = await platform.prepare_config({"resources": {"skill_sources": {
             "gateway_updates": {"mode": "event"}, "sources": [],
         }}}, scope)
         activate()
-        assert platform.http_skill_sources.owner_id == workspace_id
-        assert platform.http_skill_sources.entries() == ()
+        assert platform.configured_skill_sources.owner_id == workspace_id
+        assert platform.configured_skill_sources.entries() == ()
     finally:
         await scope.close()
         await platform.close()

@@ -407,6 +407,9 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 系统 SHALL 将owner私有获取地址解析、快照获取、更新触发、对账发布和上下文激活分开配置与执行。外部URL或其它私有locator只用于owner获取内容，模型可见寻址沿用统一资源寻址owner合同，不新增公开URI语法或把获取地址当作resource identity。系统 MUST支持通过配置引用代码内已登记的获取和触发能力，不得把来源限定为本地、Gateway、HTTP三类或仅按scheme固定分派策略；新协议需要先登记实现，未知协议、未登记能力和不支持的组合明确报错，不得剥离scheme改读本地路径或静默切换策略。配置不得执行任意代码、安装插件或维护第二套快照、tracking状态。
 
+
+配置来源 SHALL通过代码登记表选择 typed fetch 配置、runtime factory 和可选事件订阅端口；配置 roundtrip MUST保留已登记类型的全部字段，获取地址解析仅在所选实现中执行。生产当前只登记 HTTP，新增协议 MUST同步登记实现与配置 schema；不要求所有协议提供事件能力。获取端口只返回原始 bytes 或未变化标记及私有条件缓存，accepted 正文、validator、revision 和 generation MUST由同一 owner 在完整校验成功后原子接受；无 accepted 基准的未变化结果必须拒绝。已有 v1 身份中的 `:http:` 与 `http_<id>` SHALL保持不变且视为 opaque，MUST NOT据此选择获取协议，亦不得重绑既有 tracked 历史。
+
 触发 SHALL支持event、poll和manual；默认选择一种，允许显式组合事件与低频周期对账。poll间隔 MUST可配置为分钟、小时等正的有限周期，错误类型、非正值和不支持的参数组合在最终配置校验时明确失败。所有触发 MUST汇入同一owner的对账入口并合并重复请求，使用同一快照获取、校验和发布链路。本地文件监听、Gateway发布通知和HTTP周期检查只是可覆盖的默认组合；选用event但来源缺少所需事件能力时 MUST明确报错，不自动回退到poll。
 
 Gateway本地来源默认由Gateway观察并发布，Workspace默认接收发布通知后及时安排后台获取和校验；Workspace获知版本的方式 MUST允许配置切换为轮询同一认证快照接口，Gateway本地如何观察与Workspace如何获取更新分别配置。Gateway MUST先发布可获取的快照再发轻量通知，通知只携带来源身份、revision等线索，Workspace仅订阅其实际消费的来源或目录。首次订阅、重连和事件gap MUST主动对账，覆盖初始获取与建立订阅之间的变化窗口；重复、连续或乱序通知最终收敛到当前可验证快照，不要求逐个注入中间revision。
@@ -424,6 +427,17 @@ Gateway本地来源默认由Gateway观察并发布，Workspace默认接收发布
 
 - **WHEN** 软件已登记某特殊获取协议和poll能力，用户为显式来源组合两者
 - **THEN** owner通过所选能力进入相同对账和快照链路，不要求它伪装成本地文件或HTTP；若协议或能力未登记，则配置明确失败
+
+
+#### Scenario: 已登记事件能力覆盖激活与配置回滚窗口
+
+- **WHEN** 来源已登记事件订阅，候选初始获取后、配置激活前发生变化，或旧代次休眠期间收到触发后配置结算失败
+- **THEN** 来源先订阅后取初始快照，并在激活或回滚恢复时通过同一 observer 对账；休眠代次不获取或发布，成功结算后排空退役任务和订阅。event_poll 的周期超时不得取消在途事件等待
+
+#### Scenario: 事件订阅意外退出必须显式不可用
+
+- **WHEN** 已激活来源的事件等待失败或观察任务意外退出
+- **THEN** 记录原始异常并发布 unavailable，保留旧正文但不得报告健康或隐式改用 poll；候选准备失败仍保留原代次与 validator
 
 #### Scenario: Gateway本地观察策略与Workspace获取策略独立切换
 - **GIVEN** Gateway本地Skill由原文件owner发布，Workspace经认证快照与发布通知消费

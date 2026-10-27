@@ -29,14 +29,14 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
+from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
+    ConfiguredSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     GatewayResourceNavigation,
 )
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
-)
-from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
-    HttpSkillSources,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
@@ -68,7 +68,7 @@ class ResourcePlatform:
     file_registry: WorkspaceFileResourceRegistry
     state_events: ResourceStateEventPublisher
     gateway_skill_sources: GatewaySkillSources | None
-    http_skill_sources: HttpSkillSources | None
+    configured_skill_sources: ConfiguredSkillSources | None
     navigation: ResourceNavigation | None
 
     async def prepare_config(self, config: Mapping[str, object], scope: LifetimeScope) -> Callable[[], None]:
@@ -77,14 +77,14 @@ class ResourcePlatform:
         skills = cast(Mapping[str, object], resources["skill_sources"])
         policy = SourceUpdatePolicy.model_validate(skills["gateway_updates"])
         configs = validate_skill_sources(skills.get("sources", []))
-        if configs and self.http_skill_sources is None:
-            raise RuntimeError("HTTP Skill 配置缺少精确 Workspace owner")
-        activate_http = await self.http_skill_sources.prepare_config(configs, scope) if self.http_skill_sources is not None else None
+        if configs and self.configured_skill_sources is None:
+            raise RuntimeError("配置 Skill 配置缺少精确 Workspace owner")
+        activate_sources = await self.configured_skill_sources.prepare_config(configs, scope) if self.configured_skill_sources is not None else None
         activate_gateway = self.gateway_skill_sources.prepare_update_policy(policy, scope) if self.gateway_skill_sources is not None else None
 
         def activate() -> None:
-            if activate_http is not None:
-                activate_http()
+            if activate_sources is not None:
+                activate_sources()
             if activate_gateway is not None:
                 activate_gateway()
 
@@ -181,9 +181,9 @@ def bootstrap_resource_platform(
             update_policy=gateway_skill_updates,
         )
         scope.register(gateway_skill_sources.close, label="gateway-skill-sources")
-    http_skill_sources = HttpSkillSources(scope="workspace", scope_id=workspace_id, channel=observation_channel) if workspace_id is not None else None
-    if http_skill_sources is not None:
-        scope.register(http_skill_sources.close, label="workspace-http-skills")
+    configured_skill_sources = ConfiguredSkillSources(scope="workspace", scope_id=workspace_id, channel=observation_channel) if workspace_id is not None else None
+    if configured_skill_sources is not None:
+        scope.register(configured_skill_sources.close, label="workspace-http-skills")
     return ResourcePlatform(
         process_root_scope=scope,
         observation_channel=observation_channel,
@@ -191,13 +191,13 @@ def bootstrap_resource_platform(
         file_registry=file_registry,
         state_events=state_events,
         gateway_skill_sources=gateway_skill_sources,
-        http_skill_sources=http_skill_sources,
+        configured_skill_sources=configured_skill_sources,
         navigation=ResourceNavigation(
             workspace_root=workspace_root, workspace_id=workspace_id,
             project_root=project_root, gateway_sources=gateway_skill_sources, file_paths=file_paths,
             gateway_navigation=gateway_navigation,
             artifact_reader=artifact_reader,
-            network_skill_reader=http_skill_sources.read if http_skill_sources is not None else None,
+            network_skill_reader=configured_skill_sources.read if configured_skill_sources is not None else None,
         ) if workspace_id is not None else None,
     )
 

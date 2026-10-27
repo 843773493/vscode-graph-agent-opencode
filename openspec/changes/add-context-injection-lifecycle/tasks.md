@@ -346,7 +346,7 @@
 - [x] 9.6 实现统一来源块及已登记、版本化的CSM模型解释提示，覆盖system root、首次激活、diff、完整替换与恢复；说明来源、版本、增删行、替代范围、追踪状态及与用户任务的区别。采用确定性封装并明确正文边界，不泄露私有locator、凭据或提升信任资格；替换裸正文／裸diff投影，不新增另一套提醒消息路径。
 - [x] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
 - [x] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
-- [ ] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
+- [x] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
 - [x] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
 - [x] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
 - [x] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
@@ -529,3 +529,12 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 静态扩大到本切片和整个 config_service：Ruff 基线27／当前27，Pyright基线201／当前201，零新增，不声称全仓静态全绿。架构审查确认 Http owner 只持有获取事实，catalog 独占派生发布，中间件消费冻结值；未增加源码目录、兼容别名或第二获取实现。生成绑定按原生成器保留尾部空行，忽略该生成格式后差异检查通过。
 - 首轮刷新回执暴露原始 SHA 与 JCS revision 校验混用；配置检查暴露首次快照跳过 schema 时也漏掉新来源合同。两项均已修正并由上述产品／完整配置验收覆盖。最初100秒配置批次的退出124、命令文件名／脚本名错误、装具缺依赖等失败原件保留，不改写为成功。准确命令、源码指纹、raw、退出码、基线与结构对照均在 `out/tests/temp/gateway-http-skills/artifacts/`，汇集入口 `private-passed-checks.json` 及 `private-isolated-product-048.json`；各组有重叠，不累计用例数。
 - 关闭9.11／9.12／9.14／9.16。9.9 的获取能力组合仍未完成；团队／协作延期项和其它完整验收门继续保留未完成。
+
+
+### 2026-10-27 获取能力与更新触发组合闭合（9.9）
+
+- `SkillFetchCapability` 在发行代码登记 typed 配置、runtime factory 和可选订阅，配置按显式 protocol 选择并保留完整 roundtrip 字段；生产只登记 HTTP，未知协议、缺事件能力和非法／非有限周期在初始化前失败。HTTP 传输从接受 owner 物理分离；所有获取复用 `ConfiguredSkillSources` 的锁、sequence、正文验证、accepted、validator 和 generation。旧 HttpSkillSources 模块及全部直接／间接调用已迁齐并删除，无旧导出别名；v1 opaque 身份及 URI 字节保持不变，不按其 http 命名选择 transport。
+- 新非 HTTP fixture 能力直接验证 event／poll／manual／event_poll 共用接受链路、激活前事件、只读 accepted、UTF-8 失败不推进 validator、事件失败显式 unavailable 和订阅排空。额外回滚负例 `rollback-red-004` 的事件／轮询两项均失败，确认旧任务在候选接管时退出；修正为结算前休眠、回滚恢复原 observer 及待处理触发，成功结算才取消释放。event_poll 多次周期超时仍保留原事件等待。
+- 最终完整暂存 tree `c11986a2cf66b08a21e3263704d529d3d5c34447` 隔离他人 task／fork 改动后，相关单元／原配置发布／架构 89 passed／55.79秒，共享与私有真实 HTTP → Gateway → Workspace → Session 消息 → model_stream 产品 2 passed／300.44秒；加载、四层覆盖、显式 rebind、手动／一分钟周期、请求 hash 与冷恢复沿原产品断言。4557个受测 blob 逐项核验不变，正式输出保留，完整临时源码已清理。邻近消费者 `consumer-closure-002` 为306 passed／68.50秒（早于回滚修复，受测 app 当时不变，仅新测试文件发生变化）；修复后受影响 owner、Gateway consumer 与产品由隔离批重新覆盖。配置定向 `config-contract-008` 为25 passed，不能与重叠批次相加作为独立总场景数。
+- 19文件 Ruff 基线／最终均零诊断；Pyright 基线／最终均9项既有诊断，零新增，类型检查本身 exit1。新增 typed 继承已显式 frozen，未忽略类型错误。AST／目录审查无新增结构问题：获取协议留在来源目录，通知不存正文，acceptance 不进入 CSM／数据库 writer；大文件仅迁移原字段／调用，未增加无关职责。公共 DTO／Proto／Web 源码均未变化，Web真实类型与构建按上一边界未变依赖复用，未声称本轮重跑或实际浏览器／外部 Provider／Windows验证。
+- 准确命令、源码指纹、原始输出、实际退出码、静态基线和隔离产品原件位于 `out/tests/temp/skill-source-capabilities/artifacts/`。关闭9.9，当前69/76；团队／协作延期项及其余全量验收门仍保持未完成。

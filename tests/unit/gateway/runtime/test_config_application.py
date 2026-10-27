@@ -39,6 +39,13 @@ from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
+from app.services.infrastructure.resource_platform.sources import skill_source_config
+from app.services.infrastructure.resource_platform.sources.http_skill_fetch import (
+    HttpSkillFetch,
+)
+from app.services.infrastructure.resource_platform.sources.skill_fetch_contracts import (
+    SkillFetchCapability,
+)
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChangeBatch,
 )
@@ -128,8 +135,11 @@ async def test_http_skill_config_switch_is_atomic_and_drains_old_generation(
     async def respond(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(status, content=b"accepted body", headers={"ETag": '"accepted"'})
 
-    await case.owner.http_sources._client.aclose()
-    case.owner.http_sources._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    capability = skill_source_config.skill_fetch_capability("http")
+    monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
+        "http": SkillFetchCapability(config_type=capability.config_type,
+            create=lambda: HttpSkillFetch(httpx.AsyncClient(transport=httpx.MockTransport(respond)))),
+    })
 
     async def configure(priority: int) -> None:
         case.config.path.write_text(json.dumps({"config_version": 3, "resources": {"skill_sources": {"sources": [{
@@ -139,10 +149,10 @@ async def test_http_skill_config_switch_is_atomic_and_drains_old_generation(
         }]}}}))
         await case.config.service.reload()
 
-    empty = case.owner.http_sources.current
+    empty = case.owner.configured_sources.current
     await configure(0)
-    previous = case.owner.http_sources.current
-    assert previous is not empty and len(case.owner.http_sources._generations) == 1
+    previous = case.owner.configured_sources.current
+    assert previous is not empty and len(case.owner.configured_sources._generations) == 1
     accepted = case.owner.snapshot(workspace_id="workspace")
     assert any(entry.layer == "network" and entry.priority == 0 for entry in accepted.entries)
     if failure == "prepare":
@@ -155,14 +165,14 @@ async def test_http_skill_config_switch_is_atomic_and_drains_old_generation(
         expected = ConfigConflictError if failure == "promotion" else RuntimeError
         with pytest.raises(expected, match="stage=promotion|stage=runtime_apply"):
             await configure(2)
-        assert case.owner.http_sources.current is previous
+        assert case.owner.configured_sources.current is previous
         assert case.owner.snapshot(workspace_id="workspace") == accepted
     else:
         await configure(2)
-        assert case.owner.http_sources.current is not previous
+        assert case.owner.configured_sources.current is not previous
         assert any(entry.layer == "network" and entry.priority == 2 for entry in case.owner.snapshot(workspace_id="workspace").entries)
         assert not case.config.service.status().restart_required
-    assert len(case.owner.http_sources._generations) == 1
+    assert len(case.owner.configured_sources._generations) == 1
 
 
 @pytest.mark.parametrize("mode", ["poll", "event_poll"])

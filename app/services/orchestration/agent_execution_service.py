@@ -74,11 +74,11 @@ from app.services.infrastructure.message_stream_store import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
+    ConfiguredSkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
-)
-from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
-    HttpSkillSources,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
@@ -127,7 +127,7 @@ class AgentExecutionService(JobStepExecutor):
         # Turn 控制 inbox 状态路径解析器；None 时用 SQLite catalog 解析到会话节点。
         control_inbox_state_path: Callable[[str, str], Path] | None = None,
         gateway_skill_sources: GatewaySkillSources | None = None,
-        http_skill_sources: HttpSkillSources | None = None,
+        configured_skill_sources: ConfiguredSkillSources | None = None,
     ):
         # OpenSpec 8.4：进程内复用的只有不含 Session/Thread 的 graph
         # blueprint/topology 投影——这里缓存的是 Provider 工具面定义（纯 DTO）
@@ -154,7 +154,7 @@ class AgentExecutionService(JobStepExecutor):
         self._external_resource_leases = external_resource_leases
         self._workspace_file_resource_registry = workspace_file_resource_registry
         self._gateway_skill_sources = gateway_skill_sources
-        self._http_skill_sources = http_skill_sources
+        self._configured_skill_sources = configured_skill_sources
         self._graph_binding_store = graph_binding_store
         self._residency_tracker = residency_tracker
         self._resource_activation_factory = resource_activation_factory
@@ -337,7 +337,7 @@ class AgentExecutionService(JobStepExecutor):
                         file_registry=file_registry,
                         gateway_id=gateway_id,
                         gateway_sources=self._gateway_skill_sources if gateway_id is not None else None,
-                        http_sources=self._http_skill_sources,
+                        configured_sources=self._configured_skill_sources,
                     )
                     agent = self._build_agent(
                         session_id=session_id,
@@ -362,7 +362,7 @@ class AgentExecutionService(JobStepExecutor):
                 file_registry=file_registry,
                 lifetime_scope=scope,
                 gateway_sources=self._gateway_skill_sources if gateway_id is not None else None,
-                http_sources=self._http_skill_sources,
+                configured_sources=self._configured_skill_sources,
             )
             await observe_phase(thread_id, "thread.runtime.built", details={
                 "session_id": session_id, "thread_id": thread_id,

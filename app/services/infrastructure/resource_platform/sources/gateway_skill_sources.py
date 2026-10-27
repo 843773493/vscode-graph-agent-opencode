@@ -50,8 +50,8 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
     navigation_deadline_at,
 )
 from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
+    configured_skill_identity,
     gateway_skill_revision,
-    http_skill_identity,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -138,7 +138,7 @@ class GatewaySkillSources:
         return activate
 
     def _prepare_observer(self, state: _GatewaySkillState, generation: _ObservationGeneration) -> None:
-        if generation.policy.mode == "manual" or state.gateway_id in generation.tasks:
+        if not generation.policy.automatic or state.gateway_id in generation.tasks:
             return
 
         async def observe() -> None:
@@ -370,7 +370,7 @@ class GatewaySkillSources:
             if entry.layer == "network":
                 parsed = parse_resource_uri(entry.display_uri)
                 source_key = parsed.tail_segments[0].removeprefix("http_")
-                expected_source, expected_identity, expected_uri = http_skill_identity("gateway", gateway_id, source_key)
+                expected_source, expected_identity, expected_uri = configured_skill_identity("gateway", gateway_id, source_key)
             else:
                 expected_source, expected_identity, expected_uri = (
                     f"gateway-skill-source:{gateway_id}:{entry.name}",
@@ -408,7 +408,7 @@ class GatewaySkillSources:
         state = self._state(gateway_id)
         policy = generation.policy
         interval = policy.poll_seconds
-        if policy.mode == "poll":
+        if not policy.uses_events:
             assert interval is not None
             while generation is self._generation:
                 await asyncio.sleep(interval)

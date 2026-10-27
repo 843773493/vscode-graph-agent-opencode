@@ -32,9 +32,9 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
-from app.services.infrastructure.resource_platform.sources.http_skill_sources import (
-    HttpSkillGeneration,
-    HttpSkillSources,
+from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
+    ConfiguredSkillGeneration,
+    ConfiguredSkillSources,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
@@ -75,11 +75,11 @@ class GatewaySkillSourceOwner:
         )
         self._scope.register(watcher.shutdown, label="gateway-skill-file-watcher")
         self._scope.register(self.file_registry.stop, label="gateway-skill-files")
-        self.http_sources = HttpSkillSources(scope="gateway", scope_id=gateway_id, channel=self.file_registry.observation_channel)
+        self.configured_sources = ConfiguredSkillSources(scope="gateway", scope_id=gateway_id, channel=self.file_registry.observation_channel)
         self._source_configs = sources
-        self._scope.register(self.http_sources.close, label="gateway-http-skills")
+        self._scope.register(self.configured_sources.close, label="gateway-http-skills")
         self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root,
-                                              network_skill_reader=self.http_sources.read)
+                                              network_skill_reader=self.configured_sources.read)
         self._directory_id = self.file_registry.register_skill_directory(
             root=skills_root, scope="gateway", scope_id=gateway_id,
         ).directory_id
@@ -134,37 +134,37 @@ class GatewaySkillSourceOwner:
         self, *, sources: tuple[SkillSourceConfig, ...], generation: str,
         fencing_token_digest: str | None, fence_check: Callable[[], None] | None,
     ) -> GatewayRuntimeConsumerStage:
-        previous = self.http_sources.current
-        candidate: HttpSkillGeneration | None = None
+        previous = self.configured_sources.current
+        candidate: ConfiguredSkillGeneration | None = None
 
         async def prepare() -> None:
             nonlocal candidate
-            candidate = await self.http_sources.prepare(sources)
+            candidate = await self.configured_sources.prepare(sources)
 
         def apply() -> None:
             if candidate is None:
-                raise RuntimeError("HTTP Skill 来源候选尚未准备")
-            self.http_sources.activate(candidate)
+                raise RuntimeError("配置 Skill 来源候选尚未准备")
+            self.configured_sources.activate(candidate)
             self._publish()
 
         def health() -> GatewayRuntimeHealthProof:
-            if self.http_sources.current is not candidate:
-                raise RuntimeError("HTTP Skill 来源代次不一致")
-            self.http_sources.entries()
+            if self.configured_sources.current is not candidate:
+                raise RuntimeError("配置 Skill 来源代次不一致")
+            self.configured_sources.entries()
             return GatewayRuntimeHealthProof(
                 consumer_id="gateway-http-skills", generation=generation, state="healthy",
                 details={"source_ids": [source.id for source in sources]}, fencing_token_digest=fencing_token_digest,
             )
 
         def rollback() -> None:
-            if candidate is not None and self.http_sources.current is candidate and previous is not None:
-                self.http_sources.activate(previous)
+            if candidate is not None and self.configured_sources.current is candidate and previous is not None:
+                self.configured_sources.activate(previous)
                 self._publish()
 
         async def finalize() -> None:
-            stale = previous if self.http_sources.current is candidate else candidate
+            stale = previous if self.configured_sources.current is candidate else candidate
             if stale is not None:
-                await self.http_sources.close_generation(stale)
+                await self.configured_sources.close_generation(stale)
 
         return GatewayRuntimeConsumerStage(
             consumer_id="gateway-http-skills", generation=generation, prepare=prepare, apply=apply, health=health,
@@ -175,7 +175,7 @@ class GatewaySkillSourceOwner:
     async def refresh(self) -> GatewaySkillRefreshDTO:
         self.file_registry.check_running()
         self.file_registry.reconcile()
-        await self.http_sources.refresh()
+        await self.configured_sources.refresh()
         self._publish()
         if self._publication is None:
             raise RuntimeError("Gateway Skill source owner 尚未就绪")
@@ -197,8 +197,8 @@ class GatewaySkillSourceOwner:
                 available=raw.available,
                 error_code=None if raw.available else "source-unavailable",
             ))
-        if self.http_sources.current is not None:
-            entries.extend(self.http_sources.entries())
+        if self.configured_sources.current is not None:
+            entries.extend(self.configured_sources.entries())
         available = directory.available and all(entry.available for entry in entries)
         # revision 只组合 owner 已接受的原始 revision，不重新读取或 hash 全套正文。
         revision = gateway_skill_revision(self.gateway_id, available, entries)
@@ -251,7 +251,7 @@ class GatewaySkillSourceOwner:
             label="gateway-skill-observation",
         )
         await self.file_registry.start()
-        self.http_sources.activate(await self.http_sources.prepare(self._source_configs))
+        self.configured_sources.activate(await self.configured_sources.prepare(self._source_configs))
         self._publish()
 
         async def observe() -> None:
@@ -279,7 +279,7 @@ class GatewaySkillSourceOwner:
             raise RuntimeError("Gateway Skill source publication 意外退出")
         if self._task is not None:
             self.file_registry.check_running()
-            self.http_sources.entries()
+            self.configured_sources.entries()
         publication = self._publication
         return GatewaySkillSourcesDTO(
             gateway_id=self.gateway_id, workspace_id=workspace_id,

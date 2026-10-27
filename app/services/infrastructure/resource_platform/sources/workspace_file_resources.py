@@ -646,7 +646,7 @@ class WorkspaceFileResourceRegistry:
     async def _sync_watch_subscriptions(self, observation: FileSourceObservation, *, publish: bool = True) -> None:
         """按当前安全边界增删监听；新增目录 ready 后立即重新对账。"""
         while True:
-            desired = self._desired_watch_roots() if observation.policy.mode in {"event", "event_poll"} else set()
+            desired = self._desired_watch_roots() if observation.policy.uses_events else set()
             desired_keys = {
                 self._subscription_key(root, recursive)
                 for root, recursive in desired
