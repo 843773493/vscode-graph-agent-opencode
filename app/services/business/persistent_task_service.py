@@ -56,6 +56,8 @@ class PersistentTaskService:
     def get(self, task_id: str) -> PersistentTaskDTO:
         task = self._store.get(task_id)
         recovering = self.runtime.recovering(task_id)
+        if task.application_type == "goal":
+            return task.model_copy(update={"recovering": recovering, "phase": "recovering" if recovering else task.phase})
         pending = self._store.runs(task_id, pending_only=True)
         phase = "recovering" if recovering else (pending[0].phase if pending else task.phase)
         return task.model_copy(update={"recovering": recovering, "phase": phase})
@@ -86,7 +88,7 @@ class PersistentTaskService:
         lifecycles: dict[str, TaskLifecycle] = {"pause": "paused", "resume": "active", "terminate": "terminated"}
         lifecycle = lifecycles[request.action]
         async with self.runtime.locks.lock_for(task_id):
-            configuration = self._store.get(task_id).configuration
+            configuration = self._store.get_automation(task_id).configuration
             cursor = await self.runtime.execution_source_cursor(configuration) if lifecycle == "active" else None
             self._store.control(task_id, expected_revision=request.expected_revision, lifecycle=lifecycle,
                                 now=self.runtime.clock(), source_cursor=cursor)

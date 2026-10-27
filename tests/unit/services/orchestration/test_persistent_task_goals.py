@@ -130,7 +130,7 @@ def session_orchestrator() -> _Orchestrator:
 @pytest.fixture
 async def goal_runtime(goal_service, job_service, session_orchestrator):
     store = Mock()
-    store.list.return_value = []
+    store.list_automations.return_value = []
     store.schedule_due.return_value = []
     store.next_schedule_at.return_value = None
     runtime = PersistentTaskRuntime(

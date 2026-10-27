@@ -386,7 +386,7 @@ async def test_worker_failures_are_visible_and_shutdown_retrieves_the_failure(
     case = source_case
     runtime = case.container.persistent_task_runtime
     await runtime.stop()
-    original = runtime.store.list
+    original = runtime.store.list_automations
 
     def broken_store():
         raise RuntimeError("task-storage-fault")
@@ -394,7 +394,7 @@ async def test_worker_failures_are_visible_and_shutdown_retrieves_the_failure(
     try:
         if stage == "running":
             await runtime.start()
-        monkeypatch.setattr(runtime.store, "list", broken_store)
+        monkeypatch.setattr(runtime.store, "list_automations", broken_store)
         if stage == "initialization":
             with pytest.raises(RuntimeError, match="task-storage-fault"):
                 await runtime.start()
@@ -413,7 +413,7 @@ async def test_worker_failures_are_visible_and_shutdown_retrieves_the_failure(
             await runtime.stop()
         assert runtime._worker is None and runtime._inflight == {}
     finally:
-        monkeypatch.setattr(runtime.store, "list", original)
+        monkeypatch.setattr(runtime.store, "list_automations", original)
         if runtime._worker is not None:
             with pytest.raises(RuntimeError, match="task-storage-fault"):
                 await runtime.stop()
@@ -444,6 +444,11 @@ async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tas
     try:
         await asyncio.wait_for(runtime.start(), 1)
         await asyncio.wait_for(entered.wait(), 1)
+        management = await case.client.get(f"{ROOT}/{goal.goal_id}")
+        assert management.status_code == 200, management.text
+        projected = management.json()["data"]
+        assert projected["recovering"] and projected["phase"] == "recovering"
+        assert projected["goal"]["goal_id"] == goal.goal_id and projected["lifecycle"] == "active"
         # 通用任务继续通过真实 API 发布上下文，不等待慢 Goal 恢复。
         run = await _check(case, task)
         assert (await _run(case, task, run))["delivery"]["state"] == "saved"
@@ -451,12 +456,16 @@ async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tas
         assert response.status_code == 200, response.text
         paused = response.json()["data"]
         assert paused["goal_id"] == goal.goal_id and paused["status"] == "paused"
+        projected = (await case.client.get(f"{ROOT}/{goal.goal_id}")).json()["data"]
+        assert projected["recovering"] and projected["phase"] == "recovering" and projected["lifecycle"] == "paused"
         release.set()
         async with asyncio.timeout(5):
             while f"goal:{session_id}" in runtime._inflight or runtime._application_work:
                 await asyncio.sleep(0.01)
         current = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]
         assert current == paused
+        projected = (await case.client.get(f"{ROOT}/{goal.goal_id}")).json()["data"]
+        assert not projected["recovering"] and projected["phase"] == "paused" and projected["goal"] == paused
         assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
         assert (await case.client.get("/api/v1/health")).status_code == 200
     finally:

@@ -67,7 +67,7 @@
 - [ ] 7.5 完成后端相关静态分析、真实前端类型检查与 `bun run --cwd src/clients/web build`；全部测试采用进程外超时与内存保护，保留源码指纹、命令、原始输出和实际退出码。
 - [ ] 7.6 在隔离工作区通过真实 Gateway 和浏览器验证创建/编辑/检查/暂停/恢复、运行记录、Goal 联动及工作区/会话切换；当前开发环境以实际 8111 启动配置为准，核对初始化 API 和 request_id，产物遵守 out/tests 路径规范。
 - [ ] 7.7 交付前全仓检索旧接口与 producer，检查悬空调用、双轨、第二事实源、隐式回退和无关改动；如实列明通过、失败及未验证范围。
-- [ ] 7.8 验证慢 Goal/条件判断恢复不阻塞工作区就绪、同任务恢复前新触发只排队、不同已恢复任务可推进，以及 worker 初始化/运行期失败均明确报告；断言没有独立 Goal 恢复入口。
+- [x] 7.8 验证慢 Goal/条件判断恢复不阻塞工作区就绪、同任务恢复前新触发只排队、不同已恢复任务可推进，以及 worker 初始化/运行期失败均明确报告；断言没有独立 Goal 恢复入口。
 - [ ] 7.9 验证普通定时任务对多个计划点均执行且无额外脚本/判断模型调用，同任务开启附加条件后保留身份、游标与历史；真实前端验证默认隐藏判断配置和统一编辑流程。
 
 ## 实施证据
@@ -203,3 +203,14 @@
 - 249新增存储/导入模块、251完整任务store及共享worker应用Pyright均零错误；246本批Ruff及250最终变更文件Ruff通过。所有最终运行具进程外期限/4GiB保护且source_changes为空。无公开协议/前端源码变化，不需要重新生成绑定或Web构建；全仓搜索旧store/import/测试selector无生产调用。
 - 235为51 passed/7 failed，237同样发现导入枚举漏传必填workspace_id，236因此主动停止（exit130、两个setup error）；修正后239/240通过。241为1 passed/1 failed：空历史测试误用必须有点击item的view_prefix_fork；改用既有full_rollout_copy。244亦1 passed/1 failed，实际故障已通过HTTP返回500但测试误期待Python异常；改为严格核对500、原故障事实、request_id及原创建aborted/任务退休，最终247通过。失败原件均保留。
 - 本切片完成4.2/4.3的实现与定向验证；通用应用传输/列表仍由2.1及6.5迁齐，store中已留明确TODO，不将旧自动化DTO强行解析Goal。完整Goal在途进程恢复及fork发布窗口的硬重启组合继续由7.4追踪；原多挂载准备长尾、Windows长路径、团队协作TODO不扩大本次范围。准确命令、HEAD/源码指纹、原始输出和退出码沿既有证据目录保留，正式新增产物在out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。
+
+
+### Goal 统一查询、SSE 与恢复展示（2026-10-27）
+
+- 公开任务 DTO 增加 application_type/application_version，严格校验 automation 组件与 Goal 状态互斥及同一任务身份；工作区列表/详情直接读取同一 owner 的当前 Goal，保持 Goal 六状态、独立的任务 revision/定义 revision 和原 Goal revision。退休/清除/替换的旧身份及 preparing 节点不可见，缺失不可变定义明确报错。普通组件调度显式读取 automation 应用，Goal 仍由同一 worker 推进；没有新增持久状态或数据库结构。
+- Goal 原业务入口修改/清除后，原有有界 channel 发送完整列表失效通知，HTTP SSE 重读权威快照。初始化只枚举恢复身份，逐项工作仍在初始化回执后进行；Goal 恢复工作冻结原身份/revision，恢复期间展示 recovering，暂停保持原 Goal 应用状态，完成后恢复真实阶段。Goal 的通用编辑/控制、历史展示及右侧摘要仍由2.1/6.5迁齐，当前通用组件操作明确拒绝 Goal，不修改派生 lifecycle 或伪造空历史。
+- 261 正式 matrix **3 passed／91.96秒**，通过真实 Backend HTTP、SSE 与重启验证统一列表、Goal 编辑/清除通知、原身份/预算及无额外模型执行，同时复验 fork 安装/发布/撤销。266 **5 passed／45.56秒**，验证慢 Goal 恢复的真实管理投影、暂停与其他任务推进、普通任务恢复期间排队及暂停、worker 初始化/运行失败和健康错误、原模型工具完成 Goal。慢 Goal 的 active 准备仍经 service 设置，只证明受控生命周期恢复；完整在途执行/fork 发布窗口硬重启仍由7.4验收，未以它代替完整恢复产品入口。
+- 267 最终单元/存储/SSE合同 **42 passed／4.75秒**；268 相关任务 DTO/store/service/runtime/Goal应用 Pyright零错误，269 Ruff通过。264 在恢复展示改动前另有4项管理/Goal/真实SSE回归通过，重叠场景不累计冒充独立覆盖。最终运行均有进程外期限、4GiB保护且source_changes为空。
+- 253 Buf lint/build及对真实提交e4d9ce890的breaking检查与全平台绑定生成通过，254 OpenAPI更新仅涉及本任务响应。257真实Web类型检查、262构建通过，只有既有chunk提示；后续冻结声明修正不改变公开schema及前端资产，按依赖复用。没有实现新Web界面，不将构建或Backend HTTP验证表述为Gateway浏览器交互验收。
+- 255最初有5项类型诊断；259剩3项字段收窄诊断，改为静态分析可识别的frozen类声明后263/268均零错误，没有忽略诊断。256为41 passed/1 failed：preparing创建尚未发布catalog节点，实际已正确拒绝；新测试误期待另一个错误文字，改为精确核对原catalog错误及目标Session身份，260/267均42 passed。失败原件保留。
+- 本切片完成7.8；2.1仍含会话生成器应用合同，6.5仍含UI与通用管理动作，不提前勾选。准确命令、HEAD/源码指纹、原始输出和实际退出码沿用out/tests/temp/persistent-task-migration/artifacts/；正式产品产物在对应test_persistent_task_goal_storage及test_persistent_tasks目录。生成器整体迁移、主Web管理、完整进程恢复组合及Windows既有长路径范围仍未完成，团队协作继续TODO。

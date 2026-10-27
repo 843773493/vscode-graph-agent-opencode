@@ -11787,6 +11787,23 @@ export declare type PersistentTaskDTO = Message<"boxteam.workspace.v2.Persistent
    * @generated from field: optional google.protobuf.Timestamp next_run_at = 12;
    */
   nextRunAt?: Timestamp | undefined;
+
+  /**
+   * 应用身份与版本；Goal 状态直接投影原 owner，configuration 仅属于 automation。
+   *
+   * @generated from field: string application_type = 13;
+   */
+  applicationType: string;
+
+  /**
+   * @generated from field: string application_version = 14;
+   */
+  applicationVersion: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGoalDTO goal = 15;
+   */
+  goal?: SessionGoalDTO | undefined;
 };
 
 /**

@@ -2758,7 +2758,13 @@ export interface PersistentTaskDTO {
   recovering: boolean;
   created_at: string | undefined;
   updated_at: string | undefined;
-  next_run_at?: string | undefined;
+  next_run_at?:
+    | string
+    | undefined;
+  /** 应用身份与版本；Goal 状态直接投影原 owner，configuration 仅属于 automation。 */
+  application_type: string;
+  application_version: string;
+  goal?: SessionGoalDTO | undefined;
 }
 
 export interface TaskDecisionDTO {
@@ -19993,6 +19999,9 @@ function createBasePersistentTaskDTO(): PersistentTaskDTO {
     created_at: undefined,
     updated_at: undefined,
     next_run_at: undefined,
+    application_type: "",
+    application_version: "",
+    goal: undefined,
   };
 }
 
@@ -20013,6 +20022,9 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       next_run_at: isSet(object.next_run_at) ? globalThis.String(object.next_run_at) : undefined,
+      application_type: isSet(object.application_type) ? globalThis.String(object.application_type) : "",
+      application_version: isSet(object.application_version) ? globalThis.String(object.application_version) : "",
+      goal: isSet(object.goal) ? SessionGoalDTO.fromJSON(object.goal) : undefined,
     };
   },
 
@@ -20054,6 +20066,15 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     if (message.next_run_at !== undefined) {
       obj.next_run_at = message.next_run_at;
     }
+    if (message.application_type !== "") {
+      obj.application_type = message.application_type;
+    }
+    if (message.application_version !== "") {
+      obj.application_version = message.application_version;
+    }
+    if (message.goal !== undefined) {
+      obj.goal = SessionGoalDTO.toJSON(message.goal);
+    }
     return obj;
   },
 
@@ -20076,6 +20097,11 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.next_run_at = object.next_run_at ?? undefined;
+    message.application_type = object.application_type ?? "";
+    message.application_version = object.application_version ?? "";
+    message.goal = (object.goal !== undefined && object.goal !== null)
+      ? SessionGoalDTO.fromPartial(object.goal)
+      : undefined;
     return message;
   },
 };

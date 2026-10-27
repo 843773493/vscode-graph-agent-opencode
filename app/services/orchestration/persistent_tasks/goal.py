@@ -34,6 +34,7 @@ class GoalWork:
     request_id: str | None = None
     gateway_id: str | None = None
     observed_at: datetime | None = None
+    recovering: bool = False
 
 
 async def _submit(runtime: PersistentTaskRuntime, goal: SessionGoalDTO,

@@ -2709,6 +2709,10 @@ message PersistentTaskDTO {
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
   optional google.protobuf.Timestamp next_run_at = 12;
+  // 应用身份与版本；Goal 状态直接投影原 owner，configuration 仅属于 automation。
+  string application_type = 13;
+  string application_version = 14;
+  optional SessionGoalDTO goal = 15;
 }
 
 message TaskDecisionDTO {

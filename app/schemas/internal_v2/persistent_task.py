@@ -17,6 +17,7 @@ from pydantic import (
 
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.time_schedule import MisfirePolicy, TimeSchedule
+from app.schemas.internal_v2.goal import SessionGoalDTO
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 TaskLifecycle = Literal["active", "paused", "complete", "terminated", "needs_attention"]
@@ -169,12 +170,15 @@ class PersistentTaskConfigurationDTO(BaseModel):
         return self
 
 
-class PersistentTaskDTO(BaseModel):
+class PersistentTaskDTO(BaseModel, frozen=True):
     task_id: str
     workspace_id: str
     revision: int
     definition_revision: int
-    configuration: PersistentTaskConfigurationDTO
+    application_type: Literal["automation", "goal"] = "automation"
+    application_version: Literal["1"] = "1"
+    configuration: PersistentTaskConfigurationDTO | None = None
+    goal: SessionGoalDTO | None = None
     lifecycle: TaskLifecycle
     phase: str
     reason: str | None = None
@@ -182,6 +186,23 @@ class PersistentTaskDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     next_run_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_application(self) -> PersistentTaskDTO:
+        if self.application_type == "automation":
+            if self.configuration is None or self.goal is not None:
+                raise ValueError("automation 任务必须只有组件配置")
+        elif self.goal is None or self.configuration is not None or self.goal.goal_id != self.task_id:
+            raise ValueError("Goal 任务必须关联同一身份的 Goal 状态，不能配置普通自动化组件")
+        return self
+
+
+class AutomationTaskDTO(PersistentTaskDTO, frozen=True):
+    """调度与组件执行的内部类型；公开管理响应统一使用 PersistentTaskDTO。"""
+
+    application_type: Literal["automation"] = "automation"
+    configuration: PersistentTaskConfigurationDTO = Field()
+    goal: None = None
 
 
 class TaskDecisionDTO(BaseModel):

@@ -159,6 +159,9 @@ async def test_preparing_goal_is_hidden_and_abort_uses_exact_journal(goal_case):
     assert import_legacy_goals(store) == 1
     assert store.goal_read(record.session_id, creation=record) == fork_goal
     assert store.goal_list() == []
+    assert store.list() == []
+    with pytest.raises(KeyError, match=f"会话目录节点不存在: {record.session_id}"):
+        store.get(fork_goal.goal_id)
     store.goal_abort_fork(record)
     assert store.goal_read(record.session_id, creation=record) is None
 
@@ -170,3 +173,37 @@ async def test_goal_missing_definition_never_becomes_an_empty_goal(goal_case):
         connection.execute("DELETE FROM persistent_task_definitions WHERE task_id=?", (goal.goal_id,))
     with pytest.raises(RuntimeError, match="缺少不可变定义"):
         store.goal_read(goal.session_id)
+
+
+async def test_management_view_is_the_same_goal_identity_and_retires_old_identity(goal_case):
+    _, _, store, goal = goal_case
+    store.goal_write(goal)
+    task = store.get(goal.goal_id)
+    assert task.application_type == "goal" and task.application_version == "1"
+    assert task.task_id == goal.goal_id and task.goal == goal
+    assert task.configuration is None and task.lifecycle == task.phase == "active"
+    assert store.list() == [task] and store.list_automations() == []
+    with pytest.raises(ValueError, match="会话 Goal 入口"):
+        store.get_automation(goal.goal_id)
+    edited = goal.model_copy(update={"status": GoalStatus.blocked, "objective": "明确阻塞", "revision": 10})
+    store.goal_write(edited)
+    updated = store.get(goal.goal_id)
+    assert updated.goal == edited and updated.lifecycle == "needs_attention" and updated.phase == "blocked"
+    assert updated.revision == task.revision + 1 and updated.definition_revision == task.definition_revision + 1
+    store.goal_write(edited.model_copy(update={"goal_id": "goal_replacement"}))
+    with pytest.raises(KeyError, match="不存在"):
+        store.get(goal.goal_id)
+    assert [view.task_id for view in store.list()] == ["goal_replacement"]
+    store.goal_clear(goal.session_id)
+    assert store.list() == []
+
+
+async def test_management_view_rejects_missing_goal_definition(goal_case):
+    _, state, store, goal = goal_case
+    store.goal_write(goal)
+    with closing(state.connection()) as connection, connection:
+        connection.execute("DELETE FROM persistent_task_definitions WHERE task_id=?", (goal.goal_id,))
+    with pytest.raises(RuntimeError, match="缺少不可变定义"):
+        store.get(goal.goal_id)
+    with pytest.raises(RuntimeError, match="缺少不可变定义"):
+        store.list()

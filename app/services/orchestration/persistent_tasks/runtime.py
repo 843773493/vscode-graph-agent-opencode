@@ -122,6 +122,10 @@ class PersistentTaskRuntime:
             return self._saver.execution_completions(session_id, thread_id, after_commit_id=None).through_commit_id
 
     async def on_event(self, event: Event) -> None:
+        if event.type in {EventType.GOAL_UPDATED, EventType.GOAL_CLEARED}:
+            # 两个管理视图共用同一 owner；通知只使完整快照失效，不复制 Goal 状态。
+            self.events.publish(PersistentTaskChanged())
+            return
         if event.type == EventType.JOB_STARTED:
             # 发布事务不能重新进入 Goal 异步锁，也不能把归属捕获延迟到编辑之后。
             owner = self.goals.started_owner(event.payload.session_id, event.payload.thread_id)
@@ -136,7 +140,7 @@ class PersistentTaskRuntime:
                                          tokens=event.payload.token_usage.total_tokens if event.type == EventType.AGENT_END else 0))
             self._waiting_checks.clear()
             if self._accepting:
-                self._execution_pending.update(task.task_id for task in self.store.list()
+                self._execution_pending.update(task.task_id for task in self.store.list_automations()
                                                if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
             self._wake.set()
 
@@ -171,6 +175,10 @@ class PersistentTaskRuntime:
                 done.set_exception(error)
             raise
         else:
+            if work.recovering:
+                assert work.goal is not None
+                self._recovering.discard(work.goal.goal_id)
+                self.events.publish(PersistentTaskChanged())
             if done is not None:
                 done.set_result(None)
         finally:
@@ -195,7 +203,7 @@ class PersistentTaskRuntime:
         await self._actions_drained.wait()
 
     def notify(self, task_id: str, run_id: str | None = None) -> None:
-        task = self.store.get(task_id)
+        task = self.store.get_automation(task_id)
         self.events.publish(PersistentTaskChanged(task_id, task.revision, run_id))
         self._wake.set()
 
@@ -238,15 +246,15 @@ class PersistentTaskRuntime:
     async def _run(self, initialized: asyncio.Future[None]) -> None:
         failure: BaseException | None = None
         try:
-            self._recovering = {task.task_id for task in self.store.list()}
+            goals = [goal for goal in self.goals.list_existing() if goal.status == GoalStatus.active]
+            self._recovering = {task.task_id for task in self.store.list_automations()} | {goal.goal_id for goal in goals}
             await self._job_events.register_durable_listener(self.on_event)
             self._accepting = True
             initialized.set_result(None)
             # 初始化回执先交还工作区 owner，再推进任何逐任务恢复。
             await asyncio.sleep(0)
-            for goal in self.goals.list_existing():
-                if goal.status == GoalStatus.active:
-                    self._queue_goal(GoalWork(goal.session_id))
+            for goal in goals:
+                self._queue_goal(GoalWork(goal.session_id, goal=goal, recovering=True))
             while True:
                 self._wake.clear()
                 for task_id, running in tuple(self._inflight.items()):
@@ -263,7 +271,7 @@ class PersistentTaskRuntime:
                 if self._accepting:
                     for task_id in self.store.schedule_due(self.clock()):
                         self.notify(task_id)
-                tasks = self.store.list() if self._accepting else []
+                tasks = self.store.list_automations() if self._accepting else []
                 for task in tasks:
                     if task.task_id in self._inflight or task.task_id in self._waiting_checks:
                         continue
@@ -325,7 +333,7 @@ class PersistentTaskRuntime:
 
     async def _collect_execution_completions(self, task_id: str) -> None:
         async with self.locks.lock_for(task_id):
-            task = self.store.get(task_id)
+            task = self.store.get_automation(task_id)
             uri = task.configuration.trigger.source_uri
             if uri is None or task.lifecycle != "active":
                 return
@@ -389,7 +397,7 @@ class PersistentTaskRuntime:
                     self.notify(run.task_id, run.run_id)
                     return
             if delivery is None:
-                task = self.store.get(run.task_id)
+                task = self.store.get_automation(run.task_id)
                 if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
                     self.store.advance(run, phase="suppressed", now=self.clock(), error="任务 revision 或生命周期已变化，未投递动作")
                     self.notify(run.task_id, run.run_id)
@@ -444,7 +452,7 @@ class PersistentTaskRuntime:
                      configuration: PersistentTaskConfigurationDTO) -> PersistentTaskRunDTO | None:
         launching = run.phase == "pending"
         async with self.locks.lock_for(run.task_id):
-            task = self.store.get(run.task_id)
+            task = self.store.get_automation(run.task_id)
             if run.phase == "checking" and configuration.condition.type_id == "builtin.script":
                 self.store.advance(run, phase="failed", now=self.clock(),
                                    error="脚本检查中断，结果未知；需要人工确认，不自动重跑",
@@ -502,7 +510,7 @@ class PersistentTaskRuntime:
             if wakeup is None:
                 if run.evaluation is not None:
                     raise RuntimeError("已记录判断的原准入事实缺失")
-                task = self.store.get(run.task_id)
+                task = self.store.get_automation(run.task_id)
                 if task.revision != run.task_revision or (task.lifecycle != "active" and not run.check_only):
                     self.store.advance(run, phase="suppressed", now=self.clock(), error="任务已变化，未接受模型判断")
                     self.notify(run.task_id, run.run_id)

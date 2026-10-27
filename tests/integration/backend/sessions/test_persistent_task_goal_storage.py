@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import closing
 
 import pytest
 
-from tests.integration.backend.sessions.test_persistent_tasks import _target
+from tests.integration.backend.sessions.test_persistent_tasks import (
+    ROOT,
+    _configuration,
+    _create,
+    _target,
+)
 from tests.integration.backend.sessions.test_runtime_context_publication import (
     fork_deadlines as fork_deadlines,  # noqa: PLC0414 - 正式fork进程外保护
 )
@@ -137,3 +143,70 @@ async def test_fork_goal_install_publish_replay_and_abort_use_the_same_owner(
     assert case.requests() == []
     case.write_actual("goal-fork-owner", {"source": source_goal, "target": target, "edited": edited,
                                          "aborted_intent": json.loads(current.request_intent_json)})
+
+
+@pytest.mark.asyncio
+async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
+    restart_source_case: RestartRuntimeSourceCase,
+) -> None:
+    case = restart_source_case
+    session_id, thread_id, target = await _target(case)
+    automation = await _create(case, _configuration(target))
+    assert automation["application_type"] == "automation" and automation["application_version"] == "1"
+    assert automation["goal"] is None
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+        "objective": "统一列表中的目标", "status": "paused", "token_budget": 123,
+    })
+    assert response.status_code == 200, response.text
+    original = response.json()["data"]
+    goal_id = original["goal_id"]
+
+    async def snapshot(lines) -> dict:
+        async with asyncio.timeout(15):
+            async for line in lines:
+                if line.startswith("data: "):
+                    return {row["task_id"]: row for row in json.loads(line[6:])["items"]}
+        raise AssertionError("任务 SSE 提前结束")
+
+    async with case.client.stream("GET", ROOT + "/events") as stream:
+        assert stream.status_code == 200 and stream.headers["X-Request-ID"]
+        lines = stream.aiter_lines()
+        initial = await snapshot(lines)
+        assert set(initial) == {automation["task_id"], goal_id}
+        assert initial[goal_id]["goal"] == original and initial[goal_id]["configuration"] is None
+        assert initial[goal_id]["application_type"] == "goal" and initial[goal_id]["application_version"] == "1"
+        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+            "objective": "从右侧 Goal 入口编辑", "status": "blocked",
+        })
+        assert response.status_code == 200, response.text
+        edited = response.json()["data"]
+        latest = await snapshot(lines)
+        while latest[goal_id]["goal"] != edited:
+            latest = await snapshot(lines)
+        projected = latest[goal_id]
+        assert projected["lifecycle"] == "needs_attention" and projected["phase"] == "blocked"
+        assert projected["definition_revision"] == initial[goal_id]["definition_revision"] + 1
+        response = await case.client.get(f"{ROOT}/{goal_id}")
+        assert response.status_code == 200 and response.json()["data"] == projected
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        response = await case.client.post(f"{ROOT}/{goal_id}/control", json={
+            "expected_revision": projected["revision"], "action": "resume",
+        })
+        assert response.status_code == 400 and "会话 Goal 入口" in response.text
+        assert await _goal(case, session_id) == edited
+    await case.restart(hard=True)
+    response = await case.client.get(f"{ROOT}/{goal_id}")
+    assert response.status_code == 200 and response.json()["data"] == projected
+    async with case.client.stream("GET", ROOT + "/events") as stream:
+        lines = stream.aiter_lines()
+        assert (await snapshot(lines))[goal_id]["goal"] == edited
+        response = await case.client.delete(f"/api/v1/sessions/{session_id}/goal")
+        assert response.status_code == 200 and response.json()["data"]["cleared"]
+        latest = await snapshot(lines)
+        while goal_id in latest:
+            latest = await snapshot(lines)
+        assert set(latest) == {automation["task_id"]}
+    assert (await case.client.get(f"{ROOT}/{goal_id}")).status_code == 404
+    assert await _goal(case, session_id) is None and case.call_count(session_id, thread_id) == 0
+    assert case.requests() == []
+    case.write_actual("goal-management-owner", {"original": original, "edited": edited, "projected": projected})

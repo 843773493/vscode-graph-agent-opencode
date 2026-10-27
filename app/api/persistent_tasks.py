@@ -114,6 +114,8 @@ async def task_runs(task_id: str, request_id: RequestId,
         return APIResponse(data=PersistentTaskRunListDTO(items=service.runs(task_id)), request_id=request_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/{task_id}/notifications", response_model=APIResponse[PersistentTaskRunDTO])

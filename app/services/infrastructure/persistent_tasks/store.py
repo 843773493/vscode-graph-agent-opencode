@@ -15,6 +15,7 @@ from app.core.time_schedule import evaluate_schedule
 from app.domain.itemized.execution_queue import ExecutionCompletionPage
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.persistent_task import (
+    AutomationTaskDTO,
     PersistentTaskCheckRequest,
     PersistentTaskConfigurationDTO,
     PersistentTaskCreateRequest,
@@ -51,16 +52,21 @@ class PersistentTaskStore(TaskGoals):
             connection.execute("BEGIN IMMEDIATE")
             yield connection
 
-    def _task(self, connection: sqlite3.Connection, task_id: str) -> PersistentTaskDTO:
+    def _task(self, connection: sqlite3.Connection, task_id: str) -> AutomationTaskDTO:
         row = connection.execute(
-            "SELECT t.*,d.configuration_json FROM persistent_tasks t JOIN persistent_task_definitions d "
+            "SELECT t.*,d.configuration_json FROM persistent_tasks t LEFT JOIN persistent_task_definitions d "
             "ON d.task_id=t.task_id AND d.definition_revision=t.definition_revision "
-            "WHERE t.task_id=? AND t.workspace_id=? AND t.application_type='automation'", (task_id, self.workspace_id),
+            "WHERE t.task_id=? AND t.workspace_id=? AND t.retired_at IS NULL", (task_id, self.workspace_id),
         ).fetchone()
         if row is None:
             raise KeyError(f"持久任务不存在: {task_id}")
+        # TODO（6.5）：通用 Goal 管理动作接入既有业务规则，禁止直接修改派生 lifecycle。
+        if row["application_type"] != "automation":
+            raise ValueError("Goal 任务的修改和执行使用会话 Goal 入口")
+        if row["configuration_json"] is None:
+            raise RuntimeError("自动化当前任务缺少不可变定义")
         schedule = connection.execute("SELECT next_run_at FROM persistent_task_schedules WHERE task_id=?", (task_id,)).fetchone()
-        return PersistentTaskDTO(
+        return AutomationTaskDTO(
             task_id=row["task_id"], workspace_id=row["workspace_id"], revision=row["revision"],
             definition_revision=row["definition_revision"], lifecycle=row["lifecycle"],
             configuration=PersistentTaskConfigurationDTO.model_validate_json(row["configuration_json"]),
@@ -69,16 +75,49 @@ class PersistentTaskStore(TaskGoals):
             next_run_at=schedule[0] if schedule else None,
         )
 
-    def get(self, task_id: str) -> PersistentTaskDTO:
+    def get_automation(self, task_id: str) -> AutomationTaskDTO:
         with closing(self._store.connection()) as connection:
             return self._task(connection, task_id)
 
-    def list(self) -> list[PersistentTaskDTO]:
-        # TODO：2.1/4.2 迁齐通用应用 DTO 后展示 Goal；当前 Goal 专用 API 已直接消费本 owner。
+    def list_automations(self) -> list[AutomationTaskDTO]:
         with closing(self._store.connection()) as connection:
             return [self._task(connection, row[0]) for row in connection.execute(
                 "SELECT task_id FROM persistent_tasks WHERE workspace_id=? AND application_type='automation' ORDER BY created_at,task_id", (self.workspace_id,),
             ).fetchall()]
+
+    def _view(self, connection: sqlite3.Connection, task_id: str) -> PersistentTaskDTO:
+        row = connection.execute("SELECT * FROM persistent_tasks WHERE task_id=? AND workspace_id=? AND retired_at IS NULL",
+                                 (task_id, self.workspace_id)).fetchone()
+        if row is None:
+            raise KeyError(f"持久任务不存在: {task_id}")
+        if row["application_type"] == "automation":
+            return self._task(connection, task_id)
+        paths = self._goal_paths()
+        node = paths.catalog_store.get_node(row["owner_session_id"])
+        if node.kind != "session" or node.state != "active":
+            raise KeyError(f"持久任务尚未发布或所属会话不可用: {task_id}")
+        goal = self._goal(connection, self.workspace_id, node.node_id, paths.main_thread_id(node.node_id))
+        if goal is None or goal.goal_id != task_id:
+            raise RuntimeError("Goal 管理投影与当前任务身份不一致")
+        return PersistentTaskDTO(
+            task_id=task_id, workspace_id=self.workspace_id, revision=row["revision"],
+            definition_revision=row["definition_revision"], application_type="goal", goal=goal,
+            lifecycle=row["lifecycle"], phase=goal.status.value,
+            created_at=goal.created_at, updated_at=goal.updated_at,
+        )
+
+    def get(self, task_id: str) -> PersistentTaskDTO:
+        with closing(self._store.connection()) as connection:
+            return self._view(connection, task_id)
+
+    def list(self) -> list[PersistentTaskDTO]:
+        # preparing/deleting 的可见性只取 catalog，不让任务存储另存发布状态。
+        with closing(self._store.connection()) as connection:
+            rows = connection.execute("SELECT task_id,application_type,owner_session_id FROM persistent_tasks "
+                                      "WHERE workspace_id=? AND retired_at IS NULL ORDER BY created_at,task_id", (self.workspace_id,)).fetchall()
+            active = {node.node_id for node in self._goal_paths().list_nodes() if node.kind == "session" and node.state == "active"} if any(row["application_type"] == "goal" for row in rows) else set()
+            return [self._view(connection, row["task_id"]) for row in rows
+                    if row["application_type"] == "automation" or row["owner_session_id"] in active]
 
     def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
         payload = request.model_dump(mode="json")
@@ -317,7 +356,7 @@ class PersistentTaskStore(TaskGoals):
         return changed
 
     def next_schedule_at(self) -> datetime | None:
-        tasks = [task for task in self.list() if task.lifecycle == "active"
+        tasks = [task for task in self.list_automations() if task.lifecycle == "active"
                  and task.next_run_at is not None]
         return min((task.next_run_at for task in tasks if task.next_run_at is not None), default=None)
 

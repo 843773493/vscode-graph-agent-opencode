@@ -242,6 +242,13 @@ GoalRuntimeService已物理删除，其事件、激活及恢复工作由Persiste
 
 ### Goal应用的唯一持久状态（2026-10-27）
 
-Workspace schema21扩展原任务表，以application_type=goal、owner_session_id及application_json保存Goal身份、状态/用量/续跑标记；目标和预算在原不可变定义表版本化，用量更新不复制定义。Goal六状态是权威应用状态，通用lifecycle列仅为同事务派生索引；main Thread来自catalog，不持久第二指针。清除/替换退休原任务并保留原导入身份，既有Goal API返回合同不变。通用列表的typed应用投影仍由2.1/6.5实施，不能把Goal定义当普通自动化配置读取。
+Workspace schema21扩展原任务表，以application_type=goal、owner_session_id及application_json保存Goal身份、状态/用量/续跑标记；目标和预算在原不可变定义表版本化，用量更新不复制定义。Goal六状态是权威应用状态，通用lifecycle列仅为同事务派生索引；main Thread来自catalog，不持久第二指针。清除/替换退休原任务并保留原导入身份，既有Goal API返回合同不变。通用列表和详情通过application_type/application_version投影原Goal状态，configuration只属于automation应用；Goal修改和执行继续消费原业务入口，通用编辑/控制及关联UI仍由2.1/6.5实施，不能把Goal定义当普通自动化配置读取。
 
 启动在恢复fork及启动共享worker之前显式一次性导入旧goal.json；原始字节指纹与目标写入同一事务，核验成功后删除并fsync。重试只核对原导入回执，不能覆盖后续用户修改或复活已退休的Goal。fork继续按原creation journal安装、发布和撤销，准备阶段不可被调度；创建目录不再允许或要求goal.json。容器显式复用唯一PersistentTaskStore，旧SessionGoalStore已物理删除。完整进程窗口组合验收继续由7.4追踪，当前定向证据见tasks.md。
+
+
+### 应用查询与恢复的当前边界（2026-10-27）
+
+公开PersistentTaskDTO将共同的任务身份/版本/生命周期与应用状态分开：automation携带原组件配置，goal携带同一Goal DTO，互斥且核验Goal ID。内部AutomationTaskDTO只收窄组件执行需要的不可空配置，不引入第二套序列化或持久化。管理列表/详情读取全部已发布应用，普通组件worker只读取automation；所有数据仍由同一WorkspaceStateStore保存。Goal更新/清除沿原事件触发完整快照失效，任务通知不保存另一份Goal镜像。
+
+启动枚举Goal及普通任务恢复身份，在初始化回执后才推进单项工作。Goal恢复工作冻结原目标身份和revision，管理查询展示recovering；暂停等操作仍更改原Goal状态，迟到恢复不能改回active。成功结束恢复后清除瞬态进度并通知同一管理列表。通用组件管理暂时明确拒绝Goal动作，等待6.5将表单接到既有Goal规则；不得直接修改同事务派生的lifecycle索引。此查询切片不代表会话生成器或主Web管理已完成，产品/合同证据见tasks.md。

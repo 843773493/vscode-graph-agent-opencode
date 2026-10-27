@@ -14,8 +14,8 @@ from app.services.infrastructure.events.event_channel_service import (
 
 @dataclass(frozen=True, slots=True)
 class PersistentTaskChanged:
-    task_id: str
-    revision: int
+    task_id: str | None = None
+    revision: int | None = None
     run_id: str | None = None
 
 
