@@ -10,3 +10,6 @@
 - [x] 2.3 完成相关静态分析、严格 OpenSpec 校验和差异检查，保留准确命令、源码指纹、原始输出与退出码。
 
 验收原件位于 `out/tests/temp/model_metadata_refresh/artifacts/runs/`：`metadata-final-unit-004` 105 passed/7.59秒，`metadata-final-http-process-004` 1 passed/14.24秒，`metadata-final-provider-http-002` 6 passed/23.23秒，均 exit0；覆盖真实 SDK/TCP、两个冷进程、同步/异步 Provider wire/hash 合同。`metadata-final-static-005` Ruff exit0。全部测试使用外置 timeout 与4GiB数据段限制，并记录源码前后 SHA、准确命令、raw 与退出码。首轮集成失败分别为新测试装具导入路径错误和 SDK stdout 干扰测试回执，已修正并保留原件；不把局部检查称为完整 Web 验收。最终源码、独立范围补丁与静态/规范复核见同目录 `delivery.json`、`owned.patch` 和 `metadata-final-review-006`。
+
+
+2026-10-27 归档复核：在完整固定HEAD `ad05857aa`（tree `f991ad1929461d1e8b49416620c7210b15db6f3c`）补验119项相关单测、1项真实HTTP/冷进程及6项同步/异步Provider网络合同，全部通过；Ruff通过。AST审计生产SDK导入只在唯一runtime入口，3条requirement和6个scenario与实现及测试一致，无未勾任务。本轮未改产品源码，不调用真实外部模型，不代替完整Web或Windows；准确命令、完整源码指纹、raw/实际退出码及进程组回收见 `out/tests/temp/model-metadata-finalize/artifacts/verification-006.json`。
