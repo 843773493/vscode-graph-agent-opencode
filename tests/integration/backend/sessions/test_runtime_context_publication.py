@@ -36,7 +36,7 @@ from tests.support.fork_deadline import ForkDeadlineRegistry
 
 def _notice(marker: str) -> PreparedInternalMessage:
     return internal_message_factory.build(
-        kind="checkpoint_reminder", control=marker,
+        kind="checkpoint_reminder", control=marker + "\n" + "必须复用已保存的事件正文。" * 30,
         metadata={"source": "persistent_task"},
     )
 

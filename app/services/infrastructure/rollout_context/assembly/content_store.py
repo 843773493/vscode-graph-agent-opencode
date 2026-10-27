@@ -39,11 +39,16 @@ class _AssemblyContentStore:
         if canonical_identity in self.canonical_payloads:
             return self.canonical_payloads[canonical_identity]
         locator = self.connection.execute(
-            "SELECT i.item_sequence,i.jsonl_offset,i.jsonl_length,e.session_id,e.thread_id "
-            "FROM item_catalog i JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",
+            "SELECT i.item_sequence,i.jsonl_offset,i.jsonl_length,e.session_id,e.thread_id,"
+            "i.execution_id,i.turn_scope,i.turn_id "
+            "FROM item_catalog i LEFT JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",
             (canonical_item_id,),
         ).fetchone()
-        if locator is None or locator[3:] != historical_owner:
+        if locator is None:
+            raise ValueError(f"source-mismatch: assembly canonical owner/locator 不一致: {canonical_item_id}")
+        # 仅发布事件没有 execution，归属由已核验的本地/冻结 namespace 与 item 身份共同约束。
+        if ((locator[5] is not None and locator[3:5] != historical_owner)
+                or (locator[5] is None and locator[6:] != ("ambient", None))):
             raise ValueError(f"source-mismatch: assembly canonical owner/locator 不一致: {canonical_item_id}")
         database_path = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
         with Path(database_path).with_name("rollout.jsonl").open("rb") as stream:
@@ -85,13 +90,13 @@ class _AssemblyContentStore:
             require_historical_scope(self.connection, ref["session_id"], ref["thread_id"])
             source = self.connection.execute(
                 "SELECT i.content_hash,i.payload_length,i.source_revision,i.item_sequence,e.session_id,e.thread_id "
-                "FROM item_catalog i JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",
+                "FROM item_catalog i LEFT JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",
                 (ref["ref_id"],),
             ).fetchone()
             if source is None or source[:4] != (ref["content_hash"], ref["content_length"], ref["source_revision"], ref["item_sequence"]):
                 raise ValueError(f"source-mismatch: assembly canonical 版本不一致: {ref['ref_id']}")
             # fork 的本地 selection scope 与 immutable item 的历史 execution owner 分开。
-            historical_owner = source[4:]
+            historical_owner = source[4:] if source[4] is not None else (ref["session_id"], ref["thread_id"])
             payload = self._canonical_item_payload(ref["ref_id"], historical_owner)
             visit(payload, [], {
                 "item_id": ref["ref_id"],
