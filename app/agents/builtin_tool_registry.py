@@ -4,6 +4,7 @@ from types import MappingProxyType
 
 _BUILTIN_TOOL_FACTORIES = MappingProxyType(
     {
+        "connections.manage": "app.agents.tools.connections:create_connections_tool",
         "read_context": "app.agents.tools.session_history:create_read_context_tool",
         "search_context": "app.agents.tools.session_history:create_search_context_tool",
         "web_search": "app.agents.tools.web:create_web_search_tool",

@@ -28,6 +28,7 @@ from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -95,6 +96,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_mcp_tools(self) -> list[BaseTool]: ...
 
     def get_mcp_catalog_owner(self) -> McpCatalogOwner: ...
+
+    def get_mcp_connection_service(self) -> McpConnectionService: ...
 
     def get_node_debug_service(self) -> NodeDebugService: ...
 
@@ -169,6 +172,7 @@ def build_session_agent_runtime(
         ),
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,
+        mcp_connection_service=dependency_provider.get_mcp_connection_service(),
         resource_registry=resource_registry,
         resource_activation=resource_activation,
         node_debug_service=dependency_provider.get_node_debug_service(),

@@ -223,6 +223,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
         session_target_resolver: SessionTargetResolverProtocol,
         mcp_catalog_owner: McpCatalogOwner,
+        mcp_connection_service: McpConnectionService,
         resource_navigation: ResourceNavigation,
         text_mutations: WorkspaceTextMutationOwner,
     ) -> None:
@@ -235,6 +236,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._workspace_session_context_client = workspace_session_context_client
         self._session_target_resolver = session_target_resolver
         self._mcp_catalog_owner = mcp_catalog_owner
+        self._mcp_connection_service = mcp_connection_service
         self._resource_navigation = resource_navigation
         self._text_mutations = text_mutations
         self._node_debug_service: NodeDebugService | None = None
@@ -300,6 +302,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_mcp_catalog_owner(self) -> McpCatalogOwner:
         return self._mcp_catalog_owner
+
+    def get_mcp_connection_service(self) -> McpConnectionService:
+        return self._mcp_connection_service
 
     def get_mcp_tools(self) -> list[BaseTool]:
         return self._mcp_catalog_owner.get_tools()
@@ -799,6 +804,7 @@ def _build_app_container(
         session_target_resolver=session_target_resolver,
         mcp_catalog_owner=mcp_catalog_owner,
         resource_navigation=resource_navigation,
+        mcp_connection_service=mcp_connection_service,
         text_mutations=text_mutations,
     )
     dependency_provider.set_goal_service(goal_service)

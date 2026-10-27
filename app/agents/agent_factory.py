@@ -106,6 +106,7 @@ from app.services.infrastructure.mcp.catalog_activation import (
     extension_dispatch_from_activation,
 )
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
@@ -417,6 +418,7 @@ def create_my_deep_agent(
     session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
+    mcp_connection_service: McpConnectionService | None = None,
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
@@ -654,6 +656,7 @@ def create_my_deep_agent(
             browser_resource_owner=browser_resource_owner,
             invocation_context=tool_invocation_context,
             node_debug_service=node_debug_service,
+            mcp_connection_service=mcp_connection_service,
         )
         custom_specs_by_name = {
             spec.name: spec
@@ -1093,6 +1096,7 @@ def create_runtime_deep_agent_for_session(
     session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
+    mcp_connection_service: McpConnectionService | None = None,
     name: str | None = None,
     override_model: Any = None,
     response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
@@ -1193,6 +1197,7 @@ def create_runtime_deep_agent_for_session(
         session_communication_service=session_communication_service,
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,
+        mcp_connection_service=mcp_connection_service,
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,

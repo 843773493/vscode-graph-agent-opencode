@@ -1312,7 +1312,7 @@
                   "tool_id": {
                     "type": "string",
                     "enum": [
-                      "read_context", "search_context", "web_search", "fetch_webpage",
+                      "connections.manage", "read_context", "search_context", "web_search", "fetch_webpage",
                       "listBrowserPage", "openBrowserPage", "readPage", "navigatePage", "clickElement",
                       "typeInPage", "hoverElement", "dragElement", "handleDialog",
                       "screenshotPage", "runPlaywrightCode", "test_tool_2", "large_test_output"

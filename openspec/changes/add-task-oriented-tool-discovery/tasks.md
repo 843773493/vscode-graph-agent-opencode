@@ -14,7 +14,7 @@
 
 ## 3. 通用 search_tools 与上下文集成
 
-- [ ] 3.1 注册唯一 search_tools 入口和 query/tool_ids 互斥参数模型，接入现有 MCP、本地扩展与连接控制目录；不新增 MCP 专用入口或第二发现链路。
+- [x] 3.1 注册唯一 search_tools 入口和 query/tool_ids 互斥参数模型，接入现有 MCP、本地扩展与连接控制目录；不新增 MCP 专用入口或第二发现链路。
 - [x] 3.2 先将每目标完整定义 facet 与父目录 members／lineage 原子发布到既有 Registry，并由 activation／Saver 冻结正文，再实现冻结快照上的确定性任务排名、精确 ID 结果、逐项错误和绑定目录／策略／查询的 cursor；禁止 live 同名补洞。
 - [x] 3.3 实现候选数、最终字节／行数上限和完整 schema 保真；大定义复用 ToolOutputStore／artifact，以 inline_complete 或 needs_read＋引用／摘要／provenance 表达，不新增 schema 库或读取工具；不支持引用、物化失败及引用也超预算时明确报错。
 - [ ] 3.4 接入 ToolPolicyResolver 完整结果及统一 ToolMetadata，分离软 model_visible 与硬 model_visibility_locked；发现、精确查询、导航和恢复均服从 model_hidden，执行禁用不能经发现绕过；区分已知未授权与未知目录。
@@ -36,7 +36,7 @@
 
 ## 5. 本地连接控制与授权流程
 
-- [ ] 5.1 通过现有本地扩展注册 connections.manage 的 list/connect/status/disconnect；贯通首次需授权时的 workspace 启动、owner publication 和必需资源冻结，使同一目录保持本地控制及其它就绪 Server 可达；使用稳定工作区／Server identity 与既有工具 operation 幂等身份，不吞掉未知授权或协议错误。
+- [x] 5.1 通过现有本地扩展注册 connections.manage 的 list/connect/status/disconnect；贯通首次需授权时的 workspace 启动、owner publication 和必需资源冻结，使同一目录保持本地控制及其它就绪 Server 可达；使用稳定工作区／Server identity 与既有工具 operation 幂等身份，不吞掉未知授权或协议错误。
 - [x] 5.2 实现独立的连接／授权操作状态、查询和 deadline；选择现有领域持久化入口及受限凭据存储，不写入导航 catalog 或全局会话目录。
 - [x] 5.3 为受支持 MCP HTTP 授权接入标准 SDK／协议及 state/PKCE 校验；保持 stdio env／HTTP credential reference 现有行为，未知方式明确报错。
 - [ ] 5.4 将 Server 授权与上游应用授权分别路由到实际 owner；复用远端已有管理工具，不假设任意 Server 有应用目录或 OAuth 能力。
@@ -79,6 +79,14 @@
 - [ ] 9.4 审查重复目录／dispatch／writer、旧 schema 指纹、live 同名回退、静默字段丢弃、宽泛异常、隐式授权／重试、无界等待和无关改动，清理当前范围旧实现。
 - [ ] 9.5 对照全部新增／修改规格场景核验并运行 OpenSpec 严格校验；仅在实际实现和验收完成时勾选任务，不把规划修订或结构校验当作功能完成。
 - [ ] 9.6 规格同步／归档前确认 unify-product-runtime-logging 已先同步主规格并归档；重新读取最新主规格，核对两个共享 MODIFIED Requirement 保留 Gateway logging.runtime、仅日志热应用及混合 Gateway 候选场景，再同步／归档本变更。前置未完成或正文漂移时先修订 delta，禁止逆序覆盖，不改动日志 change 的文件。
+
+### 3.1／5.1 本地连接控制的 Agent 入口验收（2026-10-27）
+
+- `connections.manage` 沿既有本地 factory、有效策略、完整定义 facet、冻结及信封调用注册，复用原工作区连接 service。list／connect／status／disconnect 不接收 OAuth 参数或凭据；操作身份来自受信 Session／Thread／model-call／provider tool-call，管理路径指向实际工作区的受保护状态 API，不伪造授权页面。默认配置与 schema 同步增加稳定工具 ID，不升配置或数据库版本。
+- 正式 `integration-mcp-connection-control` 经真实 Gateway、Backend、Session 消息、Agent、HTTP OAuth 与同一 MCP handler 验证：首次未授权仍能发现本地控制与就绪兄弟工具，未知远端没有伪造定义；短 status 不取消连接，模型提交 code 被真实参数校验拒绝，兄弟 Server 收到完整参数，disconnect 核实关闭并取消原等待。九次 model_stream 请求保留逐调用配对、真实 operation 身份、同 request_id 和无真实凭据／授权地址；不代表真实 Provider 或浏览器验收。
+- `product-complete-005` 为1 passed／86.44秒；完整暂存 tree `81de5bee04053883634b78a18088114f25f287d8` 的隔离 `isolated-product-008` 为1 passed／94.17秒，两次范围重叠不累计。隔离源码不含其它未提交的 fork／task 修改，全部4537个 tracked blob 核验无漂移后删除临时源码，正式产物移至 `final-source-008-formal-output/` 保留。
+- 相关装配、目录、策略、信封及配置回归 `regression-final-006` 为115 passed／11.19秒；修正旧手工图装配测试遗漏 search_tools，完整 HEAD 的 `baseline-policy-004` 已复现同一失败，保留全集相等断言。初轮产品测试漏必填 Provider 配置与误把 MCP 文本块当字符串的失败原件保留，后者改为核对完整块回执，未改产品行为。
+- Ruff通过；四个核心模块 Pyright零诊断，扩大七文件为8条，与完整 HEAD 基线相同、零新增。准确命令、源码指纹、raw、退出码、类型对照与 AST 结构审查在 `out/tests/temp/mcp-connection-control/artifacts/`；无新增源码目录或第二调用／存储链路。OpenSpec strict 校验通过，无Web源码变化。关闭3.1／5.1，当前25/52；授权 UI、完整长等待自动继续及其它未勾验收仍未完成，团队／协作继续TODO。
 
 ### 3.6 活动定义恢复验收（2026-10-26）
 

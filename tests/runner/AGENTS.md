@@ -13,6 +13,7 @@
 
 ## 规范
 
+- `integration-mcp-connection-control` 经真实 Gateway、Backend、Session 消息及 Agent 发现／信封入口，验证首次 OAuth 未授权时的本地控制、兄弟 Server 调用、受信 operation 身份、短 status、参数拒绝与 disconnect，固定240秒／4GiB；模型复用 model_stream，不替代授权 UI、长等待自动继续或真实 Provider 验收。
 - `integration-mcp-oauth-startup` 使用真实 HTTP OAuth／MCP 与真实 Backend 启动，核对首次需授权的局部状态、兄弟 Server、同 request_id、SDK PKCE／state、冷刷新和敏感信息边界，固定90秒／4GiB；不替代产品 connect、授权UI、持久等待或Gateway／Web验收。
 - `integration-mcp-stdio-recovery` 使用真实 Backend、单实例 OS 锁与 SDK stdio，覆盖 POSIX 非合作进程强制关闭、关闭期限失败及旧实例停止后的 OS 退出／claim 冷恢复，固定180秒／4GiB；不替代 Windows Job Object、OAuth、HITL 或 Web 验收。
 - `integration-mcp-stdio-replacement` 使用真实单实例锁、stdio SDK、watcher、Runner和model_stream，核对停止意图先于关闭、停后再启、破坏性失败与同入口修复及兄弟工作区隔离，固定180秒／4GiB；不代替非合作进程终止、退役清理诊断、OAuth或Web验收。

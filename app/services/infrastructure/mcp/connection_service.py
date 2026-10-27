@@ -8,6 +8,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import Literal, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 from app.core.lifecycle import LifetimeScope
@@ -26,6 +27,14 @@ from app.services.infrastructure.mcp.session_runtime import (
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 _OPERATION_TIMEOUT_SECONDS = 300
+
+
+class McpConnectionSummary(TypedDict):
+    connection_id: str
+    server_id: str
+    transport: Literal["stdio", "streamable_http"]
+    enabled: bool
+    status: Literal["disabled", "ready", "failed", "authorization_required"]
 
 
 @dataclass
@@ -49,6 +58,23 @@ class McpConnectionService:
 
     def _configuration_ref(self, server_id: str) -> str:
         return sha256_jcs(asdict(self._owner.server_configuration(server_id)))
+
+    def _connection_id(self, server_id: str) -> str:
+        return f"mcp-server:v1:{self._workspace_id}:{server_id}"
+
+    def list_connections(self, server_id: str | None = None) -> list[McpConnectionSummary]:
+        servers = self._owner.list_servers()
+        if server_id is not None:
+            self._owner.server_configuration(server_id)
+            servers = [server for server in servers if server.server_id == server_id]
+        return [McpConnectionSummary(
+            connection_id=self._connection_id(server.server_id), server_id=server.server_id,
+            transport=server.transport, enabled=server.enabled, status=server.status,
+        ) for server in servers]
+
+    def operation_path(self, operation: McpConnectionOperationDTO) -> str:
+        """真实受保护状态入口；不构造假授权链接或返回 SDK 的敏感地址。"""
+        return f"/api/v1/workspaces/{self._workspace_id}/mcp/connection-operations/{operation.operation_id}"
 
     def start(self) -> None:
         """只对账遗留操作；不恢复旧 socket，不自动重放授权交换。"""
@@ -80,7 +106,7 @@ class McpConnectionService:
             existing = self._store.get(request.operation_id)
         except LookupError:
             existing = None
-        connection_id = f"mcp-server:v1:{self._workspace_id}:{request.server_id}"
+        connection_id = self._connection_id(request.server_id)
         if existing is not None:
             if (existing.connection_id, existing.action) != (connection_id, request.action):
                 raise ValueError("MCP operation_id 已被不同连接意图使用")

@@ -31,6 +31,7 @@ from app.agents.tool_invocation_context import ToolInvocationContext
 if TYPE_CHECKING:
     from app.services.business.browser_resources.owner import BrowserResourceOwner
     from app.services.business.terminal_resources.owner import TerminalResourceOwner
+    from app.services.infrastructure.mcp.connection_service import McpConnectionService
     from app.services.infrastructure.node_debug.service import NodeDebugService
 
 
@@ -55,6 +56,7 @@ class CustomToolFactoryContext:
     session_communication_service: SessionCommunicationProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
     node_debug_service: NodeDebugService | None = None
+    mcp_connection_service: McpConnectionService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +155,7 @@ def build_custom_tool_bundle(
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_communication_service: SessionCommunicationProtocol | None = None,
     node_debug_service: NodeDebugService | None = None,
+    mcp_connection_service: McpConnectionService | None = None,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
         session_id=session_id,
@@ -173,6 +176,7 @@ def build_custom_tool_bundle(
         session_target_resolver=session_target_resolver,
         session_communication_service=session_communication_service,
         node_debug_service=node_debug_service,
+        mcp_connection_service=mcp_connection_service,
     )
     tools = build_custom_tools(specs, context=context)
     return CustomToolBundle(tools=tools)
