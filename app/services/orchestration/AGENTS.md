@@ -25,7 +25,6 @@ orchestration/
 ├── activity_runtime.py                   活动处理器注册和工具活动发布
 ├── terminal_finalization.py              消息流终态和中断事实收口
 ├── trace_observer.py                     消息流 trace 观察接线
-├── goal_runtime_service.py               Job 事件驱动的 Goal 捕获、续跑和终止状态
 ├── initial_execution_binding_worker.py   持久初始执行 intent 的 claim/bind 消费
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
 ├── owner_thread_creation_factory.py      按操作作用域装配 Thread 创建依赖并显式关闭控制连接
@@ -45,7 +44,7 @@ orchestration/
 
 `persistent_tasks/`负责通用任务 worker、手动触发和既有 source 动作对账；定义与运行事实归工作区状态库，不另建执行器。Goal 和生成器的完整迁移仍由对应 OpenSpec 追踪。
 
-主执行链为 `JobExecutionService → AgentExecutionService → execution_step.StepRunner → event_stream → MessageStreamRuntime/既有写入端口`。`GoalRuntimeService` 是独立的 Job 生命周期消费者：`JOB_STARTED` 在后台捕获 Goal 归属，`AGENT_END` 结算并派发续跑，`JOB_COMPLETED` 确保活动 Goal 在空闲时启动；`JOB_FAILED` 与 `JOB_CANCELLED` 分别收敛为 blocked 与 paused。查找执行重试、失败收口或事件身份时进入对应子目录，不要在公共 service 或事件消费处复制同类规则。
+主执行链为 `JobExecutionService → AgentExecutionService → execution_step.StepRunner → event_stream → MessageStreamRuntime/既有写入端口`。`persistent_tasks/` 的同一受管理 worker 消费 Job 生命周期并恢复 Goal：`JOB_STARTED` 在同步发布边界冻结 Goal 归属，`AGENT_END` 结算并派发续跑，`JOB_COMPLETED` 补偿空闲激活；失败与取消分别收敛为 blocked 与 paused。关闭时先停止动作准入，排空在途 Job 终态后再停止 worker。查找执行重试、失败收口或事件身份时进入对应子目录，不要在公共 service 或事件消费处复制同类规则。
 
 ## 可修改内容
 

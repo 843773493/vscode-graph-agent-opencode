@@ -21,3 +21,5 @@ start 只等待 worker 初始化；慢任务不得阻塞其他已恢复任务。
 执行结束事件只唤醒同一worker；触发事实来自原canonical终态提交，按原owner有界读取并与来源游标原子接受，不建立第二份执行历史。新订阅/更换来源和暂停后恢复取当前明确起点，改名保留游标。
 
 模型判断沿同一source/wakeup及执行准入，显式绑定独立Thread，使用该Thread自己的Agent/工具配置，不继承工作Thread能力。运行只保存原准入引用；未知结果等待终态唤醒并释放worker槽，恢复先对账原身份。只读取本次execution最后一次ModelCall的canonical输出，并校验run_id/definition_revision；迟到结果仍由原决定事务抑制动作。
+
+`goal.py`只处理一个 Goal 应用工作项和暂停前用时结算，不持有 worker、恢复循环、事件订阅或关闭生命周期；Goal 与其他任务共用 runtime 的有界槽位及动作准入。

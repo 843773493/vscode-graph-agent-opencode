@@ -49,6 +49,13 @@ class SessionGoalService:
         if thread_id != await self._session_service.resolve_main_thread(session_id):
             raise ValueError("Goal 只属于 Session main thread，child thread 不得读取、创建或修改 Goal")
 
+    def started_owner(self, session_id: str, thread_id: str) -> str | None:
+        """JOB_STARTED 同步发布边界冻结归属；无 await，不与同进程写入交错。"""
+        goal = self._store.read(session_id)
+        if goal is not None and goal.thread_id == thread_id and goal.status == GoalStatus.active:
+            return goal.goal_id
+        return None
+
     async def get(self, session_id: str) -> SessionGoalDTO | None:
         await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):

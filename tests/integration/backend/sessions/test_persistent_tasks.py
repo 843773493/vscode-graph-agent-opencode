@@ -19,6 +19,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
     _job,
     _send,
+    _tool_reply,
     _wire_text,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
@@ -417,3 +418,70 @@ async def test_worker_failures_are_visible_and_shutdown_retrieves_the_failure(
             with pytest.raises(RuntimeError, match="task-storage-fault"):
                 await runtime.stop()
         await runtime.start()
+
+
+@pytest.mark.asyncio
+async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tasks_or_pause(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = source_case
+    session_id, thread_id, target = await _target(case)
+    task = await _create(case, _configuration(target), "during-goal-recovery")
+    runtime, goals = case.container.persistent_task_runtime, case.container.goal_service
+    await runtime.stop()
+    goal = await goals.set(session_id, objective="恢复期间暂停后不能迟到续跑")
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = goals.get
+
+    async def slow_goal(identity: str):
+        current = asyncio.current_task()
+        if identity == session_id and current is not None and current.get_name() == f"persistent-task:goal:{session_id}":
+            entered.set()
+            await release.wait()
+        return await original(identity)
+
+    monkeypatch.setattr(goals, "get", slow_goal)
+    try:
+        await asyncio.wait_for(runtime.start(), 1)
+        await asyncio.wait_for(entered.wait(), 1)
+        # 通用任务继续通过真实 API 发布上下文，不等待慢 Goal 恢复。
+        run = await _check(case, task)
+        assert (await _run(case, task, run))["delivery"]["state"] == "saved"
+        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"status": "paused"})
+        assert response.status_code == 200, response.text
+        paused = response.json()["data"]
+        assert paused["goal_id"] == goal.goal_id and paused["status"] == "paused"
+        release.set()
+        async with asyncio.timeout(5):
+            while f"goal:{session_id}" in runtime._inflight or runtime._application_work:
+                await asyncio.sleep(0.01)
+        current = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]
+        assert current == paused
+        assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
+        assert (await case.client.get("/api/v1/health")).status_code == 200
+    finally:
+        release.set()
+
+
+
+@pytest.mark.asyncio
+async def test_goal_activation_keeps_request_identity_and_completes_through_the_model(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    session_id, thread_id, _target_uri = await _target(case)
+    await case.plan(session_id, [
+        _tool_reply("update_goal", {"status": "complete"}, "call_goal_done"),
+        {"content": "目标已经完成"},
+    ], thread_id=thread_id)
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "验证目标后调用 update_goal 完成"})
+    assert response.status_code == 200, response.text
+    wakeup, = case.sql(session_id, thread_id, "SELECT job_id,request_id,gateway_id FROM runtime_execution_wakeups")
+    assert wakeup[1:] == (response.json()["request_id"], case.gateway_id)
+    await _job(case, wakeup[0])
+    goal = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]
+    assert goal["goal_id"] == response.json()["data"]["goal_id"] and goal["status"] == "complete"
+    assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id,outcome FROM executions") == [("internal", None, "completed")]
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
+    assert case.call_count(session_id, thread_id) == 2 and len(case.requests()) == 2
+    # 显式验证 worker 排空，而不是把测试函数结束误记为生命周期完成。
+    await asyncio.wait_for(case.container.persistent_task_runtime.stop(), 5)
+    assert case.container.persistent_task_runtime._worker is None

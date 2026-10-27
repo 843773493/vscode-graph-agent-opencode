@@ -72,7 +72,6 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.communication.service import SessionCommunicationService
-from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing.service import ToolTestService
@@ -91,7 +90,6 @@ class _AppContainerProtocol(Protocol):
     attachment_blob_store: AttachmentBlobStore
     runtime_service: RuntimeService
     goal_service: SessionGoalService
-    goal_runtime_service: GoalRuntimeService
     persistent_task_runtime: PersistentTaskRuntime
     persistent_task_service: PersistentTaskService
     session_interrupt_service: SessionInterruptService
@@ -279,8 +277,8 @@ def get_goal_service(request: Request) -> SessionGoalService:
     return _require_service(request, "goal_service", SessionGoalService, "SessionGoalService 尚未在应用启动阶段初始化")
 
 
-def get_goal_runtime_service(request: Request) -> GoalRuntimeService:
-    return _require_service(request, "goal_runtime_service", GoalRuntimeService, "GoalRuntimeService 尚未在应用启动阶段初始化")
+def get_persistent_task_runtime(request: Request) -> PersistentTaskRuntime:
+    return _require_service(request, "persistent_task_runtime", PersistentTaskRuntime, "PersistentTaskRuntime 尚未在应用启动阶段初始化")
 
 
 def get_session_interrupt_service(request: Request) -> SessionInterruptService:

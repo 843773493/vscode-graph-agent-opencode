@@ -14,9 +14,9 @@ from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
     get_file_tree_settings_service,
-    get_goal_runtime_service,
     get_goal_service,
     get_llm_request_log_service,
+    get_persistent_task_runtime,
     get_request_id,
     get_rollout_checkpoint_saver,
     get_session_changes_service,
@@ -118,7 +118,8 @@ from app.services.infrastructure.trace_event_store import TraceCursorGoneError
 from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
 )
-from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.services.orchestration.persistent_tasks.goal import settle_goal_progress
+from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -160,7 +161,7 @@ async def set_session_goal(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
-    runtime: Annotated[GoalRuntimeService, Depends(get_goal_runtime_service)],
+    runtime: Annotated[PersistentTaskRuntime, Depends(get_persistent_task_runtime)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     token_budget = (
@@ -173,7 +174,7 @@ async def set_session_goal(
         if payload.replace or (
             payload.status is not None and payload.status.value != "active"
         ):
-            await runtime.settle_active_progress(session_id)
+            await settle_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
             goal = await goal_service.set(
                 session_id,
@@ -189,8 +190,8 @@ async def set_session_goal(
                 and previous_goal is not None
                 and previous_goal.objective != goal.objective
             ):
-                await runtime.apply_objective_update(goal)
-            await runtime.ensure_active_goal_running(session_id)
+                await runtime.request_goal(session_id, objective=goal)
+            await runtime.request_goal(session_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
@@ -208,11 +209,11 @@ async def clear_session_goal(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
-    runtime: Annotated[GoalRuntimeService, Depends(get_goal_runtime_service)],
+    runtime: Annotated[PersistentTaskRuntime, Depends(get_persistent_task_runtime)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
-        await runtime.settle_active_progress(session_id)
+        await settle_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
             cleared = await goal_service.clear(session_id)
     except SessionDeletionPendingError as error:

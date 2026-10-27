@@ -383,7 +383,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     lifespan_ready = asyncio.Event()
     model_entered, model_release = asyncio.Event(), asyncio.Event()
-    goal_entered, goal_captured = asyncio.Event(), asyncio.Event()
+    goal_entered = asyncio.Event()
     containers: list[AppContainer] = []
     jobs: list[JobState] = []
     goal_paths: list[Path] = []
@@ -414,26 +414,20 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
                 planned.append(_plan_model_call(
                     replay, container, session_id, thread_id, response_status=400,
                 ))
-                goals, runtime = container.goal_service, container.goal_runtime_service
+                goals, runtime = container.goal_service, container.persistent_task_runtime
                 await goals.set(session_id, objective="关闭时必须保存真实 Goal 状态")
-                real_capture = runtime._capture_started_job
                 real_get = goals.get
 
-                async def capture(job_id: str) -> None:
-                    await real_capture(job_id)
-                    goal_captured.set()
-
                 async def get_goal(identity: str):
-                    if close_requested.is_set() and asyncio.current_task() in runtime._tasks:
+                    if close_requested.is_set() and asyncio.current_task() in runtime._inflight.values():
                         goal_entered.set()
                     return await real_get(identity)
 
-                monkeypatch.setattr(runtime, "_capture_started_job", capture)
                 monkeypatch.setattr(goals, "get", get_goal)
                 job = await _start_job(case, "user", session_id, thread_id)
                 jobs.append(job)
                 await asyncio.wait_for(model_entered.wait(), 5)
-                await asyncio.wait_for(goal_captured.wait(), 5)
+                assert runtime._goal_job_owners[job.job_id] == (await goals.get(session_id)).goal_id
                 await goals.set(session_id, status=user_status)
                 lock = goals.lock_for(session_id)
                 await lock.acquire()
@@ -475,7 +469,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
         else:
             await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 8)
     assert json.loads(goal_paths[0].read_text(encoding="utf-8"))["status"] == expected_status.value
-    assert not containers[0].goal_runtime_service._tasks
+    assert not containers[0].persistent_task_runtime._inflight
     assert not containers[0].job_service._finalization_tasks
     assert controller.transport.call_count == 1
     assert list(controller.transport.hit_counts.values()) == [1]
@@ -580,7 +574,7 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
             await asyncio.wait_for(task, 8)
         await asyncio.wait_for(asyncio.gather(*starts), 8)
     assert not containers[0].job_service._finalization_tasks
-    assert not containers[0].goal_runtime_service._tasks
+    assert not containers[0].persistent_task_runtime._inflight
     assert_closed(mounted_case, retried_jobs=containers[0].workspace_id if writer_failure else None)
 
 

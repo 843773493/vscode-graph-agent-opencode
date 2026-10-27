@@ -39,7 +39,7 @@
 - [x] 4.1 将目标提示、预算记账及完成/阻塞审计构建为 Goal 应用组件，保持 main-thread 限定和既有状态语义。
 - [ ] 4.2 平移激活、目标更新、启动恢复、Agent/Job 事件处理并验证去重；Goal 工具和 API 直接操作统一任务 owner。
 - [ ] 4.3 实现可重试的一次性 goal.json 导入，保留稳定身份、预算、revision 和已续跑标记；迁齐fork冻结Goal、preparing节点安装、发布/取消/恢复及旧文件校验消费者，独立fork Goal保持新身份和零用量，child不获得Goal；迁齐消费者后物理移除旧 Goal 状态存储与专用调度实现。
-- [ ] 4.4 物理删除 GoalRuntimeService 及其文件、import、容器字段与装配、独立事件订阅/注销和 close-admission/shutdown 步骤，删除 workspace_lifecycle 中 goal_runtime_service.resume_active_goals 启动 hook；由通用运行时统一接管，禁止保留转发包装层或改名后的独立 Goal 调度器。
+- [x] 4.4 物理删除 GoalRuntimeService 及其文件、import、容器字段与装配、独立事件订阅/注销和 close-admission/shutdown 步骤，删除 workspace_lifecycle 中 goal_runtime_service.resume_active_goals 启动 hook；由通用运行时统一接管，禁止保留转发包装层或改名后的独立 Goal 调度器。
 
 ## 5. 将定时生成器迁入统一运行时
 
@@ -181,3 +181,13 @@
 - 原管理revision、判断结算与接受事实对账链路无需另加终止分支。206 **3 passed／72.46秒**，覆盖event/state两种忙时排队：终止发生在原wakeup已接受但任务未记回执时，排队工作仍按同一item/job/execution完成；尚未接受的动作则被抑制。真实Gateway、任务API和model_stream保留原归属、无伪用户Turn。原忙时测试按新增control参数重命名，全仓无旧selector调用。
 - 207 **1 passed／16.69秒**验证迟到脚本保留原结果、不投递、任务继续terminated。该命令的全局`-k terminate`同时排除了显式选择的模型场景（实际10 deselected），不将其计为模型通过；209另行精确运行模型场景 **1 passed／62.83秒**，覆盖pause/edit/暂停试运行/terminate四次实际判断、工作模型零调用、终止后恢复及新试运行均409且完整对象不变。208 Ruff通过，全部运行具进程外期限/4GiB保护且无源码漂移。
 - 完成3.7；与原脚本/模型试运行、暂停/编辑及接受后冷恢复证据按未变产品源码共同证明管理边界，不宣称本次重新完整运行全部套件。准确命令、指纹、原始输出和实际退出码仍在既有临时证据目录，正式产物分别镜像三个测试文件。Goal/生成器迁移与主Web管理仍未完成。
+
+
+### Goal调度并入通用worker（2026-10-27）
+
+- 物理删除GoalRuntimeService及原测试文件，迁齐API、容器、事件订阅、启动和关闭消费者；Goal的激活、目标编辑、终态及启动恢复工作与普通任务共享同一worker和有界槽位。单项Goal函数不持有循环或生命周期。初始化回执先交还工作区，慢恢复在后台推进；暂停后迟到工作重读状态，不重新激活。此切片只完成4.4，goal.json仍是当前唯一Goal状态来源，统一任务owner、一次性导入与fork完整迁移仍由4.2/4.3追踪。
+- JOB_STARTED同步冻结Goal归属，工作入队冻结request_id/gateway_id及事件观察时间；终态携带Job快照，避免删除流程先移出注册表导致后台重读失败。关闭先停止动作准入并排空已开始动作，再关闭Job和排空终态，最后停止共享worker；终态记账不触发关闭后的续跑。Session删除结束对应工作项，其他任务继续；后台错误进入原健康失败并保留多个在途异常。
+- 227最终单测 **40 passed**；228真实API/SDK/model_stream产品场景 **2 passed／46.28秒**，验证激活后模型完成Goal、原请求身份、内部执行无伪用户Turn，以及慢Goal恢复期间其他任务推进、暂停后迟到恢复不续跑。230共享worker回归 **3 passed／146.48秒**，覆盖忙时接受后暂停，以及两种动作接受后硬杀Backend再恢复。所有最终运行都有进程外期限/4GiB保护，source_changes为空。
+- 229相关Runtime/Goal应用Pyright零错误，231本批Ruff通过；232核对API的27项B008诊断与HEAD完全一致，未声称全仓静态分析全绿。全仓app/tests/scripts检索旧类、字段、恢复hook及测试selector无命中。没有协议、数据库或前端改动，不需要schema提升及Web构建。
+- 226产品测试发现naive Job时间与UTC观察时间相减错误，改为timestamp差并补齐四种时间组合；227/228已通过。210/211/220的日志调度、类型及非法测试Gateway身份错误均保留原件，最终对应检查通过。216原Goal/Terminal/interrupt综合测试exit124、150秒超时，仅输出一个点，不能算完整通过；221多挂载关闭首项在既有ready.wait 8秒、模型准备前失败，随后生命周期未关闭导致其余5项失败，未放宽期限，也不将这些场景计为通过。性能TODO及Windows既有长路径范围保留。
+- 准确命令、HEAD/源码指纹、原始输出和退出码保留在out/tests/temp/persistent-task-migration/artifacts/；正式产品产物沿对应测试路径保存。Goal存储/fork、生成器和主Web管理仍未完成，团队协作继续TODO。

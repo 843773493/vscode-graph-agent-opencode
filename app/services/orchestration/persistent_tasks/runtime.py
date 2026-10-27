@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections import deque
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
+from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import EventType
@@ -17,6 +21,8 @@ from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.trace_middleware import (
+    get_current_gateway_id,
+    get_current_request_id,
     reset_current_gateway_id,
     reset_current_request_id,
     set_current_gateway_id,
@@ -24,6 +30,7 @@ from app.core.trace_middleware import (
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
+from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
@@ -31,6 +38,7 @@ from app.schemas.internal_v2.persistent_task import (
     TaskDeliveryDTO,
     TaskEvaluationDTO,
 )
+from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.events.event_channel_service import EventChannel
 from app.services.infrastructure.persistent_tasks.events import PersistentTaskChanged
@@ -45,6 +53,11 @@ from app.services.orchestration.persistent_tasks.conditions import (
     model_decision,
 )
 from app.services.orchestration.persistent_tasks.contexts import action_context
+from app.services.orchestration.persistent_tasks.goal import (
+    GoalWork,
+    GoalWorkKind,
+    process_goal_work,
+)
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 logger = logging.getLogger(__name__)
@@ -54,9 +67,16 @@ class PersistentTaskRuntime:
     def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionOrchestratorProtocol,
                  dispatcher: RuntimeSourceDispatcher, sessions: SessionService, events: EventChannel[PersistentTaskChanged],
                  clock: Callable[[], datetime], workspace_root: Path, saver: RolloutCheckpointSaver,
-                 job_events: JobEventBusProtocol, concurrency: int = 4) -> None:
+                 job_events: JobEventBusProtocol, goals: SessionGoalService, jobs: JobServiceProtocol, concurrency: int = 4) -> None:
         if concurrency < 1:
             raise ValueError("持久任务并发数必须为正")
+        self.goals = goals
+        self.jobs = jobs
+        self._goal_job_owners: dict[str, str] = {}
+        self._application_work: dict[str, deque[tuple[GoalWork, asyncio.Future[None] | None]]] = {}
+        self._active_actions = 0
+        self._actions_drained = asyncio.Event()
+        self._actions_drained.set()
         self.store = store
         self.locks = KeyLockPool()
         self._orchestrator = orchestrator
@@ -102,12 +122,77 @@ class PersistentTaskRuntime:
             return self._saver.execution_completions(session_id, thread_id, after_commit_id=None).through_commit_id
 
     async def on_event(self, event: Event) -> None:
-        # 事件只唤醒原worker；恢复读取canonical终态提交，不依赖内存通知完整性。
-        if event.type in {EventType.JOB_COMPLETED, EventType.JOB_FAILED, EventType.JOB_CANCELLED} and not self._closing:
+        if event.type == EventType.JOB_STARTED:
+            # 发布事务不能重新进入 Goal 异步锁，也不能把归属捕获延迟到编辑之后。
+            owner = self.goals.started_owner(event.payload.session_id, event.payload.thread_id)
+            if owner is not None:
+                self._goal_job_owners[event.job_id] = owner
+        elif event.type in {EventType.AGENT_END, EventType.JOB_FAILED, EventType.JOB_CANCELLED, EventType.JOB_COMPLETED}:
+            if event.type == EventType.JOB_COMPLETED or event.job_id in self._goal_job_owners:
+                job = await self.jobs.get(event.job_id)
+                kinds: dict[str, GoalWorkKind] = {EventType.AGENT_END: "agent_end", EventType.JOB_FAILED: "failed",
+                        EventType.JOB_CANCELLED: "cancelled", EventType.JOB_COMPLETED: "idle"}
+                self._queue_goal(GoalWork(job.session_id, kinds[event.type], job=job,
+                                         tokens=event.payload.token_usage.total_tokens if event.type == EventType.AGENT_END else 0))
             self._waiting_checks.clear()
-            self._execution_pending.update(task.task_id for task in self.store.list()
-                                           if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
+            if self._accepting:
+                self._execution_pending.update(task.task_id for task in self.store.list()
+                                               if task.configuration.trigger.source_uri is not None and task.lifecycle == "active")
             self._wake.set()
+
+    def _queue_goal(self, work: GoalWork, done: asyncio.Future[None] | None = None) -> None:
+        key = f"goal:{work.session_id}"
+        work = replace(work, request_id=get_current_request_id(), gateway_id=get_current_gateway_id(), observed_at=self.clock())
+        self._application_work.setdefault(key, deque()).append((work, done))
+        self._wake.set()
+
+    async def request_goal(self, session_id: str, *, objective: SessionGoalDTO | None = None) -> None:
+        self.assert_healthy()
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._queue_goal(GoalWork(session_id, "objective" if objective is not None else "idle", goal=objective), done)
+        await asyncio.shield(done)
+
+    async def _process_application(self, key: str) -> None:
+        # 每次只推进一个工作项，与其他任务共享有界槽位，防止长 Goal 独占 worker。
+        work, done = self._application_work[key].popleft()
+        if not self._application_work[key]:
+            del self._application_work[key]
+        request_token = set_current_request_id(work.request_id)
+        gateway_token = set_current_gateway_id(work.gateway_id)
+        try:
+            await process_goal_work(self, work)
+        except NotFoundError as error:
+            # 导航删除可能先排空 Job 并移除 Session；已排队工作不能拖垮其他任务。
+            logger.info("Goal 工作的 Session 已删除，结束该工作项: session_id=%s", work.session_id)
+            if done is not None:
+                done.set_exception(error)
+        except BaseException as error:
+            if done is not None:
+                done.set_exception(error)
+            raise
+        else:
+            if done is not None:
+                done.set_result(None)
+        finally:
+            reset_current_gateway_id(gateway_token)
+            reset_current_request_id(request_token)
+
+    @asynccontextmanager
+    async def action_admission(self) -> AsyncIterator[bool]:
+        if not self._accepting:
+            yield False
+            return
+        self._active_actions += 1
+        self._actions_drained.clear()
+        try:
+            yield True
+        finally:
+            self._active_actions -= 1
+            if not self._active_actions:
+                self._actions_drained.set()
+
+    async def drain_actions(self) -> None:
+        await self._actions_drained.wait()
 
     def notify(self, task_id: str, run_id: str | None = None) -> None:
         task = self.store.get(task_id)
@@ -127,11 +212,12 @@ class PersistentTaskRuntime:
 
     def close_admission(self) -> None:
         self._accepting = False
-        self._closing = True
         self._wake.set()
 
     async def stop(self) -> None:
         self.close_admission()
+        self._closing = True
+        self._wake.set()
         if self._worker is not None:
             try:
                 await self._worker
@@ -158,15 +244,26 @@ class PersistentTaskRuntime:
             initialized.set_result(None)
             # 初始化回执先交还工作区 owner，再推进任何逐任务恢复。
             await asyncio.sleep(0)
-            while not self._closing:
+            for goal in self.goals.list_existing():
+                if goal.status == GoalStatus.active:
+                    self._queue_goal(GoalWork(goal.session_id))
+            while True:
                 self._wake.clear()
                 for task_id, running in tuple(self._inflight.items()):
                     if running.done():
                         del self._inflight[task_id]
                         running.result()
-                for task_id in self.store.schedule_due(self.clock()):
-                    self.notify(task_id)
-                tasks = self.store.list()
+                if self._closing and not self._application_work and not self._inflight:
+                    break
+                for key in tuple(self._application_work):
+                    if key not in self._inflight and len(self._inflight) < self._concurrency:
+                        running = asyncio.create_task(self._process_application(key), name=f"persistent-task:{key}")
+                        running.add_done_callback(lambda _task: self._wake.set())
+                        self._inflight[key] = running
+                if self._accepting:
+                    for task_id in self.store.schedule_due(self.clock()):
+                        self.notify(task_id)
+                tasks = self.store.list() if self._accepting else []
                 for task in tasks:
                     if task.task_id in self._inflight or task.task_id in self._waiting_checks:
                         continue
@@ -178,7 +275,7 @@ class PersistentTaskRuntime:
                         running = asyncio.create_task(self._process_task(task.task_id), name=f"persistent-task:{task.task_id}")
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[task.task_id] = running
-                next_run = self.store.next_schedule_at()
+                next_run = self.store.next_schedule_at() if self._accepting else None
                 if next_run is None:
                     await self._wake.wait()
                 else:
@@ -197,21 +294,30 @@ class PersistentTaskRuntime:
             raise
         finally:
             await self._job_events.unregister_durable_listener(self.on_event)
+            for queue in self._application_work.values():
+                for _work, done in queue:
+                    if done is not None and not done.done():
+                        done.set_exception(failure or RuntimeError("持久任务 worker 已停止"))
+            self._application_work.clear()
             # 不取消已接受的 Job；当前动作走原身份结算后再归还运行时。
             if self._inflight:
                 results = await asyncio.gather(*self._inflight.values(), return_exceptions=True)
                 self._inflight.clear()
-                if failure is None:
-                    for result in results:
-                        if isinstance(result, BaseException):
-                            raise result
+                errors = [result for result in results if isinstance(result, BaseException)]
+                for error in errors:
+                    logger.error("持久任务工作项失败", exc_info=(type(error), error, error.__traceback__))
+                if failure is None and errors:
+                    raise errors[0]
 
     async def _process_task(self, task_id: str) -> None:
         await self._collect_execution_completions(task_id)
         for run in self.store.runs(task_id, pending_only=True):
             if self._closing:
                 return
-            await self._process_run(run)
+            async with self.action_admission() as admitted:
+                if not admitted:
+                    return
+                await self._process_run(run)
             if task_id in self._waiting_checks:
                 return
         self._recovering.discard(task_id)

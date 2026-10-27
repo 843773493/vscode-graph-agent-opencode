@@ -89,7 +89,6 @@ def _isolate_non_navigation_services(
         "generation_stop": (container.session_generation_service, "shutdown", None),
         "terminal_start": (container.terminal_steering_service, "start", None),
         "terminal_stop": (container.terminal_steering_service, "shutdown", None),
-        "goal_resume": (container.goal_runtime_service, "resume_active_goals", None),
         "node_debug_close": (container.node_debug_service, "close", None),
         "config_close": (container.config_service, "close", None),
         "agent_start": (container.agent_execution_service, "start", None),
@@ -105,6 +104,8 @@ def _isolate_non_navigation_services(
         stubs[name] = stub
 
     for owner, method_name, result in (
+        # MCP owner 已隔离，连接恢复也不能读取未启动的真实 owner。
+        (container.mcp_connection_service, "start", None),
         (container.config_service, "validate_workspace_config", None),
         (container.config_service, "set_mcp_tool_names", None),
         (container.mcp_catalog_owner, "get_tool_ids", []),

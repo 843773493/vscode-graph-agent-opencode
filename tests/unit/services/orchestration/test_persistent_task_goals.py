@@ -1,10 +1,21 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.core.exceptions import NotFoundError
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    get_current_request_id,
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_tasks.goal import (
@@ -12,7 +23,8 @@ from app.services.business.persistent_tasks.goal import (
     objective_updated_message,
 )
 from app.services.business.session_goal_service import SessionGoalService
-from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.services.orchestration.persistent_tasks.goal import GoalWork
+from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 
 
 class _Sessions:
@@ -91,6 +103,12 @@ class _Bus:
     async def publish(self, **event):
         return event
 
+    async def register_durable_listener(self, listener):
+        pass
+
+    async def unregister_durable_listener(self, listener):
+        pass
+
 
 @pytest.fixture
 def goal_service() -> SessionGoalService:
@@ -110,22 +128,37 @@ def session_orchestrator() -> _Orchestrator:
 
 
 @pytest.fixture
-def goal_runtime(
-    goal_service: SessionGoalService,
-    job_service: _Jobs,
-    session_orchestrator: _Orchestrator,
-) -> GoalRuntimeService:
-    return GoalRuntimeService(
-        goal_service=goal_service,
-        job_service=job_service,
-        session_orchestrator=session_orchestrator,
+async def goal_runtime(goal_service, job_service, session_orchestrator):
+    store = Mock()
+    store.list.return_value = []
+    store.schedule_due.return_value = []
+    store.next_schedule_at.return_value = None
+    runtime = PersistentTaskRuntime(
+        store=store, orchestrator=session_orchestrator, dispatcher=Mock(), sessions=_Sessions(),
+        events=Mock(), clock=lambda: datetime.now(UTC), workspace_root=Path.cwd(), saver=Mock(),
+        job_events=_Bus(), goals=goal_service, jobs=job_service,
     )
+    await runtime.start()
+    yield runtime
+    if runtime._worker is not None:
+        await runtime.stop()
+
+
+async def _work(runtime, work):
+    done = asyncio.get_running_loop().create_future()
+    runtime._queue_goal(work, done)
+    await asyncio.wait_for(asyncio.shield(done), 1)
+
+
+async def _close_admission(runtime):
+    runtime.close_admission()
+    await runtime.drain_actions()
 
 
 @pytest.mark.asyncio
 async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     session_orchestrator: _Orchestrator,
 ) -> None:
     created = await goal_service.set("sess_1", objective="完成目标")
@@ -134,8 +167,8 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     assert created.thread_id == "thr_sess_1"
     assert (await goal_service.get("sess_1")).thread_id == "thr_sess_1"
 
-    await goal_runtime.ensure_active_goal_running("sess_1")
-    await goal_runtime.ensure_active_goal_running("sess_1")
+    await goal_runtime.request_goal("sess_1")
+    await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0][2]["internal"] is True
     assert session_orchestrator.calls[0][2]["goal_objective"] == "完成目标"
@@ -155,18 +188,18 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     assert "重新计算连续轮次" in str(internal_message.content)
 
     await goal_service.set("sess_1", status=GoalStatus.paused)
-    await goal_runtime.ensure_active_goal_running("sess_1")
+    await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 1
 
     await goal_service.set("sess_1", status=GoalStatus.active)
-    await goal_runtime.ensure_active_goal_running("sess_1")
+    await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 2
 
 
 @pytest.mark.asyncio
 async def test_job_started_listener_does_not_reenter_goal_lock(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
 ) -> None:
     job_service.job = SimpleNamespace(
@@ -178,22 +211,19 @@ async def test_job_started_listener_does_not_reenter_goal_lock(
     await goal_lock.acquire()
     try:
         await asyncio.wait_for(
-            goal_runtime.on_event(SimpleNamespace(type="job_started", job_id="job_1")),
+            goal_runtime.on_event(SimpleNamespace(type="job_started", job_id="job_1",
+                                                  payload=SimpleNamespace(session_id="sess_1", thread_id="thr_sess_1"))),
             timeout=0.1,
         )
-        capture_task = goal_runtime._job_goal_capture_tasks["job_1"]
-        assert not capture_task.done()
+        assert goal_runtime._goal_job_owners["job_1"] == goal.goal_id
     finally:
         goal_lock.release()
-
-    await capture_task
-    assert goal_runtime._job_goal_ids["job_1"] == goal.goal_id
 
 
 @pytest.mark.asyncio
 async def test_replaced_goal_ignores_old_job_and_failed_job_blocks_owner(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
     session_orchestrator: _Orchestrator,
 ) -> None:
@@ -205,34 +235,34 @@ async def test_replaced_goal_ignores_old_job_and_failed_job_blocks_owner(
         ended_at=None,
     )
     old = await goal_service.set("sess_1", objective="旧目标")
-    goal_runtime._job_goal_ids["job_1"] = old.goal_id
+    goal_runtime._goal_job_owners["job_1"] = old.goal_id
     new = await goal_service.set("sess_1", objective="新目标", replace=True)
 
-    await goal_runtime._continue_after_agent_end("job_1", total_tokens=99)
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=99))
     current = await goal_service.get("sess_1")
     assert current.goal_id == new.goal_id
     assert current.tokens_used == 0
     assert session_orchestrator.calls == []
 
-    goal_runtime._job_goal_ids["job_1"] = new.goal_id
-    await goal_runtime._stop_after_terminal_error("job_1", "job_failed")
+    goal_runtime._goal_job_owners["job_1"] = new.goal_id
+    await _work(goal_runtime, GoalWork("sess_1", "failed", job=job_service.job))
     assert (await goal_service.get("sess_1")).status == GoalStatus.blocked
 
 
 @pytest.mark.asyncio
 async def test_failed_job_does_not_overwrite_goal_paused_during_active_turn(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
 ) -> None:
     job_service.job = SimpleNamespace(
         job_id="job_1", session_id="sess_1", thread_id="thr_sess_1"
     )
     goal = await goal_service.set("sess_1", objective="目标")
-    goal_runtime._job_goal_ids["job_1"] = goal.goal_id
+    goal_runtime._goal_job_owners["job_1"] = goal.goal_id
     await goal_service.set("sess_1", status=GoalStatus.paused)
 
-    await goal_runtime._stop_after_terminal_error("job_1", "job_failed")
+    await _work(goal_runtime, GoalWork("sess_1", "failed", job=job_service.job))
 
     assert (await goal_service.get("sess_1")).status == GoalStatus.paused
 
@@ -240,7 +270,7 @@ async def test_failed_job_does_not_overwrite_goal_paused_during_active_turn(
 @pytest.mark.asyncio
 async def test_goal_created_during_unrelated_job_starts_after_that_job_completes(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
     session_orchestrator: _Orchestrator,
 ) -> None:
@@ -254,11 +284,11 @@ async def test_goal_created_during_unrelated_job_starts_after_that_job_completes
     job_service.items = [running]
     await goal_service.set("sess_1", objective="新目标")
 
-    await goal_runtime.ensure_active_goal_running("sess_1")
+    await goal_runtime.request_goal("sess_1")
     assert session_orchestrator.calls == []
 
     job_service.items = []
-    await goal_runtime._ensure_after_job_completed("job_unrelated")
+    await _work(goal_runtime, GoalWork("sess_1", job=job_service.job))
     assert len(session_orchestrator.calls) == 1
     assert "新目标" in session_orchestrator.calls[0][1]
 
@@ -266,7 +296,7 @@ async def test_goal_created_during_unrelated_job_starts_after_that_job_completes
 @pytest.mark.asyncio
 async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
     session_orchestrator: _Orchestrator,
 ) -> None:
@@ -279,9 +309,9 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt(
         ended_at=started_at + timedelta(seconds=37),
     )
     goal = await goal_service.set("sess_1", objective="完成预算目标", token_budget=100)
-    goal_runtime._job_goal_ids["job_budget"] = goal.goal_id
+    goal_runtime._goal_job_owners["job_budget"] = goal.goal_id
 
-    await goal_runtime._continue_after_agent_end("job_budget", total_tokens=120)
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=120))
 
     current = await goal_service.get("sess_1")
     assert current.status == GoalStatus.budget_limited
@@ -301,7 +331,7 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt(
 @pytest.mark.asyncio
 async def test_active_objective_edit_queues_internal_goal_message(
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
     session_orchestrator: _Orchestrator,
 ) -> None:
@@ -313,12 +343,12 @@ async def test_active_objective_edit_queues_internal_goal_message(
     )
     job_service.items = [running]
     original = await goal_service.set("sess_1", objective="旧目标")
-    goal_runtime._job_goal_ids[running.job_id] = original.goal_id
+    goal_runtime._goal_job_owners[running.job_id] = original.goal_id
     edited = await goal_service.set("sess_1", objective="新目标")
 
-    await goal_runtime.apply_objective_update(edited)
+    await goal_runtime.request_goal("sess_1", objective=edited)
 
-    assert goal_runtime._job_goal_ids.get(running.job_id) is None
+    assert goal_runtime._goal_job_owners.get(running.job_id) is None
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0][3] == "after_turn"
     assert "取代此前的 Goal" in session_orchestrator.calls[0][1]
@@ -353,7 +383,7 @@ async def test_close_admission_waits_for_admitted_dispatch_without_consuming_nex
     monkeypatch: pytest.MonkeyPatch,
     window: str,
     goal_service: SessionGoalService,
-    goal_runtime: GoalRuntimeService,
+    goal_runtime: PersistentTaskRuntime,
     job_service: _Jobs,
     session_orchestrator: _Orchestrator,
 ) -> None:
@@ -379,9 +409,9 @@ async def test_close_admission_waits_for_admitted_dispatch_without_consuming_nex
 
         monkeypatch.setattr(job_service, "list", blocked_preparation)
     await goal_service.set("sess_1", objective="保持真实目标")
-    dispatch = asyncio.create_task(goal_runtime.ensure_active_goal_running("sess_1"))
+    dispatch = asyncio.create_task(goal_runtime.request_goal("sess_1"))
     await asyncio.wait_for(entered.wait(), 1)
-    closing = asyncio.create_task(goal_runtime.close_admission())
+    closing = asyncio.create_task(_close_admission(goal_runtime))
     try:
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(asyncio.shield(closing), 0.01)
@@ -389,35 +419,128 @@ async def test_close_admission_waits_for_admitted_dispatch_without_consuming_nex
         release.set()
         await asyncio.wait_for(asyncio.gather(dispatch, closing), 1)
     before = await goal_service.set("sess_1", objective="关闭时更新后的目标")
-    await goal_runtime.ensure_active_goal_running("sess_1")
+    await _work(goal_runtime, GoalWork("sess_1"))
     after = await goal_service.get("sess_1")
     assert len(session_orchestrator.calls) == 1
     assert after.status == GoalStatus.active
     assert after.last_continued_job_id == before.last_continued_job_id
-    await goal_runtime.shutdown()
+    await goal_runtime.stop()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_exposes_first_background_error_and_logs_later_errors(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    goal_runtime: GoalRuntimeService,
-    job_service: _Jobs,
-) -> None:
+async def test_shutdown_exposes_background_failure_and_logs_all_inflight_errors(
+    monkeypatch, caplog, goal_runtime, goal_service,
+):
     first, second = RuntimeError("首个状态转换故障"), RuntimeError("后续状态转换故障")
 
-    async def failed_get(job_id: str):
-        raise first if job_id == "job_first" else second
+    async def failed_get(session_id):
+        raise first if session_id == "sess_first" else second
 
-    monkeypatch.setattr(job_service, "get", failed_get)
-    for job_id in ("job_first", "job_second"):
-        await goal_runtime.on_event(
-            SimpleNamespace(type="job_completed", job_id=job_id)
-        )
-    with pytest.raises(ExceptionGroup) as caught:
-        await goal_runtime.shutdown()
-    assert caught.value.exceptions == (first,)
-    assert goal_runtime._task_error is first
-    assert not goal_runtime._tasks
+    monkeypatch.setattr(goal_service, "get", failed_get)
+    goal_runtime._queue_goal(GoalWork("sess_first"))
+    goal_runtime._queue_goal(GoalWork("sess_second"))
+    async with asyncio.timeout(1):
+        while goal_runtime._failure is None:
+            await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="首个状态转换故障"):
+        await goal_runtime.stop()
+    # Task 的完成回调在等待者恢复后运行，等同一轮事件循环再核日志。
+    await asyncio.sleep(0)
+    assert goal_runtime._failure is first
+    assert not goal_runtime._inflight and not goal_runtime._application_work
     assert "首个状态转换故障" in caplog.text
     assert "后续状态转换故障" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,status", [("failed", GoalStatus.blocked), ("cancelled", GoalStatus.paused)])
+async def test_closed_action_admission_still_accounts_terminal_goal_work(goal_runtime, goal_service, job_service, kind, status):
+    goal = await goal_service.set("sess_1", objective="关闭时保留终态")
+    job_service.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
+    goal_runtime._goal_job_owners["job_1"] = goal.goal_id
+    goal_runtime.close_admission()
+    await _work(goal_runtime, GoalWork("sess_1", kind, job=job_service.job))
+    assert (await goal_service.get("sess_1")).status == status
+
+
+@pytest.mark.asyncio
+async def test_started_owner_is_frozen_before_a_later_goal_replacement(goal_runtime, goal_service, job_service, session_orchestrator):
+    old = await goal_service.set("sess_1", objective="旧目标")
+    await goal_runtime.on_event(SimpleNamespace(type="job_started", job_id="job_old",
+                                               payload=SimpleNamespace(session_id="sess_1", thread_id="thr_sess_1")))
+    assert goal_runtime._goal_job_owners["job_old"] == old.goal_id
+    replacement = await goal_service.set("sess_1", objective="新目标", replace=True)
+    job_service.job = SimpleNamespace(job_id="job_old", session_id="sess_1", thread_id="thr_sess_1")
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=50))
+    current = await goal_service.get("sess_1")
+    assert current.goal_id == replacement.goal_id and current.tokens_used == 0
+    assert not session_orchestrator.calls
+
+
+@pytest.mark.asyncio
+async def test_goal_work_freezes_request_identity_instead_of_using_worker_context(goal_runtime, goal_service, session_orchestrator, monkeypatch):
+    identities = []
+    original = session_orchestrator.submit_runtime_event
+
+    async def submit(*args, **kwargs):
+        identities.append((get_current_request_id(), get_current_gateway_id()))
+        await original(*args, **kwargs)
+
+    monkeypatch.setattr(session_orchestrator, "submit_runtime_event", submit)
+    await goal_service.set("sess_1", objective="第一个请求")
+    for request_id, gateway_id in [("req-first", "gateway_" + "a" * 32), ("req-second", "gateway_" + "b" * 32)]:
+        request_token = set_current_request_id(request_id)
+        gateway_token = set_current_gateway_id(gateway_id)
+        try:
+            edited = await goal_service.set("sess_1", objective=request_id)
+            await goal_runtime.request_goal("sess_1", objective=edited)
+            assert (get_current_request_id(), get_current_gateway_id()) == (request_id, gateway_id)
+        finally:
+            reset_current_gateway_id(gateway_token)
+            reset_current_request_id(request_token)
+    assert identities == [("req-first", "gateway_" + "a" * 32), ("req-second", "gateway_" + "b" * 32)]
+
+
+
+@pytest.mark.asyncio
+async def test_deleted_goal_session_reports_the_request_error_without_failing_the_worker(goal_runtime, goal_service, monkeypatch):
+    original = goal_service.get
+
+    async def get(session_id):
+        if session_id == "sess_removed":
+            raise NotFoundError("Session 已删除")
+        return await original(session_id)
+
+    monkeypatch.setattr(goal_service, "get", get)
+    with pytest.raises(NotFoundError, match="Session 已删除"):
+        await goal_runtime.request_goal("sess_removed")
+    goal_runtime.assert_healthy()
+    await goal_service.set("sess_1", objective="其他 Goal 仍可执行")
+    await goal_runtime.request_goal("sess_1")
+    goal_runtime.assert_healthy()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timezone", [None, UTC])
+@pytest.mark.parametrize("terminal_time", [False, True])
+async def test_terminal_work_uses_the_observed_job_after_registry_removal(goal_runtime, goal_service, job_service, session_orchestrator, monkeypatch, timezone, terminal_time):
+    goal = await goal_service.set("sess_1", objective="终态工作必须保留准确归属")
+    now = datetime.now(timezone)
+    job_service.job = SimpleNamespace(job_id="job_terminal", session_id="sess_1", thread_id="thr_sess_1",
+                                      created_at=now - timedelta(seconds=3), ended_at=now if terminal_time else None)
+    goal_runtime._goal_job_owners["job_terminal"] = goal.goal_id
+    await goal_runtime.on_event(SimpleNamespace(type="agent_end", job_id="job_terminal",
+        payload=SimpleNamespace(token_usage=SimpleNamespace(total_tokens=17))))
+
+    async def removed(job_id):
+        raise ValueError("Job 已由删除流程移出注册表")
+
+    monkeypatch.setattr(job_service, "get", removed)
+    async with asyncio.timeout(1):
+        while goal_runtime._application_work or goal_runtime._inflight:
+            await asyncio.sleep(0)
+    goal_runtime.assert_healthy()
+    current = await goal_service.get("sess_1")
+    assert current.tokens_used == 17 and current.time_used_seconds == 3
+    assert len(session_orchestrator.calls) == 1

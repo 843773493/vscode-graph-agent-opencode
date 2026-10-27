@@ -193,7 +193,6 @@ from app.services.orchestration.agent_execution_service import AgentExecutionSer
 from app.services.orchestration.communication.service import (
     SessionCommunicationService,
 )
-from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
@@ -376,7 +375,6 @@ class AppContainer:
     external_resource_leases: ExternalResourceLeaseLedger
     runtime_service: RuntimeService
     goal_service: SessionGoalService
-    goal_runtime_service: GoalRuntimeService
     session_interrupt_service: SessionInterruptService
     session_skill_tracking_service: SessionSkillTrackingService
     session_context_fork_service: SessionContextForkService
@@ -945,6 +943,7 @@ def _build_app_container(
         orchestrator=session_orchestrator, dispatcher=runtime_source_dispatcher, sessions=session_service,
         events=task_channel(job_event_bus.event_channel_service, workspace_id), clock=clock_ports.wall,
         workspace_root=resolved_workspace_root, saver=checkpointer, job_events=job_event_bus,
+        goals=goal_service, jobs=job_service,
     )
     persistent_task_service = PersistentTaskService(runtime=persistent_task_runtime, sessions=session_service)
     session_communication_service = SessionCommunicationService(
@@ -1014,11 +1013,6 @@ def _build_app_container(
         terminal_status_writer=checkpointer,
         pending_tool_checkpoint_id=agent_execution_service.pending_tool_checkpoint_id,
         pending_request_store=pending_request_store,
-    )
-    goal_runtime_service = GoalRuntimeService(
-        goal_service=goal_service,
-        job_service=job_service,
-        session_orchestrator=session_orchestrator,
     )
     session_interrupt_service = SessionInterruptService(
         session_service=session_service,
@@ -1148,7 +1142,6 @@ def _build_app_container(
         external_resource_leases=external_resource_leases,
         runtime_service=runtime_service,
         goal_service=goal_service,
-        goal_runtime_service=goal_runtime_service,
         session_interrupt_service=session_interrupt_service,
         session_skill_tracking_service=session_skill_tracking_service,
         session_context_fork_service=session_context_fork_service,

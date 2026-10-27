@@ -18,8 +18,8 @@ from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
 from app.agents.context_compaction_adapter import ContextCompactionCheck
 from app.api.deps import (
     get_context_compaction_service,
-    get_goal_runtime_service,
     get_goal_service,
+    get_persistent_task_runtime,
     get_request_id,
     get_session_service,
     verify_local_token,
@@ -151,13 +151,9 @@ class _RuntimeProbe:
             await self._assert_admission_released(session_id)
         self.calls.append("settle")
 
-    async def apply_objective_update(self, goal: SessionGoalDTO) -> None:
-        await self._assert_admission_released(goal.session_id)
-        self.calls.append("apply")
-
-    async def ensure_active_goal_running(self, session_id: str) -> None:
+    async def request_goal(self, session_id: str, *, objective: SessionGoalDTO | None = None) -> None:
         await self._assert_admission_released(session_id)
-        self.calls.append("ensure")
+        self.calls.append("apply" if objective is not None else "ensure")
 
 
 @dataclass(slots=True)
@@ -174,7 +170,7 @@ class _Harness:
 
 
 @pytest.fixture
-async def harness() -> AsyncIterator[_Harness]:
+async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
     run_context = TestRunContext.from_test_file(Path(__file__))
     prepare_test_workspace(
         workspace_root=run_context.workspace_root,
@@ -201,6 +197,12 @@ async def harness() -> AsyncIterator[_Harness]:
         job_event_bus=JobEventBus(),
     )
     runtime = _RuntimeProbe(session_service)
+
+    async def settle_probe(_runtime, session_id):
+        assert _runtime is runtime
+        await runtime.settle_active_progress(session_id)
+
+    monkeypatch.setattr("app.api.sessions.settle_goal_progress", settle_probe)
     checkpoint_store = _RecordingCheckpointStore(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
@@ -216,7 +218,7 @@ async def harness() -> AsyncIterator[_Harness]:
     api.dependency_overrides[get_request_id] = lambda: "test-request-id"
     api.dependency_overrides[get_session_service] = lambda: session_service
     api.dependency_overrides[get_goal_service] = lambda: goal_service
-    api.dependency_overrides[get_goal_runtime_service] = lambda: runtime
+    api.dependency_overrides[get_persistent_task_runtime] = lambda: runtime
     api.dependency_overrides[get_context_compaction_service] = lambda: (
         compaction_service
     )

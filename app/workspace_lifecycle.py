@@ -93,7 +93,7 @@ async def _retry_pending_fork_exports_periodically(container: AppContainer) -> N
 
 async def _drain_workspace_jobs(container: AppContainer) -> None:
     container.persistent_task_runtime.close_admission()
-    await container.goal_runtime_service.close_admission()
+    await container.persistent_task_runtime.drain_actions()
     container.job_service.close_admission()
     await container.job_service.force_interrupt_active(reason="工作区后端正在关闭")
 
@@ -108,9 +108,9 @@ class WorkspaceLifespan:
         self._owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
             ("navigation_operations.stop", container.session_catalog_service.operations.stop),
-            ("persistent_tasks.stop", container.persistent_task_runtime.stop),
             ("jobs.close_admission", partial(_drain_workspace_jobs, container)),
             ("jobs.drain_finalizations", container.job_service.drain_finalizations),
+            ("persistent_tasks.stop", container.persistent_task_runtime.stop),
             ("node_debug.close", container.node_debug_service.close),
             ("terminal_steering.shutdown", container.terminal_steering_service.shutdown),
             ("session_generation.shutdown", container.session_generation_service.shutdown),
@@ -119,8 +119,6 @@ class WorkspaceLifespan:
             ("thread_initial_execution.stop", container.thread_initial_execution_service.stop),
             ("communication.unregister", partial(container.job_event_bus.unregister_durable_listener, container.session_communication_service.observations.on_event)),
             ("communication.stop", container.session_communication_service.stop),
-            ("goal_runtime.shutdown", container.goal_runtime_service.shutdown),
-            ("goal_runtime.unregister", partial(container.job_event_bus.unregister_durable_listener, container.goal_runtime_service.on_event)),
             ("config.close", container.config_service.close),
             ("background_tasks.stop", container.background_task_registry.stop),
             ("team_fanout.stop", container.team_fanout_service.stop),
@@ -339,7 +337,6 @@ class WorkspaceLifespan:
             with _workspace_startup_stage(container, "trace_event_recorder.start"):
                 await container.trace_event_recorder.start()
             with _workspace_startup_stage(container, "job_event_bus.register_durable_listeners"):
-                await container.job_event_bus.register_durable_listener(container.goal_runtime_service.on_event)
                 await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
                 await container.job_event_bus.register_durable_listener(self.record_session_activity)
             with _workspace_startup_stage(container, "pending_request_store.migrate_all"):
@@ -392,8 +389,6 @@ class WorkspaceLifespan:
                 await container.session_generation_service.start()
             with _workspace_startup_stage(container, "terminal_steering_service.start"):
                 await container.terminal_steering_service.start()
-            with _workspace_startup_stage(container, "goal_runtime_service.resume_active_goals"):
-                await container.goal_runtime_service.resume_active_goals()
             with _workspace_startup_stage(container, "navigation_operations.start"):
                 await operations.start()
             logger.info(
