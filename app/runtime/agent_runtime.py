@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from app.agents.graph_binding import GraphBindingStorePort
-    from app.agents.skill_runtime import PublishedSkillCatalog
+    from app.agents.skill_catalog import PublishedSkillCatalog
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService

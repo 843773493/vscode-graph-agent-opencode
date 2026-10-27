@@ -32,7 +32,7 @@ app/agents/
 │   ├── structured_tool_call_middleware.py、tool_output_middleware.py
 │   └── llm_logging_middleware.py、upstream_request_trace.py
 ├── [指令与 Skill]
-│   ├── instruction_producers.py、middleware_prompts.py、skill_runtime.py
+│   ├── instruction_producers.py、middleware_prompts.py、skill_catalog.py、skill_runtime.py
 │   └── tools/skill_loading.py
 └── [工作区适配]
     ├── workspace_backend.py        DeepAgents 内部虚拟工作区

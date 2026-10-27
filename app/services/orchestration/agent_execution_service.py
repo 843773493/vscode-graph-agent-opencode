@@ -24,7 +24,7 @@ from app.agents.graph_binding import (
     GraphBindingStorePort,
     resolve_graph_binding,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,

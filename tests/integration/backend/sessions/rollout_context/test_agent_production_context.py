@@ -19,9 +19,11 @@ from app.agents import agent_factory
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.policy import ToolPolicyResolver
+from app.agents.skill_catalog import (
+    build_workspace_skill_catalog,
+)
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
-    build_workspace_skill_catalog,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope

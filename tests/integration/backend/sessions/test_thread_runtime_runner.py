@@ -39,7 +39,7 @@ from app.agents.sealed_assembly_dispatch import (
     SealedAssemblyDispatch,
     read_sealed_assembly_dispatch,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,

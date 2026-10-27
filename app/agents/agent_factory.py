@@ -65,10 +65,12 @@ from app.agents.policy import (
 from app.agents.policy.tool_capability import metadata_for_tool
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
-from app.agents.skill_runtime import (
+from app.agents.skill_catalog import (
     PublishedSkillCatalog,
-    append_skill_middlewares,
     build_workspace_skill_catalog,
+)
+from app.agents.skill_runtime import (
+    append_skill_middlewares,
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_identity import TOOL_DISCOVERY_NAME, tool_definition_name

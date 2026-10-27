@@ -7,9 +7,11 @@ from typing import Any
 
 import pytest
 
+from app.agents.skill_catalog import (
+    build_workspace_skill_catalog,
+)
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
-    build_workspace_skill_catalog,
 )
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks

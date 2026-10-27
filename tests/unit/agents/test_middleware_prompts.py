@@ -22,10 +22,12 @@ from app.agents.middleware_prompts import (
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_catalog import (
     PublishedSkillCatalog,
-    WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
+)
+from app.agents.skill_runtime import (
+    WorkspaceSkillsMiddleware,
 )
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,

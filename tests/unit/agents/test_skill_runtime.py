@@ -11,10 +11,12 @@ from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.agents.policy.custom_tool_spec import parse_custom_tool_spec
-from app.agents.skill_runtime import (
-    WorkspaceSkillsMiddleware,
+from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
+)
+from app.agents.skill_runtime import (
+    WorkspaceSkillsMiddleware,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext

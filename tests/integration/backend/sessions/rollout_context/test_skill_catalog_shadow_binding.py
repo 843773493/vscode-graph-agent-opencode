@@ -11,10 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.skill_runtime import (
-    WorkspaceSkillsMiddleware,
+from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
+)
+from app.agents.skill_runtime import (
+    WorkspaceSkillsMiddleware,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
