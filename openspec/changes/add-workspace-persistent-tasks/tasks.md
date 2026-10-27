@@ -65,6 +65,7 @@
 - [x] 7.3 验证仅注入、忙时排队、任务暂停与已接受执行、投递中断恢复，核对真实序列化、source/wakeup 引用及内部执行不产生伪用户 Turn。
 - [ ] 7.4 验证 Goal 既有状态/预算/激活与恢复入口、定时三种会话策略/时区/补跑/overlap/回报及迁移重复运行和离线归属，补充受影响定向回归。
   - [x] 7.4.1 产品入口验证 Goal 续跑接受前，以及执行完成后标记保存前/后的 Backend 硬重启；沿原准入/canonical 用量恢复，保留原身份、精确记账且不重复执行。完整在途模型/工具、目标编辑与旧执行及 fork 发布窗口的硬重启仍待完成。
+  - [x] 7.4.2 产品入口验证在途模型硬重启后的 execution_lost、暂停不重启及新目标独立执行；受支持 read_context 工具结果提交前硬杀后沿原 checkpoint 恢复，核对原 source/job/execution/model_call/assembly/request_hash、工具配对、精确用量、零伪用户 Turn 与再次重启无重复。无 Goal 准入根的历史用户执行、fork 发布窗口硬杀及生成器迁移仍由整项追踪。
 - [ ] 7.5 完成后端相关静态分析、真实前端类型检查与 `bun run --cwd src/clients/web build`；全部测试采用进程外超时与内存保护，保留源码指纹、命令、原始输出和实际退出码。
 - [ ] 7.6 在隔离工作区通过真实 Gateway 和浏览器验证创建/编辑/检查/暂停/恢复、运行记录、Goal 联动及工作区/会话切换；当前开发环境以实际 8111 启动配置为准，核对初始化 API 和 request_id，产物遵守 out/tests 路径规范。
 - [ ] 7.7 交付前全仓检索旧接口与 producer，检查悬空调用、双轨、第二事实源、隐式回退和无关改动；如实列明通过、失败及未验证范围。
@@ -230,3 +231,9 @@
 - 291领域进度合同、Goal应用与共享runtime的Pyright零错误；294全部本批Python文件Ruff通过。287扩展infra Pyright仍有10项既有sibling方法声明诊断，新增进度读取无诊断；不宣称infra或全仓类型全绿。无公开协议/前端变化，按依赖复用之前Web结果。
 - 281因把codec返回的dict当消息对象读取导致启动500，改用原project_annotations；282为3 failed/62 passed，统一终态后对失败分支读取不适用时间，修正为仅agent_end计算实时elapsed；285因测试给原_sql多传参数未进入重启，改用原签名严格核对唯一执行终态。288旧240秒总期限下exit124、241.27秒，无完整summary；suite从3增至6项后调整总envelope为360秒，场景期限与身份/次数断言未放宽，最终292通过。失败原件均保留。
 - 深历史续跑链仍逐项读取原准入，代码留有测量后优化TODO，尚无长历史性能数据。完整在途执行、无Goal准入根的历史用户执行、目标编辑与旧在途Job的全部重启组合及fork发布硬杀仍由7.4追踪，不勾选整项。准确命令、HEAD/逐文件SHA256、原始输出和退出码保存在out/tests/temp/persistent-task-migration/artifacts/；正式场景产物位于out/tests/integration/backend/sessions/test_persistent_task_goal_storage/。
+
+### Goal 在途模型与工具 checkpoint 恢复（2026-10-27）
+
+- 新增在途模型的原目标、暂停、修改目标三场景及受支持 read_context 的工具结果提交前硬杀恢复。读取本工作区 inventory 走真实 query owner；原执行、模型调用与 assembly/hash 不变，后继模型收到一次且正确配对的完整工具结果。精确核对 token、归属、零伪用户 Turn 及再次硬重启无重复；未扩展产品自动恢复工具名单。
+- `goal-recovery-full-matrix-312` 正式 matrix 为 **10 passed／523.51秒**，实际退出0，源码前后指纹相同；该套件从6项增加至10项，将总期限由360秒调整为660秒，场景自身期限和业务断言未放宽。此前299的三项、311的工具场景为定向证据，与整套重叠不累计。313 Ruff、314 OpenSpec strict通过。
+- 保留308文件工具不能自动续接、310 canonical限定ID与Provider wire ID不同等失败原件；最终使用已支持的本地inventory入口，删除排错期间无用Gateway fixture增强。命令、源码指纹、raw及退出码在 `out/tests/temp/persistent-task-migration/artifacts/runs/`。7.4整体、fork发布窗口硬杀及生成器迁移继续未完成，团队协作TODO不变。

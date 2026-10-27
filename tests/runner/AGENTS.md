@@ -45,7 +45,7 @@
 - `integration-persistent-task-states`经任务、消息及公开fork入口验证同值合并、A→B→A、发布/唤醒原子回滚、接受后硬重启及历史状态闭包；复用model_stream、真实Terminal/Browser和正式fork watchdog，固定360秒/4GiB，不替代Goal/生成器迁移或主Web管理验收。
 - `integration-persistent-task-schedules`经任务API、受控时钟、model_stream和真实Backend硬重启，核对interval/cron、时区、补跑、暂停恢复及原计划身份，固定240秒/4GiB；不替代脚本/模型条件、Goal/生成器迁移或主Web验收。
 - `integration-persistent-tasks-manual`通过任务 API、原 source owner 与 model_stream 核对手动触发、试运行、忙时排队、revision 以及接受后硬重启对账，固定300秒/4GiB；不代表定时、脚本/模型条件、Goal/生成器迁移或主Web验收。
-- `integration-persistent-task-goal-storage`通过Goal与fork公开入口、真实Backend重启及Terminal/Browser核对唯一任务owner、准备可见性、发布重试和取消清理；覆盖续跑接受前、执行完成后标记保存前/后的硬重启、原canonical用量记账及无重复执行，固定360秒/4GiB并复用正式fork watchdog；不代替完整在途执行恢复、fork发布窗口硬杀或主Web验收。
+- `integration-persistent-task-goal-storage`通过Goal与fork公开入口、真实Backend重启及Terminal/Browser核对唯一任务owner、准备可见性、发布重试和取消清理；覆盖续跑接受前、执行完成后标记保存前/后、在途模型的原目标/暂停/新目标及受支持工具checkpoint续接，核对原归属、工具配对、精确用量和二次重启无重复，固定660秒/4GiB并复用正式fork watchdog；不代替无Goal准入根的用户执行恢复、fork发布窗口硬杀或主Web验收。
 - 每个已启用 suite 都带数据段内存上限与硬超时；被上限或超时中止的套件必须以 TIMEOUT 或非零退出码报出，不得记成通过。
 - `integration-resource-operation-admission`经正式创建及原工具operation验证真实PTY/Chromium资源锁等待到期和显式重试，固定90秒/4GiB；不代表整个工具执行、Gateway/Web或Backend重启验收。
 - `integration-resource-thread-admission`经正式资源入口和导航worker验证短Session准入、同Session独立资源并行及原holder退出后的删除排空，固定90秒/4GiB；不代表整个工具operation的截止或终止核实。
