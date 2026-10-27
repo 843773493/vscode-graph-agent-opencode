@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from app.abstractions.internal_message import RuntimeContextMode
 from app.domain.itemized.enums import SemanticKind, TurnScope
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
@@ -14,6 +15,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceControlReceipt,
     ContextSourceControlState,
     ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDescriptor,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
@@ -32,7 +39,8 @@ class ContextSourceControlOwnerMixin:
         _storage: RolloutContextStore
         _lock: RLock
 
-    def runtime_context_publication_preimage(self, session_id: str, thread_id: str, item_id: str) -> str | None:
+    def runtime_context_publication(self, session_id: str, thread_id: str, item_id: str, *,
+                                    context_mode: RuntimeContextMode = "event") -> tuple[str, str] | None:
         """精确核对仅发布事件的已提交正文；无接受事实与数据损坏分别处理。"""
         storage = self._storage.storage
         try:
@@ -54,15 +62,60 @@ class ContextSourceControlOwnerMixin:
                     raise TypeError("runtime context annotations 必须是已知扩展对象")
                 metadata = annotations["value"]
                 revision = sha256_jcs({"content": item.payload, "metadata": metadata})
-                if item.source_manifest is None or item.source_manifest.source_revision != revision:
+                if item.source_manifest is None or item.source_manifest.source_revision is None:
+                    raise RuntimeError("runtime context缺少来源版本")
+                stored_revision = item.source_manifest.source_revision
+                if context_mode == "event" and stored_revision != revision:
                     raise RuntimeError("runtime context 正文与来源 revision 不一致")
                 return sha256_jcs({
                     "session_id": session_id, "thread_id": thread_id,
                     "source_id": item.producer_ref["producer_id"], "prompt": item.payload,
                     "metadata": metadata, "delivery_mode": "context_only",
-                }).rsplit(":", 1)[1]
+                    **({"context_mode": "state"} if context_mode == "state" else {}),
+                }).rsplit(":", 1)[1], stored_revision
         except RolloutNotMaterializedError:
             return None
+
+    def install_runtime_context_sources(self, session_id: str, thread_id: str, manager: ContextSourceManager) -> None:
+        """安全prepare边界只重水合canonical状态版本，不读取任务当前定义或外部来源。"""
+        states = tuple(state for state in self.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread_id))
+                       if state.source_kind == "runtime_state" and state.latest_revision is not None and state.tracking_status == "tracked")
+        if not states:
+            return
+        storage = self._storage.storage
+        with storage.read_connection(session_id, thread_id) as connection:
+            def read(source_id: str, revision: str) -> str:
+                row = connection.execute(
+                    "SELECT item_id FROM item_catalog WHERE source_revision=? "
+                    "AND json_extract(producer_ref_json,'$.producer_id')=? AND item_id GLOB 'item-rstate_*' "
+                    "ORDER BY item_sequence LIMIT 1", (revision, source_id),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"runtime-state-unavailable: source_id={source_id}, revision={revision}")
+                item = storage._read_canonical_item_from_catalog(
+                    connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=row[0],
+                )
+                if (not isinstance(item.payload, str) or item.turn_scope != TurnScope.AMBIENT
+                        or item.semantic_kind != SemanticKind.RUNTIME_NOTICE or item.turn_id is not None
+                        or item.source_manifest is None or item.source_manifest.source_revision != revision):
+                    raise RuntimeError("runtime-state-conflict: canonical状态正文与版本不一致")
+                return item.payload
+
+            # 先完整核验所有版本；缺少任一正文时不发布局部内存快照。
+            frozen = []
+            for state in states:
+                assert state.latest_revision is not None
+                content = read(state.source_id, state.latest_revision)
+                baseline = None if state.latest_visible_committed_revision is None else read(state.source_id, state.latest_visible_committed_revision)
+                frozen.append((state, content, baseline))
+        for state, content, baseline in frozen:
+            manager.register(ContextSourceDescriptor(
+                source_id=state.source_id, source_kind=state.source_kind, name=state.name,
+                description="持久发布的运行态来源", internal_locator=state.source_id,
+            ), tracking_status="tracked")
+            if baseline is not None:
+                manager.restore_committed_baseline(state.source_id, lambda _revision, body=baseline: body)
+            manager.observe(state.source_id, content, revision=state.latest_revision).require_tracked()
 
     def receive_team_source_observation(self, session_id: str, thread_id: str, *, ledger_revision: int,
                                        event_hash: str, payload_json: str) -> None:

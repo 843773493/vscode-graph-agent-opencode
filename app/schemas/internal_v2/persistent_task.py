@@ -121,6 +121,7 @@ class TaskConditionDTO(TaskComponentDTO):
 class TaskContextDTO(TaskComponentDTO):
     type_id: Literal["builtin.literal"]
     content: str = Field(min_length=1)
+    mode: Literal["event", "state"] = "event"
 
 
 class TaskActionDTO(TaskComponentDTO):

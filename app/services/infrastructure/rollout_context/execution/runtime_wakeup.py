@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, replace
+from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.execution_queue import ExecutionQueueInput
@@ -19,11 +20,16 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
+
 _COLUMNS = tuple(RuntimeExecutionWakeup.__dataclass_fields__)
 
 
 class RuntimeWakeupStorageMixin:
     """source/admission/wakeup 使用同一 ContextStore transaction。"""
+
+    _context: RolloutContextStore
 
     def commit_runtime_source_wakeup(
         self,
@@ -31,6 +37,8 @@ class RuntimeWakeupStorageMixin:
         item: CanonicalItemRecord,
         wakeup: RuntimeExecutionWakeup,
         *, queue_input: ExecutionQueueInput,
+        state_decision: ApplySourceLifecycleDecision | None = None,
+        state_item: CanonicalItemRecord | None = None,
     ) -> RuntimeExecutionWakeup:
         if (
             wakeup.session_id != decision.owner.session_id
@@ -42,6 +50,13 @@ class RuntimeWakeupStorageMixin:
             or not decision.pending_only
         ):
             raise ValueError("runtime source/wakeup owner、input 或 execution identity 不一致")
+        if (state_decision is None) != (state_item is None):
+            raise ValueError("runtime state 必须同时提供来源决策与canonical正文")
+        if state_decision is not None and (
+            state_decision.owner != decision.owner or state_decision.source_id != wakeup.source_id
+            or state_decision.source_kind != "runtime_state" or state_decision.execution_id is not None
+        ):
+            raise ValueError("runtime state 与wakeup来源归属不一致")
         with self._execution_input_transaction(wakeup.session_id, wakeup.thread_id) as connection:
             values = asdict(wakeup)
             existing = connection.execute(
@@ -75,6 +90,8 @@ class RuntimeWakeupStorageMixin:
             )
             self.publish_execution_queue_input(connection, admission, queue_input, checkpoint_ns="")
             self._context.checkpoints._apply_source_lifecycle_decision_transaction(connection, decision, item)
+            if state_decision is not None:
+                self._context.checkpoints._apply_source_lifecycle_decision_transaction(connection, state_decision, state_item)
             expected = tuple(values[column] for column in _COLUMNS)
             connection.execute(
                 f"INSERT INTO runtime_execution_wakeups ({','.join(_COLUMNS)},state,updated_at) "

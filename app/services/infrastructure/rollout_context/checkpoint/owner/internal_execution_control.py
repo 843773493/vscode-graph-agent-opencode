@@ -14,6 +14,9 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
+from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
+    source_lifecycle_item,
+)
 from app.services.infrastructure.rollout_context.execution.internal_control import (
     InternalInterruptEvent,
 )
@@ -53,7 +56,7 @@ class InternalExecutionControlOwnerMixin:
                 or decision.source_id != f"checkpoint:user_interrupt:{request.interrupt_request_id}"):
             raise ValueError("内部中断提醒与精确 execution owner 不一致")
         storage, executions = self._storage.storage, self._storage.executions
-        item = self._source_lifecycle_item(decision)
+        item = source_lifecycle_item(decision)
         with storage._lock(admission.thread_id, "", session_id=admission.session_id):
             actual = executions.execution_admission(
                 admission.session_id, thread_id=admission.thread_id, execution_id=admission.execution_id,

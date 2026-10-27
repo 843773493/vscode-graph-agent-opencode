@@ -122,6 +122,42 @@ class _AppendIntentBatch:
     commit_ids: tuple[int, ...] | None = None
 
 
+def source_lifecycle_item(intent: ApplySourceLifecycleDecision) -> CanonicalItemRecord | None:
+    """所有 source 提交共用唯一 canonical item 构造。"""
+    item: CanonicalItemRecord | None = None
+    if intent.content is not None:
+        if intent.item_id is None:
+            raise MutationIntentPortError(
+                "source lifecycle intent 缺少 item_id: "
+                f"source_id={intent.source_id!r}"
+            )
+        message_id = (
+            intent.item_id.removeprefix("item-")
+            if intent.item_id.startswith("item-")
+            else intent.item_id
+        )
+        item = CanonicalItemRecord.create(
+            item_sequence=1,
+            item_id=intent.item_id,
+            semantic_kind=SemanticKind.RUNTIME_NOTICE,
+            payload_kind=("structured_content" if intent.runtime_notice_payload is not None else "text"),
+            status=CanonicalItemStatus.COMPLETED,
+            producer_ref={
+                "producer_kind": "runtime",
+                "producer_id": intent.source_id,
+                "invocation_id": intent.idempotency_key,
+            },
+            payload=(dict(intent.runtime_notice_payload) if intent.runtime_notice_payload is not None else intent.content),
+            projection_identity=ItemProjectionIdentity(projection_message_id=message_id),
+            source_manifest=ItemSourceManifest(intent.revision, "internal", "public") if intent.revision is not None else None,
+            extensions=intent.extensions,
+            turn_scope=TurnScope(intent.turn_scope),
+            message_group_id=f"message-{message_id}",
+            wire_role="user",
+        )
+    return item
+
+
 class RolloutMutationIntentPortMixin:
     """SessionThreadMutationIntentPort 的唯一 owner 消费端口。"""
 
@@ -152,44 +188,8 @@ class RolloutMutationIntentPortMixin:
         intent: ApplySourceLifecycleDecision,
     ) -> None:
         """source 分支：正文与 control state 在同一 owner transaction 提交。"""
-        item = self._source_lifecycle_item(intent)
+        item = source_lifecycle_item(intent)
         self._storage.checkpoints.apply_source_lifecycle_decision(intent, item)
-
-    @staticmethod
-    def _source_lifecycle_item(intent: ApplySourceLifecycleDecision) -> CanonicalItemRecord | None:
-        """所有 source 提交共用唯一 canonical item 构造。"""
-        item: CanonicalItemRecord | None = None
-        if intent.content is not None:
-            if intent.item_id is None:
-                raise MutationIntentPortError(
-                    "source lifecycle intent 缺少 item_id: "
-                    f"source_id={intent.source_id!r}"
-                )
-            message_id = (
-                intent.item_id.removeprefix("item-")
-                if intent.item_id.startswith("item-")
-                else intent.item_id
-            )
-            item = CanonicalItemRecord.create(
-                item_sequence=1,
-                item_id=intent.item_id,
-                semantic_kind=SemanticKind.RUNTIME_NOTICE,
-                payload_kind=("structured_content" if intent.runtime_notice_payload is not None else "text"),
-                status=CanonicalItemStatus.COMPLETED,
-                producer_ref={
-                    "producer_kind": "runtime",
-                    "producer_id": intent.source_id,
-                    "invocation_id": intent.idempotency_key,
-                },
-                payload=(dict(intent.runtime_notice_payload) if intent.runtime_notice_payload is not None else intent.content),
-                projection_identity=ItemProjectionIdentity(projection_message_id=message_id),
-                source_manifest=ItemSourceManifest(intent.revision, "internal", "public") if intent.revision is not None else None,
-                extensions=intent.extensions,
-                turn_scope=TurnScope(intent.turn_scope),
-                message_group_id=f"message-{message_id}",
-                wire_role="user",
-            )
-        return item
 
     def _consume_append_intent(self, intent: AppendCanonicalItemIntent) -> None:
         """append 分支：批内首个 intent 消费时单事务提交整批。"""

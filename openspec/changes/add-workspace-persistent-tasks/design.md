@@ -93,6 +93,8 @@ Goal 的 `active/paused/blocked/usage_limited/budget_limited/complete` 及预算
 
 上下文同时支持一次性事件和同一 source 的最新状态更新。状态更新遵循已有 source revision/历史不可变合同，不覆盖已提交事实。投递时机复用既有 `after_turn / after_tool_result / after_interrupt` 语义；默认等待本轮结束，其他策略必须用户明确配置。运行中的模型请求无法中途改变，thread 的串行执行由现有 Job 准入负责。
 
+字面动作上下文显式选择`event/state`，缺省event保持既有输入。state以task为稳定来源，正文由冻结字面内容、触发payload和判断result构造；run_id、触发键及解释理由归运行审计，不制造状态revision变化。每次发布沿原canonical source intent保留不可变接受事实；来源版本由原控制owner在事务内按内容hash及单调控制次序分配，同值复用当前版本，A→B→A取得新的A版本，不能把旧的完整帧与新的delta冒充同一版本。context_and_run在原rollout事务同时接受状态、短引用通知与wakeup。冷prepare和rebuild只从canonical版本恢复完整正文及applied基准，fork闭包保留冻结checkpoint引用的版本，不回读当前任务配置或后继来源。
+
 ### 6. 持久记录与幂等覆盖每个关键窗口
 
 触发记录冻结 definition revision、trigger identity、输入 revision、判断引用、决定、动作 identity 和接受/执行结果。外部通知必须带幂等键；同一身份不同内容明确冲突。`first_match / rising_edge / each_match` 等条件触发策略持久保存已触发事实，首次满足不等于每次轮询都续跑；服务再次下线后上线是否重触发由策略决定。

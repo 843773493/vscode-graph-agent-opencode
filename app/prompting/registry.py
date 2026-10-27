@@ -281,6 +281,7 @@ INTERNAL_MESSAGE_KIND_SPECS = (
     ),
     InternalMessageKindSpec("checkpoint_reminder", frozenset()),
     InternalMessageKindSpec("persistent_task_check", frozenset({"control_context", "untrusted_instructions"})),
+    InternalMessageKindSpec("runtime_state_changed", frozenset({"control_context"})),
     InternalMessageKindSpec("persistent_task", frozenset({"control_context", "untrusted_instructions"}),
                             frozenset({"control_context", "untrusted_instructions"})),
     InternalMessageKindSpec(

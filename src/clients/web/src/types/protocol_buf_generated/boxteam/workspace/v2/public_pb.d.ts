@@ -11608,6 +11608,11 @@ export declare type TaskContextDTO = Message<"boxteam.workspace.v2.TaskContextDT
    * @generated from field: string content = 3;
    */
   content: string;
+
+  /**
+   * @generated from field: optional string mode = 4;
+   */
+  mode?: string | undefined;
 };
 
 /**

@@ -23,6 +23,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
     _normalize_skill_name,
     next_skill_selection_sequence,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.runtime_state import (
+    runtime_state_revision,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -533,6 +536,30 @@ class ContextSourceControlStorageMixin:
             if existing_row is not None
             else None
         )
+        if decision.source_kind == "runtime_state":
+            if item is None or item.source_manifest is None or decision.revision is None:
+                raise ValueError("runtime state发布缺少canonical正文或内容版本")
+            published = connection.execute("SELECT source_revision FROM item_catalog WHERE item_id=?", (item.item_id,)).fetchone()
+            if published is not None:
+                revision = strict_text(published[0], field="runtime_state.source_revision")
+            else:
+                revision = runtime_state_revision(decision.revision, 1 if stored is None else stored.state_revision + 1)
+                if stored is not None and stored.latest_revision is not None:
+                    prior = connection.execute(
+                        "SELECT item_id FROM item_catalog WHERE source_revision=? "
+                        "AND json_extract(producer_ref_json,'$.producer_id')=? AND item_id GLOB 'item-rstate_*' "
+                        "ORDER BY item_sequence LIMIT 1", (stored.latest_revision, decision.source_id),
+                    ).fetchone()
+                    if prior is None:
+                        raise RuntimeError("runtime-state-unavailable: 最新观察缺少canonical正文")
+                    previous = self._storage._read_canonical_item_from_catalog(
+                        connection, session_id=owner.session_id, thread_id=owner.thread_id, checkpoint_ns="", item_id=prior[0],
+                    )
+                    if (previous.content_hash, previous.extensions) == (item.content_hash, item.extensions):
+                        revision = stored.latest_revision
+            decision = replace(decision, revision=revision)
+            item = replace(item, source_manifest=replace(item.source_manifest, source_revision=revision),
+                           producer_ref={**item.producer_ref, "invocation_id": decision.idempotency_key})
         existing_item = None
         if item is not None:
             if decision.content is None:
@@ -637,6 +664,9 @@ class ContextSourceControlStorageMixin:
         # observe_pending 只保留 immutable pending item；提醒等一次性
         # runtime source 不建立 tracking row，避免把事件伪装成 CSM
         # registration。其它 source decision 才更新控制状态。
+        # 已提交发布的重试只返回原事实，不把后继状态回退成旧正文。
+        if decision.source_kind == "runtime_state" and existing_item is not None:
+            return commit_ids
         if decision.decision_kind != "observe_pending":
             tracking_status = decision.tracking_status or (
                 stored.tracking_status if stored is not None else "untracked"

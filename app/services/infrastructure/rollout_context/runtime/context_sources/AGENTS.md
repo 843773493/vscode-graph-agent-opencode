@@ -22,3 +22,4 @@
 - 名称索引按 source_kind 隔离；Skill 模式操作及同名唯一追踪约束只作用于 Skill，不能覆盖或停止同名 instruction。要求 tracked 的重复登记须在变更 descriptor／绑定和持久控制前核对已有状态。
 
 - `tool_definitions.py` 只从实际 canonical 发现与已封存来源派生活动定义 batch；原 activation 是正文来源，提交与校验仍归 Saver，不登记第二个 CSM 控制 owner。
+- `runtime_state.py`只编码显式状态发布intent；原canonical item保留每次发布事实，CSM按同一source/revision合并未封存变化，applied只由seal推进。冷恢复及rebuild从原owner冻结正文，不回读任务定义。

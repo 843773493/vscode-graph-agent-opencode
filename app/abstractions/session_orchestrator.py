@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from app.abstractions.internal_message import (
     PreparedInternalMessage,
+    RuntimeContextMode,
     RuntimeContextReceipt,
 )
 from app.domain.itemized.execution_admission import (
@@ -21,12 +22,14 @@ class SessionOrchestratorProtocol(Protocol):
     async def publish_runtime_context(
         self, session_id: str, message: PreparedInternalMessage, *,
         thread_id: str, source_id: str, idempotency_key: str,
+        context_mode: RuntimeContextMode = "event",
     ) -> RuntimeContextReceipt: ...
 
     async def submit_runtime_event(
         self, session_id: str, message: PreparedInternalMessage, *,
         thread_id: str, source_id: str, idempotency_key: str,
         delivery_policy: DeliveryPolicy = "after_turn",
+        context_mode: RuntimeContextMode = "event",
     ) -> MessageRunAccepted: ...
 
     def reserve_user_execution_identity(self) -> UserExecutionIdentity: ...

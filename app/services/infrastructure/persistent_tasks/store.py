@@ -76,6 +76,8 @@ class PersistentTaskStore:
 
     def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
         payload = request.model_dump(mode="json")
+        if request.configuration.context.mode == "event":
+            payload["configuration"]["context"].pop("mode")
         if request.configuration.trigger.source_uri is None:
             payload["configuration"]["trigger"].pop("source_uri")
         # 缺省时间配置不改变既有手动创建请求的幂等身份。

@@ -2720,6 +2720,7 @@ export interface TaskContextDTO {
   version: string;
   type_id: string;
   content: string;
+  mode?: string | undefined;
 }
 
 export interface TaskActionDTO {
@@ -19774,7 +19775,7 @@ export const TaskRuleCheckDTO: MessageFns<TaskRuleCheckDTO> = {
 };
 
 function createBaseTaskContextDTO(): TaskContextDTO {
-  return { version: "", type_id: "", content: "" };
+  return { version: "", type_id: "", content: "", mode: undefined };
 }
 
 export const TaskContextDTO: MessageFns<TaskContextDTO> = {
@@ -19783,6 +19784,7 @@ export const TaskContextDTO: MessageFns<TaskContextDTO> = {
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
       content: isSet(object.content) ? globalThis.String(object.content) : "",
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : undefined,
     };
   },
 
@@ -19797,6 +19799,9 @@ export const TaskContextDTO: MessageFns<TaskContextDTO> = {
     if (message.content !== "") {
       obj.content = message.content;
     }
+    if (message.mode !== undefined) {
+      obj.mode = message.mode;
+    }
     return obj;
   },
 
@@ -19808,6 +19813,7 @@ export const TaskContextDTO: MessageFns<TaskContextDTO> = {
     message.version = object.version ?? "";
     message.type_id = object.type_id ?? "";
     message.content = object.content ?? "";
+    message.mode = object.mode ?? undefined;
     return message;
   },
 };

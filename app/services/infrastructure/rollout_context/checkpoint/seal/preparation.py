@@ -268,6 +268,8 @@ def prepare_registered_context(
             rebuild = None if summary_candidate is not None else owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,
             )
+            context_source_manager.refresh_context_rebuild_state(rebuild)
+            owner.install_runtime_context_sources(session_id, thread_id, context_source_manager)
 
             def read_agents_committed_activation() -> ResourceActivationSnapshotRef:
                 source_assembly = rebuild.source_assembly if rebuild is not None else previous

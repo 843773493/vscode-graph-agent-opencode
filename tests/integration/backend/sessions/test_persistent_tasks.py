@@ -44,7 +44,7 @@ def _configuration(target: str, mode: Literal["context_only", "context_and_run"]
         "name": "服务就绪", "trigger": {"type_id": "builtin.manual", "version": "1", "interval_seconds": None,
                                       "expression": None, "timezone": "UTC", "source_uri": None},
         "condition": {"type_id": "builtin.always", "version": "1", "script": None, "rule": None, "model": None},
-        "context": {"type_id": "builtin.literal", "version": "1", "content": "task-original-private：服务已经就绪。"},
+        "context": {"type_id": "builtin.literal", "version": "1", "mode": "event", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},
         "policies": {"completion": "continuous", "misfire": "skip", "match_mode": "each_match"},
@@ -185,10 +185,13 @@ async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
-async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accepted_work(source_case: RuntimeSourceCase) -> None:
+@pytest.mark.parametrize("context_mode", ["event", "state"])
+async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accepted_work(source_case: RuntimeSourceCase, context_mode: str) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)
-    task = await _create(case, _configuration(target, "context_and_run"))
+    configuration = _configuration(target, "context_and_run")
+    configuration["context"]["mode"] = context_mode
+    task = await _create(case, configuration)
     assert task["configuration"]["action"]["target_uri"].startswith(f"boxteam://{case.gateway_id}/")
     first_call, task_call = await case.plan(session_id, [{"content": "用户工作完成。"}, {"content": "持久任务工作完成。"}])
     case.control.arm(first_call, "model.response_ready")
@@ -217,8 +220,11 @@ async def test_busy_task_queues_without_fake_user_turn_and_pause_preserves_accep
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions ORDER BY created_at") == [
         ("user_turn", user["turn_id"]), ("internal", None),
     ]
+    notice_id, = case.sql(session_id, thread_id,
+        "SELECT item_id FROM item_catalog WHERE execution_id=? AND semantic_kind='runtime_notice'", (delivery["execution_id"],))[0]
+    assert (notice_id == delivery["item_id"]) == (context_mode == "event")
     assert case.sql(session_id, thread_id, "SELECT execution_id,job_id,source_item_id,gateway_id FROM runtime_execution_wakeups") == [
-        (delivery["execution_id"], delivery["job_id"], delivery["item_id"], case.gateway_id),
+        (delivery["execution_id"], delivery["job_id"], notice_id, case.gateway_id),
     ]
     assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == "paused"
     case.write_actual("busy-task", {"run": actual, "pause": paused, "request": case.request(task_call)})

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.abstractions.internal_message import (
     PreparedInternalMessage,
+    RuntimeContextMode,
     RuntimeContextReceipt,
 )
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -73,24 +74,26 @@ class SessionOrchestrator:
     async def publish_runtime_context(
         self, session_id: str, message: PreparedInternalMessage, *,
         thread_id: str, source_id: str, idempotency_key: str,
+        context_mode: RuntimeContextMode = "event",
     ) -> RuntimeContextReceipt:
         if self._runtime_source_dispatcher is None:
             raise RuntimeError("runtime source dispatcher unavailable")
         return await self._runtime_source_dispatcher.publish_context(
             session_id, thread_id, message, source_id=source_id,
-            idempotency_key=idempotency_key,
+            idempotency_key=idempotency_key, context_mode=context_mode,
         )
 
     async def submit_runtime_event(
         self, session_id: str, message: PreparedInternalMessage, *,
         thread_id: str, source_id: str, idempotency_key: str,
         delivery_policy: DeliveryPolicy = "after_turn",
+        context_mode: RuntimeContextMode = "event",
     ) -> MessageRunAccepted:
         if self._runtime_source_dispatcher is None:
             raise RuntimeError("runtime source dispatcher unavailable")
         return await self._runtime_source_dispatcher.submit(
             session_id, thread_id, message, source_id=source_id,
-            idempotency_key=idempotency_key, delivery_policy=delivery_policy,
+            idempotency_key=idempotency_key, delivery_policy=delivery_policy, context_mode=context_mode,
         )
 
     def reserve_user_execution_identity(self) -> UserExecutionIdentity:

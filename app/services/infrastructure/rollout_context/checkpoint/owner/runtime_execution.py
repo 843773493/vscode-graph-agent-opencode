@@ -36,9 +36,15 @@ from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProv
 from app.domain.itemized.runtime import ModelCallRecord
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting import internal_message_factory
+from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
+    source_lifecycle_item,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     ContextSourceDescriptor,
     ContextSourceSnapshot,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.runtime_state import (
+    runtime_context_decision,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
@@ -314,6 +320,7 @@ class RuntimeExecutionOwnerMixin:
     def commit_runtime_source_wakeup(
         self, wakeup: RuntimeExecutionWakeup, *, source_kind: str,
         intent: InternalExecutionIntent, message: HumanMessage,
+        state_message: PreparedInternalMessage | None = None,
     ) -> RuntimeExecutionWakeup:
         notice, _request = self._internal_execution_input(intent, message)
         if notice is None:
@@ -332,7 +339,14 @@ class RuntimeExecutionOwnerMixin:
             delivery_policy=wakeup.delivery_policy, gateway_id=wakeup.gateway_id,
             request_id=wakeup.request_id, created_at=wakeup.message_created_at,
         )
-        return self._storage.executions.commit_runtime_source_wakeup(decision, notice, wakeup, queue_input=queue_input)
+        state = None if state_message is None else runtime_context_decision(
+            wakeup.session_id, wakeup.thread_id, state_message, source_id=wakeup.source_id,
+            item_id="item-rstate_" + intent.message_id.removeprefix("rmsg_"), context_mode="state",
+        )
+        return self._storage.executions.commit_runtime_source_wakeup(
+            decision, notice, wakeup, queue_input=queue_input,
+            state_decision=state, state_item=None if state is None else source_lifecycle_item(state),
+        )
 
     def runtime_wakeup_for_admission(
         self, session_id: str, thread_id: str, admission_idempotency_key: str,

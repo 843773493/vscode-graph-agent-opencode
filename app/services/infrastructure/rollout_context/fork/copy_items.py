@@ -286,6 +286,8 @@ def select_view_prefix(
             ).fetchall()
             if not items and not assemblies and not details and not activations:
                 if checkpoints_frozen:
+                    if _include_runtime_states(connection):
+                        continue
                     break
                 # 先冻结原有前缀允许保留的 checkpoint，再展开 pending 正文依赖。
                 # backing item 不能反过来扩大 checkpoint 集合而递归带入锚点之后的历史。
@@ -462,6 +464,26 @@ def _include_delta_history(connection: sqlite3.Connection) -> None:
         "UNION SELECT member.item_id FROM context_view_items member JOIN checkpoint_channels channel "
         "ON member.view_id=channel.context_view_id JOIN fork_selected_checkpoints USING(checkpoint_id)",
     )
+
+
+def _include_runtime_states(connection: sqlite3.Connection) -> int:
+    """只保护冻结控制版本的canonical正文，不带入来源的后继状态或创建新可见成员。"""
+    count = 0
+    for source_id, latest, applied in connection.execute(
+        "SELECT DISTINCT source_id,latest_revision,latest_visible_committed_revision "
+        "FROM checkpoint_context_source_states WHERE source_kind='runtime_state' AND checkpoint_id IN "
+        "(SELECT checkpoint_id FROM fork_selected_checkpoints UNION SELECT checkpoint_id FROM fork_selected_source_checkpoints)",
+    ).fetchall():
+        for revision in {latest, applied} - {None}:
+            row = connection.execute(
+                "SELECT item_id FROM item_catalog WHERE source_revision=? "
+                "AND json_extract(producer_ref_json,'$.producer_id')=? AND item_id GLOB 'item-rstate_*' "
+                "ORDER BY item_sequence LIMIT 1", (revision, source_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("runtime-state-unavailable: fork缺少冻结来源版本的canonical正文")
+            count += connection.execute("INSERT OR IGNORE INTO fork_selected_items(item_id) VALUES (?)", row).rowcount
+    return count
 
 
 def _include_pending_message_references(storage: RolloutStorage, connection: sqlite3.Connection, *, stage: Path) -> None:

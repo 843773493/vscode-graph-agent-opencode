@@ -2670,6 +2670,7 @@ message TaskContextDTO {
   string version = 1;
   string type_id = 2;
   string content = 3;
+  optional string mode = 4;
 }
 
 message TaskActionDTO {

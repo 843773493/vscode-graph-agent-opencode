@@ -4,6 +4,7 @@
   "schemaVersion": 1,
   "suites": [
     {"id":"integration-persistent-task-models","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_models.py"]},
+    {"id":"integration-persistent-task-states","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_states.py"]},
     {"id":"integration-persistent-task-execution-events","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_execution_events.py"]},
     {"id":"integration-persistent-task-rules","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_rules.py"]},
     {"id":"integration-persistent-task-notifications","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_notifications.py"]},

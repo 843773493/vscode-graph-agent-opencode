@@ -20,9 +20,9 @@
 - [x] 3.2 提供规则判断及脚本判断组件，明确工作区执行位置、结构化输出、运行期限、资源保护与失败诊断，打通服务未就绪到首次就绪的真实入口。
   - [x] 3.2.1 script v1经共用原生监督器执行，冻结结构化输入、工作区cwd、UTF-8结果、期限/内存/输出限制及明确失败；真实入口覆盖服务未就绪到首次就绪、迟到判断和硬重启。规则、外部通知及条件策略另行验收。
   - [x] 3.2.2 rule v1消费同一冻结输入，用JSON Pointer和JSON值比较返回wait/proceed；真实入口覆盖缺失/null、bool/number、对象/数组、暂停试运行与checking硬重启。Linux本切片通过，Windows完整产品边界仍保留原长路径TODO。
-- [ ] 3.3 提供判断与动作上下文构造组件，保存输入来源/revision，支持一次性事件与同一来源状态更新，不复制上下文 owner 存储。
+- [x] 3.3 提供判断与动作上下文构造组件，保存输入来源/revision，支持一次性事件与同一来源状态更新，不复制上下文 owner 存储。
 - [x] 3.4 通过现有 thread 执行准入实现模型判断器，绑定独立判断 thread、本次输入与执行身份，校验明确决定与理由，并防止判断重入和自触发。
-- [ ] 3.5 补齐仅发布上下文的业务端口，并复用 source 加 durable wakeup 实现发布后请求执行；覆盖忙时串行投递和明确的投递时机。
+- [x] 3.5 补齐仅发布上下文的业务端口，并复用 source 加 durable wakeup 实现发布后请求执行；覆盖忙时串行投递和明确的投递时机。
   - [x] 3.5.1 实现不可变事件的仅发布端口、原子 canonical view membership、幂等与冷 owner 恢复结算；通过空闲/忙时真实模型准备及公开 fork 验收，不以该子项代替任务动作协调、状态更新和投递时机验收。
 - [x] 3.6 实现 first_match/rising_edge/each_match 条件策略与已触发事实，重复通知及同键不同内容冲突使用统一幂等入口。
   - [x] 3.6.1 三种策略复用原运行判断/接受事实，决定与策略选择原子提交；覆盖持续就绪、真实下线再上线、试运行、暂停/恢复/编辑及决定前后硬重启。外部通知证据见后续切片。
@@ -153,3 +153,11 @@
 - 162使用既有managed_gateway fixture补验忙时/工具循环场景，1 passed、61.35秒。实际读取工作区文件、只解析最后回复、同任务两次检查串行及同实例stop/start均通过。连同158其余5项，共6个不同产品场景分别通过，未声称最终6项同轮完整matrix全绿；覆盖四类决定、非法/错误身份/错误revision/空理由、执行取消不伤其他任务、迟到管理/暂停试运行，以及判断已完成但任务未登记回执时硬杀Backend、再次重启后仍一判断/一工作执行。
 - 155合同/迁移/发行SQL资源为27 passed，含不可变evaluation身份冲突和v16—v19升级；153因命令误写不存在测试路径而未运行测试（exit4），保留原件后改用已有合同文件。159规则完整回归3 passed、103.39秒；161脚本试运行/失败回归2 passed、18.84秒。最终产品运行均有进程外期限/4GiB保护且无源码漂移。
 - 148 Buf/全部绑定、149 OpenAPI、154真实Web类型、156构建、163最终Ruff及160最终任务相关Pyright均通过，仅既有chunk/依赖弃用提示。owner仍有前述旧mixin类型限制，未声称全仓类型全绿。准确命令、HEAD/文件指纹、原始输出和实际退出码沿用现有证据目录；正式模型产物在`out/tests/integration/backend/sessions/test_persistent_task_models/`。状态来源更新、Goal/生成器迁移、主Web管理及Windows完整产品验收仍未完成，团队协作继续TODO。
+
+
+### 同一来源状态发布与历史恢复（2026-10-27）
+
+- `context.mode`显式选择event/state，缺省event保留原创建幂等身份。state正文只取冻结字面内容、触发payload与判断result，运行身份及理由留在审计；原canonical owner保存每次发布，原控制事务分配来源版本，同值复用当前版本，A→B→A取得新版本。状态、短引用通知、执行准入、队列及wakeup同事务接受；旧请求重试不回退后继状态。冷prepare/rebuild与fork只读取冻结canonical正文，不另存任务上下文历史。原source构造器直接迁为同模块纯函数并迁齐全部调用，无旧方法或转发层。
+- `task-state-final-product-189`完整matrix **5 passed／251.55秒**，覆盖无假Turn/无重复注入、两种动作接受后硬杀Backend并编辑/暂停、事务中断回滚后原键重试，以及来源后继状态已发布时从旧历史点fork、目标首次prepare重建原版本。`task-state-manual-regression-180` **13 passed／222.21秒**，包含event/state忙时串行、暂停保留已接受工作及挂载隔离；`task-state-event-regression-187` **5 passed／129.05秒**，复验原事件发布、忙时工具循环、冷owner结算与fork。所有产品批次均有进程外期限/4GiB保护且无源码漂移，继续复用model_stream。
+- 初轮168暴露内容hash不能充当状态生命周期版本，173暴露来源revision格式不符合原合同；修正分配算法，未放宽domain冲突检查。178为3 passed/2 failed，分别是fork漏启真实辅助服务及断言混入其他来源；183的fork保护要求正式runner而未进入业务，原子重试已通过；186正式runner的fork通过，最终189又加严并覆盖全部5项。185为29 passed/2 failed：旧中断测试的Gateway Skill fixture误将快照作为发布通知，另有configured owner未就绪，尚未进入中断裁决；该旧测试消费者仍待迁齐，不把它报为通过。
+- 166 Buf/全部绑定、167 OpenAPI、175合同/旧库/发行SQL/协议 **26 passed**；170真实Web类型及171构建按未变生成资产复用。188/191 Ruff、190相关业务模块Pyright与OpenSpec strict验证通过。184扩大到存储mixin仍exit1、53项诊断，未声称存储全文件类型全绿。准确命令、指纹、原始输出和退出码保留在`out/tests/temp/persistent-task-migration/artifacts/`，正式产物在对应`out/tests/integration/backend/sessions/test_persistent_task_states/`；临时协议staging已清理。当前完成3.3/3.5，Goal与生成器迁移、主Web管理、Windows既有长路径范围仍未完成，团队/协作继续TODO。
