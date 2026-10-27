@@ -50,6 +50,7 @@ from app.gateway.runtime.logging_consumer import (
     logging_progress_recorder,
 )
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,14 @@ def _gateway_runtime_consumer_stages(
     generation = f"gateway-runtime:{candidate.revision}:{uuid4().hex}"
     fencing_token_digest = runtime_fencing_token_digest(fencing_token)
     stages: list[GatewayRuntimeConsumerStage] = []
+    if candidate.local_skill_updates != previous.local_skill_updates:
+        skill_sources = app.state.skill_source_owner
+        if not isinstance(skill_sources, GatewaySkillSourceOwner):
+            raise RuntimeError("Gateway Skill 热应用缺少来源 owner")
+        stages.append(skill_sources.policy_stage(
+            policy=candidate.local_skill_updates, generation=generation,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+        ))
     if candidate.payload["logging"] != previous.payload["logging"]:
         registry = app.state.registry
         state_store = app.state.gateway_state

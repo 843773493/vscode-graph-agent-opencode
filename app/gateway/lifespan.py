@@ -201,6 +201,7 @@ async def lifespan(app: FastAPI):
         httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
         GatewaySkillSourceOwner(
             gateway_id=gateway_id, skills_root=get_boxteam_home() / "skills",
+            update_policy=gateway_config.local_skill_updates,
         ).lifespan() as skill_source_owner,
     ):
         app.state.skill_source_owner = skill_source_owner

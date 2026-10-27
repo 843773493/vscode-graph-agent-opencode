@@ -33,6 +33,7 @@ from app.gateway.runtime_proof import (
     _gateway_runtime_consumer_stages,
     _should_preserve_gateway_generation_for_handoff,
 )
+from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import ConfigConflictError
 
 
@@ -62,6 +63,44 @@ def _gateway_consumer_health_digests(value: str = "a") -> dict[str, str]:
         consumer_id: value * 64
         for consumer_id in sorted(REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS)
     }
+
+
+@pytest.mark.parametrize("mode,interval,seconds", [("event", None, None), ("manual", None, None), ("poll", "2m", 120), ("event_poll", "1h", 3600)])
+def test_gateway_local_skill_update_policy_uses_final_config_and_schema(
+    tmp_path: Path, mode: str, interval: str | None, seconds: int | None,
+) -> None:
+    path, schema = _write_gateway_config(tmp_path, [])
+    payload = json.loads(path.read_text())
+    payload["resources"] = {"skill_sources": {"local_updates": {"mode": mode, "poll_interval": interval}}}
+    path.write_text(json.dumps(payload))
+    config = load_gateway_config(config_path=path, schema_path=schema)
+    assert config.local_skill_updates.mode == mode
+    assert config.local_skill_updates.poll_seconds == seconds
+    assert config.payload["config_version"] == 1  # 新增可选配置无需伪造迁移。
+
+
+@pytest.mark.parametrize("policy", [
+    {"mode": "event", "poll_interval": "1h"}, {"mode": "manual", "poll_interval": "1m"},
+    {"mode": "poll", "poll_interval": None}, {"mode": "poll", "poll_interval": "30s"},
+    {"mode": "event_poll", "poll_interval": "0m"}, {"mode": "fallback", "poll_interval": None},
+    {"mode": "event", "poll_interval": None, "unknown": True},
+])
+def test_gateway_local_skill_update_policy_rejects_invalid_combinations(tmp_path: Path, policy: dict[str, object]) -> None:
+    path, schema = _write_gateway_config(tmp_path, [])
+    payload = json.loads(path.read_text())
+    payload["resources"] = {"skill_sources": {"local_updates": policy}}
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="配置验证失败") as failure:
+        load_gateway_config(config_path=path, schema_path=schema)
+    assert isinstance(failure.value.__cause__, ValidationError)
+
+
+def test_additive_local_skill_namespace_does_not_require_gateway_restart() -> None:
+    registry = gateway_config_policy()
+    paths = ("/resources", "/resources/skill_sources", "/resources/skill_sources/local_updates", "/resources/skill_sources/local_updates/mode")
+    assert registry.restart_paths(paths) == ()
+    assert registry.activation_scope_for(paths) == "current"
+    assert all(not decision.policy_missing for decision in registry.classify(paths))
 
 
 @pytest.mark.asyncio

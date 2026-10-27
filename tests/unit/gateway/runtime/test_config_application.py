@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
 from app.core.logging_config import configure_application_logging, runtime_logging_state
+from app.core.trace_middleware import TraceMiddleware
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.diagnostics import _LogCandidate, _logging_process_diagnostics
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.skill_sources import router as skill_source_router
+from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerTransaction,
+)
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import _apply_gateway_runtime_config
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
@@ -27,8 +36,157 @@ from app.schemas.runtime_logging import (
     RuntimeLoggingStatus,
 )
 from app.services.infrastructure.config.state import ConfigConflictError
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChangeBatch,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.gateway_managed_backends import ProcessProbe
+
+
+@dataclass
+class SkillApplicationCase:
+    config: ConfigApplicationCase
+    owner: GatewaySkillSourceOwner
+    client: httpx.AsyncClient
+    skill: Path
+
+    async def policy(self, mode: str, interval: str | None = None) -> None:
+        self.config.path.write_text(json.dumps({
+            "config_version": 3,
+            "resources": {"skill_sources": {"local_updates": {"mode": mode, "poll_interval": interval}}},
+        }))
+        await self.config.service.reload()
+
+
+async def _until(predicate: Callable[[], bool]) -> None:
+    async with asyncio.timeout(3):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+@pytest.fixture
+async def skill_application(config_application: ConfigApplicationCase, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SkillApplicationCase]:
+    case = config_application
+    root = case.path.parent
+    monkeypatch.setenv("BOXTEAM_HOME", str(root))
+    skill = root / "skills/demo/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("初版正文\n")
+    owner = GatewaySkillSourceOwner(gateway_id="gateway_0123456789abcdef0123456789abcdef", skills_root=root / "skills")
+    case.app.state.skill_source_owner = owner
+    case.app.add_middleware(TraceMiddleware)
+    case.app.include_router(skill_source_router)
+    async with owner.lifespan(), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=case.app), base_url="http://gateway.test",
+        headers={"X-Local-Token": get_gateway_local_token()},
+    ) as client:
+        yield SkillApplicationCase(case, owner, client, skill)
+
+
+async def test_local_skill_hot_policy_and_management_refresh_share_accepted_owner(skill_application: SkillApplicationCase) -> None:
+    case = skill_application
+    old = case.owner.file_registry.observation
+    await case.policy("manual")
+    registry = case.owner.file_registry
+    assert registry.observation.policy.mode == "manual"
+    assert old.task is not None and old.task.done() and not old.subscriptions
+    assert len(registry._observations) == 1
+    before = case.owner.snapshot(workspace_id="workspace")
+    case.skill.write_text("仅手动获取的新版\n")
+    # 将旧代次的错误和 overflow 都留到切换后，不能让其重新发布。
+    await old.events.put(WorkspaceFileChangeBatch(error="旧代次迟到错误"))
+    await old.events.put(WorkspaceFileChangeBatch(overflow=True))
+    await asyncio.sleep(0.1)
+    assert case.owner.snapshot(workspace_id="workspace") == before
+    denied = await case.client.post("/api/gateway/skill-sources/refresh", headers={"X-Local-Token": "wrong"})
+    assert denied.status_code == 401
+    reply = await case.client.post("/api/gateway/skill-sources/refresh")
+    assert reply.status_code == 200, reply.text
+    assert reply.headers["X-Request-ID"] == reply.json()["request_id"]
+    after = case.owner.snapshot(workspace_id="workspace")
+    assert after.entries[0].content == "仅手动获取的新版\n"
+    assert reply.json()["data"] == {"gateway_id": case.owner.gateway_id, "revision": after.revision, "available": True}
+    assert str(case.skill) not in reply.text
+    await case.policy("event")
+    case.skill.write_text("重新建立监听后的新版\n")
+    await _until(lambda: case.owner.snapshot(workspace_id="workspace").entries[0].content == "重新建立监听后的新版\n")
+    event = case.config.service.list_events()[-1]
+    assert event.result == "applied" and event.activation_scope == "current"
+    assert not case.config.service.status().restart_required
+
+
+@pytest.mark.parametrize("mode", ["poll", "event_poll"])
+async def test_local_skill_poll_uses_configured_policy_and_same_reconciler(
+    skill_application: SkillApplicationCase, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    case = skill_application
+    # 单元测试只加速时钟周期；产品入口另验证真实的一分钟配置。
+    monkeypatch.setattr(SourceUpdatePolicy, "poll_seconds", property(lambda self: 0.08 if self.poll_interval else None))
+    await case.policy(mode, "1m")
+    current = case.owner.file_registry.observation
+    assert current.policy.poll_interval == "1m"
+    assert bool(current.subscriptions) == (mode == "event_poll")
+    case.skill.write_text("周期获取正文\n")
+    await _until(lambda: case.owner.snapshot(workspace_id="workspace").entries[0].content == "周期获取正文\n")
+    assert len(case.owner.file_registry._observations) == 1
+
+
+@pytest.mark.parametrize("failure", ["prepare", "promotion"])
+async def test_local_skill_failed_candidate_preserves_original_generation(
+    skill_application: SkillApplicationCase, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    case = skill_application
+    await case.policy("manual")
+    registry = case.owner.file_registry
+    original = registry.observation
+    accepted = case.owner.snapshot(workspace_id="workspace")
+    baseline = case.config.store.get_active_config_snapshot("gateway")
+    if failure == "prepare":
+        async def reject_ready(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("候选监听未就绪")
+        monkeypatch.setattr(registry._watch_service, "wait_until_ready", reject_ready)
+    else:
+        def reject_promotion(**kwargs: object) -> None:
+            raise ConfigConflictError("策略最终 CAS 冲突")
+        monkeypatch.setattr(case.config.store, "promote_active_config_snapshot", reject_promotion)
+    expected = ConfigConflictError if failure == "promotion" else RuntimeError
+    with pytest.raises(expected, match="stage=promotion|stage=runtime_apply") as rejected:
+        await case.policy("event")
+    cause = rejected.value.__cause__
+    if failure == "prepare":
+        assert cause is not None and str(cause) == "候选监听未就绪"
+    else:
+        assert isinstance(cause, ConfigConflictError) and str(cause) == "策略最终 CAS 冲突"
+    assert registry.observation is original and original.activated.is_set()
+    assert len(registry._observations) == 1 and not original.subscriptions
+    assert case.config.store.get_active_config_snapshot("gateway") == baseline
+    assert case.owner.snapshot(workspace_id="workspace") == accepted
+    case.skill.write_text("失败候选不能恢复自动获取\n")
+    await asyncio.sleep(0.1)
+    assert case.owner.snapshot(workspace_id="workspace") == accepted
+
+
+async def test_unsettled_old_observer_is_fenced_and_rollback_restores_it(skill_application: SkillApplicationCase) -> None:
+    case = skill_application
+    registry = case.owner.file_registry
+    original = registry.observation
+    result = await GatewayRuntimeConsumerTransaction((case.owner.policy_stage(
+        policy=SourceUpdatePolicy(mode="manual"), generation="candidate-proof",
+        fencing_token_digest=None, fence_check=None,
+    ),)).apply()
+    accepted = case.owner.snapshot(workspace_id="workspace")
+    assert original.task is not None and not original.task.done()
+    await original.events.put(WorkspaceFileChangeBatch(error="未结算旧代次的迟到错误"))
+    await asyncio.sleep(0.05)
+    assert case.owner.snapshot(workspace_id="workspace") == accepted
+    await result.rollback()
+    await result.finalize()
+    assert registry.observation is original and len(registry._observations) == 1
+    case.skill.write_text("回退后旧订阅仍可观察\n")
+    await _until(lambda: case.owner.snapshot(workspace_id="workspace").entries[0].content == "回退后旧订阅仍可观察\n")
 
 
 @dataclass(frozen=True)

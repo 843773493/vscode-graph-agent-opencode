@@ -21,6 +21,7 @@ from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillPublicationRequest,
+    GatewaySkillRefreshDTO,
     GatewaySkillSourcesDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -41,6 +42,18 @@ router = APIRouter()
 
 def _get_skill_source_owner(request: Request) -> GatewaySkillSourceOwner:
     return request.app.state.skill_source_owner
+
+
+@router.post(
+    "/api/gateway/skill-sources/refresh", response_model=APIResponse[GatewaySkillRefreshDTO],
+    dependencies=[Depends(verify_gateway_token)],
+)
+async def refresh_local_skill_sources(
+    owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request_id: str = Depends(get_request_id),
+) -> APIResponse[GatewaySkillRefreshDTO]:
+    """仅本机管理权限可触发获取；既有联邦只读授权不扩大为刷新权。"""
+    return APIResponse(data=owner.refresh(), request_id=request_id)
 
 
 async def _source_request(

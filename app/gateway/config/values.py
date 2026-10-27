@@ -16,6 +16,9 @@ from app.core.history_loading import (
 )
 from app.core.path_utils import get_user_config_root
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyResult
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
 
 # Gateway 来源权威表：每个来源键的逻辑来源层与 precedence 只在本文件登记一次；`inline:0`
 # 是 writer 为无 source_key 的 inline 记录生成的 canonical baseline key。
@@ -77,6 +80,7 @@ class GatewayConfig:
     gateway_process_health_poll_interval_seconds: float = 0.5
     gateway_process_connection_drain_timeout_seconds: float = 2
     default_workspace_skill_groups: tuple[str, ...] = ()
+    local_skill_updates: SourceUpdatePolicy = field(default_factory=SourceUpdatePolicy)
     history_loading: GatewayHistoryLoadingConfig = field(
         default_factory=GatewayHistoryLoadingConfig,
     )

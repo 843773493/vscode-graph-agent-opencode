@@ -425,6 +425,13 @@ Gateway本地来源默认由Gateway观察并发布，Workspace默认接收发布
 - **WHEN** 软件已登记某特殊获取协议和poll能力，用户为显式来源组合两者
 - **THEN** owner通过所选能力进入相同对账和快照链路，不要求它伪装成本地文件或HTTP；若协议或能力未登记，则配置明确失败
 
+#### Scenario: Gateway本地观察策略与Workspace获取策略独立切换
+- **GIVEN** Gateway本地Skill由原文件owner发布，Workspace经认证快照与发布通知消费
+- **WHEN** 管理者修改Gateway的`resources.skill_sources.local_updates`，选择event、poll、manual或显式event_poll
+- **THEN** 配置沿原候选prepare/apply/health/promotion/rollback链路热切换并排空旧订阅；分钟／小时周期经最终schema校验，错误组合明确失败，Workspace的gateway_updates策略不被改写
+- **AND** 旧代次迟到事件及错误不得覆盖当前发布；候选准备失败保留旧观察和accepted快照，最终提交失败恢复原观察代次
+- **AND** manual仅在初始获取或明确刷新时对账；本机管理刷新入口`POST /api/gateway/skill-sources/refresh`复用原读取／校验／发布链路和本地管理授权，联邦只读授权不获得刷新能力
+
 #### Scenario: Gateway先发布再通知
 
 - **WHEN** Gateway检测到已订阅Skill来源或目录发生有效变化

@@ -7,6 +7,14 @@
       "pretty": true
     }
   },
+  "resources": {
+    "skill_sources": {
+      "local_updates": {
+        "mode": "event", // Gateway 本机 Skill 的获取触发；与 Workspace 消费发布通知分别配置。
+        "poll_interval": null // poll/event_poll 必须使用正整数分钟 m 或小时 h；对象按配置层递归合并。
+      }
+    }
+  },
   "workspaces": [
     {
       "enabled": true,

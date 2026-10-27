@@ -706,8 +706,7 @@ async def test_initial_binding_response_cannot_exceed_total_connection_budget(
 async def test_watcher_gap_is_unavailable_until_full_registered_boundary_reconcile(source_case):
     owner, source, _skill, _channel = source_case
     original = owner.snapshot(workspace_id=source._workspace_id)
-    events = owner.file_registry._watch_events
-    assert events is not None
+    events = owner.file_registry.observation.events
     await events.put(WorkspaceFileChangeBatch(error="watch failed at /private/gateway/path"))
     async with asyncio.timeout(3):
         while owner.snapshot(workspace_id=source._workspace_id).available:

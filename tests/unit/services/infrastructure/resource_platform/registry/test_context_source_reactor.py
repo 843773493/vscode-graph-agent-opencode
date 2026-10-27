@@ -371,8 +371,8 @@ async def raw_overflow_case(
     overflow_seen = asyncio.Event()
     next_event = registry._next_watch_event
 
-    async def record_overflow():
-        batch = await next_event()
+    async def record_overflow(observation):
+        batch = await next_event(observation)
         if batch is not None and batch.overflow:
             overflow_seen.set()
         return batch

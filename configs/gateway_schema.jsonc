@@ -4,6 +4,10 @@
   "$id": "https://boxteam.dev/schemas/gateway-config-v3.json",
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
+    { "pattern": "/resources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/local_updates", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/resources/skill_sources/local_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/ui/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -44,6 +48,33 @@
           "properties": {
             "level": { "type": "string", "enum": ["debug", "info", "warning", "error", "critical"], "default": "info" },
             "pretty": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill_sources"],
+      "properties": {
+        "skill_sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["local_updates"],
+          "properties": {
+            "local_updates": {
+              "type": "object",
+              "description": "Gateway 本机 Skill 观察策略；经原配置候选 prepare/apply/health/promotion/rollback 热切换，旧订阅在结算后排空。",
+              "additionalProperties": false,
+              "required": ["mode", "poll_interval"],
+              "properties": {
+                "mode": {"enum": ["event", "poll", "manual", "event_poll"]},
+                "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}
+              },
+              "if": {"properties": {"mode": {"enum": ["poll", "event_poll"]}}},
+              "then": {"properties": {"poll_interval": {"type": "string"}}},
+              "else": {"properties": {"poll_interval": {"type": "null"}}}
+            }
           }
         }
       }

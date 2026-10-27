@@ -347,7 +347,7 @@
 - [x] 9.7 在compiler的seal前阶段实现默认聚合同一合法批次为一条user消息，并提供Workspace配置切换逐来源消息；两种模式共用封装与生命周期。封存分组及有序item引用、各来源revision／追踪状态，迁齐Provider frame、dispatch、history、retry／恢复消费者及itemized owner接线；不跨用户／工具事实、不合并旧sealed消息、不制造消息级tracking状态，不由Provider adapter重新分组。
 - [x] 9.8 实现一次`skill_load`显式刷新及snapshot／tracked互斥转换：省略mode即snapshot并停止同名称已有追踪，显式tracked建立或保持追踪；同版本复用正文仍执行状态变更，新版或显式来源切换明确替代关系。同一owner原子接受激活候选与控制变化，成功时清理或替换与显式版本冲突的未seal自动候选，失败保留旧状态；回执表达实际mode／tracked／append结果，注入基准只随seal推进。迁齐工具schema说明、提示、结果消费者及重试逻辑，不加reload参数或unload前置步骤。
 - [ ] 9.9 将私有获取地址解析、快照获取、更新触发与上下文激活通过配置引用已登记能力组合；实现event／poll／manual及显式event＋低频对账，poll周期支持分钟／小时。配置归属实际owner的Gateway或Workspace域，收敛键名、默认值、最终校验、合并和generation切换；未知协议、缺事件能力、不支持组合或错误间隔明确失败，移除固定策略分派、隐式回退及重复更新状态机。
-- [ ] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
+- [x] 9.10 在现有Gateway认证快照链路增加发布后通知，Workspace默认事件触发获取并可配置为轮询同一接口；Gateway本地观察与Workspace获知版本分别配置，只订阅实际消费来源／目录。首次订阅、初始获取窗口、重连及gap主动对账，合并重复／乱序通知并防止accepted快照回退，配置替换后旧订阅排空；不恢复generic gateway_snapshot或本机路径fallback。
 - [ ] 9.11 接入显式HTTP(S) Skill来源，由Workspace管理私有来源、Gateway统一获取共享来源并分发快照；支持所选事件／轮询／手动触发及ETag／Last-Modified条件请求，validator不充当语义revision。读取、来源与正文校验、不可用诊断均进入现有accepted／published链路，内容更新保持稳定identity；不在目录解析、模型准备或skill_load路径临时联网，不因检测更新自动执行指令。
 - [ ] 9.12 将SkillCatalog名称选择统一为Workspace本地 > Gateway本地 > 网络来源 > inline，校验后的网络Skill支持`skill_load(name)`，获取owner和缓存不改变网络层归属。同层支持显式来源优先级，同优先级同规范化名称报冲突；迁齐目录生产、metadata、冻结绑定与显式加载，目录优先级变化不改绑已有tracked来源，安全display URI沿用统一寻址owner、不暴露获取URL。
 - [x] 9.13 增加CSM投影与模式状态转换的定向验证：多来源tracked＋snapshot聚合／独立分组、root／tail封装、diff／完整替换、配置切换后旧前缀不变、retry／cold replay一致及tool结果顺序；验证同版本tracked→snapshot、snapshot→tracked、单调用刷新、不同effective来源切换、旧pending候选清理、模式转换前后rewind、失败回滚与幂等重试，untrack仍不撤销正文。断言真实封存frames／item引用／控制态，不能只匹配提示文字或手工给helper塞metadata。
@@ -498,3 +498,13 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 删除默认 wired 标记，真实 producer 显式绑定配置、软件或 SkillCatalog 的发布 revision 与 next_job／epoch／resource_activation 边界；缺失或不符在修改 CSM 前失败，恢复复用原 binding_revision。配置不宣称运行中 model-call 更新，没有新增 watcher、持久格式或团队功能。
 - 完整暂存 tree `8863f4301f3aa402c31d272546ecd873f3d48057`：定向33 passed、相邻50 passed（排除R03专项）、原 Skill／来源入口32 passed；各组有交集。R01／R02 × inline／file 产品检查首次3 passed／1 failed，唯一失败在R02-file首轮8秒helper等待，尚未进入更新断言；相同用例单独运行，HEAD基线1 passed／49.94秒，当前1 passed／47.06秒，未修改等待或业务断言。并行负载敏感性保留性能TODO，不能称首轮整批通过。
 - 7文件Ruff零诊断、compileall通过；Pyright基线／当前均22个既有诊断，零新增，检查exit1。原件、准确命令、源码tree及退出码在 `out/tests/temp/csm-tracked-bindings/artifacts/` 的 probe-001、verify-002、baseline-003、serial-004。关闭9.2，当前63/76；9.9—9.12／9.14／9.16、完整Web／外部Provider／Windows及团队协作TODO保持未完成。
+
+
+### 2026-10-27 Gateway 本地来源策略闭合（9.10）
+
+- Gateway 独立使用 `resources.skill_sources.local_updates`，默认 event；poll／manual／显式 event_poll 与 Workspace 的 gateway_updates 分别配置。所有触发复用原文件 registry 的读取、校验、accepted 与发布；原配置 consumer 负责休眠订阅准备、代次切换、健康证明、失败回退及旧订阅结算排空。新增可选参数不升配置或数据库版本，旧 active snapshot 首次补入命名空间也归 immediate_read/current。
+- 本机管理刷新 `POST /api/gateway/skill-sources/refresh` 复用既有本地凭据，仅返回发布 revision 与可用性；联邦只读凭据不能触发刷新。发布先于通知，原来源身份与 Workspace 的冻结／tracked 绑定保持不变。
+- 新策略 owner 定向19 passed；组合回归204 passed／7 failed，失败均为新非法配置测试误用 jsonschema 原异常，产品实际依既有合同包装 ValueError。修正后非法组合、四种模式及新增命名空间定向12 passed；最终配置策略与路由27 passed。原始失败、首轮路由基线变化及超时收据均保留，不将失败整轮记为全绿。
+- 真实 Gateway→受管 Backend→公开 Session／消息→共享 model_stream 的产品流程1 passed／153.89秒，实际分钟轮询60.07秒，核手动刷新、权限拒绝、发布通知、模型请求正文、稳定身份与冷重启后的 manual 策略。仅暂存树 `bd07f815f639a8d06bb4a8f82e301d05003a6eec` 完整 archive 隔离 task/fork 改动后，同一正式 suite 再为1 passed／158.29秒；4537个受测blob均与该tree一致。
+- 14文件Ruff及4核心模块Pyright零诊断；扩大范围Ruff基线／最终均10项、Pyright均7项，零新增，不称全仓静态全绿。OpenSpec strict通过，结构自审无新增findings。全部检查带进程外超时及4GiB保护；准确命令、源码指纹、raw、退出码和隔离正式产物位于 `out/tests/temp/gateway-local-skill-updates/artifacts/`。纯临时隔离源码已删除，验证原件保留。
+- 关闭9.10，当前64/76；9.9获取能力组合、9.11网络来源、9.12四层目录、9.14／9.16总门继续未完成。没有修改Web源码或生成类型，未重跑Web、外部Provider或Windows；团队／协作专项继续TODO。

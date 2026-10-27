@@ -5,16 +5,21 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.gateway.runtime.consumer_protocol import (
+    GatewayRuntimeConsumerStage,
+    GatewayRuntimeHealthProof,
+)
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillPublicationRequest,
+    GatewaySkillRefreshDTO,
     GatewaySkillSourceEntryDTO,
     GatewaySkillSourcesDTO,
 )
@@ -26,10 +31,14 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     ResourceObservation,
     ResourceObservationChannel,
 )
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    FileSourceObservation,
     WorkspaceFileResourceRegistry,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -47,13 +56,14 @@ class _GatewaySkillPublication:
 class GatewaySkillSourceOwner:
     """只从已接受文件事实派生可跨进程传输的无路径快照。"""
 
-    def __init__(self, *, gateway_id: str, skills_root: Path) -> None:
+    def __init__(self, *, gateway_id: str, skills_root: Path, update_policy: SourceUpdatePolicy | None = None) -> None:
         self.gateway_id = gateway_id
         self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root)
         self._scope = LifetimeScope("gateway-skill-sources")
         watcher = WorkspaceFileWatchService(workspace_root=skills_root)
         self.file_registry = WorkspaceFileResourceRegistry(
             workspace_root=None, gateway_skills_root=skills_root, watch_service=watcher,
+            update_policy=update_policy,
         )
         self._scope.register(watcher.shutdown, label="gateway-skill-file-watcher")
         self._scope.register(self.file_registry.stop, label="gateway-skill-files")
@@ -65,6 +75,57 @@ class GatewaySkillSourceOwner:
         self._publication_generation = secrets.token_hex(16)
         self._publication_sequence = 0
         self._task: asyncio.Task[None] | None = None
+
+    def policy_stage(
+        self, *, policy: SourceUpdatePolicy, generation: str,
+        fencing_token_digest: str | None, fence_check: Callable[[], None] | None,
+    ) -> GatewayRuntimeConsumerStage:
+        previous = self.file_registry.observation
+        candidate: FileSourceObservation | None = None
+
+        async def prepare() -> None:
+            nonlocal candidate
+            candidate = await self.file_registry.prepare_update_policy(policy)
+
+        def apply() -> None:
+            if candidate is None:
+                raise RuntimeError("Gateway Skill 更新策略尚未准备")
+            self.file_registry.activate_update_policy(candidate)
+            self._publish()
+
+        def health() -> GatewayRuntimeHealthProof:
+            if self.file_registry.observation is not candidate:
+                raise RuntimeError("Gateway Skill 更新策略代次不一致")
+            return GatewayRuntimeHealthProof(
+                consumer_id="gateway-skill-sources", generation=generation, state="healthy",
+                details={"policy": policy.model_dump(mode="json")}, fencing_token_digest=fencing_token_digest,
+            )
+
+        def rollback() -> None:
+            if candidate is not None and self.file_registry.is_current_observation(candidate):
+                self.file_registry.activate_update_policy(previous)
+                self._publish()
+
+        async def finalize() -> None:
+            if candidate is not None:
+                stale = previous if self.file_registry.is_current_observation(candidate) else candidate
+                await self.file_registry.close_observation(stale)
+
+        return GatewayRuntimeConsumerStage(
+            consumer_id="gateway-skill-sources", generation=generation, prepare=prepare, apply=apply,
+            health=health, promote=lambda: None, rollback=rollback, finalize=finalize,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+        )
+
+    def refresh(self) -> GatewaySkillRefreshDTO:
+        self.file_registry.check_running()
+        self.file_registry.reconcile()
+        self._publish()
+        if self._publication is None:
+            raise RuntimeError("Gateway Skill source owner 尚未就绪")
+        return GatewaySkillRefreshDTO(
+            gateway_id=self.gateway_id, revision=self._publication.revision, available=self._publication.available,
+        )
 
     def _publish(self) -> None:
         directory = self.file_registry.skill_directory_snapshot(self._directory_id)

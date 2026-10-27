@@ -53,3 +53,13 @@ class GatewaySkillPublicationDTO(BaseModel):
     available: bool
     changed: bool
     gap: bool
+
+
+class GatewaySkillRefreshDTO(BaseModel):
+    """本机管理刷新仅返回发布位置，不公开来源正文或私有 locator。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_id: str
+    revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    available: bool

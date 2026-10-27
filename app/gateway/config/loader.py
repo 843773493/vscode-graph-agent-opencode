@@ -17,6 +17,9 @@ from app.services.infrastructure.config.state import (
     ConfigConflictError,
     SecretReferenceRequiredError,
 )
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
+)
 from configs.installer import resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 
@@ -33,6 +36,7 @@ from .values import (
     GatewayConfig,
     _configured_theme_background,
     _history_loading_config,
+    _nested_config_value,
     _positive_integer_config,
     _positive_number_config,
     _skill_groups_config,
@@ -306,6 +310,9 @@ def load_gateway_config(
             default=2,
         ),
         default_workspace_skill_groups=_skill_groups_config(raw_gateway_config),
+        local_skill_updates=SourceUpdatePolicy.model_validate(
+            _nested_config_value(raw_gateway_config, "resources", "skill_sources", "local_updates") or {}
+        ),
         history_loading=_history_loading_config(raw_gateway_config),
         revision=config_revision(raw_gateway_config),
         schema_path=resolved_schema_path,

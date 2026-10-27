@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from app.core.phase_observer import observe_phase
@@ -22,6 +22,9 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     ResourceObservation,
     ResourceObservationChannel,
     ResourceObservationSubscription,
+)
+from app.services.infrastructure.resource_platform.observation.source_update_policy import (
+    SourceUpdatePolicy,
 )
 from app.services.infrastructure.resource_platform.sources.observed_source import (
     MAX_STABLE_READ_BYTES,
@@ -81,6 +84,27 @@ class _SkillDirectoryHandle:
     declared_entries: tuple[str, ...] | None
 
 
+@dataclass(slots=True, eq=False)
+class FileSourceObservation:
+    """一次观察代次；候选只建立订阅，激活后才能更新原 registry 的事实。"""
+
+    policy: SourceUpdatePolicy
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    activated: asyncio.Event = field(default_factory=asyncio.Event)
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    events: asyncio.Queue[WorkspaceFileChangeBatch] = field(default_factory=lambda: asyncio.Queue(maxsize=FILE_WATCH_QUEUE_SIZE))
+    subscriptions: dict[tuple[Path, bool, int | None], asyncio.Task[None]] = field(default_factory=dict)
+    task: asyncio.Task[None] | None = None
+    next_poll_at: float | None = None
+
+    def check_running(self) -> None:
+        if self.task is None:
+            raise RuntimeError("文件来源观察任务尚未启动")
+        if self.task.done():
+            self.task.result()
+            raise RuntimeError("文件来源观察任务意外退出")
+
+
 class WorkspaceFileResourceRegistry:
     """共享工作区文件快照 registry。
 
@@ -97,6 +121,7 @@ class WorkspaceFileResourceRegistry:
         project_root: Path | None = None,
         observation_channel: ResourceObservationChannel | None = None,
         gateway_skills_root: Path | None = None,
+        update_policy: SourceUpdatePolicy | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("文件 owner 必须且只能绑定 Workspace 或 Gateway 配置域")
@@ -125,12 +150,10 @@ class WorkspaceFileResourceRegistry:
         self._skill_directories: dict[str, _SkillDirectoryHandle] = {}
         self._skill_directory_snapshots: dict[str, WorkspaceSkillDirectorySnapshot] = {}
         self._skill_entry_watch_roots: dict[str, tuple[Path, ...]] = {}
-        self._task: asyncio.Task[None] | None = None
-        self._ready = asyncio.Event()
+        self._initial_policy = update_policy or SourceUpdatePolicy()
+        self._observation: FileSourceObservation | None = None
+        self._observations: set[FileSourceObservation] = set()
         self._watch_filter = self._is_relevant_change
-        self._watch_subscriptions: dict[tuple[Path, bool, int | None], asyncio.Task[None]] = {}
-        self._watch_events: asyncio.Queue[WorkspaceFileChangeBatch] | None = None
-        self._watch_config_changed = asyncio.Event()
         self._watch_unavailable = False
 
     def register_file(
@@ -266,8 +289,8 @@ class WorkspaceFileResourceRegistry:
         snapshot = self._reconcile_skill_directory(directory_id, handle)
         # 初次稳定读取完成后才让应用 loop 看见登记边界，避免 worker 编译窗口的半成品。
         self._skill_directories[directory_id] = handle
-        if self._task is not None:
-            self._watch_config_changed.set()
+        for observation in tuple(self._observations):
+            observation.changed.set()
         return snapshot
 
     def skill_directory_snapshot(self, directory_id: str) -> WorkspaceSkillDirectorySnapshot:
@@ -440,50 +463,98 @@ class WorkspaceFileResourceRegistry:
         )
 
     async def start(self) -> None:
-        if self._task is not None:
+        if self._observation is not None:
             raise RuntimeError("工作区文件来源 registry 不允许重复启动")
-        self._ready.clear()
-        self._task = asyncio.create_task(
-            self._watch_loop(),
-            name="boxteam-workspace-file-resources",
-        )
-        self._task.add_done_callback(lambda _task: self._ready.set())
-        await self._ready.wait()
-        if self._task.done():
-            task = self._task
-            self._task = None
-            task.result()
+        observation = await self.prepare_update_policy(self._initial_policy)
+        self.activate_update_policy(observation)
+
+    async def prepare_update_policy(self, policy: SourceUpdatePolicy) -> FileSourceObservation:
+        """候选订阅 ready 后才交付；失败只回收候选，不改变当前快照与任务。"""
+        observation = FileSourceObservation(policy)
+        self._observations.add(observation)
+        task = asyncio.create_task(self._watch_loop(observation), name="boxteam-workspace-file-resources")
+        observation.task = task
+        task.add_done_callback(lambda _task: observation.ready.set())
+        try:
+            await observation.ready.wait()
+            observation.check_running()
+        except BaseException:
+            await self.close_observation(observation)
+            raise
+        return observation
+
+    def activate_update_policy(self, observation: FileSourceObservation) -> None:
+        if observation not in self._observations:
+            raise RuntimeError("文件观察候选不属于当前 owner")
+        observation.check_running()
+        # 来源读取是同步的；与代次切换在同一事件循环步内完成，不接受旧代次迟到事件。
+        self.reconcile()
+        if self._observation is not None:
+            self._observation.activated.clear()
+        self._observation = observation
+        interval = observation.policy.poll_seconds
+        observation.next_poll_at = asyncio.get_running_loop().time() + interval if interval is not None else None
+        observation.activated.set()
+
+    def reconcile(self) -> None:
+        """监听、周期、初始和手动更新共用同一来源读取及发布链路。"""
+        skill_uris = {entry.uri for directory in self._skill_directory_snapshots.values() for entry in directory.entries}
+        for uri in tuple(self._file_handles_by_uri):
+            if uri not in skill_uris:
+                self.refresh(uri)
+        for directory_id, handle in tuple(self._skill_directories.items()):
+            self._reconcile_skill_directory(directory_id, handle)
+        self._watch_unavailable = False
 
     def check_running(self) -> None:
-        """owner 对外发布前核实实际观察任务仍存活。"""
-        if self._task is None:
+        if self._observation is None:
             raise RuntimeError("文件来源观察任务尚未启动")
-        if self._task.done():
-            self._task.result()
-            raise RuntimeError("文件来源观察任务意外退出")
+        self._observation.check_running()
+
+    @property
+    def observation(self) -> FileSourceObservation:
+        self.check_running()
+        assert self._observation is not None
+        return self._observation
+
+    def is_current_observation(self, observation: FileSourceObservation) -> bool:
+        return self._observation is observation
+
+    async def close_observation(self, observation: FileSourceObservation) -> None:
+        task = observation.task
+        try:
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            self._observations.discard(observation)
+            if self._observation is observation:
+                self._observation = None
 
     async def stop(self) -> None:
-        task = self._task
-        self._task = None
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        results = await asyncio.gather(*(self.close_observation(item) for item in tuple(self._observations)), return_exceptions=True)
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            raise BaseExceptionGroup("文件观察任务关闭失败", errors)
 
-    async def _watch_loop(self) -> None:
-        self._watch_events = asyncio.Queue(maxsize=FILE_WATCH_QUEUE_SIZE)
+    async def _watch_loop(self, observation: FileSourceObservation) -> None:
         try:
-            await self._sync_watch_subscriptions()
-            for directory_id, handle in tuple(self._skill_directories.items()):
-                self._reconcile_skill_directory(directory_id, handle)
-            await self._sync_watch_subscriptions()
-            self._ready.set()
+            await self._sync_watch_subscriptions(observation, publish=False)
+            observation.ready.set()
             while True:
-                batch = await self._next_watch_event()
-                if batch is not None:
+                await observation.activated.wait()
+                if observation is not self._observation:
+                    continue
+                await self._sync_watch_subscriptions(observation)
+                batch = await self._next_watch_event(observation)
+                if observation is not self._observation:
+                    continue
+                if batch is None:
+                    self.reconcile()
+                else:
                     if batch.error is not None:
                         logger.error("工作区文件来源监听失败: %s", batch.error)
                         self._watch_unavailable = True
@@ -525,6 +596,8 @@ class WorkspaceFileResourceRegistry:
                             ):
                                 self.refresh(uri)
                         for directory_id in dirty_directories:
+                            if observation is not self._observation:
+                                break
                             directory = self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])
                             for entry in directory.entries:
                                 snapshot = self.snapshot(entry.uri)
@@ -533,43 +606,47 @@ class WorkspaceFileResourceRegistry:
                                     "registry_object_id": id(self),
                                     "subscriber_ids": self._observation_channel.subscriber_ids,
                                 })
-                        self._watch_unavailable = False
-                await self._sync_watch_subscriptions()
+                        if observation is self._observation:
+                            self._watch_unavailable = False
         finally:
-            subscriptions = tuple(self._watch_subscriptions.values())
-            self._watch_subscriptions.clear()
+            subscriptions = tuple(observation.subscriptions.values())
+            observation.subscriptions.clear()
             for task in subscriptions:
                 if not task.done():
                     task.cancel()
             if subscriptions:
                 await asyncio.gather(*subscriptions, return_exceptions=True)
-            self._watch_events = None
 
-    async def _next_watch_event(self) -> WorkspaceFileChangeBatch | None:
-        events = self._watch_events
-        if events is None:
-            raise RuntimeError("工作区文件来源 watcher 尚未初始化事件队列")
-        batch_task = asyncio.create_task(events.get())
-        config_task = asyncio.create_task(self._watch_config_changed.wait())
+    async def _next_watch_event(self, observation: FileSourceObservation) -> WorkspaceFileChangeBatch | None:
+        now = asyncio.get_running_loop().time()
+        deadline = observation.next_poll_at
+        timeout = max(0, deadline - now) if deadline is not None else None
+        batch_task = asyncio.create_task(observation.events.get())
+        config_task = asyncio.create_task(observation.changed.wait())
         try:
             done, _pending = await asyncio.wait(
-                (batch_task, config_task), return_when=asyncio.FIRST_COMPLETED,
+                (batch_task, config_task), timeout=timeout, return_when=asyncio.FIRST_COMPLETED,
             )
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                interval = observation.policy.poll_seconds
+                if interval is None:
+                    raise RuntimeError("文件观察周期与策略不一致")
+                observation.next_poll_at = asyncio.get_running_loop().time() + interval
+                return None
             if config_task in done:
-                self._watch_config_changed.clear()
+                observation.changed.clear()
                 return batch_task.result() if batch_task in done else None
             return batch_task.result()
         finally:
             pending = tuple(task for task in (batch_task, config_task) if not task.done())
             for task in pending:
                 task.cancel()
-            if pending:
-                await asyncio.gather(batch_task, config_task, return_exceptions=True)
+            await asyncio.gather(batch_task, config_task, return_exceptions=True)
 
-    async def _sync_watch_subscriptions(self) -> None:
+    async def _sync_watch_subscriptions(self, observation: FileSourceObservation, *, publish: bool = True) -> None:
         """按当前安全边界增删监听；新增目录 ready 后立即重新对账。"""
         while True:
-            desired = self._desired_watch_roots()
+            desired = self._desired_watch_roots() if observation.policy.mode in {"event", "event_poll"} else set()
             desired_keys = {
                 self._subscription_key(root, recursive)
                 for root, recursive in desired
@@ -579,16 +656,16 @@ class WorkspaceFileResourceRegistry:
                 desired, key=lambda item: (len(item[0].parts), str(item[0]), item[1]),
             ):
                 key = self._subscription_key(root, recursive)
-                task = self._watch_subscriptions.get(key)
+                task = observation.subscriptions.get(key)
                 if task is not None and not task.done():
                     continue
                 if task is not None:
                     task.result()
                 task = asyncio.create_task(
-                    self._pump_watch_root(root, recursive),
+                    self._pump_watch_root(root, recursive, observation),
                     name=f"boxteam-resource-watch:{root}",
                 )
-                self._watch_subscriptions[key] = task
+                observation.subscriptions[key] = task
                 await self._watch_service.wait_until_ready(
                     (root,), recursive=recursive, change_filter=self._watch_filter,
                 )
@@ -596,8 +673,8 @@ class WorkspaceFileResourceRegistry:
                     task.result()
                 added.append(root)
 
-            stale_keys = set(self._watch_subscriptions) - desired_keys
-            stale_tasks = [self._watch_subscriptions.pop(key) for key in stale_keys]
+            stale_keys = set(observation.subscriptions) - desired_keys
+            stale_tasks = [observation.subscriptions.pop(key) for key in stale_keys]
             for task in stale_tasks:
                 if not task.done():
                     task.cancel()
@@ -616,13 +693,13 @@ class WorkspaceFileResourceRegistry:
                     for root in added
                 )
             )
-            for directory_id, handle in affected:
-                self._reconcile_skill_directory(directory_id, handle)
+            if publish and observation is self._observation:
+                for directory_id, handle in affected:
+                    self._reconcile_skill_directory(directory_id, handle)
+            else:
+                return
 
-    async def _pump_watch_root(self, root: Path, recursive: bool) -> None:
-        events = self._watch_events
-        if events is None:
-            raise RuntimeError("工作区文件来源 watcher 尚未初始化事件队列")
+    async def _pump_watch_root(self, root: Path, recursive: bool, observation: FileSourceObservation) -> None:
         iterator: AsyncGenerator[WorkspaceFileChangeBatch, None] = self._watch_service.subscribe_roots(
             (root,),
             include_internal_paths=True,
@@ -639,7 +716,7 @@ class WorkspaceFileResourceRegistry:
                     batch = await next_batch
                 except StopAsyncIteration:
                     return
-                await events.put(batch)
+                await observation.events.put(batch)
                 next_batch = asyncio.ensure_future(anext(iterator))
         finally:
             if not next_batch.done():

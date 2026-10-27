@@ -39,7 +39,7 @@ async def test_bootstrap_scope_close_releases_in_reverse_order(
     # 重复 close 幂等。
     await platform.process_root_scope.close()
     assert watch_service._watchers == {}
-    assert registry._task is None
+    assert registry._observation is None
     # 关闭后拒绝新登记。
     with pytest.raises(RuntimeError, match="不允许注册"):
         platform.process_root_scope.register(lambda: None)

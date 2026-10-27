@@ -342,6 +342,132 @@ def _rows(database: Path, query: str, parameters: tuple[str, ...] = ()) -> list[
         return [dict(row) for row in connection.execute(query, parameters)]
 
 
+async def test_gateway_local_update_policy_drives_workspace_skill_and_cold_restart(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    integration_workspace_config_path: str, scripted_model: ModelState,
+):
+    """真实管理配置、分钟轮询和手动刷新，经过原发布链路驱动真实 Agent。"""
+    state = scripted_model
+    workspace = Path(integration_workspace_root_path)
+    output = workspace.parent
+    artifacts = output / "artifacts" / "gateway-local-updates"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    home = output / "boxteam-home-local"
+    port = integration_port_block_for_file(Path(request.node.fspath)).port(13)
+    base_url = f"http://127.0.0.1:{port}"
+    _configure_model(Path(integration_workspace_config_path), ENDPOINT)
+    skill = home / "skills" / SKILL_NAME / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_bytes((FRONTMATTER + OLD_BODY).encode())
+    gateway = start_gateway_process(
+        workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
+        artifacts_dir=artifacts / "gateway-first", extra_env=state.environment,
+        asgi_app="tests.support.e2e_control.gateway_app:app",
+    )
+    receipts: dict[str, object] = {}
+    try:
+        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
+            await acquire_gateway_guest(client)
+            health = await client.get("/api/gateway/health")
+            gateway_id = health.json()["data"]["gateway_id"]
+            workspace_reply = await client.get("/api/v1/workspace")
+            assert workspace_reply.status_code == 200, workspace_reply.text
+            workspace_id = json.loads((workspace / ".boxteam/workspace-identity.json").read_text())["workspace_id"]
+            raw_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
+            notice_path = raw_path.replace("/skill-sources/", "/skill-source-connections/") + "/publications/wait"
+
+            async def policy(mode: str, interval: str | None = None) -> None:
+                status_path = "/api/gateway/config/reload-status"
+                before = (await client.get(status_path)).json()["data"]
+                path = home / "config/gateway.jsonc"
+                config = commentjson.loads(path.read_text())
+                config["resources"]["skill_sources"]["local_updates"] = {"mode": mode, "poll_interval": interval}
+                candidate = path.with_suffix(".candidate")
+                candidate.write_text(json.dumps(config, ensure_ascii=False))
+                candidate.replace(path)
+                async with asyncio.timeout(8):
+                    while True:
+                        reply = await client.get(status_path)
+                        assert reply.status_code == 200, reply.text
+                        assert reply.headers["X-Request-ID"] == reply.json()["request_id"]
+                        status = reply.json()["data"]
+                        if status["revision"] != before["revision"]:
+                            assert status["healthy"] and not status["restart_required"], status
+                            assert status["state"] == "active" and not status["deferred_paths"], status
+                            receipts[mode] = status
+                            return
+                        await asyncio.sleep(0.05)
+
+            original = (await client.get(raw_path)).json()["data"]
+            notice = (await client.post(notice_path, json={})).json()["data"]
+            await policy("manual")
+            skill.write_bytes((FRONTMATTER + NEW_BODY).encode())
+            heartbeat = await client.post(notice_path, json={"after_cursor": notice["cursor"], "wait_ms": 500})
+            assert heartbeat.status_code == 200 and not heartbeat.json()["data"]["changed"], heartbeat.text
+            assert (await client.get(raw_path)).json()["data"] == original
+            for headers in ({"X-Local-Token": "wrong"}, {"X-Local-Token": "", "X-BoxTeam-Federation-Token": "read-only-peer"}):
+                assert (await client.post("/api/gateway/skill-sources/refresh", headers=headers)).status_code == 401
+            refreshed = await client.post("/api/gateway/skill-sources/refresh")
+            assert refreshed.status_code == 200, refreshed.text
+            assert refreshed.headers["X-Request-ID"] == refreshed.json()["request_id"]
+            changed = (await client.post(notice_path, json={"after_cursor": notice["cursor"], "wait_ms": 500})).json()["data"]
+            assert changed["changed"] and changed["revision"] == refreshed.json()["data"]["revision"]
+            assert str(home) not in refreshed.text
+            created = await client.post("/api/v1/sessions", json={"title": "Gateway local update policy"})
+            assert created.status_code == 200, created.text
+            session_id = created.json()["data"]["session_id"]
+            thread_id = (await client.get(f"/api/v1/sessions/{session_id}/main-thread")).json()["data"]["thread_id"]
+            state.plan(session_id, thread_id, _skill_reply("manual_skill_load", tracked=True), _text_reply("MANUAL_SOURCE_OK"))
+            job = await _job(client, session_id)
+            assert job["status"] in {"completed", "succeeded"}, job
+            assert NEW_BODY.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
+
+            await policy("poll", "1m")
+            poll_body = "Gateway 真实一分钟轮询正文 Ω 003\n"
+            skill.write_text(FRONTMATTER + poll_body)
+            started = time.monotonic()
+            async with asyncio.timeout(75):
+                while True:
+                    current = (await client.get(raw_path)).json()["data"]
+                    if current["entries"][0]["content"] == FRONTMATTER + poll_body:
+                        break
+                    await asyncio.sleep(0.2)
+            elapsed = time.monotonic() - started
+            assert elapsed >= 50, "poll 不得残留事件监听而提前更新"
+            receipts["poll_elapsed_seconds"] = elapsed
+            assert current["entries"][0]["entry_identity"] == original["entries"][0]["entry_identity"]
+            state.plan(session_id, thread_id, _text_reply("POLL_SOURCE_OK"))
+            job = await _job(client, session_id)
+            assert job["status"] in {"completed", "succeeded"}, job
+            assert poll_body.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
+            await policy("manual")
+        close_gateway_process(gateway)
+        gateway = start_gateway_process(
+            workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
+            artifacts_dir=artifacts / "gateway-restarted", extra_env=state.environment,
+            asgi_app="tests.support.e2e_control.gateway_app:app",
+        )
+        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
+            await acquire_gateway_guest(client)
+            assert (await client.get("/api/v1/workspace")).status_code == 200
+            assert (await client.get(raw_path)).json()["data"] == current
+            skill.write_bytes((FRONTMATTER + OLD_BODY).encode())
+            heartbeat = await client.post(notice_path, json={})
+            cursor = heartbeat.json()["data"]["cursor"]
+            unchanged = await client.post(notice_path, json={"after_cursor": cursor, "wait_ms": 500})
+            assert not unchanged.json()["data"]["changed"]
+            assert (await client.get(raw_path)).json()["data"] == current
+            state.plan(session_id, thread_id, _text_reply("RESTORED_MANUAL_POLICY_OK"))
+            job = await _job(client, session_id)
+            assert job["status"] in {"completed", "succeeded"}, job
+            assert poll_body.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
+            assert len(state.requests) == len(state.call_ids) == 4
+    finally:
+        close_gateway_process(gateway)
+        (artifacts / "policy-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+        (artifacts / "model-requests.json").write_text(json.dumps(state.requests, ensure_ascii=False, indent=2) + "\n")
+
+
 async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     integration_workspace_config_path: str, scripted_model,
