@@ -147,6 +147,43 @@ class SessionGenerationExecuteRequest(BaseModel):
     execution_workspace_id: str
 
 
+class SessionGenerationPreviewRequest(BaseModel):
+    """目标工作区内的导航命名预览，不接受物理路径。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    title_template: str = Field(min_length=1, max_length=500)
+    path_template: list[str] = Field(default_factory=list, max_length=20)
+    session_title: str = Field(default="生成会话", min_length=1, max_length=500)
+    generated_at: datetime | None = None
+    placement_kind: Literal["workspace", "session", "session_folder"] = "workspace"
+    placement_node_id: str | None = None
+    session_strategy: Literal[
+        "new_per_run", "continue_existing", "fork_new_and_report_back"
+    ] = "new_per_run"
+    target_session_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_locators(self) -> SessionGenerationPreviewRequest:
+        if (self.placement_kind == "workspace") != (self.placement_node_id is None):
+            raise ValueError("workspace 挂载不得指定节点，其他挂载必须指定节点")
+        if (self.session_strategy == "new_per_run") != (self.target_session_id is None):
+            raise ValueError("new_per_run 不得指定目标，其他策略必须指定目标会话")
+        return self
+
+
+class SessionGenerationPreviewDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str
+    title: str
+    path_segments: list[str]
+    navigation_path: list[str]
+    physical_location: Literal["unallocated", "existing_session"]
+    target_session_id: str | None = None
+
+
 class SessionGenerationOutputDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 

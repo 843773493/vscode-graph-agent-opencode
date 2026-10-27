@@ -793,3 +793,20 @@ export type TurnHistoryPageDTO = TurnHistoryPage;
 export type TurnPageDTO = TurnPage;
 export type WorkspaceFileListDTO = WorkspaceFileList;
 export type WorkspaceFileNodeDTO = WorkspaceFileNode;
+
+export type SessionGenerationPreviewRequest = Omit<
+  WorkspaceProtocol.SessionGenerationPreviewRequest,
+  "generated_at" | "placement_kind" | "session_strategy" | "placement_node_id" | "target_session_id"
+> & {
+  generated_at?: string | null;
+  placement_node_id?: string | null;
+  target_session_id?: string | null;
+  placement_kind?: "workspace" | "session" | "session_folder";
+  session_strategy?: "new_per_run" | "continue_existing" | "fork_new_and_report_back";
+};
+export type SessionGenerationPreviewDTO = Omit<
+  WorkspaceProtocol.SessionGenerationPreviewDTO, "physical_location" | "target_session_id"
+> & {
+  physical_location: "unallocated" | "existing_session";
+  target_session_id: string | null;
+};

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.identifier import create_prefixed_id
-from app.core.path_segments import validate_generator_name
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.schemas.gateway_control import (
     GenerationRunDTO,
@@ -16,11 +14,7 @@ from app.schemas.gateway_control import (
     GeneratorDefinitionDTO,
     GeneratorDefinitionListDTO,
     GeneratorDefinitionUpdateRequest,
-    GeneratorPlacementPreviewDTO,
-    GeneratorPlacementPreviewRequest,
 )
-
-_TOKEN_PATTERN = re.compile(r"\{([^{}]+)\}")
 
 
 class SessionGeneratorStore:
@@ -110,68 +104,6 @@ class SessionGeneratorStore:
         )
         self._write_definition(updated)
         return updated
-
-    def preview(
-        self,
-        payload: GeneratorPlacementPreviewRequest,
-    ) -> GeneratorPlacementPreviewDTO:
-        if payload.session_strategy.mode == "continue_existing":
-            target = payload.session_strategy.target
-            if target is None:
-                raise ValueError("continue_existing 预览缺少目标会话")
-            return GeneratorPlacementPreviewDTO(
-                title=payload.session_title,
-                path_segments=[],
-                session_path_segment="",
-                relative_path=(
-                    f"<继续现有会话:{target.workspace_id}/{target.session_id}>"
-                    "（不创建物理目录）"
-                ),
-            )
-        generated_at = payload.generated_at or datetime.now(UTC)
-        values = {
-            "generator.name": payload.name,
-            "session.title": payload.session_title,
-        }
-        title = self._render_name(
-            payload.naming.title_template,
-            values=values,
-            generated_at=generated_at,
-        )
-        path_segments = [
-            self._render_name(
-                segment,
-                values={**values, "session.title": title},
-                generated_at=generated_at,
-            )
-            for segment in payload.naming.path_template
-        ]
-        session_path_segment = "<session-id>"
-        placement_prefix: str | None = None
-        if payload.placement is not None:
-            if payload.placement.kind == "workspace":
-                placement_prefix = (
-                    f"<工作区会话根:{payload.placement.workspace_id}>"
-                )
-            elif payload.placement.kind == "session":
-                placement_prefix = (
-                    f"<会话:{payload.placement.session_id}>/children"
-                )
-            else:
-                placement_prefix = f"<会话文件夹:{payload.placement.folder_id}>"
-        physical_folder_segments = ["<folder-id>" for _ in path_segments]
-        return GeneratorPlacementPreviewDTO(
-            title=title,
-            path_segments=path_segments,
-            session_path_segment=session_path_segment,
-            relative_path="/".join(
-                [
-                    *([placement_prefix] if placement_prefix else []),
-                    *physical_folder_segments,
-                    session_path_segment,
-                ]
-            ),
-        )
 
     def find_run_by_idempotency_key(
         self,
@@ -288,45 +220,3 @@ class SessionGeneratorStore:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
-
-    @classmethod
-    def _render_name(
-        cls,
-        template: str,
-        *,
-        values: dict[str, str],
-        generated_at: datetime,
-    ) -> str:
-        def replace(match: re.Match[str]) -> str:
-            token = match.group(1)
-            if token.startswith("generated_at:"):
-                pattern = token.removeprefix("generated_at:")
-                format_tokens = {
-                    "yyyy": "%Y",
-                    "MM": "%m",
-                    "dd": "%d",
-                    "HH": "%H",
-                    "mm": "%M",
-                    "ss": "%S",
-                }
-                unknown_pattern = pattern
-                for source in format_tokens:
-                    unknown_pattern = unknown_pattern.replace(source, "")
-                if re.search(r"[A-Za-z]", unknown_pattern):
-                    raise ValueError(f"命名模板包含未知时间格式: {pattern}")
-                strftime_pattern = pattern
-                for source, target in format_tokens.items():
-                    strftime_pattern = strftime_pattern.replace(source, target)
-                return generated_at.strftime(strftime_pattern)
-            value = values.get(token)
-            if value is None:
-                raise ValueError(f"命名模板包含未知变量: {token}")
-            return value
-
-        rendered = _TOKEN_PATTERN.sub(replace, template).strip()
-        cls._validate_name(rendered)
-        return rendered
-
-    @staticmethod
-    def _validate_name(value: str) -> None:
-        validate_generator_name(value)

@@ -255,8 +255,6 @@ import type {
   GeneratorDefinitionListDTO,
   GeneratorDefinitionUpdateRequest as GeneratedGeneratorDefinitionUpdateRequest,
   GeneratorManualRunRequest as GeneratedGeneratorManualRunRequest,
-  GeneratorPlacementPreviewDTO,
-  GeneratorPlacementPreviewRequest as GeneratedGeneratorPlacementPreviewRequest,
   GeneratorSessionStrategyDTO,
   SessionLocatorDTO,
   WorkspaceNavigationNodeDTO,
@@ -396,12 +394,6 @@ export type GeneratorDefinitionUpdateRequest = Omit<
   naming?: GeneratorNamingRequest | null;
 };
 export type GeneratorManualRunRequest = GeneratedGeneratorManualRunRequest;
-export type GeneratorPlacementPreviewRequest = Omit<
-  GeneratedGeneratorPlacementPreviewRequest,
-  "naming"
-> & {
-  naming: GeneratorNamingRequest;
-};
 export type WorkspaceFolderCreateRequest = GeneratedWorkspaceFolderCreateRequest;
 export type WorkspaceNavigationNodeUpdateRequest =
   GeneratedWorkspaceNavigationNodeUpdateRequest;
@@ -787,7 +779,6 @@ export type GenerationRunList = Omit<GenerationRunListDTO, "items"> & {
   items: GenerationRun[];
 };
 
-export type GeneratorPlacementPreview = Required<GeneratorPlacementPreviewDTO>;
 
 export type SshConnectionOption = SshConnectionOptionDTO;
 
@@ -800,3 +791,5 @@ export type SshConnectionOptionList = Omit<
 
 export type SessionResourceKind = SessionResource["kind"];
 export type SessionResourceAction = SessionResource["available_actions"][number];
+
+export type { SessionGenerationPreviewRequest, SessionGenerationPreviewDTO } from "./protocol";

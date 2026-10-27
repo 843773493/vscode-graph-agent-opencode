@@ -23,7 +23,9 @@ from app.schemas.gateway_control import (
     GeneratorDefinitionCreateRequest,
     GeneratorDefinitionDTO,
     GeneratorManualRunRequest,
-    GeneratorPlacementPreviewRequest,
+)
+from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationPreviewDTO,
 )
 
 logger = logging.getLogger(__name__)
@@ -398,18 +400,32 @@ class SessionGeneratorCoordinator:
         target: WorkspaceTarget,
         request_id: str,
     ) -> dict[str, object]:
-        preview = self._store.preview(
-            GeneratorPlacementPreviewRequest(
-                name=definition.name,
-                naming=definition.naming,
-                session_title=str(
-                    definition.config.get("session_title") or definition.name
-                ),
-                generated_at=run.scheduled_for,
-                placement=definition.placement,
-                session_strategy=definition.session_strategy,
-            )
+        # TODO：生成器运行协调迁入统一任务 owner 后，移除此 Gateway 业务入口。
+        preview_url, preview_headers = self._target_request(
+            target,
+            path="/api/v1/session-generations/preview-placement",
+            request_id=request_id,
         )
+        preview_response = await self._http_client.post(
+            preview_url,
+            headers=preview_headers,
+            json={
+                "name": definition.name,
+                "title_template": definition.naming.title_template,
+                "path_template": definition.naming.path_template,
+                "session_title": str(definition.config.get("session_title") or definition.name),
+                "generated_at": run.scheduled_for.isoformat(),
+                "placement_kind": definition.placement.kind,
+                "placement_node_id": definition.placement.session_id or definition.placement.folder_id,
+                "session_strategy": definition.session_strategy.mode,
+                "target_session_id": (
+                    definition.session_strategy.target.session_id
+                    if definition.session_strategy.target is not None else None
+                ),
+            },
+        )
+        preview_response.raise_for_status()
+        preview = SessionGenerationPreviewDTO.model_validate(preview_response.json()["data"])
         url, headers = self._target_request(
             target,
             path="/api/v1/session-generations/execute",

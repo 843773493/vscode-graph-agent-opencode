@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.abstractions.state_conflict import ClientStateConflictError
@@ -28,6 +30,10 @@ from app.schemas.internal_v2.session_navigation import (
     SessionGenerationCapabilitiesDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
+)
+from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationPreviewDTO,
+    SessionGenerationPreviewRequest,
 )
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationEventsPageDTO,
@@ -154,6 +160,25 @@ async def list_session_generation_capabilities(
     service: SessionGenerationService = Depends(get_session_generation_service),
 ):
     return APIResponse(data=service.list_capabilities(), request_id=request_id)
+
+
+@router.post(
+    "/session-generations/preview-placement",
+    response_model=APIResponse[SessionGenerationPreviewDTO],
+)
+async def preview_session_generation(
+    payload: SessionGenerationPreviewRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionGenerationService, Depends(get_session_generation_service)],
+):
+    try:
+        result = await service.preview(payload)
+    except KeyError as error:
+        raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(

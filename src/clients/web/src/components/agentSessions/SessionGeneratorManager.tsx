@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getSessionMainThread, listSessionCatalogChildren } from "../../api";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type {
@@ -7,6 +7,7 @@ import type {
 } from "../../types/backend";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
+import { previewSessionGeneration } from "../../api/session/sessionGenerations";
 import WarmActionDialog from "../overlays/WarmActionDialog";
 import {
   generatorStatusPresentation,
@@ -49,6 +50,13 @@ export default function SessionGeneratorManager({
   const [intervalSeconds, setIntervalSeconds] = useState("3600");
   const [cronExpression, setCronExpression] = useState("0 * * * *");
   const [previewPath, setPreviewPath] = useState("");
+  const previewRequest = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setPreviewPath("");
+    previewRequest.current?.abort();
+    return () => previewRequest.current?.abort();
+  }, [apiPort, activeWorkspaceId, targetWorkspaceId, name, titleTemplate, pathTemplate,
+    placementKind, targetFolderId, targetSessionId, strategy, creating]);
   const [deletingGenerator, setDeletingGenerator] = useState<{
     generatorId: string;
     name: string;
@@ -434,31 +442,33 @@ export default function SessionGeneratorManager({
                 reportError("预览命名路径失败", new Error("请先选择目标工作区"));
                 return;
               }
-              void (async () => generatorResources.previewGenerator({
-                name: name.trim(),
-                naming: {
+              previewRequest.current?.abort();
+              const controller = new AbortController();
+              previewRequest.current = controller;
+              void (async () => previewSessionGeneration(
+                apiPort,
+                requireGatewayWorkspaceRequestTarget(workspaces, previewWorkspaceId),
+                {
+                  name: name.trim(),
                   title_template: titleTemplate,
                   path_template: pathTemplate.split("/").map((segment) => segment.trim()).filter(Boolean),
+                  session_title: name.trim(),
+                  placement_kind: placementKind,
+                  placement_node_id: placementKind === "workspace" ? undefined
+                    : placementKind === "session" ? targetSessionId.trim() : targetFolderId,
+                  session_strategy: strategy,
+                  target_session_id: strategy === "new_per_run" ? undefined : targetSessionId.trim(),
                 },
-                session_title: name.trim(),
-                placement: {
-                  kind: placementKind,
-                  workspace_id: previewWorkspaceId,
-                  session_id: placementKind === "session" ? targetSessionId.trim() : null,
-                  folder_id: placementKind === "session_folder" ? targetFolderId : null,
-                },
-                session_strategy: {
-                  mode: strategy,
-                  target: strategy === "new_per_run"
-                    ? null
-                    : await resolveTarget(previewWorkspaceId),
-                  concurrency: "queue",
-                  report_back: strategy === "fork_new_and_report_back"
-                    ? "continue_agent"
-                    : "none",
-                },
-              }))().then((preview) => setPreviewPath(preview.relative_path)).catch((error) => reportError("预览命名路径失败", error));
-            }}>预览物理路径模板（稳定 ID 在运行时分配）</button>
+                controller.signal,
+              ))().then((preview) => {
+                if (!controller.signal.aborted) setPreviewPath(
+                  `导航：${preview.navigation_path.join(" / ")}；${preview.physical_location === "unallocated"
+                    ? "物理定位尚未分配，将在创建会话时生成" : "继续现有会话，使用原物理定位"}`,
+                );
+              }).catch((error: unknown) => {
+                if (!controller.signal.aborted) reportError("预览导航位置失败", error);
+              });
+            }}>预览名称与导航位置</button>
             {previewPath ? <code>{previewPath}</code> : null}
           </div>
           <div className="session-generator-form-actions">

@@ -638,23 +638,6 @@ message GeneratorPlacementDTO {
   optional string folder_id = 4;
 }
 
-message GeneratorPlacementPreviewDTO {
-  optional string preview_kind = 1;
-  string title = 2;
-  repeated string path_segments = 3;
-  string session_path_segment = 4;
-  string relative_path = 5;
-}
-
-message GeneratorPlacementPreviewRequest {
-  string name = 1;
-  GeneratorNamingDTO naming = 2;
-  optional string session_title = 3;
-  optional google.protobuf.Timestamp generated_at = 4;
-  optional GeneratorPlacementDTO placement = 5;
-  optional GeneratorSessionStrategyDTO session_strategy = 6;
-}
-
 message GeneratorPoliciesDTO {
   optional string overlap = 1;
   optional string misfire = 2;

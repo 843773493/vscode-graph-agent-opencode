@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationPreviewRequest,
+)
+from app.services.business.session_generation.naming import render_generation_names
 from app.testing.model_stream import (
     StreamFrame,
     chat_completion_frames,
@@ -237,6 +241,21 @@ def generation_target_stub(
             _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
 
         def do_POST(self) -> None:
+            if self.path == "/api/v1/session-generations/preview-placement":
+                if not self.has_expected_backend_identity():
+                    return
+                payload = _request_json(self)
+                state.requests.append({"method": "POST", "path": self.path, "json": payload})
+                preview_request = SessionGenerationPreviewRequest.model_validate(payload)
+                title, segments = render_generation_names(preview_request)
+                _json_response(self, {"data": {
+                    "workspace_id": backend_workspace_id,
+                    "title": title, "path_segments": segments,
+                    "navigation_path": [*segments, title],
+                    "physical_location": "unallocated",
+                    "target_session_id": preview_request.target_session_id,
+                }})
+                return
             if self.path != "/api/v1/session-generations/execute":
                 _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
                 return

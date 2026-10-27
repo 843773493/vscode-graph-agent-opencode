@@ -127,6 +127,10 @@ Goal 工具/API 与专用视图可以作为应用入口保留，但直接读写�
 
 迁移完成必须物理删除 `app/services/orchestration/goal_runtime_service.py` 中的 `GoalRuntimeService`，移除所有 import、容器字段/装配、独立 durable listener 注册与注销、close-admission/shutdown 关闭步骤以及 `goal_runtime_service.resume_active_goals` 启动阶段。通用生命周期、事件消费与调度进入 `PersistentTaskRuntime`；目标状态、预算、提示和完成/阻塞规则进入 Goal 应用组件。禁止保留同名服务作为转发包装层，或换个类名保留独立 Goal 恢复调度器。Goal 业务模块及工具/API 按职责保留，不因删除运行时误删业务契约。
 
+### 7.1 导航命名预览由目标工作区解释
+
+`POST /api/v1/session-generations/preview-placement` 按已认证的工作区路由读取 catalog，输入仅含命名模板、日期与本地稳定节点 ID。响应分别提供标题、待创建的导航段、完整导航位置，以及 `unallocated/existing_session` 物理定位状态；不分配 ID、不创建目录、不输出物理模板。继续指定会话使用 catalog 当前标题及导航位置；新建与分支由同一渲染器产生名称和导航段，实际执行校验相同路径段约束。同节点的挂载和策略校验复用一次读取。旧 Gateway 预览接口、DTO 与物理 children/folder 占位拼接已经删除；现有协调器在整体迁移完成前调用目标工作区取得渲染结果，不保留本地渲染或回退。
+
 ### 8. 前端以工作区任务管理为中心，模板与高级编辑共用定义
 
 主窗口底部面板“自动化”采用任务列表加详情。列表包含名称、模板类型、生命周期、当前阶段与原因、目标、最近结果和下次触发；详情提供配置、进度、判断/工作 thread 链接、运行记录和控制操作。

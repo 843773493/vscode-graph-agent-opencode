@@ -17,12 +17,15 @@ from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
+    SessionCatalogBreadcrumbDTO,
     SessionGenerationCapabilitiesDTO,
     SessionGenerationCapabilityDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
 )
 from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationPreviewDTO,
+    SessionGenerationPreviewRequest,
     SessionGenerationTargetDTO,
 )
 from app.services.business.message_service import MessageService
@@ -31,6 +34,10 @@ from app.services.business.session_context_fork_service import (
 )
 from app.services.business.session_generation.message_dispatch import (
     SessionGenerationMessageDispatchSupport,
+)
+from app.services.business.session_generation.naming import (
+    render_generation_names,
+    validate_navigation_segment,
 )
 from app.services.business.session_generation.providers import (
     SessionGenerationProviderProtocol,
@@ -158,6 +165,44 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                     key=lambda item: item.type_id,
                 )
             ]
+        )
+
+    async def preview(self, payload: SessionGenerationPreviewRequest) -> SessionGenerationPreviewDTO:
+        """从目标工作区 catalog 解析导航，不创建节点或分配物理 locator。"""
+        chains: dict[str, list[str]] = {}
+        breadcrumbs: dict[str, SessionCatalogBreadcrumbDTO] = {}
+        for node_id, expected_kind in (
+            (payload.placement_node_id, "folder" if payload.placement_kind == "session_folder" else "session"),
+            (payload.target_session_id, "session"),
+        ):
+            if node_id is None:
+                continue
+            breadcrumb = breadcrumbs.get(node_id)
+            if breadcrumb is None:
+                breadcrumb = await self._session_catalog_service.breadcrumb(node_id)
+                breadcrumbs[node_id] = breadcrumb
+            node = breadcrumb.items[-1]
+            if node.kind != expected_kind or any(item.state != "active" for item in breadcrumb.items):
+                raise ValueError(
+                    f"生成器节点不可用: node_id={node_id}, expected={expected_kind}, "
+                    f"actual={node.kind}, state={node.state}"
+                )
+            chains[node_id] = [item.name for item in breadcrumb.items]
+        if payload.session_strategy == "continue_existing":
+            target_session_id = payload.target_session_id
+            assert target_session_id is not None
+            navigation = chains[target_session_id]
+            return SessionGenerationPreviewDTO(
+                workspace_id=self._session_catalog_service.workspace_id,
+                title=navigation[-1], path_segments=[], navigation_path=navigation,
+                physical_location="existing_session", target_session_id=payload.target_session_id,
+            )
+        title, segments = render_generation_names(payload)
+        parent = chains[payload.placement_node_id] if payload.placement_node_id is not None else []
+        return SessionGenerationPreviewDTO(
+            workspace_id=self._session_catalog_service.workspace_id,
+            title=title, path_segments=segments, navigation_path=[*parent, *segments, title],
+            physical_location="unallocated", target_session_id=payload.target_session_id,
         )
 
     async def execute(
@@ -377,7 +422,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
     ) -> None:
         validate_generator_name(payload.title)
         for segment in payload.navigation_path:
-            validate_generator_name(segment)
+            validate_navigation_segment(segment)
         execution_workspace_id = payload.execution_workspace_id
         if payload.placement.workspace_id != execution_workspace_id:
             raise ValueError(

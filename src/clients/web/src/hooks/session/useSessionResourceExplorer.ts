@@ -257,7 +257,6 @@ export function useSessionResourceExplorer({
     runGenerator,
     updateGenerator,
     deleteGenerator,
-    previewGenerator,
   } = generatorResources;
   const currentSessionRevealKeyRef = useRef<string | null>(null);
   const currentSessionRevealRequestRef = useRef(0);
@@ -1659,7 +1658,6 @@ export function useSessionResourceExplorer({
     runGenerator,
     updateGenerator,
     deleteGenerator,
-    previewGenerator,
   }), [
     projectedBranches,
     createGenerator,
@@ -1679,7 +1677,6 @@ export function useSessionResourceExplorer({
     placeWorkspaceNode,
     moveSessionFolder,
     moveCatalogNode,
-    previewGenerator,
     refreshGenerationRuns,
     refreshNavigation,
     refreshResourceTree,

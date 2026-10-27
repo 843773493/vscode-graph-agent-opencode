@@ -4,7 +4,6 @@ import {
   deleteSessionGenerator,
   listSessionGeneratorRuns,
   listSessionGenerators,
-  previewSessionGeneratorPlacement,
   runSessionGenerator,
   updateSessionGenerator,
 } from "../../gatewayApi";
@@ -12,8 +11,6 @@ import type {
   GenerationRun,
   GeneratorDefinitionCreateRequest,
   GeneratorDefinitionUpdateRequest,
-  GeneratorPlacementPreview,
-  GeneratorPlacementPreviewRequest,
   SessionGeneratorDefinition,
   SessionGeneratorList,
 } from "../../types/backend";
@@ -145,12 +142,6 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
     await refreshGenerators();
   }, [apiPort, refreshGenerators]);
 
-  const previewGenerator = useCallback(async (
-    payload: GeneratorPlacementPreviewRequest,
-  ): Promise<GeneratorPlacementPreview> => {
-    return previewSessionGeneratorPlacement(apiPort, payload);
-  }, [apiPort]);
-
   useEffect(() => {
     if (!enabled) {
       return;
@@ -190,14 +181,12 @@ export function useSessionGeneratorResources(apiPort: number, enabled = true) {
     runGenerator,
     updateGenerator,
     deleteGenerator,
-    previewGenerator,
   }), [
     createGenerator,
     deleteGenerator,
     generationRuns,
     generatorError,
     generators,
-    previewGenerator,
     refreshGenerationRuns,
     runGenerator,
     updateGenerator,

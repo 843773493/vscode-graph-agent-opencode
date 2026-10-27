@@ -63,7 +63,6 @@ def test_workspace_navigation_rejects_wrong_local_token(gateway_app: FastAPI) ->
 _UNPROTECTED_CONTROL_PLANE_REQUESTS: tuple[tuple[str, str, dict[str, object] | None], ...] = (
     ("GET", "/api/gateway/session-catalog/search?query=a", None),
     ("GET", "/api/gateway/session-generators", None),
-    ("POST", "/api/gateway/session-generators/preview-placement", {"json": {}}),
     ("GET", "/api/gateway/session-generators/gen-1/runs", None),
     ("GET", "/api/gateway/workspace-navigation/nodes/node-1/breadcrumb", None),
 )

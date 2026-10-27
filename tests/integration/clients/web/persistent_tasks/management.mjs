@@ -50,6 +50,25 @@ try {
   }
   let panel = await openAutomation();
   await panel.getByRole("button", { name: /同一owner的暂停目标/ }).waitFor();
+  // 从实际底部面板入口预览生成导航；不点击创建，不替产品预写 catalog。
+  await page.locator("summary").filter({ hasText: "定时会话生成" }).click();
+  const generator = page.getByTestId("session-generator-manager");
+  await generator.getByRole("button", { name: "新建自动化", exact: true }).click();
+  await generator.getByLabel("名称", { exact: true }).fill("导航预览任务");
+  await generator.getByLabel("会话名称模板", { exact: true }).fill("{generator.name}-输出");
+  await generator.getByLabel("目录模板（留空表示挂载文件夹）", { exact: true }).fill("自动化/预览");
+  const previewReceipt = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/session-generations/preview-placement");
+  await generator.getByRole("button", { name: "预览名称与导航位置", exact: true }).click();
+  const previewResponse = await previewReceipt;
+  assert.equal(previewResponse.status(), 200);
+  const preview = (await previewResponse.json()).data;
+  assert.deepEqual(preview.navigation_path, ["自动化", "预览", "导航预览任务-输出"]);
+  assert.equal(preview.workspace_id, fixture.workspaceId);
+  assert.equal(preview.physical_location, "unallocated");
+  await generator.getByText("导航：自动化 / 预览 / 导航预览任务-输出；物理定位尚未分配，将在创建会话时生成", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(artifacts, "generation-navigation-preview.png"), fullPage: true });
+  await generator.getByRole("button", { name: "取消", exact: true }).click();
+  await page.locator("summary").filter({ hasText: "定时会话生成" }).click();
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
   let form = panel.getByRole("form", { name: "创建持久任务" });
   await form.getByLabel("任务名称", { exact: true }).fill("浏览器创建的任务");
@@ -118,7 +137,7 @@ try {
   await page.mouse.move(sash.x + sash.width / 2, sash.y - 280, { steps: 10 });
   await page.mouse.up();
   await page.screenshot({ path: path.join(artifacts, "task-management.png"), fullPage: true });
-  await writeFile(path.join(artifacts, "actual.json"), JSON.stringify({ taskId, initialization, conflict, noPageErrors: true }, null, 2));
+  await writeFile(path.join(artifacts, "actual.json"), JSON.stringify({ taskId, initialization, conflict, preview, noPageErrors: true }, null, 2));
 } catch (error) {
   if (page) {
     await page.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true });

@@ -2844,6 +2844,28 @@ export interface PersistentTaskRunListDTO {
   items: PersistentTaskRunDTO[];
 }
 
+/** 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。 */
+export interface SessionGenerationPreviewRequest {
+  name: string;
+  title_template: string;
+  path_template: string[];
+  session_title?: string | undefined;
+  generated_at?: string | undefined;
+  placement_kind?: string | undefined;
+  placement_node_id?: string | undefined;
+  session_strategy?: string | undefined;
+  target_session_id?: string | undefined;
+}
+
+export interface SessionGenerationPreviewDTO {
+  workspace_id: string;
+  title: string;
+  path_segments: string[];
+  navigation_path: string[];
+  physical_location: string;
+  target_session_id?: string | undefined;
+}
+
 function createBaseAPIResponse(): APIResponse {
   return { code: undefined, message: undefined, data: undefined, request_id: "" };
 }
@@ -20631,6 +20653,154 @@ export const PersistentTaskRunListDTO: MessageFns<PersistentTaskRunListDTO> = {
   fromPartial<I extends Exact<DeepPartial<PersistentTaskRunListDTO>, I>>(object: I): PersistentTaskRunListDTO {
     const message = createBasePersistentTaskRunListDTO();
     message.items = object.items?.map((e) => PersistentTaskRunDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSessionGenerationPreviewRequest(): SessionGenerationPreviewRequest {
+  return {
+    name: "",
+    title_template: "",
+    path_template: [],
+    session_title: undefined,
+    generated_at: undefined,
+    placement_kind: undefined,
+    placement_node_id: undefined,
+    session_strategy: undefined,
+    target_session_id: undefined,
+  };
+}
+
+export const SessionGenerationPreviewRequest: MessageFns<SessionGenerationPreviewRequest> = {
+  fromJSON(object: any): SessionGenerationPreviewRequest {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      title_template: isSet(object.title_template) ? globalThis.String(object.title_template) : "",
+      path_template: globalThis.Array.isArray(object?.path_template)
+        ? object.path_template.map((e: any) => globalThis.String(e))
+        : [],
+      session_title: isSet(object.session_title) ? globalThis.String(object.session_title) : undefined,
+      generated_at: isSet(object.generated_at) ? globalThis.String(object.generated_at) : undefined,
+      placement_kind: isSet(object.placement_kind) ? globalThis.String(object.placement_kind) : undefined,
+      placement_node_id: isSet(object.placement_node_id) ? globalThis.String(object.placement_node_id) : undefined,
+      session_strategy: isSet(object.session_strategy) ? globalThis.String(object.session_strategy) : undefined,
+      target_session_id: isSet(object.target_session_id) ? globalThis.String(object.target_session_id) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationPreviewRequest): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.title_template !== "") {
+      obj.title_template = message.title_template;
+    }
+    if (message.path_template?.length) {
+      obj.path_template = message.path_template;
+    }
+    if (message.session_title !== undefined) {
+      obj.session_title = message.session_title;
+    }
+    if (message.generated_at !== undefined) {
+      obj.generated_at = message.generated_at;
+    }
+    if (message.placement_kind !== undefined) {
+      obj.placement_kind = message.placement_kind;
+    }
+    if (message.placement_node_id !== undefined) {
+      obj.placement_node_id = message.placement_node_id;
+    }
+    if (message.session_strategy !== undefined) {
+      obj.session_strategy = message.session_strategy;
+    }
+    if (message.target_session_id !== undefined) {
+      obj.target_session_id = message.target_session_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationPreviewRequest>, I>>(base?: I): SessionGenerationPreviewRequest {
+    return SessionGenerationPreviewRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationPreviewRequest>, I>>(
+    object: I,
+  ): SessionGenerationPreviewRequest {
+    const message = createBaseSessionGenerationPreviewRequest();
+    message.name = object.name ?? "";
+    message.title_template = object.title_template ?? "";
+    message.path_template = object.path_template?.map((e) => e) || [];
+    message.session_title = object.session_title ?? undefined;
+    message.generated_at = object.generated_at ?? undefined;
+    message.placement_kind = object.placement_kind ?? undefined;
+    message.placement_node_id = object.placement_node_id ?? undefined;
+    message.session_strategy = object.session_strategy ?? undefined;
+    message.target_session_id = object.target_session_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationPreviewDTO(): SessionGenerationPreviewDTO {
+  return {
+    workspace_id: "",
+    title: "",
+    path_segments: [],
+    navigation_path: [],
+    physical_location: "",
+    target_session_id: undefined,
+  };
+}
+
+export const SessionGenerationPreviewDTO: MessageFns<SessionGenerationPreviewDTO> = {
+  fromJSON(object: any): SessionGenerationPreviewDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      path_segments: globalThis.Array.isArray(object?.path_segments)
+        ? object.path_segments.map((e: any) => globalThis.String(e))
+        : [],
+      navigation_path: globalThis.Array.isArray(object?.navigation_path)
+        ? object.navigation_path.map((e: any) => globalThis.String(e))
+        : [],
+      physical_location: isSet(object.physical_location) ? globalThis.String(object.physical_location) : "",
+      target_session_id: isSet(object.target_session_id) ? globalThis.String(object.target_session_id) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationPreviewDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.path_segments?.length) {
+      obj.path_segments = message.path_segments;
+    }
+    if (message.navigation_path?.length) {
+      obj.navigation_path = message.navigation_path;
+    }
+    if (message.physical_location !== "") {
+      obj.physical_location = message.physical_location;
+    }
+    if (message.target_session_id !== undefined) {
+      obj.target_session_id = message.target_session_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationPreviewDTO>, I>>(base?: I): SessionGenerationPreviewDTO {
+    return SessionGenerationPreviewDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationPreviewDTO>, I>>(object: I): SessionGenerationPreviewDTO {
+    const message = createBaseSessionGenerationPreviewDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.title = object.title ?? "";
+    message.path_segments = object.path_segments?.map((e) => e) || [];
+    message.navigation_path = object.navigation_path?.map((e) => e) || [];
+    message.physical_location = object.physical_location ?? "";
+    message.target_session_id = object.target_session_id ?? undefined;
     return message;
   },
 };

@@ -27,7 +27,6 @@ import type {
   GatewaySessionSearchResults,
   GenerationRun,
   GenerationRunList,
-  GeneratorPlacementPreview,
   SessionGeneratorDefinition,
   SessionGeneratorList,
   WorkspaceNavigationTree,
@@ -38,7 +37,6 @@ import type {
   GatewayResourceList,
   GeneratorDefinitionCreateRequest,
   GeneratorDefinitionUpdateRequest,
-  GeneratorPlacementPreviewRequest,
   WorkspaceFolderCreateRequest,
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
@@ -376,19 +374,6 @@ export async function deleteSessionGenerator(
       port,
       `/api/gateway/session-generators/${encodeURIComponent(generatorId)}`,
       { method: "DELETE" },
-    ),
-  );
-}
-
-export async function previewSessionGeneratorPlacement(
-  port: number,
-  payload: GeneratorPlacementPreviewRequest,
-): Promise<GeneratorPlacementPreview> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GeneratorPlacementPreview>>(
-      port,
-      "/api/gateway/session-generators/preview-placement",
-      { method: "POST", body: JSON.stringify(payload) },
     ),
   );
 }

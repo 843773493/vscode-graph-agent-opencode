@@ -64,7 +64,13 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         response = await client.put(f"/api/v1/sessions/{session}/goal", json={"objective": "同一owner的暂停目标", "status": "paused"})
         assert response.status_code == 200, response.text
         goal = response.json()["data"]
+        before_preview = await client.get("/api/v1/session-catalog/export")
+        assert before_preview.status_code == 200, before_preview.text
         result = await browser_runner(case, client, target_uri=thread_resource_uri(case.mount.workspace_id, session, thread), title=title)
+        assert result["preview"]["physical_location"] == "unallocated"
+        after_preview = await client.get("/api/v1/session-catalog/export")
+        assert after_preview.status_code == 200, after_preview.text
+        assert after_preview.json()["data"] == before_preview.json()["data"]
         task_id = result["taskId"]
         response = await client.get(f"/api/v1/persistent-tasks/{task_id}")
         assert response.status_code == 200, response.text

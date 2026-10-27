@@ -12153,3 +12153,102 @@ export declare type PersistentTaskRunListDTO = Message<"boxteam.workspace.v2.Per
  */
 export declare const PersistentTaskRunListDTOSchema: GenMessage<PersistentTaskRunListDTO>;
 
+/**
+ * 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。
+ *
+ * @generated from message boxteam.workspace.v2.SessionGenerationPreviewRequest
+ */
+export declare type SessionGenerationPreviewRequest = Message<"boxteam.workspace.v2.SessionGenerationPreviewRequest"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string title_template = 2;
+   */
+  titleTemplate: string;
+
+  /**
+   * @generated from field: repeated string path_template = 3;
+   */
+  pathTemplate: string[];
+
+  /**
+   * @generated from field: optional string session_title = 4;
+   */
+  sessionTitle?: string | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp generated_at = 5;
+   */
+  generatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional string placement_kind = 6;
+   */
+  placementKind?: string | undefined;
+
+  /**
+   * @generated from field: optional string placement_node_id = 7;
+   */
+  placementNodeId?: string | undefined;
+
+  /**
+   * @generated from field: optional string session_strategy = 8;
+   */
+  sessionStrategy?: string | undefined;
+
+  /**
+   * @generated from field: optional string target_session_id = 9;
+   */
+  targetSessionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationPreviewRequest.
+ * Use `create(SessionGenerationPreviewRequestSchema)` to create a new message.
+ */
+export declare const SessionGenerationPreviewRequestSchema: GenMessage<SessionGenerationPreviewRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationPreviewDTO
+ */
+export declare type SessionGenerationPreviewDTO = Message<"boxteam.workspace.v2.SessionGenerationPreviewDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string title = 2;
+   */
+  title: string;
+
+  /**
+   * @generated from field: repeated string path_segments = 3;
+   */
+  pathSegments: string[];
+
+  /**
+   * @generated from field: repeated string navigation_path = 4;
+   */
+  navigationPath: string[];
+
+  /**
+   * @generated from field: string physical_location = 5;
+   */
+  physicalLocation: string;
+
+  /**
+   * @generated from field: optional string target_session_id = 6;
+   */
+  targetSessionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationPreviewDTO.
+ * Use `create(SessionGenerationPreviewDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationPreviewDTOSchema: GenMessage<SessionGenerationPreviewDTO>;
+

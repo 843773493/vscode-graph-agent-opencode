@@ -31,8 +31,6 @@ from app.schemas.gateway_control import (
     GeneratorDefinitionListDTO,
     GeneratorDefinitionUpdateRequest,
     GeneratorManualRunRequest,
-    GeneratorPlacementPreviewDTO,
-    GeneratorPlacementPreviewRequest,
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
     WorkspaceNavigationNodeUpdateRequest,
@@ -514,23 +512,6 @@ async def delete_session_generator(
         result = store.delete_definition(generator_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post(
-    "/session-generators/preview-placement",
-    response_model=APIResponse[GeneratorPlacementPreviewDTO],
-)
-async def preview_generator_placement(
-    payload: GeneratorPlacementPreviewRequest,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    store: SessionGeneratorStore = Depends(_generator_store),
-):
-    try:
-        result = store.preview(payload)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

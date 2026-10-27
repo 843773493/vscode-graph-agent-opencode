@@ -314,6 +314,59 @@ def _execute_payload(
 
 
 @pytest.mark.asyncio
+async def test_preview_resolves_target_catalog_and_rejects_invalid_locators(
+    generation_client: httpx.AsyncClient,
+    generation_backend: tuple[str, Path],
+) -> None:
+    session_id, folder_id = await _create_nested_anchor(
+        generation_client, title="预览目标", root_name="预览根", child_name="预览目录",
+    )
+    before = await _catalog_nodes(generation_client)
+    manifest_count = _session_manifest_count(generation_backend[1])
+    payload = {
+        "name": "每日审查", "title_template": "{generated_at:HH-mm-ss}_{session.title}",
+        "session_title": "依赖更新", "path_template": ["{generator.name}", "{generated_at:yyyy-MM-dd}"],
+        "generated_at": "2026-07-23T10:11:12Z",
+        "placement_kind": "session_folder", "placement_node_id": folder_id,
+    }
+    response = await generation_client.post("/api/v1/session-generations/preview-placement", json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {
+        "workspace_id": before[session_id]["session"]["workspace_id"],
+        "title": "10-11-12_依赖更新", "path_segments": ["每日审查", "2026-07-23"],
+        "navigation_path": ["预览根", "预览目录", "每日审查", "2026-07-23", "10-11-12_依赖更新"],
+        "physical_location": "unallocated", "target_session_id": None,
+    }
+    continued = await generation_client.post("/api/v1/session-generations/preview-placement", json={
+        **payload, "session_strategy": "continue_existing", "target_session_id": session_id,
+    })
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["data"] == {
+        "workspace_id": before[session_id]["session"]["workspace_id"],
+        "title": "预览目标", "path_segments": [], "navigation_path": ["预览根", "预览目录", "预览目标"],
+        "physical_location": "existing_session", "target_session_id": session_id,
+    }
+    wrong_kind = await generation_client.post("/api/v1/session-generations/preview-placement", json={
+        **payload, "placement_kind": "session",
+    })
+    assert wrong_kind.status_code == 400, wrong_kind.text
+    assert "expected=session, actual=folder" in wrong_kind.text
+    missing = await generation_client.post("/api/v1/session-generations/preview-placement", json={
+        **payload, "placement_node_id": "019a0000-0000-7000-8000-000000000099",
+    })
+    assert missing.status_code == 404, missing.text
+    invalid = await generation_client.post("/api/v1/session-generations/preview-placement", json={
+        **payload, "path_template": [".."],
+    })
+    assert invalid.status_code == 400, invalid.text
+    assert await _catalog_nodes(generation_client) == before
+    assert _session_manifest_count(generation_backend[1]) == manifest_count
+    removed = await generation_client.post("/api/gateway/session-generators/preview-placement", json={})
+    # 同路径仍匹配通用 /{generator_id} 的 PATCH/DELETE，因此已移除的 POST 返回405。
+    assert removed.status_code == 405, removed.text
+
+
+@pytest.mark.asyncio
 async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     generation_client: httpx.AsyncClient,
     generation_backend: tuple[str, Path],
@@ -339,7 +392,30 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
         mode="new_per_run",
         placement_session_id=anchor_session_id,
     )
+    nodes_before_preview = await _catalog_nodes(generation_client)
     manifest_count_before = _session_manifest_count(generation_backend[1])
+    preview_response = await generation_client.post(
+        "/api/v1/session-generations/preview-placement",
+        json={
+            "name": "自动化", "session_title": "new_per_run",
+            "title_template": "Generated {session.title}",
+            "path_template": ["{generator.name}", "new_per_run"],
+            "placement_kind": "session", "placement_node_id": anchor_session_id,
+        },
+    )
+    assert preview_response.status_code == 200, preview_response.text
+    assert preview_response.headers["X-Request-ID"] == preview_response.json()["request_id"]
+    preview = preview_response.json()["data"]
+    assert preview["physical_location"] == "unallocated"
+    assert preview["target_session_id"] is None
+    assert preview["navigation_path"] == [
+        "New Per Run 根目录", "New Per Run 二级目录", "New Per Run Placement Anchor",
+        "自动化", "new_per_run", "Generated new_per_run",
+    ]
+    assert await _catalog_nodes(generation_client) == nodes_before_preview
+    assert _session_manifest_count(generation_backend[1]) == manifest_count_before
+    payload["title"] = preview["title"]
+    payload["navigation_path"] = preview["path_segments"]
     first_response, _ = await _execute_new_owner(generation_client, generation_replay, payload)
     assert first_response.status_code == 200, first_response.text
     first = first_response.json()["data"]

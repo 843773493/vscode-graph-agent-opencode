@@ -298,18 +298,6 @@ export type GeneratorDefinitionUpdateRequest = Omit<
   config?: Record<string, unknown> | null;
 };
 export type GeneratorManualRunRequest = OptionalFields<GatewayProtocol.GeneratorManualRunRequest>;
-export type GeneratorPlacementPreviewDTO = Omit<OptionalFields<GatewayProtocol.GeneratorPlacementPreviewDTO>, "preview_kind"> & {
-  preview_kind?: "logical_physical_path_template";
-};
-export type GeneratorPlacementPreviewRequest = Omit<
-  OptionalFields<GatewayProtocol.GeneratorPlacementPreviewRequest>,
-  "naming" | "generated_at" | "placement" | "session_strategy"
-> & {
-  naming: GeneratorNamingDTO;
-  generated_at?: string | null;
-  placement?: GeneratorPlacementDTO | null;
-  session_strategy?: GeneratorSessionStrategyDTO;
-};
 export type SessionLocatorDTO = OptionalFields<GatewayProtocol.SessionLocatorDTO>;
 export type WorkspaceNavigationNodeDTO = Omit<OptionalFields<GatewayProtocol.WorkspaceNavigationNodeDTO>, "kind" | "parent_node_id" | "workspace_id"> & {
   kind: "workspace_folder" | "workspace_ref";

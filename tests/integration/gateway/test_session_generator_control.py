@@ -94,7 +94,7 @@ async def _wait_for_completed_run(
 
 
 @pytest.mark.asyncio
-async def test_generator_crud_preview_and_idempotent_manual_run(
+async def test_generator_crud_and_idempotent_manual_run(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ) -> None:
@@ -145,45 +145,6 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                 assert len(registered) == 1, add_target_response.text
                 workspace_id = registered[0]["workspace_id"]
                 assert registered[0]["backend_url"] == f"http://127.0.0.1:{target_port}"
-
-                preview_response = await client.post(
-                    "/api/gateway/session-generators/preview-placement",
-                    json={
-                        "name": "每日审查",
-                        "session_title": "依赖更新",
-                        "generated_at": "2026-07-23T10:11:12Z",
-                        "naming": {
-                            "title_template": "{generated_at:HH-mm-ss}_{session.title}",
-                            "path_template": [
-                                "{generator.name}",
-                                "{generated_at:yyyy-MM-dd}",
-                                "{session.title}",
-                            ],
-                        },
-                    },
-                )
-                assert preview_response.status_code == 200, preview_response.text
-                preview = preview_response.json()["data"]
-                assert preview["title"] == "10-11-12_依赖更新"
-                assert preview["path_segments"] == [
-                    "每日审查",
-                    "2026-07-23",
-                    "10-11-12_依赖更新",
-                ]
-
-                invalid_preview_response = await client.post(
-                    "/api/gateway/session-generators/preview-placement",
-                    json={
-                        "name": "非法路径",
-                        "session_title": "越界",
-                        "naming": {
-                            "title_template": "{session.title}",
-                            "path_template": [".."],
-                        },
-                    },
-                )
-                assert invalid_preview_response.status_code == 400
-                assert "非法" in invalid_preview_response.text
 
                 create_response = await client.post(
                     "/api/gateway/session-generators",

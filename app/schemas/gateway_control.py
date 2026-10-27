@@ -290,29 +290,6 @@ class GeneratorDefinitionListDTO(BaseModel):
     items: list[GeneratorDefinitionDTO] = Field(default_factory=list)
 
 
-class GeneratorPlacementPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=200)
-    naming: GeneratorNamingDTO
-    session_title: str = Field(default="生成会话", min_length=1, max_length=500)
-    generated_at: datetime | None = None
-    placement: GeneratorPlacementDTO | None = None
-    session_strategy: GeneratorSessionStrategyDTO = Field(
-        default_factory=GeneratorSessionStrategyDTO
-    )
-
-
-class GeneratorPlacementPreviewDTO(BaseModel):
-    preview_kind: Literal["logical_physical_path_template"] = (
-        "logical_physical_path_template"
-    )
-    title: str
-    path_segments: list[str]
-    session_path_segment: str
-    relative_path: str
-
-
 GenerationRunStatus = Literal[
     "planned",
     "dispatching",

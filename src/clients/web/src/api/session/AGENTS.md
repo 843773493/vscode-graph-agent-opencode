@@ -13,6 +13,7 @@
 ```text
 api/session/
 ├── sessions.ts                    会话、主线程与 fork 来源查询
+├── sessionGenerations.ts           目标工作区的生成命名与导航预览
 ├── sessionCatalog.ts               会话目录快照读取
 ├── sessionCatalogOperations.ts     目录变更请求、回执与回压状态
 ├── sessionActivity.ts              会话活动事件请求

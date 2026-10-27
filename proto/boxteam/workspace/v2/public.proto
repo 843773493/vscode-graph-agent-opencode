@@ -2791,3 +2791,25 @@ message PersistentTaskListDTO {
 message PersistentTaskRunListDTO {
   repeated PersistentTaskRunDTO items = 1;
 }
+
+// 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。
+message SessionGenerationPreviewRequest {
+  string name = 1;
+  string title_template = 2;
+  repeated string path_template = 3;
+  optional string session_title = 4;
+  optional google.protobuf.Timestamp generated_at = 5;
+  optional string placement_kind = 6;
+  optional string placement_node_id = 7;
+  optional string session_strategy = 8;
+  optional string target_session_id = 9;
+}
+
+message SessionGenerationPreviewDTO {
+  string workspace_id = 1;
+  string title = 2;
+  repeated string path_segments = 3;
+  repeated string navigation_path = 4;
+  string physical_location = 5;
+  optional string target_session_id = 6;
+}
