@@ -88,6 +88,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.session import SessionForkRequest
@@ -317,6 +318,11 @@ async def runtime_case(
     monkeypatch.setattr(agent_factory, "build_model_from_provider", model_from_provider)
     if not case.shutdown_owned_by_lifespan:
         await runner_case.container.mcp_catalog_owner.start()
+        platform = runner_case.container.resource_platform
+        activate_resources = await platform.prepare_config(
+            runner_case.container.config_service.get_snapshot().to_dict(), platform.process_root_scope,
+        )
+        activate_resources()
         await runner_case.container.workspace_file_resource_registry.start()
         await runner_case.container.team_fanout_service.start()
     try:
@@ -2427,14 +2433,24 @@ async def gateway_skill_publication(runtime_case: RuntimeCase):
     assert source is not None
     independent_requests = 0
 
-    def handle(request: httpx.Request) -> httpx.Response:
+    async def handle(request: httpx.Request) -> httpx.Response:
         nonlocal independent_requests
         request_id = request.headers.get("X-Request-ID")
         if request_id is None:
             # 真实 Gateway 的 TraceMiddleware 为独立轮询创建 ID；协议桩显式模拟此边界。
             independent_requests += 1
             request_id = f"gateway-skill-fixture-poll-{independent_requests}"
-        snapshot = owner.snapshot(workspace_id=runtime_case.runner.container.workspace_id)
+        workspace_id = runtime_case.runner.container.workspace_id
+        endpoint = f"/api/gateway/skill-source-connections/{owner.gateway_id}/workspaces/{workspace_id}"
+        if request.method == "POST" and request.url.path == endpoint + "/publications/wait":
+            publication = await owner.wait_for_publication(
+                GatewaySkillPublicationRequest.model_validate_json(request.content), workspace_id=workspace_id,
+            )
+            return httpx.Response(200, json={
+                "code": 0, "request_id": request_id, "data": publication.model_dump(mode="json"),
+            }, headers={"X-Request-ID": request_id})
+        assert request.method == "GET" and request.url.path == endpoint, request.url
+        snapshot = owner.snapshot(workspace_id=workspace_id)
         etag = '"' + snapshot.revision + '"'
         headers = {"ETag": etag, "X-Request-ID": request_id}
         if request.headers.get("If-None-Match") == etag:
@@ -2447,6 +2463,7 @@ async def gateway_skill_publication(runtime_case: RuntimeCase):
     try:
         yield source
     finally:
+        await source.close()
         await owner.close()
 
 
