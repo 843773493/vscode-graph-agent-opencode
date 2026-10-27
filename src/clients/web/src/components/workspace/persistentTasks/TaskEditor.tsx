@@ -8,6 +8,16 @@ import type { PersistentTaskConfigurationDTO } from "../../../api/persistentTask
 
 const triggers: Record<string, string> = { "builtin.manual": "手动", "builtin.interval": "固定间隔", "builtin.cron": "Cron", "builtin.external": "外部通知", "builtin.execution_end": "工作执行结束" };
 const conditions: Record<string, string> = { "builtin.always": "无附加条件", "builtin.script": "脚本条件", "builtin.model": "模型判断", "builtin.rule": "规则判断" };
+export type TaskTemplate = "scheduled" | "script" | "model" | "custom";
+
+function conditionConfiguration(typeId: string): NonNullable<PersistentTaskConfigurationDTO["condition"]> {
+  return {
+    type_id: typeId, version: "1",
+    ...(typeId === "builtin.script" ? { script: { command: [""], timeout_seconds: 30, output_limit_bytes: 65536, memory_limit_mb: 256 } } : {}),
+    ...(typeId === "builtin.model" ? { model: { thread_uri: "", instruction: "" } } : {}),
+    ...(typeId === "builtin.rule" ? { rule: { pointer: "", expected: true } } : {}),
+  };
+}
 
 export function configurationProblem(config: PersistentTaskConfigurationDTO): string | null {
   const components = [config.trigger, config.condition, config.context, config.action];
@@ -20,20 +30,23 @@ export function configurationProblem(config: PersistentTaskConfigurationDTO): st
   return null;
 }
 
-function initialConfiguration(): PersistentTaskConfigurationDTO {
+function initialConfiguration(template: TaskTemplate): PersistentTaskConfigurationDTO {
   return {
-    name: "", trigger: { type_id: "builtin.interval", version: "1", interval_seconds: 60, timezone: "UTC" },
-    condition: { type_id: "builtin.always", version: "1" }, context: { type_id: "builtin.literal", version: "1", content: "", mode: "event" },
+    name: "", trigger: template === "custom" ? { type_id: "builtin.manual", version: "1", timezone: "UTC" } : {
+      type_id: "builtin.interval", version: "1", interval_seconds: template === "script" ? 10 : template === "model" ? 600 : 60, timezone: "UTC",
+    },
+    condition: conditionConfiguration(template === "script" ? "builtin.script" : template === "model" ? "builtin.model" : "builtin.always"),
+    context: { type_id: "builtin.literal", version: "1", content: "", mode: "event" },
     action: { type_id: "builtin.runtime_source", version: "1", target_uri: "", delivery_mode: "context_and_run", delivery_policy: "after_turn" },
-    policies: { completion: "continuous", misfire: "skip", match_mode: "each_match" },
+    policies: { completion: template === "script" ? "after_delivery" : "continuous", misfire: "skip", match_mode: "each_match" },
   };
 }
 
-export default function TaskEditor({ apiPort, target, configuration, busy, onSave, onCancel }: {
-  apiPort: number; target: GatewayWorkspaceRequestTarget; configuration?: PersistentTaskConfigurationDTO; busy: boolean;
+export default function TaskEditor({ apiPort, target, configuration, template = "scheduled", busy, onSave, onCancel }: {
+  apiPort: number; target: GatewayWorkspaceRequestTarget; configuration?: PersistentTaskConfigurationDTO; template?: TaskTemplate; busy: boolean;
   onSave: (configuration: PersistentTaskConfigurationDTO) => Promise<boolean>; onCancel: () => void;
 }) {
-  const [draft, setDraft] = useState(configuration ?? initialConfiguration);
+  const [draft, setDraft] = useState(() => configuration ?? initialConfiguration(template));
   const [ruleValue, setRuleValue] = useState(JSON.stringify(configuration?.condition?.rule ? configuration.condition.rule.expected : true));
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -44,12 +57,7 @@ export default function TaskEditor({ apiPort, target, configuration, busy, onSav
 
   const changeCondition = (typeId: string) => {
     if (typeId === "builtin.rule") setRuleValue("true");
-    setDraft({ ...draft, condition: {
-    type_id: typeId, version: "1",
-    ...(typeId === "builtin.script" ? { script: { command: [""], timeout_seconds: 30, output_limit_bytes: 65536, memory_limit_mb: 256 } } : {}),
-    ...(typeId === "builtin.model" ? { model: { thread_uri: "", instruction: "" } } : {}),
-    ...(typeId === "builtin.rule" ? { rule: { pointer: "", expected: true } } : {}),
-    } });
+    setDraft({ ...draft, condition: conditionConfiguration(typeId) });
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -95,7 +103,8 @@ export default function TaskEditor({ apiPort, target, configuration, busy, onSav
       {trigger.type_id === "builtin.execution_end" ? <label>执行结束来源 Thread URI<input aria-label="执行结束来源 Thread URI" required value={trigger.source_uri} onChange={(event) => setDraft({ ...draft, trigger: { ...trigger, source_uri: event.target.value } })} /></label> : null}
     </fieldset>
     <fieldset disabled={busy}><legend>附加条件</legend>
-      <label>判断方式<select aria-label="判断方式" value={condition.type_id} onChange={(event) => changeCondition(event.target.value)}>{Object.entries(conditions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label><input aria-label="启用附加条件" type="checkbox" checked={condition.type_id !== "builtin.always"} onChange={(event) => changeCondition(event.target.checked ? "builtin.script" : "builtin.always")} />启用附加条件</label>
+      {condition.type_id !== "builtin.always" ? <label>判断方式<select aria-label="判断方式" value={condition.type_id} onChange={(event) => changeCondition(event.target.value)}>{Object.entries(conditions).filter(([value]) => value !== "builtin.always").map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
       {condition.script ? <>
         <p>脚本在任务所属工作区运行，命令和每个参数分别填写，不经过 shell 拼接。试运行也会实际运行脚本。</p>
         {condition.script.command.map((argument, index) => <label key={index}>{index === 0 ? "程序" : `参数 ${index}`}<input aria-label={index === 0 ? "程序" : `参数 ${index}`} required={index === 0} value={argument} onChange={(event) => setDraft({ ...draft, condition: { ...condition, script: { ...condition.script!, command: condition.script!.command.map((value, position) => position === index ? event.target.value : value) } } })} />{index > 0 ? <button type="button" onClick={() => setDraft({ ...draft, condition: { ...condition, script: { ...condition.script!, command: condition.script!.command.filter((_, position) => position !== index) } } })}>删除参数 {index}</button> : null}</label>)}
@@ -130,7 +139,7 @@ export default function TaskEditor({ apiPort, target, configuration, busy, onSav
       </>}
       <label>结束策略<select aria-label="结束策略" value={policies.completion} onChange={(event) => setDraft({ ...draft, policies: { ...policies, completion: event.target.value } })}><option value="continuous">持续等待后续触发</option><option value="after_delivery">首次投递后结束</option></select></label>
     </fieldset>
-    <details><summary>高级配置</summary><fieldset disabled={busy}>
+    <details open={template === "custom" || undefined}><summary>高级配置</summary><fieldset disabled={busy}>
       <label>条件触发策略<select aria-label="条件触发策略" value={policies.match_mode} onChange={(event) => setDraft({ ...draft, policies: { ...policies, match_mode: event.target.value } })}><option value="each_match">每次满足</option><option value="first_match">首次满足</option><option value="rising_edge">未满足后再次满足</option></select></label>
       <label>错过计划<select aria-label="错过计划" value={policies.misfire} onChange={(event) => setDraft({ ...draft, policies: { ...policies, misfire: event.target.value } })}><option value="skip">跳过</option><option value="run_latest">只补最近一次</option><option value="catch_up">补齐计划点</option></select></label>
       {!action.generation ? <>

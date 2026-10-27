@@ -1320,6 +1320,12 @@ export default function AppShell() {
         onResetHeight={resetBottomPanelHeight}
         onStatusChange={setStatus}
         onOpenSession={handleSelectAgentSession}
+        goalSessionId={activeSessionWorkspaceId === bottomPanelWorkspaceId ? activeSession?.session_id ?? null : null}
+        onManageGoal={async (sessionId) => {
+          if (!bottomPanelWorkspaceId) throw new Error("请先选择工作区");
+          await handleSelectAgentSession(bottomPanelWorkspaceId, sessionId);
+          openAuxiliaryTab("goal");
+        }}
       />
         </div>
       </div>

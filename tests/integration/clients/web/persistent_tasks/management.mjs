@@ -50,8 +50,26 @@ try {
   }
   let panel = await openAutomation();
   await panel.getByRole("button", { name: /同一owner的暂停目标/ }).waitFor();
+  // 五类入口使用现有Goal视图或同一组件表单；切换模板不创建后台任务。
+  await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+  const templates = panel.getByRole("region", { name: "选择持久任务模板", exact: true });
+  for (const title of ["Goal", "定时执行", "脚本条件", "模型判断", "自定义"]) assert.equal(await templates.getByRole("button", { name: title, exact: true }).count(), 1);
+  await templates.getByRole("button", { name: "Goal", exact: true }).click();
+  await page.getByRole("region", { name: "当前 Goal", exact: true }).getByText("同一owner的暂停目标", { exact: true }).waitFor();
+  for (const [title, field] of [["脚本条件", "程序"], ["模型判断", "判断说明"], ["自定义", "触发方式"]]) {
+    await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+    await panel.getByRole("region", { name: "选择持久任务模板", exact: true }).getByRole("button", { name: title, exact: true }).click();
+    const form = panel.getByRole("form", { name: "创建持久任务" });
+    await form.getByLabel(field, { exact: true }).waitFor();
+    if (title === "自定义") {
+      assert.equal(await form.getByLabel("触发方式", { exact: true }).inputValue(), "builtin.manual");
+      assert.equal(await form.locator("details").getAttribute("open"), "");
+    } else assert.equal(await form.getByLabel("启用附加条件", { exact: true }).isChecked(), true);
+    await form.getByRole("button", { name: "取消编辑", exact: true }).click();
+  }
   // 从实际底部面板入口预览生成导航；不点击创建，不替产品预写 catalog。
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+  await panel.getByRole("region", { name: "选择持久任务模板", exact: true }).getByRole("button", { name: "定时执行", exact: true }).click();
   const generator = panel.getByRole("form", { name: "创建持久任务" });
   await generator.getByLabel("任务名称", { exact: true }).fill("导航预览任务");
   await generator.getByLabel("工作动作", { exact: true }).selectOption("builtin.session_generation");
@@ -69,9 +87,12 @@ try {
   await page.screenshot({ path: path.join(artifacts, "generation-navigation-preview.png"), fullPage: true });
   await generator.getByRole("button", { name: "取消编辑", exact: true }).click();
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+  await panel.getByRole("region", { name: "选择持久任务模板", exact: true }).getByRole("button", { name: "定时执行", exact: true }).click();
   let form = panel.getByRole("form", { name: "创建持久任务" });
+  assert.equal(await form.getByLabel("启用附加条件", { exact: true }).isChecked(), false);
+  assert.equal(await form.getByLabel("判断方式", { exact: true }).count(), 0);
   await form.getByLabel("任务名称", { exact: true }).fill("浏览器创建的任务");
-  await form.getByLabel("触发方式", { exact: true }).selectOption("builtin.manual");
+  await form.getByLabel("间隔（秒）", { exact: true }).fill("3600");
   await form.getByLabel("工作 Thread URI", { exact: true }).fill(fixture.targetUri);
   await form.getByLabel("提示内容", { exact: true }).fill("浏览器创建的提示正文");
   await form.getByLabel("动作", { exact: true }).selectOption("context_only");
@@ -80,6 +101,8 @@ try {
   const createdResponse = await created;
   assert.equal(createdResponse.status(), 200);
   const createdBody = await createdResponse.json();
+  assert.equal(createdBody.data.configuration.condition.type_id, "builtin.always");
+  assert.equal(createdBody.data.configuration.condition.version, "1");
   assert.equal(createdResponse.headers()["x-request-id"], createdBody.request_id);
   const taskId = createdBody.data.task_id;
   await panel.getByRole("button", { name: "检查试运行", exact: true }).click();
@@ -87,11 +110,19 @@ try {
   assert.equal(await panel.getByText("内容已保存，尚不代表模型已消费", { exact: true }).count(), 0);
   await panel.getByRole("button", { name: "编辑任务", exact: true }).click();
   form = panel.getByRole("form", { name: "编辑持久任务" });
+  await form.getByLabel("启用附加条件", { exact: true }).check();
   await form.getByLabel("判断方式", { exact: true }).selectOption("builtin.rule");
   await form.getByLabel("输入 JSON Pointer", { exact: true }).fill("/trigger/type");
   await form.getByLabel("比较值（JSON）", { exact: true }).fill('"manual"');
   await form.getByLabel("提示内容", { exact: true }).fill("浏览器编辑后的提示正文");
+  const updated = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/persistent-tasks/${taskId}` && response.request().method() === "PUT");
   await form.getByRole("button", { name: "保存任务", exact: true }).click();
+  const updatedResponse = await updated;
+  assert.equal(updatedResponse.status(), 200);
+  const updatedTask = (await updatedResponse.json()).data;
+  assert.equal(updatedTask.task_id, taskId);
+  assert.equal(updatedTask.next_run_at, createdBody.data.next_run_at);
+  assert.deepEqual(updatedTask.configuration.trigger, createdBody.data.configuration.trigger);
   await panel.getByRole("button", { name: "立即检查", exact: true }).click();
   await panel.getByText("内容已保存，尚不代表模型已消费", { exact: false }).waitFor();
   // 模拟另一真实客户端在本次请求发出后编辑；原请求继续到后端产生真实409。

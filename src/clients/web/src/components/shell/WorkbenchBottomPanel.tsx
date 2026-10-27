@@ -46,6 +46,8 @@ interface WorkbenchBottomPanelProps {
   onStartResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResetHeight: () => void;
   onOpenSession: (workspaceId: string, sessionId: string) => Promise<void>;
+  goalSessionId: string | null;
+  onManageGoal: (sessionId: string) => Promise<void>;
   onStatusChange: (text: string) => void;
 }
 
@@ -68,6 +70,8 @@ export default function WorkbenchBottomPanel({
   onStartResize,
   onResetHeight,
   onOpenSession,
+  goalSessionId,
+  onManageGoal,
   onStatusChange,
 }: WorkbenchBottomPanelProps) {
   if (!visible) {
@@ -122,6 +126,8 @@ export default function WorkbenchBottomPanel({
             height={state.height}
             onStatusChange={onStatusChange}
             onOpenSession={onOpenSession}
+            goalSessionId={goalSessionId}
+            onManageGoal={onManageGoal}
             onSwitchTab={switchTab}
             onClose={close}
           />
