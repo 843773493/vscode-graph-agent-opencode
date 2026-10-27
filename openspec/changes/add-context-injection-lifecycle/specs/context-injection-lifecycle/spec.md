@@ -937,10 +937,17 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 
 系统 SHALL 将 AGENTS、Skill metadata/activation、团队角色/任务状态和同类动态上下文接入同一 source lifecycle。生产代码不得绕过该边界直接向模型请求追加未登记的内部 `HumanMessage`，不得让通用 read 工具承担 Skill 激活，也不得通过普通 `MessageRole.user` 创建仅用于内部状态的新 Turn。
 
+AGENTS 是自动装配的工作区来源。回放或 rewind 到其首次登记之前时，唯一恢复 owner MUST 保留已有自动跟踪声明，清空目标边界之后的 observed/applied revision 及选择序号；下一次真实 prepare 仍从本次冻结 activation 接受正文，不回读当前文件修改历史 assembly。已有明确的 untracked 状态不能借此自动恢复；显式激活的 Skill 仍按历史边界恢复 tracking，不扩展该例外。
+
 #### Scenario: AGENTS 文件变化
 
 - **WHEN** 共享file provider经SourceReconciler与ResourceDerivationGraph发布AGENTS语义revision B，而SessionThread已应用revision A
 - **THEN** 系统在该resource配置的turn或model_call activation boundary登记A→B delta并以user role追加；原root/base不被原地替换，model request路径不读盘也不运行`rg`
+
+#### Scenario: 二次回放到首轮输入前
+
+- **WHEN** 两轮真实执行后先改写第二轮，再回放至首轮输入前，目标控制快照尚无首次 prepare 登记的 AGENTS
+- **THEN** 恢复保留自动跟踪声明并清空后来 revision，下一次真实 Provider 请求成功消费冻结 AGENTS 和新输入，排除被替换历史，旧封存 assembly 原字节不变
 
 #### Scenario: 技能包文件读取与激活分离
 

@@ -293,6 +293,72 @@ async def test_live_agents_publication_appends_delta_without_changing_sealed_roo
     })
 
 
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_replay_before_first_input_preserves_automatic_agents_tracking(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = source_case
+    body = "CIL_REPLAY_AUTOMATIC_AGENTS\n"
+    files = case.container.workspace_file_resource_registry
+    (files.workspace_root / "AGENTS.md").write_text(body, encoding="utf-8")
+    session = await create_session(case.client, "AGENTS 首轮前回放")
+    await case.plan(session, [{"content": content} for content in (
+        "agents-replay-first-answer", "agents-replay-second-answer", "agents-replay-revised-answer", "agents-replay-root-answer",
+    )])
+    first = await _send(case, session, "agents-replay-first-input")
+    await _job(case, first["job_id"])
+    second = await _send(case, session, "agents-replay-second-input")
+    await _job(case, second["job_id"])
+    saver = case.container.checkpointer
+    owner = ContextSourceOwnerKey(session, first["thread_id"])
+    historical = {assembly.assembly_id: canonical_json_bytes(assembly.to_dict())
+                  for assembly in saver.list_context_assemblies(session, owner.thread_id)}
+    restored = []
+    original_rewind = saver.arewind_to_turn
+
+    async def observe_rewind(*args, **kwargs):
+        result = await original_rewind(*args, **kwargs)
+        state = next(state for state in saver.load_context_source_control_states(owner)
+                     if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
+        restored.append(state)
+        return result
+
+    monkeypatch.setattr(saver, "arewind_to_turn", observe_rewind)
+    for original, content in ((second, "agents-replay-revised-input"), (first, "agents-replay-root-input")):
+        response = await case.client.post(f"/api/v1/sessions/{session}/messages/{original['message_id']}/replay", json={
+            "action": "edit_and_continue", "content": content, "acknowledge_context_only": True,
+        })
+        assert response.status_code == 200, response.text
+        await _job(case, response.json()["data"]["job_id"])
+    assert len(restored) == 2
+    assert restored[-1].tracking_status == "tracked"
+    assert restored[-1].latest_revision is None
+    assert restored[-1].latest_visible_committed_revision is None
+    final, = [assembly for assembly in saver.list_context_assemblies(session, owner.thread_id)
+              if _has_prompt(assembly, "agents-replay-root-input")]
+    _assert_sealed_agents_facets(saver, final, body)
+    wire = case.requests()[-1]
+    assert normalize_wire_request(wire) == final.request_hash_preimage
+    text = _wire_text(_messages(wire))
+    assert "agents-replay-root-input" in text
+    assert all(excluded not in text for excluded in (
+        "agents-replay-first-input", "agents-replay-second-input", "agents-replay-revised-input",
+    ))
+    for assembly_id, original in historical.items():
+        assert canonical_json_bytes(saver.get_context_assembly(session, owner.thread_id, assembly_id=assembly_id).to_dict()) == original
+    current = next(state for state in saver.load_context_source_control_states(owner)
+                   if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
+    assert current.tracking_status == "tracked"
+    assert current.latest_revision == current.latest_visible_committed_revision == sha256_jcs({"content": body})
+    case.write_actual("agents-replay-first-input", {
+        "source_id": current.source_id, "thread_id": owner.thread_id,
+        "restored_tracking": [state.tracking_status for state in restored],
+        "cleared_before_prepare": restored[-1].latest_revision is None,
+        "assembly_id": final.assembly_id, "request_hash": final.request_hash,
+        "historical_assemblies": list(historical),
+    })
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True, "terminal": True, "browser": True}], indirect=True)
 async def test_agents_full_copy_target_restores_sealed_chain_before_real_provider(

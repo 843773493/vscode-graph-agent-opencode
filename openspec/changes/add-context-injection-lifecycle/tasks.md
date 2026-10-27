@@ -543,7 +543,10 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 准确命令、源码指纹、原始输出、实际退出码、静态基线和隔离产品原件位于 `out/tests/temp/skill-source-capabilities/artifacts/`。关闭9.9，当前69/76；团队／协作延期项及其余全量验收门仍保持未完成。
 
 
-### 2026-10-27 回放至首轮的来源跟踪待排查
+### 2026-10-27 回放至首轮的自动 AGENTS 跟踪恢复
 
-- TODO：产品消息生成两轮历史后，先改写第二轮，再回放至首轮，模型准备失败于 `context-source-not-tracked: source_id=agents:workspace`；即便使用已发布 AGENTS 的 model_tool_test_workspace 仍复现。尚未修复或完成修改前基线归因，不能据此关闭来源恢复或完整执行门。
+- 初次复现：产品消息生成两轮历史后，先改写第二轮，再回放至首轮，模型准备失败于 `context-source-not-tracked: source_id=agents:workspace`；即便使用已发布 AGENTS 的 model_tool_test_workspace 仍复现。当时尚未修复，不能据此关闭来源恢复或完整执行门。
 - 原件为 `out/tests/temp/fork-item-lookup/artifacts/runs/product-007/`（主断言1 failed／其余4 passed；teardown因准备失败导致4次model call仅3次response而报错）。当前全分支定位改用第二、三轮回放及公开完整 fork 验收；这不证明首轮回放问题已解决。
+- 根因是首次 prepare 的 AGENTS registration 晚于初始 input checkpoint，恢复会把缺席于目标控制快照的来源统一设为 untracked。原恢复 owner 现保留自动 workspace_agents 已有 tracking 声明，同时清空后来 observed/applied revision 和选择序号；明确 untracked 不会恢复，Skill 仍按原规则停用。严格 register/observe、冻结 activation 正文及旧 assembly 均不改，不新增恢复链或数据库结构。
+- 最终完整候选 `4e15473a2bbef81b2dac7320b81318031c2b8633`：真实消息／二次 replay 产品用例1 passed／69.32秒，核对 rewind 后 revision 清空、真实 Provider 请求、AGENTS raw/chain facets、wire/preimage 相等和旧 sealed bytes；来源恢复／事件17 passed／21.23秒，补充 tracked AGENTS、真实 untrack mutation 及后来 Skill registration 三边界3 passed。前两组早期候选的产品源码逐字一致，既有 epoch 测试全部符号 AST 不变，按依赖复用；各组不叠加为全量验收。
+- 相关 Ruff exit0，strict validation 47项通过。10次运行的准确命令、全源码前后指纹、raw、退出码和进程组核验见 `out/tests/temp/agents-first-replay/artifacts/verification-011.json`。首次 product 测试在注册前手工 refresh 失败、首次 untracked 边界准备未持久化记录的失败原件均保留，最终使用真实首次发现和控制 mutation。业务 HTTP 是 ASGI transport，Gateway 管理来源是真实服务；未新增 Web、Windows 或 Pyright 验收，不关闭团队或完整执行门。

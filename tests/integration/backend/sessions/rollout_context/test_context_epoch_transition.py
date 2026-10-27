@@ -57,8 +57,10 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
     ContextSourceOwnerKey,
     ContextSourceRebuildState,
+    ContextSourceTrackingStatus,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
@@ -476,6 +478,43 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_re
     assert (skill_delta.kind, skill_delta.content) == ("rebuild", "v2\n")
     assert case.manager.prepare_pending() is None
     assert canonical_json_bytes(case.snapshot(second).to_dict()) == second_bytes
+
+
+@pytest.mark.parametrize(("source_kind", "tracking", "expected"), (
+    ("workspace_agents", "tracked", "tracked"),
+    ("workspace_agents", "untracked", "untracked"),
+    ("skill", "tracked", "untracked"),
+))
+def test_rewind_before_registration_preserves_only_automatic_agents_tracking(
+    epoch_case: EpochCase, source_kind: str,
+    tracking: ContextSourceTrackingStatus, expected: ContextSourceTrackingStatus,
+) -> None:
+    case = epoch_case
+    descriptor = ContextSourceDescriptor(
+        source_id="late:source", source_kind=source_kind, name="late-source",
+        description="目标 checkpoint 之后登记的来源", internal_locator="/绝不读取/late",
+        resource_uri="boxteam://workspace/test/resources/late", root_placement="root_eligible",
+    )
+    case.manager.register(descriptor, tracking_status="tracked")
+    case.manager.observe(descriptor.source_id, "后来的正文", revision="late:1")
+    if tracking == "untracked":
+        registered = next(state for state in case.saver.load_context_source_control_states(case.owner)
+                          if state.source_id == descriptor.source_id)
+        case.saver.apply_context_source_control_mutation(ContextSourceControlMutation(
+            operation="untrack", state=replace(registered, tracking_status="untracked"),
+        ))
+    assert case.connection.execute(
+        "SELECT count(*) FROM checkpoint_context_source_states WHERE checkpoint_id=? AND source_id=?",
+        ("checkpoint-first", descriptor.source_id),
+    ).fetchone() == (0,)
+    before = canonical_json_bytes(case.snapshot(case.first).to_dict())
+    case.rewind("checkpoint-first")
+    state = next(state for state in case.saver.load_context_source_control_states(case.owner)
+                 if state.source_id == descriptor.source_id)
+    assert state.tracking_status == expected
+    assert state.latest_revision is state.latest_visible_committed_revision is None
+    assert state.selection_sequence == state.latest_visible_selection_sequence == 0
+    assert canonical_json_bytes(case.snapshot(case.first).to_dict()) == before
 
 
 def test_rebuild_rejects_state_header_mismatch_without_committing(epoch_case, monkeypatch):
