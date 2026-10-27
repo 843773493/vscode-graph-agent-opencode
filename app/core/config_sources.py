@@ -10,6 +10,8 @@ from typing import Literal
 
 import commentjson
 
+from app.core.resource_uri import parse_resource_uri
+
 logger = logging.getLogger(__name__)
 
 ConfigSourceLayer = Literal[
@@ -21,6 +23,21 @@ ConfigSourceLayer = Literal[
 ]
 # 配置来源的存在性闭集：present 表示来源实际存在，absent 表示已探测但不含内容。
 ConfigSourcePresence = Literal["present", "absent"]
+
+
+def validate_config_source_uri(uri: str | None) -> str | None:
+    """来源与 schema 复用唯一 URI grammar；不可寻址来源保留显式 None。"""
+    if uri is None:
+        return None
+    try:
+        parsed = parse_resource_uri(uri)
+        if parsed.kind != "config":
+            raise ValueError("配置来源引用必须指向 config 资源")
+    except ValueError:
+        # 普通错误只含 grammar 规则；非法原值仅留在具名原始诊断入口。
+        logger.exception("配置来源 URI 合同错误: uri=%r", uri)
+        raise
+    return uri
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +56,9 @@ class ConfigSource:
     layer_revision: int | None = None
     layer_digest: str | None = None
     source_generation: int | None = None
+
+    def __post_init__(self) -> None:
+        validate_config_source_uri(self.uri)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.config_sources import ConfigSourceLayer
+from app.core.config_sources import ConfigSourceLayer, validate_config_source_uri
 
 
 class GatewayConfigReloadStatusDTO(BaseModel):
@@ -114,6 +114,8 @@ class GatewayConfigEventsDTO(BaseModel):
 
 
 class GatewayConfigSourceDTO(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     uri: str | None
     layer: ConfigSourceLayer
     precedence: int
@@ -123,10 +125,14 @@ class GatewayConfigSourceDTO(BaseModel):
     layer_revision: int | None = None
     layer_digest: str | None = None
     source_generation: int | None = None
+    _uri = field_validator("uri")(validate_config_source_uri)
 
 
 class GatewayConfigSourcesDTO(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     revision: str
     schema_uri: str | None
     sources: list[GatewayConfigSourceDTO] = Field(default_factory=list)
     policy_manifest: list[dict[str, object]] = Field(default_factory=list)
+    _schema_uri = field_validator("schema_uri")(validate_config_source_uri)

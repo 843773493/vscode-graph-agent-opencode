@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config_sources import (
+    ConfigSource,
     parse_stable_config_file,
     read_stable_config_file,
     verify_stable_config_file,
@@ -156,3 +157,32 @@ def test_invalid_utf8_reports_byte_offset_without_document(config_file: Path) ->
 def test_jsonc_comments_trailing_comma_and_unicode_keep_same_values(config_file: Path) -> None:
     config_file.write_text('{\n// 注释\n"值": [1, true,],\n}', encoding="utf-8")
     assert parse_stable_config_file(read_stable_config_file(config_file)) == {"值": [1, True]}
+
+
+@pytest.mark.parametrize("uri", [
+    "/private-config/workspace.jsonc", r"C:\private-config\workspace.jsonc",
+    r"\\server\private-config\workspace.jsonc", "file:///private-config/workspace.jsonc",
+    "workspace.jsonc", "", "boxteam://workspace/ws_a/resources/files/root/workspace.jsonc",
+])
+def test_source_constructor_and_replace_reject_native_or_wrong_kind_uri(
+    uri: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = ConfigSource(uri=None, layer="runtime_override", precedence=4, loaded=True)
+    with pytest.raises(ValueError) as created:
+        ConfigSource(uri=uri, layer="inline", precedence=0, loaded=True)
+    with pytest.raises(ValueError) as replaced:
+        replace(source, uri=uri)
+    assert str(created.value) == str(replaced.value)
+    if uri:
+        assert uri not in str(created.value)
+    assert source.uri is None
+    assert [record.args for record in caplog.records] == [(uri,), (uri,)]
+
+
+@pytest.mark.parametrize("uri", [
+    None, "boxteam://inline/boxteam_v1/resources/config/workspace_inline",
+    "boxteam://gateway_remote/workspace/ws_a/resources/config/workspace_override",
+])
+def test_source_keeps_logical_uri_or_explicit_null_without_resolving(uri: str | None) -> None:
+    source = ConfigSource(uri=uri, layer="inline", precedence=0, loaded=True)
+    assert source.uri == uri and replace(source, loaded=False).uri == uri
