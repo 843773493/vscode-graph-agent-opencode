@@ -206,6 +206,41 @@ async def test_context_only_task_is_saved_once_and_real_user_consumes_it(source_
 
 
 @pytest.mark.asyncio
+async def test_session_task_query_uses_current_goal_work_judge_and_trigger_references(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    work_id, _, work_uri = await _target(case)
+    judge_id, _, judge_uri = await _target(case)
+    other_id, _, other_uri = await _target(case)
+    response = await case.client.put(f"/api/v1/sessions/{work_id}/goal", json={"objective": "会话关联目标", "status": "paused"})
+    assert response.status_code == 200, response.text
+    goal = response.json()["data"]
+    configuration = _configuration(work_uri)
+    configuration["condition"] = {"type_id": "builtin.model", "version": "1", "model": {"thread_uri": judge_uri, "instruction": "只在触发后判断"}}
+    task = await _create(case, configuration)
+    source_configuration = _configuration(other_uri)
+    source_configuration["trigger"].update({"type_id": "builtin.execution_end", "source_uri": judge_uri})
+    source_task = await _create(case, source_configuration, key="execution-source")
+
+    async def related(session_id: str) -> dict:
+        response = await case.client.get(ROOT, params={"session_id": session_id})
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        return {item["task_id"]: item for item in response.json()["data"]["items"]}
+
+    assert set(await related(work_id)) == {goal["goal_id"], task["task_id"]}
+    assert set(await related(judge_id)) == {task["task_id"], source_task["task_id"]}
+    assert set(await related(other_id)) == {source_task["task_id"]}
+    assert (await related(work_id))[goal["goal_id"]]["goal"] == goal
+    changed = deepcopy(task["configuration"])
+    changed["action"]["target_uri"] = other_uri
+    response = await case.client.put(f"{ROOT}/{task['task_id']}", json={"expected_revision": task["revision"], "configuration": changed})
+    assert response.status_code == 200, response.text
+    assert set(await related(work_id)) == {goal["goal_id"]}
+    assert set(await related(other_id)) == {task["task_id"], source_task["task_id"]}
+    assert case.requests() == []
+
+
+@pytest.mark.asyncio
 async def test_run_inspection_uses_frozen_definition_after_target_and_content_edit(source_case: RuntimeSourceCase) -> None:
     case = source_case
     session_id, thread_id, target = await _target(case)

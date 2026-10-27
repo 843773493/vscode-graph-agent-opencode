@@ -21,12 +21,12 @@ async function request<T>(port: number, target: GatewayWorkspaceRequestTarget, p
   }));
 }
 
-export async function listPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal) {
-  return snapshot(await request<unknown>(port, target, "", signal)).items;
+export async function listPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, sessionId?: string) {
+  return snapshot(await request<unknown>(port, target, sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "", signal)).items;
 }
 
-export async function watchPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (items: PersistentTaskDTO[]) => void) {
-  const response = await requestGatewayResponse(port, root + "/events", {
+export async function watchPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (items: PersistentTaskDTO[]) => void, sessionId?: string) {
+  const response = await requestGatewayResponse(port, root + "/events" + (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""), {
     signal, headers: { ...gatewayWorkspaceRequestHeaders(target), accept: "text/event-stream" }, cache: "no-store",
   });
   await consumeSseResponse(response, { signal, events: {

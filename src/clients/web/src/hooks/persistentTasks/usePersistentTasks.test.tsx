@@ -16,15 +16,15 @@ const original: api.PersistentTaskDTO = {
 let renderer: ReactTestRenderer;
 let value: ReturnType<typeof usePersistentTasks>;
 let records: api.PersistentTaskDTO[];
-const streams: Array<{ signal: AbortSignal; publish: (items: api.PersistentTaskDTO[]) => void }> = [];
+const streams: Array<{ signal: AbortSignal; publish: (items: api.PersistentTaskDTO[]) => void; sessionId?: string }> = [];
 const restores: Array<() => void> = [];
-function Probe({ owner }: { owner: GatewayWorkspaceRequestTarget }) { value = usePersistentTasks(8014, owner); return null; }
+function Probe({ owner, sessionId }: { owner: GatewayWorkspaceRequestTarget; sessionId?: string }) { value = usePersistentTasks(8014, owner, sessionId); return null; }
 async function mount() { await act(async () => { renderer = create(<Probe owner={target} />); }); }
 
 beforeEach(() => {
   records = [original]; streams.length = 0;
-  const watch = spyOn(api, "watchPersistentTasks").mockImplementation(async (_port, _owner, signal, publish) => {
-    streams.push({ signal, publish }); publish(records);
+  const watch = spyOn(api, "watchPersistentTasks").mockImplementation(async (_port, _owner, signal, publish, sessionId) => {
+    streams.push({ signal, publish, sessionId }); publish(records);
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   });
   const list = spyOn(api, "listPersistentTasks").mockImplementation(async () => records);
@@ -32,6 +32,18 @@ beforeEach(() => {
   restores.push(() => watch.mockRestore(), () => list.mockRestore(), () => history.mockRestore());
 });
 afterEach(() => { act(() => renderer?.unmount()); restores.splice(0).forEach((restore) => restore()); });
+
+test("切换关联会话撤销旧状态流，迟到的原会话快照不能覆盖新会话", async () => {
+  await act(async () => { renderer = create(<Probe owner={target} sessionId="session-one" />); });
+  const previous = streams[0];
+  records = [];
+  await act(async () => { renderer.update(<Probe owner={target} sessionId="session-two" />); });
+  expect(previous.signal.aborted).toBe(true);
+  expect(streams[streams.length - 1].sessionId).toBe("session-two");
+  await act(async () => { previous.publish([original]); });
+  expect(value.items).toEqual([]);
+  expect(value.loaded).toBe(true);
+});
 
 test("切换后端工作区后不保留旧详情，旧订阅和动作闭包均不能回写", async () => {
   const control = spyOn(api, "controlPersistentTask").mockResolvedValue(original);

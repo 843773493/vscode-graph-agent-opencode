@@ -50,6 +50,7 @@ interface WorkbenchBottomPanelProps {
   goalSessionId: string | null;
   onManageGoal: (sessionId: string) => Promise<void>;
   onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
+  requestedTask?: { taskId: string } | null;
   onStatusChange: (text: string) => void;
 }
 
@@ -75,6 +76,7 @@ export default function WorkbenchBottomPanel({
   goalSessionId,
   onManageGoal,
   onOpenThread,
+  requestedTask,
   onStatusChange,
 }: WorkbenchBottomPanelProps) {
   if (!visible) {
@@ -132,6 +134,7 @@ export default function WorkbenchBottomPanel({
             goalSessionId={goalSessionId}
             onManageGoal={onManageGoal}
             onOpenThread={onOpenThread}
+            requestedTask={requestedTask}
             onSwitchTab={switchTab}
             onClose={close}
           />

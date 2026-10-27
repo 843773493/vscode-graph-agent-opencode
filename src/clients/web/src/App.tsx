@@ -14,6 +14,7 @@ import Composer from "./components/composer/Composer";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
 import GoalManagerCard from "./components/cards/GoalManagerCard";
+import SessionTaskSummary from "./components/workspace/persistentTasks/SessionTaskSummary";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
@@ -60,7 +61,7 @@ import {
   DEFAULT_MAIN_AREA_RATIOS,
 } from "./layout/workbenchLayout";
 import { sessionScopeKey } from "./state/session/sessionScope";
-import type { OutputDiagnostic } from "./state/workspaceBottomPanel";
+import { resolveWorkspaceBottomPanelState, toWorkspaceBottomPanelSettings, type OutputDiagnostic } from "./state/workspaceBottomPanel";
 import { getConversationsForSession } from "./state/conversations";
 import { resolveAgentSessionsPreferences } from "./state/uiSettings/preferences";
 import {
@@ -166,6 +167,8 @@ export default function AppShell() {
     }
   }, [activeSession?.session_id, selectedAttachmentPreview]);
   const bottomPanelWorkspaceId = state.activeGatewayWorkspaceId ?? activeSessionWorkspaceId;
+  const [automationTaskRequest, setAutomationTaskRequest] = useState<{ workspaceId: string; taskId: string } | null>(null);
+  const sessionTaskWorkspace = state.gatewayWorkspaces.find((workspace) => workspace.workspace_id === activeSessionWorkspaceId);
   const [outputDiagnostic, setOutputDiagnostic] = useState<{
     workspaceId: string | null;
     diagnostic: OutputDiagnostic;
@@ -1082,7 +1085,7 @@ export default function AppShell() {
                         )
                         : null
                     }
-                    goalPanel={extensionWindowRequested ? null : (
+                    goalPanel={extensionWindowRequested ? null : <>
                       <GoalManagerCard
                         key={activeSessionCacheKey ?? "no-session"}
                         sessionId={activeSession?.session_id ?? ""}
@@ -1098,7 +1101,21 @@ export default function AppShell() {
                         onUpdate={updateGoal}
                         onClear={clearGoal}
                       />
-                    )}
+                      {activeSession && sessionTaskWorkspace ? <SessionTaskSummary
+                        key={activeSessionCacheKey}
+                        apiPort={resolvedApiPort} target={sessionTaskWorkspace} sessionId={activeSession.session_id}
+                        onOpenTask={async (taskId) => {
+                          const workspaceId = sessionTaskWorkspace.workspace_id;
+                          if (workspaceId !== bottomPanelWorkspaceId) await activateGatewayWorkspace(workspaceId, activeSession.session_id);
+                          const next = { ...resolveWorkspaceBottomPanelState(state.uiSettings.layout.bottom_panel_by_workspace?.[workspaceId], bottomPanelState), visible: true, tab: "automation" as const };
+                          setWorkspaceBottomPanelStates((previous) => ({ ...previous, [workspaceId]: next }));
+                          persistUiSettings((current) => ({ layout: { bottom_panel_by_workspace: {
+                            ...current.layout.bottom_panel_by_workspace, [workspaceId]: toWorkspaceBottomPanelSettings(next),
+                          } } }));
+                          setAutomationTaskRequest({ workspaceId, taskId });
+                        }}
+                      /> : null}
+                    </>}
                     resourcePanel={(
                       extensionWindowRequested ? (
                         <GatewayExtensionResourcePanel
@@ -1321,6 +1338,7 @@ export default function AppShell() {
         onStatusChange={setStatus}
         onOpenSession={handleSelectAgentSession}
         goalSessionId={activeSessionWorkspaceId === bottomPanelWorkspaceId ? activeSession?.session_id ?? null : null}
+        requestedTask={automationTaskRequest?.workspaceId === bottomPanelWorkspaceId ? automationTaskRequest : null}
         onManageGoal={async (sessionId) => {
           if (!bottomPanelWorkspaceId) throw new Error("请先选择工作区");
           await handleSelectAgentSession(bottomPanelWorkspaceId, sessionId);

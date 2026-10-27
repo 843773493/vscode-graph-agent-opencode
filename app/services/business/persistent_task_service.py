@@ -89,8 +89,35 @@ class PersistentTaskService:
         phase = "recovering" if recovering else (pending[0].phase if pending else task.phase)
         return task.model_copy(update={"recovering": recovering, "phase": phase})
 
-    def list(self) -> list[PersistentTaskDTO]:
-        return [self.get(task.task_id) for task in self._store.list()]
+    def list(self, session_id: str | None = None) -> list[PersistentTaskDTO]:
+        tasks = self._store.list()
+        if session_id is not None:
+            generated = self._store.generated_for_session(session_id)
+            tasks = [task for task in tasks if task.task_id in generated or self._references_session(task, session_id)]
+        return [self.get(task.task_id) for task in tasks]
+
+    @staticmethod
+    def _references_session(task: PersistentTaskDTO, session_id: str) -> bool:
+        if task.goal is not None:
+            return task.goal.session_id == session_id
+        configuration = task.configuration
+        if configuration is None:
+            raise RuntimeError("自动化关联查询缺少任务定义")
+        action = configuration.action
+        uris = [configuration.trigger.source_uri]
+        if configuration.condition.model is not None:
+            uris.append(configuration.condition.model.thread_uri)
+        if isinstance(action, SessionGenerationActionDTO):
+            generation = action.generation
+            target = generation.session_strategy.target
+            if target is not None and target.workspace_id == task.workspace_id and target.session_id == session_id:
+                return True
+            source = generation.context_source
+            if source.workspace_id == task.workspace_id and source.session_id == session_id:
+                return True
+        else:
+            uris.append(action.target_uri)
+        return any(uri is not None and parse_session_thread_uri(uri)[1] == session_id for uri in uris)
 
     async def create(self, request: PersistentTaskCreateRequest) -> PersistentTaskDTO:
         self.runtime.assert_healthy()

@@ -196,6 +196,9 @@ async def test_generation_hard_restart_reuses_session_message_and_execution(
     catalog = (await case.client.get("/api/v1/session-catalog/export")).json()["data"]["items"]
     generated = [row for row in catalog if row["session"] and row["session"]["generation_origin"]]
     assert [row["session_id"] for row in generated] == [expected_session]
+    response = await case.client.get(ROOT, params={"session_id": expected_session})
+    assert response.status_code == 200, response.text
+    assert [item["task_id"] for item in response.json()["data"]["items"]] == [task["task_id"]]
     assert case.call_count(after["session_id"], after["thread_id"]) == 1
     assert "generation-original-private" in _wire_text(case.request(calls[0])["messages"])
     assert not (case.workspace / ".boxteam/generation-runs").exists()
@@ -223,6 +226,9 @@ async def test_import_retains_deleted_terminal_history_and_repeat_does_not_overw
     assert run["phase"] == "delivered" and run["trigger_key"] == "legacy-key"
     assert run["generation"]["job_id"] == "job_historical" and run["generation"]["message_id"] == "msg_historical"
     assert run["generation"]["outputs"] == [{"kind": "session", "workspace_id": workspace_id, "session_id": "ses_deleted", "title": "保留的历史标题", "navigation_path": ["原目录"]}]
+    response = await case.client.get(ROOT, params={"session_id": "ses_deleted"})
+    assert response.status_code == 200, response.text
+    assert [item["task_id"] for item in response.json()["data"]["items"]] == [task["task_id"]]
     configuration = task["configuration"]
     configuration["name"] = "导入后修改"
     changed = await case.client.put(ROOT + "/gen_historical", json={"expected_revision": 7, "configuration": configuration})

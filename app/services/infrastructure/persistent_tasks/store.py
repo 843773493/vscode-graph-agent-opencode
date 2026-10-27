@@ -123,6 +123,17 @@ class PersistentTaskStore(TaskGoals):
             return [self._view(connection, row["task_id"]) for row in rows
                     if row["application_type"] == "automation" or row["owner_session_id"] in active]
 
+    def generated_for_session(self, session_id: str) -> set[str]:
+        """关联原生成输出，不另存会话到任务的可变索引。"""
+        with closing(self._store.connection()) as connection:
+            return {row[0] for row in connection.execute(
+                "SELECT DISTINCT task_id FROM persistent_task_runs WHERE "
+                "(json_extract(generation_json,'$.kind')='action' AND json_extract(generation_json,'$.session_id')=?) "
+                "OR EXISTS (SELECT 1 FROM json_each(generation_json,'$.value.outputs') output "
+                "WHERE json_extract(output.value,'$.session_id')=? AND json_extract(output.value,'$.workspace_id')=?)",
+                (session_id, session_id, self.workspace_id),
+            )}
+
     def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
         payload = request.model_dump(mode="json")
         if request.configuration.context.mode == "event":

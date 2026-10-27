@@ -1,16 +1,9 @@
+import { taskLabel as label } from "./taskPresentation";
 import { useEffect, useState } from "react";
 import { inspectPersistentTaskRun, type PersistentTaskRunDTO, type PersistentTaskRunDetailDTO, type TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { errorMessage } from "../../../utils/errorMessage";
 
-const labels: Record<string, string> = {
-  manual: "手动", interval: "固定间隔", cron: "Cron", external: "外部通知", execution_end: "工作执行结束",
-  pending: "等待检查", checking: "正在判断", delivering: "正在投递", delivered: "已投递", checked: "检查已结束",
-  failed: "失败", suppressed: "未投递（状态已变化）", skipped: "已跳过", wait: "条件未满足", proceed: "条件满足",
-  complete: "已完成", needs_attention: "需要处理", completed: "已完成", completed_empty: "已完成（无输出）", cancelled: "已取消",
-  unknown: "结果未知或仍在执行", interrupted: "已中断",
-};
-const label = (value: string) => labels[value] ?? value;
 const time = (value: string | undefined) => value ? new Date(value).toLocaleString() : "—";
 
 function RunDetail({ apiPort, target, run, onOpenThread }: {

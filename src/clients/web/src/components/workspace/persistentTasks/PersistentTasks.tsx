@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { taskLabel as label } from "./taskPresentation";
+import { useEffect, useState } from "react";
 import type { PersistentTaskDTO, TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { useGenerationActivity } from "../../../hooks/persistentTasks/useGenerationActivity";
@@ -9,21 +10,15 @@ import TaskEditor, { configurationProblem, type TaskTemplate } from "./TaskEdito
 import TaskRunHistory from "./TaskRunHistory";
 import "../../../styles/workspace/persistentTasks.css";
 
-const labels: Record<string, string> = {
-  active: "已启用", paused: "已暂停", complete: "已完成", terminated: "已终止", needs_attention: "需要处理",
-  waiting_trigger: "等待触发", recovering: "恢复中", pending: "等待检查", checking: "正在判断", delivering: "正在投递",
-  delivered: "已投递", checked: "检查已结束", failed: "失败", suppressed: "未投递（状态已变化）", skipped: "已跳过",
-  wait: "条件未满足", proceed: "条件满足", blocked: "已阻塞", budget_limited: "预算已用尽",
-  manual: "手动", interval: "固定间隔", cron: "Cron", external: "外部通知", execution_end: "工作执行结束",
-};
-const label = (value: string) => labels[value] ?? value;
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : "—";
-export default function PersistentTasks({ apiPort, target, goalSessionId, onManageGoal, onStatusChange, onOpenSession, onOpenThread }: {
+export default function PersistentTasks({ apiPort, target, goalSessionId, onManageGoal, onStatusChange, onOpenSession, onOpenThread, requestedTask }: {
+  requestedTask?: { taskId: string } | null;
   apiPort: number; target: GatewayWorkspaceRequestTarget; goalSessionId: string | null;
   onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
   onManageGoal: (sessionId: string) => Promise<void>; onStatusChange: (message: string) => void; onOpenSession: (sessionId: string) => Promise<void>;
 }) {
   const state = usePersistentTasks(apiPort, target);
+  useEffect(() => { if (requestedTask) state.select(requestedTask.taskId); }, [requestedTask, state.select]);
   const activityError = useGenerationActivity(apiPort, target, state.items, state.loaded, { onStatusChange, onOpenSession });
   const confirm = useWarmConfirm();
   const [editor, setEditor] = useState<{ task: PersistentTaskDTO | null; key: string; template: TaskTemplate | null } | null>(null);

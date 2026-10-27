@@ -56,6 +56,13 @@ try {
   for (const title of ["Goal", "定时执行", "脚本条件", "模型判断", "自定义"]) assert.equal(await templates.getByRole("button", { name: title, exact: true }).count(), 1);
   await templates.getByRole("button", { name: "Goal", exact: true }).click();
   await page.getByRole("region", { name: "当前 Goal", exact: true }).getByText("同一owner的暂停目标", { exact: true }).waitFor();
+  const goalCard = page.getByRole("region", { name: "当前 Goal", exact: true });
+  await goalCard.getByRole("button", { name: "编辑", exact: true }).click();
+  const goalEditor = page.getByRole("dialog", { name: "编辑 Goal", exact: true });
+  await goalEditor.getByLabel("目标", { exact: true }).fill("同一owner的编辑目标");
+  await goalEditor.getByRole("button", { name: "保存 Goal", exact: true }).click();
+  await panel.getByRole("button", { name: /同一owner的编辑目标/ }).waitFor();
+  await page.getByRole("region", { name: "当前会话关联任务", exact: true }).getByRole("button", { name: "同一owner的编辑目标", exact: true }).waitFor();
   for (const [title, field] of [["脚本条件", "程序"], ["模型判断", "判断说明"], ["自定义", "触发方式"]]) {
     await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
     await panel.getByRole("region", { name: "选择持久任务模板", exact: true }).getByRole("button", { name: title, exact: true }).click();
@@ -174,6 +181,23 @@ try {
   panel = await openAutomation();
   await panel.getByRole("button", { name: /另一客户端修改的任务/ }).click();
   assert.match(await panel.innerText(), /已终止/);
+  await panel.getByRole("button", { name: /同一owner的编辑目标/ }).click();
+  await panel.getByRole("button", { name: "管理会话 Goal", exact: true }).click();
+  const linked = page.getByRole("region", { name: "当前会话关联任务", exact: true });
+  await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).click();
+  await panel.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
+  // 切换会话重建原owner镜像；读取失败不能显示成“没有任务”。
+  await page.locator(`[data-session-id="${fixture.otherSessionId}"]`).first().click();
+  await linked.getByText("当前会话没有关联任务。", { exact: true }).waitFor();
+  assert.equal(await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).count(), 0);
+  await page.route("**/persistent-tasks/events?session_id=*", (route) => route.abort("failed"), { times: 1 });
+  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  await linked.getByRole("alert").waitFor();
+  assert.equal(await linked.getByText("当前会话没有关联任务。", { exact: true }).count(), 0);
+  await linked.getByRole("button", { name: "刷新关联任务", exact: true }).click();
+  await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).waitFor();
+  await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).click();
+  await panel.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
   assert(conflict);
   assert.deepEqual(errors, []);
   const sash = await page.getByRole("button", { name: "调整底部面板高度", exact: true }).boundingBox();

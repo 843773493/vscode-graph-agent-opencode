@@ -31,7 +31,7 @@ def browser_runner():
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "持久任务Web验收需要Chromium"
 
-    async def run(case, client, *, target_uri, title):
+    async def run(case, client, *, target_uri, title, other_session_id):
         artifacts = case.context.artifacts_dir / "browser"
         artifacts.mkdir()
         command = ["bun", "tests/integration/clients/web/persistent_tasks/management.mjs"]
@@ -40,7 +40,7 @@ def browser_runner():
             env={**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                  "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
                      "baseUrl": str(client.base_url), "workspaceId": case.mount.workspace_id,
-                     "targetUri": target_uri, "sessionTitle": title,
+                     "targetUri": target_uri, "sessionTitle": title, "otherSessionId": other_session_id,
                  })})
         (artifacts / "browser.raw").write_text(result.stdout + result.stderr, encoding="utf-8")
         (artifacts / "receipt.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}))
@@ -64,9 +64,10 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         response = await client.put(f"/api/v1/sessions/{session}/goal", json={"objective": "同一owner的暂停目标", "status": "paused"})
         assert response.status_code == 200, response.text
         goal = response.json()["data"]
+        other_session = await create_session(client, "无关联任务的另一个会话")
         before_preview = await client.get("/api/v1/session-catalog/export")
         assert before_preview.status_code == 200, before_preview.text
-        result = await browser_runner(case, client, target_uri=thread_resource_uri(case.mount.workspace_id, session, thread), title=title)
+        result = await browser_runner(case, client, target_uri=thread_resource_uri(case.mount.workspace_id, session, thread), title=title, other_session_id=other_session)
         assert result["preview"]["physical_location"] == "unallocated"
         after_preview = await client.get("/api/v1/session-catalog/export")
         assert after_preview.status_code == 200, after_preview.text
@@ -88,7 +89,9 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         assert trial["phase"] == "checked" and trial["decision"]["decision"] == "proceed" and trial["delivery"] is None
         assert delivered["phase"] == "delivered" and delivered["decision"]["decision"] == "proceed"
         assert delivered["delivery"]["state"] == "saved" and delivered["delivery"]["execution_id"] is None
-        assert (await client.get(f"/api/v1/sessions/{session}/goal")).json()["data"] == goal
+        updated_goal = (await client.get(f"/api/v1/sessions/{session}/goal")).json()["data"]
+        assert updated_goal["goal_id"] == goal["goal_id"] and updated_goal["revision"] == goal["revision"] + 1
+        assert updated_goal["objective"] == "同一owner的编辑目标" and updated_goal["status"] == "paused"
         # 本次只有上下文发布与纯规则判断，不应出现模型调用或伪用户消息。
         assert list(replay.artifacts.glob("*.json")) == []
         (case.context.artifacts_dir / "actual-owner.json").write_text(json.dumps({"task": task, "runs": runs, "goal": goal}, ensure_ascii=False, indent=2))
