@@ -32,6 +32,7 @@ import { WorkspaceFileReferenceProvider } from "./components/workspace/Workspace
 import WorkspaceAuxiliaryPanel from "./components/workspace/WorkspaceAuxiliaryPanel";
 import WorkspaceAttachmentPreview from "./components/workspace/preview/WorkspaceAttachmentPreview";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -1085,9 +1086,8 @@ export default function AppShell() {
                         )
                         : null
                     }
-                    goalPanel={extensionWindowRequested ? null : <>
+                    goalPanel={extensionWindowRequested ? null : <Fragment key={activeSessionCacheKey ?? "no-session"}>
                       <GoalManagerCard
-                        key={activeSessionCacheKey ?? "no-session"}
                         sessionId={activeSession?.session_id ?? ""}
                         goal={state.currentGoalSessionId === activeSession?.session_id
                           ? state.currentGoal : null}
@@ -1102,7 +1102,6 @@ export default function AppShell() {
                         onClear={clearGoal}
                       />
                       {activeSession && sessionTaskWorkspace ? <SessionTaskSummary
-                        key={activeSessionCacheKey}
                         apiPort={resolvedApiPort} target={sessionTaskWorkspace} sessionId={activeSession.session_id}
                         onOpenTask={async (taskId) => {
                           const workspaceId = sessionTaskWorkspace.workspace_id;
@@ -1115,7 +1114,7 @@ export default function AppShell() {
                           setAutomationTaskRequest({ workspaceId, taskId });
                         }}
                       /> : null}
-                    </>}
+                    </Fragment>}
                     resourcePanel={(
                       extensionWindowRequested ? (
                         <GatewayExtensionResourcePanel

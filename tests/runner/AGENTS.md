@@ -19,7 +19,7 @@
 
 - `integration-mcp-wait-admission`通过真实Gateway、Agent、OAuth/MCP及model_stream验证用户输入与after_turn唤醒串行、活动等待阻挡删除/取消后删除不复活、终态先完成后登记不丢通知，以及原300秒期限不因成功授权续期。固定600秒/4GiB，与原等待崩溃/child恢复套件使用不同测试文件工作区；不代替完整HITL、跨Gateway或真实Provider验收。
 
-- `integration-web-persistent-tasks`经真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、另一真实客户端造成的409、管理控制与刷新保留，固定200秒/4GiB；复用既有model_stream产品装具，不代表生成器迁移、模型判断模板、跨工作区切换或完整恢复Web验收。
+- `integration-web-persistent-tasks`经真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、真实409回读、管理控制、刷新、后台恢复/失败、生成会话自动打开及跨工作区任务/Goal隔离。新增第二工作区原生运行时后，整组保护期限300秒/4GiB；保留各场景原期限，复用既有model_stream产品装具，不代替生成器迁移回退或完整模型判断验收。
 
 - `integration-runtime-context-publication` 通过真实 Session、模型准备与公开 fork 入口验证仅发布事件不创建 Job/Turn、已发送请求不变、下一次准备消费及 fork 锚点闭包；提交前/后故障经全新 Saver/dispatcher 核对冷 owner 恢复。复用 model_stream 和正式 fork watchdog，固定240秒/4GiB，不代表持久任务完整运行时、进程重启或主 Web 验收。
 
