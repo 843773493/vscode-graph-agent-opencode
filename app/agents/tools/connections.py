@@ -107,6 +107,6 @@ def create_connections_tool(context: CustomToolFactoryContext) -> BaseTool:
 
     return StructuredTool.from_function(
         coroutine=manage, name="connections.manage", args_schema=ConnectionsInput,
-        description="查询当前工作区已配置的 MCP 连接，发起连接、查询真实操作状态或断开。授权由用户通过产品入口完成；本工具不管理上游应用，不新增 Server 或返回凭据。",
+        description="查询当前工作区已配置的 MCP Server 连接，发起连接、查询真实操作状态或断开。仅处理 Server 访问授权，用户通过产品入口授权；已连接 Server 要求上游应用授权时，用 search_tools 查找该 Server 已发布的管理工具并经信封调用，保留其真实授权状态，无对应能力时明确报告不支持。本工具不新增 Server 或返回凭据，重连不能证明上游应用已授权。",
         handle_tool_error=True,
     )

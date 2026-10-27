@@ -43,6 +43,19 @@ def build_server(definitions_path: Path, receipt_path: Path) -> Server:
         receipt = {"name": name, "arguments": arguments}
         with receipt_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+        if name in {"upstream_query", "upstream_manage"}:
+            # 真实远端 owner 的应用授权需求；只提供等待事实，不伪造用户同意。
+            application = arguments["application"]
+            state = {
+                "authorization_layer": "upstream_app", "application": application,
+                "status": "authorization_required" if name == "upstream_query" else "waiting_user",
+            }
+            if name == "upstream_query":
+                state["management_tool"] = "upstream_manage"
+            return types.CallToolResult(
+                isError=name == "upstream_query", structuredContent=state,
+                content=[types.TextContent(type="text", text=json.dumps(state))],
+            )
         call_mode = arguments.get("call_mode")
         if call_mode == "disconnect":
             os._exit(0)

@@ -177,3 +177,76 @@ async def test_previously_verified_oauth_catalog_remains_discoverable_without_ex
                     projector_version=assembly.projector_version, target_format=assembly.target_format, wire_request=wire,
                 )
         assert (await client.post("/api/v1/mcp/connection-operations/known-reauthorize/cancel")).status_code == 200
+
+
+async def test_upstream_authorization_uses_published_remote_manager_without_reconnecting_server(
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan,
+):
+    async with oauth_endpoint_factory() as secure, http_schema_endpoint_factory("upstream") as endpoint:
+        endpoint.definitions.write_text(json.dumps({name: {
+            "type": "object", "properties": {"application": {"type": "string"}},
+            "required": ["application"], "additionalProperties": False,
+        } for name in ("upstream_query", "upstream_manage")}))
+        async with product_case(secure, endpoint) as (client, replay, case):
+            session = await create_session(client, "上游应用授权归实际Server")
+            response = await client.get(f"/api/v1/sessions/{session}/main-thread")
+            assert response.status_code == 200, response.text
+            thread = response.json()["data"]["thread_id"]
+            operations = [
+                ("search_tools", {"tool_ids": [
+                    "connections.manage", "mcp__schema__upstream_query", "mcp__schema__upstream_manage",
+                    "mcp__schema__invented_authorization",
+                ]}),
+                ("invoke_extension_tool", {"tool_name": "mcp__schema__upstream_query", "arguments": {"application": "code_host"}}),
+                ("invoke_extension_tool", {"tool_name": "connections.manage", "arguments": {
+                    "request": {"operation": "authorize_app", "server_id": "schema", "application": "code_host"},
+                }}),
+                ("invoke_extension_tool", {"tool_name": "mcp__schema__upstream_manage", "arguments": {"application": "code_host"}}),
+                ("invoke_extension_tool", {"tool_name": "connections.manage", "arguments": {
+                    "request": {"operation": "list", "server_id": "schema"},
+                }}),
+            ]
+            calls = discovery_plan(replay, session, thread, operations, key="upstream-authorization-owner")
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+                "message": {"content": "检查Server真实应用管理能力；上游应用授权不能用本地重连代替，不支持的能力明确报错。"},
+                "run": {"mode": "single_agent", "agent_id": "default"},
+            })
+            assert response.status_code == 200, response.text
+            await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=120)
+            records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in calls]
+            results = [message for message in records[-1]["messages"] if message["role"] == "tool"]
+            assert [message["tool_call_id"] for message in results] == [f"debug-e2e-call-{index}" for index in range(5)]
+            found = json.loads(results[0]["content"])["results"]
+            assert "重连不能证明上游应用已授权" in found[0]["description"]
+            assert [item["tool_id"] for item in found[1:3]] == ["mcp__schema__upstream_query", "mcp__schema__upstream_manage"]
+            assert found[3]["error"]["code"] == "tool-not-found" and "input_schema" not in found[3]
+            for index, expected in ((1, "authorization_required"), (3, "waiting_user")):
+                content, = results[index]["content"]
+                state = json.loads(content["text"])
+                assert state["authorization_layer"] == "upstream_app" and state["status"] == expected
+                assert state["application"] == "code_host"
+            assert "参数校验失败" in results[2]["content"]
+            local = json.loads(results[4]["content"])
+            assert local["authorization_layer"] == "server"
+            connection, = local["connections"]
+            assert connection["status"] == "ready"
+            assert [json.loads(line) for line in endpoint.receipts.read_text().splitlines()] == [
+                {"name": name, "arguments": {"application": "code_host"}}
+                for name in ("upstream_query", "upstream_manage")
+            ]
+            assert secure.exchanges == 0
+            resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
+            with RolloutCheckpointSaver(resolver.sessions_root) as saver:
+                items = saver._storage.storage.read_items(session, thread)
+                attempts = [item for item in items if item.semantic_kind == "tool_result"
+                            and item.projection_identity is not None
+                            and item.projection_identity.projection_message_id is None]
+                assert len(attempts) == 5
+                assert [item.payload["tool_outcome"] for item in attempts] == ["success", "failure", "failure", "success", "success"]
+                for item, index in zip((attempts[1], attempts[3]), (1, 3), strict=True):
+                    assert item.payload["artifact"]["structured_content"] == json.loads(results[index]["content"][0]["text"])
+                assemblies = saver.list_context_assemblies(session, thread)
+                assert len(assemblies) == len(records) == 6
+                for assembly, record in zip(assemblies, records, strict=True):
+                    assert assembly.request_hash_preimage == normalize_wire_request(record)
+                    assembly.validate_hashes()

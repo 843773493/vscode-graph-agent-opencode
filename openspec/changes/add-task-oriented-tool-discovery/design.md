@@ -117,7 +117,7 @@ HTTP Server 以可选的 `mcp.servers.<id>.oauth.redirect_uri` 显式选择标�
 
 受保护的 `/mcp/connection-operations` API 与后续本地控制目标共用同一 service。实际授权 URL 仅经 no-store 管理读取返回，code／state 仅以受保护 POST body 交给实际工作区 owner；它们只在原操作内存中传递，模型、普通操作行、SSE和会话不保存这些值。显式私有回调模型的校验失败也不把输入写入日志。标准浏览器 redirect 如何经已认证客户端送回此 POST，仍须后续产品 UI 接线，不把该 API 本身当作完整授权页面。
 
-显式 disconnect 只作用于本工作区运行态：撤销新准入、发布无该 Server 成员的目录，并核实原 active／退役 scope 关闭；不改 enabled 配置，也不删除凭据。进程重启按已启用配置创建新连接代际，对遗留非终态只核对当前就绪与原配置指纹，或明确失败／过期；不恢复旧 socket、不重放 token 交换或业务调用。终态历史不因后来重连而改写。
+显式 disconnect 只作用于本工作区运行态：撤销执行准入、以目录专用成员保留已验证定义，并核实原 active／退役 scope 关闭；不改 enabled 配置，也不删除凭据。进程重启按已启用配置创建新连接代际，对遗留非终态只核对当前就绪与原配置指纹，或明确失败／过期；不恢复旧 socket、不重放 token 交换或业务调用。终态历史不因后来重连而改写。
 
 等待记录复用现有后台工作存储／handler 和内部执行准入，按 `(session_id, thread_id, operation_id)` 关联到既有会话节点；具体文件由统一路径解析器取得，不手拼日期或全局目录。记录至少包含 deadline、操作／连接引用、最后观察状态、通知／恢复去重身份和待恢复 continuation 引用，不存储可执行代码或复制业务参数作为第二权威。
 

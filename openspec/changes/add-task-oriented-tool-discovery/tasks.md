@@ -39,7 +39,7 @@
 - [x] 5.1 通过现有本地扩展注册 connections.manage 的 list/connect/status/disconnect；贯通首次需授权时的 workspace 启动、owner publication 和必需资源冻结，使同一目录保持本地控制及其它就绪 Server 可达；使用稳定工作区／Server identity 与既有工具 operation 幂等身份，不吞掉未知授权或协议错误。
 - [x] 5.2 实现独立的连接／授权操作状态、查询和 deadline；选择现有领域持久化入口及受限凭据存储，不写入导航 catalog 或全局会话目录。
 - [x] 5.3 为受支持 MCP HTTP 授权接入标准 SDK／协议及 state/PKCE 校验；保持 stdio env／HTTP credential reference 现有行为，未知方式明确报错。
-- [ ] 5.4 将 Server 授权与上游应用授权分别路由到实际 owner；复用远端已有管理工具，不假设任意 Server 有应用目录或 OAuth 能力。
+- [x] 5.4 将 Server 授权与上游应用授权分别路由到实际 owner；复用远端已有管理工具，不假设任意 Server 有应用目录或 OAuth 能力。
 - [x] 5.5 在用户授权后真实核验 token／协议初始化／完整目录，再报告 ready；断开撤销新准入并核实资源关闭，失败保留可复查阶段。
 - [ ] 5.6 接入产品授权入口与只读状态 API，经 Gateway 透明代理；凭据／短期授权能力不进入模型、日志、SSE 或会话快照。
 - [ ] 5.7 从真实工作区启动及 Agent 入口验证首次 OAuth、多个 Server 仅一个未授权、本地 connect 可达与未知目录不虚构；验证重复 connect、错误 callback、无支持流程的 401、授权成功但 initialize/relist 失败、过期、断开失败和凭据输出边界；完成静态分析。
@@ -264,3 +264,10 @@
 - 较早tree `6f1c441e0a7669942bee2f838e3a37a0a40db826` 的012为整个MCP单元及信封196 passed／103.69秒；产品组合报告13 passed／417.56秒，但进程随后触及420秒外部保护，实际退出124，不将其记为整组成功。最终v2读取修正由014覆盖。012／014／016各4563个tracked文件核验无漂移，源码副本已清理，正式输出、raw、命令及实际退出码保留于 `out/tests/temp/mcp-discovery-policy/artifacts/`。
 - 现有 Workspace JSONC／schema 已支持 OAuth redirect_uri、env／header凭据引用及 sealed_call_timeout_seconds；沿既有覆盖层和未知字段拒绝，无需增加参数。`known-config-015` 76 passed／18.31秒覆盖安装、配置验证、策略和MCP配置。
 - 架构复查未新增源码目录或第二writer；MCP目录18个直接Python文件。既有catalog_owner增长至1136行，保留大文件残余风险，不在此切片扩展结构重构。关闭3.4／7.1，当前33/52；完整HITL、Web授权及其余未勾场景继续推进，团队／协作专项TODO不变。
+
+
+### 5.4 Server 与上游应用授权归属（2026-10-27）
+
+- 本地 connections.manage 的冻结定义明确只管理 Server 访问授权，上游应用沿统一 search_tools／信封使用该 Server 已发布的管理能力；不增加应用注册表、授权代理或第二dispatcher。未知管理目标不补造定义，非法本地应用操作按真实schema拒绝；远端isError与structuredContent保留实际层级及状态，等待用户不被描述为已授权。
+- `isolated-details-017` 经真实Gateway→Session消息→Agent→同一HTTP MCP handler验证：远端查询报告upstream_app授权需求、已发布管理工具返回waiting_user，本地不支持操作配对失败，Server仍ready，只有两次预期远端业务请求，未知目标无schema。冷canonical核对5个独立attempt的顺序／成败／结构化正文，6份真实请求与封存hash一致。model_stream仅提供模型响应，不证明外部应用OAuth或真实Provider能力。
+- 产品1 passed／76.97秒，实际退出0；受影响Ruff、生产connections模块Pyright零诊断、OpenSpec strict通过。完整暂存tree、4563文件无漂移校验、raw、准确命令及正式输出保留于 `out/tests/temp/mcp-discovery-policy/artifacts/isolated-details-017/`，源码副本已清理。修正design中断开删除成员的旧表述，与已验收的目录专用成员合同一致。关闭5.4，当前34/52；Web及完整授权入口继续未完成。
