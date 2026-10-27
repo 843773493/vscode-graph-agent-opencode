@@ -39,3 +39,5 @@
 
 2026-10-25 补齐复核：发现 fork 前缀选择仍有两条临时表 DROP 内联在 Python，已分别移入原 owner 的 SQL 目录，保持两次 execute 的顺序和原事务，不升 schema。展开新增资产后的执行 AST 与原 HEAD 完全相同；本次生产 Python AST 扫描未发现静态 DDL 字符串。候选正式 matrix 的 19 项 fork 详情/发布拒绝回归通过（33.93 秒），发行资源收集后建库/冷重开/缺失资产失败 1 项通过（3.20 秒），Ruff 通过；准确命令、受测指纹、原始输出和退出码位于 `out/tests/temp/fork_sql_cleanup_20261025/artifacts/runs/`。这次补齐修正此前“零残留”的遗漏，不代表新的全量业务验收或独立代理审查。共享合并后验证另记原件；团队与协作专项继续 TODO。
 共享版本同一正式 fork suite 为19 passed，发行资源测试1 passed；Ruff、执行 AST 等价/生产 DDL 扫描与45项 strict 均退出0，受测文件前后指纹一致、进程组无残留；共享暂存索引保持原字节。
+
+2026-10-27 归档复核：固定HEAD中1108个生产Python文件的AST扫描无静态DDL残留，包加载、迁移事务和缺失资产检查13项通过。发行副本初始化在旧schema21断言失败；持久任务已有第22版SQL迁移，现同步版本断言并核新增generation_json列与generator imports表，原冷重开和缺资产失败断言保持，定向发行验收1项通过；Ruff、Pyright及strict均退出0。最终固定tree `7656c7effd87207cb20c17cc54705f1c0f30d9c4` 与首轮只差该测试，未修改生产SQL、迁移号或执行链。各owner既有升级/fork证据按未变依赖复用，不重复全业务长测试；本次未构建完整发行包或运行Windows实机。准确命令、raw、退出码、源码指纹及复用检查见 `out/tests/temp/sqlite-assets-finalize/artifacts/verification-009.json`，14项完成且无delta spec，按原skip_specs重构范围归档。
