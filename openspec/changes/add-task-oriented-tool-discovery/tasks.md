@@ -317,3 +317,12 @@
 - 补齐固定信封本身要求审批时的精确投影；完整 archive `93d1c1d2236f56cdd2322787b720df442472f9ee` 的审批／runner 21 passed／3.91秒，覆盖同步／异步、直接结果／Command／Command列表及两个相同参数调用的独立 ID。最终仅修正新增测试的 RunnableConfig 注解／import 格式，扩大静态检查为28个文件：完整 HEAD 基线147条／当前143条 Pyright诊断，Ruff基线／当前均6条，零新增，不宣称全仓静态全绿。各组范围重叠，不累计用例数。
 - 命令、tree／逐文件指纹、raw、准确退出码、失败原件与正式产物保留在 `out/tests/temp/mcp-tool-approval/artifacts/`。保留边界场景首次失败、测试断开字段错误、读文件参数错误、隔离副本依赖链接缺失等原件；未放宽身份、顺序、期限、结果未知或 hash 断言。
 - 关闭4.4，当前42/52。4.2的跨执行持续持有、4.6的综合冷恢复／隔离、8.4的跨 Gateway 授权和8.5的真实 Provider token／缓存指标仍按原未勾项推进；本批回放与本地 HTTP 不证明真实 Provider 收益或旧 socket 可恢复。团队／协作 TODO 不变。
+
+
+### 4.6 前置：审批中硬重启与多调用历史闭合（2026-10-27）
+
+- 真实产品验收复现两层故障：等待审批尚无工具 attempt，原冷恢复没有为已提交声明写配对结果；补齐后，Delta checkpoint 替换消息又只移除末尾 anchor，留下多调用组的前半声明，触发原 seal 唯一性校验。修复归原 execution 终态事务与 checkpoint writer，不新增事实源、schema 或工具重试链；未知通知不制造 attempt、不覆盖已有结果，旧检查点保持不变。
+- 完整 tree `048c4597cae8ce584918bbb65aa9ef61d8d0df1c` 的正式 `integration-mcp-tool-approval-recovery`（`approval-restart-matrix-064`）为1 passed／102.61秒、退出0：Gateway／消息／审批生成真实等待，OS kill Backend 后原 execution_lost、迟到404、旧资格 released／未核实连接 orphaned、远端零旧请求；同 Session 新 execution 通过一项批准／一项拒绝取得唯一新连接回执。两条 runtime 未知结果与终态同 commit、原 owner／ModelCall／call ID、无虚构 attempt，以及五份真实请求 preimage／hash 均核验。独立套件固定240秒／4GiB，不把已完成 operation 或短期资格当作跨执行持续持有。
+- 最终完整 tree `3736255c08416d6a1ea16f7c6393d8c06d0658fc` 的9项恢复检查（`approval-restart-unit-final-070`）为9 passed／10.26秒，覆盖已有success／failure／cancelled／unknown结果、幂等、事务失败回滚、2／3调用的真实冷 Saver 与官方 Delta 快照替换。另29项准入／工具 checkpoint 回归（`approval-restart-admission-069`）通过／17.60秒；106项通过的扩大 carrier／seal 检查原件在060，该轮新增两用例因未声明 Delta 快照失败，修正装具后9项最终检查通过，未放宽声明唯一性。完整 archive 变异067仅还原旧消息移除逻辑，两用例分别精确检出残留成员，退出1，证明测试区分已知缺陷。
+- 六文件 Pyright 相对完整 HEAD `1f552af5e` 基线52条／当前38条，零新增；最终 Ruff 零诊断，严格 OpenSpec 校验通过。最终相对产品 tree 仅整理 TYPE_CHECKING imports 与单测上下文写法，复用未变产品行为的正式验收。失败原件、准确命令、tree／逐文件指纹、raw及退出码保留在 `out/tests/temp/mcp-tool-approval/artifacts/`；正式产品产物位于对应 archive 的 `out/tests/integration/backend/agents/test_mcp_tool_approval_recovery/`。未改Web或协议合同，不重复前端构建。
+- 进度保持42/52；4.2持续持有、4.6其余综合门、8.4跨 Gateway 授权及8.5真实 Provider 指标继续推进，团队／协作 TODO 不变。

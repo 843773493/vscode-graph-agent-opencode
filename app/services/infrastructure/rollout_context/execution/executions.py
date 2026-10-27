@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
@@ -24,6 +25,9 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
 )
 from app.domain.itemized.validation import validate_turn_transition
+from app.services.infrastructure.rollout_context.execution.terminal_helpers import (
+    execution_lost_tool_results,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     load_committed_idempotency_commit,
     read_committed_item_identities,
@@ -31,6 +35,12 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 _V2_TO_HISTORY_STATUS = {
     TurnStatus.OPEN.value: "accepted",
@@ -46,6 +56,9 @@ _V2_TO_HISTORY_STATUS = {
 
 class RolloutExecutionsMixin:
     """Execution attempt、resume/lost 与 terminal convergence owner。"""
+
+    _storage: RolloutStorage
+    _context: RolloutContextStore
 
     def converge_execution(
         self,
@@ -218,6 +231,15 @@ class RolloutExecutionsMixin:
                 session_id=session_id,
             ) as connection:
                 self._storage._require_v2_runtime(connection)
+                if outcome == ControlOutcome.EXECUTION_LOST.value:
+                    admission = self._context.executions.execution_admission(
+                        session_id, thread_id=owner_thread_id, execution_id=execution_id,
+                        checkpoint_ns=checkpoint_ns, writer_connection=connection,
+                    )
+                    items = execution_lost_tool_results(
+                        self._storage, admission, connection, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
+                        items=items,
+                    )
                 if turn_id is None:
                     connection.execute("BEGIN IMMEDIATE")
                     return self._converge_internal_execution(

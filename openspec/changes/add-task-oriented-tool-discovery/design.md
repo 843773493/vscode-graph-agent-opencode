@@ -193,6 +193,8 @@ HTTP 与 stdio Server 的配置、增删／禁用经过真实验收后可热应�
 
 turn-bound MCP 目录的原执行在首次模型发送前保留精确连接资格，由原 TurnExecutionScope 持有并在原账本登记。后继模型调用只可继承该原执行已经保留的 handle 与原期限，不因切换后产生新的 model_call_id 重新计时或扩大目录；原执行结束、期限到达或禁用／撤权后拒绝继承。model-call-bound 目录继续逐次取得当时 active 连接。此执行持有只管理短期资格，不复制模型正文或创建第二套事实来源；进程重启不能恢复旧 socket。
 
+审批中硬重启也沿原 execution 终态事务收敛：已提交却没有已确认结果的工具声明追加 runtime 未知结果，与原 ModelCall 和调用 ID 配对，不制造真实工具 attempt；已有结果及旧请求保持不变。冷恢复关闭旧审批与待用资格，新输入建立独立执行。messages view 的 anchor 仅定位整条 canonical 消息，checkpoint 替换消息时按显式 group 与 owner 移除全部成员，避免留下多工具消息的非 anchor 声明；不通过放宽配对唯一性或重放旧调用修复历史。
+
 快速重启可能早于原配置 apply claim 到期。原 ConfigService 在保持已确认 active 的同时，按该 claim 的持久期限安排启动对账；不提前抢占有效 fencing，也不把一次启动扫描当作完成恢复。到期后由原 store 标记未提交 journal 为 recovery_required、回收过期 claim，再经原 reload 锁与整体候选流水线建立新的验证／提交 attempt，保留原未提交历史。若 promotion 已提交，则从持久 active 建立新连接，原 journal 和配置事件保持 committed／applied；遗留 claim 的到期回收不依赖还有 applying 候选。对账任务归配置生命周期关闭，失败保留日志及原存储事实，不建立第二套恢复队列。
 
 切换后的旧连接清理失败是可观察的 draining/cleanup failure；不能把已经切换的配置说成「从未应用」，也不能伪报资源已释放。后台 owner 持续记录实际状态并阻止冲突替换，处理结果沿用现有配置／活动事件合同。

@@ -431,8 +431,15 @@ class RolloutCheckpointPersistenceMixin:
                     key=lambda row: strict_non_negative_int(row[2], field="context_view_items.context_ordinal"),
                 )]
                 if messages_state != "view" and locator_view is not None:
+                    # messages view 用末尾 anchor 定位完整消息。移除消息时必须
+                    # 同时移除其 typed group，不能留下多工具声明的前半组。
                     previous_items = {row[0] for row in connection.execute(
-                        "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1",
+                        "SELECT member.item_id FROM context_view_items previous "
+                        "JOIN item_catalog anchor ON anchor.item_id=previous.item_id "
+                        "JOIN item_catalog member ON member.item_id=anchor.item_id OR ("
+                        "anchor.message_group_id IS NOT NULL AND member.message_group_id=anchor.message_group_id "
+                        "AND member.execution_id=anchor.execution_id AND member.turn_id IS anchor.turn_id) "
+                        "WHERE previous.view_id=? AND previous.visible=1",
                         (locator_view[0],),
                     )}
                     removed_items = previous_items - set(batch.item_ids)

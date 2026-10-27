@@ -61,3 +61,5 @@
 - 首次SIGINT/SIGTERM请求终止套件，保留30秒升级宽限；再次中断立即强杀，原套件强杀期限不重置。POSIX按信号终止进程组；Windows用 `taskkill /T` 终止监督器进程树，并在升级阶段加 `/F`。等待监督器退出后才返回，中断仍为130，超时仍为3及原TIMEOUT回执。
 
 - `integration-extension-definition-recovery` 通过真实 Runner 发现、压缩和 fork，使用正式 fork watchdog；不代表外部 Provider 或 Web 验收。
+
+- `integration-mcp-tool-approval-recovery` 经真实 Gateway／消息／审批入口生成多工具等待，再硬退出并重启 Backend；验证旧决定失效、原资格释放、未知结果与原执行同事务归属、新执行唯一 MCP 收据及请求 hash，固定240秒／4GiB；不替代跨 execution 持续资源持有、跨 Gateway 授权或真实 Provider 验收。

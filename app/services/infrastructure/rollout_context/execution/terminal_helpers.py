@@ -3,18 +3,105 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import (
+    provider_tool_call_id,
+    software_tool_operation_id,
+)
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
     strict_text,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
+
+def execution_lost_tool_results(
+    storage: RolloutStorage, admission: ExecutionAdmission, connection: sqlite3.Connection, *,
+    turn_id: str | None, checkpoint_ns: str,
+    items: Sequence[CanonicalItemRecord],
+) -> tuple[CanonicalItemRecord, ...]:
+    """闭合已提交但没有结果的声明；恢复通知不能冒充真实工具 attempt。"""
+    session_id, thread_id, execution_id = admission.session_id, admission.thread_id, admission.execution_id
+    if admission.turn_id != turn_id:
+        raise ValueError("工具丢失通知与原 execution/Turn 不一致")
+    rows = connection.execute(
+        "SELECT item_id FROM item_catalog WHERE execution_id=? "
+        "AND semantic_kind IN ('tool_call','tool_result') ORDER BY item_sequence",
+        (execution_id,),
+    ).fetchall()
+    stored = storage.read_items(
+        session_id, thread_id, checkpoint_ns=checkpoint_ns,
+        item_ids=tuple(row[0] for row in rows), connection=connection,
+    ) if rows else ()
+    declarations: dict[tuple[str, str], str] = {}
+    results: dict[tuple[str, str], CanonicalItemRecord] = {}
+    for item in (*stored, *items):
+        if item.status != "completed" or item.semantic_kind not in {"tool_call", "tool_result"}:
+            continue
+        identity = item.projection_identity
+        if identity is None or identity.model_call_id is None:
+            raise RuntimeError("已提交工具声明/结果缺少原 ModelCall 归属")
+        model_call = identity.model_call_id
+        payload = item.payload
+        if not isinstance(payload, Mapping):
+            raise TypeError("工具丢失恢复需要完整 canonical 声明/结果")
+        if item.semantic_kind == "tool_result":
+            call_id = strict_text(item.tool_call_id, field="tool_result.tool_call_id")
+            results[(model_call, provider_tool_call_id(identity, call_id))] = item
+            continue
+        calls = payload.get("tool_calls", [payload])
+        if not isinstance(calls, list):
+            raise TypeError("工具丢失恢复的 tool_calls 必须是数组")
+        for call in calls:
+            if not isinstance(call, Mapping):
+                raise TypeError("工具丢失恢复的声明必须是对象")
+            call_id = strict_text(call.get("id", call.get("tool_call_id")), field="tool_call.id")
+            name = strict_text(call.get("name"), field="tool_call.name")
+            key = (model_call, provider_tool_call_id(identity, call_id))
+            previous = declarations.setdefault(key, name)
+            if previous != name:
+                raise RuntimeError("工具丢失恢复的原调用声明冲突")
+    recovered: list[CanonicalItemRecord] = []
+    incoming = {item.item_id for item in items}
+    for (model_call, call_id), name in declarations.items():
+        recovery_id = software_tool_operation_id(
+            "execution_lost_tool_result", session_id, thread_id, model_call, call_id,
+        )
+        item_id = f"item-{recovery_id}"
+        previous = results.get((model_call, call_id))
+        if previous is not None:
+            # 重复终态提交必须使用原通知正文与时间，不重新生成或改写真实结果。
+            if previous.item_id == item_id and item_id not in incoming:
+                recovered.append(previous)
+            continue
+        recovered.append(CanonicalItemRecord.create(
+            item_sequence=1, item_id=item_id,
+            semantic_kind="tool_result", payload_kind="tool_result", status="completed",
+            producer_ref={"producer_kind": "runtime", "producer_id": execution_id, "invocation_id": model_call},
+            payload={
+                "tool_call_id": call_id, "result_id": recovery_id, "name": name,
+                "content": "工作区后端重启，原工具调用没有已确认结果；执行是否发生未知，禁止自动重试。",
+                "tool_outcome": "unknown", "execution_confirmed": False,
+            },
+            projection_identity=ItemProjectionIdentity(model_call_id=model_call),
+            turn_id=turn_id, turn_scope="turn_member" if turn_id is not None else None,
+            message_group_id=f"message-{recovery_id}", wire_role="tool",
+        ))
+    return (*items, *recovered)
+
 
 class RolloutTerminalProjectionMixin:
     """只负责 terminal projection 所需的 durable item/view 辅助读取。"""
-
-
 
     def _ensure_active_view_turn(
         self,

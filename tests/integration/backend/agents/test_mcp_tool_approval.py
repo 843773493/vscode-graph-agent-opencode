@@ -32,15 +32,17 @@ from tests.support.api_waiters import wait_for_job_done
 
 @pytest.fixture
 def approval_plan():
-    def plan(replay, session, thread, *, direct_calls=None):
+    def plan(replay, session, thread, *, direct_calls=None, complete=True, call_offset=0):
         calls = direct_calls if direct_calls is not None else [_tool_call(
             call_index=index, name="invoke_extension_tool",
             arguments={"tool_name": "mcp__schema__probe", "arguments": {"proof": f"approval-{index}"}},
-        ) for index in (1, 2)]
+        ) for index in (call_offset + 1, call_offset + 2)]
         deltas: list[dict[str, object]] = [] if direct_calls is not None else [{"tool_calls": [_tool_call(
-            call_index=0, name="search_tools", arguments={"tool_ids": ["mcp__schema__probe"]},
+            call_index=call_offset, name="search_tools", arguments={"tool_ids": ["mcp__schema__probe"]},
         )]}]
-        deltas.extend([{"tool_calls": calls}, {"content": "工具审批已按原调用逐一结算。"}])
+        deltas.append({"tool_calls": calls})
+        if complete:
+            deltas.append({"content": "工具审批已按原调用逐一结算。"})
         interactions = []
         for index, delta in enumerate(deltas):
             entries = build_cassette(
