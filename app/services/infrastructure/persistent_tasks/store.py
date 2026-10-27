@@ -9,6 +9,7 @@ from datetime import datetime
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.identifier import create_prefixed_id
+from app.core.time_schedule import evaluate_schedule
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
@@ -22,6 +23,12 @@ from app.schemas.internal_v2.persistent_task import (
     TaskRunPhase,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+
+_INSERT_RUN = (
+    "INSERT INTO persistent_task_runs (run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,"
+    "request_id,check_only,phase,decision_json,delivery_json,error,created_at,updated_at,trigger_type,scheduled_for) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
 
 
 class PersistentTaskStore:
@@ -43,12 +50,14 @@ class PersistentTaskStore:
         ).fetchone()
         if row is None:
             raise KeyError(f"持久任务不存在: {task_id}")
+        schedule = connection.execute("SELECT next_run_at FROM persistent_task_schedules WHERE task_id=?", (task_id,)).fetchone()
         return PersistentTaskDTO(
             task_id=row["task_id"], workspace_id=row["workspace_id"], revision=row["revision"],
             definition_revision=row["definition_revision"], lifecycle=row["lifecycle"],
             configuration=PersistentTaskConfigurationDTO.model_validate_json(row["configuration_json"]),
             phase="waiting_trigger" if row["lifecycle"] == "active" else row["lifecycle"],
             reason=row["reason"], created_at=row["created_at"], updated_at=row["updated_at"],
+            next_run_at=schedule[0] if schedule else None,
         )
 
     def get(self, task_id: str) -> PersistentTaskDTO:
@@ -62,7 +71,14 @@ class PersistentTaskStore:
             ).fetchall()]
 
     def create(self, request: PersistentTaskCreateRequest, now: datetime) -> PersistentTaskDTO:
-        preimage = sha256_jcs(request.model_dump(mode="json"))
+        payload = request.model_dump(mode="json")
+        # 缺省时间配置不改变既有手动创建请求的幂等身份。
+        if request.configuration.trigger.type_id == "builtin.manual":
+            for field in ("interval_seconds", "expression", "timezone"):
+                payload["configuration"]["trigger"].pop(field)
+        if request.configuration.policies.misfire == "skip":
+            payload["configuration"]["policies"].pop("misfire")
+        preimage = sha256_jcs(payload)
         with self._transaction() as connection:
             row = connection.execute("SELECT task_id,creation_hash FROM persistent_tasks WHERE creation_key=?",
                                      (request.idempotency_key,)).fetchone()
@@ -77,6 +93,7 @@ class PersistentTaskStore:
             ))
             connection.execute("INSERT INTO persistent_task_definitions VALUES (?,1,?)",
                                (task_id, request.configuration.model_dump_json()))
+            self._set_schedule(connection, task_id, request.configuration, 1, now)
             return self._task(connection, task_id)
 
     @staticmethod
@@ -96,7 +113,23 @@ class PersistentTaskStore:
                                (task_id, revision, configuration.model_dump_json()))
             connection.execute("UPDATE persistent_tasks SET revision=revision+1,definition_revision=?,updated_at=? WHERE task_id=?",
                                (revision, now.isoformat(), task_id))
+            if task.configuration.trigger != configuration.trigger:
+                self._set_schedule(connection, task_id, configuration, revision, now)
+            else:
+                connection.execute("UPDATE persistent_task_schedules SET definition_revision=? WHERE task_id=?", (revision, task_id))
             return self._task(connection, task_id)
+
+    @staticmethod
+    def _set_schedule(connection: sqlite3.Connection, task_id: str, configuration: PersistentTaskConfigurationDTO,
+                      definition_revision: int, now: datetime) -> None:
+        schedule = configuration.trigger.schedule()
+        if schedule is None:
+            connection.execute("DELETE FROM persistent_task_schedules WHERE task_id=?", (task_id,))
+        else:
+            connection.execute("INSERT INTO persistent_task_schedules VALUES (?,?,?,?) "
+                               "ON CONFLICT(task_id) DO UPDATE SET definition_revision=excluded.definition_revision,"
+                               "anchor_at=excluded.anchor_at,next_run_at=excluded.next_run_at",
+                               (task_id, definition_revision, now.isoformat(), schedule.next_time(now).isoformat()))
 
     def control(self, task_id: str, *, expected_revision: int, lifecycle: TaskLifecycle,
                 now: datetime, reason: str | None = None) -> PersistentTaskDTO:
@@ -113,6 +146,7 @@ class PersistentTaskStore:
             run_id=row["run_id"], task_id=row["task_id"], task_revision=row["task_revision"],
             definition_revision=row["definition_revision"], trigger_key=row["trigger_key"], check_only=bool(row["check_only"]),
             request_id=row["request_id"],
+            trigger_type=row["trigger_type"], scheduled_for=row["scheduled_for"],
             phase=row["phase"], decision=TaskDecisionDTO.model_validate_json(row["decision_json"]) if row["decision_json"] else None,
             delivery=TaskDeliveryDTO.model_validate_json(row["delivery_json"]) if row["delivery_json"] else None,
             error=row["error"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -122,7 +156,7 @@ class PersistentTaskStore:
         with closing(self._store.connection()) as connection:
             self._task(connection, task_id)
             condition = "AND phase IN ('pending','checking','delivering')" if pending_only else ""
-            rows = connection.execute(f"SELECT * FROM persistent_task_runs WHERE task_id=? {condition} ORDER BY created_at,run_id",
+            rows = connection.execute(f"SELECT * FROM persistent_task_runs WHERE task_id=? {condition} ORDER BY run_sequence",
                                       (task_id,)).fetchall()
             return [self._run(row) for row in rows]
 
@@ -141,11 +175,52 @@ class PersistentTaskStore:
             if task.lifecycle != "active" and not request.check_only:
                 raise ClientStateConflictError("只有 active 持久任务可接受新动作")
             run_id = create_prefixed_id("ptrun")
-            connection.execute("INSERT INTO persistent_task_runs VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,?,?)", (
+            connection.execute(_INSERT_RUN, (
                 run_id, task_id, task.revision, task.definition_revision, request.idempotency_key, preimage,
-                request_id, int(request.check_only), now.isoformat(), now.isoformat(),
+                request_id, int(request.check_only), "pending", None, None, None, now.isoformat(), now.isoformat(), "manual", None,
             ))
             return self._run(connection.execute("SELECT * FROM persistent_task_runs WHERE run_id=?", (run_id,)).fetchone())
+
+    def schedule_due(self, now: datetime) -> list[str]:
+        """计划触发和游标一次提交；中断只会保留两者或两者均不保留。"""
+        changed: list[str] = []
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT s.* FROM persistent_task_schedules s JOIN persistent_tasks t ON t.task_id=s.task_id "
+                "WHERE t.workspace_id=? AND t.lifecycle='active' ORDER BY s.next_run_at,s.task_id", (self.workspace_id,),
+            ).fetchall()
+            for row in rows:
+                task_id = row["task_id"]
+                task = self._task(connection, task_id)
+                schedule = task.configuration.trigger.schedule()
+                if schedule is None or row["definition_revision"] != task.definition_revision:
+                    raise RuntimeError(f"持久任务计划与定义不一致: {task_id}")
+                due, skipped, following = evaluate_schedule(
+                    schedule, anchor=datetime.fromisoformat(row["anchor_at"]),
+                    candidate=datetime.fromisoformat(row["next_run_at"]), now=now,
+                    misfire=task.configuration.policies.misfire,
+                )
+                if not due and not skipped:
+                    continue
+                for scheduled_for in [*due, *skipped]:
+                    trigger_key = f"{task_id}:{schedule.kind}:{row['anchor_at']}:{scheduled_for.isoformat()}"
+                    preimage = sha256_jcs({"trigger_key": trigger_key, "definition_revision": task.definition_revision})
+                    missed = scheduled_for in skipped
+                    connection.execute(_INSERT_RUN, (
+                        create_prefixed_id("ptrun"), task_id, task.revision, task.definition_revision,
+                        trigger_key, preimage, create_prefixed_id("req"), 0, "skipped" if missed else "pending", None, None,
+                        "按 misfire=skip 跳过积压触发" if missed else None, now.isoformat(), now.isoformat(),
+                        schedule.kind, scheduled_for.isoformat(),
+                    ))
+                connection.execute("UPDATE persistent_task_schedules SET next_run_at=? WHERE task_id=?",
+                                   (following.isoformat(), task_id))
+                changed.append(task_id)
+        return changed
+
+    def next_schedule_at(self) -> datetime | None:
+        tasks = [task for task in self.list() if task.lifecycle == "active"
+                 and task.next_run_at is not None]
+        return min((task.next_run_at for task in tasks if task.next_run_at is not None), default=None)
 
     def configuration(self, run: PersistentTaskRunDTO) -> PersistentTaskConfigurationDTO:
         with closing(self._store.connection()) as connection:

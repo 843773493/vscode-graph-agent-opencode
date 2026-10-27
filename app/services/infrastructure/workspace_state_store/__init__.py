@@ -148,6 +148,7 @@ _WORKSPACE_MIGRATIONS = (
     _migrate_workspace_config_into_source_layers,
     load_sql(__package__, "workspace_state_sql/015.sql"),
     load_sql(__package__, "workspace_state_sql/016.sql"),
+    load_sql(__package__, "workspace_state_sql/017.sql"),
 )
 
 

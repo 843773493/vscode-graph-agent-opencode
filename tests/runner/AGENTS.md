@@ -36,6 +36,7 @@
 - `integration-browser-element-references` 使用真实Chromium验证辅助Browser服务的DOM引用与动作，固定60秒/4GiB；不代表Gateway或主Web产品链路验收。
 - `integration-terminal-shutdown-signals`通过真实HTTP/PTY及POSIX信号核对在途创建与关闭重试，显式就绪交付屏障保留原Worker结果，固定90秒/4GiB；不代表Windows、Gateway/主Web或整个shutdown总期限。
 - `integration-browser-checkpoint-form-state` 使用真实Chromium与HTTP表单验证检查点捕获、DOM变更后的定位、释放后恢复及大型匿名表单的扫描成本，固定60秒/4GiB；Manager落盘边界为空操作，不代表持久化或主Web验收。
+- `integration-persistent-task-schedules`经任务API、受控时钟、model_stream和真实Backend硬重启，核对interval/cron、时区、补跑、暂停恢复及原计划身份，固定240秒/4GiB；不替代脚本/模型条件、Goal/生成器迁移或主Web验收。
 - `integration-persistent-tasks-manual`通过任务 API、原 source owner 与 model_stream 核对手动触发、试运行、忙时排队、revision 以及接受后硬重启对账，固定300秒/4GiB；不代表定时、脚本/模型条件、Goal/生成器迁移或主Web验收。
 - 每个已启用 suite 都带数据段内存上限与硬超时；被上限或超时中止的套件必须以 TIMEOUT 或非零退出码报出，不得记成通过。
 - `integration-resource-operation-admission`经正式创建及原工具operation验证真实PTY/Chromium资源锁等待到期和显式重试，固定90秒/4GiB；不代表整个工具执行、Gateway/Web或Backend重启验收。

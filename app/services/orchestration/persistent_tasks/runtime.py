@@ -116,6 +116,8 @@ class PersistentTaskRuntime:
                     if running.done():
                         del self._inflight[task_id]
                         running.result()
+                for task_id in self.store.schedule_due(self.clock()):
+                    self.notify(task_id)
                 tasks = self.store.list()
                 for task in tasks:
                     if task.task_id in self._inflight:
@@ -127,7 +129,15 @@ class PersistentTaskRuntime:
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[task.task_id] = running
                 self._wake.clear()
-                await self._wake.wait()
+                next_run = self.store.next_schedule_at()
+                if next_run is None:
+                    await self._wake.wait()
+                else:
+                    delay = max(0, (next_run - self.clock()).total_seconds())
+                    try:
+                        await asyncio.wait_for(self._wake.wait(), timeout=delay)
+                    except TimeoutError:
+                        pass
         except BaseException as error:
             failure = error
             self._failure = error

@@ -8,10 +8,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.resource_uri import parse_session_thread_uri
+from app.core.time_schedule import MisfirePolicy, TimeSchedule
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 TaskLifecycle = Literal["active", "paused", "complete", "terminated", "needs_attention"]
-TaskRunPhase = Literal["pending", "checking", "delivering", "delivered", "checked", "failed", "suppressed"]
+TaskRunPhase = Literal["pending", "checking", "delivering", "delivered", "checked", "failed", "suppressed", "skipped"]
 
 
 class TaskComponentDTO(BaseModel):
@@ -21,7 +22,27 @@ class TaskComponentDTO(BaseModel):
 
 
 class TaskTriggerDTO(TaskComponentDTO):
-    type_id: Literal["builtin.manual"]
+    type_id: Literal["builtin.manual", "builtin.interval", "builtin.cron"]
+    interval_seconds: int | None = Field(default=None, ge=1)
+    expression: str | None = None
+    timezone: str = "UTC"
+
+    def schedule(self) -> TimeSchedule | None:
+        if self.type_id == "builtin.manual":
+            return None
+        kind = "interval" if self.type_id == "builtin.interval" else "cron"
+        return TimeSchedule(kind, self.interval_seconds, self.expression, self.timezone)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> TaskTriggerDTO:
+        if self.type_id == "builtin.manual" and (self.interval_seconds is not None or self.expression is not None or self.timezone != "UTC"):
+            raise ValueError("手动触发不能配置时间计划")
+        if self.type_id == "builtin.interval" and self.expression is not None:
+            raise ValueError("interval trigger 不能配置 cron expression")
+        if self.type_id == "builtin.cron" and self.interval_seconds is not None:
+            raise ValueError("cron trigger 不能配置 interval_seconds")
+        self.schedule()
+        return self
 
 
 class TaskConditionDTO(TaskComponentDTO):
@@ -51,6 +72,7 @@ class TaskPoliciesDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     completion: Literal["continuous", "after_delivery"] = "continuous"
+    misfire: MisfirePolicy = "skip"
 
 
 class PersistentTaskConfigurationDTO(BaseModel):
@@ -76,6 +98,7 @@ class PersistentTaskDTO(BaseModel):
     recovering: bool = False
     created_at: datetime
     updated_at: datetime
+    next_run_at: datetime | None = None
 
 
 class TaskDecisionDTO(BaseModel):
@@ -99,6 +122,8 @@ class PersistentTaskRunDTO(BaseModel):
     definition_revision: int
     trigger_key: str
     request_id: str | None = None
+    trigger_type: Literal["manual", "interval", "cron"] = "manual"
+    scheduled_for: datetime | None = None
     check_only: bool
     phase: TaskRunPhase
     decision: TaskDecisionDTO | None = None

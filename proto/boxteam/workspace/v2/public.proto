@@ -2635,6 +2635,9 @@ message TextMutationTransferDTO {
 message TaskTriggerDTO {
   string version = 1;
   string type_id = 2;
+  optional int64 interval_seconds = 3;
+  optional string expression = 4;
+  string timezone = 5;
 }
 
 message TaskConditionDTO {
@@ -2658,6 +2661,7 @@ message TaskActionDTO {
 
 message TaskPoliciesDTO {
   string completion = 1;
+  string misfire = 2;
 }
 
 message PersistentTaskConfigurationDTO {
@@ -2681,6 +2685,7 @@ message PersistentTaskDTO {
   bool recovering = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
+  optional google.protobuf.Timestamp next_run_at = 12;
 }
 
 message TaskDecisionDTO {
@@ -2711,6 +2716,8 @@ message PersistentTaskRunDTO {
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
   optional string request_id = 13;
+  string trigger_type = 14;
+  optional google.protobuf.Timestamp scheduled_for = 15;
 }
 
 message PersistentTaskCreateRequest {

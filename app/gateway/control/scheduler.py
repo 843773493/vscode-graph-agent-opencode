@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
-
-from croniter import croniter
+from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
+from app.core.time_schedule import TimeSchedule, evaluate_schedule
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
@@ -117,7 +115,7 @@ class SessionGeneratorScheduler:
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            await self._run_due(datetime.now(timezone.utc))
+            await self._run_due(datetime.now(UTC))
             try:
                 await asyncio.wait_for(
                     self._wake_event.wait(),
@@ -192,6 +190,10 @@ class SessionGeneratorScheduler:
         definition: GeneratorDefinitionDTO,
         now: datetime,
     ) -> tuple[list[datetime], list[datetime], datetime]:
+        trigger = definition.trigger
+        if trigger.type == "manual":
+            raise ValueError("手动生成器没有时间计划")
+        schedule = TimeSchedule(trigger.type, trigger.interval_seconds, trigger.expression, trigger.timezone)
         state = self._store.read_schedule_state(definition.generator_id)
         if state is not None and state.get("definition_revision") == definition.revision:
             raw_next = state.get("next_run_at")
@@ -201,70 +203,6 @@ class SessionGeneratorScheduler:
                 )
             candidate = datetime.fromisoformat(raw_next)
         else:
-            candidate = self._next_time(definition, definition.created_at)
-        due: list[datetime] = []
-        while candidate <= now and len(due) < 100:
-            due.append(candidate)
-            candidate = self._next_time(definition, candidate)
-        if candidate <= now:
-            if definition.policies.misfire == "catch_up":
-                return due, [], candidate
-            latest_due = self._latest_due_time(definition, now)
-            candidate = self._next_time(definition, latest_due)
-            if definition.policies.misfire == "skip":
-                return [], [latest_due], candidate
-            return [latest_due], [], candidate
-        if len(due) <= 1 or definition.policies.misfire == "catch_up":
-            return due, [], candidate
-        if definition.policies.misfire == "skip":
-            return [], [due[-1]], candidate
-        return [due[-1]], [], candidate
-
-    @staticmethod
-    def _latest_due_time(
-        definition: GeneratorDefinitionDTO,
-        now: datetime,
-    ) -> datetime:
-        trigger = definition.trigger
-        if trigger.type == "interval":
-            if trigger.interval_seconds is None:
-                raise RuntimeError(
-                    f"interval 生成器缺少 interval_seconds: {definition.generator_id}"
-                )
-            elapsed = max(0, (now - definition.created_at).total_seconds())
-            intervals = int(elapsed // trigger.interval_seconds)
-            return definition.created_at + timedelta(
-                seconds=intervals * trigger.interval_seconds
-            )
-        if trigger.type != "cron" or trigger.expression is None:
-            raise RuntimeError(
-                f"不支持的定时触发器: {definition.generator_id}/{trigger.type}"
-            )
-        zone = ZoneInfo(trigger.timezone)
-        latest = croniter(trigger.expression, now.astimezone(zone)).get_prev(datetime)
-        if latest.tzinfo is None:
-            latest = latest.replace(tzinfo=zone)
-        return latest.astimezone(timezone.utc)
-
-    @staticmethod
-    def _next_time(
-        definition: GeneratorDefinitionDTO,
-        previous: datetime,
-    ) -> datetime:
-        trigger = definition.trigger
-        if trigger.type == "interval":
-            if trigger.interval_seconds is None:
-                raise RuntimeError(
-                    f"interval 生成器缺少 interval_seconds: {definition.generator_id}"
-                )
-            return previous + timedelta(seconds=trigger.interval_seconds)
-        if trigger.type != "cron" or trigger.expression is None:
-            raise RuntimeError(
-                f"不支持的定时触发器: {definition.generator_id}/{trigger.type}"
-            )
-        zone = ZoneInfo(trigger.timezone)
-        localized_previous = previous.astimezone(zone)
-        next_local = croniter(trigger.expression, localized_previous).get_next(datetime)
-        if next_local.tzinfo is None:
-            next_local = next_local.replace(tzinfo=zone)
-        return next_local.astimezone(timezone.utc)
+            candidate = schedule.next_time(definition.created_at)
+        return evaluate_schedule(schedule, anchor=definition.created_at, candidate=candidate,
+                                 now=now, misfire=definition.policies.misfire)

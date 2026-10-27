@@ -11453,6 +11453,21 @@ export declare type TaskTriggerDTO = Message<"boxteam.workspace.v2.TaskTriggerDT
    * @generated from field: string type_id = 2;
    */
   typeId: string;
+
+  /**
+   * @generated from field: optional int64 interval_seconds = 3;
+   */
+  intervalSeconds?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string expression = 4;
+   */
+  expression?: string | undefined;
+
+  /**
+   * @generated from field: string timezone = 5;
+   */
+  timezone: string;
 };
 
 /**
@@ -11552,6 +11567,11 @@ export declare type TaskPoliciesDTO = Message<"boxteam.workspace.v2.TaskPolicies
    * @generated from field: string completion = 1;
    */
   completion: string;
+
+  /**
+   * @generated from field: string misfire = 2;
+   */
+  misfire: string;
 };
 
 /**
@@ -11659,6 +11679,11 @@ export declare type PersistentTaskDTO = Message<"boxteam.workspace.v2.Persistent
    * @generated from field: google.protobuf.Timestamp updated_at = 11;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp next_run_at = 12;
+   */
+  nextRunAt?: Timestamp | undefined;
 };
 
 /**
@@ -11797,6 +11822,16 @@ export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.Persist
    * @generated from field: optional string request_id = 13;
    */
   requestId?: string | undefined;
+
+  /**
+   * @generated from field: string trigger_type = 14;
+   */
+  triggerType: string;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp scheduled_for = 15;
+   */
+  scheduledFor?: Timestamp | undefined;
 };
 
 /**

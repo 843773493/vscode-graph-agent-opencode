@@ -2685,6 +2685,9 @@ export interface TextMutationTransferDTO {
 export interface TaskTriggerDTO {
   version: string;
   type_id: string;
+  interval_seconds?: number | undefined;
+  expression?: string | undefined;
+  timezone: string;
 }
 
 export interface TaskConditionDTO {
@@ -2708,6 +2711,7 @@ export interface TaskActionDTO {
 
 export interface TaskPoliciesDTO {
   completion: string;
+  misfire: string;
 }
 
 export interface PersistentTaskConfigurationDTO {
@@ -2731,6 +2735,7 @@ export interface PersistentTaskDTO {
   recovering: boolean;
   created_at: string | undefined;
   updated_at: string | undefined;
+  next_run_at?: string | undefined;
 }
 
 export interface TaskDecisionDTO {
@@ -2761,6 +2766,8 @@ export interface PersistentTaskRunDTO {
   created_at: string | undefined;
   updated_at: string | undefined;
   request_id?: string | undefined;
+  trigger_type: string;
+  scheduled_for?: string | undefined;
 }
 
 export interface PersistentTaskCreateRequest {
@@ -19502,7 +19509,7 @@ export const TextMutationTransferDTO: MessageFns<TextMutationTransferDTO> = {
 };
 
 function createBaseTaskTriggerDTO(): TaskTriggerDTO {
-  return { version: "", type_id: "" };
+  return { version: "", type_id: "", interval_seconds: undefined, expression: undefined, timezone: "" };
 }
 
 export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
@@ -19510,6 +19517,9 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
     return {
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+      interval_seconds: isSet(object.interval_seconds) ? globalThis.Number(object.interval_seconds) : undefined,
+      expression: isSet(object.expression) ? globalThis.String(object.expression) : undefined,
+      timezone: isSet(object.timezone) ? globalThis.String(object.timezone) : "",
     };
   },
 
@@ -19521,6 +19531,15 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
     if (message.type_id !== "") {
       obj.type_id = message.type_id;
     }
+    if (message.interval_seconds !== undefined) {
+      obj.interval_seconds = Math.round(message.interval_seconds);
+    }
+    if (message.expression !== undefined) {
+      obj.expression = message.expression;
+    }
+    if (message.timezone !== "") {
+      obj.timezone = message.timezone;
+    }
     return obj;
   },
 
@@ -19531,6 +19550,9 @@ export const TaskTriggerDTO: MessageFns<TaskTriggerDTO> = {
     const message = createBaseTaskTriggerDTO();
     message.version = object.version ?? "";
     message.type_id = object.type_id ?? "";
+    message.interval_seconds = object.interval_seconds ?? undefined;
+    message.expression = object.expression ?? undefined;
+    message.timezone = object.timezone ?? "";
     return message;
   },
 };
@@ -19658,18 +19680,24 @@ export const TaskActionDTO: MessageFns<TaskActionDTO> = {
 };
 
 function createBaseTaskPoliciesDTO(): TaskPoliciesDTO {
-  return { completion: "" };
+  return { completion: "", misfire: "" };
 }
 
 export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
   fromJSON(object: any): TaskPoliciesDTO {
-    return { completion: isSet(object.completion) ? globalThis.String(object.completion) : "" };
+    return {
+      completion: isSet(object.completion) ? globalThis.String(object.completion) : "",
+      misfire: isSet(object.misfire) ? globalThis.String(object.misfire) : "",
+    };
   },
 
   toJSON(message: TaskPoliciesDTO): unknown {
     const obj: any = {};
     if (message.completion !== "") {
       obj.completion = message.completion;
+    }
+    if (message.misfire !== "") {
+      obj.misfire = message.misfire;
     }
     return obj;
   },
@@ -19680,6 +19708,7 @@ export const TaskPoliciesDTO: MessageFns<TaskPoliciesDTO> = {
   fromPartial<I extends Exact<DeepPartial<TaskPoliciesDTO>, I>>(object: I): TaskPoliciesDTO {
     const message = createBaseTaskPoliciesDTO();
     message.completion = object.completion ?? "";
+    message.misfire = object.misfire ?? "";
     return message;
   },
 };
@@ -19770,6 +19799,7 @@ function createBasePersistentTaskDTO(): PersistentTaskDTO {
     recovering: false,
     created_at: undefined,
     updated_at: undefined,
+    next_run_at: undefined,
   };
 }
 
@@ -19789,6 +19819,7 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
       recovering: isSet(object.recovering) ? globalThis.Boolean(object.recovering) : false,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      next_run_at: isSet(object.next_run_at) ? globalThis.String(object.next_run_at) : undefined,
     };
   },
 
@@ -19827,6 +19858,9 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.next_run_at !== undefined) {
+      obj.next_run_at = message.next_run_at;
+    }
     return obj;
   },
 
@@ -19848,6 +19882,7 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     message.recovering = object.recovering ?? false;
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
+    message.next_run_at = object.next_run_at ?? undefined;
     return message;
   },
 };
@@ -19962,6 +19997,8 @@ function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
     created_at: undefined,
     updated_at: undefined,
     request_id: undefined,
+    trigger_type: "",
+    scheduled_for: undefined,
   };
 }
 
@@ -19981,6 +20018,8 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
+      trigger_type: isSet(object.trigger_type) ? globalThis.String(object.trigger_type) : "",
+      scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
     };
   },
 
@@ -20025,6 +20064,12 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     if (message.request_id !== undefined) {
       obj.request_id = message.request_id;
     }
+    if (message.trigger_type !== "") {
+      obj.trigger_type = message.trigger_type;
+    }
+    if (message.scheduled_for !== undefined) {
+      obj.scheduled_for = message.scheduled_for;
+    }
     return obj;
   },
 
@@ -20050,6 +20095,8 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.request_id = object.request_id ?? undefined;
+    message.trigger_type = object.trigger_type ?? "";
+    message.scheduled_for = object.scheduled_for ?? undefined;
     return message;
   },
 };

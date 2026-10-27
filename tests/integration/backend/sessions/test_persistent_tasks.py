@@ -41,12 +41,13 @@ def _release_match(case: ModelReplayCase, barrier_id: str) -> None:
 
 def _configuration(target: str, mode: Literal["context_only", "context_and_run"] = "context_only") -> dict:
     return {
-        "name": "服务就绪", "trigger": {"type_id": "builtin.manual", "version": "1"},
+        "name": "服务就绪", "trigger": {"type_id": "builtin.manual", "version": "1", "interval_seconds": None,
+                                      "expression": None, "timezone": "UTC"},
         "condition": {"type_id": "builtin.always", "version": "1"},
         "context": {"type_id": "builtin.literal", "version": "1", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},
-        "policies": {"completion": "continuous"},
+        "policies": {"completion": "continuous", "misfire": "skip"},
     }
 
 

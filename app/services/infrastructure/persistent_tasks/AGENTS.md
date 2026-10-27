@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-任务及运行的事务、revision、幂等和恢复索引读取。
+任务、计划游标及运行的事务、revision、幂等和恢复索引读取。
 
 # 不可修改内容
 
@@ -12,4 +12,4 @@
 
 # 规范
 
-DDL 归 WorkspaceStateStore 的 SQL 资产；运行只引用冻结定义版本，来源正文归既有 source owner。冲突与损坏明确报错。
+DDL 归 WorkspaceStateStore 的 SQL 资产；运行只引用冻结定义版本，来源正文归既有 source owner。计划触发与游标原子提交，运行按持久接受序号排序；不能用随机ID打破相同时间戳的并列。冲突与损坏明确报错。
