@@ -585,7 +585,7 @@ export type ReorderGatewayWorkspacesRequest = GeneratedReorderGatewayWorkspacesR
 
 export type WebUiMainAreaRatios = DeepRequired<WebUIMainAreaRatiosDTO>;
 
-export type WebUiBottomPanelTab = "terminal" | "output" | "ports" | "automation";
+export type WebUiBottomPanelTab = NonNullable<WebUIWorkspaceBottomPanelSettingsDTO["tab"]>;
 
 
 export type WebUiWorkspaceBottomPanelSettings =

@@ -58,6 +58,7 @@ export default defineConfig({
       input: {
         main: path.resolve(process.cwd(), "index.html"),
         preview: path.resolve(process.cwd(), "preview.html"),
+        mcpCallback: path.resolve(process.cwd(), "mcp-oauth-callback.html"),
       },
       output: {
         entryFileNames: "assets/[name].js",

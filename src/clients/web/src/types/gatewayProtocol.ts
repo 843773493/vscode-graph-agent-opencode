@@ -174,7 +174,7 @@ export type WebUIWorkspaceBottomPanelSettingsDTO = Omit<
   OptionalFields<GatewayProtocol.WebUIWorkspaceBottomPanelSettingsDTO>,
   "tab" | "terminal_id"
 > & {
-  tab?: "terminal" | "output" | "ports" | "automation";
+  tab?: "terminal" | "output" | "ports" | "automation" | "mcp";
   terminal_id?: string | null;
 };
 export type WebUILayoutSettingsDTO = Omit<

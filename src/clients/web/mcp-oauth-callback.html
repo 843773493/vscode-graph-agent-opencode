@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>MCP 授权回调</title>
+  </head>
+  <body>
+    <h1>MCP 授权回调</h1>
+    <p id="status" role="status">正在交回原授权窗口…</p>
+    <script>
+      // 不加载应用、资源或第三方代码；私有参数只交给同源原窗口。
+      const query = new URLSearchParams(window.location.search);
+      window.history.replaceState(null, "", window.location.pathname);
+      const status = document.getElementById("status");
+      if (window.opener) {
+        window.opener.postMessage({ type: "boxteam-mcp-oauth-callback:v1", code: query.get("code"), state: query.get("state") }, window.location.origin);
+        status.textContent = "已交回原窗口。请在原窗口查看实际连接与目录验证结果。";
+      } else {
+        status.setAttribute("role", "alert");
+        status.textContent = "原授权窗口已不可达。请回到工作区连接管理查看实际状态并重新发起授权。";
+      }
+    </script>
+  </body>
+</html>

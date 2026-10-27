@@ -4,6 +4,7 @@ import App from './App';
 import AppErrorBoundary from './components/shell/AppErrorBoundary';
 import { AppProvider } from './hooks';
 import WarmConfirmProvider from './components/shell/WarmConfirmProvider';
+import McpAuthorizationPage from './components/workspace/mcp/McpAuthorizationPage';
 import '@vscode/codicons/dist/codicon.css';
 import { installBoxTeamThemeRuntime } from './theme/theme';
 import './styles/foundation/theme.css';
@@ -38,6 +39,8 @@ declare global {
 
 const rootElement = document.getElementById('root');
 
+const mcpWorkspace = new URLSearchParams(window.location.search).get('mcp_workspace');
+
 if (!rootElement) {
   throw new Error('找不到前端挂载节点 #root');
 }
@@ -50,11 +53,11 @@ window.__graphAgentRoot = root;
 root.render(
   <React.StrictMode>
     <AppErrorBoundary>
-      <AppProvider>
+      {mcpWorkspace ? <McpAuthorizationPage workspaceId={mcpWorkspace} /> : <AppProvider>
         <WarmConfirmProvider>
           <App />
         </WarmConfirmProvider>
-      </AppProvider>
+      </AppProvider>}
     </AppErrorBoundary>
   </React.StrictMode>,
 );

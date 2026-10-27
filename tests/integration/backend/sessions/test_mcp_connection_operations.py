@@ -71,6 +71,10 @@ async def test_oauth_operations_replay_callback_catalog_disconnect_and_restart(
                 assert response.headers["x-request-id"] == response.json()["request_id"] == "connect-proof"
                 operation = await observe(client, "connect-intent", {"waiting_user"})
                 assert operation["connection_id"] == f"mcp-server:v1:{case.mount.workspace_id}:secure"
+                listed = await client.get("/mcp/connection-operations", headers={"X-Request-ID": "operation-list-proof"})
+                assert listed.status_code == 200, listed.text
+                assert listed.headers["x-request-id"] == listed.json()["request_id"] == "operation-list-proof"
+                assert listed.json()["data"] == [operation]
                 for identity in ("connect-intent", "joined-intent"):
                     replay = await client.post("/mcp/connection-operations", json={**request, "operation_id": identity})
                     assert replay.json()["data"]["operation_id"] == "connect-intent"
@@ -103,6 +107,8 @@ async def test_oauth_operations_replay_callback_catalog_disconnect_and_restart(
                 disconnected = await client.post("/mcp/connection-operations", json={**request, "action": "disconnect", "operation_id": "disconnect-intent"})
                 assert disconnected.status_code == 200
                 await observe(client, "disconnect-intent", {"succeeded"})
+                listed = await client.get("/mcp/connection-operations")
+                assert [item["operation_id"] for item in listed.json()["data"]] == ["disconnect-intent"]
                 servers = await client.get("/mcp/servers")
                 assert next(item for item in servers.json()["data"] if item["server_id"] == "secure")["tools"] == []
                 assert next(item for item in servers.json()["data"] if item["server_id"] == "schema")["status"] == "ready"
@@ -114,6 +120,8 @@ async def test_oauth_operations_replay_callback_catalog_disconnect_and_restart(
             async with client_factory(base_url, case) as client:
                 replay = await client.post("/mcp/connection-operations", json={**request, "operation_id": "joined-intent"})
                 assert replay.json()["data"] == complete and secure.exchanges == 1
+                listed = await client.get("/mcp/connection-operations")
+                assert [item["operation_id"] for item in listed.json()["data"]] == ["disconnect-intent"]
                 servers = await client.get("/mcp/servers")
                 assert next(item for item in servers.json()["data"] if item["server_id"] == "secure")["status"] == "ready"
 

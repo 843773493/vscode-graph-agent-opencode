@@ -1,3 +1,5 @@
+import BottomPanelTabs from "./BottomPanelTabs";
+import type { WebUiBottomPanelTab } from "../../../types/backend";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type { GatewayDiagnosticLog, GatewayDiagnostics } from "../../../types/backend";
@@ -10,10 +12,8 @@ interface GatewayLogPanelProps {
   workspaceId: string | null;
   diagnostic?: OutputDiagnostic | null;
   height: number;
+  onSwitchTab: (tab: WebUiBottomPanelTab) => void;
   onClose: () => void;
-  onOpenTerminal?: () => void;
-  onOpenPorts?: () => void;
-  onOpenAutomation?: () => void;
 }
 
 function serviceLabel(log: GatewayDiagnosticLog): string {
@@ -65,10 +65,8 @@ export default function GatewayLogPanel({
   workspaceId,
   diagnostic = null,
   height,
+  onSwitchTab,
   onClose,
-  onOpenTerminal,
-  onOpenPorts,
-  onOpenAutomation,
 }: GatewayLogPanelProps) {
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
@@ -195,48 +193,7 @@ export default function GatewayLogPanel({
       data-testid="gateway-log-panel"
     >
       <header className="gateway-log-panel-header">
-        <div className="gateway-log-panel-tabs" role="tablist" aria-label="底部面板">
-          {onOpenTerminal ? (
-            <button
-              type="button"
-              className="gateway-log-panel-tab"
-              role="tab"
-              aria-selected="false"
-              onClick={onOpenTerminal}
-            >
-              <span className="codicon codicon-terminal" aria-hidden="true" />
-              <span>终端</span>
-            </button>
-          ) : null}
-          <button type="button" className="gateway-log-panel-tab active" role="tab" aria-selected="true">
-            <span className="codicon codicon-output" aria-hidden="true" />
-            <span>输出</span>
-          </button>
-          {onOpenPorts ? (
-            <button
-              type="button"
-              className="gateway-log-panel-tab"
-              role="tab"
-              aria-selected="false"
-              onClick={onOpenPorts}
-            >
-              <span className="codicon codicon-server-environment" aria-hidden="true" />
-              <span>端口</span>
-            </button>
-          ) : null}
-          {onOpenAutomation ? (
-            <button
-              type="button"
-              className="gateway-log-panel-tab"
-              role="tab"
-              aria-selected="false"
-              onClick={onOpenAutomation}
-            >
-              <span className="codicon codicon-gear" aria-hidden="true" />
-              <span>自动化</span>
-            </button>
-          ) : null}
-        </div>
+        <BottomPanelTabs selected="output" prefix="gateway-log-panel" onSelect={onSwitchTab} />
         <div className="gateway-log-panel-toolbar">
           <label className="gateway-log-panel-filter">
             <span className="visually-hidden">筛选当前输出</span>

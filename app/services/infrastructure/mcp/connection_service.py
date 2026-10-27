@@ -76,6 +76,9 @@ class McpConnectionService:
         """真实受保护状态入口；不构造假授权链接或返回 SDK 的敏感地址。"""
         return f"/api/v1/workspaces/{self._workspace_id}/mcp/connection-operations/{operation.operation_id}"
 
+    def list_operations(self) -> list[McpConnectionOperationDTO]:
+        return self._store.latest()
+
     def start(self) -> None:
         """只对账遗留操作；不恢复旧 socket，不自动重放授权交换。"""
         if self._started or self._scope.is_closed:

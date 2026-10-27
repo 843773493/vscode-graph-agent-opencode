@@ -46,14 +46,14 @@ def product_case(recovery_case, free_tcp_port_factory):
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
     @asynccontextmanager
-    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None):
+    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, web=False, oauth_redirect_uri=None):
         home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
         install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
         payload = read_jsonc_object(path) if path.exists() else {}
         payload["mcp"] = {"servers": {
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
-            "secure": secure.configuration(),
+            "secure": secure.configuration(redirect_uri=oauth_redirect_uri or f"http://127.0.0.1:{gateway_port}/mcp-oauth-callback.html") if web else secure.configuration(),
         }}
         payload["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
         payload["llm"] = {"providers": [{
@@ -66,6 +66,10 @@ def product_case(recovery_case, free_tcp_port_factory):
         }]}
         default = payload.setdefault("agents", {}).setdefault("default", {})
         default["model"] = {"primary_provider": "control-replay", "fallback_providers": []}
+        if web:
+            # 完整页面会读取全部 Agent；每个继承的模型引用都必须指向真实回放 Provider。
+            for agent_id in read_jsonc_object(case.context.project_root / "configs/workspace_inline.jsonc")["agents"]:
+                payload["agents"].setdefault(agent_id, {})["model"] = {"primary_provider": "control-replay", "fallback_providers": []}
         default.setdefault("tools", {})["custom"] = [{"tool_id": "connections.manage"}]
         if tool_restrictions is not None:
             default["tools"].setdefault("policy", {})["restrictions"] = tool_restrictions
@@ -88,6 +92,7 @@ def product_case(recovery_case, free_tcp_port_factory):
                     default_backend_url=f"http://127.0.0.1:{backend_port}", port=gateway_port,
                     boxteam_home=home,
                     artifacts_dir=case.context.artifacts_dir / "gateway",
+                    extra_env={"BOXTEAM_WEB_ASSETS": str(case.context.project_root / "src/clients/web/dist")} if web else None,
                 )
                 try:
                     async with httpx.AsyncClient(

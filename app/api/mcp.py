@@ -73,6 +73,15 @@ def _connection_errors():
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@router.get("/connection-operations", response_model=APIResponse[list[McpConnectionOperationDTO]])
+async def list_connection_operations(
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+):
+    return APIResponse(data=service.list_operations(), request_id=request_id)
+
+
 @router.post("/connection-operations", response_model=APIResponse[McpConnectionOperationDTO])
 async def create_connection_operation(
     body: McpConnectionRequestDTO,

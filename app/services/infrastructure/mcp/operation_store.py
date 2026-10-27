@@ -36,6 +36,15 @@ class McpConnectionOperationStore:
             rows = connection.execute("SELECT * FROM mcp_connection_operations WHERE status IN ('pending', 'waiting_user', 'verifying') ORDER BY created_at").fetchall()
         return tuple(self._operation(dict(row)) for row in rows)
 
+    def latest(self) -> list[McpConnectionOperationDTO]:
+        """管理视图从原操作行读取各 Server 最近一次意图，不建立状态副本。"""
+        with closing(self._store.connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM mcp_connection_operations WHERE rowid IN "
+                "(SELECT MAX(rowid) FROM mcp_connection_operations GROUP BY server_id) ORDER BY server_id"
+            ).fetchall()
+        return [self._operation(dict(row)) for row in rows]
+
     def begin(self, *, operation_id: str, connection_id: str, server_id: str, action: str,
               configuration_ref: str, deadline: float) -> tuple[McpConnectionOperationDTO, bool]:
         """同一意图重放返回原操作；同连接同时 connect 加入原有效操作。"""

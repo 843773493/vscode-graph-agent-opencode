@@ -17,6 +17,7 @@ src/
 │   ├── http.ts                  统一鉴权、重试、超时、JSON 请求与响应解包
 │   ├── workspace*.ts            工作区、文件、资源与身份请求
 │   ├── jobs.ts, nodeDebug.ts     作业与 Node 调试请求
+│   ├── mcpConnections.ts        工作区 MCP 操作与私有回调 API
 │   ├── toolTesting.ts            工具测试请求
 │   ├── gateway/                  Gateway 会话连接、用户访问与视图状态
 │   ├── session/                  会话、目录、消息、目标、资源及活动订阅
@@ -35,6 +36,7 @@ src/
 │   ├── backend.ts, frontend.ts    手写后端 DTO 与前端视图类型
 │   ├── gatewayProtocol.ts         Gateway 协议类型
 │   ├── protocol.ts                协议类型汇总入口
+│   ├── mcpConnections.ts        工作区 MCP 操作与私有回调 API
 │   ├── toolTesting.ts              工具测试接口类型
 │   ├── openapi/                   生成的 OpenAPI schema
 │   ├── protocol_buf_generated/    生成的 Protobuf TypeScript 绑定

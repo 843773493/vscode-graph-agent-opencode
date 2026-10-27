@@ -17,6 +17,7 @@
 ```text
 src/clients/web/
 ├── index.html           # 浏览器入口
+├── mcp-oauth-callback.html # 无资源加载的私有 OAuth 回调入口
 ├── preview.html         # 可选的预览入口
 ├── package.json         # 前端依赖与脚本
 ├── tsconfig.json        # TypeScript 配置

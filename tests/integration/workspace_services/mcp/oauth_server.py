@@ -45,6 +45,7 @@ class OAuthEndpoint:
     refreshes: int = 0
     metadata: OAuthClientMetadata | None = None
     codes: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
+    authorizations: list[dict[str, str]] = field(default_factory=list, repr=False)
     access_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
     refresh_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
     private_marker: str = "private-oauth-response-must-not-leak"
@@ -87,6 +88,7 @@ class OAuthEndpoint:
             return Response(status_code=400)
         code = secrets.token_urlsafe(24)
         self.codes[code] = values
+        self.authorizations.append({**values, "code": code})
         return RedirectResponse(values["redirect_uri"] + "?" + urlencode({"code": code, "state": values["state"]}), status_code=303)
 
     async def token(self, request: Request) -> Response:

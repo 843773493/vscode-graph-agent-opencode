@@ -1,6 +1,6 @@
 # 目录用途
 
-`components/panels/bottomPanel/` 存放主窗口底部面板族的四个标签页容器：TerminalPanel（终端）、GatewayLogPanel（输出）、PortForwardPanel（端口）与 AutomationPanel（自动化）。四者共享同一套「标签栏 + 内容区」外壳布局，切换入口与面板状态由 `state/workspaceBottomPanel` 按工作区保存，数据由 App 层通过 props 传入。
+`components/panels/bottomPanel/` 存放主窗口底部面板族的五个标签页容器：TerminalPanel（终端）、GatewayLogPanel（输出）、PortForwardPanel（端口）、AutomationPanel（自动化）与 McpConnectionsPanel（MCP 连接）。五者通过 BottomPanelTabs 共享同一套「标签栏 + 内容区」外壳布局，切换入口与面板状态由 `state/workspaceBottomPanel` 按工作区保存，数据由 App 层通过 props 传入。
 
 本目录与相邻子包的边界：
 

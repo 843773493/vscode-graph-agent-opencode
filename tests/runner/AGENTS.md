@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-web-mcp-authorization` 通过真实 Chromium、Gateway、Session/Agent、同一 OAuth/MCP 资产及 model_stream 验证会话授权入口、私有弹窗回调、工作区底部标签持久化、完整定义和真实调用；固定240秒／4GiB，不代替远程 Gateway、真实 Provider 或完整后台等待恢复。
+
 - `integration-tool-discovery-policy` 通过真实 Gateway、Agent 和 HTTP MCP 核对首次发布前已禁用目标的身份、硬隐藏、配对拒绝、远端零执行及封存 request_hash，固定160秒／4GiB。
 
 - `integration-mcp-connection-wait` 经真实 Gateway、Agent、OAuth/MCP 与 model_stream 验证原配对等待、无新用户 Turn 的独立 continuation、两种激活边界及 mailbox／dispatcher 崩溃窗口，固定600秒／4GiB；不替代 Web 授权交互或真实 Provider 验收。

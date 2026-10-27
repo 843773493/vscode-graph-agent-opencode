@@ -30,7 +30,7 @@ class WebUIWorkspaceBottomPanelSettingsDTO(BaseModel):
 
     visible: bool | None = None
     height: int | None = Field(default=None, ge=190, le=520)
-    tab: Literal["terminal", "output", "ports", "automation"] | None = None
+    tab: Literal["terminal", "output", "ports", "automation", "mcp"] | None = None
     terminal_id: str | None = None
 
 

@@ -5,6 +5,7 @@ import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { OutputDiagnostic, WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import type { GatewayWorkspace } from "../../types/backend";
 
+const McpConnectionsPanel = lazy(() => import("../panels/bottomPanel/McpConnectionsPanel"));
 const GatewayLogPanel = lazy(() => import("../panels/bottomPanel/GatewayLogPanel"));
 const AutomationPanel = lazy(() => import("../panels/bottomPanel/AutomationPanel"));
 const PortForwardPanel = lazy(() => import("../panels/bottomPanel/PortForwardPanel"));
@@ -55,7 +56,7 @@ interface WorkbenchBottomPanelProps {
 }
 
 /**
- * 主窗口底部面板：拖拽分隔条加上「终端 / 端口 / 自动化 / 工作区输出」四个互斥标签。
+ * 主窗口底部面板：拖拽分隔条加上「终端 / 输出 / 端口 / 自动化 / MCP 连接」互斥标签。
  * 面板状态按工作区归属，由调用方传入；本组件只负责按当前标签渲染对应面板并回写状态。
  */
 export default function WorkbenchBottomPanel({
@@ -113,9 +114,7 @@ export default function WorkbenchBottomPanel({
               tab: "terminal",
               terminalId,
             })}
-            onSwitchToOutput={() => switchTab("output")}
-            onSwitchToPorts={() => switchTab("ports")}
-            onSwitchToAutomation={() => switchTab("automation")}
+            onSwitchTab={switchTab}
             onClose={close}
           />
         ) : state.tab === "ports" ? (
@@ -123,9 +122,7 @@ export default function WorkbenchBottomPanel({
             apiPort={apiPort}
             workspace={workspace}
             height={state.height}
-            onSwitchToTerminal={() => switchTab("terminal")}
-            onSwitchToOutput={() => switchTab("output")}
-            onSwitchToAutomation={() => switchTab("automation")}
+            onSwitchTab={switchTab}
             onClose={close}
           />
         ) : state.tab === "automation" ? (
@@ -141,20 +138,19 @@ export default function WorkbenchBottomPanel({
             onOpenConnectionManager={onOpenConnectionManager}
             onReconnectWorkspace={onReconnectWorkspace}
             onStartWorkspace={onStartWorkspace}
-            onSwitchToTerminal={() => switchTab("terminal")}
-            onSwitchToOutput={() => switchTab("output")}
-            onSwitchToPorts={() => switchTab("ports")}
+            onSwitchTab={switchTab}
             onClose={close}
           />
+        ) : state.tab === "mcp" ? (
+          <McpConnectionsPanel apiPort={apiPort} workspace={workspace} height={state.height}
+            onSwitchTab={switchTab} onClose={close} />
         ) : (
           <GatewayLogPanel
             apiPort={apiPort}
             workspaceId={workspaceId}
             diagnostic={diagnostic}
             height={state.height}
-            onOpenTerminal={() => switchTab("terminal")}
-            onOpenPorts={() => switchTab("ports")}
-            onOpenAutomation={() => switchTab("automation")}
+            onSwitchTab={switchTab}
             onClose={close}
           />
         )}

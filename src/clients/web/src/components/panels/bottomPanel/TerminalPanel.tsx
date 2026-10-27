@@ -1,3 +1,5 @@
+import BottomPanelTabs from "./BottomPanelTabs";
+import type { WebUiBottomPanelTab } from "../../../types/backend";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkspaceTerminalController } from "../../../hooks/workspace/useWorkspaceTerminalResources";
 import type { ResourceAction, ResourceThreadRef } from "../../../api/workspaceResources";
@@ -20,9 +22,7 @@ interface TerminalPanelProps {
   selectedTerminalId: string | null;
   height: number;
   onSelectTerminal: (terminalId: string) => void;
-  onSwitchToOutput: () => void;
-  onSwitchToPorts: () => void;
-  onSwitchToAutomation: () => void;
+  onSwitchTab: (tab: WebUiBottomPanelTab) => void;
   onClose: () => void;
 }
 
@@ -35,9 +35,7 @@ export default function TerminalPanel({
   selectedTerminalId,
   height,
   onSelectTerminal,
-  onSwitchToOutput,
-  onSwitchToPorts,
-  onSwitchToAutomation,
+  onSwitchTab,
   onClose,
 }: TerminalPanelProps) {
   const { items: entries, loading } = controller;
@@ -146,43 +144,7 @@ export default function TerminalPanel({
       data-testid="terminal-panel"
     >
       <header className="terminal-panel-header">
-        <div className="terminal-panel-tabs" role="tablist" aria-label="底部面板">
-          <button type="button" className="terminal-panel-tab active" role="tab" aria-selected="true">
-            <span className="codicon codicon-terminal" aria-hidden="true" />
-            <span>终端</span>
-            <span className="terminal-panel-count">{entries.length}</span>
-          </button>
-          <button
-            type="button"
-            className="terminal-panel-tab"
-            role="tab"
-            aria-selected="false"
-            onClick={onSwitchToOutput}
-          >
-            <span className="codicon codicon-output" aria-hidden="true" />
-            <span>输出</span>
-          </button>
-          <button
-            type="button"
-            className="terminal-panel-tab"
-            role="tab"
-            aria-selected="false"
-            onClick={onSwitchToPorts}
-          >
-            <span className="codicon codicon-server-environment" aria-hidden="true" />
-            <span>端口</span>
-          </button>
-          <button
-            type="button"
-            className="terminal-panel-tab"
-            role="tab"
-            aria-selected="false"
-            onClick={onSwitchToAutomation}
-          >
-            <span className="codicon codicon-gear" aria-hidden="true" />
-            <span>自动化</span>
-          </button>
-        </div>
+        <BottomPanelTabs selected="terminal" prefix="terminal-panel" onSelect={onSwitchTab} terminalCount={entries.length} />
         <div className="terminal-panel-actions">
           <span className="terminal-panel-context" title={workspaceId ?? "未选择工作区"}>
             {workspaceName || "未选择工作区"}

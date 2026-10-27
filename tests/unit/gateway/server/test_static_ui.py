@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.gateway.server.static_ui import install_static_web_ui
 def write_assets(root: Path) -> None:
     (root / "assets").mkdir(parents=True)
     (root / "index.html").write_text("<main>BoxTeam UI</main>", encoding="utf-8")
+    (root / "mcp-oauth-callback.html").write_text("<main>私有回调</main>", encoding="utf-8")
     (root / "assets" / "main.js").write_text(
         "globalThis.boxteam=true;",
         encoding="utf-8",
@@ -60,3 +62,23 @@ def test_static_ui_requires_index(tmp_path: Path) -> None:
         assert "index.html" in str(error)
     else:
         raise AssertionError("缺少 index.html 时必须快速失败")
+
+
+def test_oauth_callback_is_not_cached_and_access_log_omits_private_query(
+    static_ui_client: TestClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = static_ui_client.get("/mcp-oauth-callback.html?code=private-code&state=private-state")
+    assert response.text == "<main>私有回调</main>"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    access_logger = logging.getLogger("uvicorn.access")
+    # SDK/uvicorn 的真实集成装具会改全局日志配置；本测试注入独立收集器并完整恢复。
+    monkeypatch.setattr(access_logger, "handlers", [caplog.handler])
+    monkeypatch.setattr(access_logger, "propagate", False)
+    monkeypatch.setattr(access_logger, "disabled", False)
+    with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+        for target in ("/mcp-oauth-callback.html?code=private-code&state=private-state", "/api/gateway/workspaces?view=details"):
+            logging.getLogger("uvicorn.access").info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", target, "1.1", 200)
+    assert '"GET /mcp-oauth-callback.html HTTP/1.1" 200' in caplog.text
+    assert "private-code" not in caplog.text and "private-state" not in caplog.text
+    assert "/api/gateway/workspaces?view=details" in caplog.text

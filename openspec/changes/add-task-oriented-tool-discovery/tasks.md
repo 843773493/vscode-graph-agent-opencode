@@ -41,8 +41,8 @@
 - [x] 5.3 为受支持 MCP HTTP 授权接入标准 SDK／协议及 state/PKCE 校验；保持 stdio env／HTTP credential reference 现有行为，未知方式明确报错。
 - [x] 5.4 将 Server 授权与上游应用授权分别路由到实际 owner；复用远端已有管理工具，不假设任意 Server 有应用目录或 OAuth 能力。
 - [x] 5.5 在用户授权后真实核验 token／协议初始化／完整目录，再报告 ready；断开撤销新准入并核实资源关闭，失败保留可复查阶段。
-- [ ] 5.6 接入产品授权入口与只读状态 API，经 Gateway 透明代理；凭据／短期授权能力不进入模型、日志、SSE 或会话快照。
-- [ ] 5.7 从真实工作区启动及 Agent 入口验证首次 OAuth、多个 Server 仅一个未授权、本地 connect 可达与未知目录不虚构；验证重复 connect、错误 callback、无支持流程的 401、授权成功但 initialize/relist 失败、过期、断开失败和凭据输出边界；完成静态分析。
+- [x] 5.6 接入产品授权入口与只读状态 API，经 Gateway 透明代理；凭据／短期授权能力不进入模型、日志、SSE 或会话快照。
+- [x] 5.7 从真实工作区启动及 Agent 入口验证首次 OAuth、多个 Server 仅一个未授权、本地 connect 可达与未知目录不虚构；验证重复 connect、错误 callback、无支持流程的 401、授权成功但 initialize/relist 失败、过期、断开失败和凭据输出边界；完成静态分析。
 
 ## 6. 持久等待、精确通知与恢复
 
@@ -65,9 +65,9 @@
 
 ## 8. Web 与真实产品链路验收
 
-- [ ] 8.1 在主窗口会话流程展示产品授权入口、等待／失败／激活状态；工作区连接管理使用底部面板或既有工作区设置，状态来自后端完整对象。
-- [ ] 8.2 完成真实前端类型检查及 `bun run --cwd src/clients/web build`；只修改 Web 客户端，不预写 Electron／移动适配。
-- [ ] 8.3 沿实际 Gateway、目标工作区和页面初始化链路执行浏览器操作，验证任务搜索→连接授权→完整定义→真实 MCP 执行；授权需测试 OAuth/MCP Server 实际接收请求，不能只 mock helper 或检查健康接口。
+- [x] 8.1 在主窗口会话流程展示产品授权入口、等待／失败／激活状态；工作区连接管理使用底部面板或既有工作区设置，状态来自后端完整对象。
+- [x] 8.2 完成真实前端类型检查及 `bun run --cwd src/clients/web build`；只修改 Web 客户端，不预写 Electron／移动适配。
+- [x] 8.3 沿实际 Gateway、目标工作区和页面初始化链路执行浏览器操作，验证任务搜索→连接授权→完整定义→真实 MCP 执行；授权需测试 OAuth/MCP Server 实际接收请求，不能只 mock helper 或检查健康接口。
 - [ ] 8.4 验证 model_call 与 turn 下均能通过有效 continuation 和 after_turn 独立内部执行自动恢复，新执行冻结新目录且原 Turn 不变，无需用户再发继续；验证未过准入时的等待事实、拒绝／过期／断开错误可见、原 thread 恢复和远程 owner 回调可达性，缺少环境时记录具体未验证范围。
 - [ ] 8.5 验证同轮多个信封调用各自确认、取消和结果配对；记录完整定义输入 token、首次调用成功率、发现轮次和真实 Provider 可用时的 cached tokens，不把 mock 当缓存收益证据。
 
@@ -271,3 +271,13 @@
 - 本地 connections.manage 的冻结定义明确只管理 Server 访问授权，上游应用沿统一 search_tools／信封使用该 Server 已发布的管理能力；不增加应用注册表、授权代理或第二dispatcher。未知管理目标不补造定义，非法本地应用操作按真实schema拒绝；远端isError与structuredContent保留实际层级及状态，等待用户不被描述为已授权。
 - `isolated-details-017` 经真实Gateway→Session消息→Agent→同一HTTP MCP handler验证：远端查询报告upstream_app授权需求、已发布管理工具返回waiting_user，本地不支持操作配对失败，Server仍ready，只有两次预期远端业务请求，未知目标无schema。冷canonical核对5个独立attempt的顺序／成败／结构化正文，6份真实请求与封存hash一致。model_stream仅提供模型响应，不证明外部应用OAuth或真实Provider能力。
 - 产品1 passed／76.97秒，实际退出0；受影响Ruff、生产connections模块Pyright零诊断、OpenSpec strict通过。完整暂存tree、4563文件无漂移校验、raw、准确命令及正式输出保留于 `out/tests/temp/mcp-discovery-policy/artifacts/isolated-details-017/`，源码副本已清理。修正design中断开删除成员的旧表述，与已验收的目录专用成员合同一致。关闭5.4，当前34/52；Web及完整授权入口继续未完成。
+
+
+### 2026-10-27 Web 授权与工作区连接管理
+
+- 会话内提供非敏感管理入口，主窗口底部面板按工作区显示 MCP；完整操作对象来自原 owner，失败回读，切换目标撤销旧请求。共用标签组件替换各面板重复实现，具名用户的标签经后端保存并在刷新后恢复。
+- 独立回调页清除 query，禁止缓存及 Referer；只向同源原弹窗回传 code/state，原页面固定原 Gateway 目标与操作提交私有 POST。关闭、到期、目标切换及不可达回调均明确显示未确认。Gateway 静态访问日志仅移除该具名回调的 query，不改普通日志。
+- `web-product-032` 经真实 Gateway／Web／Agent／OAuth／MCP 为1 passed，84.74秒，实际退出0且源码无漂移：只交换一次，兄弟连接保持ready，授权后取得完整schema并真实执行；核对6份实际请求的preimage/hash、canonical归属及凭据不进入模型、会话、日志、Referer或浏览器存储。本轮回复按该轮真实用户输入所在Turn定位，不依赖历史回复数量。模型响应沿用model_stream，不证明真实Provider或跨Gateway授权。
+- `ui-state-031` 19通过；`web-types-031`、`web-build-031`和`ui-python-static-031`通过，源码无漂移。`ui-types-python-023`的6文件Pyright零诊断，受测Python未变；`ui-backend-operations-027`中连接操作8项通过，静态UI的4项通过／1项失败源于测试日志捕获；该断言修正后的`ui-backend-unit-029`为5通过。共享协议资产、首次多Server启动、未知401、错误callback、交换后初始化／目录失败、到期、断开失败及Agent入口复用5.1—5.5的具名证据，不累计重叠用例数。
+- 命令、源码指纹、raw、实际退出码和失败原件保存在 `out/tests/temp/mcp-discovery-policy/artifacts/`；正式浏览器现场在同名测试输出下的 `run-425c64d795c3`。032误用Bun不支持的语法检查入口而执行到缺少fixture，未启动浏览器；033改用Bun build仅解析脚本并通过，临时解析输出已删除。新增两个源码目录的AGENTS齐全，相关Python AST可解析；已有大型DTO和测试父目录未在本切片扩展重构。
+- 关闭5.6／5.7／8.1—8.3，当前39/52。完整HITL、child冷恢复／用户输入交错／删除期限、跨Gateway授权及其余未勾项继续推进；团队／协作专项TODO不变。

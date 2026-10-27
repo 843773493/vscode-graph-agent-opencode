@@ -52,6 +52,7 @@ export default function ChatTurnResponseBody({
   );
   const renderGroups = buildRenderGroups(visibleParts);
   const activityItems = renderGroups.flatMap((group) => group.kind === "work" ? group.items : []);
+  const hasConnectionOperation = activityItems.some((item) => item.kind === "aggregated_tool" && item.toolName === "connections.manage");
   const historyTurn = conversation.displayMode === "history" && Boolean(conversation.turnId);
   const onForkItem = conversation.displayMode === "history" && onForkConversation
     ? (itemId: string) => {
@@ -97,6 +98,8 @@ export default function ChatTurnResponseBody({
   return (
     <>
       <RewindStatusPart conversation={conversation} />
+      {workspaceId && hasConnectionOperation ? <a target="_blank" rel="noopener noreferrer"
+        href={`/?mcp_workspace=${encodeURIComponent(workspaceId)}`}>查看此工作区的 MCP 授权与连接状态</a> : null}
       {historyTurn ? (
         <TurnActivitySummary
           conversation={conversation}

@@ -1,3 +1,5 @@
+import BottomPanelTabs from "./BottomPanelTabs";
+import type { WebUiBottomPanelTab } from "../../../types/backend";
 import type { GatewayWorkspace } from "../../../types/backend";
 import type { SessionGeneratorResourcesController } from "../../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import SessionGeneratorManager from "../../agentSessions/SessionGeneratorManager";
@@ -14,9 +16,7 @@ interface AutomationPanelProps {
   onOpenConnectionManager: () => void;
   onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
-  onSwitchToTerminal: () => void;
-  onSwitchToOutput: () => void;
-  onSwitchToPorts: () => void;
+  onSwitchTab: (tab: WebUiBottomPanelTab) => void;
   onClose: () => void;
 }
 
@@ -32,9 +32,7 @@ export default function AutomationPanel({
   onOpenConnectionManager,
   onReconnectWorkspace,
   onStartWorkspace,
-  onSwitchToTerminal,
-  onSwitchToOutput,
-  onSwitchToPorts,
+  onSwitchTab,
   onClose,
 }: AutomationPanelProps) {
   return (
@@ -44,24 +42,7 @@ export default function AutomationPanel({
       data-testid="automation-panel"
     >
       <header className="automation-bottom-panel-header">
-        <div className="automation-bottom-panel-tabs" role="tablist" aria-label="底部面板">
-          <button type="button" className="automation-bottom-panel-tab" role="tab" aria-selected="false" onClick={onSwitchToTerminal}>
-            <span className="codicon codicon-terminal" aria-hidden="true" />
-            <span>终端</span>
-          </button>
-          <button type="button" className="automation-bottom-panel-tab" role="tab" aria-selected="false" onClick={onSwitchToOutput}>
-            <span className="codicon codicon-output" aria-hidden="true" />
-            <span>输出</span>
-          </button>
-          <button type="button" className="automation-bottom-panel-tab" role="tab" aria-selected="false" onClick={onSwitchToPorts}>
-            <span className="codicon codicon-server-environment" aria-hidden="true" />
-            <span>端口</span>
-          </button>
-          <button type="button" className="automation-bottom-panel-tab active" role="tab" aria-selected="true">
-            <span className="codicon codicon-gear" aria-hidden="true" />
-            <span>自动化</span>
-          </button>
-        </div>
+        <BottomPanelTabs selected="automation" prefix="automation-bottom-panel" onSelect={onSwitchTab} />
         <div className="automation-bottom-panel-actions">
           <span className="automation-bottom-panel-context" title={activeWorkspaceId ?? "未选择工作区"}>
             {workspaceName || "未选择工作区"}

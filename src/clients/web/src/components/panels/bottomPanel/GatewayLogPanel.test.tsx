@@ -103,7 +103,7 @@ test("断网时界面诊断直接显示错误详情，不依赖再次读取服�
       workspaceId="ws_a"
       height={200}
       diagnostic={{ title: "工作区甲 · 切换工作区失败", detail: "请求超时: /api/gateway/workspaces/ws_a/activate" }}
-      onClose={() => undefined}
+      onSwitchTab={() => undefined} onClose={() => undefined}
     />);
   });
   const text = JSON.stringify(renderer.toJSON());
@@ -122,7 +122,7 @@ test("界面诊断与服务日志共用输出通道，打开新错误时清除�
   let renderer!: ReactTestRenderer;
   const renderPanel = (detail: string) => <GatewayLogPanel
     apiPort={8025} workspaceId="ws_a" height={200}
-    diagnostic={{ title: "读取目录失败", detail }} onClose={() => undefined}
+    diagnostic={{ title: "读取目录失败", detail }} onSwitchTab={() => undefined} onClose={() => undefined}
   />;
   await act(async () => { renderer = create(renderPanel("首次错误")); });
   await act(async () => {
@@ -146,10 +146,10 @@ test("切换工作区后不继续显示上一个工作区的界面错误", async
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(<GatewayLogPanel apiPort={8025} workspaceId="ws_a" height={200}
-      diagnostic={{ title: "甲的错误", detail: "甲的请求超时" }} onClose={() => undefined} />);
+      diagnostic={{ title: "甲的错误", detail: "甲的请求超时" }} onSwitchTab={() => undefined} onClose={() => undefined} />);
   });
   act(() => {
-    renderer.update(<GatewayLogPanel apiPort={8025} workspaceId="ws_b" height={200} onClose={() => undefined} />);
+    renderer.update(<GatewayLogPanel apiPort={8025} workspaceId="ws_b" height={200} onSwitchTab={() => undefined} onClose={() => undefined} />);
   });
   expect(JSON.stringify(renderer.toJSON())).not.toContain("甲的请求超时");
   await flush();
@@ -167,7 +167,7 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayLogPanel apiPort={8025} workspaceId="ws_a" height={200} onClose={() => undefined} />,
+      <GatewayLogPanel apiPort={8025} workspaceId="ws_a" height={200} onSwitchTab={() => undefined} onClose={() => undefined} />,
     );
   });
   await flush();
@@ -175,7 +175,7 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
   // 第一次请求仍在途时切换工作区，触发第二次请求。
   act(() => {
     renderer.update(
-      <GatewayLogPanel apiPort={8025} workspaceId="ws_b" height={200} onClose={() => undefined} />,
+      <GatewayLogPanel apiPort={8025} workspaceId="ws_b" height={200} onSwitchTab={() => undefined} onClose={() => undefined} />,
     );
   });
   await flush();
@@ -206,7 +206,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayLogPanel apiPort={8028} workspaceId="ws_a" height={200} onClose={() => undefined} />,
+      <GatewayLogPanel apiPort={8028} workspaceId="ws_a" height={200} onSwitchTab={() => undefined} onClose={() => undefined} />,
     );
   });
   await flush();
@@ -220,7 +220,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   // 切到 ws_b：该工作区的诊断请求仍在途。
   act(() => {
     renderer.update(
-      <GatewayLogPanel apiPort={8028} workspaceId="ws_b" height={200} onClose={() => undefined} />,
+      <GatewayLogPanel apiPort={8028} workspaceId="ws_b" height={200} onSwitchTab={() => undefined} onClose={() => undefined} />,
     );
   });
   await flush();

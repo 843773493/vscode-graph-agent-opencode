@@ -9,7 +9,7 @@
 - `components/workspace/`：工作区文件与端口等面板实现，本目录的 PortForwardPanel 只做工作区端口面板的接入层。
 - `components/eventQueue/`、`components/contextInspection/`、`components/nodeDebug/`、`components/gatewayExtensions/`：各自专属面板的进一步拆分子包。
 - `components/panels/resourceTree/`：会话与 Gateway 可重连资源树的面板、行组件及其测试。
-- `components/panels/bottomPanel/`：主窗口底部面板族的终端、输出、端口与自动化标签页容器。
+- `components/panels/bottomPanel/`：主窗口底部面板族的终端、输出、端口、自动化与 MCP 连接标签页容器。
 - `components/panels/sessionPanels/`：左侧侧边栏会话面板与右侧侧边栏子会话线程面板。
 - `components/panels/inspectionPanels/`：事件视图、请求视图与 Agent State 只读诊断面板。
 - `components/overlays/`：AnchoredOverlay、WarmActionDialog、SessionNameDialog、SessionContextForkDialog 与 GatewayUserAccessMenu 等覆盖层和对话框；锚定定位实现按需加载。

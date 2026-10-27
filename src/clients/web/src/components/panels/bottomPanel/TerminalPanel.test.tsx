@@ -46,9 +46,7 @@ function panelProps(entries: WorkspaceResourceDTO[], threadTargetUnavailable = f
     selectedTerminalId: null,
     height: 240,
     onSelectTerminal: () => {},
-    onSwitchToOutput: () => {},
-    onSwitchToPorts: () => {},
-    onSwitchToAutomation: () => {},
+    onSwitchTab: () => {},
     onClose: () => {},
   };
 }

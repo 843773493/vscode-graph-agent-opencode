@@ -115,7 +115,11 @@ HTTP Server 以可选的 `mcp.servers.<id>.oauth.redirect_uri` 显式选择标�
 
 连接操作复用唯一 WorkspaceStateStore，实际新增 operations 与 intent aliases 两张表，因此 schema 从14升至15；DDL 由015.sql显式迁移。稳定连接身份由工作区与已配置 Server 组成；同一意图终态重放返回原事实，不同意图加入同一活动连接时持久记录 alias，避免重启后重新发起授权。操作期限为300秒，短 status 观察最多5000ms且不取消共享操作；期限先撤销发布资格，清理失败补全同一取消／过期终态的安全诊断，不重新开放准入。
 
-受保护的 `/mcp/connection-operations` API 与后续本地控制目标共用同一 service。实际授权 URL 仅经 no-store 管理读取返回，code／state 仅以受保护 POST body 交给实际工作区 owner；它们只在原操作内存中传递，模型、普通操作行、SSE和会话不保存这些值。显式私有回调模型的校验失败也不把输入写入日志。标准浏览器 redirect 如何经已认证客户端送回此 POST，仍须后续产品 UI 接线，不把该 API 本身当作完整授权页面。
+受保护的 `/mcp/connection-operations` API 与本地控制目标共用同一 service。GET 列表直接投影各 Server 最新的原操作行，不建立管理状态表；实际授权 URL 仅经 no-store 管理读取返回，code／state 仅以受保护 POST body 交给实际工作区 owner；它们只在原操作内存中传递，模型、普通操作行、SSE和会话不保存这些值。显式私有回调模型的校验失败也不把输入写入日志。
+
+Web 管理复用同一个工作区连接组件、hook 与 Gateway API 客户端。会话中的非敏感链接只携带 Gateway 已注册目标身份，进入管理页后先解析目标，再读取完整操作对象；主窗口底部面板提供同一管理能力并按工作区保存标签。浏览器授权由用户主动打开弹窗，Web 要求现有 `oauth.redirect_uri` 显式配置为当前客户端 origin 的 `/mcp-oauth-callback.html`；不匹配时明确报告配置要求，不能用客户端 localhost 冒充目标 owner。SDK 的 state／PKCE 校验仍归目标工作区。
+
+回调页是独立、无外部资源的 HTML，不挂载应用或工作区 Provider，不读取凭据，不写入浏览器存储；立即清除地址中的私有 query，仅向同源 opener 发送临时 code／state。原窗口同时核对精确弹窗身份与 origin，并使用打开窗口时冻结的 Gateway 目标及原 operation 提交受保护 POST。Gateway 对具名回调静态响应设置 no-store／no-referrer，并仅从其原访问日志中移除 query；其它原始诊断行为保持。页面关闭、取消、期限到达或目标切换释放监听器和窗口，不能因此报告 ready；成功与失败后均重新读取实际 owner 状态。
 
 显式 disconnect 只作用于本工作区运行态：撤销执行准入、以目录专用成员保留已验证定义，并核实原 active／退役 scope 关闭；不改 enabled 配置，也不删除凭据。进程重启按已启用配置创建新连接代际，对遗留非终态只核对当前就绪与原配置指纹，或明确失败／过期；不恢复旧 socket、不重放 token 交换或业务调用。终态历史不因后来重连而改写。
 
