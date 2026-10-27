@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.abstractions.internal_message import PreparedInternalMessage
+from app.abstractions.internal_message import (
+    PreparedInternalMessage,
+    RuntimeContextReceipt,
+)
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     UserExecutionIdentity,
@@ -14,6 +17,11 @@ from app.schemas.internal_v2.pending_request import DeliveryPolicy
 @runtime_checkable
 class SessionOrchestratorProtocol(Protocol):
     async def resolve_main_thread(self, session_id: str) -> str: ...
+
+    async def publish_runtime_context(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+    ) -> RuntimeContextReceipt: ...
 
     async def submit_runtime_event(
         self, session_id: str, message: PreparedInternalMessage, *,

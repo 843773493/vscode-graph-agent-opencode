@@ -1048,6 +1048,7 @@ def _build_app_container(
         # drain 进度记录，保证部分失败可按 record 定点重试。
         async def drain_session_resources(session_id: str) -> None:
             session_service.settle_abandoned_context_controls(session_id)
+            runtime_source_dispatcher.recover_context_publications(session_id)
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
             await session_communication_service.observations.drain_session(session_id)

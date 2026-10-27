@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.abstractions.internal_message import PreparedInternalMessage
+from app.abstractions.internal_message import (
+    PreparedInternalMessage,
+    RuntimeContextReceipt,
+)
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.identifier import create_prefixed_id
@@ -66,6 +69,17 @@ class SessionOrchestrator:
 
     async def resolve_main_thread(self, session_id: str) -> str:
         return await self._session_service.resolve_main_thread(session_id)
+
+    async def publish_runtime_context(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+    ) -> RuntimeContextReceipt:
+        if self._runtime_source_dispatcher is None:
+            raise RuntimeError("runtime source dispatcher unavailable")
+        return await self._runtime_source_dispatcher.publish_context(
+            session_id, thread_id, message, source_id=source_id,
+            idempotency_key=idempotency_key,
+        )
 
     async def submit_runtime_event(
         self, session_id: str, message: PreparedInternalMessage, *,

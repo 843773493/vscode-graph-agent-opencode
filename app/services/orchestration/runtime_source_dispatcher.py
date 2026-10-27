@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import closing
 from typing import cast
 
 from langchain_core.messages import HumanMessage
 
-from app.abstractions.internal_message import PreparedInternalMessage
+from app.abstractions.internal_message import (
+    PreparedInternalMessage,
+    RuntimeContextReceipt,
+)
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -22,7 +26,11 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.mutation_intents import (
+    ApplySourceLifecycleDecision,
+    MutationIntentOwner,
+)
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting.validation import validate_internal_message
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDispatchStatus
@@ -32,6 +40,8 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+
+_CONTEXT_RECOVERY_REF = "runtime-context:v1:"
 
 
 class RuntimeSourceDispatcher:
@@ -56,6 +66,82 @@ class RuntimeSourceDispatcher:
         """区分已提交的准入恢复与尚未发生的新准入，不以邮箱事实代替。"""
         digest = self._digest(session_id, thread_id, idempotency_key)
         return self._saver.runtime_wakeup_for_admission(session_id, thread_id, f"radm_{digest}")
+
+    async def publish_context(
+        self, session_id: str, thread_id: str, message: PreparedInternalMessage,
+        *, source_id: str, idempotency_key: str,
+    ) -> RuntimeContextReceipt:
+        """仅发布事件，沿唯一 source owner 入库；没有 wakeup、执行或伪用户输入。"""
+        validate_internal_message(message.content, message.metadata)
+        kind = message.metadata["structured_prompt_kind"]
+        if not isinstance(kind, str):
+            raise TypeError("runtime source kind 必须是字符串")
+        digest = self._digest(session_id, thread_id, idempotency_key)
+        revision = sha256_jcs({"content": message.content, "metadata": message.metadata})
+        item_id = f"item-rmsg_{digest}"
+        decision = ApplySourceLifecycleDecision(
+            owner=MutationIntentOwner(session_id=session_id, thread_id=thread_id),
+            source_id=source_id, source_kind=kind, name=kind,
+            decision_kind="observe_pending", revision=revision, pending_only=True,
+            content=message.content, item_id=item_id, turn_scope="ambient",
+            extensions={"boxteam.checkpoint.annotations": {
+                "extension_version": "1", "protection": "public", "value": dict(message.metadata),
+            }},
+        )
+        async with self._sessions.session_write_admission(session_id):
+            resolver = self._sessions.path_resolver
+            resolver.resolve_thread_node(session_id, thread_id)
+            with closing(SessionControlStore(
+                resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME,
+            )) as control:
+                lease = control.create_or_get_lease(
+                    operation_kind="context_control", operation_identity=f"radm_{digest}",
+                    preimage_hash=sha256_jcs({
+                        "session_id": session_id, "thread_id": thread_id,
+                        "source_id": source_id, "prompt": message.content,
+                        "metadata": message.metadata, "delivery_mode": "context_only",
+                    }).rsplit(":", 1)[1], recovery_ref=_CONTEXT_RECOVERY_REF + canonical_json_bytes({
+                        "thread_id": thread_id, "item_id": item_id,
+                    }).decode(),
+                )
+                if lease.state == "active":
+                    lease = control.mark_lease_settling(
+                        lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                    )
+                if lease.state not in {"settling", "completed"}:
+                    raise RuntimeError("runtime context 的生命周期准入已失效")
+                self._saver.consume_mutation_intent(decision)
+                if lease.state == "settling":
+                    control.settle_lease(
+                        lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                        outcome="completed",
+                    )
+        return RuntimeContextReceipt(session_id, thread_id, source_id, item_id, revision)
+
+    def recover_context_publications(self, session_id: str) -> int:
+        """调用方持 Session exclusive；按具名恢复引用核对原提交，不重放正文。"""
+        resolver = self._sessions.path_resolver
+        count = 0
+        with closing(SessionControlStore(resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME)) as control:
+            for lease in control.list_non_terminal_leases():
+                if lease.operation_kind != "context_control" or lease.recovery_ref is None or not lease.recovery_ref.startswith(_CONTEXT_RECOVERY_REF):
+                    continue
+                reference = json.loads(lease.recovery_ref.removeprefix(_CONTEXT_RECOVERY_REF))
+                if not isinstance(reference, dict) or reference.keys() != {"thread_id", "item_id"}:
+                    raise ValueError("runtime context 恢复引用结构非法")
+                thread_id, item_id = reference["thread_id"], reference["item_id"]
+                if not isinstance(thread_id, str) or not isinstance(item_id, str):
+                    raise TypeError("runtime context 恢复引用必须明确 Thread 和 item")
+                resolver.resolve_thread_node(session_id, thread_id)
+                preimage = self._saver.runtime_context_publication_preimage(session_id, thread_id, item_id)
+                if preimage is not None and preimage != lease.preimage_hash:
+                    raise RuntimeError("runtime context 已提交正文与原准入 preimage 不一致")
+                lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+                lease = control.mark_lease_settling(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+                control.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                                    outcome="completed" if preimage is not None else "failed")
+                count += 1
+        return count
 
     async def submit(
         self, session_id: str, thread_id: str, message: PreparedInternalMessage,
@@ -199,6 +285,8 @@ class RuntimeSourceDispatcher:
             if node.kind != "session" or node.state != "active":
                 continue
             session_id = node.node_id
+            async with self._sessions.session_write_admission(session_id):
+                self.recover_context_publications(session_id)
             with closing(SessionControlStore(
                 self._sessions.path_resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME,
             )) as control:

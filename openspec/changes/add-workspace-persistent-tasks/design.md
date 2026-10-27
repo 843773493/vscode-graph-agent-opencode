@@ -189,3 +189,15 @@ Goal 工具/API 与专用视图可以作为应用入口保留，但直接读写�
 迁移按原execution_workspace_id定位目标，禁止把Gateway注册表路由ID直接当作后端owner UUID；关联定义、计划游标、Gateway运行和工作区运行/消息intent一并校验。先关闭旧producer准入并排空/记录在途，再按稳定ID导入并逐项核验；离线或身份冲突保留明确未完成状态，目标任务不可调度，也不重启旧producer并行工作。核验通过后启用同一运行时，旧文件仅作显式迁移/备份输入，最终删除上述旧writer和消费者。
 
 先打通手动/时间触发、显式always判断、单一任务运行与source动作，再迁Goal，最后迁定时会话动作和Web入口。团队协作设计继续TODO，不作为该独立链路前置；真实Provider缓存指标和已测量的性能长尾也不阻塞任务正确性实现。以上为源码/合同盘点，尚不代表新任务模型、存储、运行时或产品验收已完成。
+
+### 仅发布事件端口的实施与证据（2026-10-27）
+
+`SessionOrchestrator.publish_runtime_context` 经既有 `RuntimeSourceDispatcher` 和 source mutation owner 保存不可变事件；ambient canonical item 与 active view membership 在同一 rollout 事务提交，不分配 Job、Execution、Turn 或 wakeup。回执只表示已保存。相同幂等键复用同一 item，异内容及切换为执行投递均明确冲突；幂等重试不把已从当前 view 移除的历史 item 再次选入。
+
+短写继续使用既有 context_control lease，以具名版本化 recovery_ref 定位精确 Thread/item，不保存第二份正文。启动及 Session 删除 drain 对照原 canonical 记录校验 source revision 与准入 preimage：已提交者完成结算，无提交者明确失败，损坏或冲突直接报错；不重放正文、不创建恢复执行。恢复后原事件身份保持不变。
+
+- `context-only-product-020`：正式 matrix 套件 5 passed，111.23 秒；真实 Session 创建及消息入口证明空闲发布无执行、忙时不改已发送请求且下一次工具循环可见。公开 fork 入口配齐真实 Terminal/Browser 服务和原 60 秒 watchdog，证明只复制锚点前来源，冷读保留来源及投影身份。故障注入截断 source 提交前和提交后/lease 结算前，使用全新 Saver/dispatcher 调用实际启动恢复，并经后续真实模型请求核对结果；这是冷 owner 恢复验证，尚未代替完整持久任务的进程重启验收。
+- `context-only-source-regressions-018`：68 passed；另一个 fork 用例因直接 pytest 未经过正式 matrix runner 在 fixture 阶段被拒绝。`context-only-notice-fork-022` 使用原 matrix 入口补跑该项，1 passed；未重复已通过部分。
+- `context-only-runtime-regressions-021`：旧 runtime notice 文本和冻结执行准入两项真实产品回归通过。`context-only-types-017` 与 `context-only-ruff-019` 均 exit 0；上述最终运行均无源码漂移。
+
+各运行的完整命令、源码指纹、原始输出和实际退出码保存在 `out/tests/temp/persistent-task-migration/artifacts/<运行名>/`。本子项尚未实现同一来源状态更新、任务动作的投递时机协调或统一任务运行时，3.5 及相关整体验收保持未完成。

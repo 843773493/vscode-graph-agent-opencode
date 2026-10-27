@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+from app.domain.itemized.enums import SemanticKind, TurnScope
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
@@ -10,10 +15,54 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
+
+if TYPE_CHECKING:
+    from _thread import RLock
+
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class ContextSourceControlOwnerMixin:
     """暴露给 CSM 的唯一 owner 端口；实现委托给 RolloutContextStore。"""
+
+    if TYPE_CHECKING:
+        _storage: RolloutContextStore
+        _lock: RLock
+
+    def runtime_context_publication_preimage(self, session_id: str, thread_id: str, item_id: str) -> str | None:
+        """精确核对仅发布事件的已提交正文；无接受事实与数据损坏分别处理。"""
+        storage = self._storage.storage
+        try:
+            with storage.read_connection(session_id, thread_id) as connection:
+                row = connection.execute(
+                    "SELECT execution_id FROM item_catalog WHERE item_id=?", (item_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                item = storage._read_canonical_item_from_catalog(
+                    connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=item_id,
+                )
+                if (row != (None,) or item.semantic_kind != SemanticKind.RUNTIME_NOTICE
+                        or item.turn_scope != TurnScope.AMBIENT or item.turn_id is not None
+                        or item.producer_ref["producer_kind"] != "runtime"):
+                    raise RuntimeError("runtime context 恢复引用不属于仅发布事件")
+                annotations = item.extensions["boxteam.checkpoint.annotations"]
+                if not isinstance(annotations, Mapping):
+                    raise TypeError("runtime context annotations 必须是已知扩展对象")
+                metadata = annotations["value"]
+                revision = sha256_jcs({"content": item.payload, "metadata": metadata})
+                if item.source_manifest is None or item.source_manifest.source_revision != revision:
+                    raise RuntimeError("runtime context 正文与来源 revision 不一致")
+                return sha256_jcs({
+                    "session_id": session_id, "thread_id": thread_id,
+                    "source_id": item.producer_ref["producer_id"], "prompt": item.payload,
+                    "metadata": metadata, "delivery_mode": "context_only",
+                }).rsplit(":", 1)[1]
+        except RolloutNotMaterializedError:
+            return None
 
     def receive_team_source_observation(self, session_id: str, thread_id: str, *, ledger_revision: int,
                                        event_hash: str, payload_json: str) -> None:

@@ -32,6 +32,12 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
+
 _TABLE_NAME = "context_source_control_states"
 _COLUMNS = (
     "session_id",
@@ -128,6 +134,9 @@ class ContextSourceControlStorageMixin:
     """
 
     if TYPE_CHECKING:
+        _storage: RolloutStorage
+        _context: RolloutContextStore
+
         def _sealed_skill_selection(
             self, connection: sqlite3.Connection, owner: ContextSourceOwnerKey, name: str,
             source_ids: frozenset[str],
@@ -524,6 +533,7 @@ class ContextSourceControlStorageMixin:
             if existing_row is not None
             else None
         )
+        existing_item = None
         if item is not None:
             if decision.content is None:
                 raise ValueError(
@@ -614,6 +624,14 @@ class ContextSourceControlStorageMixin:
                 self._storage._append_context_view_items(
                     connection, checkpoint_ns="", item_ids=(item.item_id,),
                     source_kind="display_only", require_view=True,
+                )
+        elif item is not None and decision.turn_scope == "ambient" and decision.decision_kind == "observe_pending":
+            # 仅发布的事件没有 execution；沿同一 view 成为下次准备可见的来源，
+            # 不分配 Job/Turn，也不将普通 CSM 的 pending observation 重复选入。
+            if existing_item is None:
+                self._storage._append_context_view_items(
+                    connection, checkpoint_ns="", item_ids=(item.item_id,),
+                    source_kind="canonical", require_view=True,
                 )
 
         # observe_pending 只保留 immutable pending item；提醒等一次性

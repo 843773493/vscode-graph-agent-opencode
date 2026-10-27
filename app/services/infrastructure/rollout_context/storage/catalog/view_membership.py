@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text
@@ -26,6 +26,11 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 class RolloutViewMembershipMixin:
     """集中维护 view-local item ordinal，避免各写入入口各自分配顺序。"""
+
+    if TYPE_CHECKING:
+        def _view_message_sequences_from_connection(
+            self, connection: sqlite3.Connection, view_id: str, visited: set[str] | None = None,
+        ) -> list[int]: ...
 
     @staticmethod
     def _active_context_view_id(
@@ -173,7 +178,10 @@ class RolloutViewMembershipMixin:
                 execution_id, field=f"item_catalog.execution_id: {item_id}"
             )
             if source_kind == "canonical":
-                if turn_scope not in {"turn_root", "turn_member"}:
+                if turn_scope not in {"turn_root", "turn_member"} and not (
+                    semantic_kind == "runtime_notice" and turn_scope == "ambient"
+                    and turn_id is None and execution_id is None
+                ):
                     continue
             elif (
                 execution_id is None
@@ -709,7 +717,10 @@ class RolloutViewMembershipMixin:
                             "父 context view 的 display_only membership 指向非法 runtime item: "
                             f"view_id={parent_view_id}, item_id={item_id}"
                         )
-                elif turn_scope not in {"turn_root", "turn_member"}:
+                elif turn_scope not in {"turn_root", "turn_member"} and not (
+                    semantic_kind == "runtime_notice" and turn_scope == "ambient"
+                    and turn_id is None and execution_id is None
+                ):
                     # Turn-less internal checkpoint message 不会因为进入
                     # LangGraph messages channel 而变成 canonical history。
                     continue
