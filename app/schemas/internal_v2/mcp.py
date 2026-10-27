@@ -40,5 +40,5 @@ class McpServerDTO(BaseModel):
     server_id: str
     transport: Literal["stdio", "streamable_http"]
     enabled: bool
-    status: Literal["disabled", "ready", "failed"]
+    status: Literal["disabled", "ready", "failed", "authorization_required"]
     tools: list[McpToolDTO] = Field(default_factory=list)

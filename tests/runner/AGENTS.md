@@ -13,6 +13,7 @@
 
 ## 规范
 
+- `integration-mcp-oauth-startup` 使用真实 HTTP OAuth／MCP 与真实 Backend 启动，核对首次需授权的局部状态、兄弟 Server、同 request_id、SDK PKCE／state、冷刷新和敏感信息边界，固定90秒／4GiB；不替代产品 connect、授权UI、持久等待或Gateway／Web验收。
 - `integration-mcp-stdio-recovery` 使用真实 Backend、单实例 OS 锁与 SDK stdio，覆盖 POSIX 非合作进程强制关闭、关闭期限失败及旧实例停止后的 OS 退出／claim 冷恢复，固定180秒／4GiB；不替代 Windows Job Object、OAuth、HITL 或 Web 验收。
 - `integration-mcp-stdio-replacement` 使用真实单实例锁、stdio SDK、watcher、Runner和model_stream，核对停止意图先于关闭、停后再启、破坏性失败与同入口修复及兄弟工作区隔离，固定180秒／4GiB；不代替非合作进程终止、退役清理诊断、OAuth或Web验收。
 - `integration-mcp-config-recovery` 通过真实 Backend OS 退出验证 MCP promotion 前后、立即／lease 到期重启、原 claim fencing、连接重建和真实 HTTP SSE 重放，固定240秒／4GiB；不代替 stdio 停后再启、OAuth或Web验收。

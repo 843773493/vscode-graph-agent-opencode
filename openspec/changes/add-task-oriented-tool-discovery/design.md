@@ -101,6 +101,10 @@ MCP Server 授权由本地连接 owner 使用标准协议／SDK 支持实施；�
 
 凭据经环境变量／安全凭据引用交给实际 owner，不进入 schema、配置明文、ToolResult、SSE 或会话快照；OAuth 交换信息和 token 存放 owner 的受限凭据存储。模型仅获得非敏感操作摘要与产品授权入口；带 state／短期能力的实际授权地址由 UI 按用户身份读取，不持久复制到模型历史。回调使用标准 state/PKCE 与 issuer 校验。
 
+HTTP Server 以可选的 `mcp.servers.<id>.oauth.redirect_uri` 显式选择标准 OAuth，回调由配置指向实际工作区 owner；缺省仍按既有 headers／环境引用连接，不探测或猜测其它授权方式。OAuth 与 Authorization header 不能同时配置，stdio 不接受该 HTTP 授权对象。现阶段 OAuth 对象变更仍属于未验收的重启分类，不借 Server 根通配符热生效，不提升可选字段的配置版本。
+
+标准流程复用官方 `OAuthClientProvider` 和同一 HTTP／session 链。仅在 SDK 核对受保护资源、授权 metadata、issuer 和 S256 能力后，首次无用户回调的启动探测才表达 `authorization_required`；只有该类型的异常组可局部接受，混入清理错误仍失败。该 Server 不发布未知工具或执行成员，唯一目录保留本地扩展与已就绪兄弟 Server。注册及 token 请求之前核对发现合同，裸401或无支持协议不成为可交互授权。凭据按工作区／Server／endpoint／回调分区，沿既有私有权限和原子文件原语保存；恢复原绝对过期时间及 discovery endpoint，不能因重启重新发放有效期。OAuth SDK 日志及向外异常只保留安全事件、类型与阶段，原交换正文和 state 不进入异常链。该基础切片不代替后续持久操作、产品 callback／UI 和等待恢复。
+
 ### 5. 工作区领域状态与精确 thread 等待各有归属
 
 连接配置仍属于 Workspace JSONC；实际连接／授权操作在现有工作区基础设施领域存储中维护，不回写 JSONC、不塞入导航 catalog 或 Gateway 全局库。凭据与业务状态分离。

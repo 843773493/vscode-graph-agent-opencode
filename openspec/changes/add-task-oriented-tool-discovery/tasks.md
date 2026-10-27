@@ -210,3 +210,11 @@
 - Ruff及5文件Pyright均零诊断，Buf格式／lint／build及相对真实HEAD `b590c163c` 的breaking检查通过，Web真实tsc及build通过。首次误用Bun直接执行tsc在4GiB保护下触发JSC MemoryExhaustion；改为项目的 `bun run --cwd src/clients/web tsc --noEmit` 入口后25.52秒通过，未放宽内存保护或修改依赖／环境。无UI行为修改，未将构建当作浏览器授权验收。
 - 两份OpenAPI由仅含本边界的完整暂存tree导出，不混入其他会话尚未提交的fork／task字段；同时补齐HEAD已提交但旧快照遗漏的directory_uri及mcp_cleanup。逐项JSON差异留在openapi-delta.json。4524个tree blob核验，仅两份预期生成快照变化后清理临时源码；原命令、源码指纹、raw、实际退出码及完整正式产物保留在 `out/tests/temp/mcp-server-readiness/artifacts/` 与同名正式测试路径。严格OpenSpec校验通过。
 - 5.6仍未勾选，进度20/52：本切片只闭合原状态出口，独立连接操作、OAuth、授权UI、持久等待及其Gateway／Web产品门继续推进；团队／协作TODO不变。
+
+### 5.1／5.3 前置：首次 OAuth 启动与官方协议边界（2026-10-27）
+
+- 可选 OAuth 配置沿原 Workspace JSONC 族解析；缺省保留原 stdio env／HTTP headers 链，禁止 OAuth 覆盖显式 Authorization。官方 Provider 承担发现、DCR、PKCE、state、交换及刷新，产品在注册／token 副作用前核对资源、issuer、HTTPS／loopback 与 S256；未知401不作待授权成功。首次无用户回调只保留已确认的 authorization_required，异常组混入清理失败仍拒绝启动。唯一目录不虚构远端工具，保持本地扩展和已就绪兄弟 Server 可发布。
+- SDK TokenStorage 凭据按工作区／Server／endpoint／回调隔离，复用既有跨平台私有权限与原子文件原语；重启恢复原绝对期限及非默认 token endpoint，不重复 DCR、不延长凭据。OAuth 专属日志和异常链不能携带 state、token 或交换响应正文。没有新增状态库／schema 迁移、第二 MCP 适配器或自制 OAuth 交换协议。
+- 正式 `integration-mcp-oauth-startup` 的 `matrix-002` 为10 passed／20.53秒：真实 HTTP OAuth／同一 schema_server MCP、SDK PKCE与冷刷新、错误state、token失败、无metadata、issuer／PKCE拒绝、授权成功但目录非法及同名不同endpoint；真实 Backend 启动核authorization_required／ready、无未知工具、200与同request_id。`discovery-regression-001` 为220 passed／114.60秒，保留原目录、策略、信封、SDK生命周期、冻结／恢复及stdio／HTTP取消进度。两组准确命令、前后指纹、raw和实际退出码在 `out/tests/temp/mcp-oauth-startup/artifacts/`，源码无漂移。
+- 10文件Ruff／Pyright零诊断，Buf格式／lint／build及相对真实HEAD e8a66258f 的breaking通过；Web真实tsc及build通过。两份OpenAPI只增加该状态枚举，由完整暂存tree ce5df2655b2dba23bee3f45a622de9591ff3897e 导出，4527个源码blob核验后清理副本，不混入他人fork／task改动。保留首轮凭据文件计数混入前一场景、误用不存在的pyright入口、Pydantic URL类型直接比较导致错误拒绝及类型诊断的原件；修正后才完成最终验证，没有放宽issuer或业务断言。
+- 5.1—5.7和7.1仍按完整任务保留未勾选，进度20/52。当前证明初次启动及官方协议适配，不证明尚待接入的connections.manage、持久操作、实际产品callback／UI、HITL、长等待恢复或Gateway／Web授权；团队／协作专项继续TODO。未做Windows实机或外部Provider验收。

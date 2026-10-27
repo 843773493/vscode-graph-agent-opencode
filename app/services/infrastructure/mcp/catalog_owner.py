@@ -22,6 +22,7 @@ import logging
 from _thread import RLock
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, TypeAlias
@@ -63,6 +64,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     payload_digest,
 )
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
+from app.services.infrastructure.mcp.oauth import is_authorization_required
 from app.services.infrastructure.mcp.retirement import McpConnectionRetirement
 from app.services.infrastructure.mcp.session_runtime import (
     McpChangeNotifyCallback,
@@ -100,7 +102,7 @@ class McpServerSnapshot:
     server_id: str
     transport: Literal["stdio", "streamable_http"]
     enabled: bool
-    status: Literal["disabled", "ready", "failed"]
+    status: Literal["disabled", "ready", "failed", "authorization_required"]
     tools: tuple[McpToolDescriptor, ...]
     # 最近一次 relist 的错误事实；原始异常仅留诊断，成功 relist 后清空。
     last_relist_error: str | None = None
@@ -262,7 +264,7 @@ class McpCatalogOwner:
         self._workspace_root = workspace_root
         self._leases = leases
         self._session_factory: McpSessionFactory = (
-            session_factory or production_mcp_session_factory
+            session_factory or partial(production_mcp_session_factory, workspace_root=workspace_root)
         )
         self._session_scope: LifetimeScope | None = None
         self._started = False
@@ -325,7 +327,14 @@ class McpCatalogOwner:
                 )
                 with self._publication_lock:
                     self._runtimes[server.server_id] = runtime
-                await runtime.start()
+                try:
+                    await runtime.start()
+                except Exception as error:
+                    if not is_authorization_required(error):
+                        raise
+                    # 只有标准 SDK 已确认的授权需求可局部保留；清理失败仍向外报错。
+                    await runtime.scope.close()
+                    continue
                 self._leases.register_external(
                     resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace",
                 )
@@ -968,7 +977,11 @@ class McpCatalogOwner:
                     server_id=server.server_id,
                     transport=server.transport,
                     enabled=server.enabled,
-                    status=("ready" if connected else "failed") if server.enabled else "disabled",
+                    status=(
+                        "disabled" if not server.enabled else
+                        "ready" if connected else
+                        "authorization_required" if runtime is not None and runtime.authorization_required else "failed"
+                    ),
                     tools=self._descriptors_by_server.get(server.server_id, ()),
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,

@@ -645,6 +645,20 @@
             "type": "string"
           },
           "default": {}
+        },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["redirect_uri"],
+          "description": "显式启用标准 MCP OAuth；回调必须到实际工作区 owner。未配置时保留 headers 凭据引用行为；变更本对象需重启工作区。",
+          "properties": {
+            "redirect_uri": {
+              "type": "string",
+              "format": "uri",
+              "minLength": 1,
+              "description": "实际 owner 可达的回调 URI，支持环境变量引用；仅 loopback 可使用 HTTP。不得填写客户端本机地址冒充远端工作区。"
+            }
+          }
         }
       }
     },

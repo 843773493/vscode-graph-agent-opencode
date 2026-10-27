@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 from typing import Protocol, TypeAlias, cast
 
 from langchain_core.tools import BaseTool
@@ -13,6 +14,10 @@ from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConne
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.invocation import CancellableMcpClientSession
+from app.services.infrastructure.mcp.oauth import (
+    McpOAuthProvider,
+    is_authorization_required,
+)
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from mcp import StdioServerParameters
 from mcp import types as mcp_types
@@ -51,7 +56,13 @@ class _McpServerSession:
 @asynccontextmanager
 async def production_mcp_session_factory(
     server: McpServerConfig, on_tools_list_changed: McpChangeNotifyCallback,
+    *, workspace_root: Path | None = None, oauth_provider: McpOAuthProvider | None = None,
 ) -> AsyncIterator[McpServerSessionPort]:
+    auth = oauth_provider
+    if server.oauth is not None and auth is None:
+        if workspace_root is None:
+            raise ValueError("MCP OAuth session 必须显式指定所属工作区")
+        auth = McpOAuthProvider(server=server, workspace_root=workspace_root)
     async def message_handler(message: object) -> None:
         if isinstance(message, mcp_types.ServerNotification) and isinstance(
             message.root, mcp_types.ToolListChangedNotification,
@@ -70,7 +81,7 @@ async def production_mcp_session_factory(
         else:
             connection = cast(StreamableHttpConnection, server.connection)
             async with (
-                create_mcp_http_client(headers=connection.get("headers")) as client,
+                create_mcp_http_client(headers=connection.get("headers"), auth=auth) as client,
                 streamable_http_client(connection["url"], http_client=client) as (read, write, _),
             ):
                 yield read, write
@@ -117,6 +128,10 @@ class McpServerRuntime:
     @property
     def running(self) -> bool:
         return self._session is not None and not self._closing and self._failure is None
+
+    @property
+    def authorization_required(self) -> bool:
+        return self._failure is not None and is_authorization_required(self._failure)
 
     @property
     def session(self) -> McpServerSessionPort:

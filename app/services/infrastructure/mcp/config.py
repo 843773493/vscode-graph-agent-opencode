@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 from langchain_mcp_adapters.sessions import Connection
@@ -14,7 +14,12 @@ _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _PLACEHOLDER_PATTERN = re.compile(r"\$\{([^}]+)\}")
 _COMMON_FIELDS = frozenset({"enabled", "transport"})
 _STDIO_FIELDS = _COMMON_FIELDS | frozenset({"command", "args", "env", "cwd"})
-_HTTP_FIELDS = _COMMON_FIELDS | frozenset({"url", "headers"})
+_HTTP_FIELDS = _COMMON_FIELDS | frozenset({"url", "headers", "oauth"})
+
+
+@dataclass(frozen=True, slots=True)
+class McpOAuthConfig:
+    redirect_uri: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +28,7 @@ class McpServerConfig:
     enabled: bool
     transport: McpTransport
     connection: Connection
+    oauth: McpOAuthConfig | None = None
 
 
 def parse_mcp_server_configs(
@@ -107,10 +113,41 @@ def _parse_server(
                 raw_server,
                 workspace_root=workspace_root,
             ),
+            oauth=_parse_oauth(server_id, raw_server, workspace_root=workspace_root),
         )
     raise ValueError(
         f"mcp.servers.{server_id}.transport 仅支持 stdio 或 streamable_http"
     )
+
+
+def _parse_oauth(
+    server_id: str, raw_server: dict[str, object], *, workspace_root: Path,
+) -> McpOAuthConfig | None:
+    if "oauth" not in raw_server:
+        return None
+    oauth = raw_server["oauth"]
+    if not isinstance(oauth, dict) or set(oauth) != {"redirect_uri"}:
+        raise ValueError(f"mcp.servers.{server_id}.oauth 必须仅包含 redirect_uri")
+    redirect_uri = _expand_value(
+        _required_string(oauth["redirect_uri"], f"mcp.servers.{server_id}.oauth.redirect_uri"),
+        workspace_root=workspace_root,
+    )
+    _require_http_url(redirect_uri, field=f"mcp.servers.{server_id}.oauth.redirect_uri")
+    parsed = urlparse(redirect_uri)
+    if parsed.fragment or parsed.username or parsed.password:
+        raise ValueError(f"mcp.servers.{server_id}.oauth.redirect_uri 不得包含凭据或 fragment")
+    headers = cast(dict[str, str], raw_server.get("headers", {}))
+    if any(str(key).lower() == "authorization" for key in headers):
+        raise ValueError(f"mcp.servers.{server_id} 不得同时配置 OAuth 与 Authorization header")
+    return McpOAuthConfig(redirect_uri=redirect_uri)
+
+
+def _require_http_url(url: str, *, field: str) -> None:
+    parsed_url = urlparse(url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+        raise ValueError(f"{field} 必须是有效 HTTP(S) URL")
+    if parsed_url.scheme == "http" and parsed_url.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError(f"{field} 仅允许 loopback 地址使用 HTTP")
 
 
 def _parse_stdio_connection(
@@ -164,17 +201,7 @@ def _parse_http_connection(
         _required_string(raw_server.get("url"), f"mcp.servers.{server_id}.url"),
         workspace_root=workspace_root,
     )
-    parsed_url = urlparse(url)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
-        raise ValueError(f"mcp.servers.{server_id}.url 必须是有效 HTTP(S) URL")
-    if parsed_url.scheme == "http" and parsed_url.hostname not in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
-        raise ValueError(
-            f"mcp.servers.{server_id}.url 仅允许 loopback 地址使用 HTTP"
-        )
+    _require_http_url(url, field=f"mcp.servers.{server_id}.url")
     raw_headers = raw_server.get("headers", {})
     if not isinstance(raw_headers, dict) or not all(
         isinstance(key, str) and isinstance(value, str)

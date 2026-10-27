@@ -15,6 +15,37 @@ def workspace_root(tmp_path: Path) -> Path:
     return tmp_path / "workspace"
 
 
+def test_oauth_callback_is_explicit_and_target_owned(workspace_root, monkeypatch):
+    monkeypatch.setenv("MCP_CALLBACK", "https://target.example/api/v1/mcp/oauth/callback")
+    raw = {"transport": "streamable_http", "url": "https://mcp.example/api", "oauth": {"redirect_uri": "${MCP_CALLBACK}"}}
+    server, = parse_mcp_server_configs({"servers": {"secure": raw}}, workspace_root=workspace_root)
+    assert server.oauth is not None
+    assert server.oauth.redirect_uri == "https://target.example/api/v1/mcp/oauth/callback"
+    assert "oauth" not in server.connection
+
+
+@pytest.mark.parametrize("oauth", [None, {}, {"unknown": "value"}, {"redirect_uri": "http://remote.example/callback"},
+                                   {"redirect_uri": "file:///tmp/callback"}, {"redirect_uri": "https://host/callback#secret"},
+                                   {"redirect_uri": "https://user:secret@host/callback"}])
+def test_oauth_configuration_rejects_unsupported_callback_inputs(workspace_root, oauth):
+    raw = {"transport": "streamable_http", "url": "https://mcp.example/api", "oauth": oauth}
+    with pytest.raises(ValueError):
+        parse_mcp_server_configs({"servers": {"secure": raw}}, workspace_root=workspace_root)
+
+
+def test_oauth_cannot_override_an_explicit_authorization_header(workspace_root):
+    raw = {"transport": "streamable_http", "url": "https://mcp.example/api", "headers": {"aUtHoRiZaTiOn": "Bearer existing"},
+           "oauth": {"redirect_uri": "https://target.example/callback"}}
+    with pytest.raises(ValueError, match="同时配置"):
+        parse_mcp_server_configs({"servers": {"secure": raw}}, workspace_root=workspace_root)
+
+
+def test_stdio_does_not_accept_http_oauth_configuration(workspace_root):
+    with pytest.raises(ValueError, match="不支持的字段"):
+        parse_mcp_server_configs({"servers": {"secure": {"transport": "stdio", "command": "server", "oauth": {}}}},
+                                 workspace_root=workspace_root)
+
+
 @pytest.mark.parametrize("seconds", [1, 1800, 86400])
 def test_sealed_call_timeout_uses_one_bounded_configuration(workspace_root, seconds):
     config = {"supervision": {"sealed_call_timeout_seconds": seconds}, "servers": {}}
@@ -58,10 +89,12 @@ def test_parse_stdio_config_expands_workspace_and_environment(
     assert len(servers) == 1
     server = servers[0]
     assert server.enabled is True
-    assert server.connection["command"] == f"{workspace_root}/bin/server"
-    assert server.connection["args"] == ["--root", str(workspace_root)]
-    assert server.connection["env"] == {"TOKEN": "secret-value"}
-    assert str(server.connection["cwd"]) == str(workspace_root)
+    connection = server.connection
+    assert connection["transport"] == "stdio"
+    assert connection["command"] == f"{workspace_root}/bin/server"
+    assert connection["args"] == ["--root", str(workspace_root)]
+    assert connection.get("env") == {"TOKEN": "secret-value"}
+    assert str(connection.get("cwd")) == str(workspace_root)
 
 
 def test_parse_config_rejects_missing_environment_variable(
