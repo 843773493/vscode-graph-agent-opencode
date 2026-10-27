@@ -367,6 +367,90 @@ async def test_preview_resolves_target_catalog_and_rejects_invalid_locators(
 
 
 @pytest.mark.asyncio
+async def test_definition_validation_uses_target_provider_catalog_and_thread(
+    generation_client: httpx.AsyncClient,
+    generation_backend: tuple[str, Path],
+) -> None:
+    client = generation_client
+    session_id, folder_id = await _create_nested_anchor(
+        client, title="定义目标", root_name="定义校验根", child_name="定义校验目录",
+    )
+    other_session = await create_session(client, "另一会话")
+    main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+    other_main = await client.get(f"/api/v1/sessions/{other_session}/main-thread")
+    assert main.status_code == other_main.status_code == 200
+    thread_id = main.json()["data"]["thread_id"]
+    before = await _catalog_nodes(client)
+    manifests = _session_manifest_count(generation_backend[1])
+    workspace_id = before[session_id]["session"]["workspace_id"]
+    payload = {
+        "name": "定义校验", "generator_type": {"type_id": "builtin.agent_prompt", "version": "1"},
+        "config": {"prompt": "验证不应运行模型"},
+        "execution_workspace_id": workspace_id,
+        "placement": {"kind": "session_folder", "workspace_id": workspace_id, "folder_id": folder_id},
+        "context_source": {"kind": "live_session", "workspace_id": workspace_id, "session_id": session_id, "thread_id": thread_id},
+        "session_strategy": {"mode": "continue_existing", "target": {"workspace_id": workspace_id, "session_id": session_id, "thread_id": thread_id}},
+        "title_template": "{generator.name}", "path_template": [],
+    }
+    endpoint = "/api/v1/session-generations/validate-definition"
+    valid = await client.post(endpoint, json=payload)
+    assert valid.status_code == 200, valid.text
+    assert valid.headers["X-Request-ID"] == valid.json()["request_id"]
+    assert valid.json()["data"] == {"workspace_id": workspace_id, "provider_available": True, "reason": None}
+    for generator_type in ({"type_id": "missing.provider", "version": "1"}, {"type_id": "builtin.agent_prompt", "version": "999"}):
+        unavailable = await client.post(endpoint, json={**payload, "generator_type": generator_type})
+        assert unavailable.status_code == 200, unavailable.text
+        assert unavailable.json()["data"]["provider_available"] is False
+        assert unavailable.json()["data"]["reason"]
+    invalid_config = await client.post(endpoint, json={**payload, "config": {"prompt": 123}})
+    assert invalid_config.status_code == 400, invalid_config.text
+    assert "schema" in invalid_config.text
+    wrong_kind = await client.post(endpoint, json={**payload, "placement": {"kind": "session", "workspace_id": workspace_id, "session_id": folder_id}})
+    assert wrong_kind.status_code == 400, wrong_kind.text
+    assert "actual=folder" in wrong_kind.text
+    wrong_thread = {**payload["context_source"], "thread_id": other_main.json()["data"]["thread_id"]}
+    bad_thread = await client.post(endpoint, json={**payload, "context_source": wrong_thread})
+    assert bad_thread.status_code == 404, bad_thread.text
+    split = await client.post(endpoint, json={**payload, "placement": {"kind": "workspace", "workspace_id": "00000000-0000-4000-8000-000000000099"}})
+    assert split.status_code == 400, split.text
+    assert "execution_workspace_id" in split.text
+
+    # 同一真实 Gateway 创建和嵌套编辑，校验不得被 pause 策略误吞成能力缺失。
+    alias = client.headers["X-BoxTeam-Workspace-Id"]
+    gateway_payload = {
+        "name": payload["name"], "config": payload["config"],
+        "execution_workspace_id": alias, "placement": {"kind": "workspace", "workspace_id": alias},
+        "trigger": {"type": "manual", "timezone": "UTC"},
+        "policies": {"mount_missing": "pause"},
+    }
+    invalid = await client.post("/api/gateway/session-generators", json={**gateway_payload, "config": {"prompt": 123}})
+    assert invalid.status_code == 400, invalid.text
+    created = await client.post("/api/gateway/session-generators", json=gateway_payload)
+    assert created.status_code == 200, created.text
+    generator_id = created.json()["data"]["generator_id"]
+    patch = {
+        "config": {"prompt": "已编辑"},
+        "placement": {"kind": "session_folder", "workspace_id": alias, "folder_id": folder_id},
+        "session_strategy": {"mode": "continue_existing", "target": {"workspace_id": alias, "session_id": session_id, "thread_id": thread_id}},
+    }
+    updated = await client.patch(f"/api/gateway/session-generators/{generator_id}", json=patch)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["placement"]["folder_id"] == folder_id
+    assert updated.json()["data"]["session_strategy"]["target"]["thread_id"] == thread_id
+    reread = await client.get("/api/gateway/session-generators")
+    saved = next(item for item in reread.json()["data"]["items"] if item["generator_id"] == generator_id)
+    assert saved == updated.json()["data"]
+    rejected = await client.patch(f"/api/gateway/session-generators/{generator_id}", json={"placement": {"kind": "session", "workspace_id": alias, "session_id": folder_id}})
+    assert rejected.status_code == 400, rejected.text
+    blocked = await client.post("/api/gateway/session-generators", json={**gateway_payload, "generator_type": {"type_id": "missing.provider", "version": "1"}})
+    assert blocked.status_code == 200, blocked.text
+    assert blocked.json()["data"]["status"] == "blocked"
+    assert blocked.json()["data"]["status_reason"]
+    assert await _catalog_nodes(client) == before
+    assert _session_manifest_count(generation_backend[1]) == manifests
+
+
+@pytest.mark.asyncio
 async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     generation_client: httpx.AsyncClient,
     generation_backend: tuple[str, Path],

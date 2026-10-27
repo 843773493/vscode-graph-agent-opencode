@@ -46,6 +46,7 @@
 - [ ] 5.1 将现有生成器迁为定时触发、统一无附加条件判断和会话动作的预设组合，不保留独立定时任务模型或运行分支；保留三种会话策略、回报及 UI 激活行为，复用当前 catalog 定位与导航预览。
   - [x] 5.1.1 目标工作区统一计算命名与 catalog 导航预览，实际生成消费同一渲染结果；未创建时明确物理定位尚未分配，继续会话显示现有导航。迁齐前端/协调器/协议和测试后删除 Gateway 旧预览接口与物理 children/folder 路径模板；生成器定义、调度与账本整体迁移仍未完成。
 - [ ] 5.2 将定义校验、运行协调、执行引用和终态归一到工作区任务 owner，保留 GenerationRun 身份及既有幂等，不复制第二份可变账本。
+  - [x] 5.2.1 保存前的 provider/版本/config、工作区关系、catalog 节点与 Thread 归属校验由目标工作区唯一执行，执行复用同一 provider 解析；Gateway 仅逐个解析路由身份并传递结果，删除旧 schema 校验与目录探测。此子项不代表运行账本与调度 owner 已迁移。
 - [ ] 5.3 实现 Gateway 旧定义、计划游标及未完成运行的一次性迁移，按原执行工作区解析；离线/缺失目标显式报告并禁止改绑默认工作区。
 - [ ] 5.4 将前端、API、工具和配置消费者全量迁移到工作区入口，移除 Gateway 旧生成器调度、业务存储、监控、接口和无用配置，不保留兼容转发或生产双读。
 - [ ] 5.5 核验迁移重试、核验后切换和备份回退流程，证明同一任务没有同时运行的新旧 producer。
@@ -256,3 +257,14 @@
 - `types-final-020`真实Web类型、`web-build-final-022`构建、`python-types-013`相关Pyright、`protocol-final-023`Buf lint/build均通过；OpenAPI变化仅新增预览入口与3个相关schema。`static-final-019`逐项对比HEAD的Ruff诊断，无新增；两份旧路由/协调器保留既有诊断，未宣称全仓静态全绿。上述最终测试/检查均有进程外期限、4GiB保护及前后相同源码指纹；浏览器后仅修正JSON null的TypeScript适配，运行时链路未变，复用其产品结果。
 - 004为46通过/2失败：旧API测试缺少显式workspace_id，在进入被测服务前返回400；006保留原始响应与服务未被调用证据，未改这些无关测试或算为通过。007为1通过/1失败：已删除POST受同路径通用PATCH/DELETE路由影响实际返回405，修正准确预期后014通过。018暴露新TS适配遗漏JSON null，修正后020/021通过；011仅因基础环境缺pyright无法启动，013通过uv隔离附加依赖完成。失败原件均保留。
 - 命令、逐文件SHA256、raw与实际退出码保存在 `out/tests/temp/generator-navigation/artifacts/`；正式产品输出沿同名测试路径保留。此切片只完成5.1.1，定义/调度/三份可变账本的一次性迁移仍由5.1—5.5追踪；团队协作继续TODO。
+
+
+### 生成器定义校验的工作区归属（2026-10-27）
+
+- 新增工作区`session-generations/validate-definition`，保存校验和执行共用唯一provider解析；provider缺失/版本不支持明确返回不可用，既有Gateway创建仍保存为blocked。非法config、工作区分离、节点类型和精确Thread归属由工作区校验，400/404不被mount_missing=pause误当作离线而接受。
+- Gateway逐个将placement/context/strategy/execution路由ID解析为各自backend UUID，保留目标身份和同一request_id，单次POST校验；删除Gateway JSON Schema验证、breadcrumb探测及重复工作区关系规则。嵌套PATCH候选与权威写入均完整解析DTO，修复裸dict进入后续消费者的问题。
+- `unit-003` **50 passed／3.28秒**，含既有生成幂等/恢复/回报与控制面认证；Gateway单测现在证明单次传递、逐个身份解析和错误类别，实际业务校验迁到真实产品入口。
+- `product-definition-004` **1 passed／25.72秒**，真实Gateway/Backend与产品创建的Session验证provider/版本、config、catalog kind、Thread所属、跨工作区拒绝、嵌套编辑持久化与blocked；catalog和manifest未因校验新增。`gateway-007` **2 passed／25.07秒**，验证显式目标的校验/执行路由、CRUD及运行幂等。`product-strategies-011` **2 passed／56.45秒**，复验真实新建和继续会话动作。
+- `static-final-008`逐文件对照HEAD无新增Ruff诊断；`python-types-baseline-013`确认修改的服务/DTO无错误，Gateway协调器仍有两项HEAD既有optional访问诊断。`python-types-006`的35项全目录错误均位于未改动的message_dispatch/reporting mixin；未把此结果表述成全目录类型检查通过。`static-005`的新增无用变量已删除。
+- `protocol-generate-001`完成协议生成、Buf格式/依赖及相对HEAD的breaking检查；`web-types-012`真实tsc、`web-build-010`Web构建通过，仅既有chunk提示。生成绑定与OpenAPI随同更新。
+- 准确命令、逐文件指纹、原始输出与退出码保存于`out/tests/temp/generator-definition/artifacts/`，正式产品产物沿同名测试目录保留。本次未重复fork完整产品验收；运行journal/调度和一次性迁移仍由5.1—5.5追踪，整体保持未完成。原生成执行请求的路由身份与既有journal合同暂不改写，后续随唯一owner切换迁移，不建立生产双读。

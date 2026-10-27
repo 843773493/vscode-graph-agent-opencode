@@ -43,34 +43,6 @@ from app.schemas.internal_v2.common import APIResponse
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
 
 
-def _validate_generator_workspace_contract(
-    definition: GeneratorDefinitionCreateRequest | GeneratorDefinitionDTO,
-) -> None:
-    placement_workspace_id = definition.placement.workspace_id
-    if definition.execution_workspace_id != placement_workspace_id:
-        raise ValueError(
-            "当前版本不支持会话存储工作区与 Agent 执行工作区分离；"
-            "execution_workspace_id 必须等于 placement.workspace_id"
-        )
-    strategy_target = definition.session_strategy.target
-    if (
-        strategy_target is not None
-        and strategy_target.workspace_id != placement_workspace_id
-    ):
-        raise ValueError(
-            "当前版本不支持跨工作区策略目标；"
-            "session_strategy.target.workspace_id 必须等于 placement.workspace_id"
-        )
-    if (
-        definition.context_source.kind == "live_session"
-        and definition.context_source.workspace_id != placement_workspace_id
-    ):
-        raise ValueError(
-            "当前版本不支持跨工作区复制 live_session 上下文；"
-            "context_source.workspace_id 必须等于生成会话所在工作区"
-        )
-
-
 def _registry(request: Request) -> GatewayWorkspaceRegistry:
     value = getattr(request.app.state, "registry", None)
     if not isinstance(value, GatewayWorkspaceRegistry):
@@ -397,18 +369,10 @@ async def create_session_generator(
     payload: GeneratorDefinitionCreateRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
     store: SessionGeneratorStore = Depends(_generator_store),
     coordinator: SessionGeneratorCoordinator = Depends(_coordinator),
 ):
     try:
-        _validate_generator_workspace_contract(payload)
-        registry.resolve(payload.execution_workspace_id)
-        registry.resolve(payload.placement.workspace_id)
-        if payload.context_source.workspace_id is not None:
-            registry.resolve(payload.context_source.workspace_id)
-        if payload.session_strategy.target is not None:
-            registry.resolve(payload.session_strategy.target.workspace_id)
         capability_error: str | None = None
         try:
             await coordinator.validate_definition_capability(
@@ -457,22 +421,15 @@ async def update_session_generator(
     payload: GeneratorDefinitionUpdateRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
     store: SessionGeneratorStore = Depends(_generator_store),
     coordinator: SessionGeneratorCoordinator = Depends(_coordinator),
 ):
     try:
         current = store.get_definition(generator_id)
-        candidate = current.model_copy(
-            update=payload.model_dump(exclude_unset=True)
-        )
-        _validate_generator_workspace_contract(candidate)
-        registry.resolve(candidate.execution_workspace_id)
-        registry.resolve(candidate.placement.workspace_id)
-        if candidate.context_source.workspace_id is not None:
-            registry.resolve(candidate.context_source.workspace_id)
-        if candidate.session_strategy.target is not None:
-            registry.resolve(candidate.session_strategy.target.workspace_id)
+        candidate = GeneratorDefinitionDTO.model_validate({
+            **current.model_dump(mode="json"),
+            **payload.model_dump(mode="json", exclude_unset=True),
+        })
         await coordinator.validate_definition_capability(
             candidate,
             request_id=request_id,

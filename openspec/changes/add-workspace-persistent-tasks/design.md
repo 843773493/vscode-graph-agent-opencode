@@ -258,3 +258,8 @@ Workspace schema21扩展原任务表，以application_type=goal、owner_session_
 Goal 续跑在原 Goal 锁内先提交 source/wakeup 准入，接受成功后再登记 last_continued_job_id；失败不写尝试标记，也不需要补偿回写。接受前进程中断由统一 worker 恢复原 Goal 并重试原幂等链路。接受后，worker 只查询当前 Goal ID/revision 的原 idle/objective 准入根，按原 admission commit 选择较晚入口并沿后继幂等键找到尾执行。未结束执行恢复内存归属，已结束执行从原 execution queue 和 canonical 最终输出取得终态、用量及时间，与实时事件共用记账及续跑函数；不读取当前 checkpoint 猜历史，也不增加 Goal 结果账本。已通过产品入口验证执行完成后在标记保存前、保存后硬重启，准确记账且无重复执行。深续跑链仍逐项查询，代码保留测量后优化 TODO；完整在途模型/工具恢复、无 Goal 准入根的历史用户执行及目标编辑与旧在途执行的重启组合仍待7.4验收。
 
 启动枚举Goal及普通任务恢复身份，在初始化回执后才推进单项工作。Goal恢复工作冻结原目标身份和revision，管理查询展示recovering；暂停等操作仍更改原Goal状态，迟到恢复不能改回active。成功结束恢复后清除瞬态进度并通知同一管理列表。通用组件管理暂时明确拒绝Goal动作，等待6.5将表单接到既有Goal规则；不得直接修改同事务派生的lifecycle索引。此查询切片不代表会话生成器或主Web管理已完成，产品/合同证据见tasks.md。
+
+
+### 定义保存校验的目标工作区边界（2026-10-27）
+
+生成器保存前的类型、版本、配置、工作区关系及catalog/Thread验证已由目标工作区统一负责；执行复用同一provider解析。校验请求使用后端稳定工作区身份，Gateway从注册表逐个解析placement/context/strategy/execution，不能把不同引用统一改成执行目标。Provider不可用沿既有创建规则保留blocked；非法业务输入明确4xx，不被离线策略吞掉。Gateway旧schema和目录探测代码已删除，前端不另持能力验证事实。此切片尚未迁移定义/运行持久存储及调度，其整体切换仍按既有迁移计划推进。

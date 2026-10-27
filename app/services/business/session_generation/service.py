@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.path_segments import validate_generator_name
@@ -24,13 +23,20 @@ from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteResultDTO,
 )
 from app.schemas.internal_v2.session_navigation.models import (
+    SessionGenerationDefinitionDTO,
     SessionGenerationPreviewDTO,
     SessionGenerationPreviewRequest,
     SessionGenerationTargetDTO,
+    SessionGenerationValidateRequest,
+    SessionGenerationValidationDTO,
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_context_fork_service import (
     SessionContextForkService,
+)
+from app.services.business.session_generation.definition import (
+    GenerationProviderUnavailable,
+    resolve_generation_provider,
 )
 from app.services.business.session_generation.message_dispatch import (
     SessionGenerationMessageDispatchSupport,
@@ -117,7 +123,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             ) is None:
                 recovered_result = await self._execute_strategy(
                     payload,
-                    self._resolve_provider(payload).build_prompt(payload.config),
+                    resolve_generation_provider(self._providers, payload).build_prompt(payload.config),
                     ledger_path=ledger_path,
                 )
                 self._assert_same_dispatch_result(result, recovered_result)
@@ -205,6 +211,36 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             physical_location="unallocated", target_session_id=payload.target_session_id,
         )
 
+    async def validate_definition(self, payload: SessionGenerationValidateRequest) -> SessionGenerationValidationDTO:
+        self._validate_definition_workspaces(payload)
+        workspace_id = self._session_catalog_service.workspace_id
+        if payload.execution_workspace_id != workspace_id:
+            raise ValueError("生成器定义必须使用目标工作区的稳定身份")
+        try:
+            resolve_generation_provider(self._providers, payload)
+        except GenerationProviderUnavailable as error:
+            return SessionGenerationValidationDTO(workspace_id=workspace_id, provider_available=False, reason=str(error))
+        await self.preview(SessionGenerationPreviewRequest(
+            name=payload.name, title_template=payload.title_template, path_template=payload.path_template,
+            session_title=str(payload.config.get("session_title") or payload.name),
+            placement_kind=payload.placement.kind,
+            placement_node_id=payload.placement.session_id or payload.placement.folder_id,
+            session_strategy=payload.session_strategy.mode,
+            target_session_id=payload.session_strategy.target.session_id if payload.session_strategy.target is not None else None,
+        ))
+        threads: set[tuple[str, str]] = set()
+        if payload.session_strategy.target is not None:
+            target = payload.session_strategy.target
+            threads.add((target.session_id, target.thread_id))
+        source = payload.context_source
+        if source.kind == "live_session":
+            assert source.session_id is not None and source.thread_id is not None
+            threads.add((source.session_id, source.thread_id))
+        for session_id, thread_id in threads:
+            async with self._session_service.session_read_admission(session_id):
+                self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
+        return SessionGenerationValidationDTO(workspace_id=workspace_id, provider_available=True)
+
     async def execute(
         self,
         payload: SessionGenerationExecuteRequest,
@@ -262,7 +298,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 raise RuntimeError(f"已完成的生成记录缺少 result: {ledger_path}")
             return SessionGenerationExecuteResultDTO.model_validate(raw_result)
 
-        provider = self._resolve_provider(payload)
+        provider = resolve_generation_provider(self._providers, payload)
         prompt = provider.build_prompt(payload.config)
         self._write_ledger(
             ledger_path,
@@ -378,7 +414,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
         ledger_path: Path,
     ) -> None:
         self._validate_workspace_locators(payload)
-        provider = self._resolve_provider(payload)
+        provider = resolve_generation_provider(self._providers, payload)
         try:
             result = await self._execute_strategy(
                 payload,
@@ -423,12 +459,16 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
         validate_generator_name(payload.title)
         for segment in payload.navigation_path:
             validate_navigation_segment(segment)
+        SessionGenerationService._validate_definition_workspaces(payload)
+
+    @staticmethod
+    def _validate_definition_workspaces(payload: SessionGenerationDefinitionDTO) -> None:
         execution_workspace_id = payload.execution_workspace_id
         if payload.placement.workspace_id != execution_workspace_id:
             raise ValueError(
                 "生成会话挂载工作区与执行工作区不一致: "
                 f"placement={payload.placement.workspace_id}, "
-                f"execution={execution_workspace_id}"
+                f"execution_workspace_id={execution_workspace_id}"
             )
         target = payload.session_strategy.target
         if target is not None and target.workspace_id != execution_workspace_id:
@@ -444,34 +484,8 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             raise ValueError(
                 "生成上下文来源工作区与执行工作区不一致: "
                 f"context={context_source.workspace_id}, "
-                f"execution={execution_workspace_id}"
+                f"execution_workspace_id={execution_workspace_id}"
             )
-
-    def _resolve_provider(
-        self,
-        payload: SessionGenerationExecuteRequest,
-    ) -> SessionGenerationProviderProtocol:
-        provider = self._providers.get(payload.generator_type.type_id)
-        if provider is None:
-            raise ValueError(
-                "工作区未注册会话生成器类型: "
-                f"{payload.generator_type.type_id}"
-            )
-        if payload.generator_type.version not in provider.supported_versions:
-            raise ValueError(
-                "工作区不支持会话生成器版本: "
-                f"type_id={payload.generator_type.type_id}, "
-                f"version={payload.generator_type.version}"
-            )
-        try:
-            Draft202012Validator(provider.config_schema).validate(payload.config)
-        except ValidationError as error:
-            location = ".".join(str(part) for part in error.absolute_path) or "<root>"
-            raise ValueError(
-                "会话生成器配置不符合 provider schema: "
-                f"type_id={provider.type_id}, path={location}, error={error.message}"
-            ) from error
-        return provider
 
     async def _execute_strategy(
         self,

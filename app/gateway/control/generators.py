@@ -62,8 +62,9 @@ class SessionGeneratorStore:
     ) -> GeneratorDefinitionDTO:
         current = self.get_definition(generator_id)
         values = payload.model_dump(exclude_unset=True)
-        updated = current.model_copy(
-            update={
+        updated = GeneratorDefinitionDTO.model_validate(
+            {
+                **current.model_dump(mode="json"),
                 **values,
                 "status": (
                     "ready"

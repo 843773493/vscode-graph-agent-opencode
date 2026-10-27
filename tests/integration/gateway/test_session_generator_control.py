@@ -298,7 +298,7 @@ async def test_generator_crud_and_idempotent_manual_run(
 
 
 @pytest.mark.asyncio
-async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mount(
+async def test_generator_routes_definition_and_execution_to_explicit_target(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ) -> None:
@@ -333,9 +333,6 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
             ) as client:
                 initial_response = await client.get("/api/gateway/workspaces")
                 assert initial_response.status_code == 200, initial_response.text
-                primary_workspace_id = initial_response.json()["data"][
-                    "active_workspace_id"
-                ]
                 add_response = await client.post(
                     "/api/gateway/workspaces/local",
                     json={
@@ -353,23 +350,6 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
                 assert len(registered) == 1, add_response.text
                 secondary_workspace_id = registered[0]["workspace_id"]
                 assert registered[0]["backend_url"] == f"http://127.0.0.1:{secondary_port}"
-                create_response = await client.post(
-                    "/api/gateway/session-generators",
-                    json=_definition_payload(
-                        name="跨工作区执行 E2E",
-                        placement_workspace_id=primary_workspace_id,
-                        execution_workspace_id=secondary_workspace_id,
-                    ),
-                )
-                assert create_response.status_code == 400, create_response.text
-                assert "execution_workspace_id" in create_response.text
-                assert not primary_state.requests_for(
-                    "POST", "/api/v1/session-generations/execute"
-                )
-                assert not secondary_state.requests_for(
-                    "POST", "/api/v1/session-generations/execute"
-                )
-
                 valid_create_response = await client.post(
                     "/api/gateway/session-generators",
                     json=_definition_payload(
@@ -381,6 +361,11 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
                 assert valid_create_response.status_code == 200, (
                     valid_create_response.text
                 )
+                validations = secondary_state.requests_for("POST", "/api/v1/session-generations/validate-definition")
+                assert len(validations) == 1
+                assert validations[0]["json"]["execution_workspace_id"] == workspace_backend_id_for_root(secondary_workspace)
+                assert validations[0]["json"]["placement"]["workspace_id"] == workspace_backend_id_for_root(secondary_workspace)
+                assert not primary_state.requests_for("POST", "/api/v1/session-generations/validate-definition")
                 generator_id = valid_create_response.json()["data"]["generator_id"]
                 run_response = await client.post(
                     f"/api/gateway/session-generators/{generator_id}/run",

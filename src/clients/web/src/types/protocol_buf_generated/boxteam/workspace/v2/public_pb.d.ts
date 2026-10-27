@@ -12252,3 +12252,232 @@ export declare type SessionGenerationPreviewDTO = Message<"boxteam.workspace.v2.
  */
 export declare const SessionGenerationPreviewDTOSchema: GenMessage<SessionGenerationPreviewDTO>;
 
+/**
+ * 定义校验与执行使用同一工作区 Provider、catalog 和 Thread owner。
+ *
+ * @generated from message boxteam.workspace.v2.SessionGenerationGeneratorTypeDTO
+ */
+export declare type SessionGenerationGeneratorTypeDTO = Message<"boxteam.workspace.v2.SessionGenerationGeneratorTypeDTO"> & {
+  /**
+   * @generated from field: string type_id = 1;
+   */
+  typeId: string;
+
+  /**
+   * @generated from field: string version = 2;
+   */
+  version: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationGeneratorTypeDTO.
+ * Use `create(SessionGenerationGeneratorTypeDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationGeneratorTypeDTOSchema: GenMessage<SessionGenerationGeneratorTypeDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationPlacementDTO
+ */
+export declare type SessionGenerationPlacementDTO = Message<"boxteam.workspace.v2.SessionGenerationPlacementDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: optional string session_id = 3;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string folder_id = 4;
+   */
+  folderId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationPlacementDTO.
+ * Use `create(SessionGenerationPlacementDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationPlacementDTOSchema: GenMessage<SessionGenerationPlacementDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationContextSourceDTO
+ */
+export declare type SessionGenerationContextSourceDTO = Message<"boxteam.workspace.v2.SessionGenerationContextSourceDTO"> & {
+  /**
+   * @generated from field: optional string kind = 1;
+   */
+  kind?: string | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 2;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string session_id = 3;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 4;
+   */
+  threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional string snapshot_id = 5;
+   */
+  snapshotId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationContextSourceDTO.
+ * Use `create(SessionGenerationContextSourceDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationContextSourceDTOSchema: GenMessage<SessionGenerationContextSourceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationTargetDTO
+ */
+export declare type SessionGenerationTargetDTO = Message<"boxteam.workspace.v2.SessionGenerationTargetDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 3;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationTargetDTO.
+ * Use `create(SessionGenerationTargetDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationTargetDTOSchema: GenMessage<SessionGenerationTargetDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationStrategyDTO
+ */
+export declare type SessionGenerationStrategyDTO = Message<"boxteam.workspace.v2.SessionGenerationStrategyDTO"> & {
+  /**
+   * @generated from field: string mode = 1;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGenerationTargetDTO target = 2;
+   */
+  target?: SessionGenerationTargetDTO | undefined;
+
+  /**
+   * @generated from field: optional string concurrency = 3;
+   */
+  concurrency?: string | undefined;
+
+  /**
+   * @generated from field: optional string report_back = 4;
+   */
+  reportBack?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationStrategyDTO.
+ * Use `create(SessionGenerationStrategyDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationStrategyDTOSchema: GenMessage<SessionGenerationStrategyDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationValidateRequest
+ */
+export declare type SessionGenerationValidateRequest = Message<"boxteam.workspace.v2.SessionGenerationValidateRequest"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationGeneratorTypeDTO generator_type = 1;
+   */
+  generatorType?: SessionGenerationGeneratorTypeDTO | undefined;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct config = 3;
+   */
+  config?: JsonObject | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationPlacementDTO placement = 4;
+   */
+  placement?: SessionGenerationPlacementDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationContextSourceDTO context_source = 5;
+   */
+  contextSource?: SessionGenerationContextSourceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionGenerationStrategyDTO session_strategy = 6;
+   */
+  sessionStrategy?: SessionGenerationStrategyDTO | undefined;
+
+  /**
+   * @generated from field: string execution_workspace_id = 7;
+   */
+  executionWorkspaceId: string;
+
+  /**
+   * @generated from field: string title_template = 8;
+   */
+  titleTemplate: string;
+
+  /**
+   * @generated from field: repeated string path_template = 9;
+   */
+  pathTemplate: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationValidateRequest.
+ * Use `create(SessionGenerationValidateRequestSchema)` to create a new message.
+ */
+export declare const SessionGenerationValidateRequestSchema: GenMessage<SessionGenerationValidateRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGenerationValidationDTO
+ */
+export declare type SessionGenerationValidationDTO = Message<"boxteam.workspace.v2.SessionGenerationValidationDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: bool provider_available = 2;
+   */
+  providerAvailable: boolean;
+
+  /**
+   * @generated from field: optional string reason = 3;
+   */
+  reason?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGenerationValidationDTO.
+ * Use `create(SessionGenerationValidationDTOSchema)` to create a new message.
+ */
+export declare const SessionGenerationValidationDTOSchema: GenMessage<SessionGenerationValidationDTO>;
+

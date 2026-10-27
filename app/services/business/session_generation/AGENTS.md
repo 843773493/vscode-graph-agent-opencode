@@ -7,6 +7,7 @@
 ```text
 session_generation/
 ├── __init__.py          对外导出服务和生成器接口
+├── definition.py        保存校验与执行共用的 provider、版本及配置解析
 ├── naming.py            目标工作区导航命名模板与路径段校验，不推导物理 locator
 ├── providers.py         生成器类型合同与内置 prompt 生成器
 ├── reporting.py         子 Job 终态观察、结果回写与报告任务恢复

@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import Request
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
@@ -26,6 +24,8 @@ from app.schemas.gateway_control import (
 )
 from app.schemas.internal_v2.session_navigation.models import (
     SessionGenerationPreviewDTO,
+    SessionGenerationValidateRequest,
+    SessionGenerationValidationDTO,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,167 +82,51 @@ class SessionGeneratorCoordinator:
         *,
         request_id: str,
     ) -> None:
-        target = self._registry.resolve(self._target_workspace_id(definition))
-        url, headers = self._target_request(
-            target,
-            path="/api/v1/session-generations/capabilities",
-            request_id=request_id,
-        )
-        response = await self._http_client.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        body = response.json()
-        data = body.get("data") if isinstance(body, dict) else None
-        items = data.get("items") if isinstance(data, dict) else None
-        if not isinstance(items, list):
-            raise RuntimeError(
-                "目标工作区生成能力响应缺少 data.items 数组: "
-                f"workspace_id={target.workspace_id}"
-            )
-        capability = next(
-            (
-                item
-                for item in items
-                if isinstance(item, dict)
-                and item.get("type_id") == definition.generator_type.type_id
-            ),
-            None,
-        )
-        if capability is None:
-            raise GeneratorCapabilityMissingError(
-                "目标工作区未注册会话生成器类型: "
-                f"workspace_id={target.workspace_id}, "
-                f"type_id={definition.generator_type.type_id}"
-            )
-        versions = capability.get("supported_versions")
-        if not isinstance(versions, list) or definition.generator_type.version not in versions:
-            raise GeneratorCapabilityMissingError(
-                "目标工作区不支持会话生成器版本: "
-                f"workspace_id={target.workspace_id}, "
-                f"type_id={definition.generator_type.type_id}, "
-                f"version={definition.generator_type.version}"
-            )
-        schema = capability.get("config_schema")
-        if not isinstance(schema, dict):
-            raise RuntimeError(
-                "目标工作区生成能力缺少 config_schema: "
-                f"workspace_id={target.workspace_id}, "
-                f"type_id={definition.generator_type.type_id}"
-            )
-        try:
-            Draft202012Validator.check_schema(schema)
-            Draft202012Validator(schema).validate(definition.config)
-        except SchemaError as error:
-            raise RuntimeError(
-                "目标工作区返回了非法生成器 config_schema: "
-                f"workspace_id={target.workspace_id}, error={error.message}"
-            ) from error
-        except ValidationError as error:
-            location = ".".join(str(part) for part in error.absolute_path) or "<root>"
-            raise ValueError(
-                "会话生成器配置不符合目标工作区 provider schema: "
-                f"path={location}, error={error.message}"
-            ) from error
-        locator_kinds: dict[tuple[str, str], str] = {}
-        if definition.placement.kind == "session":
-            await self._validate_catalog_locator(
-                workspace_id=definition.placement.workspace_id,
-                node_id=definition.placement.session_id,
-                expected_kind="session",
-                description="会话挂载位置",
-                request_id=request_id,
-                known_kinds=locator_kinds,
-            )
-        elif definition.placement.kind == "session_folder":
-            await self._validate_catalog_locator(
-                workspace_id=definition.placement.workspace_id,
-                node_id=definition.placement.folder_id,
-                expected_kind="folder",
-                description="会话文件夹挂载位置",
-                request_id=request_id,
-                known_kinds=locator_kinds,
-            )
-        strategy_target = definition.session_strategy.target
-        if strategy_target is not None:
-            await self._validate_catalog_locator(
-                workspace_id=strategy_target.workspace_id,
-                node_id=strategy_target.session_id,
-                expected_kind="session",
-                description="生成策略目标会话",
-                request_id=request_id,
-                known_kinds=locator_kinds,
-            )
-        context_source = definition.context_source
-        if context_source.kind == "live_session":
-            await self._validate_catalog_locator(
-                workspace_id=context_source.workspace_id,
-                node_id=context_source.session_id,
-                expected_kind="session",
-                description="实时上下文来源会话",
-                request_id=request_id,
-                known_kinds=locator_kinds,
-            )
+        target = self._registry.resolve(definition.execution_workspace_id)
+        # TODO：定义与运行 owner 迁齐后删除 Gateway 业务入口；此处仅解析路由身份。
+        def backend_id(workspace_id: str) -> str:
+            resolved = self._registry.resolve(workspace_id)
+            if resolved.backend_workspace_id is None:
+                raise ValueError(f"目标工作区缺少后端稳定身份: {workspace_id}")
+            return resolved.backend_workspace_id
 
-    async def _validate_catalog_locator(
-        self,
-        *,
-        workspace_id: str | None,
-        node_id: str | None,
-        expected_kind: str,
-        description: str,
-        request_id: str,
-        known_kinds: dict[tuple[str, str], str],
-    ) -> None:
-        if workspace_id is None or node_id is None:
-            raise ValueError(f"{description}缺少 workspace_id/node_id")
-        locator_key = (workspace_id, node_id)
-        actual_kind = known_kinds.get(locator_key)
-        if actual_kind is None:
-            target = self._registry.resolve(workspace_id)
-            url, headers = self._target_request(
-                target,
-                path=f"/api/v1/session-catalog/breadcrumb/{node_id}",
-                request_id=request_id,
-            )
-            response = await self._http_client.get(
-                url,
-                headers=headers,
-                timeout=10,
-            )
-            response.raise_for_status()
-            body = response.json()
-            data = body.get("data") if isinstance(body, dict) else None
-            items = data.get("items") if isinstance(data, dict) else None
-            if not isinstance(items, list) or not items:
-                raise RuntimeError(
-                    "目标工作区 breadcrumb 响应缺少 data.items: "
-                    f"workspace_id={workspace_id}, node_id={node_id}"
-                )
-            terminal = items[-1]
-            if not isinstance(terminal, dict):
-                raise RuntimeError(
-                    "目标工作区 breadcrumb 末节点格式无效: "
-                    f"workspace_id={workspace_id}, node_id={node_id}"
-                )
-            actual_kind = terminal.get("kind")
-            if actual_kind not in {"folder", "session"}:
-                raise RuntimeError(
-                    "目标工作区 breadcrumb 末节点 kind 无效: "
-                    f"workspace_id={workspace_id}, node_id={node_id}, "
-                    f"kind={actual_kind}"
-                )
-            terminal_node_id = terminal.get("node_id")
-            if terminal_node_id != node_id:
-                raise RuntimeError(
-                    "目标工作区 breadcrumb 末节点与请求不一致: "
-                    f"workspace_id={workspace_id}, requested={node_id}, "
-                    f"actual={terminal_node_id}"
-                )
-            known_kinds[locator_key] = actual_kind
-        if actual_kind != expected_kind:
-            raise ValueError(
-                f"{description}节点类型错误: workspace_id={workspace_id}, "
-                f"node_id={node_id}, expected={expected_kind}, actual={actual_kind}"
-            )
+        placement = definition.placement.model_dump(mode="json")
+        placement["workspace_id"] = backend_id(definition.placement.workspace_id)
+        context = definition.context_source.model_dump(mode="json")
+        if definition.context_source.workspace_id is not None:
+            context["workspace_id"] = backend_id(definition.context_source.workspace_id)
+        strategy = definition.session_strategy.model_dump(mode="json")
+        if definition.session_strategy.target is not None:
+            strategy["target"] = {
+                **definition.session_strategy.target.model_dump(mode="json"),
+                "workspace_id": backend_id(definition.session_strategy.target.workspace_id),
+            }
+        payload = SessionGenerationValidateRequest.model_validate({
+            "generator_type": definition.generator_type.model_dump(mode="json"),
+            "name": definition.name,
+            "config": definition.config,
+            "placement": placement,
+            "context_source": context,
+            "session_strategy": strategy,
+            "execution_workspace_id": backend_id(definition.execution_workspace_id),
+            "title_template": definition.naming.title_template,
+            "path_template": definition.naming.path_template,
+        })
+        url, headers = self._target_request(
+            target, path="/api/v1/session-generations/validate-definition", request_id=request_id,
+        )
+        response = await self._http_client.post(url, headers=headers, json=payload.model_dump(mode="json"), timeout=10)
+        if response.status_code in {400, 404}:
+            detail = response.json()["detail"]
+            if response.status_code == 404:
+                raise KeyError(detail)
+            raise ValueError(detail)
+        response.raise_for_status()
+        result = SessionGenerationValidationDTO.model_validate(response.json()["data"])
+        if result.workspace_id != payload.execution_workspace_id:
+            raise RuntimeError(f"生成器定义校验响应工作区不匹配: {result.workspace_id}")
+        if not result.provider_available:
+            raise GeneratorCapabilityMissingError(result.reason)
 
     async def run_manual(
         self,
@@ -329,7 +213,7 @@ class SessionGeneratorCoordinator:
         )
         self._store.write_run(run)
         try:
-            target = self._registry.resolve(self._target_workspace_id(definition))
+            target = self._registry.resolve(definition.execution_workspace_id)
             execution = await self._execute(
                 definition,
                 run,
@@ -368,29 +252,6 @@ class SessionGeneratorCoordinator:
         self._store.write_run(running)
         self._schedule_monitor(definition, running)
         return running
-
-    @staticmethod
-    def _target_workspace_id(
-        definition: GeneratorDefinitionCreateRequest | GeneratorDefinitionDTO,
-    ) -> str:
-        placement_workspace_id = definition.placement.workspace_id
-        if definition.execution_workspace_id != placement_workspace_id:
-            raise ValueError(
-                "当前版本要求 execution_workspace_id 与会话挂载工作区一致: "
-                f"execution_workspace_id={definition.execution_workspace_id}, "
-                f"placement_workspace_id={placement_workspace_id}"
-            )
-        strategy_target = definition.session_strategy.target
-        if (
-            strategy_target is not None
-            and strategy_target.workspace_id != placement_workspace_id
-        ):
-            raise ValueError(
-                "生成策略目标工作区与挂载工作区不一致: "
-                f"target={strategy_target.workspace_id}, "
-                f"placement={placement_workspace_id}"
-            )
-        return definition.execution_workspace_id
 
     async def _execute(
         self,
@@ -548,7 +409,7 @@ class SessionGeneratorCoordinator:
             raise RuntimeError(f"running 生成记录缺少 job_id: {run.run_id}")
         try:
             target = self._registry.resolve(
-                run.execution_workspace_id or self._target_workspace_id(definition)
+                run.execution_workspace_id or definition.execution_workspace_id
             )
             await self._complete_generation(target=target, run=run)
         except asyncio.CancelledError:

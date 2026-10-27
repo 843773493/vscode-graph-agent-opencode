@@ -2813,3 +2813,55 @@ message SessionGenerationPreviewDTO {
   string physical_location = 5;
   optional string target_session_id = 6;
 }
+
+// 定义校验与执行使用同一工作区 Provider、catalog 和 Thread owner。
+message SessionGenerationGeneratorTypeDTO {
+  string type_id = 1;
+  string version = 2;
+}
+
+message SessionGenerationPlacementDTO {
+  string kind = 1;
+  string workspace_id = 2;
+  optional string session_id = 3;
+  optional string folder_id = 4;
+}
+
+message SessionGenerationContextSourceDTO {
+  optional string kind = 1;
+  optional string workspace_id = 2;
+  optional string session_id = 3;
+  optional string thread_id = 4;
+  optional string snapshot_id = 5;
+}
+
+message SessionGenerationTargetDTO {
+  string workspace_id = 1;
+  string session_id = 2;
+  string thread_id = 3;
+}
+
+message SessionGenerationStrategyDTO {
+  string mode = 1;
+  optional SessionGenerationTargetDTO target = 2;
+  optional string concurrency = 3;
+  optional string report_back = 4;
+}
+
+message SessionGenerationValidateRequest {
+  SessionGenerationGeneratorTypeDTO generator_type = 1;
+  string name = 2;
+  google.protobuf.Struct config = 3;
+  SessionGenerationPlacementDTO placement = 4;
+  SessionGenerationContextSourceDTO context_source = 5;
+  SessionGenerationStrategyDTO session_strategy = 6;
+  string execution_workspace_id = 7;
+  string title_template = 8;
+  repeated string path_template = 9;
+}
+
+message SessionGenerationValidationDTO {
+  string workspace_id = 1;
+  bool provider_available = 2;
+  optional string reason = 3;
+}

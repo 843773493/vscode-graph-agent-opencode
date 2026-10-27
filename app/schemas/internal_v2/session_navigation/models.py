@@ -130,21 +130,41 @@ class SessionGenerationStrategyDTO(BaseModel):
         return self
 
 
-class SessionGenerationExecuteRequest(BaseModel):
+class SessionGenerationDefinitionDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
-    generator_id: str
-    idempotency_key: str
     generator_type: SessionGenerationGeneratorTypeDTO
     name: str
     config: dict[str, object] = Field(default_factory=dict)
     placement: SessionGenerationPlacementDTO
     context_source: SessionGenerationContextSourceDTO
     session_strategy: SessionGenerationStrategyDTO
+    execution_workspace_id: str
+
+
+class SessionGenerationExecuteRequest(SessionGenerationDefinitionDTO):
+    run_id: str
+    generator_id: str
+    idempotency_key: str
     title: str
     navigation_path: list[str] = Field(default_factory=list)
-    execution_workspace_id: str
+
+
+class SessionGenerationValidateRequest(SessionGenerationDefinitionDTO):
+    title_template: str = Field(min_length=1, max_length=500)
+    path_template: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SessionGenerationValidationDTO(BaseModel):
+    workspace_id: str
+    provider_available: bool
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> SessionGenerationValidationDTO:
+        if self.provider_available == bool(self.reason):
+            raise ValueError("不可用 provider 必须提供原因，可用时不得带不可用原因")
+        return self
 
 
 class SessionGenerationPreviewRequest(BaseModel):

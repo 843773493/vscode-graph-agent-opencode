@@ -2866,6 +2866,58 @@ export interface SessionGenerationPreviewDTO {
   target_session_id?: string | undefined;
 }
 
+/** 定义校验与执行使用同一工作区 Provider、catalog 和 Thread owner。 */
+export interface SessionGenerationGeneratorTypeDTO {
+  type_id: string;
+  version: string;
+}
+
+export interface SessionGenerationPlacementDTO {
+  kind: string;
+  workspace_id: string;
+  session_id?: string | undefined;
+  folder_id?: string | undefined;
+}
+
+export interface SessionGenerationContextSourceDTO {
+  kind?: string | undefined;
+  workspace_id?: string | undefined;
+  session_id?: string | undefined;
+  thread_id?: string | undefined;
+  snapshot_id?: string | undefined;
+}
+
+export interface SessionGenerationTargetDTO {
+  workspace_id: string;
+  session_id: string;
+  thread_id: string;
+}
+
+export interface SessionGenerationStrategyDTO {
+  mode: string;
+  target?: SessionGenerationTargetDTO | undefined;
+  concurrency?: string | undefined;
+  report_back?: string | undefined;
+}
+
+export interface SessionGenerationValidateRequest {
+  generator_type: SessionGenerationGeneratorTypeDTO | undefined;
+  name: string;
+  config: { [key: string]: any } | undefined;
+  placement: SessionGenerationPlacementDTO | undefined;
+  context_source: SessionGenerationContextSourceDTO | undefined;
+  session_strategy: SessionGenerationStrategyDTO | undefined;
+  execution_workspace_id: string;
+  title_template: string;
+  path_template: string[];
+}
+
+export interface SessionGenerationValidationDTO {
+  workspace_id: string;
+  provider_available: boolean;
+  reason?: string | undefined;
+}
+
 function createBaseAPIResponse(): APIResponse {
   return { code: undefined, message: undefined, data: undefined, request_id: "" };
 }
@@ -20801,6 +20853,376 @@ export const SessionGenerationPreviewDTO: MessageFns<SessionGenerationPreviewDTO
     message.navigation_path = object.navigation_path?.map((e) => e) || [];
     message.physical_location = object.physical_location ?? "";
     message.target_session_id = object.target_session_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationGeneratorTypeDTO(): SessionGenerationGeneratorTypeDTO {
+  return { type_id: "", version: "" };
+}
+
+export const SessionGenerationGeneratorTypeDTO: MessageFns<SessionGenerationGeneratorTypeDTO> = {
+  fromJSON(object: any): SessionGenerationGeneratorTypeDTO {
+    return {
+      type_id: isSet(object.type_id) ? globalThis.String(object.type_id) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+    };
+  },
+
+  toJSON(message: SessionGenerationGeneratorTypeDTO): unknown {
+    const obj: any = {};
+    if (message.type_id !== "") {
+      obj.type_id = message.type_id;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationGeneratorTypeDTO>, I>>(
+    base?: I,
+  ): SessionGenerationGeneratorTypeDTO {
+    return SessionGenerationGeneratorTypeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationGeneratorTypeDTO>, I>>(
+    object: I,
+  ): SessionGenerationGeneratorTypeDTO {
+    const message = createBaseSessionGenerationGeneratorTypeDTO();
+    message.type_id = object.type_id ?? "";
+    message.version = object.version ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionGenerationPlacementDTO(): SessionGenerationPlacementDTO {
+  return { kind: "", workspace_id: "", session_id: undefined, folder_id: undefined };
+}
+
+export const SessionGenerationPlacementDTO: MessageFns<SessionGenerationPlacementDTO> = {
+  fromJSON(object: any): SessionGenerationPlacementDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      folder_id: isSet(object.folder_id) ? globalThis.String(object.folder_id) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationPlacementDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.folder_id !== undefined) {
+      obj.folder_id = message.folder_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationPlacementDTO>, I>>(base?: I): SessionGenerationPlacementDTO {
+    return SessionGenerationPlacementDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationPlacementDTO>, I>>(
+    object: I,
+  ): SessionGenerationPlacementDTO {
+    const message = createBaseSessionGenerationPlacementDTO();
+    message.kind = object.kind ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? undefined;
+    message.folder_id = object.folder_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationContextSourceDTO(): SessionGenerationContextSourceDTO {
+  return {
+    kind: undefined,
+    workspace_id: undefined,
+    session_id: undefined,
+    thread_id: undefined,
+    snapshot_id: undefined,
+  };
+}
+
+export const SessionGenerationContextSourceDTO: MessageFns<SessionGenerationContextSourceDTO> = {
+  fromJSON(object: any): SessionGenerationContextSourceDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      snapshot_id: isSet(object.snapshot_id) ? globalThis.String(object.snapshot_id) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationContextSourceDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== undefined) {
+      obj.kind = message.kind;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.snapshot_id !== undefined) {
+      obj.snapshot_id = message.snapshot_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationContextSourceDTO>, I>>(
+    base?: I,
+  ): SessionGenerationContextSourceDTO {
+    return SessionGenerationContextSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationContextSourceDTO>, I>>(
+    object: I,
+  ): SessionGenerationContextSourceDTO {
+    const message = createBaseSessionGenerationContextSourceDTO();
+    message.kind = object.kind ?? undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
+    message.snapshot_id = object.snapshot_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationTargetDTO(): SessionGenerationTargetDTO {
+  return { workspace_id: "", session_id: "", thread_id: "" };
+}
+
+export const SessionGenerationTargetDTO: MessageFns<SessionGenerationTargetDTO> = {
+  fromJSON(object: any): SessionGenerationTargetDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+    };
+  },
+
+  toJSON(message: SessionGenerationTargetDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationTargetDTO>, I>>(base?: I): SessionGenerationTargetDTO {
+    return SessionGenerationTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationTargetDTO>, I>>(object: I): SessionGenerationTargetDTO {
+    const message = createBaseSessionGenerationTargetDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionGenerationStrategyDTO(): SessionGenerationStrategyDTO {
+  return { mode: "", target: undefined, concurrency: undefined, report_back: undefined };
+}
+
+export const SessionGenerationStrategyDTO: MessageFns<SessionGenerationStrategyDTO> = {
+  fromJSON(object: any): SessionGenerationStrategyDTO {
+    return {
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      target: isSet(object.target) ? SessionGenerationTargetDTO.fromJSON(object.target) : undefined,
+      concurrency: isSet(object.concurrency) ? globalThis.String(object.concurrency) : undefined,
+      report_back: isSet(object.report_back) ? globalThis.String(object.report_back) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationStrategyDTO): unknown {
+    const obj: any = {};
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.target !== undefined) {
+      obj.target = SessionGenerationTargetDTO.toJSON(message.target);
+    }
+    if (message.concurrency !== undefined) {
+      obj.concurrency = message.concurrency;
+    }
+    if (message.report_back !== undefined) {
+      obj.report_back = message.report_back;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationStrategyDTO>, I>>(base?: I): SessionGenerationStrategyDTO {
+    return SessionGenerationStrategyDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationStrategyDTO>, I>>(object: I): SessionGenerationStrategyDTO {
+    const message = createBaseSessionGenerationStrategyDTO();
+    message.mode = object.mode ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? SessionGenerationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.concurrency = object.concurrency ?? undefined;
+    message.report_back = object.report_back ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionGenerationValidateRequest(): SessionGenerationValidateRequest {
+  return {
+    generator_type: undefined,
+    name: "",
+    config: undefined,
+    placement: undefined,
+    context_source: undefined,
+    session_strategy: undefined,
+    execution_workspace_id: "",
+    title_template: "",
+    path_template: [],
+  };
+}
+
+export const SessionGenerationValidateRequest: MessageFns<SessionGenerationValidateRequest> = {
+  fromJSON(object: any): SessionGenerationValidateRequest {
+    return {
+      generator_type: isSet(object.generator_type)
+        ? SessionGenerationGeneratorTypeDTO.fromJSON(object.generator_type)
+        : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      config: isObject(object.config) ? object.config : undefined,
+      placement: isSet(object.placement) ? SessionGenerationPlacementDTO.fromJSON(object.placement) : undefined,
+      context_source: isSet(object.context_source)
+        ? SessionGenerationContextSourceDTO.fromJSON(object.context_source)
+        : undefined,
+      session_strategy: isSet(object.session_strategy)
+        ? SessionGenerationStrategyDTO.fromJSON(object.session_strategy)
+        : undefined,
+      execution_workspace_id: isSet(object.execution_workspace_id)
+        ? globalThis.String(object.execution_workspace_id)
+        : "",
+      title_template: isSet(object.title_template) ? globalThis.String(object.title_template) : "",
+      path_template: globalThis.Array.isArray(object?.path_template)
+        ? object.path_template.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionGenerationValidateRequest): unknown {
+    const obj: any = {};
+    if (message.generator_type !== undefined) {
+      obj.generator_type = SessionGenerationGeneratorTypeDTO.toJSON(message.generator_type);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.config !== undefined) {
+      obj.config = message.config;
+    }
+    if (message.placement !== undefined) {
+      obj.placement = SessionGenerationPlacementDTO.toJSON(message.placement);
+    }
+    if (message.context_source !== undefined) {
+      obj.context_source = SessionGenerationContextSourceDTO.toJSON(message.context_source);
+    }
+    if (message.session_strategy !== undefined) {
+      obj.session_strategy = SessionGenerationStrategyDTO.toJSON(message.session_strategy);
+    }
+    if (message.execution_workspace_id !== "") {
+      obj.execution_workspace_id = message.execution_workspace_id;
+    }
+    if (message.title_template !== "") {
+      obj.title_template = message.title_template;
+    }
+    if (message.path_template?.length) {
+      obj.path_template = message.path_template;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationValidateRequest>, I>>(
+    base?: I,
+  ): SessionGenerationValidateRequest {
+    return SessionGenerationValidateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationValidateRequest>, I>>(
+    object: I,
+  ): SessionGenerationValidateRequest {
+    const message = createBaseSessionGenerationValidateRequest();
+    message.generator_type = (object.generator_type !== undefined && object.generator_type !== null)
+      ? SessionGenerationGeneratorTypeDTO.fromPartial(object.generator_type)
+      : undefined;
+    message.name = object.name ?? "";
+    message.config = object.config ?? undefined;
+    message.placement = (object.placement !== undefined && object.placement !== null)
+      ? SessionGenerationPlacementDTO.fromPartial(object.placement)
+      : undefined;
+    message.context_source = (object.context_source !== undefined && object.context_source !== null)
+      ? SessionGenerationContextSourceDTO.fromPartial(object.context_source)
+      : undefined;
+    message.session_strategy = (object.session_strategy !== undefined && object.session_strategy !== null)
+      ? SessionGenerationStrategyDTO.fromPartial(object.session_strategy)
+      : undefined;
+    message.execution_workspace_id = object.execution_workspace_id ?? "";
+    message.title_template = object.title_template ?? "";
+    message.path_template = object.path_template?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseSessionGenerationValidationDTO(): SessionGenerationValidationDTO {
+  return { workspace_id: "", provider_available: false, reason: undefined };
+}
+
+export const SessionGenerationValidationDTO: MessageFns<SessionGenerationValidationDTO> = {
+  fromJSON(object: any): SessionGenerationValidationDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      provider_available: isSet(object.provider_available) ? globalThis.Boolean(object.provider_available) : false,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGenerationValidationDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.provider_available !== false) {
+      obj.provider_available = message.provider_available;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGenerationValidationDTO>, I>>(base?: I): SessionGenerationValidationDTO {
+    return SessionGenerationValidationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGenerationValidationDTO>, I>>(
+    object: I,
+  ): SessionGenerationValidationDTO {
+    const message = createBaseSessionGenerationValidationDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.provider_available = object.provider_available ?? false;
+    message.reason = object.reason ?? undefined;
     return message;
   },
 };

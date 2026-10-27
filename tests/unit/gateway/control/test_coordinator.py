@@ -8,7 +8,10 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.gateway.control.coordinator import SessionGeneratorCoordinator
+from app.gateway.control.coordinator import (
+    GeneratorCapabilityMissingError,
+    SessionGeneratorCoordinator,
+)
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.registry import WorkspaceTarget
 from app.schemas.gateway_control import (
@@ -53,6 +56,12 @@ class _Registry:
         )
 
     def resolve(self, workspace_id: str) -> WorkspaceTarget:
+        if workspace_id == "gw_other":
+            return WorkspaceTarget(
+                workspace_id="gw_other", name="另一目标", root_path=None,
+                backend_url="http://other.test", connection_kind="ssh",
+                backend_workspace_id="00000000-0000-4000-8000-000000000002",
+            )
         if workspace_id != self.target.workspace_id:
             raise KeyError(f"未知工作区: {workspace_id}")
         return self.target
@@ -79,111 +88,62 @@ def _definition(**updates: object) -> GeneratorDefinitionCreateRequest:
     return GeneratorDefinitionCreateRequest.model_validate(payload)
 
 
-def _response(request: httpx.Request) -> httpx.Response:
-    if request.url.path == "/api/v1/session-generations/capabilities":
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "items": [
-                        {
-                            "type_id": "builtin.agent_prompt",
-                            "supported_versions": ["1"],
-                            "config_schema": {
-                                "type": "object",
-                                "properties": {"prompt": {"type": "string"}},
-                                "required": ["prompt"],
-                                "additionalProperties": False,
-                            },
-                        }
-                    ]
-                }
-            },
-        )
-    node_id = request.url.path.rsplit("/", maxsplit=1)[-1]
-    kind = {
-        "fld_wrong": "folder",
-        "ses_shared": "session",
-    }[node_id]
-    return httpx.Response(
-        200,
-        json={
-            "data": {
-                "revision": "rev_test",
-                "items": [{"node_id": node_id, "kind": kind, "name": node_id}],
-            }
-        },
-    )
-
-
 @pytest.mark.asyncio
-async def test_capability_validation_rejects_folder_used_as_session() -> None:
-    async with httpx.AsyncClient(transport=httpx.MockTransport(_response)) as client:
+@pytest.mark.parametrize("source_workspace", ["gw_test", "gw_other"])
+async def test_definition_validation_resolves_each_route_identity(source_workspace: str) -> None:
+    registry = _Registry()
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": {
+            "workspace_id": registry.target.backend_workspace_id,
+            "provider_available": True,
+        }})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         coordinator = SessionGeneratorCoordinator(
-            registry=_Registry(),  # type: ignore[arg-type]
+            registry=registry,  # type: ignore[arg-type]
             store=_UnusedStore(),  # type: ignore[arg-type]
             http_client=client,
         )
         definition = _definition(
-            placement={
-                "kind": "session",
-                "workspace_id": "gw_test",
-                "session_id": "fld_wrong",
-            }
-        )
-
-        with pytest.raises(ValueError, match="节点类型错误.*actual=folder"):
-            await coordinator.validate_definition_capability(
-                definition,
-                request_id="req_wrong_kind",
-            )
-
-
-@pytest.mark.asyncio
-async def test_duplicate_session_locators_share_one_catalog_probe() -> None:
-    requests: list[str] = []
-
-    def recording_response(request: httpx.Request) -> httpx.Response:
-        requests.append(request.url.path)
-        return _response(request)
-
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(recording_response)
-    ) as client:
-        coordinator = SessionGeneratorCoordinator(
-            registry=_Registry(),  # type: ignore[arg-type]
-            store=_UnusedStore(),  # type: ignore[arg-type]
-            http_client=client,
-        )
-        definition = _definition(
-            placement={
-                "kind": "session",
-                "workspace_id": "gw_test",
-                "session_id": "ses_shared",
-            },
-            context_source={
-                "kind": "live_session",
-                "workspace_id": "gw_test",
-                "session_id": "ses_shared",
-                "thread_id": "thr_shared",
-            },
+            placement={"kind": "session", "workspace_id": "gw_test", "session_id": "ses_shared"},
+            context_source={"kind": "live_session", "workspace_id": source_workspace, "session_id": "ses_shared", "thread_id": "thr_shared"},
             session_strategy={
                 "mode": "continue_existing",
-                "target": {
-                    "workspace_id": "gw_test",
-                    "session_id": "ses_shared",
-                    "thread_id": "thr_shared",
-                },
-                "concurrency": "queue",
-                "report_back": "none",
+                "target": {"workspace_id": "gw_test", "session_id": "ses_shared", "thread_id": "thr_shared"},
             },
         )
+        await coordinator.validate_definition_capability(definition, request_id="req_definition")
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/api/v1/session-generations/validate-definition"
+    assert request.headers["X-Request-ID"] == "req_definition"
+    assert request.headers["X-BoxTeam-Workspace-Id"] == registry.target.backend_workspace_id
+    payload = json.loads(request.content)
+    assert payload["execution_workspace_id"] == registry.target.backend_workspace_id
+    assert payload["placement"]["workspace_id"] == registry.target.backend_workspace_id
+    assert payload["context_source"]["workspace_id"] == registry.resolve(source_workspace).backend_workspace_id
+    assert payload["session_strategy"]["target"]["workspace_id"] == registry.target.backend_workspace_id
+    assert payload["session_strategy"]["target"]["thread_id"] == "thr_shared"
+    assert definition.execution_workspace_id == "gw_test"
 
-        await coordinator.validate_definition_capability(
-            definition,
-            request_id="req_deduplicate",
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "data", "error_type"), [
+    (400, {"detail": "invalid config"}, ValueError),
+    (404, {"detail": "missing thread"}, KeyError),
+    (503, {"detail": "backend unavailable"}, httpx.HTTPStatusError),
+    (200, {"data": {"workspace_id": "00000000-0000-4000-8000-000000000001", "provider_available": False, "reason": "missing provider"}}, GeneratorCapabilityMissingError),
+])
+async def test_definition_validation_preserves_error_category(status: int, data: dict[str, object], error_type: type[Exception]) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(status, json=data))) as client:
+        coordinator = SessionGeneratorCoordinator(
+            registry=_Registry(),  # type: ignore[arg-type]
+            store=_UnusedStore(),  # type: ignore[arg-type]
+            http_client=client,
         )
-
-    assert requests.count(
-        "/api/v1/session-catalog/breadcrumb/ses_shared"
-    ) == 1
+        with pytest.raises(error_type):
+            await coordinator.validate_definition_capability(_definition(), request_id="req_error")
