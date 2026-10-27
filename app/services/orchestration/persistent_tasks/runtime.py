@@ -185,6 +185,8 @@ class PersistentTaskRuntime:
             raise RuntimeError("已验证的持久任务定义缺少 Thread")
         source_id = f"persistent-task:{run.task_id}"
         content = configuration.context.content
+        if run.trigger_payload is not None:
+            content += "\n" + json.dumps({"trigger_input": run.trigger_payload}, ensure_ascii=False)
         if configuration.condition.type_id == "builtin.script":
             if run.decision is None:
                 raise RuntimeError("脚本动作缺少已持久化判断")

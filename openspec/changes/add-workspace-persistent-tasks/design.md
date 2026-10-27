@@ -95,6 +95,8 @@ Goal 的 `active/paused/blocked/usage_limited/budget_limited/complete` 及预算
 
 `policies.match_mode`默认`each_match`，保持普通定时任务逐计划执行。`first_match`以同一任务已有的持久接受回执判定是否完成首次投递；`rising_edge`以原运行接受顺序中最近的有效wait/proceed判断为边沿，首次无判断等同尚未满足。干跑、过期判断、失败及complete/needs_attention不构造新的边沿，暂停/恢复和改名不重置条件事实。判断、策略选择与运行阶段同事务提交，不另建可变匹配账本。非试运行的proceed停在checked表示策略未触发动作，保留原判断和理由、无错误也无投递。已选中但尚未记录接受回执的运行恢复原动作，先对账后推进后续检查。
 
+外部触发组件为`builtin.external`，通过受既有工作区认证保护的`/{task_id}/notifications`接收非空幂等键与JSON对象payload，不依赖Gateway调度或调用方轮询任务revision。接受事务冻结当时任务/定义revision、原request_id和payload；重试先查原触发，因此编辑或暂停不改变既有接受结果，同键异内容明确冲突。新通知只接受active的外部触发任务；暂停、终结或组件不匹配不得建立新运行。payload作为不可变触发事实进入schema18的原运行表，脚本从stdin读取，动作以不可信正文传给原source owner，恢复不读取当前外部服务猜测旧输入。既有manual/interval/cron内容及恢复幂等preimage保持不变，v16/v17沿有序SQL迁移保留原运行身份与接受顺序。
+
 后端恢复时先对账在途判断与动作，再推进计划。已存在 durable execution/wakeup 的动作复用原身份，未确认脚本副作用的运行显示中断或结果未知，不盲目重放。missed schedule 沿用显式 skip/run_latest/catch_up；进程停机不承诺执行。任务事件经现有 SSE 传播，错误必须可见。
 
 ### 6.1 启动只等待通用运行时就绪，任务恢复由受管理 worker 处理

@@ -22,21 +22,21 @@ class TaskComponentDTO(BaseModel):
 
 
 class TaskTriggerDTO(TaskComponentDTO):
-    type_id: Literal["builtin.manual", "builtin.interval", "builtin.cron"]
+    type_id: Literal["builtin.manual", "builtin.interval", "builtin.cron", "builtin.external"]
     interval_seconds: int | None = Field(default=None, ge=1)
     expression: str | None = None
     timezone: str = "UTC"
 
     def schedule(self) -> TimeSchedule | None:
-        if self.type_id == "builtin.manual":
+        if self.type_id in {"builtin.manual", "builtin.external"}:
             return None
         kind = "interval" if self.type_id == "builtin.interval" else "cron"
         return TimeSchedule(kind, self.interval_seconds, self.expression, self.timezone)
 
     @model_validator(mode="after")
     def validate_schedule(self) -> TaskTriggerDTO:
-        if self.type_id == "builtin.manual" and (self.interval_seconds is not None or self.expression is not None or self.timezone != "UTC"):
-            raise ValueError("手动触发不能配置时间计划")
+        if self.type_id in {"builtin.manual", "builtin.external"} and (self.interval_seconds is not None or self.expression is not None or self.timezone != "UTC"):
+            raise ValueError("非时间触发不能配置时间计划")
         if self.type_id == "builtin.interval" and self.expression is not None:
             raise ValueError("interval trigger 不能配置 cron expression")
         if self.type_id == "builtin.cron" and self.interval_seconds is not None:
@@ -148,8 +148,9 @@ class PersistentTaskRunDTO(BaseModel):
     definition_revision: int
     trigger_key: str
     request_id: str | None = None
-    trigger_type: Literal["manual", "interval", "cron"] = "manual"
+    trigger_type: Literal["manual", "interval", "cron", "external"] = "manual"
     scheduled_for: datetime | None = None
+    trigger_payload: dict[str, JsonValue] | None = None
     check_only: bool
     phase: TaskRunPhase
     decision: TaskDecisionDTO | None = None
@@ -187,6 +188,13 @@ class PersistentTaskCheckRequest(BaseModel):
     idempotency_key: str = Field(min_length=1)
     expected_revision: int = Field(ge=1)
     check_only: bool = False
+
+
+class PersistentTaskNotificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    idempotency_key: str = Field(min_length=1)
+    payload: dict[str, JsonValue]
 
 
 class PersistentTaskListDTO(BaseModel):

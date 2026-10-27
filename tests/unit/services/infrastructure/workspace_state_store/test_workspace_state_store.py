@@ -59,7 +59,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 17
+        assert store.diagnostics().schema_version == 18
     finally:
         store.close()
 
@@ -98,7 +98,8 @@ def test_task_decision_and_lifecycle_roll_back_together(workspace_root):
         store.close()
 
 
-def test_v16_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch):
+@pytest.mark.parametrize("old_version", [16, 17])
+def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspace_root, monkeypatch, old_version):
     original = {
         "idempotency_key": "old-create", "enabled": True, "configuration": {
             "name": "旧手动任务", "trigger": {"type_id": "builtin.manual", "version": "1"},
@@ -112,13 +113,17 @@ def test_v16_task_migration_preserves_history_and_atomic_schedule_order(workspac
     }
     now = datetime(2026, 10, 27, tzinfo=UTC)
     database = SQLiteStateDatabase(path=workspace_root / ".boxteam/state/workspace.sqlite",
-                                   schema_version=16, migrations=_WORKSPACE_MIGRATIONS[:16])
+                                   schema_version=old_version, migrations=_WORKSPACE_MIGRATIONS[:old_version])
     with closing(database.connection()) as connection, connection:
         connection.execute("INSERT INTO persistent_tasks VALUES ('ptask_old','ws_old','old-create',?,1,1,'active',NULL,?,?)",
                            (sha256_jcs(original), now.isoformat(), now.isoformat()))
         connection.execute("INSERT INTO persistent_task_definitions VALUES ('ptask_old',1,?)", (json.dumps(original["configuration"]),))
-        connection.execute("INSERT INTO persistent_task_runs VALUES ('ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?)",
-                           (now.isoformat(), now.isoformat()))
+        if old_version == 16:
+            connection.execute("INSERT INTO persistent_task_runs VALUES ('ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?)",
+                               (now.isoformat(), now.isoformat()))
+        else:
+            connection.execute("INSERT INTO persistent_task_runs VALUES (37,'ptrun_old','ptask_old',1,1,'old-check','hash','req_original',0,'pending',NULL,NULL,NULL,?,?,'manual',NULL)",
+                               (now.isoformat(), now.isoformat()))
     database.close()
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
@@ -128,11 +133,13 @@ def test_v16_task_migration_preserves_history_and_atomic_schedule_order(workspac
         assert task.task_id == "ptask_old" and task.next_run_at is None
         run, = tasks.runs(task.task_id)
         assert run.run_id == "ptrun_old" and run.request_id == "req_original"
-        assert run.trigger_type == "manual" and run.scheduled_for is None and run.phase == "pending"
+        assert run.trigger_type == "manual" and run.scheduled_for is None and run.phase == "pending" and run.trigger_payload is None
         assert tasks.configuration(run) == request.configuration
         with closing(store.connection()) as connection:
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert connection.execute("SELECT name FROM sqlite_master WHERE name='persistent_task_runs_v16'").fetchall() == []
+            assert connection.execute("SELECT name FROM sqlite_master WHERE name='persistent_task_runs_v17'").fetchall() == []
+            assert connection.execute("SELECT run_sequence FROM persistent_task_runs WHERE run_id='ptrun_old'").fetchone()[0] == (37 if old_version == 17 else 1)
         scheduled = request.configuration.model_copy(update={"trigger": TaskTriggerDTO(type_id="builtin.interval", version="1", interval_seconds=60)})
         tasks.update(task.task_id, expected_revision=1, configuration=scheduled, now=now)
         due = now + timedelta(seconds=60)

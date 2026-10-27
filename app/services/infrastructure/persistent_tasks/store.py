@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
@@ -16,6 +17,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskCreateRequest,
     PersistentTaskDTO,
+    PersistentTaskNotificationRequest,
     PersistentTaskRunDTO,
     TaskDecisionDTO,
     TaskDeliveryDTO,
@@ -26,8 +28,8 @@ from app.services.infrastructure.workspace_state_store import WorkspaceStateStor
 
 _INSERT_RUN = (
     "INSERT INTO persistent_task_runs (run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,"
-    "request_id,check_only,phase,decision_json,delivery_json,error,created_at,updated_at,trigger_type,scheduled_for) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    "request_id,check_only,phase,decision_json,delivery_json,error,created_at,updated_at,trigger_type,scheduled_for,trigger_payload_json) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 
 
@@ -151,6 +153,7 @@ class PersistentTaskStore:
             definition_revision=row["definition_revision"], trigger_key=row["trigger_key"], check_only=bool(row["check_only"]),
             request_id=row["request_id"],
             trigger_type=row["trigger_type"], scheduled_for=row["scheduled_for"],
+            trigger_payload=json.loads(row["trigger_payload_json"]) if row["trigger_payload_json"] is not None else None,
             phase=row["phase"], decision=TaskDecisionDTO.model_validate_json(row["decision_json"]) if row["decision_json"] else None,
             delivery=TaskDeliveryDTO.model_validate_json(row["delivery_json"]) if row["delivery_json"] else None,
             error=row["error"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -164,7 +167,7 @@ class PersistentTaskStore:
                                       (task_id,)).fetchall()
             return [self._run(row) for row in rows]
 
-    def trigger(self, task_id: str, request: PersistentTaskCheckRequest, now: datetime, *,
+    def trigger(self, task_id: str, request: PersistentTaskCheckRequest | PersistentTaskNotificationRequest, now: datetime, *,
                 request_id: str | None) -> PersistentTaskRunDTO:
         preimage = sha256_jcs(request.model_dump(mode="json"))
         with self._transaction() as connection:
@@ -175,13 +178,20 @@ class PersistentTaskStore:
                 if row["trigger_hash"] != preimage:
                     raise ClientStateConflictError("持久任务触发幂等键对应不同输入")
                 return self._run(row)
-            self._require_revision(task, request.expected_revision)
-            if task.lifecycle != "active" and not request.check_only:
+            external = isinstance(request, PersistentTaskNotificationRequest)
+            check_only = request.check_only if isinstance(request, PersistentTaskCheckRequest) else False
+            if isinstance(request, PersistentTaskCheckRequest):
+                self._require_revision(task, request.expected_revision)
+            elif task.configuration.trigger.type_id != "builtin.external":
+                raise ValueError("只有外部通知触发的任务接受notifications")
+            if task.lifecycle != "active" and not check_only:
                 raise ClientStateConflictError("只有 active 持久任务可接受新动作")
             run_id = create_prefixed_id("ptrun")
             connection.execute(_INSERT_RUN, (
                 run_id, task_id, task.revision, task.definition_revision, request.idempotency_key, preimage,
-                request_id, int(request.check_only), "pending", None, None, None, now.isoformat(), now.isoformat(), "manual", None,
+                request_id, int(check_only), "pending", None, None, None, now.isoformat(), now.isoformat(),
+                "external" if external else "manual", None,
+                json.dumps(request.payload, ensure_ascii=False) if isinstance(request, PersistentTaskNotificationRequest) else None,
             ))
             return self._run(connection.execute("SELECT * FROM persistent_task_runs WHERE run_id=?", (run_id,)).fetchone())
 
@@ -214,7 +224,7 @@ class PersistentTaskStore:
                         create_prefixed_id("ptrun"), task_id, task.revision, task.definition_revision,
                         trigger_key, preimage, create_prefixed_id("req"), 0, "skipped" if missed else "pending", None, None,
                         "按 misfire=skip 跳过积压触发" if missed else None, now.isoformat(), now.isoformat(),
-                        schedule.kind, scheduled_for.isoformat(),
+                        schedule.kind, scheduled_for.isoformat(), None,
                     ))
                 connection.execute("UPDATE persistent_task_schedules SET next_run_at=? WHERE task_id=?",
                                    (following.isoformat(), task_id))

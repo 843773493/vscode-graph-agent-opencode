@@ -11878,6 +11878,11 @@ export declare type PersistentTaskRunDTO = Message<"boxteam.workspace.v2.Persist
    * @generated from field: optional google.protobuf.Timestamp scheduled_for = 15;
    */
   scheduledFor?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Struct trigger_payload = 16;
+   */
+  triggerPayload?: JsonObject | undefined;
 };
 
 /**
@@ -11979,6 +11984,27 @@ export declare type PersistentTaskCheckRequest = Message<"boxteam.workspace.v2.P
  * Use `create(PersistentTaskCheckRequestSchema)` to create a new message.
  */
 export declare const PersistentTaskCheckRequestSchema: GenMessage<PersistentTaskCheckRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskNotificationRequest
+ */
+export declare type PersistentTaskNotificationRequest = Message<"boxteam.workspace.v2.PersistentTaskNotificationRequest"> & {
+  /**
+   * @generated from field: string idempotency_key = 1;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct payload = 2;
+   */
+  payload?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskNotificationRequest.
+ * Use `create(PersistentTaskNotificationRequestSchema)` to create a new message.
+ */
+export declare const PersistentTaskNotificationRequestSchema: GenMessage<PersistentTaskNotificationRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.PersistentTaskListDTO

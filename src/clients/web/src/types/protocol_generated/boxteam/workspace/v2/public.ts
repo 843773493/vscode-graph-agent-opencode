@@ -2778,6 +2778,7 @@ export interface PersistentTaskRunDTO {
   request_id?: string | undefined;
   trigger_type: string;
   scheduled_for?: string | undefined;
+  trigger_payload?: { [key: string]: any } | undefined;
 }
 
 export interface PersistentTaskCreateRequest {
@@ -2800,6 +2801,11 @@ export interface PersistentTaskCheckRequest {
   idempotency_key: string;
   expected_revision: number;
   check_only: boolean;
+}
+
+export interface PersistentTaskNotificationRequest {
+  idempotency_key: string;
+  payload: { [key: string]: any } | undefined;
 }
 
 export interface PersistentTaskListDTO {
@@ -20070,6 +20076,7 @@ function createBasePersistentTaskRunDTO(): PersistentTaskRunDTO {
     request_id: undefined,
     trigger_type: "",
     scheduled_for: undefined,
+    trigger_payload: undefined,
   };
 }
 
@@ -20091,6 +20098,7 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
       request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
       trigger_type: isSet(object.trigger_type) ? globalThis.String(object.trigger_type) : "",
       scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
+      trigger_payload: isObject(object.trigger_payload) ? object.trigger_payload : undefined,
     };
   },
 
@@ -20141,6 +20149,9 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     if (message.scheduled_for !== undefined) {
       obj.scheduled_for = message.scheduled_for;
     }
+    if (message.trigger_payload !== undefined) {
+      obj.trigger_payload = message.trigger_payload;
+    }
     return obj;
   },
 
@@ -20168,6 +20179,7 @@ export const PersistentTaskRunDTO: MessageFns<PersistentTaskRunDTO> = {
     message.request_id = object.request_id ?? undefined;
     message.trigger_type = object.trigger_type ?? "";
     message.scheduled_for = object.scheduled_for ?? undefined;
+    message.trigger_payload = object.trigger_payload ?? undefined;
     return message;
   },
 };
@@ -20322,6 +20334,44 @@ export const PersistentTaskCheckRequest: MessageFns<PersistentTaskCheckRequest> 
     message.idempotency_key = object.idempotency_key ?? "";
     message.expected_revision = object.expected_revision ?? 0;
     message.check_only = object.check_only ?? false;
+    return message;
+  },
+};
+
+function createBasePersistentTaskNotificationRequest(): PersistentTaskNotificationRequest {
+  return { idempotency_key: "", payload: undefined };
+}
+
+export const PersistentTaskNotificationRequest: MessageFns<PersistentTaskNotificationRequest> = {
+  fromJSON(object: any): PersistentTaskNotificationRequest {
+    return {
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      payload: isObject(object.payload) ? object.payload : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskNotificationRequest): unknown {
+    const obj: any = {};
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.payload !== undefined) {
+      obj.payload = message.payload;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskNotificationRequest>, I>>(
+    base?: I,
+  ): PersistentTaskNotificationRequest {
+    return PersistentTaskNotificationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskNotificationRequest>, I>>(
+    object: I,
+  ): PersistentTaskNotificationRequest {
+    const message = createBasePersistentTaskNotificationRequest();
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.payload = object.payload ?? undefined;
     return message;
   },
 };

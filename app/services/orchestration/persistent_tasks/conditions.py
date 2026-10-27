@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from app.runtime.native_command import CommandOutputLimitError, run_native_command
 from app.schemas.internal_v2.persistent_task import (
@@ -30,11 +30,14 @@ async def evaluate_condition(configuration: PersistentTaskConfigurationDTO, run:
     script = condition.script
     assert script is not None
     # 冻结输入从原定义版本与触发事实构造，不复制另一份可变上下文历史。
+    trigger: dict[str, JsonValue] = {"key": run.trigger_key, "type": run.trigger_type,
+                                     "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None}
+    if run.trigger_payload is not None:
+        trigger["payload"] = run.trigger_payload
     input_value = {
         "version": "1", "workspace_id": workspace_id, "task_id": run.task_id, "run_id": run.run_id,
         "definition_revision": run.definition_revision, "task_revision": run.task_revision,
-        "trigger": {"key": run.trigger_key, "type": run.trigger_type,
-                    "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None},
+        "trigger": trigger,
         "check_only": run.check_only, "context": configuration.context.model_dump(mode="json"),
     }
     try:

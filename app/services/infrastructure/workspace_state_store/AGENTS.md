@@ -15,6 +15,7 @@ workspace_state_store/
     ├── 015.sql          MCP 连接操作及幂等 alias；第14次为 Python 来源合并
     ├── 016.sql          持久任务定义版本与运行账本
     ├── 017.sql          任务计划游标、接受序号与v16运行迁移
+    ├── 018.sql          外部通知触发输入与v17运行迁移
     └── legacy_config/   仅供一次性旧表迁移的 SQL
 ```
 

@@ -24,6 +24,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCreateRequest,
     PersistentTaskDTO,
     PersistentTaskListDTO,
+    PersistentTaskNotificationRequest,
     PersistentTaskRunDTO,
     PersistentTaskRunListDTO,
     PersistentTaskUpdateRequest,
@@ -113,3 +114,9 @@ async def task_runs(task_id: str, request_id: RequestId,
         return APIResponse(data=PersistentTaskRunListDTO(items=service.runs(task_id)), request_id=request_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
+
+
+@router.post("/{task_id}/notifications", response_model=APIResponse[PersistentTaskRunDTO])
+async def notify_task(task_id: str, payload: PersistentTaskNotificationRequest, request_id: RequestId,
+                      service: TaskService):
+    return APIResponse(data=await _apply(lambda: service.check(task_id, payload)), request_id=request_id)

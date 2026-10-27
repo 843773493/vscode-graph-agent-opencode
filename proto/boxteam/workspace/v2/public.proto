@@ -2728,6 +2728,7 @@ message PersistentTaskRunDTO {
   optional string request_id = 13;
   string trigger_type = 14;
   optional google.protobuf.Timestamp scheduled_for = 15;
+  optional google.protobuf.Struct trigger_payload = 16;
 }
 
 message PersistentTaskCreateRequest {
@@ -2750,6 +2751,11 @@ message PersistentTaskCheckRequest {
   string idempotency_key = 1;
   int64 expected_revision = 2;
   bool check_only = 3;
+}
+
+message PersistentTaskNotificationRequest {
+  string idempotency_key = 1;
+  google.protobuf.Struct payload = 2;
 }
 
 message PersistentTaskListDTO {

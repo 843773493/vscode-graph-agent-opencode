@@ -10,6 +10,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskControlRequest,
     PersistentTaskCreateRequest,
     PersistentTaskDTO,
+    PersistentTaskNotificationRequest,
     PersistentTaskRunDTO,
     PersistentTaskUpdateRequest,
     TaskLifecycle,
@@ -76,7 +77,7 @@ class PersistentTaskService:
             self.runtime.notify(task_id)
             return self.get(task_id)
 
-    async def check(self, task_id: str, request: PersistentTaskCheckRequest) -> PersistentTaskRunDTO:
+    async def check(self, task_id: str, request: PersistentTaskCheckRequest | PersistentTaskNotificationRequest) -> PersistentTaskRunDTO:
         self.runtime.assert_healthy()
         async with self.runtime.locks.lock_for(task_id):
             run = self._store.trigger(task_id, request, self.runtime.clock(), request_id=get_current_request_id())
