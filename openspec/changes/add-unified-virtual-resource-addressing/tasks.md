@@ -1093,3 +1093,10 @@
 - 新增30个三类原生位置×五个故障入口×正常/故障日志反例，修改前全部失败；最终五文件154 passed/12.33秒，经过真实列表路由/Depends/TraceMiddleware的ASGI序列化与SQLite writer，核request_id、成员generation/完整归属、原异常身份、全组失败持久投影、配置探针修复及独占writer关闭后的冷读。首次候选18失败来自新测试误将无进程冷列表的当前“未运行”事实等同磁盘历史故障；源码证明原加载不恢复内存owner.error、冷owner无进程，因此分开精确核当前backend_runtime_health类别、磁盘原故障及查询不写库，未改产品冷恢复语义。
 - 现有健康fixture和四个测试声明一次迁到`tests/unit/gateway/registry/test_health_projection.py`，不保留副本；其中三测试AST逐字一致，另一个按URI合同把详细原文断言移到诊断并保留准确RuntimeError/阶段和组锁行为。原根文件32个声明AST保持，旧接受矩阵路径仍对应保留声明且21项矩阵检查通过。新目录补四段AGENTS，生产345行、新测试334行；根注册表测试仍1150行的拆分风险保留。
 - Ruff与compileall通过；同三文件Pyright19→19，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称全类型绿。初轮搬迁残留httpx导入已删除。准确命令、原始输出、源码前后指纹、实际退出码和结构自审见`out/tests/temp/uri-global-closure/artifacts/verification-020.json`。HTTP/进程边界为ASGI/MockTransport/Probe，不代替独立Gateway或真实进程恢复/Web/Windows验收；完整Backend动作及其它普通错误出口继续待收口，2.2/7.2保持未勾，延期项不改为完成。
+
+
+### 2026-10-28 Backend 完整组动作与生命周期 HTTP 失败事实（2.2/7.2部分收口）
+
+- 启动、停机成员退出、恢复和完整组动作，以及普通/托管/联邦删除、两种重启、探测的普通错误共用既有 failure_detail；不再把异常原文写入 owner/connection_error 或普通响应。成员关闭继续尝试全部成员、保留失败handle与原意图，通过ExceptionGroup保留runtime.close原异常；取消、发布后不回退、结构化blocker和原入口重试合同保持。联邦删除原仅捕获KeyError，实际LookupError导致不存在目标返回500，本片修为原404拒绝，并删除托管删除的冗余KeyError分支。
+- 新增70例覆盖POSIX/盘符/UNC、日志正常/失败、完整组启停/安全与强制重启/三种删除、外部探测409/502、八入口404/409，检查ASGI序列化、request_id、SQLite原writer重读、owner/成员UUID/generation、原错误诊断与原入口恢复。36例正确鉴权后在旧生产实现复现泄漏；首次36例401为新测试缺失访问依赖覆盖，不计复现。生命周期文件最终200例均已覆盖通过：266轮199 passed/1 failed，最后一项是测试误认普通删除KeyError为LookupError，精确修正后271轮16 passed；未改断言为允许两者。相关七文件259轮295 passed/5 failed，完整旧HEAD的git archive同组256轮253 passed/同5 failed，均为httpx INFO触发旧“日志为空”断言，保留原断言。
+- Ruff40→40、Pyright162→162，按文件/最窄AST owner/规则/完整消息多重集无新增，新测试零诊断；strict51/51。原命令、准确指纹、原始输出、真实退出码及归因见out/tests/temp/uri-global-closure/artifacts/verification-021.json。作者结构自审：无新目录/owner/SQL/schema，生产文件均低于800行；原重连测试仍超过800行，按原AGENTS继续按fixture与场景拆分的风险保留。ASGI/Probe不代替真实进程、Web或Windows验收，2.2/7.2全局门仍未勾，直接创建等普通错误链继续待收口，延期项保持TODO。

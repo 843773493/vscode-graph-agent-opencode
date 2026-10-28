@@ -21,6 +21,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_federation_token,
+    verify_gateway_access,
     verify_gateway_token,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -1056,7 +1057,7 @@ async def test_force_restart_unreleased_reference_fails_closed_then_full_start_r
         assert not process_boundary.starts
         assert all(registry.resolve(member_id).connection_error for member_id in graph.owner.contract.workspace_ids)
         for member_id in graph.owner.contract.workspace_ids:
-            with pytest.raises(RuntimeError, match="旧路由引用未释放"):
+            with pytest.raises(RuntimeError, match="stage=backend_group_action, error=RuntimeError"):
                 registry.resolve_service_url(member_id, "workspace_api")
     finally:
         registry.release_route_reference("member-b", streaming=True)
@@ -1103,7 +1104,7 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
 
 @pytest.mark.asyncio
 async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent_then_start_repairs(
-    workspace_runtime_controller_case, process_boundary,
+    workspace_runtime_controller_case, process_boundary, caplog,
 ) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
@@ -1111,8 +1112,15 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
     runtime = graph.runtimes["member-b"]
     failed = runtime.processes["browser_manager"]
     failed.failure = RuntimeError("browser 清理失败")
-    with pytest.raises(RuntimeError, match="browser 清理失败"):
-        registry.stop_backend_owner(graph.owner)
+    try:
+        with pytest.raises(RuntimeError, match="stage=backend_member_stop, error=RuntimeError") as stopped_error:
+            registry.stop_backend_owner(graph.owner)
+    finally:
+        failed.failure = None
+    assert isinstance(stopped_error.value.__cause__, ExceptionGroup)
+    original_error, = stopped_error.value.__cause__.exceptions
+    assert isinstance(original_error, RuntimeError) and "browser 清理失败" in str(original_error)
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
     assert graph.owner.process is None
     assert not registry.has_runtime("member-a")
     assert registry.managed_runtime("member-b") is runtime
@@ -1362,6 +1370,7 @@ def deletion_http_application(workspace_runtime_controller_case, tmp_path, monke
         registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs",
     )
     app.dependency_overrides[verify_gateway_token] = lambda: "local-test-token"
+    app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
     app.dependency_overrides[verify_federation_token] = lambda: GatewayAuthContext(kind="federation", peer_gateway_id="peer")
     app.state.federation_policy_store = FederationPolicyStore(initial={"rules": [{
         "capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer"),
@@ -1430,7 +1439,8 @@ async def test_delete_rejects_unrelated_desired_set_before_any_drain(workspace_r
     request = graph.group_request.model_copy(update={"desired_workspace_ids": []}).model_dump(mode="json")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.request("DELETE", "/api/gateway/workspaces/member-a", json=request)
-    assert response.status_code == 409 and "其余完整成员" in response.json()["detail"]
+    assert response.status_code == 409
+    assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=ValueError"
     assert not runtime_actions and not graph.owner.process.closed and registry.resolve("member-a").desired_running
 
 
@@ -1457,7 +1467,7 @@ async def test_delete_force_failed_backend_ack_reports_detail_and_keeps_unique_p
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.request("DELETE", f"{prefix}/member-a?force=true", json=request)
     assert response.status_code == 502, response.text
-    assert "member-b durable ack" in response.json()["detail"]
+    assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=ConnectError"
     assert graph.owner.process is old and not old.closed and not process_boundary.starts
     assert registry.backend_owner("member-a") is graph.owner and registry.resolve("member-a").desired_running
 
@@ -1721,6 +1731,211 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
     assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("member-b",)
     assert graph.owner.contract.generation != previous.generation and graph.owner.error is None
     assert not graph.owner.unpublished_runtimes and not registry.has_runtime("member-b") and not process_boundary.starts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+@pytest.mark.parametrize("native_location", ["/private/group-failure", r"C:\private\group-failure", r"\\server\private\group-failure"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.parametrize(("fault", "path"), [
+    ("start", "/api/gateway/workspaces/member-a/runtime/start"),
+    ("stop", "/api/gateway/workspaces/member-a/runtime/stop"),
+    ("restart", "/api/gateway/workspaces/member-a/runtime/restart-safe"),
+    ("restart", "/api/gateway/workspaces/member-a/runtime/restart-force"),
+    ("offline-exit", "/api/gateway/workspaces/member-a"),
+    ("offline-exit", "/api/gateway/managed-workspaces/member-a"),
+    ("offline-exit", "/api/gateway/federation/managed-workspaces/member-a"),
+])
+async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
+    workspace_runtime_controller_case: WorkspaceRuntimeControllerCase,
+    deletion_http_application: FastAPI, process_boundary: ProcessBoundary,
+    controller_registry_store: GatewayStateStore, monkeypatch: pytest.MonkeyPatch,
+    native_location: str, sink_fails: bool, fault: str, path: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    previous = graph.owner.contract
+    primary = RuntimeError(f"group primary failed: {native_location}")
+    recovery = RuntimeError(f"group recovery failed: {native_location}")
+    sink = OSError(5, "diagnostic sink failed", native_location)
+    request = graph.group_request.model_dump(mode="json")
+    original_save = registry._save
+    failed_handle = graph.runtimes["member-b"].processes["browser_manager"]
+    assert isinstance(failed_handle, ProcessProbe)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
+        if fault in {"start", "offline-exit"}:
+            stopped = await client.post("/api/gateway/workspaces/member-a/runtime/stop", json=request)
+            assert stopped.status_code == 200, stopped.text
+        if fault == "start":
+            process_boundary.backend_outcomes[:] = [primary]
+        elif fault == "restart":
+            process_boundary.backend_outcomes[:] = [primary, recovery]
+        elif fault == "stop":
+            failed_handle.failure = primary
+        else:
+            request["desired_workspace_ids"] = ["member-b"]
+
+            def reject_candidate(**options):
+                contracts = options.get("backend_contracts")
+                if contracts is not None and any(contract.workspace_ids == ("member-b",) for contract in contracts):
+                    raise primary
+                return original_save(**options)
+
+            monkeypatch.setattr(registry, "_save", reject_candidate)
+        if sink_fails:
+            def reject_log(*_args: object, **_kwargs: object) -> None:
+                raise sink
+
+            monkeypatch.setattr(failures.logger, "error", reject_log)
+        try:
+            response = await client.request(
+                "DELETE" if fault == "offline-exit" else "POST", path, json=request,
+                headers={"X-Request-ID": "group-request-01"},
+            )
+        finally:
+            failed_handle.failure = None
+        assert response.status_code == 502, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "group-request-01"
+        assert "group-failure" not in response.text
+        assert "error=RuntimeError" in response.json()["detail"]
+        assert ("diagnostic_sink_error=OSError" in response.json()["detail"]) is sink_fails
+        assert graph.owner.contract is previous and graph.owner.process is None
+        assert graph.owner.error and "group-failure" not in graph.owner.error
+        assert all(registry.resolve(member_id).connection_error == graph.owner.error for member_id in previous.workspace_ids)
+        if fault == "start":
+            assert "stage=backend_start" in graph.owner.error
+        elif fault == "offline-exit":
+            assert "stage=backend_stopped_exit" in graph.owner.error
+        else:
+            assert "stage=backend_group_action" in graph.owner.error
+        if not sink_fails:
+            if fault == "stop":
+                assert str(primary) in caplog.text
+            else:
+                assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+            if fault == "restart":
+                assert any(record.exc_info and record.exc_info[1] is recovery for record in caplog.records)
+        elif fault != "stop":
+            assert any(str(sink) in note for note in primary.__notes__)
+        if fault == "restart":
+            assert any(str(recovery) in note for note in primary.__notes__)
+        for member_id in previous.workspace_ids:
+            assert registry.backend_owner(member_id) is graph.owner
+            assert registry.resolve(member_id).backend_workspace_id == next(member.backend_workspace_id for member in previous.members if member.workspace_id == member_id)
+        stored_failure = controller_registry_store.load_workspace_registry()
+        assert stored_failure is not None
+        stored_targets = stored_failure["targets"]
+        assert isinstance(stored_targets, list)
+        assert all("group-failure" not in target["connection_error"] for target in stored_targets)
+        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=controller_registry_store)
+        cold_owner = cold.backend_owner("member-a")
+        assert cold_owner is not None and cold_owner.contract == previous
+        assert all(cold.resolve(member_id).connection_error == graph.owner.error for member_id in previous.workspace_ids)
+        assert len(process_boundary.starts) == (2 if fault == "restart" else 1 if fault == "start" else 0)
+        assert all(handle.closed for handle in process_boundary.handles)
+        # 修复原边界，再从原公开入口重试，不能手工清掉owner.error或写入成功状态。
+        failed_handle.failure = None
+        monkeypatch.setattr(registry, "_save", original_save)
+        process_boundary.backend_outcomes.clear()
+        retry = await client.request("DELETE" if fault == "offline-exit" else "POST", path if fault in {"start", "offline-exit"} else "/api/gateway/workspaces/member-a/runtime/start", json=request)
+        assert retry.status_code == 200, retry.text
+        if fault == "offline-exit":
+            assert graph.owner.contract.workspace_ids == ("member-b",) and not registry.has_target("member-a")
+            assert not process_boundary.starts
+        else:
+            assert graph.owner.process is process_boundary.handles[-1]
+            assert not process_boundary.handles[-1].closed
+            assert graph.owner.contract.workspace_ids == previous.workspace_ids
+        assert graph.owner.error is None
+        assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", [
+    "/api/gateway/workspaces/{workspace_id}/runtime/start",
+    "/api/gateway/workspaces/{workspace_id}/runtime/stop",
+    "/api/gateway/workspaces/{workspace_id}/runtime/restart-safe",
+    "/api/gateway/workspaces/{workspace_id}/runtime/restart-force",
+    "/api/gateway/workspaces/{workspace_id}/probe",
+    "/api/gateway/workspaces/{workspace_id}",
+    "/api/gateway/managed-workspaces/{workspace_id}",
+    "/api/gateway/federation/managed-workspaces/{workspace_id}",
+])
+@pytest.mark.parametrize("missing", [False, True])
+async def test_lifecycle_rejections_keep_status_and_have_no_runtime_side_effects(
+    workspace_runtime_controller_case: WorkspaceRuntimeControllerCase,
+    deletion_http_application: FastAPI, process_boundary: ProcessBoundary,
+    path: str, missing: bool,
+) -> None:
+    graph = workspace_runtime_controller_case.graph
+    previous = graph.owner.contract
+    process = graph.owner.process
+    request = graph.group_request.model_copy(update={"expected_backend_generation": "stale"})
+    endpoint = path.format(workspace_id="missing" if missing else "member-a")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
+        response = await client.request("POST" if "/runtime/" in path or path.endswith("/probe") else "DELETE", endpoint, json=request.model_dump(mode="json"))
+    assert response.status_code == (404 if missing else 409), response.text
+    expected_error = "KeyError" if path == "/api/gateway/workspaces/{workspace_id}" else "LookupError"
+    assert f"error={expected_error if missing else 'ValueError'}" in response.json()["detail"]
+    assert graph.owner.contract is previous and graph.owner.process is process
+    assert graph.owner.error is None and not process_boundary.starts
+    assert not workspace_runtime_controller_case.runtime_actions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+@pytest.mark.parametrize("native_location", ["/private/probe-failure", r"C:\private\probe-failure", r"\\server\private\probe-failure"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.parametrize("fault_errno", [5, 13])
+async def test_external_probe_failure_keeps_native_diagnostics_and_original_target_retry(
+    workspace_runtime_controller_case: WorkspaceRuntimeControllerCase,
+    deletion_http_application: FastAPI, controller_registry_store: GatewayStateStore,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    native_location: str, sink_fails: bool, fault_errno: int,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    target = replace(registry.resolve("member-a"), workspace_id="external", managed=False)
+    registry.upsert(target, activate=False)
+    failure = OSError(fault_errno, "probe failed", native_location)
+
+    async def probe(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(runtime_controller_module, "resolve_backend_workspace_id", lambda *_args, **_kwargs: UUID_A)
+    monkeypatch.setattr(runtime_controller_module, "wait_for_workspace_health", probe)
+    if sink_fails:
+        def fail_log(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError(f"sink failed: {native_location}")
+
+        monkeypatch.setattr(failures.logger, "error", fail_log)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
+        response = await client.post("/api/gateway/workspaces/external/probe", headers={"X-Request-ID": "external-probe-01"})
+        expected = f"工作区探测失败: stage=workspace_probe, error={type(failure).__name__}, errno={fault_errno}"
+        if sink_fails:
+            expected += ", diagnostic_sink_error=RuntimeError"
+        assert response.status_code == (409 if fault_errno == 13 else 502) and response.json()["detail"] == expected
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "external-probe-01"
+        # PermissionError 仍是原409拒绝；502写入失败事实，均不能改成托管目标。
+        assert target.connection_error == (None if fault_errno == 13 else expected)
+        assert registry.resolve("external") is target
+        assert target.backend_workspace_id == UUID_A and not target.managed
+        stored = controller_registry_store.load_workspace_registry()
+        assert stored is not None
+        assert "probe-failure" not in str(stored)
+        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=controller_registry_store)
+        assert cold.resolve("external").connection_error == target.connection_error
+        if sink_fails:
+            assert any("sink failed" in note for note in failure.__notes__)
+        else:
+            assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+
+        async def healthy(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(runtime_controller_module, "wait_for_workspace_health", healthy)
+        retry = await client.post("/api/gateway/workspaces/external/probe")
+        assert retry.status_code == 200 and target.connection_error is None
 
 
 @pytest.mark.asyncio

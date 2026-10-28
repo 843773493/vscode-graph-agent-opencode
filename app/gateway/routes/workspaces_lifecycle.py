@@ -472,19 +472,21 @@ async def start_managed_workspace_backend(
             group_request=payload,
         )
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_start", label="工作区启动失败")) from error
     except PermissionError as error:
+        detail = failure_detail(error, stage="workspace_start", label="工作区启动失败")
         target = registry.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=409, detail=str(error)) from error
+            registry.mark_connection_error(workspace_id, detail)
+        raise HTTPException(status_code=409, detail=detail) from error
     except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_start", label="工作区启动失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
+        detail = failure_detail(error, stage="workspace_start", label="工作区启动失败")
         target = registry.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=502, detail=str(error)) from error
+            registry.mark_connection_error(workspace_id, detail)
+        raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -514,11 +516,11 @@ async def stop_managed_workspace_backend(
             group_request=payload,
         )
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_stop", label="工作区关闭失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_stop", label="工作区关闭失败")) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_stop", label="工作区关闭失败")) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -548,14 +550,15 @@ async def safe_restart_managed_workspace_backend(
             group_request=payload,
         )
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
+        detail = failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")
         target = registry.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=502, detail=str(error)) from error
+            registry.mark_connection_error(workspace_id, detail)
+        raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -585,14 +588,15 @@ async def force_restart_managed_workspace_backend(
             group_request=payload,
         )
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
+        detail = failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")
         target = registry.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=502, detail=str(error)) from error
+            registry.mark_connection_error(workspace_id, detail)
+        raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -617,14 +621,15 @@ async def probe_external_workspace_backend(
             raise ValueError("bounded federation 禁止探测嵌套远程工作区")
         await controller.probe_external_backend(workspace_id)
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_probe", label="工作区探测失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_probe", label="工作区探测失败")) from error
     except (OSError, RuntimeError) as error:
+        detail = failure_detail(error, stage="workspace_probe", label="工作区探测失败")
         target = registry.resolve(workspace_id)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=502, detail=str(error)) from error
+            registry.mark_connection_error(workspace_id, detail)
+        raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
@@ -720,13 +725,13 @@ async def remove_workspace(
         if not managed_local:
             registry.remove(workspace_id, owner="manual_crud")
     except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise HTTPException(status_code=403, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,

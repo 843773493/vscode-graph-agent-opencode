@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
+from app.core.failures import failure_detail
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
@@ -271,14 +272,18 @@ class RegistryRuntimeMixin:
                 raise PermissionError(f"默认工作区不能关闭: {target.name}")
             self._assert_route_references_drained(workspace_id)
         owner.close()
-        errors = []
+        errors: list[Exception] = []
+        details: list[str] = []
         for workspace_id in owner.contract.workspace_ids:
             runtime = self._runtimes.get(workspace_id)
             if runtime is not None:
                 try:
                     runtime.close()
                 except Exception as error:  # noqa: BLE001 — 尝试全部成员，失败 runtime 留待整组 start 或关闭重试。
-                    errors.append(f"{workspace_id}: {error}")
+                    errors.append(error)
+                    details.append(failure_detail(
+                        error, stage="backend_member_stop", label=f"Backend 成员辅助服务关闭失败: workspace={workspace_id}",
+                    ))
                 else:
                     self._runtimes.pop(workspace_id)
             self.invalidate_route(workspace_id)
@@ -288,12 +293,12 @@ class RegistryRuntimeMixin:
         if self._active_workspace_id in owner.contract.workspace_ids:
             self._active_workspace_id = self._default_workspace_id()
         if errors:
-            owner.error = "完整 Backend 已停止，成员辅助服务关闭失败: " + "; ".join(errors)
+            owner.error = "完整 Backend 已停止，成员辅助服务关闭失败: " + "; ".join(details)
             for workspace_id in owner.contract.workspace_ids:
                 self.resolve(workspace_id).connection_error = owner.error
         self._save(owner="system")
         if errors:
-            raise RuntimeError(owner.error)
+            raise RuntimeError(owner.error) from ExceptionGroup("Backend 成员辅助服务关闭失败", errors)
 
     def managed_runtime(self, workspace_id: str) -> WorkspaceRuntime:
         target = self.resolve(workspace_id)

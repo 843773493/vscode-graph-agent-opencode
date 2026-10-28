@@ -15,6 +15,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_federation_token
@@ -250,12 +251,12 @@ async def remove_federation_managed_workspace(
         )
         if result.status == "blocked":
             raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     return APIResponse(
         data=await _managed_workspace_list(registry),
         request_id=request_id,

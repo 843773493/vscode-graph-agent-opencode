@@ -9,6 +9,7 @@ from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from app.core.failures import failure_detail
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import (
     rebuild_managed_backend_runtime,
@@ -175,7 +176,9 @@ class ManagedBackendGroupActions:
                             owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
                         except BaseException as cleanup_error:  # noqa: BLE001 — 未关闭句柄留在唯一 owner 供重试。
                             start_error.add_note(f"启动发布失败清理错误: {cleanup_error}")
-                        self._registry.mark_backend_error(owner, str(start_error))
+                        self._registry.mark_backend_error(owner, failure_detail(
+                            start_error, stage="backend_start", label=f"Backend 启动失败: owner={owner.contract.owner_id}",
+                        ))
                         raise
                     return await self._group_result(workspace_id, "started", owner, affected)
                 if owner.process is None:
@@ -201,7 +204,9 @@ class ManagedBackendGroupActions:
                     except BaseException as exit_error:
                         if owner in self._registry.backend_owners() and owner.contract is not candidate_contract:
                             try:
-                                self._registry.mark_backend_error(owner, str(exit_error))
+                                self._registry.mark_backend_error(owner, failure_detail(
+                                    exit_error, stage="backend_stopped_exit", label=f"Backend 停机成员退出失败: owner={owner.contract.owner_id}",
+                                ))
                             except BaseException as record_error:  # noqa: BLE001 — 记录失败不能掩盖退出/CAS 的原异常。
                                 exit_error.add_note(f"记录停机成员退出失败状态出错: {record_error}")
                         raise
@@ -277,7 +282,9 @@ class ManagedBackendGroupActions:
                             )
                             self._registry.publish_backend_runtime(owner, restored_contract, restored)
                         except BaseException as recovery_error:  # noqa: BLE001 — 原候选失败仍为主异常。
-                            self._registry.mark_backend_error(owner, f"Backend proof/CAS 失败且恢复失败: {recovery_error}")
+                            self._registry.mark_backend_error(owner, failure_detail(
+                                recovery_error, stage="backend_recovery", label=f"Backend 完整组恢复失败: owner={owner.contract.owner_id}",
+                            ))
                             publish_error.add_note(str(recovery_error))
                         raise
                     return await self._group_result(workspace_id, "restarted", owner, affected, restart=True, forced=forced, blockers=blockers if forced else None)
@@ -293,7 +300,9 @@ class ManagedBackendGroupActions:
                             recovered = False
                             error.add_note(f"完整组恢复验证失败: {recovery_error}")
                     if not recovered:
-                        self._registry.mark_backend_error(owner, str(error))
+                        self._registry.mark_backend_error(owner, failure_detail(
+                            error, stage="backend_group_action", label=f"Backend 动作失败: owner={owner.contract.owner_id}, action={action}",
+                        ))
                     if startup_contract is not None:
                         try:
                             await self._record_pending_restart_failure(

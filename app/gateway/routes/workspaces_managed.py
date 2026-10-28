@@ -16,6 +16,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
@@ -296,12 +297,10 @@ async def remove_gateway_managed_workspace(
                 connection_id=gateway_connection_id,
             )
             await port_forward_manager.reconcile_workspaces()
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except httpx.HTTPStatusError as error:
         status_code = error.response.status_code
         remote_detail = error.response.json().get("detail") if status_code == 409 else _remote_http_error_detail(error)
@@ -310,7 +309,7 @@ async def remove_gateway_managed_workspace(
             detail=remote_detail,
         ) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     if gateway_connection_id is not None and remote_data is not None:
         return APIResponse(
             data=_remote_managed_workspace_list(
