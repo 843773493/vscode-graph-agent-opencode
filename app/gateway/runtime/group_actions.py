@@ -297,7 +297,7 @@ class ManagedBackendGroupActions:
                     if startup_contract is not None:
                         try:
                             await self._record_pending_restart_failure(
-                                target, candidate_ref=str(startup_contract["candidate_ref"]), error=str(error),
+                                target, candidate_ref=str(startup_contract["candidate_ref"]), error=error,
                                 old_runtime_recovered=recovered, request_id=request_id,
                             )
                         except Exception as record_error:  # noqa: BLE001 — 失败记录不能覆盖主异常。

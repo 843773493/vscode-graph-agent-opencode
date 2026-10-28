@@ -619,8 +619,9 @@ async def test_runtime_controller_serializes_managed_restarts(workspace_runtime_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recovery_fails", [False, True])
+@pytest.mark.parametrize("native", ["/private-restart/backend", r"C:\private-restart\backend", r"\\server\private-restart\backend"])
 async def test_runtime_controller_records_restart_failure_after_old_runtime_recovery(
-    workspace_runtime_controller_case, process_boundary, monkeypatch, recovery_fails: bool,
+    workspace_runtime_controller_case, process_boundary, monkeypatch, recovery_fails: bool, native: str,
 ) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
@@ -633,12 +634,14 @@ async def test_runtime_controller_records_restart_failure_after_old_runtime_reco
         recorded.update(options)
     monkeypatch.setattr(controller, "_pending_startup_contract", pending)
     monkeypatch.setattr(controller, "_record_pending_restart_failure", record)
-    process_boundary.backend_outcomes[:] = [RuntimeError("候选启动失败"), RuntimeError("旧组恢复失败") if recovery_fails else None]
+    original = RuntimeError(f"候选启动失败 {native}")
+    process_boundary.backend_outcomes[:] = [original, RuntimeError("旧组恢复失败") if recovery_fails else None]
     old = graph.owner.contract
     with pytest.raises(RuntimeError, match="候选启动失败"):
         await controller.safe_restart_managed_backend("member-a", request_id="recovery", group_request=graph.group_request)
     assert recorded["old_runtime_recovered"] is not recovery_fails
     assert recorded["candidate_ref"] == "candidate"
+    assert recorded["error"] is original
     assert graph.owner.contract == old
     assert all((registry.resolve(member_id).connection_error is not None) is recovery_fails for member_id in old.workspace_ids)
 

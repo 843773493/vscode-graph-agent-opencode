@@ -47,6 +47,7 @@ runtime/
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
+- 向 Workspace 提交配置重启失败时传递原异常到 controller 的 HTTP 发送边界，复用配置失败事实出口；不得预拼原生异常正文进入业务记录，原异常留诊断。
 - 日志消费者从 prepare 到最终配置结算持有原 registry 的拓扑锁；共享 Backend 按实际实例确认，不按挂载工作区重复应用。逐进程发送前先登记副作用，超时后查询实际状态再补偿，不能把结果未知当作未生效。
 - 新受管进程通过 `BOXTEAM_RUNTIME_LOGGING` 接收已验证的 revision、level 与 pretty；该值在生命周期锁内从当前 Gateway 配置 owner 读取，不能缓存等待启动前的旧候选。它只交付启动设置，不构成第二个运行期配置来源。
 - 子进程日志在打开／轮转前核对同路径的写入归属；交付中断不能当作空闲。detach 只关闭当前 Gateway 的描述符，存活进程组继续保留归属。完整关闭后才释放；接管通过受认证的进程状态核对实际描述符和文件身份，不重开日志。

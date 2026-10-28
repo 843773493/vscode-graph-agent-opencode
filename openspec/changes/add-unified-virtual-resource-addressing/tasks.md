@@ -1056,3 +1056,10 @@
 - 修改前快照层12项反例全部失败；最终不重叠文件组共308 passed（ConfigService117、配置组件84、Gateway校验50、Gateway启动/运行时51、配置跨模块6）。新增6项从原 service.reload 接纳候选及取得 claim，覆盖三类原生路径、应用/promotion失败、API状态/事件/配置序列化、原错误诊断、claim释放、原入口修复重试和SQLite冷读；pending proof由原coordinator生成，不冒称实际启动新runtime。Gateway意外加载失败三项验证公开事实、原异常、旧active和同入口修复。既有详细原因断言迁到原始诊断，保留原异常、错误归属及业务状态约束。
 - 首轮集成夹具遗漏schema必填api_mode，17 passed/6 setup errors，补齐后6项通过；两组混合回归到120秒外部上限退出124，按文件拆分后完整通过，未缩短业务期限。Ruff新导入空行已修正；配置全目录39项旧诊断、触达pending文件1项旧RUF034均与HEAD核对，无新增。Pyright相同基线25条、最终扩至11文件仍25条，按文件/最窄AST owner/规则/完整消息多重集无新增，不称全静态绿。compileall、strict51/51及diff检查通过。
 - 准确命令、源码前后指纹、raw/实际退出码、基线/结构自审及失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-015.json`；正式同名测试产物保留，无新增二进制基线。未验独立Backend/Gateway/Web、Windows或真实Provider；Gateway运行控制器向Workspace提交重启失败正文的另一生产来源仍待收口，本片不关闭2.2/7.2、多工作区总门或团队/协作TODO。
+
+### 2026-10-28 Gateway 向 Workspace 提交重启失败的来源收口
+
+- 唯一受控重启生产调用方不再预拼错误字符串；原异常直接交付controller发送边界，由上一片唯一配置失败出口生成workspace_restart事实后提交原HTTP协议。原字段、候选关联、恢复状态、request_id和重试行为保持；完整原因进入Gateway诊断，日志sink失败仍保留原异常注记并继续提交，不增第二writer或兼容入口。
+- 修改前六项原恢复场景均检出异常被提前转字符串。最终110项重连/生命周期原文件通过，新增12项HTTPX→ASGI→真实Workspace配置owner/SQLite组合通过，覆盖POSIX/盘符/UNC、原组恢复与未恢复、正常/故障日志sink、序列化及持久事件、claim、旧active、原入口重试和冷读。网络transport与进程启动仍使用明确测试边界，不冒称独立Gateway/Backend或真实进程恢复。
+- 首轮新增夹具遗漏WorkspaceTarget必填connection_kind，12 failed/6 passed；按实际构造合同补齐后12项通过，未改业务断言。Ruff/compileall通过；同四文件Pyright72→72，按基线源码指纹确认AST后以文件/最窄owner/规则/完整消息比较无新增，不称类型全绿。初次比较误用HEAD定位已加单测的基线行号，四条owner误差已按实际指纹纠正，原报告保留。strict51/51与diff检查通过。
+- 准确命令、源码指纹、raw/退出码、类型对照和作者结构自审见`out/tests/temp/uri-global-closure/artifacts/verification-016.json`。尚未验Web、Windows或真实Provider；普通Backend运行错误的registry投影仍有原文来源，URI2.2/7.2与多工作区全局门保持未勾，团队/协作与MCP显式持有继续TODO。

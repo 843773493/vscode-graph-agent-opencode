@@ -34,6 +34,7 @@ from app.schemas.gateway.lifecycle import (
     GatewayRuntimeStateResultDTO,
 )
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
+from app.services.infrastructure.config.failures import config_failure_detail
 
 _LOCK_SHARDS = 64
 logger = logging.getLogger(__name__)
@@ -163,16 +164,17 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         target: WorkspaceTarget,
         *,
         candidate_ref: str,
-        error: str,
+        error: BaseException,
         old_runtime_recovered: bool,
         request_id: str,
     ) -> None:
+        detail = config_failure_detail(error, stage="workspace_restart", label="Workspace 配置应用失败")
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.post(
                 f"{target.backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",
                 params={"candidate_ref": candidate_ref},
                 json={
-                    "error": error,
+                    "error": detail,
                     "old_runtime_recovered": old_runtime_recovered,
                 },
                 headers=self._backend_headers(

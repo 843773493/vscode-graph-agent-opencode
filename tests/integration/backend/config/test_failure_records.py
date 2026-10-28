@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import NoReturn
 
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Request, Response
 
 from app.api import config as config_api
 from app.api.deps import get_config_service, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
@@ -179,4 +183,95 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
         assert cold.get_config_apply_journal(apply_id=failed.last_apply_id) == journal
         assert cold.get_pending_config_candidate(config_domain="workspace") == resolved
         assert cold.get_config_apply_claim(config_domain="workspace") is None
+        assert cold.list_config_events(config_domain="workspace")[:len(events)] == events
+
+
+@pytest.mark.parametrize("native", ["/private-restart/backend", r"C:\private-restart\backend", r"\\server\private-restart\backend"])
+@pytest.mark.parametrize("recovered", [False, True])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.asyncio
+async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
+    config_case: ConfigCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, native: str, recovered: bool, sink_fails: bool,
+) -> None:
+    case = config_case
+    active = case.store.get_active_config_snapshot("workspace")
+    candidate = case.payload | {"agents": {"default": {
+        "name": "Restart Agent", "instructions": {"system_prompt": "hello"},
+        "model": {"primary_provider": "primary", "fallback_providers": []},
+    }}}
+    case.config_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    async def require_restart(*_args: object) -> NoReturn:
+        raise ConfigRestartRequiredError("需要受控重启", changed_sections=("agents",))
+
+    with pytest.raises(ConfigRestartRequiredError):
+        await case.service.reload(candidate_applier=require_restart)
+    pending = case.store.get_pending_config_candidate(config_domain="workspace")
+    assert pending is not None and pending.candidate_ref is not None
+    original = PermissionError(13, f"重启失败 {native}", native)
+    original.__cause__ = RuntimeError(f"原始重启原因 {native}")
+    requests: list[dict[str, object]] = []
+    replies: list[dict[str, object]] = []
+    workspace_id = load_or_create_workspace_id(case.workspace)
+
+    async def capture_request(request: Request) -> None:
+        assert request.url.path == "/api/v1/config/pending/restart-failed"
+        assert request.url.params["candidate_ref"] == pending.candidate_ref
+        assert request.headers["X-BoxTeam-Workspace-Id"] == workspace_id
+        assert request.headers["X-Request-ID"] == "restart-failed"
+        requests.append(json.loads(request.content))
+
+    async def capture_response(response: Response) -> None:
+        await response.aread()
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "restart-failed"
+        replies.append(response.json())
+
+    def workspace_client(*, timeout: float, trust_env: bool) -> AsyncClient:
+        return AsyncClient(
+            timeout=timeout, trust_env=trust_env, transport=ASGITransport(app=case.app),
+            event_hooks={"request": [capture_request], "response": [capture_response]},
+        )
+
+    def reject_log(*_args: object, **_kwargs: object) -> NoReturn:
+        raise OSError(5, f"日志故障 {native}", native)
+
+    with closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")) as registry:
+        controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs")
+        with monkeypatch.context() as patch:
+            patch.setattr("app.gateway.runtime.controller.httpx.AsyncClient", workspace_client)
+            if sink_fails:
+                patch.setattr("app.services.infrastructure.config.failures.logger.error", reject_log)
+            await controller._record_pending_restart_failure(
+                WorkspaceTarget(workspace_id="member", name="Member", root_path=str(case.workspace),
+                                backend_url="http://workspace-backend", backend_workspace_id=workspace_id, connection_kind="local"),
+                candidate_ref=pending.candidate_ref, error=original,
+                old_runtime_recovered=recovered, request_id="restart-failed",
+            )
+    detail = "Workspace 配置应用失败: stage=workspace_restart, error=PermissionError, errno=13"
+    if sink_fails:
+        detail += ", diagnostic_sink_error=OSError"
+        assert any("诊断日志输出失败" in note and native in note for note in original.__notes__)
+    else:
+        assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+        assert native in caplog.text and "原始重启原因" in caplog.text
+    assert requests == [{"error": detail, "old_runtime_recovered": recovered}]
+    assert len(replies) == 1
+    failed = case.store.get_pending_config_candidate(config_domain="workspace")
+    assert failed is not None and failed.candidate_id == pending.candidate_id
+    assert failed.state == ("pending_restart" if recovered else "recovery_required")
+    assert failed.last_error == detail
+    assert case.store.get_config_apply_claim(config_domain="workspace") is None
+    assert case.store.get_active_config_snapshot("workspace") == active
+    events = case.store.list_config_events(config_domain="workspace")
+    assert [event.result for event in events] == ["restart_required", "restart_failed" if recovered else "recovery_required"]
+    assert events[-1].error == detail
+    assert "private-restart" not in json.dumps([requests, replies, asdict(failed), *[asdict(event) for event in events]], default=str)
+    retried = case.service.retry_pending_restart(candidate_ref=pending.candidate_ref)
+    assert retried.state == "pending_restart" and retried.candidate_id == pending.candidate_id
+    await case.service.close()
+    case.store.close()
+    with WorkspaceStateStore(workspace_root=case.workspace) as cold:
+        assert cold.get_active_config_snapshot("workspace") == active
         assert cold.list_config_events(config_domain="workspace")[:len(events)] == events
