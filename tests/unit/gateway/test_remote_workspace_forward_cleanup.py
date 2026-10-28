@@ -356,8 +356,8 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
     )
     monkeypatch.setattr(
         workspaces_lifecycle,
-        "_gateway_root",
-        lambda: tmp_path / "gateway-home",
+        "get_runtime_log_root",
+        lambda: tmp_path / "logs",
     )
     registry.add_commit_observer(fail_commit_observer)
 
