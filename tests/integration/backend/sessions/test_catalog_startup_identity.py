@@ -11,10 +11,13 @@ from pathlib import Path
 import pytest
 
 from app import container as container_module
-from app.container import AppContainer
+from app.container import AppContainer, WorkspaceContainerRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
-from app.core.session_catalog_store import CatalogMaintenanceRequiredError
+from app.core.session_catalog_store import (
+    CatalogMaintenanceRequiredError,
+    SessionCatalogStore,
+)
 from app.core.session_catalog_store.queries import _register_session_list_functions
 from app.core.sqlite_state import SQLiteProcessOwnership
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -60,11 +63,10 @@ def _catalog_dump(path: Path) -> str:
         return "\n".join(connection.iterdump())
 
 
-@pytest.mark.parametrize("stage", ["catalog", "config", "files"])
-async def test_failed_container_construction_releases_owned_stores_and_allows_retry(
+@pytest.fixture
+def construction_registry(
     startup_container: AppContainer, request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch, stage: str,
-) -> None:
+) -> WorkspaceContainerRegistry:
     root = startup_container.workspace_root / "candidate"
     prepare_test_workspace(
         workspace_root=root,
@@ -81,6 +83,17 @@ async def test_failed_container_construction_releases_owned_stores_and_allows_re
         project_root=Path.cwd(),
     )
     request.addfinalizer(registry.close)
+    return registry
+
+
+@pytest.mark.parametrize("stage", ["catalog", "config", "files"])
+async def test_failed_container_construction_releases_owned_stores_and_allows_retry(
+    startup_container: AppContainer, construction_registry: WorkspaceContainerRegistry,
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    registry = construction_registry
+    mount, = registry.mounted_workspaces.mounts
+    root, workspace_id = mount.workspace_root, mount.workspace_id
     activity_owners = []
     attachment_owners = []
     original_activity = container_module.WorkspaceActivityService
@@ -132,6 +145,80 @@ async def test_failed_container_construction_releases_owned_stores_and_allows_re
     peer = await startup_container.session_service.create(SessionCreateRequest(title="旁系工作区继续可用"))
     assert (await startup_container.session_service.get(peer.session_id)).session_id == peer.session_id
     assert recovered.workspace_id != startup_container.workspace_id
+
+
+@pytest.mark.parametrize("close_phase", ["before_native_close", "after_native_close"])
+@pytest.mark.parametrize("recovery", ["rebuild", "shutdown"])
+async def test_failed_construction_retains_catalog_until_original_close_succeeds(
+    startup_container: AppContainer, construction_registry: WorkspaceContainerRegistry,
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+    close_phase: str, recovery: str,
+) -> None:
+    registry = construction_registry
+    mount, = registry.mounted_workspaces.mounts
+    sessions_root = mount.workspace_root / ".boxteam/sessions"
+    original_close = SessionCatalogStore.close
+    construction_error = RuntimeError("配置装配失败")
+    close_error = OSError("原catalog关闭失败")
+    construction_attempts: list[None] = []
+    closing_stores: list[SessionCatalogStore] = []
+
+    def fail_config(**_arguments: object) -> None:
+        construction_attempts.append(None)
+        raise construction_error
+
+    def fail_close(store: SessionCatalogStore) -> None:
+        if store.sessions_root != sessions_root:
+            original_close(store)
+            return
+        closing_stores.append(store)
+        if len(closing_stores) == 1:
+            # 失败的产品实现也必须由装具归还真实连接，避免污染后续测试。
+            request.addfinalizer(lambda: original_close(store))
+        if close_phase == "after_native_close":
+            original_close(store)
+        raise close_error
+
+    with monkeypatch.context() as faults:
+        faults.setattr(container_module, "ConfigService", fail_config)
+        faults.setattr(SessionCatalogStore, "close", fail_close)
+        with pytest.raises(ExceptionGroup) as initial:
+            registry.get(mount.workspace_id)
+        assert initial.value.exceptions == (construction_error, close_error)
+        original_store, = closing_stores
+        with pytest.raises(OSError) as graph_retry:
+            registry.get(mount.workspace_id)
+        assert graph_retry.value is close_error
+        with pytest.raises(OSError) as catalog_retry:
+            registry.get_catalog_components(sessions_root, mount.workspace_id)
+        assert catalog_retry.value is close_error
+        assert construction_attempts == [None], "未关闭原owner时不得重新装配或打开catalog"
+        assert closing_stores == [original_store] * 3
+        if recovery == "shutdown":
+            with pytest.raises(ExceptionGroup) as shutdown:
+                registry.close()
+            assert shutdown.value.exceptions == (close_error,)
+            assert closing_stores == [original_store] * 4
+
+    if recovery == "shutdown":
+        registry.close()
+        with pytest.raises(RuntimeError, match="已关闭"):
+            registry.get(mount.workspace_id)
+    else:
+        fresh = registry.get_catalog_components(sessions_root, mount.workspace_id)
+        assert fresh.resolver.catalog_store is not original_store
+        recovered = registry.get(mount.workspace_id)
+        request.addfinalizer(recovered.attachment_blob_store.close)
+        request.addfinalizer(recovered.workspace_activity_service.close)
+        assert recovered.session_catalog is fresh
+        created = await recovered.session_service.create(SessionCreateRequest(title="原catalog关闭后重建"))
+        assert (await recovered.session_service.get(created.session_id)).session_id == created.session_id
+        assert registry.get(mount.workspace_id) is recovered
+
+    with pytest.raises(RuntimeError, match="已关闭|closed"):
+        _ = original_store.connection
+    peer = await startup_container.session_service.create(SessionCreateRequest(title="关闭失败不影响旁系"))
+    assert (await startup_container.session_service.get(peer.session_id)).session_id == peer.session_id
 
 
 @pytest.mark.parametrize("owner", ["node", "preparing"])

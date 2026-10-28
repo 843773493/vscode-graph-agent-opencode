@@ -144,6 +144,11 @@ workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨
 - **WHEN** 进程为工作区 A 与工作区 B 各自解析会话目录
 - **THEN** 两工作区 MUST 使用各自独立的解析器实例与其 catalog 连接，MUST NOT 复用同一实例或同一缓存键
 
+#### Scenario: 服务图装配与 catalog 关闭同时失败
+
+- **WHEN** 某工作区服务图装配失败，且原 registry 关闭该工作区 catalog 时也失败
+- **THEN** 系统 MUST 同时保留两份错误及原 catalog owner；服务图取得、catalog 取得和最终 registry 关闭都 MUST 先重试原组件的关闭，关闭成功前不得遗忘组件、重新装配或另开 catalog，且不影响其它工作区继续访问。关闭成功后允许经原取得入口重建，已关闭的 registry 不得复活
+
 #### Scenario: 进程所有权锁按工作区分区
 
 - **WHEN** 进程持有某工作区状态库的进程所有权锁

@@ -444,6 +444,7 @@ class WorkspaceContainerRegistry:
         self._clock_ports = clock_ports
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
+        self._pending_catalog_closes: set[str] = set()
         self._closed = False
         self._lock = RLock()
 
@@ -472,6 +473,8 @@ class WorkspaceContainerRegistry:
                     f"workspace_id={workspace_id}, requested={sessions_root}, "
                     f"mounted={expected_root}"
                 )
+            if workspace_id in self._pending_catalog_closes:
+                self._close_catalog_components(workspace_id)
             components = self._catalog_components.get(workspace_id)
             if components is None:
                 components = build_session_catalog_components(sessions_root, workspace_id)
@@ -482,6 +485,8 @@ class WorkspaceContainerRegistry:
         with self._lock:
             self._require_open()
             mount = self._mounted_workspaces.resolve(workspace_id)
+            if mount.workspace_id in self._pending_catalog_closes:
+                self._close_catalog_components(mount.workspace_id)
             container = self._containers.get(mount.workspace_id)
             if container is None:
                 try:
@@ -505,10 +510,11 @@ class WorkspaceContainerRegistry:
                         )
                     self._containers[mount.workspace_id] = container
                 except BaseException as error:
-                    components = self._catalog_components.pop(mount.workspace_id, None)
-                    if components is not None:
+                    if mount.workspace_id in self._catalog_components:
+                        # 原owner关闭成功前保留句柄，任何重建入口都先完成原关闭。
+                        self._pending_catalog_closes.add(mount.workspace_id)
                         try:
-                            components.close()
+                            self._close_catalog_components(mount.workspace_id)
                         except Exception as close_error:  # noqa: BLE001 - 关闭失败须与原始失败一起暴露。
                             raise BaseExceptionGroup(
                                 "工作区服务图装配失败且 catalog 关闭失败",
@@ -520,19 +526,22 @@ class WorkspaceContainerRegistry:
     def values(self) -> tuple[AppContainer, ...]:
         return tuple(self.get(workspace_id) for workspace_id in self.workspace_ids)
 
+    def _close_catalog_components(self, workspace_id: str) -> None:
+        self._catalog_components[workspace_id].close()
+        del self._catalog_components[workspace_id]
+        self._containers.pop(workspace_id, None)
+        self._pending_catalog_closes.discard(workspace_id)
+
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
         with self._lock:
             self._closed = True
             errors: list[Exception] = []
-            for workspace_id, components in tuple(self._catalog_components.items()):
+            for workspace_id in tuple(self._catalog_components):
                 try:
-                    components.close()
+                    self._close_catalog_components(workspace_id)
                 except Exception as error:  # noqa: BLE001 - 其它mount独立关闭，失败项保留。
                     errors.append(error)
-                else:
-                    del self._catalog_components[workspace_id]
-                    self._containers.pop(workspace_id, None)
             if errors:
                 raise ExceptionGroup("工作区 catalog owner 关闭失败", errors)
             self._containers.clear()

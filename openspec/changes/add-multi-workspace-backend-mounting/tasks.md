@@ -169,3 +169,9 @@
 - 原聚合 owner 在创建任何投影前核对响应 Backend UUID 与每个资源 owner；空目录同样校验，混合条目整批拒绝，不修补正文、不改目标或资源身份、不创建另一查询链。冲突沿原作用域错误出口保留健康目标，完整原值留诊断；远端路由 ID 与 Backend UUID 各按原职责使用。
 - 新增24项在旧生产全部失败，最终目录与相邻导入回归45 passed／1.07秒；覆盖本地／远端、有效外部UUID／POSIX／盘符／UNC、空响应／含正文的响应冲突／正确条目后混入错误条目，核零局部发布、原目标不变与同入口恢复。真实独立Gateway和HTTP下游以两个产品注册目标核20个错误／owner冲突查询，健康资源保持，最终修复后双方恢复，正式matrix 1 passed／13.54秒。仅查询测试使用合成资源数据，不冒充Backend执行或恢复验收。
 - Ruff与三个Python文件Pyright均零诊断；准确命令、源码前后指纹、raw／真实退出码与作者结构核对见 `out/tests/temp/resource-catalog-owner-binding/artifacts/`。未补Web、Windows、真实联邦或Backend资源执行验收，4.3／8.2及URI全局2.2／7.2仍未勾；团队协作继续TODO。
+
+### 2026-10-28 构造失败后的 catalog 原 owner 收尾（2.1／8.2 部分收口）
+
+- 注册表不再先移除组件后关闭；装配与关闭同时失败时保留原组件和两份原因。服务图取得、catalog 取得与最终关闭共用唯一关闭实现，原关闭未成功前不另开连接或重复装配；成功后才从同一缓存移除。待关闭集合只保存本进程未完成的关闭标记，不保存业务状态或第二份组件。
+- 四个新场景覆盖原生关闭前失败、关闭后回执失败、取得入口重试与最终 shutdown；完整旧生产配同一测试全部失败，均在原服务图重试入口重新装配并再次抛出构造／关闭组合错误。候选相关启动、catalog、身份与关闭回归45 passed／35.39秒；真实双挂载执行、逆序关闭、第二挂载失败回收及非法身份请求三项通过／45.87秒，模型复用 model_stream，HTTP 为 ASGI。故障解除后由产品创建入口生成新 Session，确认新 catalog 与原 owner 不混用且旁系工作区可用。
+- Ruff通过。Pyright两项既存Terminal／Browser传输协议诊断与完整旧生产的完整消息一致（仅模块行号变化），无新增诊断，不称类型全绿。七次受保护运行的源码前后指纹、raw hash、真实退出码及零进程组残留均已核验；固定候选tree `f92bdc9aa59c21ac3305af19182728ed7dbe37ce`、旧生产tree `55ea3a7076494feb072fe16c9b4586932f3d183b`。准确命令与作者AST自查见 `out/tests/temp/mounted-catalog-close-retention/artifacts/verification-001.json`；临时完整源码已删除，正式基线输出保留。本片不代独立审查、Gateway／独立Backend进程、Web、Windows或附件总关闭期限，4.3／8.2整体仍未勾，团队协作继续TODO。
