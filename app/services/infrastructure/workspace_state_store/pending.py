@@ -43,7 +43,7 @@ class WorkspaceStateStorePendingMixin:
                            payload_json, source_baseline_json, candidate_digest,
                            effective_digest, target_generation, fencing_token, state,
                            last_error, created_at, last_attempt_id, last_apply_id,
-                           candidate_ref, base_active_revision, persistence_location,
+                           candidate_ref, base_active_revision,
                            source_generation, secret_bindings_json
                     FROM config_pending_candidate
                     WHERE config_domain = ?
@@ -63,7 +63,7 @@ class WorkspaceStateStorePendingMixin:
                            payload_json, source_baseline_json, candidate_digest,
                            effective_digest, target_generation, fencing_token, state,
                            last_error, created_at, last_attempt_id, last_apply_id,
-                           candidate_ref, base_active_revision, persistence_location,
+                           candidate_ref, base_active_revision,
                            source_generation, secret_bindings_json
                     FROM config_pending_candidate
                     WHERE config_domain = ? AND {field} = ?
@@ -94,10 +94,9 @@ class WorkspaceStateStorePendingMixin:
                 last_apply_id=str(row[14]) if row[14] is not None else None,
                 candidate_ref=str(row[15]) if row[15] is not None else None,
                 base_active_revision=(int(row[16]) if row[16] is not None else None),
-                persistence_location=str(row[17]) if row[17] else None,
-                source_generation=(int(row[18]) if row[18] is not None else None),
+                source_generation=(int(row[17]) if row[17] is not None else None),
                 secret_bindings=load_json_object(
-                    str(row[19]), field="pending candidate secret bindings"
+                    str(row[18]), field="pending candidate secret bindings"
                 ),
             )
         finally:
@@ -119,7 +118,6 @@ class WorkspaceStateStorePendingMixin:
         last_error: str | None = None,
         candidate_ref: str | None = None,
         base_active_revision: int | None = None,
-        persistence_location: str | None = None,
         source_generation: int | None = None,
         secret_bindings: dict[str, object] | None = None,
         event: ConfigEventInput | None = None,
@@ -186,9 +184,9 @@ class WorkspaceStateStorePendingMixin:
                         payload_json, source_baseline_json, candidate_digest,
                         effective_digest, target_generation, fencing_token, state,
                         last_error, created_at, candidate_ref,
-                        base_active_revision, persistence_location, source_generation,
+                        base_active_revision, source_generation,
                         secret_bindings_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         config_domain,
@@ -206,7 +204,6 @@ class WorkspaceStateStorePendingMixin:
                         utc_now_text(),
                         candidate_ref,
                         base_active_revision,
-                        persistence_location or str(self.path),
                         source_generation,
                         dump_json(
                             secret_bindings or build_secret_binding_summary(payload)

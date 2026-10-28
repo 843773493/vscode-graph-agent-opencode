@@ -52,7 +52,7 @@ for _ in range(2):
     with GatewayStateStore(path=Path("state/gateway.sqlite")) as store:
         store.set_config(config_key="release-marker", config_version=3, payload={"value": "中文"})
         assert store.get_config("release-marker").payload == {"value": "中文"}
-        assert store.diagnostics().schema_version == 17
+        assert store.diagnostics().schema_version == 18
     with federation_control_database(gateway_root=Path("state")) as database:
         connection = database.connection()
         assert connection.execute("SELECT COUNT(*) FROM federation_replay_registry").fetchone()[0] == 0
@@ -64,7 +64,7 @@ for _ in range(2):
         assert control.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert control.connection.execute("SELECT revision FROM collaboration_ledger").fetchone()[0] == 0
     with closing(WorkspaceStateStore(workspace_root=Path("state/workspace"))) as workspace:
-        assert workspace.diagnostics().schema_version == 22
+        assert workspace.diagnostics().schema_version == 23
         with closing(workspace.connection()) as connection:
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("SELECT generation_json FROM persistent_task_runs").fetchall() == []
@@ -84,7 +84,7 @@ for _ in range(2):
         require_resource_activation_schema(rollout)
         assert rollout.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert rollout.execute("SELECT count(*) FROM context_assemblies").fetchone()[0] == 0
-print(json.dumps({"loaded": core.__file__, "schema": 17}))
+print(json.dumps({"loaded": core.__file__, "schema": 18}))
 '''
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}
 
@@ -99,7 +99,7 @@ print(json.dumps({"loaded": core.__file__, "schema": 17}))
 
     passed = run("staged-initialize-reopen")
     assert passed.returncode == 0, passed.stderr
-    assert json.loads(passed.stdout)["schema"] == 17
+    assert json.loads(passed.stdout)["schema"] == 18
     asset = staged_application / "app/gateway/control/gateway_state/sql/001.sql"
     asset.unlink()
     missing = run("staged-missing-asset")

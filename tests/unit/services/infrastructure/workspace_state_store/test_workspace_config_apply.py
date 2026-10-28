@@ -1,14 +1,61 @@
 from __future__ import annotations
 
+from contextlib import closing
+from dataclasses import asdict
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
+from app.services.infrastructure import workspace_state_store as store_module
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventInput,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+
+
+def test_pending_location_migration_preserves_candidate_and_replay(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def create(store: WorkspaceStateStore, *, digest: str = "candidate-digest"):
+        return store.create_pending_config_candidate(
+            config_domain="workspace", candidate_id="location-candidate",
+            idempotency_key="location-replay", payload={"api_key": "env:TEST_KEY"},
+            source_baseline={"workspace": {"revision": 7, "digest": "source-digest"}},
+            candidate_digest=digest, effective_digest="effective-digest",
+            target_generation="generation-new", fencing_token="fence-original",
+            state="candidate_validated", candidate_ref="candidate-ref",
+            base_active_revision=5, source_generation=11,
+        )
+
+    with monkeypatch.context() as legacy:
+        legacy.setattr(store_module, "_WORKSPACE_MIGRATIONS", store_module._WORKSPACE_MIGRATIONS[:22])
+        with WorkspaceStateStore(workspace_root=workspace_root) as old:
+            candidate = create(old)
+            with closing(old.connection()) as connection:
+                # 仅重现旧 writer 曾保存的位置，其余状态由原 owner 生成。
+                connection.execute("UPDATE config_pending_candidate SET persistence_location = ?", (str(old.path),))
+                original = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+                del original["persistence_location"]
+                versions = list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))
+
+    for _ in range(2):
+        with WorkspaceStateStore(workspace_root=workspace_root) as store:
+            with closing(store.connection()) as connection:
+                persisted = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+                assert persisted == original
+                assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+                assert list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))[:22] == versions
+            latest = store.get_pending_config_candidate(config_domain="workspace")
+            assert latest is not None
+            assert "persistence_location" not in asdict(latest)
+            assert store.get_pending_config_candidate(config_domain="workspace", candidate_id=candidate.candidate_id) == candidate
+            assert store.get_pending_config_candidate(config_domain="workspace", idempotency_key=candidate.idempotency_key) == candidate
+            assert create(store) == candidate
+            with pytest.raises(ConfigConflictError, match="idempotency_key"):
+                create(store, digest="conflicting-digest")
 
 
 def test_workspace_apply_journal_records_idempotent_side_effect(workspace_root):

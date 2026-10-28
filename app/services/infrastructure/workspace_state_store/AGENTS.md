@@ -20,6 +20,7 @@ workspace_state_store/
     ├── 020.sql          模型判断的原执行引用
     ├── 021.sql          Goal任务应用状态、当前归属及一次性导入指纹
     ├── 022.sql          原任务运行内的会话动作进度
+    ├── 023.sql          删除 pending 候选冗余的库物理位置
     └── legacy_config/   仅供一次性旧表迁移的 SQL
 ```
 

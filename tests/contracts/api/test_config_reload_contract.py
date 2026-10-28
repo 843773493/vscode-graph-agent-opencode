@@ -217,6 +217,8 @@ def test_configuration_diagnostics_redact_pending_payload_and_keep_secret_refere
             "env:BOXTEAM_TEST_API_KEY"
         )
         assert "payload_json" not in pending[0]
+        assert "persistence_location" not in pending[0]
+        assert str(store.path) not in json.dumps(pending, ensure_ascii=False)
         fanout = result["workspace"]["sqlite"]["source_fanout"]
         assert fanout[0]["workspace_id"] == "workspace-diagnostic"
         assert fanout[0]["result"] == "applied"

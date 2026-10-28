@@ -546,7 +546,7 @@ def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
         )
         assert pending is not None
         assert pending.base_active_revision == 7
-        assert pending.persistence_location == str(state.path)
+        assert pending.candidate_id == intent.candidate_id
         updated = state.update_gateway_restart_intent(
             candidate_ref="candidate-ref-1",
             expected_state="pending",

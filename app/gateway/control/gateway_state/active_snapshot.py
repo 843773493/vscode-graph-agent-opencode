@@ -222,7 +222,7 @@ class ConfigActiveSnapshotMixin:
                    payload_json, source_baseline_json, candidate_digest,
                    effective_digest, target_generation, fencing_token, state,
                    last_error, created_at, last_attempt_id, last_apply_id,
-                   base_active_revision, persistence_location, source_generation,
+                   base_active_revision, source_generation,
                    secret_bindings_json
             FROM config_pending_candidate
             """ + (
@@ -257,10 +257,9 @@ class ConfigActiveSnapshotMixin:
             last_attempt_id=str(row[13]) if row[13] is not None else None,
             last_apply_id=str(row[14]) if row[14] is not None else None,
             base_active_revision=(int(row[15]) if row[15] is not None else None),
-            persistence_location=str(row[16]) if row[16] else None,
-            source_generation=(int(row[17]) if row[17] is not None else None),
+            source_generation=(int(row[16]) if row[16] is not None else None),
             secret_bindings=load_json_object(
-                str(row[18]), field="Gateway pending secret bindings"
+                str(row[17]), field="Gateway pending secret bindings"
             ),
         )
 
@@ -279,7 +278,6 @@ class ConfigActiveSnapshotMixin:
         state: ConfigLifecycleState,
         last_error: str | None = None,
         base_active_revision: int | None = None,
-        persistence_location: str | None = None,
         source_generation: int | None = None,
         secret_bindings: dict[str, object] | None = None,
     ) -> ConfigPendingCandidateRecord:
@@ -337,9 +335,9 @@ class ConfigActiveSnapshotMixin:
                         payload_json, source_baseline_json, candidate_digest,
                         effective_digest, target_generation, fencing_token, state,
                         last_error, created_at, last_attempt_id, last_apply_id,
-                        base_active_revision, persistence_location, source_generation,
+                        base_active_revision, source_generation,
                         secret_bindings_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                     """,
                     (
                         config_domain,
@@ -356,7 +354,6 @@ class ConfigActiveSnapshotMixin:
                         last_error,
                         utc_now_text(),
                         base_active_revision,
-                        persistence_location or str(self.path),
                         source_generation,
                         dump_json(
                             secret_bindings or build_secret_binding_summary(payload)

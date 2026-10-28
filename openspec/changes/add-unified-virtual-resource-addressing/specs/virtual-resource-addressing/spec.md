@@ -49,6 +49,11 @@
 - **WHEN** API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path，且不属于上述控制面根绑定或两个具名入口例外
 - **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
 
+#### Scenario: 配置候选记录不重复保存存储位置
+
+- **WHEN** Workspace 或 Gateway 创建、重放、冷读 pending 配置候选，或升级包含候选记录的旧状态库
+- **THEN** SQLite 位置由原存储 owner 持有，候选记录及其诊断条目不另存或输出该位置；原有冗余位置列通过同一 owner 的有序 SQL 迁移删除，候选正文、来源基线、密钥引用、revision、幂等身份及应用和重启关联保持，普通重启不重建候选
+
 #### Scenario: 文件导航库初始化错误保留身份和原始诊断
 
 - **WHEN** 文件导航库因未知schema、缺少权威表、owner不一致、损坏数据库或SQL资产不可读而拒绝初始化

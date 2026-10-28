@@ -1006,3 +1006,9 @@
 - 原存储共用失败阶段合同，初始化、目录准备/重置、运行/样本读写和查询保留原生类别、errno/winerror及直接cause，完整原错关联原request_id进入诊断；移除Path隐式转字符串落盘。读取/列表共用scandir，根丢失、扫描故障及非文件记录明确失败，不再由glob/is_file伪装为空；正常空列表、覆盖历史和GET缺失404保持。
 - 最终工具测试与真实HTTP默认模型入口回归164 passed/11.35秒，含七阶段×三种路径、损坏原件、12项ASGI查询失败/重试及扫描反例；仅查询使用静态记录，执行仍沿原入口。旧生产25项反例失败；扫描变更前另6项失败，最终去掉重复GET参数为5项。Ruff/compileall/strict 48项通过，触达三文件Pyright零诊断；HTTP handler注册类型错误已沿官方decorator修正，原始失败保留。
 - 准确命令、前后源码指纹、raw、退出码和限定范围见`out/tests/temp/uri-global-closure/artifacts/verification-003.json`。不代替独立Gateway/Backend、真实外部Provider、Web或Windows验收；整体2.2/7.2及多工作区4.3/8.2继续未勾。
+
+### 2026-10-28 pending 配置候选的冗余库位置清理（2.2/7.2部分收口）
+
+- 全仓核对无业务读取方后，移除候选DTO、两个原owner读写签名／投影和候选诊断字段中的persistence_location，不伪造替代URI。Workspace23／Gateway18尾部追加SQL迁移删除旧列，历史SQL不改；原来源、revision、幂等、应用事务及重启关联保持，配置JSONC版本不变。
+- 首轮相关回归101 passed；候选启动／健康证明及日志迁移56 passed，发行包复制后的SQL初始化／冷重开／缺资产拒绝1 passed。扩大合同与Workspace状态库检查60 passed／1 setup error，原MCP夹具仍期待schema21，更新至23后该完整文件1 passed；最后迁移／apply29 passed及两个真实配置重载入口2 passed。各组重叠，不累计数量；前一整组90秒超时原件保留，拆分运行不改业务期限。
+- Ruff触达生产和新增用例通过，改动文件另有1条旧UTC别名诊断；Pyright八文件完整HEAD基线77条、最终38条，按文件／最窄AST owner／规则／完整消息比较无新增，不能称类型全绿。明确包导入约束消除新增迁移的可空package诊断。compileall、strict OpenSpec48/48及差异检查通过。准确命令、源码前后指纹、raw、实际退出码与作者结构检查见`out/tests/temp/uri-global-closure/artifacts/verification-004.json`；临时完整源码归档已删除，证据保留。本片不代替独立Gateway/Backend、Web或Windows验收，2.2/7.2全局门及团队协作TODO保持。

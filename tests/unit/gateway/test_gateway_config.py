@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1545,6 +1546,10 @@ async def test_gateway_config_reload_keeps_old_active_for_runtime_pending(
         assert active.effective_digest == initial.revision
         assert pending.state == "pending_restart"
         assert status.candidate_ref is not None
+        with closing(state.connection()) as connection:
+            persisted = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+        assert "persistence_location" not in persisted
+        assert str(state.path) not in json.dumps(persisted)
         restart_intent = state.get_gateway_restart_intent(
             candidate_ref=status.candidate_ref
         )

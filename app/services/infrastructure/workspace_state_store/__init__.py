@@ -127,6 +127,8 @@ def _migrate_workspace_config_into_source_layers(
     )
 
 
+assert __package__ is not None
+
 _WORKSPACE_MIGRATIONS = (
     load_sql(__package__, "workspace_state_sql/001.sql"),
     load_sql(__package__, "workspace_state_sql/002.sql"),
@@ -154,6 +156,7 @@ _WORKSPACE_MIGRATIONS = (
     load_sql(__package__, "workspace_state_sql/020.sql"),
     load_sql(__package__, "workspace_state_sql/021.sql"),
     load_sql(__package__, "workspace_state_sql/022.sql"),
+    load_sql(__package__, "workspace_state_sql/023.sql"),
 )
 
 

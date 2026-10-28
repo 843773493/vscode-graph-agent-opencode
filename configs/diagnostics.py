@@ -354,7 +354,6 @@ def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
                 "last_attempt_id",
                 "last_apply_id",
                 "base_active_revision",
-                "persistence_location",
                 "source_generation",
             ),
             order_by="created_at",

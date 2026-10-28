@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
@@ -2504,6 +2505,10 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         assert pending is not None
         assert pending.state == "pending_restart"
         assert pending.payload["mcp"]["servers"]["sample"]["command"] == "debug"
+        with closing(store.connection()) as connection:
+            persisted = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+        assert "persistence_location" not in persisted
+        assert str(store.path) not in json.dumps(persisted)
         events = store.list_config_events(config_domain="workspace")
         assert len(events) == 1
         assert events[0].result == "restart_required"

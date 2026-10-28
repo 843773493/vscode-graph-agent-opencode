@@ -98,6 +98,8 @@ def _migrate_gateway_config_into_source_layers(
         )
 
 
+assert __package__ is not None
+
 _GATEWAY_MIGRATIONS = (
     load_sql(__package__, "sql/001.sql"),
     load_sql(__package__, "sql/002.sql"),
@@ -119,4 +121,5 @@ _GATEWAY_MIGRATIONS = (
     # config_source_layers 后物理删除这些镜像行；控制面独有 KV 必须留在该表。
     _migrate_gateway_config_into_source_layers,
     load_sql(__package__, "sql/017.sql"),
+    load_sql(__package__, "sql/018.sql"),
 )

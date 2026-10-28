@@ -523,7 +523,6 @@ class ConfigPendingCandidateRecord:
     last_error: str | None
     created_at: datetime
     base_active_revision: int | None = None
-    persistence_location: str | None = None
     source_generation: int | None = None
     last_attempt_id: str | None = None
     last_apply_id: str | None = None
