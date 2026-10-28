@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
+from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.browser.test_browser_owner_revision_drain import (
     browser_client as browser_client,  # noqa: PLC0414
@@ -24,12 +28,11 @@ from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import render_test_workspace_config
 
 
-@pytest.mark.parametrize("kind", ["terminal", "browser"])
-async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explicit_retry(
+@pytest.fixture
+def resource_workspace(
     browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
-    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
-) -> None:
-    _browser, root, run = browser_client
+) -> tuple[BrowserManagerClient, Path, TestRunContext]:
+    _browser, root, _run = browser_client
     # 此测试不调用模型，仅覆盖资源入口；隔离配置不能依赖个人 Provider 凭据。
     config_path = root / ".boxteam/workspace.jsonc"
     config = json.loads(render_test_workspace_config(config_path.read_text(encoding="utf-8")))
@@ -38,6 +41,15 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
         provider["endpoint"] = "http://127.0.0.1:1/v1"
         provider.pop("auth", None)
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
+    return browser_client
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explicit_retry(
+    resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+) -> None:
+    _browser, root, run = resource_workspace
     async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
         owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
         async with resource_api(container, kind) as client:
@@ -83,3 +95,73 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
                 "failure": failed.json(), "retry": retried.json(), "existing_resource_id": existing,
                 "scope": "正式Session和ASGI资源API、真实Node/PTY或Chromium/HTTP；未验证Gateway/Web或Backend进程重启",
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_dispatch(
+    resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+) -> None:
+    _browser, root, run = resource_workspace
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            response = await client.post(f"/api/v1/resources/{kind}s", json={"session_id": sid})
+            assert response.status_code == 200, response.text
+            rid = response.json()["data"]["resource_id"]
+            async with owner.operation(session_id=sid, thread_id=None,
+                                       holder_id="original-holder", operation_id="original") as operation:
+                if isinstance(operation, TerminalOperations):
+                    await operation.read_terminal(rid)
+                else:
+                    await operation.perform(rid, "read", {})
+                active, = owner._leases.leases_for_resource(rid)
+                ledger_path = owner._leases._state_path
+                assert ledger_path is not None
+                records, ledger = owner._store.path.read_bytes(), ledger_path.read_bytes()
+                external = await owner._transport.get_resource(rid)
+                pending = ledger_path.with_suffix(".tmp")
+                native = PermissionError(errno.EACCES, "lease 发布失败", str(pending))
+                replace = Path.replace
+                issue = owner._transport.issue_transport_grant
+                issued: list[str] = []
+
+                def fail_publication(path: Path, target: Path) -> Path:
+                    if path == pending:
+                        raise native
+                    return replace(path, target)
+
+                async def observe_grant(resource_id: str, **kwargs):
+                    issued.append(resource_id)
+                    return await issue(resource_id, **kwargs)
+
+                request_id = f"lease-failure-{kind}"
+                arguments = {"expected_revision": 1, "thread": response.json()["data"]["source_thread"]}
+                with monkeypatch.context() as patch:
+                    patch.setattr(Path, "replace", fail_publication)
+                    patch.setattr(owner._transport, "issue_transport_grant", observe_grant)
+                    failed = await client.post(f"/api/v1/resources/{rid}/transport-grant", json=arguments,
+                                               headers={"X-Request-ID": request_id})
+                assert failed.status_code == 500, failed.text
+                assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
+                assert str(root) not in failed.text and str(pending) not in failed.text
+                assert "artifact=external_resource_leases" in failed.text and "stage=write" in failed.text
+                assert not issued and ledger_path.read_bytes() == ledger
+                assert owner._store.path.read_bytes() == records
+                assert owner._leases.leases_for_resource(rid) == [active]
+                assert ExternalResourceLeaseLedger(state_path=ledger_path).get_lease(active.lease_id) == active
+                current = await owner._transport.get_resource(rid)
+                identity = "os_pid" if kind == "terminal" else "active_page_id"
+                assert current[identity] == external[identity] and current["transport_owner_revision"] == 1
+                retried = await client.post(f"/api/v1/resources/{rid}/transport-grant", json=arguments,
+                                            headers={"X-Request-ID": request_id})
+                assert retried.status_code == 200, retried.text
+                assert retried.json()["data"]["grant_token"]
+                assert owner._leases.leases_for_resource(rid) == [active]
+                (run.artifacts_dir / f"lease-errors-{kind}.json").write_text(json.dumps({
+                    "failure": failed.json(), "resource_id": rid, "original_lease_id": active.lease_id,
+                    "scope": "正式Session和ASGI授权API、真实PTY/Chromium/HTTP；未验证Gateway/Web或Backend进程重启",
+                }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            cold = ExternalResourceLeaseLedger(state_path=ledger_path)
+            released = cold.get_lease(active.lease_id)
+            assert released is not None and released.status == "released"

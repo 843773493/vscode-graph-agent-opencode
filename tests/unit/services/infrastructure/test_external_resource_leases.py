@@ -92,7 +92,9 @@ def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation
             io_fault.setattr(Path, "replace", fail_replace)
         with pytest.raises(OSError) as raised:
             mutate(ledger)
-        assert raised.value is failure
+        assert raised.value.__cause__ is failure
+        assert type(raised.value) is type(failure) and raised.value.errno == failure.errno
+        assert str(path) not in str(raised.value)
     assert path.read_bytes() == original_bytes
     assert view(ledger) == before
     assert view(ExternalResourceLeaseLedger(state_path=path)) == before

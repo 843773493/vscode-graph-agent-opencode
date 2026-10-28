@@ -56,6 +56,7 @@
 
 - 所有 JavaScript 使用 ESM 并通过 Bun 执行。
 - `integration-resource-record-errors` 经正式 Session、ASGI 资源 API 与真实 PTY/Chromium 核对记录发布失败、原资源与租约不变和显式重试，固定90秒/4GiB；不调用模型，不代替 Gateway/Web 或 Backend 进程重启验收。
+- `integration-resource-lease-errors` 在同一正式测试文件内选择授权账本失败场景，核原工具 active lease、零授权派发、冷账本与显式重试，固定90秒/4GiB；与记录场景串行运行，复用同一隔离配置和辅助服务，不创建第二套装具。
 - 矩阵显式声明层级、客户端、运行面、命令和真实前置条件。
 - `unit-workspace-services` 递归发现 Browser、Terminal 的服务端、attach 页面纯逻辑及协议 JS 单测；它不启动实际辅助服务，不能代替真实进程 Integration 验收。
 - `run-workspace-services.mjs` 按静态导入的测试框架分组：`node:test` 交给Node原生测试器，`bun:test` 交给Bun。两组都执行并汇总失败，未知或混用框架在启动前拒绝；各进程沿用矩阵的超时与内存保护。测试器的编码等运行时语义须与被测行为匹配，不能用Bun的Node兼容行为代替Node服务端证据。

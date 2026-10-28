@@ -12,7 +12,7 @@ workspace_services/
 
 按被测辅助服务选择目录；纯解析和状态计算留在对应模块的单元测试，经过完整用户入口的流程归 E2E。
 
-`test_resource_record_errors.py` 经正式 Session、ASGI 资源 API 和真实 PTY/Chromium 验证 owner 落盘失败不发布候选、普通错误不泄露位置、原资源身份不变及同入口显式重试。无模型调用，配置仅作用于本测试工作区；suite `integration-resource-record-errors` 固定90秒/4GiB，不代表 Gateway/Web 或 Backend 进程重启验收。
+`test_resource_record_errors.py` 经正式 Session、ASGI 资源 API 和真实 PTY/Chromium 验证 owner／lease 落盘失败不发布候选、普通错误不泄露位置、原资源身份与精确占用不变及同入口显式重试。原工具读取生成 active lease，授权账本失败不得派发真实授权，收尾仅释放原 operation。无模型调用，配置仅作用于本测试工作区；`integration-resource-record-errors` 与 `integration-resource-lease-errors` 分别选择记录和授权场景，均固定90秒/4GiB，须串行运行，不代表 Gateway/Web 或 Backend 进程重启验收。
 
 整组关闭测试复用现有 `model_stream` 资产及精确 SessionThread/ModelCall 回放，由真实 Session 和消息 API 生成执行状态；受控 composition 只提供 ID 和观察端口。Chat/Responses 均核对原 Job 期限、实际回复及 owner，资源和进程回收仍由真实关闭入口证明。共享资产的真实 HTTP、同步和异步 SDK 验证归 `integration/harness/test_model_http_assets.py`，业务关闭场景不再持有模型 socket。
 

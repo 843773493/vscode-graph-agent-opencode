@@ -901,3 +901,9 @@
 - 最终16项单元通过／0.93秒，完整旧生产配相同测试16项全失败／1.01秒；邻近 owner 回归160项通过／5.09秒（含同组16项，不重复累计）。正式 Session、ASGI 资源 API 与真实 Node／PTY或Chromium／HTTP的2项入口通过／40.78秒；相同测试配完整旧生产2项失败／21.97秒，原响应可见路径及缺失错误阶段。核500与头体request_id、原记录／租约字节、PID／页面身份、无第二外部创建及同入口显式重试。无模型调用，配置仅写本测试隔离工作区。
 - Ruff通过；新增两份测试Pyright零诊断，生产仍为旧基线同2项，不宣称全仓类型通过。准确命令、完整候选／旧生产tree、源码前后指纹、raw、实际退出码与进程组回收见 out/tests/temp/resource-record-errors/artifacts/verification-027.json；结构及证据复用逐文件核验见structure-026.json。首次真实入口缺个人Provider密钥，隔离配置后解决；首次反例并跑占用固定端口，改串行后得到上述业务反例，原件保留。
 - 离线附件迁移回归offline-backup-008未通过：固定旧版产品生成输入时缺OPENCODE_ZEN_API_KEY，未进入当前记录存储行为；不修改用户环境或独立旧版生成器，不算通过。ASGI与真实辅助服务不代替Gateway／Web、Backend进程重启或Windows验收。全局2.2／7.2保持未勾，团队协作继续TODO。
+
+### 2026-10-28 外部资源占用账本错误出口（2.2／7.2 部分收口）
+
+- 唯一 ExternalResourceLeaseLedger 在原读取／提交位置报告 artifact、阶段及原生错误事实，位置与原异常仅留诊断，原生类别、errno／winerror和直接cause保持。三类 envelope 格式拒绝不输出路径；只有未创建文件和显式内存模式保持空账本合同，文件位置被目录占据时不再被 is_file 静默解释为空。原提交顺序、JSON字节编码、候选发布、通知及全部占用业务方法不变，无新增writer、schema或持久字段；作者AST自查见structure-011.json。
+- 新增12项单元合同，完整旧生产为11 failed／1 passed（0.59秒）；候选与账本、Terminal／Browser owner回归共207 passed／5.34秒。原8种提交失败场景继续核原占用与冷账本，原异常对象的身份转由直接cause严格核对，同时核相同类别／errno与公开无路径。正式Session／工具读取生成原active lease，再经ASGI授权API与真实PTY／Chromium核提交失败不派发授权、原记录／租约字节、原身份版本、冷读、同request_id重试及operation正常收尾；候选2 passed／22.90秒，完整旧生产2 failed／22.83秒。原资源记录API2项回归通过／25.00秒，两个suite各自保留90秒／4GiB并串行运行，复用原装具和无模型隔离配置。
+- Ruff与三文件Pyright零诊断。扩大MCP／Node／调用单测组合在120秒被外置保护中止（exit124、无完整结果），不计通过；随后定向原lease／claim／调用及真实stdio消费者验证通过，详情见lease-consumers-012。准确命令、完整tree、源码前后指纹、raw／实际退出码及进程回收见out/tests/temp/resource-lease-errors/artifacts/verification-013.json与后续收据。未改变产品期限；ASGI和真实辅助服务不代表Gateway／Web、Windows或Backend进程重启，2.2／7.2全局门仍未勾，团队协作继续TODO。

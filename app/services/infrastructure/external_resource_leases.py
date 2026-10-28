@@ -13,7 +13,8 @@ import json
 import logging
 import os
 from collections import deque
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -393,11 +394,16 @@ class ExternalResourceLeaseLedger:
         return record
 
     def _load(self) -> None:
-        if self._state_path is None or not self._state_path.is_file():
+        if self._state_path is None:
             return
-        raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+        with self._io("read"):
+            try:
+                raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                # 只有尚未创建的账本为空；目录或无权读取不能被当成空账本。
+                return
         if not isinstance(raw, dict):
-            raise TypeError(f"资源状态文件必须是对象: path={self._state_path}")
+            raise TypeError(self._failure("validate", "资源状态文件必须是对象"))
         for value in self._load_rows(raw, "records"):
             record = _RESOURCE_RECORD.validate_python(value)
             self._records[record.resource_id] = record
@@ -417,16 +423,31 @@ class ExternalResourceLeaseLedger:
         """
         rows = raw.get(name, [])
         if not isinstance(rows, list):
-            raise TypeError(
-                f"资源状态文件 {name} 必须是数组: path={self._state_path}"
-            )
+            raise TypeError(self._failure("validate", f"资源状态文件 {name} 必须是数组"))
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
-                raise TypeError(
-                    f"资源状态文件 {name}[{index}] 必须是对象: "
-                    f"path={self._state_path}"
-                )
+                raise TypeError(self._failure("validate", f"资源状态文件 {name}[{index}] 必须是对象"))
         return rows
+
+    def _failure(self, stage: str, reason: str, error: OSError | None = None) -> str:
+        detail = f"{reason}: artifact=external_resource_leases, stage={stage}"
+        if error is not None:
+            detail += f", error_type={type(error).__name__}, errno={error.errno}"
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                detail += f", winerror={winerror}"
+        logger.error("%s; path=%s", detail, self._state_path, exc_info=error)
+        return detail
+
+    @contextmanager
+    def _io(self, stage: str) -> Iterator[None]:
+        """在原账本文件访问点报告失败，原位置仅留诊断和直接原因。"""
+        try:
+            yield
+        except OSError as error:
+            detail = self._failure(stage, "资源账本文件访问失败", error)
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                raise type(error)(error.errno, detail, None, winerror) from error
+            raise type(error)(error.errno, detail) from error
 
     def _commit(
         self, *, records: Iterable[ResourceRecord] = (), leases: Iterable[ResourceLease] = (),
@@ -435,17 +456,18 @@ class ExternalResourceLeaseLedger:
         next_records = self._records | {record.resource_id: record for record in records}
         next_leases = self._leases | {lease.lease_id: lease for lease in leases}
         if self._state_path is not None:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = self._state_path.with_suffix(".tmp")
-            payload = {
-                "records": [asdict(record) for record in next_records.values()],
-                "leases": [asdict(lease) for lease in next_leases.values()],
-            }
-            with temp_path.open("w", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-                stream.flush()
-                os.fsync(stream.fileno())
-            temp_path.replace(self._state_path)
+            with self._io("write"):
+                self._state_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path = self._state_path.with_suffix(".tmp")
+                payload = {
+                    "records": [asdict(record) for record in next_records.values()],
+                    "leases": [asdict(lease) for lease in next_leases.values()],
+                }
+                with temp_path.open("w", encoding="utf-8") as stream:
+                    json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temp_path.replace(self._state_path)
         self._records = next_records
         self._leases = next_leases
 
