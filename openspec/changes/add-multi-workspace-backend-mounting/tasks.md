@@ -163,3 +163,9 @@
 - Ruff、compileall和两项OpenSpec strict通过；完整候选、准确命令、源码前后指纹、raw与真实退出码核验见 `out/tests/temp/mount-identity-inputs/artifacts/verification-013.json`。这是作者自查及ASGI HTTP／真实容器集成，不代表真实Gateway／独立Backend重启、Web或Windows实机；本机无Pyright，未运行类型检查。4.3／8.2整体和URI全局2.2／7.2仍未勾，团队协作继续TODO。
 
 同日Gateway续片将注册／冷恢复、代理与生命周期中的UUID规则统一到同一owner，保留错误类别，辅助服务在打开日志前拒绝非法身份。七文件298项回归、最终30运行边界反例、JSON／SQLite冷重开及真实Gateway身份失败／恢复3项均已验证；详细范围及旧生产失败见URI change同日「Gateway 工作区身份校验归一」与 `out/tests/temp/gateway-identity-owner/artifacts/verification-013.json`。4.3／8.2全局门仍未勾。
+
+### 2026-10-28 Gateway 资源目录响应身份
+
+- 原聚合 owner 在创建任何投影前核对响应 Backend UUID 与每个资源 owner；空目录同样校验，混合条目整批拒绝，不修补正文、不改目标或资源身份、不创建另一查询链。冲突沿原作用域错误出口保留健康目标，完整原值留诊断；远端路由 ID 与 Backend UUID 各按原职责使用。
+- 新增24项在旧生产全部失败，最终目录与相邻导入回归45 passed／1.07秒；覆盖本地／远端、有效外部UUID／POSIX／盘符／UNC、空响应／含正文的响应冲突／正确条目后混入错误条目，核零局部发布、原目标不变与同入口恢复。真实独立Gateway和HTTP下游以两个产品注册目标核20个错误／owner冲突查询，健康资源保持，最终修复后双方恢复，正式matrix 1 passed／13.54秒。仅查询测试使用合成资源数据，不冒充Backend执行或恢复验收。
+- Ruff与三个Python文件Pyright均零诊断；准确命令、源码前后指纹、raw／真实退出码与作者结构核对见 `out/tests/temp/resource-catalog-owner-binding/artifacts/`。未补Web、Windows、真实联邦或Backend资源执行验收，4.3／8.2及URI全局2.2／7.2仍未勾；团队协作继续TODO。

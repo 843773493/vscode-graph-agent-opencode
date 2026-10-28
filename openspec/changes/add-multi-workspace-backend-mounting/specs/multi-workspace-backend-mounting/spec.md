@@ -168,6 +168,11 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 - **WHEN** 后端收到一个未显式携带目标 workspace 身份的代理请求
 - **THEN** 后端 MUST 显式拒绝，MUST NOT 以默认或上一次的目标补齐
 
+#### Scenario: Gateway 资源目录不得包装其他工作区的资源
+
+- **WHEN** Gateway 聚合某目标的资源响应
+- **THEN** 响应级 workspace_id 必须等于该目标登记的 Backend UUID，每条资源的 workspace_id 必须与响应级身份一致；任一不符则该目标整批拒绝，不能保留已读的局部条目、改写 owner 或用空目录冒充成功，其他健康目标仍正常返回。远端请求继续使用该 Gateway 的路由 ID，不能以该路由 ID 或本地投影 ID 比较 Backend owner；完整冲突输入只留原始诊断
+
 #### Scenario: 进程数与工作区数解耦
 
 - **WHEN** 同一后端进程挂载多个工作区

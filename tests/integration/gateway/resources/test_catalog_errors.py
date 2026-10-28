@@ -56,18 +56,25 @@ def stub_resources(request: Request) -> JSONResponse:
     owner = request.headers["X-BoxTeam-Workspace-Id"]
     with Path(control["requests_path"]).open("a") as output:
         output.write(json.dumps({"workspace_id": owner, "request_id": request.headers["X-Request-ID"]}) + "\n")
-    if owner == os.environ["BOXTEAM_TEST_CATALOG_OWNER"] and control["mode"] != "ready":
-        if control["mode"] == "validation":
-            return JSONResponse({"data": {"workspace_id": owner, "items": control["native_path"]}})
-        return JSONResponse({"message": control["native_path"]}, status_code=503 if control["mode"] == "http-status" else 200)
-    return JSONResponse({"data": {"workspace_id": owner, "items": [{
+    resource = {
         "resource_id": f"browser-{owner}", "workspace_id": owner, "kind": "browser", "retention_scope": "workspace",
         "source_thread": {"session_id": SESSION_A, "thread_id": THREAD_A}, "thread_associations": [],
         "owner_revision": 3, "status": "running", "reconciliation_status": "verified",
         "unattached_since": None, "reclaim_at": None, "available_actions": ["stop", "delete"],
         "metadata": {"title": "查询用浏览器"}, "created_at": "2026-10-05T00:00:00Z",
         "updated_at": "2026-10-05T00:00:00Z", "error": None,
-    }]}})
+    }
+    if owner == os.environ["BOXTEAM_TEST_CATALOG_OWNER"] and control["mode"] != "ready":
+        if control["mode"] == "validation":
+            return JSONResponse({"data": {"workspace_id": owner, "items": control["native_path"]}})
+        if control["mode"] == "owner-envelope":
+            return JSONResponse({"data": {"workspace_id": control["native_path"], "items": [resource]}})
+        if control["mode"] == "owner-item":
+            return JSONResponse({"data": {"workspace_id": owner, "items": [resource, {
+                **resource, "resource_id": "browser-foreign", "workspace_id": control["native_path"],
+            }]}})
+        return JSONResponse({"message": control["native_path"]}, status_code=503 if control["mode"] == "http-status" else 200)
+    return JSONResponse({"data": {"workspace_id": owner, "items": [resource]}})
 
 
 @pytest.fixture
@@ -121,8 +128,8 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
             targets = {item["backend_workspace_id"]: item for item in added.json()["data"]["items"]}
             assert set(targets) == {failed_owner, sibling_owner}
             state = json.loads(control.read_text())
-            for mode in ("envelope", "validation", "http-status"):
-                for index, native_path in enumerate(("/private/catalog-marker/state.sqlite", r"C:\private\catalog-marker\state.sqlite", r"\\server\catalog-marker\state.sqlite")):
+            for mode in ("envelope", "validation", "http-status", "owner-envelope", "owner-item"):
+                for index, native_path in enumerate(("/private/catalog-marker/state.sqlite", r"C:\private\catalog-marker\state.sqlite", r"\\server\catalog-marker\state.sqlite", sibling_owner)):
                     state.update(mode=mode, native_path=native_path)
                     control.write_text(json.dumps(state))
                     request_id = f"catalog-{mode}-{index}"
@@ -137,7 +144,7 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
                     error, = body["data"]["errors"]
                     assert error["scope_key"] == targets[failed_owner]["workspace_id"]
                     assert error["label"] == f"本机 Gateway · {targets[failed_owner]['name']}"
-                    error_type = {"envelope": "ValueError", "validation": "ValidationError", "http-status": "HTTPStatusError"}[mode]
+                    error_type = {"envelope": "ValueError", "validation": "ValidationError", "http-status": "HTTPStatusError", "owner-envelope": "ValueError", "owner-item": "ValueError"}[mode]
                     assert error["message"] == f"工作区资源目录读取失败: {error_type}" + (", status=503" if mode == "http-status" else "")
                     observed = [json.loads(line) for line in Path(state["requests_path"]).read_text().splitlines()]
                     assert {row["workspace_id"] for row in observed if row["request_id"] == request_id} == {failed_owner, sibling_owner}

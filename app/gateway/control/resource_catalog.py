@@ -69,6 +69,15 @@ class GatewayResourceCatalogService:
         try:
             data = await self._get_data(target, "resources", request_id=request_id)
             resources = WorkspaceResourceListDTO.model_validate(data)
+            if resources.workspace_id != target.backend_workspace_id:
+                raise ValueError(
+                    f"资源目录工作区身份冲突: expected={target.backend_workspace_id}, actual={resources.workspace_id}"
+                )
+            for resource in resources.items:
+                if resource.workspace_id != resources.workspace_id:
+                    raise ValueError(
+                        f"资源工作区身份冲突: expected={resources.workspace_id}, actual={resource.workspace_id}"
+                    )
         except (httpx.HTTPError, LookupError, RuntimeError, TypeError, ValueError) as error:
             return [], [self._scope_error(target.workspace_id, workspace_label, error, request_id=request_id)]
         return [

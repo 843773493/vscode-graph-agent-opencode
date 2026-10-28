@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import Mock
 
 import httpx
@@ -8,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from tests.support.resource_owners.sessions import (
     SESSION_A,
@@ -23,20 +25,27 @@ def target() -> WorkspaceTarget:
                            backend_workspace_id=WORKSPACE_ID, managed=True)
 
 
+@pytest.fixture
+def resource_record() -> dict[str, object]:
+    return {
+        "resource_id": "browser_owned", "workspace_id": WORKSPACE_ID, "kind": "browser",
+        "retention_scope": "workspace", "source_thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
+        "thread_associations": [], "owner_revision": 3, "status": "running",
+        "reconciliation_status": "verified", "unattached_since": None, "reclaim_at": None,
+        "available_actions": ["stop", "delete"], "metadata": {"title": "持久浏览器"},
+        "created_at": "2026-10-05T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z", "error": None,
+    }
+
+
 @pytest.mark.asyncio
-async def test_catalog_loads_unassociated_workspace_browser_without_source_session(target: WorkspaceTarget) -> None:
+async def test_catalog_loads_unassociated_workspace_browser_without_source_session(
+    target: WorkspaceTarget, resource_record: dict[str, object],
+) -> None:
     calls: list[str] = []
     def request(request: httpx.Request) -> httpx.Response:
         calls.append(str(request.url))
         assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
-        return httpx.Response(200, json={"data": {"workspace_id": WORKSPACE_ID, "items": [{
-            "resource_id": "browser_owned", "workspace_id": WORKSPACE_ID, "kind": "browser",
-            "retention_scope": "workspace", "source_thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
-            "thread_associations": [], "owner_revision": 3, "status": "running",
-            "reconciliation_status": "verified", "unattached_since": None, "reclaim_at": None,
-            "available_actions": ["stop", "delete"], "metadata": {"title": "持久浏览器"},
-            "created_at": "2026-10-05T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z", "error": None,
-        }]}})
+        return httpx.Response(200, json={"data": {"workspace_id": WORKSPACE_ID, "items": [resource_record]}})
     async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
         service=GatewayResourceCatalogService(registry=Mock(spec=GatewayWorkspaceRegistry), http_client=client)
         resources, errors=await service._load_workspace(target, request_id="req_resources")
@@ -124,3 +133,76 @@ async def test_catalog_failure_preserves_scope_and_diagnostics_without_raw_paylo
         recovered = await service.list(request_id="req_catalog_failure")
         assert recovered.items == [] and recovered.errors == []
         assert len(calls) == 4
+
+
+@pytest.fixture(params=["local", "remote_gateway"])
+def owner_target(
+    request: pytest.FixtureRequest, target: WorkspaceTarget, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> tuple[WorkspaceTarget, Mock, str | None]:
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    token = None
+    if request.param == "remote_gateway":
+        target = replace(target, connection_kind="remote_gateway", root_path=None, managed=False,
+                         remote_gateway_connection_id="rgw_owner", remote_workspace_id="route_on_peer")
+        registry.remote_gateway_connection.return_value.name = "远端 Gateway"
+        registry.remote_gateway_url.return_value = "http://peer.test"
+        monkeypatch.setattr("app.gateway.control.resource_catalog.get_gateway_root", lambda: tmp_path)
+        credential = FederationCredentialStore(storage_path=tmp_path / "credentials/federation.json").issue(
+            connection_id="rgw_owner", peer_gateway_id="gateway_peer",
+        )
+        token = credential.token
+    registry.targets.return_value = (target,)
+    return target, registry, token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", ["envelope-empty", "envelope-with-data", "item-after-valid"])
+@pytest.mark.parametrize("foreign_owner", [
+    "00000000-0000-4000-8000-000000000099", "/private/catalog-owner-marker/state.sqlite",
+    r"C:\private\catalog-owner-marker\state.sqlite", r"\\server\catalog-owner-marker\state.sqlite",
+], ids=["other-workspace", "posix", "drive", "unc"])
+async def test_catalog_rejects_foreign_owner_before_publishing_any_target_items(
+    owner_target: tuple[WorkspaceTarget, Mock, str | None], resource_record: dict[str, object],
+    position: str, foreign_owner: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    target, registry, token = owner_target
+    original_target = asdict(target)
+    failed = True
+    calls = []
+
+    def request(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.headers["X-Request-ID"] == "req_catalog_owner"
+        assert request.headers["X-BoxTeam-Workspace-Id"] == ("route_on_peer" if token else WORKSPACE_ID)
+        if token:
+            assert request.headers["X-BoxTeam-Federation-Token"] == token
+        if not failed:
+            data = {"workspace_id": WORKSPACE_ID, "items": [resource_record]}
+        elif position == "item-after-valid":
+            data = {"workspace_id": WORKSPACE_ID, "items": [resource_record, {**resource_record, "resource_id": "browser_foreign", "workspace_id": foreign_owner}]}
+        else:
+            data = {"workspace_id": foreign_owner, "items": [] if position == "envelope-empty" else [resource_record]}
+        return httpx.Response(200, json={"data": data})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
+        service = GatewayResourceCatalogService(registry=registry, http_client=client)
+        rejected = await service.list(request_id="req_catalog_owner")
+        assert rejected.items == []
+        error, = rejected.errors
+        assert error.scope_key == target.workspace_id
+        assert error.message == "工作区资源目录读取失败: ValueError"
+        assert "catalog-owner-marker" not in rejected.model_dump_json()
+        diagnostic, = [record for record in caplog.records if record.name == "app.gateway.control.resource_catalog"]
+        assert diagnostic.exc_info is not None
+        assert isinstance(diagnostic.exc_info[1], ValueError)
+        assert foreign_owner in str(diagnostic.exc_info[1])
+        assert WORKSPACE_ID in str(diagnostic.exc_info[1])
+        assert len(calls) == 1 and asdict(target) == original_target
+
+        failed = False
+        recovered = await service.list(request_id="req_catalog_owner")
+        item, = recovered.items
+        assert recovered.errors == [] and len(calls) == 2
+        assert item.workspace_id == target.workspace_id
+        assert item.resource.model_dump() == resource_record
+        assert asdict(target) == original_target
