@@ -40,7 +40,7 @@ from tests.support.node_debug_dependencies import (
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 DebugReceiveClient = tuple[
-    httpx.AsyncClient, NodeDebugSessionStore, dict[str, str], Path, Callable[[], Awaitable[None]],
+    httpx.AsyncClient, NodeDebugSessionStore, dict[str, str], Path, Callable[[bool], Awaitable[None]],
 ]
 
 
@@ -71,9 +71,10 @@ async def debug_receive_client(integration_workspace_root_path: str) -> AsyncIte
         current = service()
         app.dependency_overrides[get_node_debug_service] = lambda: current
         app.dependency_overrides[verify_local_token] = lambda: "local"
-        async def reopen() -> None:
+        async def reopen(close_current: bool) -> None:
             nonlocal current
-            await current.close()
+            if close_current:
+                await current.close()
             current = service()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
@@ -152,7 +153,7 @@ async def test_handshake_receive_failure_keeps_native_cause_private_and_persists
     claim = store.read_launch_claim(**owner)
     assert claim is not None and claim.phase == "settled" and claim.pid == data["pid"]
 
-    await reopen()
+    await reopen(True)
     cold = await client.get("/api/v1/debug/node", params=owner)
     assert cold.status_code == 200, cold.text
     restored = cold.json()["data"]
@@ -178,7 +179,7 @@ async def test_handshake_receive_failure_keeps_native_cause_private_and_persists
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(process_identity.sys.platform != "linux", reason="真实 /proc 读取边界只在 Linux 验证")
-@pytest.mark.parametrize("failure", ["stat_format", "stat_fields", "empty_boot_id"])
+@pytest.mark.parametrize("failure", ["stat_format", "stat_fields", "empty_boot_id", "stat_permission", "missing_boot_id", "boot_id_permission"])
 async def test_process_identity_rejection_keeps_failed_start_private_and_retries(
     debug_receive_client: DebugReceiveClient, failure: str,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -187,6 +188,7 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     original_read = Path.read_text
     observed: list[Path] = []
     private = str(root / "identity-secret")
+    native_error = OSError(errno.ENOENT if failure == "missing_boot_id" else errno.EACCES, "身份读取失败", private)
 
     def read_identity(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
         raw = original_read(path, encoding=encoding, errors=errors)
@@ -194,9 +196,13 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
             return raw
         if failure.startswith("stat_") and path.name == "stat" and path.parent.parent == Path("/proc"):
             observed.append(path)
+            if failure == "stat_permission":
+                raise native_error
             return private if failure == "stat_format" else f"{path.parent.name} ({private}) S 0"
-        if failure == "empty_boot_id" and path == Path("/proc/sys/kernel/random/boot_id"):
+        if failure in {"empty_boot_id", "missing_boot_id", "boot_id_permission"} and path == Path("/proc/sys/kernel/random/boot_id"):
             observed.append(path)
+            if failure != "empty_boot_id":
+                raise native_error
             return "\n"
         return raw
 
@@ -217,9 +223,14 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     assert len(observed) == 1
     assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
     assert str(observed[0]) not in failed.text and "identity-secret" not in failed.text
-    assert "source=linux_proc_stat" in failed.text
-    assert str(observed[0]) in caplog.text
-    if failure.startswith("stat_"):
+    if failure in {"stat_permission", "missing_boot_id", "boot_id_permission"}:
+        assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)
+        assert str(native_error) in caplog.text
+        assert f"error_type={type(native_error).__name__}" in failed.text and f"errno={native_error.errno}" in failed.text
+    else:
+        assert "source=linux_proc_stat" in failed.text
+        assert str(observed[0]) in caplog.text
+    if failure in {"stat_format", "stat_fields"}:
         assert private in caplog.text
 
     state = await client.get("/api/v1/debug/node", params=owner)
@@ -239,7 +250,7 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     claim = store.read_launch_claim(**owner)
     assert claim is not None and claim.phase == "settled" and claim.pid is None
 
-    await reopen()
+    await reopen(True)
     cold = await client.get("/api/v1/debug/node", params=owner)
     assert cold.status_code == 200, cold.text
     restored = cold.json()["data"]
@@ -259,4 +270,75 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     (context.artifacts_dir / f"identity-{failure}.json").write_text(json.dumps({
         "failed": failed.json(), "live": state.json(), "manifest": manifest.model_dump(mode="json"),
         "cold": cold.json(), "retried": retried.json(), "stopped": stopped.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(process_identity.sys.platform != "linux", reason="真实 /proc 读取边界只在 Linux 验证")
+async def test_cold_identity_io_failure_preserves_product_claim_and_retries(
+    debug_receive_client: DebugReceiveClient,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "冷身份读取失败后重试", "script_path": "entry.mjs",
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    started = await client.post("/api/v1/debug/node/start", json={
+        **owner, "configuration_id": configuration_id, "path": "entry.mjs",
+    })
+    assert started.status_code == 200, started.text
+    pid = started.json()["data"]["pid"]
+    claim = store.read_launch_claim(**owner)
+    manifest_bytes, _manifest = store.read_manifest_payload(**owner)
+    assert claim is not None and claim.phase == "running" and claim.pid == pid
+    # 新服务实例只读产品入口生成的登记；原 owner 保留真实进程与清理责任，未模拟硬重启。
+    await reopen(False)
+    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+    native_error = FileNotFoundError(errno.ENOENT, "身份读取失败", str(root / "identity-secret/boot_id"))
+    read_text = Path.read_text
+    observed: list[Path] = []
+
+    def read_identity(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if path == boot_id_path:
+            observed.append(path)
+            raise native_error
+        return read_text(path, encoding=encoding, errors=errors)
+
+    process_identity._read_linux_boot_id.cache_clear()
+    try:
+        with monkeypatch.context() as patch, caplog.at_level(logging.ERROR):
+            patch.setattr(Path, "read_text", read_identity)
+            failed = await client.get("/api/v1/debug/node", params=owner)
+    finally:
+        process_identity._read_linux_boot_id.cache_clear()
+    assert failed.status_code == 404, failed.text
+    assert observed == [boot_id_path]
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    assert "identity-secret" not in failed.text and str(boot_id_path) not in failed.text
+    assert "stage=boot_id_read" in failed.text and "FileNotFoundError" in failed.text and "errno=2" in failed.text
+    assert f"source={process_identity.IDENTITY_SOURCE_LINUX_PROC}" in failed.text
+    assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)
+    assert str(native_error) in caplog.text
+    assert store.read_launch_claim(**owner) == claim
+    assert store.read_manifest_payload(**owner)[0] == manifest_bytes
+    identity = probe_process_identity(pid)
+    assert identity is not None
+    assert identity.compare(recorded_source=claim.process_identity_source, recorded_start_marker=claim.process_start_marker) == "match"
+
+    retried = await client.get("/api/v1/debug/node", params=owner)
+    assert retried.status_code == 200, retried.text
+    state = retried.json()["data"]
+    assert state["status"] == "idle" and state["pid"] is None
+    assert state["active_configuration_id"] == configuration_id
+    assert state["actions"][:-1] == started.json()["data"]["actions"]
+    assert probe_process_identity(pid) is None
+    settled = store.read_launch_claim(**owner)
+    assert settled is not None and settled.phase == "settled" and settled.process_instance_id == claim.process_instance_id
+    assert len([action for action in state["actions"] if action["action"] == "reconcile_settled"]) == 1
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "cold-identity-io.json").write_text(json.dumps({
+        "started": started.json(), "failed": failed.json(), "retried": retried.json(),
+        "claim": claim.model_dump(mode="json"), "settled": settled.model_dump(mode="json"),
     }, ensure_ascii=False, indent=2) + "\n")

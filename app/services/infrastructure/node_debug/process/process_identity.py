@@ -19,6 +19,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from app.core.failures import failure_detail
+
 #: 当前实例与登记身份的比对结果（三态，缺一不可）：
 #: ``incomparable`` 表示事实不足，调用方必须 fail-closed，不得当成"已终结"。
 IdentityComparison = Literal["match", "mismatch", "incomparable"]
@@ -87,6 +89,12 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
         raw = stat_path.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return None
+    except OSError as error:
+        detail = failure_detail(
+            error, stage="process_stat_read",
+            label=f"读取进程身份失败: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}",
+        )
+        raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
     # comm 字段可能包含空格与括号，必须从最后一个 ')' 之后再切分。
     closing = raw.rfind(")")
     if closing < 0:
@@ -117,7 +125,15 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
 @lru_cache(maxsize=16)
 def _read_linux_boot_id(boot_id_path: Path) -> str:
     """Linux 启动 ID 在本次启动内稳定，按路径缓存以避免每次身份读取重复开文件。"""
-    boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+    try:
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        # boot_id 缺失是身份读取失败，不能当成目标 PID 已终结。
+        detail = failure_detail(
+            error, stage="boot_id_read",
+            label=f"读取进程启动身份失败: source={IDENTITY_SOURCE_LINUX_PROC}",
+        )
+        raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
     if not boot_id:
         logger.error("Linux 启动 ID 为空: path=%s", boot_id_path)
         raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: source={IDENTITY_SOURCE_LINUX_PROC}")

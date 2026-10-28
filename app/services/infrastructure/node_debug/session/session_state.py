@@ -193,6 +193,8 @@ class NodeDebugSessionState:
         extension_catalog_binding: ExtensionCatalogBindingAuditDTO | None = None,
         result: Literal["success", "error"] = "success",
     ) -> None:
+        # 冷恢复也会追加结算动作；必须先加载原 manifest，避免覆盖方案选择及历史。
+        self.ensure_loaded(session_id, thread_id)
         owner = normalize_node_debug_owner(session_id, thread_id)
         actions = self._pending_actions.get(owner)
         if actions is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from pathlib import Path
@@ -88,6 +89,47 @@ def test_linux_process_identity_requires_boot_id(
     assert str(boot_id_path) not in str(caught.value)
     assert f"source={IDENTITY_SOURCE_LINUX_PROC}" in str(caught.value)
     assert str(boot_id_path) in caplog.text
+
+
+@pytest.mark.parametrize("stage,code", [
+    ("process_stat_read", errno.EACCES),
+    ("boot_id_read", errno.ENOENT),
+    ("boot_id_read", errno.EACCES),
+])
+@pytest.mark.parametrize("private", ["/private/identity-secret", r"C:\private\identity-secret", r"\\server\private\identity-secret"])
+def test_linux_identity_io_failure_keeps_native_facts_and_private_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    stage: str, code: int, private: str,
+) -> None:
+    monkeypatch.setattr(process_identity.sys, "platform", "linux")
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
+    process_root = tmp_path / "4242"
+    process_root.mkdir()
+    stat_path = process_root / "stat"
+    stat_path.write_text(f"4242 (python) {' '.join(['S', *(['0'] * 18), '12345'])}")
+    failed_path = stat_path if stage == "process_stat_read" else tmp_path / "sys/kernel/random/boot_id"
+    native_error = OSError(code, f"身份读取失败: {private}", private)
+    read_text = Path.read_text
+
+    def read_identity(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if path == failed_path:
+            raise native_error
+        return read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_identity)
+    monkeypatch.setattr(process_identity, "_probe_psutil_identity", lambda _pid: pytest.fail("Linux 身份读取失败不得回落"))
+    with caplog.at_level(logging.ERROR), pytest.raises(type(native_error)) as caught:
+        probe_process_identity(4242)
+    error = caught.value
+    assert error is not native_error and error.__cause__ is native_error
+    assert error.errno == code and error.filename is None
+    assert str(tmp_path) not in str(error) and "identity-secret" not in str(error)
+    assert f"stage={stage}" in str(error) and f"error={type(native_error).__name__}" in str(error)
+    assert f"source={IDENTITY_SOURCE_LINUX_PROC}" in str(error)
+    if stage == "process_stat_read":
+        assert "pid=4242" in str(error)
+    assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)
+    assert str(native_error) in caplog.text
 
 
 @pytest.mark.parametrize("raw,reason", [

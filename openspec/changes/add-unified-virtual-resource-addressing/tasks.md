@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-28 进程身份原生读取切片（2.2/7.2部分收口）：Linux stat/boot_id 的原读取点复用 failure_detail，只公开来源、阶段、异常类别及系统错误码，原异常和真实位置留诊断及直接 cause。stat 消失仍表示 PID 终结，boot_id 缺失仍明确失败，不改 HTTP 分类或回落身份来源。真实 Node 启动生成 claim 后的新服务冷读还发现原结算动作覆盖未加载 manifest；原 session_state 在追加前加载，保留方案和动作历史，不增恢复链。
+
+新增反例在原生产实现10 failed，包含真实Node/ASGI冷读404路径外泄。最终身份、接收、完整claim及会话存储120 passed；中间新增场景的3项错误断言按既有OSError合同修正，冷读方案断言保持并修复写入顺序。Ruff/compileall通过，完整旧HEAD与最终Pyright均3项、无新增；OpenSpec strict 51/51。准确命令、源码指纹、原始输出、实际退出码与作者结构自查见 out/tests/temp/uri-global-closure/artifacts/verification-027.json。未验Gateway/Web/Windows、独立Backend硬重启或全部URI出口；2.2/7.2和延期项继续未勾。
+
 ## 1. 契约冻结与单一定义点（本 change 是唯一 owner；权威表已下发，据此定稿）
 
 - [x] 1.1 建立**术语表唯一处**，按 2026-10-05 用户决定区分四层：整套机制称**统一资源寻址**，具体地址称**资源 URI**（简称 **URI**），业务层稳定身份继续称 **ResourceIdentity**，底层文件位置继续称**真实路径**。其余契约术语仍为 `作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；其余 change 只能引用本表。机制与具体地址共用旧名称的歧义由主线程按 6.6 统一清理，不保留同义别名。现有寻址语法、身份和授权行为保持既有合同；本项术语表与源码/公开字段正名已完成；验收见6.6。
