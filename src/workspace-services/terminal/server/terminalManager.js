@@ -283,7 +283,7 @@ export class TerminalManager {
     try {
       await session.start();
     } catch (error) {
-      // 保留原身份与恢复记录；只有原 Worker 的正式停止证明才能结清创建。
+      // 保留原身份与恢复记录；原owner核实进程树、Worker退出及终态落盘后才结清创建。
       await session.failStartup(error);
     }
     await this.persist();

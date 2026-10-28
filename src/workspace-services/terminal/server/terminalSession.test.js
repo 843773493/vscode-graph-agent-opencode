@@ -83,7 +83,10 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     const session = completedSession(t, { status: "created" });
     const original = new Error("受控启动失败");
     const shutdown = Promise.withResolvers();
-    session.ptyProcess = { pid: 42002, startupCleanupResult: cleanupResult, shutdown: () => shutdown.promise };
+    const stopped = ["missing", "terminated", "force_killed"].includes(cleanupResult);
+    // 无原生身份的负例不能把替身PID送进真实OS；已交付PID的停止由真实PTY集成覆盖。
+    const pid = stopped ? 42002 : null;
+    session.ptyProcess = { pid, startupCleanupResult: cleanupResult, shutdown: () => shutdown.promise };
     const states = [];
     session.manager.persist = async () => { states.push(session.toRecord()); };
     const rejected = assert.rejects(session.failStartup(original), error => error === original);
@@ -91,10 +94,9 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     assert.equal(original.creationReceipt, undefined, "Worker退出确认前不能签回执");
     assert.equal(states.length, 1);
     assert.equal(states[0].reconciliation_status, "unknown");
-    assert.equal(states[0].os_pid, 42002);
+    assert.equal(states[0].os_pid, pid);
     shutdown.resolve();
     await rejected;
-    const stopped = ["missing", "terminated", "force_killed"].includes(cleanupResult);
     assert.equal(states.length, 2);
     assert.equal(session.ptyProcess, null);
     assert.equal(session.reconciliationStatus, stopped ? "verified" : "unknown");
@@ -108,6 +110,28 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     } else assert.equal(original.creationReceipt, undefined);
   });
 }
+
+test("未取得原生PID的创建不能经管理停止伪造已终止", async t => {
+  const session = completedSession(t, { status: "created", reconciliation_status: "unknown" });
+  let shutdowns = 0;
+  const worker = { pid: null, async shutdown() { shutdowns += 1; } };
+  session.ptyProcess = worker;
+  await assert.rejects(session.kill(), /原生创建身份尚未核实/);
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.status, "created");
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(shutdowns, 0);
+});
+
+test("未实际执行停止时不能把原未知记录签为创建失败回执", async t => {
+  const session = completedSession(t, { status: "exited", reconciliation_status: "unknown", os_pid: 42002 });
+  const original = new Error("原Worker已丢失");
+  await assert.rejects(session.failStartup(original), error => error === original);
+  assert.equal(session.ptyProcess, null);
+  assert.equal(session.status, "exited");
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(original.creationReceipt, undefined);
+});
 
 test("启动收尾失败保留原Worker句柄、未知记录及两份异常", async (t) => {
   const session = completedSession(t, { status: "created" });

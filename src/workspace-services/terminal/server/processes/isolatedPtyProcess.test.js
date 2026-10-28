@@ -21,6 +21,7 @@ async function createReadyWorker(t) {
   });
   const isolated = new IsolatedPtyProcess();
   const startup = isolated.start({ command: "fixture-shell", args: [], options: {} });
+  worker.emit("message", { type: "spawned", pid: 42001 });
   worker.emit("message", { type: "ready", pid: 42001 });
   assert.deepEqual(await startup, { pid: 42001 });
   return { isolated, worker };
@@ -193,6 +194,7 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     isolated.onExit(event => exits.push(event));
     const startup = start();
     const rejected = assert.rejects(startup, /PTY启动即退出/);
+    worker.emit("message", { type: "spawned", pid: 42002 });
     worker.emit("message", { type: "startupError", pid: 42002, cleanupResult, message: "PTY启动即退出" });
     await rejected;
     worker.emit("message", { type: "ready", pid: 43003 });
@@ -219,9 +221,71 @@ test("普通Worker退出与无效PID不能提供PTY停止证明", async t => {
 
 test("成功就绪后迟到的启动消息不能污染运行身份", async t => {
   const { isolated, worker } = await createReadyWorker(t);
+  worker.emit("message", { type: "spawned", pid: 43003 });
   worker.emit("message", { type: "startupError", pid: 44004, cleanupResult: "missing" });
   worker.emit("message", { type: "ready", pid: 45005 });
   assert.equal(isolated.pid, 42001);
   assert.equal(isolated.startupCleanupResult, null);
   assert.equal(isolated.workerState, "running");
+});
+
+for (const trigger of ["error", "timeout", "exit"]) {
+  test(`原生创建后${trigger}仍保留原PID，不伪造停止证明`, async t => {
+    const { isolated, worker, start } = createStartingWorker(t);
+    const rejected = assert.rejects(start());
+    worker.emit("message", { type: "spawned", pid: 42002 });
+    assert.equal(isolated.pid, 42002);
+    assert.equal(isolated.workerState, "starting");
+    if (trigger === "error") worker.emit("error", new Error("启动回执失败"));
+    else if (trigger === "timeout") t.mock.timers.tick(10_000);
+    else worker.emit("exit", 1, null);
+    await rejected;
+    worker.emit("message", { type: "spawned", pid: 43003 });
+    worker.emit("message", { type: "ready", pid: 43003 });
+    assert.equal(isolated.pid, 42002);
+    assert.equal(isolated.startupCleanupResult, null);
+  });
+}
+
+for (const pid of [null, true, 0, -1, 4.5]) {
+  test(`非法原生PID不能进入就绪或停止事实：${pid}`, async t => {
+    const { isolated, worker, start } = createStartingWorker(t);
+    const rejected = assert.rejects(start(), /原生创建身份非法或重复/);
+    worker.emit("message", { type: "spawned", pid });
+    await rejected;
+    assert.equal(isolated.pid, null);
+    assert.equal(isolated.startupCleanupResult, null);
+  });
+}
+
+for (const firstPid of [null, 42002]) {
+  test(`就绪必须匹配已交付的唯一原生身份：${firstPid}`, async t => {
+    const { isolated, worker, start } = createStartingWorker(t);
+    const rejected = assert.rejects(start(), /就绪身份与原生创建不一致/);
+    if (firstPid !== null) worker.emit("message", { type: "spawned", pid: firstPid });
+    worker.emit("message", { type: "ready", pid: 43003 });
+    await rejected;
+    assert.equal(isolated.pid, firstPid);
+    assert.equal(isolated.startupCleanupResult, null);
+  });
+}
+
+test("重复原生身份拒绝启动且不替换原PID", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start(), /原生创建身份非法或重复/);
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  await rejected;
+  assert.equal(isolated.pid, 42002);
+  assert.equal(isolated.startupCleanupResult, null);
+});
+
+test("其它PID的启动失败回执不能提供原PTY停止证明", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start(), /错误身份回执/);
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "startupError", pid: 43003, cleanupResult: "terminated", message: "错误身份回执" });
+  await rejected;
+  assert.equal(isolated.pid, 42002);
+  assert.equal(isolated.startupCleanupResult, null);
 });

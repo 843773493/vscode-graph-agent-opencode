@@ -357,3 +357,11 @@ Linux/Windows的停止窗口各2项通过；当前源码另完成29天重关联�
 旧`admit_thread`将Session独占锁跨过整个资源operation，导致同Session的独立资源在网络等待时也无法进入。原入口改为先取得共用namespace的Session shared OS holder，再以短Session写准入核定workspace、canonical main或显式Thread；原Session锁在yield前释放。两类owner共用`workspace_resources` namespace，容器删除链只登记一次，按既有holder→Session锁序等待原operation及受保护close结束，再由原资源owner清理和物理隔离。OS holder仅保护本进程的实际持有期，不是第二份持久事实；原资源/operation lease账本、未知结果核实和恢复规则保持。
 
 Thread准入的holder、Session锁和读取共用入口一次30秒协作式预算；到期/取消排空本次准入，未进入主体不造资源、lease或unknown，底层TimeoutError保持身份。预算在真实执行前退出，不把工具执行、此前冷恢复或收尾强行限制为30秒。删除mark之后新准入沿原active校验拒绝，已准入操作由holder保护到原close结束；崩溃后OS锁释放，原持久未知占用仍须owner核实，不能仅凭holder消失结清。同步阻塞、不合作取消、旧代接管及整个operation/shutdown总期限继续TODO，5.2/5.4保持未勾。
+
+### 原生PTY创建与就绪之间的失败收尾（5.2部分收口）
+
+隔离worker在原生创建返回后立即交付唯一PTY PID，原ready必须与该身份一致；重复、非法或不匹配的消息明确拒绝启动，结算后的晚到消息不能覆盖原身份。正式startupError停止结果也只属于同一PID，不再等到就绪或异常回执才取得原生身份。该内部IPC合同整体迁移，不保留旧ready单独交付PID的兼容路径。
+
+已取得PID但启动失败时，原Session先持久化unknown，再沿既有terminateForRelease核实整棵进程树、确认worker退出及持久化终态；只有实际停止成功才签本次failed创建回执，返回“未执行停止”不构成证明。失败保留原句柄和恢复记录，created/unknown可由原管理kill重试同一执行。Linux保留forkpty创建时PID即SID的事实，执行根已回收时仍核对同SID后代。
+
+Linux真实HTTP/PTY用例只在原就绪消息交付处注入失败，父子均忽略SIGTERM，独立核对强杀后的进程状态、worker退出、原记录及peer可用；首次停止故障后经同一管理入口重试。此切片不证明Gateway/Web、Windows、独立Backend重启或native尚未交付PID的阻塞接管；后者及同步阻塞、不合作取消和整个shutdown期限继续TODO，5.2/5.4仍未完成。

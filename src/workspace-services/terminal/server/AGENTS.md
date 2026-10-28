@@ -73,6 +73,8 @@ Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；
 
 `/health`的`terminal_count`直接读取Manager当前资源Map的大小，含仍保留的非运行记录，与列表条目数量同义；它不是活跃PTY进程数。健康计数不生成、排序终端展示快照，也不读取或过滤输出buffer。
 
+就绪前失败已取得原生PID时，Session先保留unknown和原身份，再复用`terminateForRelease`核实整棵进程树、worker退出及终态持久化；全部成功才签正式failed创建回执。停止失败保留原句柄，created/unknown可由原管理kill入口重试；没有PID的created不能伪报已终止，native未交付身份的接管仍为TODO。
+
 ## 测试工作区
 
 `terminalManager.test.js`的工作目录场景只使用本次正式输出根下的目录：工作区内子目录、工作区外的兄弟目录和移动后的新根均由fixture创建，不依赖宿主`/etc`等目录。目录链接在Windows用junction、Linux/macOS用dir符号链接；断言仍核对链接路径保留、越出工作区后的相对表达及缺失目录明确失败。链接类型选择不等于对应平台已经原生验收。

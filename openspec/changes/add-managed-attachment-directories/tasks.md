@@ -375,3 +375,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux 相关回归399 passed，最终新单测20 passed，真实 PTY/Chromium 组合2 passed，原资源释放组合11 passed；Windows 新单测20 passed、真实 Terminal 组合1 passed。停止窗口 Backend 硬退出回归 Linux/Windows 各2 passed，核新增 holder 不遗留崩溃锁。Windows Browser 因85%内存压力前置条件未验证，未调整保护阈值。Windows 快照 `53a8e85a9b13af7edeeabc1149382816e45e95ed` 的五份 LF 源码与本地一致。
 - 完整旧 HEAD 归档叠相同最终新单测，12 failed/8 passed，包含旧 Session 长期持锁阻塞 peer 的行为反例。Ruff、compileall、45项 OpenSpec strict 通过；两个新测试最终 Pyright 零诊断，生产7项既存诊断与旧 HEAD 逐项一致，不称全仓类型全绿。首次误用未安装的 `uv run pyright` 未启动检查，改用既有固定版本 `uvx` 后完成。准确命令、源码指纹、raw、退出码与限定证据见 `out/tests/temp/resource_thread_admission_20261026/artifacts/verification-031.json`；纯临时旧树与 tar 已删除。
 - 本片不代表 Gateway/Web 完整验收或整个 operation/shutdown 总期限；同步阻塞、不合作取消及旧代接管仍 TODO，5.2/5.4保持未完成、整体21/23。四份 CIL 规划未改且排除本提交；随后按用户最新优先级转入 CIL 第9节，团队协作继续暂缓。
+
+### 2026-10-28 Terminal原生创建后、就绪前失败收尾（5.2部分收口）
+
+- 原worker在native创建返回时交付唯一PID，ready和正式启动失败证明必须匹配原身份；非法、重复及晚到消息不能覆盖身份。Session先保留unknown，再复用原进程树停止/worker退出/终态落盘链；只有实际返回停止成功才签failed回执，失败保留原句柄，created/unknown可经原管理kill重试。未取得PID的created明确拒绝伪报终止；无第二套停止实现、writer或schema。
+- 最终Node定向97 passed/3.43秒；Linux新增真实HTTP/PTY父子进程2 passed/13.71秒，原信号关闭6 passed/60.64秒、进程树5 passed/13.70秒，均有进程外超时及4GiB保护。新用例只注入就绪交付错误和首次停止故障，父子忽略SIGTERM，独立核强杀/worker退出、原恢复记录、peer及同管理入口重试。完整旧HEAD e1adea8ae的4699份文件逐字核对后仅叠相同最终产品测试/故障边界/matrix，两项均因原os_pid丢失失败；原业务输出封存在out/tests/temp/terminal-startup-cleanup/artifacts/old-product-output，纯临时旧树与tar已删除。
+- Ruff、新测试Pyright零诊断及Node语法检查通过。初轮新工作负载字符串误多加号导致SyntaxError，修正后真实场景通过；初轮Ruff未使用导入也已修复，原失败输出保留。准确命令、前后源码指纹、原始输出/退出码、作者结构自查及限定证据见out/tests/temp/terminal-startup-cleanup/artifacts/verification-001.json；不称Gateway/Web、Windows或独立Backend重启验收。native尚未交付PID、同步阻塞、不合作取消及整个shutdown期限继续TODO，5.2/5.4仍未勾，整体21/23；团队协作继续暂缓。

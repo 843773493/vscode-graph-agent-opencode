@@ -128,6 +128,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** native 启动抛错、Worker 异常退出或清理失败，尚未取得本次 PTY 进程树的正式停止证明
 - **THEN** 外部 owner 保留已取得的原身份与未知记录，不签发未创建或已停止回执；Python 保留本次待核实 lease，Worker 退出、已发送信号及普通 HTTP 错误均不能代替停止证明
 
+#### Scenario: Terminal 原生创建后就绪交付失败
+
+- **WHEN** 原生PTY已创建并交付唯一PID，但就绪前发生错误、超时或Worker退出
+- **THEN** 外部owner保留原PID和unknown，沿原进程树停止链核实PTY及后代、确认Worker退出并持久化终态后，才返回本次intent的正式failed回执；停止失败保留原句柄及可查询记录，允许原管理停止入口重试同一执行。就绪和正式清理回执必须匹配已交付PID，晚到消息不得替换原身份。尚无原生PID的创建不得凭Worker退出或管理调用伪报已停止
+
 #### Scenario: Terminal 关闭与在途创建共享原任务
 
 - **WHEN** Terminal Manager关闭时仍有容量排队、异步工作目录检查或已登记Session的启动尚未完成

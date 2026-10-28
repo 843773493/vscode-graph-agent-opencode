@@ -30,6 +30,8 @@ Windows和POSIX共用的退出宽限等待按`performance.now()`的单调毫秒�
 
 worker的`outputPacketId`（IPC字段仍为`messageId`）逐包计费，宿主结束本次分发后逐包回执；它不是Session的输出sequence或聊天消息ID。`ptyOutputPaused`只暂停node-pty输出读取，未确认UTF-8字节超过高水位时暂停、低于低水位时恢复，不表示OS进程或Job暂停。重复或未知包回执不重复释放额度。
 
+原生PTY创建返回后，worker先发送唯一`spawned`身份，再交付`ready`；ready必须与该PID一致，重复或非法身份明确拒绝启动。启动失败保留原PID，晚到消息不能替换身份；正式启动失败清理结果也必须属于同一PID。宿主沿原进程树停止链核实PTY及后代，再确认worker退出，不能把worker退出当作PTY停止证明。
+
 ## 可修改内容
 
 - 系统进程元数据解析、身份核验、信号发送和有界退出等待。

@@ -272,6 +272,15 @@
       "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/browser/test_browser_shutdown_signals.py"]
     },
     {
+      "id": "integration-terminal-startup-cleanup",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/terminal/test_terminal_startup_cleanup.py"]
+    },
+    {
       "id": "integration-terminal-shutdown-signals",
       "layer": "integration",
       "client": null,

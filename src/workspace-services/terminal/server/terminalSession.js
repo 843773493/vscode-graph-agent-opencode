@@ -469,7 +469,7 @@ export class TerminalSession {
       return await this.releasePromise;
     }
     const retainedRelease = this.ptyProcess && this.reconciliationStatus !== "verified"
-      && new Set(["completed", "exited", "terminated", "deleted"]).has(this.status);
+      && new Set(["created", "completed", "exited", "terminated", "deleted"]).has(this.status);
     if (this.status !== "running" && !retainedRelease) {
       return false;
     }
@@ -500,6 +500,9 @@ export class TerminalSession {
   async _terminateForRelease({ status, commandStatus, reason }) {
     const pid = this.osPid || this.ptyProcess?.pid;
     const isolatedPty = this.ptyProcess;
+    if (this.status === "created" && (!Number.isSafeInteger(pid) || pid <= 0)) {
+      throw new Error(`终端原生创建身份尚未核实: terminal_id=${this.id}`);
+    }
     if (!isolatedPty) {
       await this.verifyPersistedProcessIdentity(pid);
     }
@@ -626,25 +629,37 @@ export class TerminalSession {
 
   async failStartup(error) {
     const isolatedPty = this.ptyProcess;
-    // TODO（5.2）：native 未交付 PID 或没有正式停止证明时，保留未知记录供原 owner 接管。
-    const stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
+    // TODO（5.2）：native 尚未交付 PID 的阻塞仍须由原 owner 接管，不能凭 Worker 退出结清。
+    let stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
       .has(isolatedPty.startupCleanupResult);
     this.osPid = isolatedPty?.pid ?? this.osPid;
+    if (process.platform === "linux" && this.osPid) {
+      // forkpty 的 SID 等于执行根PID；根已回收后仍须核对同 SID 后代。
+      this.processSessionId = this.processSessionId || this.osPid;
+    }
     this.markReconciliationStatus("unknown");
     this.releaseReason = "terminal_startup_failed";
     await this.manager.persist();
     try {
-      await this.dispose();
+      if (!stopped && Number.isSafeInteger(this.osPid) && this.osPid > 0) {
+        stopped = await this.terminateForRelease({
+          status: "terminated", commandStatus: "terminated", reason: "terminal_startup_failed",
+        });
+      } else {
+        await this.dispose();
+      }
     } catch (cleanupError) {
       logger.error(`[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
       throw new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
     }
-    if (stopped) {
+    if (stopped && this.status !== "terminated") {
       this.status = "terminated";
       this.endedAt = nowIso();
       this.markReconciliationStatus("verified");
+      await this.manager.persist();
+    } else if (!stopped) {
+      await this.manager.persist();
     }
-    await this.manager.persist();
     if (stopped) error.creationReceipt = {
       resource_id: this.id, workspace_id: this.workspaceId, owner_revision: this.transportOwnerRevision,
       outcome: "failed", resource: this.snapshot(),

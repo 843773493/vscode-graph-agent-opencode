@@ -12,7 +12,7 @@ export class IsolatedPtyProcess {
   constructor() {
     /** @type {import("node:child_process").ChildProcess|null} 持有PTY的隔离Node进程，不是PTY执行根。 */
     this.workerProcess = null;
-    /** @type {number|null} worker就绪消息中的PTY执行根PID；保留与node-pty相同的pid含义。 */
+    /** @type {number|null} worker原生创建消息中的PTY执行根PID；就绪前也保留原身份。 */
     this.pid = null;
     /** @type {string|null} 只记录本次就绪前 PTY 退出的正式进程树清理结果。 */
     this.startupCleanupResult = null;
@@ -93,10 +93,22 @@ export class IsolatedPtyProcess {
         if (!message || typeof message !== "object") {
           return;
         }
+        if (message.type === "spawned") {
+          if (readySettled) return;
+          if (!Number.isSafeInteger(message.pid) || message.pid <= 0 || this.pid !== null) {
+            failStart(new Error("隔离 PTY Worker 原生创建身份非法或重复"));
+            return;
+          }
+          this.pid = message.pid;
+          return;
+        }
         if (message.type === "ready") {
           if (readySettled) return;
-          this.pid = message.pid;
-          completeStart({ pid: message.pid });
+          if (this.pid === null || message.pid !== this.pid) {
+            failStart(new Error("隔离 PTY Worker 就绪身份与原生创建不一致"));
+            return;
+          }
+          completeStart({ pid: this.pid });
           return;
         }
         if (message.type === "output") {
@@ -124,8 +136,7 @@ export class IsolatedPtyProcess {
         }
         if (message.type === "startupError") {
           if (readySettled) return;
-          if (Number.isSafeInteger(message.pid) && message.pid > 0) {
-            this.pid = message.pid;
+          if (this.pid !== null && message.pid === this.pid) {
             this.startupCleanupResult = message.cleanupResult ?? null;
           }
           failStart(new Error(`隔离 PTY Worker 错误: ${message.message}`));

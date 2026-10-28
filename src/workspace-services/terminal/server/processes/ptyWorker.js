@@ -107,6 +107,8 @@ function handleStart(message) {
   };
   ptyProcess = pty.spawn(message.command, message.args, message.options);
   const activePty = ptyProcess;
+  // 原生创建成功即交付身份；后续就绪失败仍由宿主沿同一进程树入口收尾。
+  send({ type: "spawned", pid: activePty.pid });
   // Linux forkpty 创建的 SID 等于 PTY 根 PID；根已被 waitpid 时仍核对同 SID 后代。
   shellProcessMetadata = readProcessStat(activePty.pid).then((metadata) => metadata ?? (
     process.platform === "linux" ? { processSessionId: activePty.pid, processStartTime: null } : null
