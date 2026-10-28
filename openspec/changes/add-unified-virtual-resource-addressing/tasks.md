@@ -894,3 +894,10 @@
 - 七文件回归298 passed／13.92秒；随后只去掉新增运行反例的措辞匹配并先检查路径／日志副作用，最终30项通过／0.66秒，生产字节不变且其余证据复用，不累加重复计数。完整旧生产配相同注册反例20项均失败；最终运行反例30项均失败／1.06秒，直接复现路径回显或提前打开日志。JSON／SQLite分别覆盖合法发布后非法upsert原记录不变、外部损坏后连续冷重开拒绝且不回写，POSIX／盘符／UNC与两种非canonical身份均覆盖。
 - 真实Gateway／Backend进程的身份失败恢复与健康协议集成3 passed／79.89秒：注册、停止、损坏后502、原文件不被初始化替代、列表与持久错误不泄漏、修复原身份后启动，以及健康失败后的恢复；HTTP健康替身不代表模型执行或完整Web。Ruff、compileall及全量OpenSpec strict通过；准确命令、完整tree／源码前后指纹、raw、实际退出码与进程组回收核验见 `out/tests/temp/gateway-identity-owner/artifacts/verification-013.json`。
 - 首轮新增测试有上下文管理与必填字段装配错误（15 failed／118 passed），修正装具后再做上述验证，失败原件保留。未执行Pyright、Web或Windows；全局2.2／7.2与mounting的4.3／8.2保持未勾，团队协作继续TODO。
+
+### 2026-10-28 Terminal／Browser 资源记录错误出口（2.2／7.2 部分收口）
+
+- 唯一 ResourceRecordStore 的读取与原子写入在原文件访问点报告 workspace_id、kind、阶段及原生错误码，真实位置和原异常留诊断；保留原异常类型与直接 cause。持久 envelope 错误不再输出文件位置，候选仍仅在原 fsync／replace 成功后发布。格式、顺序、资源生命周期及唯一 writer 不变；作者 AST 自查核实原成功写入链与全部签名一致，无新增持久字段或目录。
+- 最终16项单元通过／0.93秒，完整旧生产配相同测试16项全失败／1.01秒；邻近 owner 回归160项通过／5.09秒（含同组16项，不重复累计）。正式 Session、ASGI 资源 API 与真实 Node／PTY或Chromium／HTTP的2项入口通过／40.78秒；相同测试配完整旧生产2项失败／21.97秒，原响应可见路径及缺失错误阶段。核500与头体request_id、原记录／租约字节、PID／页面身份、无第二外部创建及同入口显式重试。无模型调用，配置仅写本测试隔离工作区。
+- Ruff通过；新增两份测试Pyright零诊断，生产仍为旧基线同2项，不宣称全仓类型通过。准确命令、完整候选／旧生产tree、源码前后指纹、raw、实际退出码与进程组回收见 out/tests/temp/resource-record-errors/artifacts/verification-027.json；结构及证据复用逐文件核验见structure-026.json。首次真实入口缺个人Provider密钥，隔离配置后解决；首次反例并跑占用固定端口，改串行后得到上述业务反例，原件保留。
+- 离线附件迁移回归offline-backup-008未通过：固定旧版产品生成输入时缺OPENCODE_ZEN_API_KEY，未进入当前记录存储行为；不修改用户环境或独立旧版生成器，不算通过。ASGI与真实辅助服务不代替Gateway／Web、Backend进程重启或Windows验收。全局2.2／7.2保持未勾，团队协作继续TODO。

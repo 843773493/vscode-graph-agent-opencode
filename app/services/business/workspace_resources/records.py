@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from collections.abc import KeysView
+from collections.abc import Iterator, KeysView
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -15,6 +17,8 @@ from app.abstractions.workspace_resources import ResourceKind, RetentionScope
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import validate_workspace_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,13 +124,14 @@ class ResourceRecordStore:
         self.workspace_id = validate_workspace_id(workspace_id)
         self.path = workspace_root / ".boxteam" / f"{kind}-resources.json"
         self._records: dict[str, OwnedResourceRecord] = {}
-        if not self.path.exists():
-            return
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        with self._io("read"):
+            if not self.path.exists():
+                return
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
         if payload.get("schema_version") != 1 or payload.get("workspace_id") != workspace_id:
-            raise ValueError(f"资源 owner 持久格式或工作区不匹配: {self.path}")
+            raise ValueError(self._failure("validate", "持久格式或工作区不匹配"))
         if not isinstance(payload.get("records"), list):
-            raise TypeError(f"资源 owner records 必须是数组: {self.path}")
+            raise TypeError(self._failure("validate", "records 必须是数组"))
         for raw in payload["records"]:
             record = OwnedResourceRecord(
                 **{
@@ -143,6 +148,26 @@ class ResourceRecordStore:
             if record.resource_id in self._records:
                 raise ValueError(f"资源 owner 记录重复: {record.resource_id}")
             self._records[record.resource_id] = record
+
+    def _failure(self, stage: str, reason: str, error: OSError | None = None) -> str:
+        detail = f"资源 owner {reason}: workspace_id={self.workspace_id}, kind={self.kind}, stage={stage}"
+        if error is not None:
+            detail += f", error_type={type(error).__name__}, errno={error.errno}"
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                detail += f", winerror={winerror}"
+        logger.error("%s; path=%s", detail, self.path, exc_info=error)
+        return detail
+
+    @contextmanager
+    def _io(self, stage: str) -> Iterator[None]:
+        """在唯一文件访问点报告身份与阶段，原始位置仅留诊断和原因链。"""
+        try:
+            yield
+        except OSError as error:
+            detail = self._failure(stage, "文件访问失败", error)
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                raise type(error)(error.errno, detail, None, winerror) from error
+            raise type(error)(error.errno, detail) from error
 
     def ids(self) -> KeysView[str]:
         return self._records.keys()
@@ -161,15 +186,16 @@ class ResourceRecordStore:
         candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
         for record in candidate.values():
             record.validate(self.workspace_id, self.kind)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        pending = self.path.with_suffix(".tmp")
-        with pending.open("w", encoding="utf-8") as stream:
-            json.dump({
-                "schema_version": 1,
-                "workspace_id": self.workspace_id,
-                "records": [asdict(record) for record in candidate.values()],
-            }, stream, ensure_ascii=False, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        pending.replace(self.path)
+        with self._io("write"):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            pending = self.path.with_suffix(".tmp")
+            with pending.open("w", encoding="utf-8") as stream:
+                json.dump({
+                    "schema_version": 1,
+                    "workspace_id": self.workspace_id,
+                    "records": [asdict(record) for record in candidate.values()],
+                }, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            pending.replace(self.path)
         self._records = candidate
