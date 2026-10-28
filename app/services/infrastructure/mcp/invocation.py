@@ -33,6 +33,7 @@ _Result = TypeVar("_Result", bound=BaseModel)
 class McpResourceUse:
     """由执行上下文声明的精确占用，不能从模型参数推测。"""
 
+    # TODO(工具发现10.1)：主动跨 execution 持有／释放延期；本次调用占用不保证远端会话可恢复。
     holder_id: str
     operation_id: str
     session_id: str

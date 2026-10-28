@@ -64,7 +64,9 @@
 
 正常替换 MUST 停止向旧代际分配新的执行资格，但在有界期限内保留切换前已接纳或已封存并保留资格的调用，包括人工确认等待。禁用、断开与执行撤权 MUST 在执行点拒绝尚未开始的调用；进行中调用按明确策略取消或收敛。资源关闭只有真实核实后才能报告；取消、断线或超时不能证明远端未执行时 MUST 返回结果未确认，不自动重试副作用。
 
-跨 execution／Turn 的持久资源持有 MUST 复用 ExternalResourceLeaseLedger 的 mcp_connection 和 typed resource-use 合同，状态证据由实际连接 owner 提供；owner 内短期 generation／handle 保留 MUST 不成为第二套持久租约账本，也不得按参数名称推测资源使用。
+连接生命周期、封存资格和实际调用占用 MUST 继续复用 ExternalResourceLeaseLedger 的 mcp_connection 和现有 typed resource-use 合同，状态证据由实际连接 owner 提供；owner 内短期 generation／handle 保留 MUST 不成为第二套持久租约账本，也不得按参数名称推测资源使用。跨轮次使用 MCP 资源继续依靠既有连接管理与服务提供的资源 ID／引用，实际资源状态和远端会话恢复能力由 MCP 服务负责。本地 MUST 保留既有调用租约、审批等待保护与结果未知记录，不将本地占用事实视为远端会话持续或可恢复的保证。
+
+工具显式声明跨 execution 持有／释放原 MCP 逻辑会话为**延期设计 TODO**，不属于本轮必做实现与验收；本轮 MUST NOT 新增通用持有／释放工具、用户入口或连接固定机制。只有后续确认具体工具必须沿用同一逻辑会话且现有机制不足时，才定义持有、释放、配置替换和会话失效行为；如需持久占用，MUST 复用既有资源账本，不建立第二套账本。延期不改变其余连接代际、调用结算和恢复合同。
 
 系统 MUST 在模型发送前为冻结目录的精确连接保留有界资格，并在模型响应后收窄到真实输出的信封调用身份；既有人工确认 edit 仍可选择原封存目录内的目标。期限沿 Workspace 配置族的 `mcp.supervision.sealed_call_timeout_seconds` 读取，默认1800秒、范围1–86400秒，从取得原 handle 起包含模型生成和确认等待，不因重试续期。资格与实际操作占用 MUST 分别结算，资格过期不能伪报正在执行或结果未知的远端操作已结束。
 
@@ -90,10 +92,10 @@
 - **WHEN** 原 execution scope 仍打开且原工具资格已经到期，执行需要生成下一次模型回复
 - **THEN** 系统允许普通回复，释放原工具和 runtime 引用并保留到期身份直至 scope 关闭；下一模型调用不重置 deadline，不重发工具资格，输出工具调用时仍明确配对失败
 
-#### Scenario: 同一连接跨执行被持有
+#### Scenario: 跨轮次继续使用服务资源引用
 
-- **WHEN** 工具通过 typed resource-use 声明继续持有 MCP 连接资源，后续执行仍使用该资源
-- **THEN** 持有和释放沿既有 ExternalResourceLeaseLedger 记录，连接 owner 提供真实状态；调用 handle 的临时排空引用不产生第二份持久占用事实
+- **WHEN** 后续 execution 使用 MCP 服务先前返回的资源 ID／引用
+- **THEN** 本地沿既有连接管理和调用链请求实际服务，由服务核实资源与会话状态；无效或过期时明确返回实际失败，不自动固定原逻辑会话，不以本地账本宣称远端状态可恢复
 
 #### Scenario: 原 Turn 在替换后继续工具循环
 

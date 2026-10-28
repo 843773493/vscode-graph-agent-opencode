@@ -159,7 +159,9 @@ BackgroundTask 在独立 Context 中启动，不继承原 Job 的固定配置、
 | connection generation | session 新建／替换 | 远端执行身份、迟到 callback fencing |
 | invocation lease | 每个已接纳调用 | 排空、期限和取消归属 |
 
-跨 execution／Turn 的持久资源持有复用唯一 ExternalResourceLeaseLedger 的 `mcp_connection` 与 typed resource-use 记录，真实状态仍由连接 owner 更新。owner 内 generation/handle 的短期调用保留只管理本次执行准入与排空，不另建持久资源账本，也不按任意参数名推断资源占用。execution scope 关闭（含审批中取消）时释放该 scope 下全部待用 model-call 资格；已发送但结果未知的 operation lease 仍单独保留，不能被 scope 清理结算。
+连接生命周期、封存资格和实际调用占用继续复用唯一 ExternalResourceLeaseLedger 的 `mcp_connection` 与现有 typed resource-use 记录，真实状态仍由连接 owner 更新。owner 内 generation/handle 的短期调用保留只管理本次执行准入与排空，不另建持久资源账本，也不按任意参数名推断资源占用。execution scope 关闭（含审批中取消）时释放该 scope 下全部待用 model-call 资格；已发送但结果未知的 operation lease 仍单独保留，不能被 scope 清理结算。
+
+**延期设计 TODO（2026-10-28 用户裁定）**：不实施工具主动声明跨 execution 持有／释放原 MCP 逻辑会话，不新增通用工具、用户入口或连接固定机制，也不将工作区连接常驻、单次调用租约、审批等待或结果未知记录计作该能力。跨轮次资源使用继续依靠既有连接管理和服务返回的资源 ID／引用，实际资源状态与远端会话恢复由 MCP 服务负责。只有确认具体工具必须沿用同一逻辑会话且现有机制不足后，再定义持有／释放入口、配置替换和会话失效规则；若需持久占用，复用既有账本，本地持有记录不承诺远端不断线、不过期或可恢复。本项从本轮必做验收拆出，其余连接代际、恢复与隔离验收继续。
 
 目录全量 relist 仍只有一条路径；支持 list_changed 的 Server 消费通知，其余在显式刷新／重连边界更新。无语义变化不推进目录 revision；相同 schema 的连接替换仍推进连接 generation。可调用记录包含 server identity、connection generation、完整 schema hash 与可审计 handle 引用；由 owner 解析，Agent 不再捕获 initial_targets 或回退 live publication。
 
@@ -249,7 +251,7 @@ Responses 的同一 output item 在唯一流状态中累计参数，参数 done 
 - binding／dispatch preimage 和 lineage 升为 v3，binding ID 同时覆盖完整成员身份，防止同 schema、同目录代际的新 Owner 与旧封存身份碰撞。Provider ToolSet、实际 wire bytes、request_hash 及 prefix epoch 不因执行身份变化而改变；历史 v1/v2 原件继续可读，缺少精确连接身份时拒绝恢复执行，不从语义版本推导 socket。
 - 完整定义读取不再借构造 dispatch 验证历史；父行、lineage与facets沿同一只读校验恢复。v2完整定义仍用于历史查看和压缩后的恢复，v3才允许解析执行；恢复不改写历史快照，不以旧定义可读推导旧连接可调用。
 - Agent 删除 initial/live 两段 resolver。正式信封不再长期持有初始 MCP 工具，统一由 Owner 核对原连接、完整 schema 和实际运行状态，本地扩展仍走原本地注册；执行点继续读取最新独立权限。Registry 捕获同时核对当前成员身份，不能仅凭相同语义 revision／catalog generation 接受旧连接事实。
-- 本切片只完成精确解析与旧连接明确失败，不提前实现正常热替换的有界资格、HITL 排空或跨 execution 持久占用。这些继续由4.2／4.4及配置替换切片接入原 Owner 和 ExternalResourceLeaseLedger，不以本次拒绝旧连接代替完整替换合同。
+- 本切片只完成精确解析与旧连接明确失败，不提前实现正常热替换的有界资格或 HITL 排空；这些继续由4.2／4.4及配置替换切片接入原 Owner 和 ExternalResourceLeaseLedger，不以本次拒绝旧连接代替完整替换合同。跨 execution 主动持有已按第6节裁定延期，不属于本轮验收。
 
 ### 有界导航与自动定义切片的集成边界（2026-10-26）
 

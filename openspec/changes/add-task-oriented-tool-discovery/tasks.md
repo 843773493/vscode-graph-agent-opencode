@@ -25,14 +25,14 @@
 ## 4. MCP 执行 handle 与连接代际收敛
 
 - [x] 4.1 在唯一 MCP owner 内建立每 Server 所属生命周期 task，统一创建／关闭 SDK session、完整 relist、通知及过期结果 fencing。
-- [ ] 4.2 分离 catalog revision、connection generation 和 invocation lease，冻结精确执行引用；跨 execution／Turn 持有复用 ExternalResourceLeaseLedger 的 mcp_connection 与 typed resource-use，owner 内短期 handle 保留不建第二账本；同名同 schema 新连接不得接管旧调用。
+- [x] 4.2 分离 catalog revision、connection generation 和 invocation lease，冻结精确执行引用；连接生命周期、封存资格与实际调用占用复用 ExternalResourceLeaseLedger 的 mcp_connection 与现有 typed resource-use，owner 内短期 handle 保留不建第二账本；同名同 schema 新连接不得接管旧调用。工具主动跨 execution 持有／释放按第10节延期，不属于本任务验收；独立合同核验与复用证据见文末2026-10-28收据。
 - [x] 4.3 将 Agent 长期捕获工具对象及 initial/live 两段 resolver 全量迁移至 owner 解析，物理删除旧解析路径。
 - [x] 4.4 实现有界的已封存调用执行资格及 HITL 等待保留，区分普通替换、禁用、断开和最新权限撤销；退役后不授予新的旧代际资格。
 - [x] 4.5 统一真实 MCP 结果、isError、structuredContent、媒体／artifact、进度和取消处理；必要时整体替换 LangChain MCP 适配路径并删除旧实现。
   - 已完成结果保真边界：信封复用 BaseTool 结果与错误策略，SDK 保留业务错误／结构化内容／图片／音频，ToolNode 不再将标准媒体 stringify，canonical 与冷恢复保留原正文和 artifact；SSE 仍为派生文本。后继请求不经 AI 正文过滤，Chat 媒体按调用身份送入数据消息，Responses 封存与直接历史共用纯投影。真实本地 HTTP 的两种协议与同步／异步共 4 项验收通过，核对网络正文、请求 hash 和冷恢复；Gateway 产品验收另核并发成功／失败及 3 次封存请求。
   - 进度、取消／断线的 outcome-unknown 已按下方调用生命周期切片验收。真实外部模型的媒体协议支持仍属于第8节产品门，不以模型回放代替真实 Provider 验证。结果切片的准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/mcp-result-preservation/artifacts/`。
   - 验证：结果链回归 `result-regression-018` 176 passed，Provider 投影 `provider-unified-031` 81 passed，真实 HTTP 同步／异步 `http-media-unified-032` 4 passed，Gateway 产品 `product-unified-final-035` 1 passed，公共封存／重试／前缀／跨协议回退 `wire-regression-036` 24 passed。Ruff 与严格 OpenSpec 校验通过；新增图适配模块 Pyright 零错误，受影响旧模块与完整 HEAD 基线相比无新增诊断。
-- [ ] 4.6 验证同 schema 重连、旧通知、HITL 跨替换、过期 handle、执行撤权、取消、outcome-unknown 和持久 ledger／短期 handle 的持有释放；验证同 Backend 多工作区同名 Server 隔离及静态分析。
+- [x] 4.6 验证同 schema 重连、旧通知、HITL 跨替换、过期 handle、执行撤权、取消、outcome-unknown 及现有连接生命周期／调用／封存资格账本与短期 handle 的占用结算；验证同 Backend 多工作区同名 Server 隔离及静态分析。主动跨 execution 持有／释放场景已拆至第10节，不作为本轮完成门；独立合同核验与复用证据见文末2026-10-28收据。
 
 ## 5. 本地连接控制与授权流程
 
@@ -73,12 +73,18 @@
 
 ## 9. 回归证据与交付检查
 
-- [ ] 9.1 每个代码切片迁齐声明、写入方、消费者与测试后集中验证；优先相关短检查，再按共享合同和故障结果扩大范围。
-- [ ] 9.2 所有测试使用 test:matrix 或进程外 timeout／内存保护；正式产物镜像 tests 路径，临时浏览器与诊断仅放 out/tests/temp/<task_name>/，禁止根目录测试工作区。
-- [ ] 9.3 保留准确命令、源码指纹、原始输出、退出码、构建／实际业务阶段和未验证范围；不把 CLI 规划校验、健康接口或局部通过当实现完成。
+- [x] 9.1 每个代码切片迁齐声明、写入方、消费者与测试后集中验证；优先相关短检查，再按共享合同和故障结果扩大范围。
+- [x] 9.2 所有测试使用 test:matrix 或进程外 timeout／内存保护；正式产物镜像 tests 路径，临时浏览器与诊断仅放 out/tests/temp/<task_name>/，禁止根目录测试工作区。
+- [x] 9.3 保留准确命令、源码指纹、原始输出、退出码、构建／实际业务阶段和未验证范围；不把 CLI 规划校验、健康接口或局部通过当实现完成。
 - [ ] 9.4 审查重复目录／dispatch／writer、旧 schema 指纹、live 同名回退、静默字段丢弃、宽泛异常、隐式授权／重试、无界等待和无关改动，清理当前范围旧实现。
 - [ ] 9.5 对照全部新增／修改规格场景核验并运行 OpenSpec 严格校验；仅在实际实现和验收完成时勾选任务，不把规划修订或结构校验当作功能完成。
 - [ ] 9.6 规格同步／归档前确认 unify-product-runtime-logging 已先同步主规格并归档；重新读取最新主规格，核对两个共享 MODIFIED Requirement 保留 Gateway logging.runtime、仅日志热应用及混合 Gateway 候选场景，再同步／归档本变更。前置未完成或正文漂移时先修订 delta，禁止逆序覆盖，不改动日志 change 的文件。
+
+## 10. 延期设计 TODO（不属于本轮必做验收）
+
+- [ ] 10.1 工具显式声明跨 execution 持有／释放原 MCP 逻辑会话：按2026-10-28用户裁定延期，未实现，不新增通用工具、用户入口或连接固定机制。跨轮次资源继续使用既有连接管理及服务提供的资源 ID／引用；远端资源与会话恢复由 MCP 服务负责，本地保留连接生命周期、调用租约、审批等待保护与结果未知记录。后续确认具体工具必须沿用同一逻辑会话且现有机制不足时，再定义持有、释放、配置替换和会话失效行为；必要持久占用仅复用现有资源账本，本地记录不保证远端不断线、不过期或可恢复。
+
+以下历史收据保留原验收范围；其中“主动跨执行持有待答复／待实施”的旧状态以第10节为准，不再阻挡本轮独立任务，也不代表延期能力已完成。
 
 ### 3.3／9.4 定义物化错误边界（2026-10-27）
 
@@ -380,3 +386,10 @@
 - 修复重复取消再次打断原任务、终态已提交但清理未结束时新意图提前进入的两个真实 OAuth/MCP 反例；原任务和失败句柄继续由既有 scope 持有。单次取消最多观察30秒，超时原操作登记 cleanup_wait_timeout，API返回503及同一request_id；同 Server 新意图409，alias／旧意图仍读原事实，清理完成后显式新意图可正常授权。无新增账本、schema或网络链路。
 - 旧实现两项反例均失败；最终正式 `integration-mcp-connection-operations` 为13 passed／119.41秒、exit0，含真实30秒等待、请求中断、清理失败、晚完成后重连及既有独立Backend重启。三文件Ruff、Pyright、compileall通过；OpenSpec strict 48/48。同步审计确认三个配置delta保留最新主规格的全部原scenario及日志合同。准确命令、源码前后指纹、raw与退出码在 `out/tests/temp/mcp-cancel-cleanup/artifacts/`，初轮新增测试静态诊断及审计脚本正则错误原件保留。
 - 本片未改Web，不重复构建；ASGI业务API与真实OAuth/MCP不代替Gateway/Web、Windows或同步阻塞可抢占验收。同步清理回调阻塞事件循环仍在代码保留5.4 TODO。4.2主动跨执行持有待既有设计答复，4.6及第9节整体门继续未勾。
+
+### 2026-10-28 主动跨执行持有延期与独立合同收口
+
+- 按用户裁定，proposal／design／监督spec／任务同步拆出10.1设计TODO，保留未完成；调用身份处补对应代码TODO，AST与提交前完全一致。不新增通用持有／释放工具、用户入口、连接固定机制或账本。服务资源ID／引用及远端会话状态仍由实际服务核实，本地调用、审批和结果未知事实保持。
+- 逐点核对模型发送前的原execution有界资格、精确connection_ref／schema和操作身份、canonical结果后结算及原Owner的退役排空。现有完整HITL／硬重启证据按上方各具名范围复用；本次正式发现矩阵232 passed／1 setup error，错误为固定测试输出中残留catalog v10、当前要求v11。后续原fixture重建后观察为v11，归档前置检查因此拒绝移动，未删改测试目录或生产迁移；同一GC用例由正式matrix定向补验1 passed／232 deselected。第一次定向误用直接pytest，缺正式fork watchdog、未进入业务，原件保留；不将整套原退出1改称退出0。
+- 当前多工作区同名Server真实调用／watcher替换矩阵1 passed／3 deselected、71.17秒，核旧封存目标、新执行、兄弟归属和六份请求hash；未将ASGI业务入口称为Gateway代理。近期SDK确认错误与取消清理沿各原收据复用。Ruff、注释模块Pyright零诊断、compileall、strict OpenSpec48/48及差异检查通过；未变的Web／真实Provider／审批长场景不重复运行。命令、前后指纹、raw、退出码及复用限定见`out/tests/temp/uri-global-closure/artifacts/verification-005.json`。
+- 独立核心门4.2／4.6与逐切片验证／保护／证据9.1–9.3关闭，当前49/53；9.4–9.6最终审查、同步／归档尚未完成，10.1保持延期未勾。团队／协作TODO不变。
