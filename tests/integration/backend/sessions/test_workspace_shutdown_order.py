@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from threading import Event
+import secrets
+from threading import Event, Thread
 
+import httpx
 import pytest
 
 from app import main
@@ -344,4 +346,121 @@ async def test_backend_close_retains_cancelled_file_stop_writer_and_retries_orig
     finally:
         release.set()
         await asyncio.gather(*waiters, return_exceptions=True)
+        await lifetime.__aexit__(None, None, None)
+
+
+async def test_catalog_transaction_wait_keeps_diagnostics_and_original_close_owner(
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadlines: list[asyncio.Timeout] = []
+
+    def backend_deadline(seconds: float) -> asyncio.Timeout:
+        assert seconds == 30
+        deadline = asyncio.timeout(seconds)
+        deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", backend_deadline)
+    token = secrets.token_hex(32)
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
+    lifetime = main.lifespan(main.app)
+    await lifetime.__aenter__()
+    begin, entered, release, settled = Event(), Event(), Event(), Event()
+    failures: list[BaseException] = []
+    attempts: list[SessionCatalogStore] = []
+    closing = None
+    holder = None
+    try:
+        selected = mounted_case.containers[0]
+        with workspace_context(selected.workspace_id, selected.workspace_root,
+                               session_catalog=selected.session_catalog):
+            session = await selected.session_service.create(SessionCreateRequest(title="关闭中的真实事务"))
+        locator = selected.session_catalog.resolver.resolve_session_node(session.session_id)
+        store = selected.session_catalog.resolver.catalog_store
+        original_close = SessionCatalogStore.close
+
+        def hold_transaction() -> None:
+            try:
+                if not begin.wait(10):
+                    raise RuntimeError("测试未进入catalog关闭")
+                with store.read_transaction() as connection:
+                    assert connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 1
+                    entered.set()
+                    if not release.wait(5):
+                        raise RuntimeError("测试catalog事务未释放")
+            except BaseException as error:  # noqa: BLE001 - 将线程原错误交回测试任务核对。
+                failures.append(error)
+            finally:
+                settled.set()
+
+        def observe_close(current: SessionCatalogStore) -> None:
+            if current is store:
+                attempts.append(current)
+                begin.set()
+                if not entered.wait(2):
+                    raise RuntimeError("测试catalog事务未开始")
+            original_close(current)
+
+        monkeypatch.setattr(SessionCatalogStore, "close", observe_close)
+        holder = Thread(target=hold_transaction, name="catalog-shutdown-transaction")
+        holder.start()
+        backend = main.app.state.workspace_lifespan
+        registry = backend.registry
+        closing = asyncio.create_task(backend.close())
+        async with asyncio.timeout(3):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        assert not settled.is_set(), "catalog锁竞争不得阻塞事件循环直到事务自行超时"
+        assert all(workspace.closed for workspace in backend.workspaces)
+        owner = backend._close_owner
+        assert owner is not None and not owner.done()
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        with pytest.raises(TimeoutError, match="stage=catalog"):
+            await asyncio.wait_for(closing, 3)
+        assert backend._close_owner is owner and not owner.done()
+        assert main.app.state.workspace_lifespan is backend
+        assert main.app.state.workspace_container_registry is registry
+        assert locator.is_dir() and not store._closed
+        with pytest.raises(RuntimeError, match="已关闭"):
+            registry.get_catalog_components(selected.session_catalog.sessions_root, selected.workspace_id)
+        with pytest.raises(RuntimeError, match="已关闭"):
+            registry.__enter__()
+        for container in mounted_case.containers:
+            with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+                container.workspace_root / ".boxteam/attachments", exclusive=True,
+            ):
+                pytest.fail("原catalog关闭未完成时不能归还维护锁")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://127.0.0.1") as client:
+            rejected = await asyncio.wait_for(client.get(
+                f"/api/v1/workspaces/{selected.workspace_id}/health",
+            ), 3)
+            assert rejected.status_code == 500, rejected.text
+            assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
+            assert not settled.is_set(), "已关闭的registry准入必须立即拒绝，不再等待catalog关闭锁"
+            response = await asyncio.wait_for(client.get(
+                "/api/v1/internal/runtime-logging", headers={"X-Local-Token": token},
+            ), 3)
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        assert not settled.is_set() and attempts == [store]
+        release.set()
+        await asyncio.wait_for(backend.close(), 5)
+        await asyncio.to_thread(holder.join, 3)
+        assert backend._close_owner is owner and backend.closed
+        assert settled.is_set() and not failures and attempts == [store]
+        assert store._closed and locator.is_dir()
+        assert main.app.state.workspace_lifespan is None
+        assert main.app.state.workspace_container_registry is None
+        for container in mounted_case.containers:
+            with AttachmentMaintenanceLock(container.workspace_root / ".boxteam/attachments", exclusive=True):
+                pass
+    finally:
+        release.set()
+        begin.set()
+        if holder is not None:
+            await asyncio.to_thread(holder.join, 3)
+            assert not holder.is_alive()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
         await lifetime.__aexit__(None, None, None)

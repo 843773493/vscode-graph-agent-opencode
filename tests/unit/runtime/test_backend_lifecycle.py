@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from threading import Event
 
 import pytest
 from fastapi import FastAPI
@@ -44,6 +46,10 @@ class Workspace:
 @dataclass
 class Registry:
     closes: int = 0
+    admission_closed: bool = False
+
+    def close_admission(self) -> None:
+        self.admission_closed = True
 
     def close(self) -> None:
         self.closes += 1
@@ -249,3 +255,76 @@ async def test_original_close_timeout_keeps_its_identity(case: Case) -> None:
     assert case.registry.closes == 1 and case.released_access == [True]
     await case.backend.close()
     assert case.backend.closed and case.registry.closes == 1
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
+    case: Case, monkeypatch: pytest.MonkeyPatch, queued: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered, release = Event(), Event()
+    occupied, free_executor = Event(), Event()
+    registry_close = case.registry.close
+
+    def blocked_close() -> None:
+        entered.set()
+        if not release.wait(5):
+            raise RuntimeError("测试catalog关闭屏障未释放")
+        registry_close()
+
+    def occupy_executor() -> None:
+        occupied.set()
+        if not free_executor.wait(15):
+            raise RuntimeError("测试executor屏障未释放")
+
+    for workspace in case.workspaces:
+        workspace.release.set()
+    monkeypatch.setattr(case.registry, "close", blocked_close)
+    with ThreadPoolExecutor(max_workers=1) as executor, monkeypatch.context() as patch:
+        patch.setattr(loop, "_default_executor", executor)
+        filler = executor.submit(occupy_executor) if queued else None
+        waiting = None
+        try:
+            if queued:
+                async with asyncio.timeout(2):
+                    while not occupied.is_set():
+                        await asyncio.sleep(0.001)
+            waiting = asyncio.create_task(case.backend.close())
+            async with asyncio.timeout(2):
+                while (executor._work_queue.qsize() == 0 if queued else not entered.is_set()):
+                    await asyncio.sleep(0.001)
+            owner = case.backend._close_owner
+            assert owner is not None and not owner.done()
+            assert entered.is_set() == (not queued)
+            assert case.registry.admission_closed, "同步关闭尚在线程池排队时也必须撤销装配准入"
+            assert len(case.deadlines) == 1
+            case.deadlines[0].reschedule(loop.time())
+            with pytest.raises(TimeoutError, match="stage=catalog"):
+                await asyncio.wait_for(waiting, 2)
+            assert not owner.done() and not owner.cancelled()
+            assert case.registry.closes == case.stream.closes == 0
+            assert case.released_access == []
+            assert case.application.state.workspace_lifespan is case.backend
+            retry = asyncio.create_task(case.backend.close())
+            await asyncio.sleep(0)
+            assert case.backend._close_owner is owner
+            retry.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await retry
+            assert not owner.done()
+            free_executor.set()
+            release.set()
+            await asyncio.wait_for(case.backend.close(), 2)
+            assert case.backend._close_owner is owner and case.backend.closed
+            assert case.registry.closes == case.stream.closes == 1
+            assert case.released_access == [True]
+            assert all(workspace.attempts == 1 for workspace in case.workspaces)
+        finally:
+            free_executor.set()
+            release.set()
+            if waiting is not None:
+                await asyncio.gather(waiting, return_exceptions=True)
+            if filler is not None:
+                filler.result(timeout=2)
+            if case.backend._close_owner is not None:
+                await asyncio.gather(case.backend._close_owner, return_exceptions=True)

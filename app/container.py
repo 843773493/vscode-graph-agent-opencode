@@ -463,6 +463,8 @@ class WorkspaceContainerRegistry:
     def get_catalog_components(
         self, sessions_root: Path, workspace_id: str
     ) -> SessionCatalogComponents:
+        # 关闭线程可能正在原生I/O中持锁；已关闭准入不能再阻塞请求事件循环。
+        self._require_open()
         with self._lock:
             self._require_open()
             mount = self._mounted_workspaces.resolve(workspace_id)
@@ -482,6 +484,7 @@ class WorkspaceContainerRegistry:
             return components.get_catalog_components(sessions_root, workspace_id)
 
     def get(self, workspace_id: str) -> AppContainer:
+        self._require_open()
         with self._lock:
             self._require_open()
             mount = self._mounted_workspaces.resolve(workspace_id)
@@ -532,10 +535,14 @@ class WorkspaceContainerRegistry:
         self._containers.pop(workspace_id, None)
         self._pending_catalog_closes.discard(workspace_id)
 
+    def close_admission(self) -> None:
+        """线程排队或原生关闭持锁前撤销装配准入；锁内仍须复核。"""
+        self._closed = True
+
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
+        self.close_admission()
         with self._lock:
-            self._closed = True
             errors: list[Exception] = []
             for workspace_id in tuple(self._catalog_components):
                 try:
@@ -547,6 +554,7 @@ class WorkspaceContainerRegistry:
             self._containers.clear()
 
     def __enter__(self) -> Self:
+        self._require_open()
         with self._lock:
             self._require_open()
         return self

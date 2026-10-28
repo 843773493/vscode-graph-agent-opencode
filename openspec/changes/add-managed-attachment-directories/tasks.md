@@ -388,3 +388,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 最终共享owner/账本/等待预算定向413 passed；真实Session/ASGI、冷owner及Node/Chromium/HTTP组合10 passed/90.42秒，新增stop/delete由正式matrix独立补验2 passed/24.07秒（与10项重叠，不累计）。原真实PTY的unknown/read与管理停止1 passed，核原目录及精确lease结算。新matrix固定60秒/4GiB，原Browser suite的90秒及产品期限未改变。
 - 原生产对新增停止/过期版本用例12项均失败，真实Browser的stop返回408而非200；完整HEAD `05bac2c1b`归档4706份文件逐字核对。扩大回归中的32项旧I/O断言也在该完整HEAD复现，现按已生效URI合同核公开安全错误和原生cause身份/顺序，保留全部状态及占用断言。作者差异审查发现的旧lease列表窗口另以2项失败反例确认后修复，原始失败、首次测试计数误用及筛选未启动均保留，未把它们计作通过。
 - Ruff、compileall及OpenSpec strict 47/0通过；触达五文件Pyright基线96项、候选95项，按文件/规则/完整消息核新增0、减少1，新测试无诊断，不称类型全绿。AST核原恢复主体除显式停止意图外保持相同，作者结构自查、准确命令、源码指纹、raw/退出码及限定证据见 `out/tests/temp/resource-cold-management/artifacts/verification-001.json`。不代表Gateway/Web、Windows、Backend硬重启、未知native身份或任意脚本强制终止；同步阻塞、不合作取消及整个shutdown期限继续TODO，5.2/5.4保持未勾，团队协作继续暂缓。
+
+### 2026-10-28 Catalog关闭的线程等待与准入（5.4部分收口）
+
+- Backend复用原同步I/O原语执行唯一registry关闭链，线程池排队前同步撤销装配准入；服务图、catalog和registry作用域入口先拒绝已关闭状态，原锁内仍复核。线程排队、事务锁等待继续由同一关闭owner持有；观察预算到期或等待者取消不提前归还维护锁、不重复关闭，原执行结束后才继续后续依赖。未新增账本、schema或关闭实现。
+- 原生产的新单元反例2项失败（排队装具另有5秒屏障超时，已改为15秒且保留原件）；真实catalog事务反例1项失败。仅异步关闭、未修准入的中间候选又复现工作区请求等待5秒，修复后经真实双挂载、产品Session、SQLite事务锁及ASGI请求核验即时拒绝、诊断可读、原owner/locator/维护互斥保留与迟到完成。相关单元/catalog回归14 passed，完整关闭matrix 8 passed/168.04秒（新场景与前14项重叠1项），启动失败3 passed，合计24个不同用例；模型沿用model_stream，未手填执行或恢复事实。
+- Ruff、compileall及OpenSpec strict 51/0通过；Pyright原HEAD完整归档24项、最终候选24项，按文件/最窄AST owner/规则/完整消息比较无新增，不称类型全绿。原有集成用例AST保持，作者结构自查不等于独审。准确命令、源码指纹、原始输出/退出码及限定证据见 `out/tests/temp/uri-global-closure/artifacts/verification-026.json`。本片不证明真实等待30秒、Gateway/Web、Windows、独立Backend硬重启、原生线程强制终止或整个shutdown期限；其它同步关闭、未交付PID及不合作执行继续TODO，5.2/5.4仍未勾、整体21/23，团队协作继续暂缓。

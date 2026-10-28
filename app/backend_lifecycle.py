@@ -10,6 +10,7 @@ from collections import deque
 from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     ATTACHMENT_ROOT_DIRECTORY_NAME,
 )
@@ -112,10 +113,12 @@ class BackendLifespan:
         if errors:
             raise BaseExceptionGroup("Backend关闭未完成，保留catalog与维护锁", errors)
 
-    def _close_registry(self) -> None:
-        # TODO(5.4)：同步关闭阻塞、线程池及生产进程终止协调仍须单独核实。
+    async def _close_registry(self) -> None:
+        # 原关闭owner持有同步执行及线程池排队；等待者到期不归还后续依赖。
+        # TODO(5.4)：原生线程终止、其它同步关闭及生产进程退出仍须单独核实。
         if self.registry is not None:
-            self.registry.close()
+            self.registry.close_admission()
+            await run_sync_shielded(self.registry.close)
 
     async def _close_model_stream(self) -> None:
         if self._model_stream is not None:
