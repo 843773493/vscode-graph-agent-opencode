@@ -126,33 +126,7 @@ class FederationCredentialStore:
             # 只有尚未打开的缺文件表示空库；权限核验等后续失败不能被当作未配置。
             if stage == "open" and isinstance(error, FileNotFoundError):
                 return {}
-            raise self._access_error("read", stage, error) from error
-
-    def _access_error(self, operation: Literal["read", "write"], stage: str,
-                      error: OSError | ValueError | TypeError | KeyError | RuntimeError) -> Exception:
-        action = "读取" if operation == "read" else "写入"
-        detail = f"联邦凭据{action}失败: artifact=federation_credentials, stage={stage}, error={type(error).__name__}"
-        if isinstance(error, OSError):
-            detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
-        # 解码与字段校验的原异常可能含凭据正文，只保留在cause，不写入日志。
-        logger.error("%s path=%s request_id=%s", detail, self._storage_path, get_current_request_id(),
-                     exc_info=(type(error), error, error.__traceback__) if isinstance(error, (OSError, RuntimeError)) else None)
-        projected: Exception
-        if isinstance(error, OSError):
-            if error.errno is None:
-                projected = type(error)(detail)
-            else:
-                projected = type(error)(error.errno, detail, None, getattr(error, "winerror", None))
-        elif isinstance(error, UnicodeDecodeError):
-            projected = UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail)
-        elif isinstance(error, UnicodeEncodeError):
-            projected = UnicodeEncodeError(error.encoding, error.object, error.start, error.end, detail)
-        elif isinstance(error, json.JSONDecodeError):
-            projected = json.JSONDecodeError(detail, error.doc, error.pos)
-        else:
-            projected = type(error)(detail)
-        projected.__cause__ = error
-        return projected
+            raise _file_access_error(self._storage_path, "federation_credentials", "read", stage, error) from error
 
     def _save(self, credentials: dict[str, FederationCredential]) -> None:
         payload = {
@@ -199,7 +173,7 @@ class FederationCredentialStore:
             os.replace(temporary_path, self._storage_path)
             temporary_path = None
         except (OSError, ValueError, TypeError, RuntimeError) as error:
-            primary_error = self._access_error("write", stage, error)
+            primary_error = _file_access_error(self._storage_path, "federation_credentials", "write", stage, error)
             raise primary_error from error
         except BaseException as error:
             primary_error = error
@@ -210,12 +184,12 @@ class FederationCredentialStore:
                 try:
                     os.close(descriptor)
                 except OSError as error:
-                    cleanup_errors.append(self._access_error("write", "close_descriptor", error))
+                    cleanup_errors.append(_file_access_error(self._storage_path, "federation_credentials", "write", "close_descriptor", error))
             if temporary_path is not None:
                 try:
                     temporary_path.unlink(missing_ok=True)
                 except OSError as error:
-                    cleanup_errors.append(self._access_error("write", "cleanup", error))
+                    cleanup_errors.append(_file_access_error(self._storage_path, "federation_credentials", "write", "cleanup", error))
             if cleanup_errors:
                 if primary_error is not None:
                     cleanup_errors.insert(0, primary_error)
@@ -226,24 +200,85 @@ class FederationCredentialStore:
                 ) from primary_error
 
 
+def _file_access_error(
+    storage_path: Path,
+    artifact: Literal["federation_credentials", "gateway_identity"],
+    operation: Literal["read", "write"],
+    stage: str,
+    error: OSError | ValueError | TypeError | KeyError | RuntimeError,
+) -> Exception:
+    action = "读取" if operation == "read" else "写入"
+    label = "Gateway 身份文件非法" if artifact == "gateway_identity" else f"联邦凭据{action}失败"
+    detail = f"{label}: artifact={artifact}, stage={stage}, error={type(error).__name__}"
+    if isinstance(error, OSError):
+        detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
+    # 解码与字段校验的原异常可能含凭据正文，只保留在cause，不写入日志。
+    logger.error("%s path=%s request_id=%s", detail, storage_path, get_current_request_id(),
+                 exc_info=(type(error), error, error.__traceback__) if isinstance(error, (OSError, RuntimeError)) else None)
+    projected: Exception
+    if isinstance(error, OSError):
+        if error.errno is None:
+            projected = type(error)(detail)
+        else:
+            projected = type(error)(error.errno, detail, None, getattr(error, "winerror", None))
+    elif isinstance(error, UnicodeDecodeError):
+        projected = UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail)
+    elif isinstance(error, UnicodeEncodeError):
+        projected = UnicodeEncodeError(error.encoding, error.object, error.start, error.end, detail)
+    elif isinstance(error, json.JSONDecodeError):
+        projected = json.JSONDecodeError(detail, error.doc, error.pos)
+    else:
+        projected = type(error)(detail)
+    projected.__cause__ = error
+    return projected
+
 def load_or_create_gateway_id(storage_path: Path) -> str:
-    if storage_path.exists():
-        payload = json.loads(storage_path.read_text(encoding="utf-8"))
-        gateway_id = payload.get("gateway_id") if isinstance(payload, dict) else None
-        if not isinstance(gateway_id, str) or not gateway_id:
-            raise ValueError(f"Gateway 身份文件非法: {storage_path}")
-        try:
+    descriptor: int | None = None
+    primary_error: BaseException | None = None
+    stage = "stat"
+    try:
+        if storage_path.exists():
+            stage = "read"
+            with storage_path.open("r", encoding="utf-8") as file:
+                stage = "decode"
+                payload = json.load(file)
+                stage = "close"
+            stage = "validate"
+            gateway_id = payload.get("gateway_id") if isinstance(payload, dict) else None
+            if not isinstance(gateway_id, str) or not gateway_id:
+                raise ValueError("Gateway 身份文件缺少有效 gateway_id")
             return validate_gateway_id(gateway_id)
-        except ValueError as error:
-            raise ValueError(f"Gateway 身份文件非法: {storage_path}: {error}") from error
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    gateway_id = f"gateway_{secrets.token_hex(16)}"
-    descriptor = os.open(
-        storage_path,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o600,
-    )
-    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-        json.dump({"gateway_id": gateway_id}, file)
-        file.write("\n")
-    return gateway_id
+        stage = "prepare"
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        gateway_id = f"gateway_{secrets.token_hex(16)}"
+        stage = "create"
+        descriptor = os.open(storage_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        stage = "open_stream"
+        file = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = None  # stream 创建成功后才转交关闭责任，不删除失败身份或替换已有身份。
+        with file:
+            stage = "write"
+            json.dump({"gateway_id": gateway_id}, file)
+            file.write("\n")
+            stage = "close"
+        return gateway_id
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
+        primary_error = _file_access_error(storage_path, "gateway_identity", "read" if stage in {
+            "stat", "read", "decode", "validate",
+        } else "write", stage, error)
+        raise primary_error from error
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                cleanup_error = _file_access_error(storage_path, "gateway_identity", "write", "close_descriptor", error)
+                if primary_error is not None:
+                    raise BaseExceptionGroup(
+                        "Gateway 身份创建与收尾均失败: artifact=gateway_identity, stage=close_descriptor",
+                        [primary_error, cleanup_error],
+                    ) from primary_error
+                raise cleanup_error from error

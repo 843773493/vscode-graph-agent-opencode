@@ -980,3 +980,10 @@
 - 修改前31项为30 failed/1 passed，明确复现fdopen失败遗留原fd和清理错误覆盖主错误。候选扩大定向回归144 passed/2 skipped/1 deselected；最终补充发布成功后无意义清理拒绝的反例，发布/读取合同52 passed（含34项发布用例）。覆盖三类writer、九个失败阶段、原件/授权保持、句柄关闭、两/三重收尾失败、取消、UTF-8编码失败及显式重试不删除其它尝试；各组有重叠，不累计。
 - 独立Gateway真实POSIX权限/TCP验收：发布链1 passed/25.19秒，原认证读取链复验1 passed；经产品API先生成设备授权，再使凭据目录只读，核创建与撤销500、同request_id、公开原因无原生位置、原件和授权不变，恢复权限后原入口成功并核旧/新token归属。测试与生产均无网络替身；不代替Web、Windows或真实跨Gateway连接。
 - Ruff/compileall及生产/新单测Pyright通过；集成文件两项Popen诊断与上轮完整旧HEAD按规则/消息/位置一致，原装具AST保持，不称全类型绿。唯一排除的观察者身份断言沿用上轮旧版复现证据，两个skip为既有Windows DACL实机检查。严格OpenSpec47/0；准确命令、前后源码指纹、raw/退出码、原诊断对照及作者结构自查见`out/tests/temp/federation-credential-publish/artifacts/verification-001.json`。没有新建临时源码副本，验收产物保留；2.2/7.2仍未勾，团队协作继续TODO。
+
+### 2026-10-28 Gateway 身份文件错误与描述符交付（2.2/7.2部分收口）
+
+- 身份读取、解码、字段校验和首次排他创建复用凭据文件的唯一错误出口，保留原异常类别、系统错误码及直接 cause；普通错误只带 artifact/stage，路径留在关联原 request_id 的诊断。保持原身份校验、O_EXCL/0600 与损坏原件不自动替换，不增加回退身份。
+- fdopen 成功后才交付关闭责任；失败或取消关闭本次 fd，创建和关闭同时失败保留两份 cause。17个原实现故障反例失败、1项成功基线通过；最终相关回归102 passed/2 skipped（既有Windows ACL检查），包括22个身份场景与凭据读写/认证/代理消费者。
+- 独立Gateway真实HTTP的四类身份故障及原入口修复重试1 passed/25.20秒，核原身份、文件、凭据和request_id不变。Ruff、生产/新单测Pyright及compileall通过；strict OpenSpec47/0。新测试首轮Self注解、后续IO返回类型诊断均已修正，原件保留。
+- 准确命令、源码前后指纹、原始输出、真实退出码及归属审查位于`out/tests/temp/gateway-identity-files/artifacts/verification-001.json`，正式HTTP回执在同名测试artifacts中。未验Web、Windows或真实联邦网络，2.2/7.2全局门保持未勾，团队协作继续TODO。

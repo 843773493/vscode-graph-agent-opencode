@@ -289,6 +289,75 @@ async def test_federation_credential_permission_failure_keeps_request_identity_a
     (context.artifacts_dir / "credential-read-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
 
 
+@pytest.mark.asyncio
+async def test_gateway_identity_failure_keeps_original_identity_and_request_until_repaired(
+    integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    assert context.workspace_root == Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    port = integration_port_block_for_file(Path(__file__)).port(1)
+    identity_path = context.workspace_root.parent / "boxteam-home/state/gateway/identity.json"
+    receipts: dict[str, object] = {}
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        original = identity_path.read_bytes()
+        gateway_id = json.loads(original)["gateway_id"]
+        credential_path = identity_path.parent / "credentials/federation.json"
+        store = FederationCredentialStore(storage_path=credential_path)
+        credential = store.issue(connection_id="rgw_identity_read", peer_gateway_id=gateway_id)
+        credential_bytes = credential_path.read_bytes()
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=20) as client:
+            for kind, damaged, stage in (
+                ("value", json.dumps({"gateway_id": str(identity_path)}).encode(), "validate"),
+                ("json", b'{"gateway_id":', "decode"),
+                ("utf8", str(identity_path).encode() + b"\xff", "decode"),
+                ("directory", b"", "read"),
+            ):
+                request_id = f"req_identity_{kind}"
+                headers = {"X-BoxTeam-Federation-Token": credential.token, "X-Request-ID": request_id}
+                if kind == "directory":
+                    identity_path.unlink()
+                    identity_path.mkdir()
+                else:
+                    identity_path.write_bytes(damaged)
+                try:
+                    failed = await client.get("/api/gateway/federation/workspaces", headers=headers)
+                    assert failed.status_code == 500, failed.text
+                    assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == request_id
+                    assert "artifact=gateway_identity" in failed.json()["message"]
+                    assert f"stage={stage}" in failed.json()["message"]
+                    assert str(identity_path) not in failed.text
+                    assert credential.token not in failed.text
+                    if kind == "directory":
+                        assert identity_path.is_dir()
+                    else:
+                        assert identity_path.read_bytes() == damaged
+                    receipts[kind] = failed.json()
+                finally:
+                    if kind == "directory":
+                        identity_path.rmdir()
+                    identity_path.write_bytes(original)
+                headers["X-Request-ID"] = f"{request_id}_repaired"
+                recovered = await client.get("/api/gateway/federation/workspaces", headers=headers)
+                assert recovered.status_code == 200, recovered.text
+                assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"] == headers["X-Request-ID"]
+                assert recovered.json()["data"]["gateway_id"] == gateway_id
+                assert identity_path.read_bytes() == original
+                assert credential_path.read_bytes() == credential_bytes
+                assert store.verify(credential.token) == credential
+                receipts[f"{kind}_repaired"] = recovered.json()
+    log = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert str(identity_path) in log
+    assert all(f"req_identity_{kind}" in log for kind in ("value", "json", "utf8", "directory"))
+    assert credential.token not in log
+    (context.artifacts_dir / "identity-error-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="此项核真实POSIX目录权限；Windows ACL另有专门验收")
 @pytest.mark.asyncio
 async def test_device_credential_publish_failure_keeps_authorization_until_explicit_retry(
