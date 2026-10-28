@@ -223,7 +223,10 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
     monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
-    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr(
+        "app.gateway.registry.runtime.resolve_backend_workspace_ids",
+        lambda _project, roots, **__: tuple("00000000-0000-4000-8000-000000000001" for _ in roots),
+    )
 
     async def start_default_runtime(*, owner, **_: object):
         owner.set_process(ProcessProbe("default"))

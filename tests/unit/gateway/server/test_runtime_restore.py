@@ -30,6 +30,7 @@ class StartupCase:
     gateway_root: Path
     default_root: Path
     identities: dict[Path, str] = field(default_factory=dict)
+    validated_roots: list[tuple[tuple[Path, ...], bool]] = field(default_factory=list)
     started: list[tuple[object, dict[str, object]]] = field(default_factory=list)
     handles: list[tuple[ProcessProbe, ProcessProbe]] = field(default_factory=list)
     backend_adopted: bool = False
@@ -77,8 +78,11 @@ def startup_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StartupCase
         if not root.is_dir():
             raise FileNotFoundError(f"工作区目录不存在: {root}")
         return case.identities[root]
+    def identities(project: Path, roots: tuple[Path, ...], *, initialize: bool) -> tuple[str, ...]:
+        case.validated_roots.append((roots, initialize))
+        return tuple(identity(project, root) for root in roots)
     monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", identity)
-    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", identity)
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_ids", identities)
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", case.start)
     return case
 
@@ -131,14 +135,25 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
     defaults, _ = add(("Default",), default=True)
     running, _ = add(("Running-a", "Running-b"))
     stopped, _ = add(("Stopped",), desired_running=False)
+    external_root = startup_case.default_root.parent / "External"
+    external_root.mkdir()
+    startup_case.identities[external_root] = "00000000-0000-4000-8000-000000000099"
+    persisted.upsert(WorkspaceTarget(
+        workspace_id="external", name="External", root_path=str(external_root),
+        backend_url="http://127.0.0.1:42000", connection_kind="local",
+        backend_workspace_id=startup_case.identities[external_root], managed=False,
+    ), activate=False)
+    expected_roots = tuple(Path(target.root_path) for target in persisted.targets())
     persisted.activate(running[1].workspace_id)
     registry = await bootstrap.create_registry()
+    assert startup_case.validated_roots == [(expected_roots, False)]
     assert len(startup_case.started) == 1
     assert registry.has_runtime(defaults[0].workspace_id)
     assert all(not registry.has_runtime(target.workspace_id) for target in running)
     await bootstrap._restore_managed_local_runtimes(
         registry=registry, default_workspace_id=defaults[0].workspace_id,
     )
+    assert startup_case.validated_roots == [(expected_roots, False)] * 2
     assert len(startup_case.started) == 2
     restored_owner = registry.backend_owner(running[0].workspace_id)
     assert restored_owner is registry.backend_owner(running[1].workspace_id)
@@ -396,7 +411,9 @@ async def test_restore_commit_observer_error_keeps_published_unique_owner(
         assert registry.active_workspace_id == running[1].workspace_id
         assert all(registry.resolve(target.workspace_id).connection_error is None for target in running)
         persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path)
-        assert persisted.backend_owner(running[0].workspace_id).contract == graph.owner.contract
+        restored_owner = persisted.backend_owner(running[0].workspace_id)
+        assert restored_owner is not None
+        assert restored_owner.contract == graph.owner.contract
     finally:
         registry.remove_commit_observer(observer)
         registry.close()
