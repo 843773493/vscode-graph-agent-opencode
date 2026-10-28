@@ -399,3 +399,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 文件worker排空后，原Workspace任务复用`run_sync_shielded`等待唯一同步关闭，事务锁竞争不再阻塞事件循环；原步骤结束前保留catalog、locator与维护锁，不重复关闭或移动MCP scope。真实双挂载、产品Session及SQLite事务反例在原实现1 failed，候选1 passed；完整相关关闭回归17 passed/171.60秒，核对peer关闭、ASGI诊断/request_id、观察到期及原事务释放后的同owner收尾。观察期限由测试外置推进，不冒充真实等待30秒。
 - Ruff、compileall与OpenSpec strict通过。完整旧HEAD归档4730个blob逐字核对，生产Pyright 4→4、测试17→17，无新增，不称类型全绿；原有测试函数AST保持。首次归档比对因Git中文路径转义而失败，改用NUL分隔核对后确认源码一致，未修改候选。准确命令、前后指纹、原始输出/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-028.json`。未验Gateway/Web、Windows、独立Backend硬重启、任意线程终止或整个shutdown硬期限；其它同步关闭、旧代接管与不合作取消继续TODO，5.2/5.4保持未勾，整体21/23，团队协作继续暂缓。
+
+### 2026-10-28 已接受Job与FIFO发布边界（5.4部分收口）
+
+- 原Job先保持accepted，新准入与冷恢复均在同一调度锁内恢复原FIFO后才发布queued；取消和排空先写canonical终态，只有queued删除已有条目。accepted同样刷新快照，关闭仅发一次取消事件；写盘失败保留原Job和准入供原入口重试。移除永远无法返回false的队列删除检查及其死错误构造器，严格FIFO缺项仍明确报错，不增加兼容回退或镜像插入链。
+- 真实Session/持久任务API生成准入，再于原canonical outcome读取处注入装载失败；最终取消、Backend关闭、终态写入失败后原owner重试与正常模型恢复，加原队列故障组合共23 passed/175.62秒，核原Job/admission/hash、无重复执行、取消事件与快照。Job目录单元116 passed/39.45秒，相关删除3 passed/6.04秒。单元端口按原持久phase装载，修复恢复装具多一层workspace及每项残留问题，所有原业务断言和测试函数AST保持；完整旧HEAD归档4732个blob逐字核对，最终反例在旧生产取消/关闭2 failed，旧装具setup错误也独立复现。
+- Ruff、compileall及OpenSpec strict 51/0通过；Pyright旧HEAD40、候选40，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称类型全绿。首次OSError注入、测试上下文遗漏及160秒外层保护终止均保留原件且不计通过，最终320秒验证预算未改产品期限。命令、前后指纹、raw/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-032.json`；完整临时源码已删除，正式测试产物保留。不代表Gateway/Web、Windows、独立Backend硬重启、准备尚未提交的关闭竞争、同步阻塞可抢占或整个shutdown硬期限；5.2/5.4仍未勾，整体21/23，团队协作继续暂缓。

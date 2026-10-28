@@ -77,7 +77,7 @@ def job_service_factory():
             result = []
             for identity, job in states.items():
                 record = records[identity]
-                if job.session_id != session_id or job.status.value != "queued" or record.phase != "queued":
+                if job.session_id != session_id or record.phase != "queued":
                     continue
                 binding = job.execution_binding
                 result.append(PendingRequestDTO(job_id=identity, execution_binding=binding, message_id=job.message_id,

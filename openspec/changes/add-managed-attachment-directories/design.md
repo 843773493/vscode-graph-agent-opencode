@@ -297,6 +297,10 @@ Linux7项执行场景最终86.55秒，包含新总预算与原runtime超时的�
 
 产品Session创建、API入队及真实准备任务覆盖两种回执：准备阶段到期保持active且不补造journal；准备消耗20秒后进入Session gate，剩余预算到期保持committed/repair_required，worker重启沿原journal结清。API装配为ASGI，不能称为真实网络或Gateway验收。准确命令、源码指纹、完整旧HEAD反例及各平台结果见tasks同批证据；同步阻塞、线程池、不合作取消和外部终止仍TODO。
 
+### 已接受Job与FIFO发布的状态边界（5.4部分收口）
+
+新准入和冷恢复沿同一持久队列装载，原Job先保持accepted；在原调度锁内完成FIFO恢复后才转queued。装载硬错误不再留下queued却无FIFO的中间态。用户取消与关闭均先提交原canonical终态，仅queued项删除已有FIFO；accepted项同样刷新快照，关闭仅发布一次取消事件。终态写入失败不发布终态，重试保留原Job和准入身份；正常重试仍复用原装载链，不增加镜像插入入口或宽松删除。该边界不证明准备尚未提交时的关闭竞争、同步阻塞可抢占或整个shutdown硬期限，5.4保持未完成。
+
 ### 资源operation收尾的整批等待预算（5.4 部分收口）
 
 Terminal/Browser继续共用`ResourceOperations.close()`：入口关闭迟到调用准入，全批释放任务只取得一次30秒协作式预算，各资源仍只取自己的原锁。到期取消并排空本批锁等待，不留下解锁后补做的后台释放；持久成功项已移除引用，未完成或写盘失败项保留精确原lease供同operation显式重试。到期前完成的原错误不被预算错误覆盖，多错沿原顺序聚合；底层自己的TimeoutError与调用方取消保持原归属。没有改变原账本、普通released语义或外部停止链。

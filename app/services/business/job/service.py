@@ -338,8 +338,8 @@ class JobService:
             raise RuntimeError("JobService 未绑定 JobEventBus")
 
         active_blockers: list[JobDrainBlocker] = []
-        sessions_with_queued_jobs: set[str] = set()
-        queued_blocker_ids: set[str] = set()
+        sessions_with_pending_jobs: set[str] = set()
+        unstarted_blocker_ids: set[str] = set()
         tasks: list[asyncio.Task] = []
         now = datetime.now()  # noqa: DTZ005
         async with self._dispatch_lock:
@@ -358,9 +358,9 @@ class JobService:
                         error_message=reason,
                         now=now,
                     )
+                    sessions_with_pending_jobs.add(job.session_id)
+                    unstarted_blocker_ids.add(job.job_id)
                     if was_queued:
-                        sessions_with_queued_jobs.add(job.session_id)
-                        queued_blocker_ids.add(job.job_id)
                         self._pending_queue.remove(job.session_id, job.job_id)
                     # 每项成功后立即完成事件；后续项失败不得漏掉此前取消。
                     await self._bus.publish(
@@ -375,7 +375,7 @@ class JobService:
         if not active_blockers:
             return 0
         for blocker in active_blockers:
-            if blocker.job_id in queued_blocker_ids:
+            if blocker.job_id in unstarted_blocker_ids:
                 continue
             await self._bus.publish(
                 job_id=blocker.job_id,
@@ -408,7 +408,7 @@ class JobService:
             except Exception as error:  # noqa: BLE001
                 # 一项落盘失败不阻止其它 thread 收尾；失败项保留原槽供重试。
                 errors.append(error)
-        for session_id in sessions_with_queued_jobs:
+        for session_id in sessions_with_pending_jobs:
             try:
                 await self._pending_requests.refresh_version(session_id)
             except Exception as error:  # noqa: BLE001
@@ -882,7 +882,7 @@ class JobService:
                     job_id=resolved_job_id, session_id=session_id, thread_id=thread_id,
                     message=message, message_id=message_id, attachments=list(attachments or []),
                     message_created_at=message_created_at, execution_binding=execution_binding,
-                    agent_id=agent_id, status=JobStatus.queued, delivery_policy=delivery_policy,
+                    agent_id=agent_id, status=JobStatus.accepted, delivery_policy=delivery_policy,
                     message_metadata=dict(message_metadata or {}), gateway_id=get_current_gateway_id(),
                     request_id=get_current_request_id(),
                 )
@@ -1718,7 +1718,7 @@ class JobService:
             restored: list[QueueEntry] = []
             for record in records:
                 existing = self._jobs.get(record.job_id)
-                if existing is not None and existing.status != JobStatus.queued:
+                if existing is not None and existing.status not in {JobStatus.accepted, JobStatus.queued}:
                     continue
                 if existing is None:
                     self._jobs[record.job_id] = JobState(
@@ -1737,7 +1737,7 @@ class JobService:
                         # 恢复的 Job 沿用创建时持久化的权威 request_id（独立执行根，
                         # MUST 显式携带），使重启后 job 下游能沿用同一请求 ID。
                         request_id=record.request_id,
-                        status=JobStatus.queued,
+                        status=JobStatus.accepted,
                         message_metadata=dict(record.message_metadata),
                         attachments=list(record.attachments),
                         created_at=record.created_at,
@@ -1767,6 +1767,11 @@ class JobService:
                 restored,
                 queue_snapshot_version=queue_snapshot_version,
             )
+            # 准入已落盘不代表 FIFO 已发布；装载失败时仍由原 accepted Job 接受取消和排空。
+            for entry in restored:
+                job = self._jobs[entry.job_id]
+                if job.status == JobStatus.accepted:
+                    transition_job_status(job, JobStatus.queued)
             self._pending_requests.mark_loaded(session_id)
 
     async def _publish_pending(

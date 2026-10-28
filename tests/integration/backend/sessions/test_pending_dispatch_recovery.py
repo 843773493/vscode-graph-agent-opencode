@@ -34,6 +34,7 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 
@@ -79,9 +80,13 @@ class PendingRecoveryCase:
 async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PendingRecoveryCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace_root = context.workspace_root
-    workspace_root.mkdir(parents=True, exist_ok=True)
+    prepare_test_workspace(
+        workspace_root=workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
     workspace = build_catalog_workspace(
-        workspace_root, workspace_id=load_or_create_workspace_id(workspace_root),
+        context.output_root, workspace_id=load_or_create_workspace_id(workspace_root),
     )
     session_id = await workspace.create_session("多线程队列恢复")
     factory = OwnerThreadCreationFactory(

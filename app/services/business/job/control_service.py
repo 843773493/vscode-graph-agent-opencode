@@ -83,11 +83,6 @@ class JobControlRuntimeError(RuntimeError):
             f"job_id={job_id} status={status.value}"
         )
 
-    @classmethod
-    def queue_mismatch(cls, job_id: str) -> JobControlRuntimeError:
-        return cls(f"取消排队 Job 时队列状态不一致: job_id={job_id}")
-
-
 class JobControlService:
     """负责 Job 用户控制动作及其与执行任务的协调。"""
 
@@ -159,10 +154,10 @@ class JobControlService:
                     task_to_wait = job.task
                 else:
                     self._resume_job_locked(job)
-            elif job.status == JobStatus.queued:
+            elif job.status in {JobStatus.accepted, JobStatus.queued}:
                 await self._persist_terminal_status(job, "cancelled")
-                if not self._pending_queue.remove(job.session_id, job.job_id):
-                    raise JobControlRuntimeError.queue_mismatch(job_id)
+                if job.status == JobStatus.queued:
+                    self._pending_queue.remove(job.session_id, job.job_id)
                 transition_job_status(
                     job,
                     JobStatus.cancelled,
