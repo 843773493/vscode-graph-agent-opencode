@@ -532,3 +532,8 @@ fork SHALL 具名消费 `add-unified-virtual-resource-addressing` requirement「
 
 - **WHEN** 创建在定位冻结、capture、物化或发布/绑定边界中断，随后父 Thread 新建更晚候选或切换分支
 - **THEN** 重试/恢复继续原记录及 capture，收敛到原 child/member/initial intent/Job，或定点中止；删除沿原 holder/fence 清理，不重选 latest、不复活删除目标
+
+#### Scenario: 同键更改 selector 在 HTTP 入口明确冲突
+
+- **WHEN** 调用方沿公开 fork 或目标创建 transfer 入口复用原 idempotency key，但改变显式 view、item、方向或模式
+- **THEN** 沿原创建 owner 拒绝该请求并返回 HTTP 409，保留同一请求的 request_id；原创建意图、capture 和目标身份不变，不重新定位或创建第二个目标；内部完整性 RuntimeError 仍作为服务端故障暴露，不归类为客户端状态冲突

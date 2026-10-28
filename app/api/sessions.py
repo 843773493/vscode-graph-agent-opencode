@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
@@ -30,7 +31,11 @@ from app.api.deps import (
     get_thread_residency_tracker,
     verify_local_token,
 )
-from app.api.errors import not_found_http_error, state_conflict_http_error
+from app.api.errors import (
+    not_found_http_error,
+    state_conflict_error,
+    state_conflict_http_error,
+)
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     SSE_NO_CACHE_HEADERS,
@@ -237,6 +242,8 @@ async def transfer_session_fork(
         result = await fork_service.transfer(payload)
     except IncompleteForkSourceCaptureError as error:
         raise HTTPException(status_code=409, detail=error.to_detail(action=payload.action)) from error
+    except ClientStateConflictError as error:
+        raise state_conflict_error(error) from error
     except WorkspaceSessionContextAccessError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except SessionDeletionPendingError as error:
@@ -471,6 +478,8 @@ async def fork_session_context(
         if source_session_id != session_id:
             raise ValueError("fork_source_mismatch: source_uri 与路径 Session 不一致")
         result = await fork_service.fork(payload)
+    except ClientStateConflictError as error:
+        raise state_conflict_error(error) from error
     except WorkspaceSessionContextAccessError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except SessionDeletionPendingError as error:

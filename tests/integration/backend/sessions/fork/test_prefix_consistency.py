@@ -173,6 +173,23 @@ async def test_prefix_capture_serializes_source_changes_and_reuses_original_poin
     retry_deadline.complete()
     assert retry.json()["data"] == result
     assert catalog.get_fork_source_capture(creation_key=creation_key) == capture
+    conflicts = {
+        "view": {"source_view_id": observed["source_view_id"]},
+        "item": {"anchor_item_id": "missing-conflicting-item"},
+        "direction": {"anchor_mode": "before" if anchor_mode == "inclusive" else "inclusive"},
+        "mode": {"mode": "full_rollout_copy", "source_view_id": candidate["source_view_id"],
+                 "source_view_revision": candidate["source_view_revision"], "anchor_item_id": None, "anchor_mode": "inclusive"},
+    }
+    for field, changed in conflicts.items():
+        conflict_deadline = deadlines.for_operation(target=observed["child_container_uri"], operation_key=f"{key}-conflict-{field}")
+        rejected = await conflict_deadline.wait(case.client.post(
+            f"/api/v1/sessions/{session}/fork-context", json={**body, **changed},
+        ), f"拒绝改变{field}的同键请求")
+        assert rejected.status_code == 409, rejected.text
+        conflict_deadline.complete()
+        assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
+        assert "fork request conflict" in rejected.json()["detail"]
+        assert catalog.get_fork_source_capture(creation_key=creation_key) == capture
     with factory.for_owner_session(session) as owner:
         record = owner.control_store.get_thread_creation_record(creation_key)
         assert record.child_thread_id == prepared.child_thread_id == result["thread_id"]

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.sessions import (
     fork_session_context,
     get_fork_source_point,
@@ -203,6 +204,7 @@ async def test_full_source_point_route_serializes_absent_anchor(fork_service: _F
     "failing_fork_service",
     [
         WorkspaceSessionContextAccessError("federation-channel-closed: gateway_remote"),
+        ClientStateConflictError("fork request conflict: 同 idempotency_key 不同冻结请求"),
         RuntimeError("fork_response_protocol_invalid: owner/hash 不匹配"),
     ],
     indirect=True,
@@ -222,10 +224,10 @@ async def test_fork_routes_classify_access_failure_without_hiding_integrity_erro
             ),
         )
         call = transfer_session_fork(payload=transfer_request, **arguments)
-    if isinstance(failing_fork_service.error, WorkspaceSessionContextAccessError):
+    if isinstance(failing_fork_service.error, (WorkspaceSessionContextAccessError, ClientStateConflictError)):
         with pytest.raises(HTTPException) as raised:
             await call
-        assert raised.value.status_code == 502
+        assert raised.value.status_code == (409 if isinstance(failing_fork_service.error, ClientStateConflictError) else 502)
         assert raised.value.detail == str(failing_fork_service.error)
         assert raised.value.__cause__ is failing_fork_service.error
     else:

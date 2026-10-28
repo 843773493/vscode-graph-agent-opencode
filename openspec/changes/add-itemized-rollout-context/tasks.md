@@ -1213,3 +1213,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 全 Git tree 反例 `e028fea39e10a45ec7c51b32900d9852672a3bd3` 只把前缀选择的 before 截断改为 inclusive，`before-mutation-003` 为1 failed、1 deselected／79.10秒、exit1，精确失败于目标成员多出锚点；未改共享生产代码。首轮装具只观察异步锁，遗漏消息 acceptance 线程池中的同步锁，触发60.040秒 watchdog／exit143；修正观察器后通过，失败原件保留，不当作产品失败或延长预算。
 - 原 `fork-prefix-selector` 候选 `fb5e12d3d80c3eeaf78e0e008153d35c0042b066` 至当前 HEAD 的 rollout、fork service、creation/catalog/schema、task caller 和既有 fork 测试源码无差异，复用原96项合同、13项 task 与2项 marker/CAS服务实例恢复、7项冻结正文／非前缀严格 revision 证据，不重新运行团队专项。新增测试与矩阵只负责当前公开 fork 并发链，固定240秒／4GiB与单次60秒监督器。
 - 本批命令、完整源码逐文件指纹、raw、退出码及进程组回收见 `out/tests/temp/fork-prefix-consistency/artifacts/runs/`，机械核验见同目录上级 `verification-007.json`。14.5–14.10仍未勾，跨端 prefix 冷恢复、真实 Web、摘要与故障组合门不由本次局部通过替代；团队／协作和 Goal 专项继续 TODO。本批没有新的 Windows、Python Pyright、Web 构建或真实浏览器证据，未改对应消费者。
+
+
+### 2026-10-28 同键 selector 冲突的公开 HTTP 归属（14.5 部分）
+
+- 原 fork owner 的 frozen request 核对改抛现有 `ClientStateConflictError`，公开 fork 与目标 transfer 路由统一交原状态冲突映射返回409。原 main/child 的完整 request/preimage 核对、源选择和捕获链不变；完整性 RuntimeError 不被捕获或伪装为409。delta spec 明确这一 HTTP 场景，未新增异常类型、接口或兼容分支。
+- 完整候选 `8bb64d3a6c82e5f8299d56e02f532341d05cd884` 的 API/service 定向75项／1.03秒通过，覆盖 fork/transfer 的409、远端访问502及完整性错误透传。旧生产副本 `3e539d6c346ab62365c0e8f02567f1bf5f01d973` 保留最终测试，分类反例为2 failed／4 passed／15 deselected、1.33秒、exit1，精确复现两个入口未映射状态冲突。
+- 正式 `integration-fork-prefix-consistency` 为2 passed／159.35秒：沿真实用户历史与前缀发布，分别同键改变显式 view、item、方向和模式；8次均返回409及同一响应 header/body request_id，原 capture/创建意图保持不变，只有原 child 且无初始 execution intent。继续覆盖并发追加／回放、冻结点、同键成功重试和 child 首请求。业务 HTTP 为 ASGI，model_stream、真实 Gateway 管理来源及 Terminal/Browser 的证据范围不变；固定240秒／4GiB与原60秒fork监督器。
+- 受影响 service/测试 Ruff与 compileall通过；`app/api/sessions.py` 的27项既存B008（FastAPI Depends 默认参数）在旧源码与候选中按诊断类型、消息及源码片段完全相同，没有新增诊断，未扩大修改依赖注入。原始比较为双方 Ruff exit1，不能写成全文件Ruff全绿。
+- 准确命令、完整源码前后指纹、raw、退出码和进程回收见 `out/tests/temp/fork-selector-conflicts/artifacts/runs/`，机械核验见上级 `verification-007.json`。14.5仍未勾，本批只补公开冲突入口；全阶段恢复、跨端、Web和其它14.6–14.10组合门继续保留，团队／协作与 Goal 专项未新增实现或验证。没有新的 Windows、Python Pyright 或Web构建证据。

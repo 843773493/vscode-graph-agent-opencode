@@ -14,6 +14,7 @@ from app.abstractions.session_context import (
     SessionForkTransportProtocol,
     WorkspaceSessionContextAccessError,
 )
+from app.abstractions.state_conflict import ClientStateConflictError
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
     DEEP_AGENT_GRAPH_BINDING,
@@ -542,7 +543,7 @@ class SessionContextForkService:
     ) -> None:
         origin = generation_origin.model_dump(mode="json") if generation_origin is not None else None
         if intent["request"] != request.model_dump(mode="json") or intent["generation_origin"] != origin:
-            raise RuntimeError("fork request conflict: 同 idempotency_key 不同冻结请求")
+            raise ClientStateConflictError("fork request conflict: 同 idempotency_key 不同冻结请求")
 
     @staticmethod
     def _validate_source_identity(
