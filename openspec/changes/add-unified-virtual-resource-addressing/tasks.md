@@ -907,3 +907,10 @@
 - 唯一 ExternalResourceLeaseLedger 在原读取／提交位置报告 artifact、阶段及原生错误事实，位置与原异常仅留诊断，原生类别、errno／winerror和直接cause保持。三类 envelope 格式拒绝不输出路径；只有未创建文件和显式内存模式保持空账本合同，文件位置被目录占据时不再被 is_file 静默解释为空。原提交顺序、JSON字节编码、候选发布、通知及全部占用业务方法不变，无新增writer、schema或持久字段；作者AST自查见structure-011.json。
 - 新增12项单元合同，完整旧生产为11 failed／1 passed（0.59秒）；候选与账本、Terminal／Browser owner回归共207 passed／5.34秒。原8种提交失败场景继续核原占用与冷账本，原异常对象的身份转由直接cause严格核对，同时核相同类别／errno与公开无路径。正式Session／工具读取生成原active lease，再经ASGI授权API与真实PTY／Chromium核提交失败不派发授权、原记录／租约字节、原身份版本、冷读、同request_id重试及operation正常收尾；候选2 passed／22.90秒，完整旧生产2 failed／22.83秒。原资源记录API2项回归通过／25.00秒，两个suite各自保留90秒／4GiB并串行运行，复用原装具和无模型隔离配置。
 - Ruff与三文件Pyright零诊断。扩大MCP／Node／调用单测组合在120秒被外置保护中止（exit124、无完整结果），不计通过；随后定向原lease／claim／调用及真实stdio消费者验证通过，详情见lease-consumers-012。准确命令、完整tree、源码前后指纹、raw／实际退出码及进程回收见out/tests/temp/resource-lease-errors/artifacts/verification-013.json与后续收据。未改变产品期限；ASGI和真实辅助服务不代表Gateway／Web、Windows或Backend进程重启，2.2／7.2全局门仍未勾，团队协作继续TODO。
+
+### 2026-10-28 远程 Gateway 私钥预检错误出口（2.2／7.2 部分收口）
+
+- 原远程连接 owner 在私钥缺失或路径不是普通文件时，继续抛出 FileNotFoundError、由原注册 API 返回400；普通错误改为 connection_id 和 private_key_preflight 阶段，真实路径留服务日志。原预检条件、成功路径、注册发布顺序与全部签名不变，无新增解析器、持久字段或第二链路。
+- 独立 Gateway 及其真实受管 Backend／Terminal／Browser 的两项 HTTP 验收通过（51.25秒）：各连续两次失败均不泄露路径，响应体／头沿用同一 request_id，除每次健康探测的 checked_at 外注册投影完全不变，原缺失文件／空目录不变，诊断保留路径。相同最终测试配完整旧生产为2 failed／50.50秒，均在400响应包含真实路径处失败。最终候选 tree 为 `6b70d17f28e9d9737681a90f58133429b41538d2`，红绿仅原生产文件不同；作者AST自查核实除日志与拒绝文案外模块一致，无活跃任务进程残留。
+- 相关联邦／SSH／管理协议回归59 passed／1 failed；唯一observer异常对象身份失败在完整旧生产独立复现，未改断言。Ruff唯一TRY004也与旧生产一致，无新增诊断；compileall及严格OpenSpec47／0通过。准确命令、前后源码指纹、raw、实际退出码与进程回收见 `out/tests/temp/remote-key-errors/artifacts/verification-025.json`。首次运行缺个人Provider凭据、候选比较误含逐次更新的checked_at均保留原始失败；仅修测试隔离与时间字段的正确断言，不更改产品状态或放宽身份比较。
+- 本片没有建立真实SSH连接，未执行Pyright、Web或Windows，不代表URI全局验收。2.2／7.2保持未勾，团队与协作继续TODO。

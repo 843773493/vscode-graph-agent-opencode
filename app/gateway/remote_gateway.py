@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
@@ -32,6 +33,8 @@ from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeHealthProof,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
+
+logger = logging.getLogger(__name__)
 
 
 def _synchronize_projected_workspaces(
@@ -164,7 +167,14 @@ async def _prepare_remote_gateway(
         resolved_private_key_path is not None
         and not resolved_private_key_path.is_file()
     ):
-        raise FileNotFoundError(f"SSH 私钥不存在: {resolved_private_key_path}")
+        logger.error(
+            "SSH 私钥预检失败: connection_id=%s stage=private_key_preflight path=%s",
+            configured.connection_id, resolved_private_key_path,
+        )
+        raise FileNotFoundError(
+            "SSH 私钥不存在或不是普通文件: "
+            f"connection_id={configured.connection_id}, stage=private_key_preflight"
+        )
     if resolved_private_key_path is None and not configured.ssh_config_host:
         raise ValueError("显式 SSH 连接必须提供 private_key_path")
     connection_id = configured.connection_id
