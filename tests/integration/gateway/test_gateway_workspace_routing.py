@@ -1340,6 +1340,35 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
             assert status["restart_required"] is False
             assert status["candidate_ref"] == intent.candidate_ref
             assert status["pending_revision"] == pending.pending_revision
+            assert status["candidate_id"] == pending.candidate_id
+            assert status["active_revision"] == active_before.active_revision
+            assert status["revision"] == active_before.effective_digest
+            assert status["last_error"] == failed_pending.last_error
+            assert status["healthy"] is False
+            assert status_response.headers["X-Request-ID"] == status_response.json()["request_id"]
+            # 恢复态是可管理的旧 active 服务，不只是能返回配置状态。
+            for endpoint in ("/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"):
+                response = await recovered_client.get(endpoint)
+                assert response.status_code == 200, response.text
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+            events_response = await recovered_client.get("/api/gateway/config/events")
+            assert events_response.status_code == 200, events_response.text
+            events = events_response.json()["data"]["events"]
+            assert [event["result"] for event in events] == ["restart_required", "recovery_required"]
+            assert events[-1]["candidate_id"] == pending.candidate_id
+            assert events[-1]["error"] == failed_pending.last_error
+
+        close_gateway_process(gateway)
+        gateway = None
+        state = GatewayStateStore(path=gateway_state_path)
+        try:
+            assert state.get_pending_config_candidate(
+                config_domain="gateway", candidate_id=intent.candidate_id,
+            ) == failed_pending
+            assert state.get_gateway_restart_intent(candidate_ref=intent.candidate_ref) == failed_intent
+            assert state.get_active_config_snapshot("gateway") == active_before
+        finally:
+            state.close()
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

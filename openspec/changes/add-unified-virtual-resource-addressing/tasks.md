@@ -1024,3 +1024,9 @@
 - 早期加载和后续启动入口直接传递原异常，sources facade 复用配置热应用原有的错误事实/原始日志出口，删除旧 helper 定义、迁齐调用与日志故障注入位置；不修改原 SQLite 事务、CAS、schema 或候选归属。失败记录只保存阶段、类别和适用系统错误码，原异常/原因链留原始日志，sink 再次失败仍保留注记并结算恢复态；旧预拼字符串明确拒绝。
 - 18项新合同、59项原配置回归和25项运行时/生命周期回归通过。首个混合运行90秒超时，拆分后的单例定位到测试同时打开第二个独占SQLite owner；移除重复owner准备后，由真实进程检查冷读。真实HTTP已通过原watcher生成pending、实际故障启动、恢复态/错误事实冷读及旧active保持，最终普通恢复启动仍因watcher重交损坏候选触发idempotency CAS冲突而失败，完整验收不能记通过；生产start处保留候选隔离与显式重试TODO。原create_pending协调AST保持，reload仅替换错误出口符号，规范化AST一致。原启动器文案断言同步为实际进程退出消息并保留退出码3约束。
 - 触达错误owner和测试Ruff通过，完整触达集13项旧Ruff诊断与完整旧HEAD一致；Pyright132→132，按文件/最窄AST owner/规则/完整消息核对无新增，不称全静态绿。compileall、strict OpenSpec51/51与差异检查通过；原件、准确命令、前后源码指纹、实际退出码、类型/静态对照及失败服务日志快照见`out/tests/temp/uri-global-closure/artifacts/verification-008.json`。临时完整旧源码已删除，正式产物与原始失败保留；不代替完整冷启动、Web、Windows或联邦验收，2.2/7.2与团队协作TODO保持。
+
+### 2026-10-28 Gateway 恢复时的候选重复接纳修复
+
+- 修复上一切片真实恢复验收的阻断：原watcher按来源generation与effective digest定位已发布的restart intent后，只保留其现有状态，不再次接纳或改写候选；重试、丢弃与proof继续由原重启owner处理。真正变化的来源仍生成新候选，原SQLite事务、CAS、fencing、schema和显式重试入口不变。移除create_pending之后不可达的重复状态重置及已解决的生产TODO。
+- 原启动失败回归与新增watcher矩阵共29 passed/73.31秒，覆盖待重启、applying、recovery_required、discarded及过期intent，各自使用正常/故障正文，核对原候选、claim、journal、revision、事件与intent逐字段不变；来源变化可发布新候选并保留原失败事实。139项配置/状态库回归通过。原完整真实HTTP验收现为1 passed/44.31秒：实际watcher接纳、故障启动、普通冷恢复、管理接口与工作区代理均通过，核对request_id、旧active、原失败正文与仅两条事件，关闭后再次冷读事实不变。
+- 首轮矩阵60秒外部超时，提取单项失败后确认仅原source层读取时间刷新与“全库不写”测试预期冲突；按实际合同将不变断言限定到全部候选/提交/来源journal事实，未放宽身份、顺序或CAS约束，原始失败保留。触达三文件Ruff与compileall通过；相同九文件Pyright132→132，按文件/最窄AST owner/规则/完整消息核对无新增或删除。命令、前后源码指纹、raw与退出码见`out/tests/temp/uri-global-closure/artifacts/verification-009.json`。本片只关闭已复现的Gateway恢复阻断，不关闭URI 2.2/7.2全局门，不代替Web、Windows、联邦或附件完整shutdown验收。

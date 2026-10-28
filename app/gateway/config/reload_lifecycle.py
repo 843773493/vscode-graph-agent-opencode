@@ -271,8 +271,6 @@ class ReloadLifecycleMixin:
             candidate_paths={self._config_path, self._local_config_path},
             on_change=self.reload,
         )
-        # TODO: recovery_required 候选的冷启动对账仍会重交同一幂等正文；损坏候选可触发
-        # CAS 冲突并阻止旧 active 启动。须按显式恢复合同另做候选隔离与重试的纵向修复。
         await watcher.start()
         self._watcher = watcher
     async def stop(self) -> None:
@@ -311,6 +309,12 @@ class ReloadLifecycleMixin:
             if not isinstance(payload, dict):
                 raise TypeError("Gateway 脱敏 candidate payload 必须是对象")
             candidate_id = f"candidate_{source_generation}_{candidate.revision}"
+            # 已发布的重启意图由 retry/discard/proof 处理，文件重复观察不能重新接纳、
+            # 覆写失败正文或续发 token。来源真正变化后会得到新的 candidate_id。
+            if self._state_store.get_gateway_restart_intent(
+                candidate_id=candidate_id
+            ) is not None:
+                return
             active = self._state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
             pending = self._state_store.create_pending_config_candidate(
                 config_domain=self._CONFIG_DOMAIN,
@@ -328,14 +332,6 @@ class ReloadLifecycleMixin:
                 ),
                 source_generation=source_generation,
             )
-            if pending.state in {"rejected", "conflict", "recovery_required"}:
-                pending = self._state_store.update_pending_config_candidate_state(
-                    config_domain=self._CONFIG_DOMAIN,
-                    candidate_id=pending.candidate_id,
-                    expected_state=pending.state,
-                    state="candidate_validated",
-                    last_error=None,
-                )
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")
             registry_revision = self._state_store.get_registry_revision()

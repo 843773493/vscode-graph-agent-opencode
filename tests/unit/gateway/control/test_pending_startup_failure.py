@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -21,6 +22,8 @@ class PendingGateway:
     service: GatewayConfigReloadService
     state: GatewayStateStore
     candidate_ref: str
+    config_path: Path
+    schema_path: Path
 
 
 @pytest.fixture
@@ -46,7 +49,7 @@ async def pending_gateway(tmp_path: Path) -> AsyncIterator[PendingGateway]:
         await service.reload()
         candidate_ref = service.status().candidate_ref
         assert candidate_ref is not None
-        yield PendingGateway(service, state, candidate_ref)
+        yield PendingGateway(service, state, candidate_ref, path, schema)
     finally:
         state.close()
 
@@ -67,6 +70,18 @@ def _record_failure(case: PendingGateway, error: BaseException, *, entry: str,
             candidate_ref=case.candidate_ref, target_generation=intent.target_generation,
             fencing_token=intent.fencing_token, error=error,
         )
+
+
+def _restart_facts(state: GatewayStateStore) -> dict[str, list[tuple[object, ...]]]:
+    # 文件重新观察会更新 source 的读取时间；候选与提交事实则必须逐字段保持。
+    tables = (
+        "config_active_snapshot", "config_pending_candidate", "config_apply_claim",
+        "config_apply_journal", "config_events", "config_revision_meta",
+        "gateway_restart_intent", "config_source_journal", "config_source_owner",
+    )
+    with closing(state.connection()) as connection:
+        return {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+                for table in tables}
 
 
 @pytest.mark.parametrize("entry", ["early", "service"])
@@ -149,3 +164,93 @@ async def test_startup_failure_rejects_preformatted_strings_without_publishing(
     with pytest.raises(TypeError, match="必须提供原异常"):
         _record_failure(case, cast(BaseException, "/private/old-error-text"), entry="service", monkeypatch=monkeypatch)
     assert case.service.status() == before
+
+
+@pytest.mark.parametrize("phase", ["pending_restart", "applying", "recovery_required", "discarded", "expired"])
+@pytest.mark.parametrize("corrupt_payload", [False, True])
+async def test_watcher_preserves_owned_restart_candidate_on_ordinary_recovery(
+    pending_gateway: PendingGateway, phase: str, corrupt_payload: bool,
+) -> None:
+    case = pending_gateway
+    intent = case.state.get_gateway_restart_intent(candidate_ref=case.candidate_ref)
+    active = case.state.get_active_config_snapshot("gateway")
+    assert intent is not None and active is not None
+    if phase == "applying":
+        case.service.begin_pending_restart(candidate_ref=case.candidate_ref)
+    elif phase == "recovery_required":
+        case.service.record_pending_restart_failure(
+            candidate_ref=case.candidate_ref, target_generation=intent.target_generation,
+            fencing_token=intent.fencing_token, error=RuntimeError("原候选启动失败"),
+        )
+    elif phase == "discarded":
+        case.service.discard_pending_restart(
+            candidate_ref=case.candidate_ref, expected_active_revision=active.active_revision,
+            expected_active_digest=active.effective_digest,
+        )
+    # 故障只改变输入或时钟，不替产品生成候选、claim、失败事实和丢弃记录。
+    with closing(case.state.connection()) as connection:
+        if corrupt_payload:
+            connection.execute(
+                "UPDATE config_pending_candidate SET payload_json = ? WHERE candidate_id = ?",
+                (json.dumps({"runtime": {"gateway": {"process": "invalid"}}}), intent.candidate_id),
+            )
+        if phase == "expired":
+            connection.execute(
+                "UPDATE gateway_restart_intent SET expires_at = ? WHERE candidate_ref = ?",
+                ("1970-01-01T00:00:00+00:00", case.candidate_ref),
+            )
+        connection.commit()
+    before = _restart_facts(case.state)
+
+    config = load_gateway_config(
+        config_path=case.config_path, schema_path=case.schema_path,
+        state_store=case.state, startup=True,
+    )
+    assert config.revision == active.effective_digest
+    recovered = GatewayConfigReloadService(
+        state_store=case.state, config=config, config_path=case.config_path,
+        local_config_path=case.config_path.with_name("gateway_local.jsonc"),
+        schema_path=case.schema_path, gateway_id=intent.gateway_id,
+    )
+    try:
+        # 真正启动 watcher，覆盖其订阅后的首次对账；随后重复 reload 仍不接纳旧候选。
+        await recovered.start()
+        await recovered.reload()
+        await recovered.reload()
+        status = recovered.status()
+        assert status.state == ("pending_restart" if phase == "expired" else phase)
+        assert status.active_revision == active.active_revision
+        assert status.revision == active.effective_digest
+        assert status.candidate_id == intent.candidate_id
+        assert status.candidate_ref == (None if phase == "discarded" else case.candidate_ref)
+        assert status.healthy is (phase not in {"recovery_required"})
+        assert _restart_facts(case.state) == before
+    finally:
+        await recovered.stop()
+
+
+async def test_changed_source_can_publish_new_candidate_after_restart_failure(
+    pending_gateway: PendingGateway,
+) -> None:
+    case = pending_gateway
+    intent = case.state.get_gateway_restart_intent(candidate_ref=case.candidate_ref)
+    assert intent is not None
+    case.service.record_pending_restart_failure(
+        candidate_ref=case.candidate_ref, target_generation=intent.target_generation,
+        fencing_token=intent.fencing_token, error=RuntimeError("原候选启动失败"),
+    )
+    failed = case.state.get_pending_config_candidate(config_domain="gateway", candidate_id=intent.candidate_id)
+    failed_intent = case.state.get_gateway_restart_intent(candidate_ref=case.candidate_ref)
+    document = json.loads(case.config_path.read_text(encoding="utf-8"))
+    document["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] = 2
+    case.config_path.write_text(json.dumps(document), encoding="utf-8")
+    await case.service.reload()
+    status = case.service.status()
+    assert status.state == "pending_restart"
+    assert status.candidate_id != intent.candidate_id
+    assert status.candidate_ref != case.candidate_ref
+    assert case.state.get_pending_config_candidate(config_domain="gateway", candidate_id=intent.candidate_id) == failed
+    assert case.state.get_gateway_restart_intent(candidate_ref=case.candidate_ref) == failed_intent
+    assert [event.result for event in case.service.list_events()] == [
+        "restart_required", "recovery_required", "restart_required",
+    ]
