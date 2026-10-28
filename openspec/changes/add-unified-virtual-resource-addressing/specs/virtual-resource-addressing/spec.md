@@ -374,6 +374,11 @@ URI 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 - **WHEN** 解析一个 `workspace` scope 的 URI
 - **THEN** `scope_id` 段被解释为真实 workspace_id；同 gateway 下的其它工作区就是另一个 `workspace_id`，不新增 scope
 
+#### Scenario: 工作区身份文件拒绝不泄漏物理位置
+
+- **WHEN** 唯一身份owner解析、读取或首次创建工作区身份文件失败，内容损坏、目标不是文件或显式绑定的UUID冲突
+- **THEN** 原入口明确拒绝，普通异常只含`artifact=workspace_identity`、阶段、已校验UUID或适用的原生错误事实；位置及原始异常只留诊断，错误类别、系统错误码、直接cause和解码坐标保持。失败不把损坏身份当作缺失、不覆盖并发创建的文件；并发已创建时仍由原读取入口核对，读取失败不被重复包装为创建失败，修复输入后原入口可重试
+
 #### Scenario: gateway 与 inline 的 scope_id 由真实身份推导而非硬编码
 
 - **WHEN** 系统为一个 `gateway` 或 `inline` scope 构造 URI

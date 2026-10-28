@@ -953,3 +953,9 @@
 - 首次迁移和过期刷新合并为唯一临时文件发布链，分别保持不覆盖并发目标的link和原子replace；原两段writer及上一片的单用途read wrapper已物理删除、调用方迁齐。读取与发布共用具名artifact/阶段的原生错误出口，位置与完整异常只留诊断。权限设置前将描述符交原stream持有，修复权限拒绝漏关fd；发布与清理都失败时按发生顺序保留两份原因，不再由finally覆盖首错，不扫描或删除其它尝试的文件。
 - 最终认证、factory、Agent服务及ASGI回归48 passed／21.36秒，包含原读取/结构/JSON合同、发布前原件不变、描述符关闭、主错与清理双错、并发迁移不覆盖和两种发布失败后同入口真实重试。完整旧生产只替换该模块、使用相同最终新增用例为15 failed／1 passed／11.51秒，其中两项权限拒绝实际检出fd未关闭、两项HTTP实际检出原路径回显。初轮旧生产的两项HTTP因未设置无关Provider环境变量停在初始化，未计作产品反例；fixture现为模板声明的凭据变量注入仅用于本地构建的测试值，并使用SDK本地模型目录，不依赖个人配置或发真实模型请求。原失败和前两轮重叠绿测均保留，不累计数量。
 - Ruff及三文件Pyright零诊断，strict OpenSpec47／0通过；初轮Ruff的SIM117已合并上下文后补验。完整候选/基线tree、准确命令、前后源码指纹、原始输出/真实退出码、零进程组残留和作者AST自查见 `out/tests/temp/chatgpt-auth-publication/artifacts/verification-005.json`；基线正式产物另存后删除两份临时源码。此片不代表真实OAuth网络、独立Backend/Gateway、Web或Windows验收，也不代表整个URI路径审计完成；2.2／7.2保持未勾，团队与协作继续TODO。
+
+### 2026-10-28 工作区身份文件的统一拒绝出口（2.2／7.2部分收口）
+
+- 唯一workspace_identity owner覆盖路径解析、读取、目录准备、stat、首次open/flush、JSON/UTF-8格式和绑定冲突；普通异常只报告逻辑artifact、阶段、已校验UUID及原生事实，真实位置和原异常留诊断。保持原生类别、errno/winerror、直接cause及解码坐标；正常缺失不记错误，并发O_EXCL冲突仍读取原文件，读失败不被创建阶段重复包装。成功格式、初始化/绑定顺序、只读CLI及原writer保持，无新缓存、schema或身份来源。
+- 最终相关回归86 passed/1.57秒，含新增38项；完整旧HEAD 2ae0f1489的4702份文件经archive逐字核对，仅叠相同最终新测试，38 failed/1.02秒。覆盖三种入口的损坏文件连续拒绝及修复、六种原生阶段的POSIX/盘符/UNC错误事实、两类绑定冲突、并发读失败和真实Linux符号链接循环。真实Gateway注册/停止/损坏身份/拒绝启动/修复后恢复1 passed/49.98秒；之后只新增resolve的RuntimeError错误出口，合法路径行为未变，复用该业务证据，不称新分支经过Gateway。全部测试有外置期限及4GiB保护。
+- Ruff、两文件Pyright零诊断；新测试首轮object参数转发的5项类型诊断已按真实方法签名修复。扩大回归初轮97 passed/20 setup errors，旧runtime_restore装具仍访问已删除的resolve_backend_workspace_id单数符号；完整旧HEAD独立复现同一setup error，未扩修、未算通过。准确命令、前后指纹、raw/真实退出码与作者AST审查见out/tests/temp/workspace-identity-file-errors/artifacts/verification-001.json；旧测试输出另存后删除纯临时完整源码和tar。未验Web、Windows或全部Gateway冷恢复；全局2.2/7.2与mounting 4.3/8.2保持未勾，团队协作继续TODO。

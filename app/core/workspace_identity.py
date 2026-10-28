@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from stat import S_ISREG
 from uuid import UUID, uuid4
@@ -15,10 +17,37 @@ WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
 logger = logging.getLogger(__name__)
 
 
+def _identity_failure(identity_path: Path, stage: str, reason: str, *, error: BaseException | None = None) -> str:
+    message = f"{reason}: artifact=workspace_identity, stage={stage}"
+    logger.error("%s path=%s", message, identity_path,
+                 exc_info=None if error is None else (type(error), error, error.__traceback__))
+    return message
+
+
+@contextmanager
+def _identity_access(identity_path: Path, stage: str) -> Iterator[None]:
+    try:
+        yield
+    except OSError as error:
+        raise _identity_io_error(identity_path, stage, error) from error
+
+
+def _identity_io_error(identity_path: Path, stage: str, error: OSError) -> OSError:
+    message = _identity_failure(identity_path, stage,
+        f"Workspace 后端身份访问失败: error={type(error).__name__}, errno={error.errno}, winerror={getattr(error, 'winerror', None)}",
+        error=error)
+    return type(error)(error.errno, message, None, getattr(error, "winerror", None))
+
+
 def workspace_identity_path(workspace_root: Path) -> Path:
     """返回当前工作区后端身份文件的绝对路径。"""
 
-    return workspace_root.expanduser().resolve() / ".boxteam" / WORKSPACE_IDENTITY_FILE_NAME
+    try:
+        with _identity_access(workspace_root, "resolve"):
+            return workspace_root.expanduser().resolve() / ".boxteam" / WORKSPACE_IDENTITY_FILE_NAME
+    except RuntimeError as error:
+        message = _identity_failure(workspace_root, "resolve", "Workspace 后端身份路径解析失败: error=RuntimeError", error=error)
+        raise RuntimeError(message) from error
 
 
 def validate_workspace_id(workspace_id: str, *, source: Path | None = None) -> str:
@@ -38,18 +67,19 @@ def validate_workspace_id(workspace_id: str, *, source: Path | None = None) -> s
 
 def _read_workspace_id(identity_path: Path) -> str:
     try:
-        payload = json.loads(native_io_path(identity_path).read_text(encoding="utf-8"))
+        with _identity_access(identity_path, "read"):
+            payload = json.loads(native_io_path(identity_path).read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise RuntimeError(
-            f"Workspace 后端身份文件不是有效 JSON: {identity_path}"
-        ) from error
+        raise RuntimeError(_identity_failure(identity_path, "decode",
+            f"Workspace 后端身份文件不是有效 JSON: line={error.lineno}, column={error.colno}", error=error)) from error
+    except UnicodeDecodeError as error:
+        message = _identity_failure(identity_path, "decode", "Workspace 后端身份文件不是有效 UTF-8", error=error)
+        raise UnicodeDecodeError(error.encoding, error.object, error.start, error.end, message) from error
     if not isinstance(payload, dict):
-        raise TypeError(f"Workspace 后端身份文件必须是 JSON object: {identity_path}")
+        raise TypeError(_identity_failure(identity_path, "validate", "Workspace 后端身份文件必须是 JSON object"))
     workspace_id = payload.get("workspace_id")
     if not isinstance(workspace_id, str):
-        raise TypeError(
-            f"Workspace 后端身份文件缺少 workspace_id: {identity_path}"
-        )
+        raise TypeError(_identity_failure(identity_path, "validate", "Workspace 后端身份文件缺少 workspace_id"))
     return validate_workspace_id(workspace_id, source=identity_path)
 
 
@@ -68,8 +98,10 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
         )
     except FileExistsError:
         return _read_workspace_id(identity_path)
+    except OSError as error:
+        raise _identity_io_error(identity_path, "create", error) from error
 
-    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+    with _identity_access(identity_path, "flush"), os.fdopen(descriptor, "w", encoding="utf-8") as file:
         json.dump(
             {"workspace_id": workspace_id},
             file,
@@ -83,12 +115,13 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
 
 
 def _read_existing_workspace_id(identity_path: Path) -> str | None:
-    try:
-        identity_stat = native_io_path(identity_path).stat()
-    except FileNotFoundError:
-        return None
+    with _identity_access(identity_path, "stat"):
+        try:
+            identity_stat = native_io_path(identity_path).stat()
+        except FileNotFoundError:
+            return None
     if not S_ISREG(identity_stat.st_mode):
-        raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
+        raise RuntimeError(_identity_failure(identity_path, "validate", "Workspace 后端身份路径不是文件"))
     return _read_workspace_id(identity_path)
 
 
@@ -96,7 +129,8 @@ def load_or_create_workspace_id(workspace_root: Path) -> str:
     """为工作区创建一次后端 UUID，并在后续启动中复用它。"""
 
     identity_path = workspace_identity_path(workspace_root)
-    native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
+    with _identity_access(identity_path, "directory"):
+        native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
     existing_id = _read_existing_workspace_id(identity_path)
     return existing_id if existing_id is not None else _create_workspace_id(identity_path)
 
@@ -106,22 +140,19 @@ def bind_workspace_id(workspace_root: Path, workspace_id: str) -> str:
 
     expected_id = validate_workspace_id(workspace_id)
     identity_path = workspace_identity_path(workspace_root)
-    native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
+    with _identity_access(identity_path, "directory"):
+        native_io_path(identity_path.parent).mkdir(parents=True, exist_ok=True)
     existing_id = _read_existing_workspace_id(identity_path)
     if existing_id is not None:
         actual_id = existing_id
         if actual_id != expected_id:
-            raise RuntimeError(
-                "挂载工作区 UUID 与工作区身份文件不一致: "
-                f"expected={expected_id}, actual={actual_id}, identity={identity_path}"
-            )
+            raise RuntimeError(_identity_failure(identity_path, "bind",
+                f"挂载工作区 UUID 与工作区身份文件不一致: expected={expected_id}, actual={actual_id}"))
         return actual_id
     actual_id = _create_workspace_id(identity_path, expected_id)
     if actual_id != expected_id:
-        raise RuntimeError(
-            "并发初始化得到的 Workspace 后端 UUID 与 mount 契约不一致: "
-            f"expected={expected_id}, actual={actual_id}, identity={identity_path}"
-        )
+        raise RuntimeError(_identity_failure(identity_path, "bind",
+            f"并发初始化得到的 Workspace 后端 UUID 与 mount 契约不一致: expected={expected_id}, actual={actual_id}"))
     return actual_id
 
 

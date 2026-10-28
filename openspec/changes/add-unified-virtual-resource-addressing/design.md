@@ -316,3 +316,5 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 
 fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁内复用既有 storage 错误出口（artifact=fork_target，stage 为 publication / publication_recovery / publication_finalize）。原生类别、errno/winerror与直接 cause 保持；安装失败后回滚再次失败时，两份原异常仍按原 cause/context 保留。真实位置及完整原错只留诊断，普通错误和创建记录不包含目标路径或内部 locator。原 target→rollback、stage→target、各次目录同步、失败还原和最终删除顺序逐项保持；恢复只消费同一 materialization 的既有目录与 journal，不增加安装/清理链或 schema。故障解除后仍沿原恢复或产品新请求读取同一历史 checkpoint、metadata、pending writes、assembly owner 与 request_hash。
+
+工作区UUID文件的解析、读取、首次创建和绑定继续归唯一workspace_identity owner。原生resolve/stat/mkdir/open/flush与读取失败共用该owner的错误出口，普通异常只公布逻辑artifact、阶段和原生事实，位置及原异常留诊断；JSON/UTF-8坐标与既有拒绝类别保持。正常缺失不记错误，O_EXCL并发冲突仍读取既有文件，后续读取失败不被外层创建阶段重复包装。格式、初始化及绑定顺序保持，损坏文件、目录目标和冲突UUID不被默认身份覆盖；不新建身份缓存或另一writer。
