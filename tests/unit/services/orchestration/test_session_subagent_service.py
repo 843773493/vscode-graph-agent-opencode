@@ -212,7 +212,14 @@ async def test_delegate_creates_durable_child_thread_with_bound_intent(
     session_subagent_service: SessionSubagentService,
     owner_thread_creation_factory: OwnerThreadCreationFactory,
     session_catalog_store: SessionCatalogStore,
+    sessions_root: Path,
 ) -> None:
+    parent_rollout = get_session_path_resolver(sessions_root).resolve_thread_node(
+        parent_session.session_id, parent_session.thread_id,
+    ) / "rollout"
+    assert not parent_rollout.exists()
+    # 默认empty不得检查或读取父历史；错误的父rollout类型不能阻止独立委派。
+    parent_rollout.write_bytes(b"parent-rollout-must-not-be-opened")
     gateway_token = set_current_gateway_id("gateway_9c65b6f74b8dc349e3f5b7c61da3e622")
     request_token = set_current_request_id("request-frozen-creation")
     try:
@@ -231,6 +238,7 @@ async def test_delegate_creates_durable_child_thread_with_bound_intent(
     assert accepted.execution_binding_id.startswith("tbind_")
     assert accepted.frozen_job_id.startswith("job_")
     session_subagent_service._context_forks.create_task_child.assert_not_called()
+    assert parent_rollout.read_bytes() == b"parent-rollout-must-not-be-opened"
 
     # 唯一可见性：workspace catalog 节点数不变（没有第二个 Session）。
     node_count = int(

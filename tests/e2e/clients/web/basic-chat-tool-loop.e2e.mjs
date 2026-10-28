@@ -6268,6 +6268,22 @@ async function runDefaultChildForkUi(surface) {
   assert.equal(await dialog.getByLabel("目标容器", { exact: true }).inputValue(), point.child_container_uri);
   const name = "用户编辑的默认分支名称";
   await dialog.getByLabel("目标名称", { exact: true }).fill(name);
+  assert.deepEqual(await dialog.getByLabel("复制范围", { exact: true }).locator("option").evaluateAll(
+    (options) => options.map((option) => option.value)),
+  ["view_prefix_fork", "last_completed_turn_fork", "full_rollout_copy"]);
+  for (const mode of ["last_completed_turn_fork", "view_prefix_fork"]) {
+    const [response] = await Promise.all([waitPoint(), dialog.getByLabel("复制范围", { exact: true }).selectOption(mode)]);
+    assert.equal(response.status(), 200, await response.text());
+    const query = new URL(response.url()).searchParams;
+    assert.deepEqual([query.get("mode"), query.get("item_id")],
+      [mode, mode === "view_prefix_fork" ? point.anchor_item_id : null]);
+    const refreshed = (await response.json()).data;
+    assert.deepEqual([refreshed.resource_mode, refreshed.source_view_id, refreshed.source_view_revision, refreshed.anchor_item_id],
+      [mode, point.source_view_id, point.source_view_revision,
+        mode === "view_prefix_fork" ? point.anchor_item_id : before.completedAnchorItemId]);
+    await waitUntil(async () => await dialog.getByRole("button", { name: "创建分支", exact: true }).isEnabled(), "范围切换读取原来源候选");
+    assert.equal(await dialog.getByLabel("目标名称", { exact: true }).inputValue(), name);
+  }
   for (const anchorMode of ["before", "inclusive"]) {
     const [response] = await Promise.all([waitPoint(), dialog.getByLabel("截止位置", { exact: true }).selectOption(anchorMode)]);
     assert.equal(response.status(), 200, await response.text());

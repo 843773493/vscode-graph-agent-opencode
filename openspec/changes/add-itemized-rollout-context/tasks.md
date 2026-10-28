@@ -1267,3 +1267,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 初始失败原件全部保留：`product-capture-002` 错将canonical组合call ID用于原生delegation key，未命中屏障，exit143；`product-capture-005` 错把导入历史admission计为目标新执行，exit1，改为精确thread/key唯一性；`recovery-boundaries-007` 在preparing阶段提前读取尚无坐标的captured_point，exit143，改为按marker/原journal阶段读取；`product-all-009` 错要求启动对账后的可变回执逐字不变，exit1，现严格核原来源/通知/Job/执行身份及completed状态。没有放宽身份、顺序、hash或业务期限，也没有为测试更改产品行为。直接用Bun运行tsc的 `typescript-018` 在4GiB保护下内存耗尽exit-6；改用仓库标准 `bun x tsc` 后通过，未改变环境或保护上限。
 - 准确命令、完整源码逐文件指纹、raw、退出码及进程回收见 `out/tests/temp/task-prefix-restart/artifacts/runs/`；三例实际新候选、PID、源码依赖复用和结构机械核验见同目录上级 `verification-022.json`。正式工作区/产物位于各候选完整archive内的同名 `out/tests/integration/backend/sessions/fork/`，均保留；未新增项目根工作区或业务写入。
 - 进度109/119；14.9/14.10及其它组合门继续未勾。没有新增真实Gateway业务代理、跨端、Windows、外部Provider或浏览器交互证据，类型检查/构建不替代这些验收。团队/协作与Goal专项继续TODO。
+
+### 2026-10-28 范围模式、空委派与历史血缘回归（14.9 部分）
+
+- 扩展原 `integration-fork-scope-contract`，沿同一持久 owner 装具覆盖三种模式的 internal／retry／闭合工具 lineage，以及公开 fork 的 idle、零 member／initial intent。原 normal／空来源组 `modes-003` 为11 passed／44.23秒；新增组 `internal-idle-016` 为4 passed／32.70秒。两组分别运行，不冒称一次完整15项运行；未变测试的全部顶层声明 AST 已核对。suite仍180秒／4GiB，单次fork原60秒预算未改。
+- 默认empty单元回归将父rollout置为不可读取的普通文件，仍按原入口委派、父sentinel不变且不调用context copy；`empty-unit-006` 为18 passed／1.81秒。此组下游使用原recording binder，只证明服务合同，不代替14.6／14.8已经登记的真实task及硬重启产品验收。
+- 新纳入的历史血缘测试两处checkpoint版本与new_versions不一致；负例先修正为沿用原消息版本，再核canonical正文冲突、JSONL及最新checkpoint不变，正例传递自身真实channel_versions。保留原严格正文／身份／错误断言，不改生产校验。008／011／014的失败原件保留：分别在版本校验、合法新版本修订分支和后继checkpoint版本校验处拒绝。最终Ruff、JS语法及matrix解析通过；前端生产代码／协议与上一边界逐文件相同，复用真实tsc／protocol检查及本轮`web-build-002`成功证据。
+- Web唯一owner补充范围选项与preview切换断言，但`web-ui-004`在fixture租约检查失败，尚未进入浏览器业务：44000是Codex到本地代理的活跃ESTAB出站连接，不终止未知owner或修改系统环境。新增Web断言未执行，14.9／14.10保持未勾，整体仍109/119；未新增跨端、Windows或外部Provider验收。运行命令、完整候选tree `aa50afe492262a7368fe15431968ff6077dd32f0`、4687文件前后指纹、raw／实际退出码及进程组回收见 `out/tests/temp/fork-regression-closure/artifacts/verification-021.json`和runs；020仅为本地审计脚本误用候选cwd的路径失败，修正后022通过。结构作者自审未新增职责或目录，原大型测试文件拆分风险仍存在，不称独立审查。团队／协作与Goal专项继续TODO。

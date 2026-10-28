@@ -7864,15 +7864,19 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
         assert target_jsonl.read_bytes() == unchanged
         changed_user = restored_user.model_copy(deep=True)
         changed_user.content[1]["metadata"]["availability"] = "available"
+        tampered_checkpoint = _checkpoint("fork-tampered-attachment", [
+            changed_user if message.id == restored_user.id else message
+            for message in request_messages
+        ])
+        # 沿用冻结消息版本，验证旧正文不可变；新版本的合法修订由独立合同覆盖。
+        tampered_versions = {"messages": latest.checkpoint["channel_versions"]["messages"], "counter": "tampered"}
+        tampered_checkpoint["channel_versions"] = tampered_versions
         with pytest.raises(ValueError, match="canonical item 与 message projection 内容不一致"):
             await context.saver.aput(
                 latest.config,
-                _checkpoint("fork-tampered-attachment", [
-                    changed_user if message.id == restored_user.id else message
-                    for message in request_messages
-                ]),
+                tampered_checkpoint,
                 {"source": "loop", "step": 1, "parents": {}},
-                {"messages": "tampered", "counter": "tampered"},
+                tampered_versions,
             )
         assert target_jsonl.read_bytes() == unchanged
         after_rejection = await context.saver.aget_tuple(build_checkpoint_config(target_owner.thread_id))
@@ -7921,11 +7925,12 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
                 AIMessage(content="副本后继执行完成", id="fork-successor-final"),
             ]
         commit_fixture_output(context.saver, messages=completed_messages)
+        successor_checkpoint = _checkpoint("fork-successor-checkpoint", completed_messages)
         await context.saver.aput(
             latest.config,
-            _checkpoint("fork-successor-checkpoint", completed_messages),
+            successor_checkpoint,
             {"source": "loop", "step": 1, "parents": {}},
-            {"messages": "successor", "counter": "successor"},
+            successor_checkpoint["channel_versions"],
         )
         restored_successor = await _get_tuple(context, child.session_id)
         assert restored_successor is not None
