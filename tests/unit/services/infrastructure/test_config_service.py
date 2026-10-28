@@ -1743,6 +1743,7 @@ async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
 @pytest.mark.asyncio
 async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
@@ -1764,7 +1765,8 @@ async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     assert service.get_revision() == original_revision
     status = service.get_reload_status()
     assert status.healthy is False
-    assert "missing_package.tools:create_missing_tool" in (status.last_error or "")
+    assert status.last_error == "Workspace 配置热重载失败: stage=invalid_config, error=ValueError"
+    assert any(record.exc_info and "missing_package.tools:create_missing_tool" in str(record.exc_info[1]) for record in caplog.records)
     rejected = json.loads(config_path.read_text(encoding="utf-8"))
     assert rejected["config_version"] == 2
     assert rejected["agents"]["default"]["tools"]["custom"][0]["factory"] == (

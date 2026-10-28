@@ -12,6 +12,7 @@ from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerApplyResult,
 )
 from app.services.infrastructure.config import ConfigFileWatcher, ConfigReloadStatus
+from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -23,7 +24,6 @@ from app.services.infrastructure.config.state import (
 )
 
 from .loader import load_gateway_config
-from .sources import gateway_config_failure_detail
 from .values import (
     GatewayConfig,
     GatewayConfigRuntimeApplier,
@@ -289,6 +289,8 @@ class ReloadLifecycleMixin:
             logger.exception("Gateway 配置 watcher reload 失败，继续监听后续修改")
     async def reload(self) -> None:
         now = datetime.now(UTC)
+        reported_error: Exception | None = None
+        error_detail: str | None = None
         try:
             candidate = load_gateway_config(
                 config_path=self._config_path,
@@ -543,7 +545,7 @@ class ReloadLifecycleMixin:
                     ),
                 )
             except Exception as error:
-                error_detail = gateway_config_failure_detail(error, stage=failure_stage)
+                error_detail = config_failure_detail(error, stage=failure_stage, label="Gateway 配置应用失败")
                 (
                     recovery_required,
                     recovery_error,
@@ -588,7 +590,8 @@ class ReloadLifecycleMixin:
                     changed_paths=changed_paths,
                 )
                 failure_type = ConfigConflictError if conflict else RuntimeError
-                raise failure_type(error_detail) from error
+                reported_error = failure_type(error_detail)
+                raise reported_error from error
             finally:
                 try:
                     if runtime_result is not None:
@@ -633,7 +636,9 @@ class ReloadLifecycleMixin:
                 self._status,
                 healthy=False,
                 last_attempt_at=now,
-                last_error=f"{type(error).__name__}: {error}",
+                last_error=(error_detail if error is reported_error else config_failure_detail(
+                    error, stage="reload", label="Gateway 配置应用失败",
+                )),
                 reason=self._status.reason or "invalid_config",
             )
             raise
@@ -684,7 +689,7 @@ class ReloadLifecycleMixin:
         try:
             await runtime_result.rollback()
         except Exception as rollback_error:  # noqa: BLE001 - 回退必须捕获所有运行时故障
-            rollback_detail = gateway_config_failure_detail(rollback_error, stage="runtime_rollback")
+            rollback_detail = config_failure_detail(rollback_error, stage="runtime_rollback", label="Gateway 配置应用失败")
             self._state_store.record_config_apply_compensation(
                 apply_id=apply_id,
                 compensation={

@@ -91,7 +91,8 @@ async def test_native_source_message_does_not_enter_reload_status_or_persistent_
         status = body["data"]
         assert status["healthy"] is False and status["reason"] == "invalid_config"
         assert str(target) not in failed.text and "private-config-message" not in failed.text
-        assert "operation=read" in status["last_error"] and "errno=13" in status["last_error"]
+        assert "stage=reload" in status["last_error"] and "errno=13" in status["last_error"]
+        assert "operation=read" in caplog.text
         assert "PermissionError" in status["last_error"]
         assert service.config is initial
         assert store.get_active_config_snapshot("gateway") == active
@@ -117,6 +118,42 @@ async def test_native_source_message_does_not_enter_reload_status_or_persistent_
     }, ensure_ascii=False, indent=2) + "\n")
 
 
+@pytest.mark.parametrize("native", ["/private-config/source.jsonc", r"C:\private-config\source.jsonc", r"\\server\private-config\source.jsonc"])
+async def test_unexpected_loader_failure_keeps_native_details_in_diagnostics(
+    validation_owner, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    native: str,
+) -> None:
+    application, service, store, _, _, _ = validation_owner
+    initial = service.config
+    active = store.get_active_config_snapshot("gateway")
+    error = PermissionError(13, f"加载失败 {native}", native)
+
+    def reject_load(**_kwargs: object):
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr("app.gateway.config.reload_lifecycle.load_gateway_config", reject_load)
+        with pytest.raises(PermissionError) as caught:
+            await service.reload()
+    assert caught.value is error
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+        response = await client.get("/api/gateway/config/reload-status", headers={"X-Request-ID": "config-loader-failed"})
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "config-loader-failed"
+        status = response.json()["data"]
+        assert status["healthy"] is False
+        assert status["last_error"] == "Gateway 配置应用失败: stage=reload, error=PermissionError, errno=13"
+        assert "private-config" not in json.dumps(response.json())
+        assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+        assert native in caplog.text
+        assert service.config is initial and store.get_active_config_snapshot("gateway") == active
+        assert store.get_pending_config_candidate(config_domain="gateway") is None
+        assert store.get_config_apply_claim(config_domain="gateway") is None
+        assert service.list_events() == ()
+        await service.reload()
+        assert service.status().healthy and service.status().last_error is None
+
+
 async def test_watcher_initial_reconcile_reports_failure_and_observes_repair(validation_owner) -> None:
     _, service, store, config_path, _, original = validation_owner
     active = store.get_active_config_snapshot("gateway")
@@ -125,7 +162,7 @@ async def test_watcher_initial_reconcile_reports_failure_and_observes_repair(val
         await service.start()
         failed = service.status()
         assert failed.healthy is False and failed.reason == "invalid_config"
-        assert "配置 JSONC 解析失败" in (failed.last_error or "")
+        assert failed.last_error == "Gateway 配置应用失败: stage=reload, error=ValueError"
         assert store.get_active_config_snapshot("gateway") == active
         config_path.write_text(original, encoding="utf-8")
         async with asyncio.timeout(10):
@@ -230,7 +267,7 @@ async def test_source_backup_failure_keeps_original_facts_and_can_retry(
         status = response.json()["data"]
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-backup"
         assert status["healthy"] is False and status["reason"] == "invalid_config"
-        assert status["last_error"] == f"PermissionError: {failure.value}"
+        assert status["last_error"] == "Gateway 配置应用失败: stage=reload, error=PermissionError, errno=13"
         assert "private-backup" not in response.text and locator not in response.text
         assert str(config_path) not in response.text and str(backup) not in response.text
         # 故障解除后显式重走同一入口，只有备份真实成功后才提交来源与候选。
@@ -354,6 +391,7 @@ async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
 )
 async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
     validation_owner, override: dict[str, object], location: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     application, service, store, config_path, schema_path, original = validation_owner
     initial_config = service.config
@@ -380,7 +418,8 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"] == f"ValueError: {failure.value}"
+        assert status["last_error"] == "Gateway 配置应用失败: stage=reload, error=ValueError"
+        assert any(record.exc_info and record.exc_info[1] is failure.value for record in caplog.records)
         assert str(config_path) not in response.text
         assert str(schema_path) not in response.text
         assert str(config_path.parent) not in response.text
@@ -403,6 +442,7 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
 @pytest.mark.parametrize("damage", ["value", "key", "schema", "policy", "ref_fragment", "ref_file"])
 async def test_schema_failure_status_never_echoes_values_or_dynamic_keys(
     validation_owner, damage: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     application, service, store, config_path, schema_path, original = validation_owner
     schema_bytes = schema_path.read_bytes()
@@ -437,7 +477,8 @@ async def test_schema_failure_status_never_echoes_values_or_dynamic_keys(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"] == f"ValueError: {failure.value}"
+        assert status["last_error"] == "Gateway 配置应用失败: stage=reload, error=ValueError"
+        assert any(record.exc_info and record.exc_info[1] is failure.value for record in caplog.records)
         assert "secret-marker" not in response.text
         assert str(config_path.parent) not in response.text
         assert service.config is initial_config
@@ -461,6 +502,7 @@ async def test_schema_failure_status_never_echoes_values_or_dynamic_keys(
 ])
 async def test_source_read_failure_has_no_native_path_and_preserves_active_state(
     validation_owner, damage: str, exception: type[Exception], reason: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     application, service, store, config_path, schema_path, original = validation_owner
     initial_config = service.config
@@ -475,7 +517,7 @@ async def test_source_read_failure_has_no_native_path_and_preserves_active_state
         if damage == "schema_directory":
             schema_path.mkdir()
 
-    with pytest.raises(exception, match=reason):
+    with pytest.raises(exception, match=reason) as failure:
         await service.reload()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://test",
@@ -485,7 +527,9 @@ async def test_source_read_failure_has_no_native_path_and_preserves_active_state
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert reason in status["last_error"]
+        assert f"stage=reload, error={exception.__name__}" in status["last_error"]
+        assert any(record.exc_info and record.exc_info[1] is failure.value for record in caplog.records)
+        assert reason in caplog.text
         assert str(config_path.parent) not in response.text
         assert service.config is initial_config
         assert store.get_active_config_snapshot("gateway") == active
@@ -506,6 +550,7 @@ async def test_source_read_failure_has_no_native_path_and_preserves_active_state
 @pytest.mark.parametrize("damage", ["character", "token", "utf8"])
 async def test_parse_failure_status_does_not_echo_document_or_advance_sources(
     validation_owner, source: str, damage: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     application, service, store, config_path, schema_path, _ = validation_owner
     target = config_path if source == "config" else schema_path
@@ -541,7 +586,8 @@ async def test_parse_failure_status_does_not_echo_document_or_advance_sources(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"] == f"ValueError: {failure.value}"
+        assert status["last_error"] == "Gateway 配置应用失败: stage=reload, error=ValueError"
+        assert any(record.exc_info and record.exc_info[1] is failure.value for record in caplog.records)
         assert "secret-marker" not in response.text
         assert str(config_path.parent) not in response.text
         assert "another" not in response.text

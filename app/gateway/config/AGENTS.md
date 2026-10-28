@@ -8,7 +8,7 @@ app/gateway/config/
 ├── __init__.py                 facade：组装 ReloadService，并维护原公开导入出口
 ├── values.py                   配置值对象与无副作用的值解析
 ├── loader.py                   合并来源、校验配置、生成 GatewayConfig
-├── sources.py                  来源层读取、迁移、来源明细及配置失败的诊断事实出口
+├── sources.py                  来源层读取、迁移、来源明细及启动失败记录
 ├── connection_ids.py           connection_id 规范化、迁移和回滚
 ├── reload_lifecycle.py         ReloadLifecycleMixin：watcher、事件游标与 reload
 └── reload_pending_restart.py   ReloadPendingRestartMixin：pending restart 与 health proof
@@ -38,5 +38,6 @@ app/gateway/config/
 - 新增模块必须保持每文件 ≤800 行。
 - 失败直接抛出明确错误，不得静默降级；不得返回虚假默认值。
 - watcher 的单次 reload 失败须保留原失败状态并记录异常，继续观察后续文件修复；显式 reload 仍抛错，取消继续向上传播，不增加第二套重试链。
+- 失败事实与完整异常诊断复用 `app/services/infrastructure/config/failures.py`，不另存原生异常正文。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 

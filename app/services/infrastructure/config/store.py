@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.services.infrastructure.config.contracts import ConfigSnapshotPublisher
+from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.snapshot import (
     ConfigReloadFailureReason,
     ConfigReloadStatus,
@@ -108,7 +109,7 @@ class ConfigSnapshotStore:
                 else active.loaded_at
             ),
             last_attempt_at=now,
-            last_error=f"{type(error).__name__}: {error}",
+            last_error=config_failure_detail(error, stage=reason, label="Workspace 配置热重载失败"),
             restart_required=restart_required,
             reason=reason,
             changed_sections=(
@@ -116,10 +117,6 @@ class ConfigSnapshotStore:
                 if isinstance(error, ConfigRestartRequiredError)
                 else ()
             ),
-        )
-        logger.exception(
-            "配置热重载失败，继续使用最后一个有效快照: revision=%s",
-            active.revision,
         )
 
     def _commit(self, candidate: ConfigSnapshot) -> None:

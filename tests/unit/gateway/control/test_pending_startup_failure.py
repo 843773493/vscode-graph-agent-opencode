@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from app.gateway.config import GatewayConfigReloadService, load_gateway_config, sources
+from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.runtime_proof import _record_owned_gateway_startup_failure
 
@@ -128,7 +128,7 @@ async def test_startup_failure_settles_even_when_original_log_sink_fails(
 ) -> None:
     def reject_log(*args: object, **kwargs: object) -> None:
         raise OSError(5, "日志原生位置 /private/gateway/log")
-    monkeypatch.setattr(sources.logger, "error", reject_log)
+    monkeypatch.setattr("app.services.infrastructure.config.failures.logger.error", reject_log)
     _record_failure(pending_gateway, error, entry="service", monkeypatch=monkeypatch)
     status = pending_gateway.service.status()
     assert status.state == "recovery_required"

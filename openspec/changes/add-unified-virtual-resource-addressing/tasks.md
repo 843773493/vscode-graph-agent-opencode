@@ -1049,3 +1049,10 @@
 - 修改前6 failed/1 passed，检出POSIX/盘符/UNC路径进入detail_error或summary；最终定向回归65 passed，相邻编排/压缩归档/协议113 passed，存储活动/压缩5 passed。最后仅复用同一ModelRequest及收紧测试类型，受影响9项补验通过，其他声明AST一致。新增六项真实Activity→MessageStreamStore组合核对实时订阅、JSONL/state、完整续读及冷恢复快照，修复同一Handler后仍由原writer成功发布；原异常身份在日志可核对。压缩/工具callback仍为既有单元替身验证，不冒称完整Agent执行或外部模型验收。
 - Ruff、compileall通过；完整旧HEAD类型基线154条、最终151条，按文件/最窄AST owner/规则/完整消息多重集无新增，不称全类型绿。新用例初轮5条类型诊断已按真实payload结构收紧，压缩重复请求构造的3条诊断通过复用同一请求消除，未放宽规则。作者按架构审查技能核文件/owner/import/规模：生产净减少13行，无新目录或职责；processor既有858→865行及既有大型测试/目录风险保留，不称独立审查。
 - 准确命令、前后指纹、raw/实际退出码、红测原件、类型/AST/结构对照见`out/tests/temp/uri-global-closure/artifacts/verification-014.json`。临时完整旧源码在保留证据后删除；未验独立HTTP/Gateway/Web、Windows实机或真实Provider，2.2/7.2全局门和团队/协作延期项保持未完成。
+
+### 2026-10-28 配置失败事实的唯一出口（2.2/7.2部分收口）
+
+- 将 Gateway 原失败事实实现物理迁至中立配置基础设施，Workspace 快照、候选应用和 pending resolve 同批复用；旧 helper 零调用并删除，不新增错误字符串解析或响应过滤。普通失败状态、事件及 journal 只保存阶段、类别和适用系统错误码/解析坐标，完整异常及原因链保留诊断。Gateway runtime apply/promotion/rollback 的原准确阶段保持；加载等外层失败不再复制任意异常正文。原异常身份、取消、发布前后快照、旧 active、claim、CAS 与重试行为保持，不改 schema 或配置层级。
+- 修改前快照层12项反例全部失败；最终不重叠文件组共308 passed（ConfigService117、配置组件84、Gateway校验50、Gateway启动/运行时51、配置跨模块6）。新增6项从原 service.reload 接纳候选及取得 claim，覆盖三类原生路径、应用/promotion失败、API状态/事件/配置序列化、原错误诊断、claim释放、原入口修复重试和SQLite冷读；pending proof由原coordinator生成，不冒称实际启动新runtime。Gateway意外加载失败三项验证公开事实、原异常、旧active和同入口修复。既有详细原因断言迁到原始诊断，保留原异常、错误归属及业务状态约束。
+- 首轮集成夹具遗漏schema必填api_mode，17 passed/6 setup errors，补齐后6项通过；两组混合回归到120秒外部上限退出124，按文件拆分后完整通过，未缩短业务期限。Ruff新导入空行已修正；配置全目录39项旧诊断、触达pending文件1项旧RUF034均与HEAD核对，无新增。Pyright相同基线25条、最终扩至11文件仍25条，按文件/最窄AST owner/规则/完整消息多重集无新增，不称全静态绿。compileall、strict51/51及diff检查通过。
+- 准确命令、源码前后指纹、raw/实际退出码、基线/结构自审及失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-015.json`；正式同名测试产物保留，无新增二进制基线。未验独立Backend/Gateway/Web、Windows或真实Provider；Gateway运行控制器向Workspace提交重启失败正文的另一生产来源仍待收口，本片不关闭2.2/7.2、多工作区总门或团队/协作TODO。

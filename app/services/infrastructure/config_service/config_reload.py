@@ -15,6 +15,7 @@ from app.services.infrastructure.config import (
     ConfigSnapshot,
 )
 from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.shadow_scope import (
     ConfigShadowLifecycleError,
@@ -292,13 +293,14 @@ class ConfigReloadMixin:
                     state, result = "conflict", "conflict"
                 else:
                     state, result = "rejected", "apply_failed"
+                error_detail = config_failure_detail(error, stage=result, label="Workspace 配置应用失败")
                 self._finish_candidate(
                     pending,
                     attempt_id=attempt_id,
                     apply_id=apply_id,
                     state=state,
                     result=result,
-                    error=f"{type(error).__name__}: {error}",
+                    error=error_detail,
                     changed_paths=changed_paths,
                     candidate_ref=new_config_id("candidate_ref") if state == "pending_restart" else None,
                     target_generation=claim.target_generation if claim else None,
@@ -309,7 +311,7 @@ class ConfigReloadMixin:
                         apply_id=claim.apply_id,
                         expected_state="applying",
                         state="recovery_required" if recovery_required else "failed",
-                        last_error=f"{type(error).__name__}: {error}",
+                        last_error=error_detail,
                     )
                 raise
             finally:

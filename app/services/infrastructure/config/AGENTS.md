@@ -21,6 +21,7 @@ app/services/infrastructure/config/
 │   ├── state.py            状态记录、迁移、路径差异和密钥引用
 │   └── llm_resolution.py   生效配置到 Provider/模型的解析结果
 ├── 候选应用与重载
+│   ├── failures.py         Gateway/Workspace 共用失败事实与原始诊断出口
 │   ├── pending_restart.py  待重启候选的启动证明、重试和提交
 │   ├── reload_status.py    快照状态与 active/pending 记录聚合
 │   └── shadow_scope.py     影子配置代次及应用生命周期
@@ -54,6 +55,7 @@ app/services/infrastructure/config/
 
 - 监听器只报告变化，候选配置的校验与提交由调用方负责。
 - 配置加载失败必须向上抛出，不能吞掉异常或伪造成功状态。
+- 公开失败状态、事件与应用记录复用 `failures.py` 的阶段、类别和系统错误事实；原异常及原因链保留在诊断日志，不复制到业务记录。
 - 待重启协作者的状态库和配置域必须通过构造参数显式注入，回读状态只允许通过注入的 reload status provider。
 - 事件游标协作者只做逐字转发，after/limit/consumer_id 语义与越界异常必须由状态库承担，不得在本目录改写分页或吞掉 CursorGone。
 - LLM 解析协作者只接收无参、返回不可变值的叶子提供者（生效配置与默认 Agent id），不得注入整个 `ConfigService` 或快照存储。

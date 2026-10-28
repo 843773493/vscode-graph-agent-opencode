@@ -108,3 +108,48 @@ async def test_cancelled_cleanup_group_is_recorded_without_publishing_candidate(
         await store.reload(candidate_applier=fail_cleanup)
     assert store.current() is previous and not store.status().healthy
     assert store.status().reason == "apply_failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_path", ["/private-config/source.jsonc", r"C:\private-config\source.jsonc", r"\\server\private-config\source.jsonc"])
+@pytest.mark.parametrize("phase", ["build", "prepare", "drain", "cancel"])
+async def test_reload_failure_state_uses_facts_and_preserves_original_exception(
+    native_path: str, phase: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = asyncio.CancelledError(native_path) if phase == "cancel" else PermissionError(13, native_path, native_path)
+    failed = True
+    before = build_config_snapshot({"value": "before"}, source_paths=())
+    after = build_config_snapshot({"value": "after"}, source_paths=())
+
+    def build_candidate():
+        if failed and phase == "build":
+            raise error
+        return after
+
+    async def apply_candidate(_previous, _candidate, publish) -> None:
+        if phase == "drain":
+            publish()
+        if failed:
+            raise error
+        if phase != "drain":
+            publish()
+
+    store = ConfigSnapshotStore(candidate_builder=build_candidate)
+    store.initialize(before)
+    with pytest.raises(type(error)) as caught:
+        await store.reload(candidate_applier=apply_candidate)
+    assert caught.value is error
+    assert store.current() is (after if phase == "drain" else before)
+    status = store.status()
+    assert not status.healthy
+    assert status.reason == ("invalid_config" if phase == "build" else "apply_failed")
+    assert status.last_error is not None
+    assert "private-config" not in status.last_error
+    assert type(error).__name__ in status.last_error
+    if isinstance(error, OSError):
+        assert "errno=13" in status.last_error
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    failed = False
+    await store.reload(candidate_applier=apply_candidate)
+    assert store.current() is after
+    assert store.status().healthy and store.status().last_error is None

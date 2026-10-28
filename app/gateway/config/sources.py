@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-import sqlite3
 from pathlib import Path
-from traceback import format_exception
 from typing import cast
 
 from app.core.config_sources import (
@@ -16,6 +14,7 @@ from app.core.config_sources import (
     verify_stable_config_file,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.state import (
     SecretReferenceRequiredError,
     dump_json,
@@ -25,24 +24,6 @@ from app.services.infrastructure.config.state import (
 from .values import _GATEWAY_SOURCE_LAYER_AUTHORITY
 
 logger = logging.getLogger(__name__)
-
-
-def gateway_config_failure_detail(error: BaseException, *, stage: str) -> str:
-    """运行时失败只发布阶段和系统错误事实，原始异常留在管理诊断日志。"""
-    label = "Gateway pending generation 启动失败" if stage == "startup" else "Gateway 配置应用失败"
-    detail = f"{label}: stage={stage}, error={type(error).__name__}"
-    if isinstance(error, OSError):
-        detail += f", errno={error.errno}"
-        if (winerror := getattr(error, "winerror", None)) is not None:
-            detail += f", winerror={winerror}"
-    elif isinstance(error, sqlite3.Error):
-        detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
-    try:
-        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
-    except Exception as sink_error:  # noqa: BLE001 — 诊断输出失败不能阻止配置事务结算，也不能递归写入同一 sink。
-        error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
-        detail += f", diagnostic_sink_error={type(sink_error).__name__}"
-    return detail
 
 
 def record_gateway_restart_startup_failure(
@@ -63,7 +44,7 @@ def record_gateway_restart_startup_failure(
         gateway_id=gateway_id,
         target_generation=target_generation,
         fencing_token=fencing_token,
-        error=gateway_config_failure_detail(error, stage="startup"),
+        error=config_failure_detail(error, stage="startup", label="Gateway pending generation 启动失败"),
     )
 
 
@@ -202,7 +183,7 @@ def _load_or_migrate_gateway_override(
                         encoding="utf-8",
                     )
             except OSError as error:
-                detail = gateway_config_failure_detail(error, stage="source_deleted_backup")
+                detail = config_failure_detail(error, stage="source_deleted_backup", label="Gateway 配置应用失败")
                 raise type(error)(error.errno, detail) from error
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
@@ -259,7 +240,7 @@ def _load_or_migrate_gateway_override(
         if not backup_path.exists():
             shutil.copy2(path, backup_path)
     except OSError as error:
-        detail = gateway_config_failure_detail(error, stage="source_backup")
+        detail = config_failure_detail(error, stage="source_backup", label="Gateway 配置应用失败")
         raise type(error)(error.errno, detail) from error
     source_record = state_store.sync_config_source(
         config_key=config_key,
