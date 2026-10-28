@@ -11,6 +11,10 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
@@ -601,6 +605,26 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     generation_replay: ModelStreamReplay,
     fork_deadlines: ForkDeadlineRegistry,
 ) -> None:
+    await _fork_report_flow(generation_client, generation_backend, generation_replay, fork_deadlines,
+                            operation_key="fork-report-e2e-key", report_attempts=40)
+
+
+async def test_fork_report_completion_preserves_original_run_and_input(
+    generation_client: httpx.AsyncClient,
+    generation_backend: tuple[str, Path],
+    generation_replay: ModelStreamReplay,
+    fork_deadlines: ForkDeadlineRegistry,
+) -> None:
+    # 功能门独立验证最终回报；原40次性能门保留，不将此用例当作性能通过。
+    await _fork_report_flow(generation_client, generation_backend, generation_replay, fork_deadlines,
+                            operation_key="fork-report-completion", report_attempts=450)
+
+
+async def _fork_report_flow(
+    generation_client: httpx.AsyncClient, generation_backend: tuple[str, Path],
+    generation_replay: ModelStreamReplay, fork_deadlines: ForkDeadlineRegistry,
+    *, operation_key: str, report_attempts: int,
+) -> None:
     target_session_id, _target_folder_id = await _create_nested_anchor(
         generation_client,
         title="Fork Report Back Target",
@@ -632,10 +656,10 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     )
     report_call = await _plan_reply(generation_client, generation_replay, target_session_id)
     deadline = fork_deadlines.for_operation(
-        generation_client.headers["X-BoxTeam-Workspace-Id"], "fork-report-e2e-key",
+        generation_client.headers["X-BoxTeam-Workspace-Id"], operation_key,
     )
     task, accepted, child_call = await deadline.wait(
-        _execute_new_owner(generation_client, generation_replay, payload, "fork-report-e2e-key"), "generation_fork_publish",
+        _execute_new_owner(generation_client, generation_replay, payload, operation_key), "generation_fork_publish",
     )
     result = accepted["generation"]
     assert result["status"] == "queued"
@@ -654,16 +678,25 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     deadline.complete()
     await wait_for_job_done(generation_client, result["job_id"], max_attempts=20)
     final_status: dict[str, object] | None = None
+    loop = asyncio.get_running_loop()
+    report_started = loop.time()
+    statuses: list[str] = []
     # TODO：真实汇报实测约6秒，原40×0.1秒窗口内仍可能reporting；保持期限，待后续优化。
-    for _ in range(40):
+    for _ in range(report_attempts):
         runs = await generation_client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
         assert runs.status_code == 200, runs.text
         candidate = next(item["generation"] for item in runs.json()["data"]["items"] if item["run_id"] == accepted["run_id"])
+        statuses.append(candidate["status"])
         if candidate["status"] == "completed":
             final_status = candidate
             break
         assert candidate["status"] in {"queued", "reporting"}, candidate
         await asyncio.sleep(0.1)
+    (generation_backend[1].parent / "artifacts" / f"{operation_key}-completion.json").write_text(json.dumps({
+        "task_id": task["task_id"], "run_id": accepted["run_id"],
+        "source_session_id": target_session_id, "generated_session_id": generated_session_id,
+        "report_attempts": report_attempts, "elapsed_seconds": loop.time() - report_started, "statuses": statuses,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert final_status is not None
     assert final_status["report_back_job_id"]
     await wait_for_job_done(
@@ -672,10 +705,10 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         max_attempts=20,
     )
     replay_deadline = fork_deadlines.for_operation(
-        generation_client.headers["X-BoxTeam-Workspace-Id"], "fork-report-e2e-key",
+        generation_client.headers["X-BoxTeam-Workspace-Id"], operation_key,
     )
     repeated = await replay_deadline.wait(
-        _check_generation(generation_client, task, "fork-report-e2e-key"), "generation_fork_idempotent_replay",
+        _check_generation(generation_client, task, operation_key), "generation_fork_idempotent_replay",
     )
     assert repeated["generation"] == final_status
     replay_deadline.complete()
@@ -743,3 +776,15 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     assert '<control_context encoding="json" trust="control">' in final_request_text
     assert "<generated_session_result " in final_request_text
     assert 'trust="untrusted_data"' in final_request_text
+    with RolloutCheckpointSaver(generation_backend[1] / ".boxteam/sessions") as saver:
+        for record in recorded:
+            identity = record["identity"]
+            session_id, thread_id = identity["session_id"], identity["thread_id"]
+            with saver._storage.storage.read_connection(session_id, thread_id) as connection:
+                assembly_id, = connection.execute(
+                    "SELECT assembly_id FROM context_assemblies WHERE model_call_id=?",
+                    (identity["model_call_id"],),
+                ).fetchone()
+            assembly = saver.get_context_assembly(session_id, thread_id, assembly_id=assembly_id)
+            assert assembly.request_hash_preimage == normalize_wire_request(record["request"])
+            assembly.validate_hashes()
