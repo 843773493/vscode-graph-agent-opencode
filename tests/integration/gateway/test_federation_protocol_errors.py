@@ -233,3 +233,57 @@ async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_respon
     (context.artifacts_dir / "runtime-protocol-error-receipts.json").write_text(
         json.dumps({"responses": evidence, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
     )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="此项核真实POSIX权限；Windows ACL另有专门验收")
+@pytest.mark.asyncio
+async def test_federation_credential_permission_failure_keeps_request_identity_and_can_retry(
+    integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    assert context.workspace_root == Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    port = integration_port_block_for_file(Path(__file__)).port(1)
+    credential_path = context.workspace_root.parent / "boxteam-home/state/gateway/credentials/federation.json"
+    receipts: dict[str, object] = {}
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        # 仅通过原凭据owner签发认证前置；HTTP认证、清单与失败重试均走独立Gateway。
+        store = FederationCredentialStore(storage_path=credential_path)
+        credential = store.issue(connection_id="rgw_permission_read", peer_gateway_id="gateway_peer")
+        original = credential_path.read_bytes()
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=20) as client:
+            headers = {"X-BoxTeam-Federation-Token": credential.token, "X-Request-ID": "req_credential_reject"}
+            credential_path.chmod(0o644)
+            try:
+                failed = await client.get("/api/gateway/federation/workspaces", headers=headers)
+                assert failed.status_code == 401, failed.text
+                assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == headers["X-Request-ID"]
+                assert "artifact=federation_credentials" in failed.json()["detail"]
+                assert "stage=permissions" in failed.json()["detail"]
+                assert str(credential_path) not in failed.text
+                assert credential.token not in failed.text
+                assert credential_path.read_bytes() == original
+                receipts["rejected"] = failed.json()
+            finally:
+                credential_path.chmod(0o600)
+            headers["X-Request-ID"] = "req_credential_repaired"
+            recovered = await client.get("/api/gateway/federation/workspaces", headers=headers)
+            assert recovered.status_code == 200, recovered.text
+            assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"] == headers["X-Request-ID"]
+            assert recovered.json()["data"]["gateway_id"] == load_or_create_gateway_id(credential_path.parent.parent / "identity.json")
+            assert store.verify(credential.token) == credential
+            assert credential_path.read_bytes() == original
+            receipts["recovered"] = recovered.json()
+            denied = await client.get("/api/gateway/federation/workspaces", headers={"X-BoxTeam-Federation-Token": "invalid"})
+            assert denied.status_code == 401, denied.text
+            assert denied.json()["detail"] == "无效或已过期的 Gateway 联邦凭据"
+    log = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert str(credential_path) in log
+    assert "req_credential_reject" in log
+    assert credential.token not in log
+    (context.artifacts_dir / "credential-read-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")

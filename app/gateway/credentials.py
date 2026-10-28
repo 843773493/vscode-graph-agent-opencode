@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import tempfile
@@ -13,6 +14,9 @@ from app.core.file_permissions import (
     restrict_private_path_access,
 )
 from app.core.identifier import validate_gateway_id
+from app.core.trace_middleware import get_current_request_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,28 +96,53 @@ class FederationCredentialStore:
             self._save(credentials)
 
     def _load(self) -> dict[str, FederationCredential]:
+        stage = "open"
         try:
             with self._storage_path.open("r", encoding="utf-8") as file:
                 # 校验与解析使用同一文件句柄，避免重复路径查询和替换竞态。
+                stage = "permissions"
                 require_private_file_access(
                     self._storage_path,
                     descriptor=file.fileno(),
                 )
+                stage = "decode"
                 payload = json.load(file)
-        except FileNotFoundError:
-            return {}
-        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-            raise ValueError(f"联邦凭据文件版本非法: {self._storage_path}")
-        result: dict[str, FederationCredential] = {}
-        for item in payload.get("credentials", []):
-            credential = FederationCredential(
-                connection_id=str(item["connection_id"]),
-                peer_gateway_id=str(item["peer_gateway_id"]),
-                token=str(item["token"]),
-                expires_at=datetime.fromisoformat(str(item["expires_at"])),
-            )
-            result[credential.connection_id] = credential
-        return result
+                stage = "close"
+            stage = "validate"
+            if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+                raise ValueError("联邦凭据文件版本非法")
+            result: dict[str, FederationCredential] = {}
+            for item in payload.get("credentials", []):
+                credential = FederationCredential(
+                    connection_id=str(item["connection_id"]),
+                    peer_gateway_id=str(item["peer_gateway_id"]),
+                    token=str(item["token"]),
+                    expires_at=datetime.fromisoformat(str(item["expires_at"])),
+                )
+                result[credential.connection_id] = credential
+            return result
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            # 只有尚未打开的缺文件表示空库；权限核验等后续失败不能被当作未配置。
+            if stage == "open" and isinstance(error, FileNotFoundError):
+                return {}
+            raise self._read_error(stage, error) from error
+
+    def _read_error(self, stage: str, error: OSError | ValueError | TypeError | KeyError | RuntimeError) -> Exception:
+        detail = f"联邦凭据读取失败: artifact=federation_credentials, stage={stage}, error={type(error).__name__}"
+        if isinstance(error, OSError):
+            detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
+        # 解码与字段校验的原异常可能含凭据正文，只保留在cause，不写入日志。
+        logger.error("%s path=%s request_id=%s", detail, self._storage_path, get_current_request_id(),
+                     exc_info=(type(error), error, error.__traceback__) if stage in {"open", "permissions", "close"} else None)
+        if isinstance(error, OSError):
+            if error.errno is None:
+                return type(error)(detail)
+            return type(error)(error.errno, detail, None, getattr(error, "winerror", None))
+        if isinstance(error, UnicodeDecodeError):
+            return UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail)
+        if isinstance(error, json.JSONDecodeError):
+            return json.JSONDecodeError(detail, error.doc, error.pos)
+        return type(error)(detail)
 
     def _save(self, credentials: dict[str, FederationCredential]) -> None:
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)

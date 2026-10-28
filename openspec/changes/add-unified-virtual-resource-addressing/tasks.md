@@ -966,3 +966,10 @@
 - 修正新增装具的补丁作用域和SQL前导换行后，原生产14 failed；最终控制库单元及真实服务ASGI入口221 passed，Session创建回归22 passed，非委派child物理回归25 passed，共268项；随后仅格式整理的新测试18 passed与221项重叠，不累计。真实API创建Session后损坏控制库版本，核409/request_id、库字节与全部行不变，修复后同入口到达CSM的skill-not-found。关闭失败双原因、真实锁释放、嵌套事务、拒绝版本只读/可写零改写均覆盖。
 - Ruff/compileall通过；Pyright完整HEAD基线843项、候选811项，按文件/规则/完整消息多重集新增0、减少32，不称类型全绿。严格OpenSpec47/0。整组60秒超时后按文件拆分完成非协作回归；委派专项的DID NOT RAISE在完整HEAD archive亦复现，按用户要求保留TODO。初轮新增测试误用fence返回类型及误判新Session的ContextStore可用性，已按真实合同修正，不放宽身份/状态/期限。
 - 准确命令、前后源码指纹、raw/实际退出码、基线正式输出及作者审查见`out/tests/temp/session-control-connection-owner/artifacts/verification-001.json`；完整临时archive源码副本已删除。不代表独立HTTP/Gateway/Web/Windows或整个控制库业务错误审计完成，2.2/7.2与mounting4.3/8.2保持未勾，团队协作继续TODO。
+
+### 2026-10-28 联邦凭据读取与认证拒绝的位置边界（2.2/7.2部分收口）
+
+- 原凭据owner统一open/permissions/decode/close/validate的失败出口，保留异常类别、系统错误码及直接cause；普通错误不复制物理位置或非法字段值，诊断保留位置和同一request_id，解码/字段原异常可能含凭据正文，不写入该owner日志。只有open时缺文件表示未配置，后续缺件不伪造空清单；七类直接消费者继续同一读取链，原写入及过期/认证规则不变。
+- 修改前反例16 failed/1 passed，已复现真实POSIX权限错误经原认证路由回显路径。最终单元及相邻认证/凭据/联邦/请求ID回归63 passed/2 skipped/1 deselected；新增独立Gateway/TCP验收1 passed/24.90秒，核401、同request_id、原件不变、修复权限后同凭据成功及无效凭据继续拒绝。单元18项覆盖读取/关闭失败、JSON/UTF-8/字段拒绝、描述符关闭及修复重试。
+- Ruff/compileall通过；生产与新单测Pyright零诊断，集成文件两条原Popen类型诊断与完整旧HEAD按规则/消息/位置逐项一致。唯一排除的观察者异常身份断言在完整旧HEAD同样失败，未放宽或扩修；两项skip为既有Windows DACL实机检查。严格OpenSpec47/0。准确命令、前后源码指纹、raw/实际退出码、完整旧版核验及作者结构审查见`out/tests/temp/federation-credential-read/artifacts/verification-001.json`。
+- 本片未验Web、Windows、真实跨Gateway连接或凭据发布错误；原完整临时源码与tar在保存基线产物后删除。2.2/7.2全局门保持未勾，团队协作继续TODO。

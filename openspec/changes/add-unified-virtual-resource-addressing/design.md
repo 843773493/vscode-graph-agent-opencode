@@ -82,6 +82,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。
 
+联邦凭据的唯一读取owner在原文件句柄上完成权限核验与解码，按open/permissions/decode/close/validate报告阶段。普通异常保留原类别、适用系统错误码及直接cause，不复制物理位置或非法字段值；诊断关联同一request_id并保留位置，解码/字段异常可能包含凭据正文，仅保留在cause，不将其正文写日志。只有open时缺文件表示未配置，后续缺件或权限失败继续明确失败；原签发、替换、过期判断及认证拒绝状态码保持。读取失败不改变原件，所有直接和间接消费者复用同一读取链，不新增认证fallback。凭据发布与本地token/身份文件仍由各自后续错误边界审计承接。
+
 调试方案 fork 的文件阶段复用原 rollout 存储错误出口：在 staging 检查/写入、旧 staging 清理、发布和已发布正文验证的原生 I/O 边界保留异常类别、errno/winerror 与 cause；公开文本携带 `artifact=fork_debug` 和原阶段，真实位置与原异常仅留诊断。布局拒绝沿同一出口报告，不在 API 层扫描/脱敏字符串。原文件调用顺序、manifest/configuration hash、prepared→ready→published journal、来源身份和重放规则保持；公开 fork 失败仍按原创建 owner 中止清理，不增加另一个保存链或迁移。
 
 fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件冻结集合核对复用：先确认根为已有普通目录，os.walk的扫描错误立即抛出，不以默认忽略行为生成残缺清单。原生读取与元数据失败复用原storage错误出口（artifact=fork_source、stage=manifest），布局拒绝只公开原原因；位置与完整原异常保留诊断。排序、排除项、字节hash与文件集合不变，不新增清单owner或恢复reader。
