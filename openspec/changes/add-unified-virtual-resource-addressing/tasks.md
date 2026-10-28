@@ -1030,3 +1030,9 @@
 - 修复上一切片真实恢复验收的阻断：原watcher按来源generation与effective digest定位已发布的restart intent后，只保留其现有状态，不再次接纳或改写候选；重试、丢弃与proof继续由原重启owner处理。真正变化的来源仍生成新候选，原SQLite事务、CAS、fencing、schema和显式重试入口不变。移除create_pending之后不可达的重复状态重置及已解决的生产TODO。
 - 原启动失败回归与新增watcher矩阵共29 passed/73.31秒，覆盖待重启、applying、recovery_required、discarded及过期intent，各自使用正常/故障正文，核对原候选、claim、journal、revision、事件与intent逐字段不变；来源变化可发布新候选并保留原失败事实。139项配置/状态库回归通过。原完整真实HTTP验收现为1 passed/44.31秒：实际watcher接纳、故障启动、普通冷恢复、管理接口与工作区代理均通过，核对request_id、旧active、原失败正文与仅两条事件，关闭后再次冷读事实不变。
 - 首轮矩阵60秒外部超时，提取单项失败后确认仅原source层读取时间刷新与“全库不写”测试预期冲突；按实际合同将不变断言限定到全部候选/提交/来源journal事实，未放宽身份、顺序或CAS约束，原始失败保留。触达三文件Ruff与compileall通过；相同九文件Pyright132→132，按文件/最窄AST owner/规则/完整消息核对无新增或删除。命令、前后源码指纹、raw与退出码见`out/tests/temp/uri-global-closure/artifacts/verification-009.json`。本片只关闭已复现的Gateway恢复阻断，不关闭URI 2.2/7.2全局门，不代替Web、Windows、联邦或附件完整shutdown验收。
+
+### 2026-10-28 Gateway 配置来源备份的原生错误出口（2.2/7.2部分收口）
+
+- 原导入备份与删除备份在存在性检查、copy2/write_text的原生I/O边界复用既有配置错误事实出口，保留原OSError类别、errno及直接cause，winerror进入诊断事实；完整原错与原因链留原始日志。失败前不提交来源、候选或事件，不改备份格式、复制顺序、SQL或CAS；三处解析空值拒绝仅使用逻辑source_key，不回显本机位置。
+- 最终错误出口45 passed/77.85秒、原配置回归59 passed/46.44秒；新增两种备份×两种失败阶段×三类原生位置，经真实ConfigReloadService与ASGI状态序列化核对旧active、来源版本、输入原件、空pending/claim/事件、原始日志及修复后同入口重试。Ruff、compileall通过；生产文件8条类型诊断与前次已提交基线按最窄AST owner/规则/完整消息一致，新测试0条。首轮测试直接构造Windows错误属性触发Ruff或Pyright诊断，已改用pytest monkeypatch注入，未忽略规则或修改生产合同；原件保留。
+- 原始命令、前后源码指纹、raw、退出码和类型对照见`out/tests/temp/uri-global-closure/artifacts/verification-010.json`。本片未运行独立Gateway/Backend、Web、Windows或联邦验收，不将模拟Windows异常称为Windows实机通过；URI全局门与延期协作项保持未完成。

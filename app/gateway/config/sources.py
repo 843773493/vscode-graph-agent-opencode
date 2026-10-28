@@ -195,11 +195,15 @@ def _load_or_migrate_gateway_override(
     if file_snapshot.presence == "absent":
         if persist_migrations and source_record is not None:
             deleted_backup_path = path.with_name(f"{path.name}.deleted.bak")
-            if not deleted_backup_path.exists() and source_record.payload is not None:
-                deleted_backup_path.write_text(
-                    dump_json(redact_config_payload(source_record.payload)),
-                    encoding="utf-8",
-                )
+            try:
+                if not deleted_backup_path.exists() and source_record.payload is not None:
+                    deleted_backup_path.write_text(
+                        dump_json(redact_config_payload(source_record.payload)),
+                        encoding="utf-8",
+                    )
+            except OSError as error:
+                detail = gateway_config_failure_detail(error, stage="source_deleted_backup")
+                raise type(error)(error.errno, detail) from error
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
                 config_key=config_key,
@@ -226,7 +230,7 @@ def _load_or_migrate_gateway_override(
         _record_gateway_source_journal(state_store, source_record, origin="loader")
         payload = parse_stable_config_file(file_snapshot)
         if payload is None:
-            raise RuntimeError(f"Gateway 配置文件解析为空: {path}")
+            raise RuntimeError(f"Gateway 配置来源解析为空: source_key={config_key}")
         verify_stable_config_file(file_snapshot)
         source_record = state_store.sync_config_source(
             config_key=config_key,
@@ -244,15 +248,19 @@ def _load_or_migrate_gateway_override(
     if not persist_migrations:
         payload = parse_stable_config_file(file_snapshot)
         if payload is None:
-            raise RuntimeError(f"Gateway 配置文件解析为空: {path}")
+            raise RuntimeError(f"Gateway 配置来源解析为空: source_key={config_key}")
         return payload
     payload = parse_stable_config_file(file_snapshot)
     if payload is None:
-        raise RuntimeError(f"Gateway 配置文件解析为空: {path}")
+        raise RuntimeError(f"Gateway 配置来源解析为空: source_key={config_key}")
     backup_path = path.with_name(f"{path.name}.migrated.bak")
     verify_stable_config_file(file_snapshot)
-    if not backup_path.exists():
-        shutil.copy2(path, backup_path)
+    try:
+        if not backup_path.exists():
+            shutil.copy2(path, backup_path)
+    except OSError as error:
+        detail = gateway_config_failure_detail(error, stage="source_backup")
+        raise type(error)(error.errno, detail) from error
     source_record = state_store.sync_config_source(
         config_key=config_key,
         config_version=int(payload.get("config_version", 3)),

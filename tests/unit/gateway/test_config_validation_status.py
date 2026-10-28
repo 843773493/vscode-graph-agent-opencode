@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
+from app.gateway.config import sources as gateway_sources
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
 from app.services.infrastructure.config.state import ConfigConflictError
@@ -113,6 +114,99 @@ async def test_native_source_message_does_not_enter_reload_status_or_persistent_
     (context.artifacts_dir / "config-source-io.json").write_text(json.dumps({
         "failure": body, "recovered": recovered.json(),
     }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.parametrize("operation", ["source_backup", "source_deleted_backup"])
+@pytest.mark.parametrize("failure_phase", ["exists", "write"])
+@pytest.mark.parametrize("locator", ["/private/gateway/config", r"C:\private\gateway\config", r"\\server\private\config"])
+async def test_source_backup_failure_keeps_original_facts_and_can_retry(
+    validation_owner, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    operation: str, failure_phase: str, locator: str,
+) -> None:
+    application, service, store, config_path, _, original = validation_owner
+    active = store.get_active_config_snapshot("gateway")
+    source = store.get_source_layer("gateway_mutable_override")
+    assert source is not None
+    initial = service.config
+    error = PermissionError(errno.EACCES, f"private-backup-message: {locator}", locator)
+    monkeypatch.setattr(error, "winerror", 5, raising=False)
+    error.__cause__ = OSError(errno.EIO, "private-backup-cause", locator)
+    if operation == "source_backup":
+        backup = config_path.with_name(f"{config_path.name}.migrated.bak")
+        backup.unlink()
+        payload = json.loads(original)
+        payload["runtime"] = {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}}
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        backup = config_path.with_name(f"{config_path.name}.deleted.bak")
+        config_path.unlink()
+    input_bytes = config_path.read_bytes() if config_path.exists() else None
+    write_text = Path.write_text
+    exists = Path.exists
+
+    def fail_copy(source_path, destination_path):
+        assert source_path == config_path and destination_path == backup
+        raise error
+
+    def fail_write(path, data, *args, **kwargs):
+        if path == backup:
+            raise error
+        return write_text(path, data, *args, **kwargs)
+
+    def fail_exists(path):
+        if path == backup:
+            raise error
+        return exists(path)
+
+    with monkeypatch.context() as patch:
+        if failure_phase == "exists":
+            patch.setattr(Path, "exists", fail_exists)
+        elif operation == "source_backup":
+            patch.setattr(gateway_sources.shutil, "copy2", fail_copy)
+        else:
+            patch.setattr(Path, "write_text", fail_write)
+        with pytest.raises(PermissionError) as failure:
+            await service.reload()
+    assert failure.value.__cause__ is error
+    assert failure.value.errno == errno.EACCES
+    assert "private-backup" not in str(failure.value) and locator not in str(failure.value)
+    assert "errno=13" in str(failure.value) and "winerror=5" in str(failure.value)
+    assert f"stage={operation}" in str(failure.value)
+    assert not backup.exists()
+    assert (config_path.read_bytes() if config_path.exists() else None) == input_bytes
+    assert service.config is initial
+    assert store.get_active_config_snapshot("gateway") == active
+    observed = store.get_source_layer("gateway_mutable_override")
+    assert observed is not None and replace(observed, updated_at=source.updated_at) == source
+    assert store.get_pending_config_candidate(config_domain="gateway") is None
+    assert store.get_config_apply_claim(config_domain="gateway") is None
+    assert service.list_events() == ()
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert "private-backup-message" in caplog.text and "private-backup-cause" in caplog.text
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+        response = await client.get("/api/gateway/config/reload-status", headers={"X-Request-ID": "source-backup"})
+        assert response.status_code == 200, response.text
+        status = response.json()["data"]
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-backup"
+        assert status["healthy"] is False and status["reason"] == "invalid_config"
+        assert status["last_error"] == f"PermissionError: {failure.value}"
+        assert "private-backup" not in response.text and locator not in response.text
+        assert str(config_path) not in response.text and str(backup) not in response.text
+        # 故障解除后显式重走同一入口，只有备份真实成功后才提交来源与候选。
+        await service.reload()
+        observed = store.get_source_layer("gateway_mutable_override")
+        assert observed is not None and observed.layer_revision == source.layer_revision + 1
+        assert observed.presence == ("present" if operation == "source_backup" else "absent")
+        assert backup.is_file()
+        if operation == "source_backup":
+            assert backup.read_bytes() == input_bytes
+        else:
+            assert json.loads(backup.read_text(encoding="utf-8")) == source.payload
+        recovered = await client.get("/api/gateway/config/reload-status")
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["data"]["healthy"] is True
+        assert len(service.list_events()) == 1
 
 
 @pytest.mark.parametrize("stage", ["apply", "promotion", "rollback"])
