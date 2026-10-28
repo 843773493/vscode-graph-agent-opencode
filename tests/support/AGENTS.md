@@ -27,6 +27,7 @@
 │       ├── view_mutations.py                隔离注入view成员索引损坏
 │       └── web_boundary_seeding.py           Web历史边界场景数据
 ├── 业务owner装配与显式替身
+│   ├── tool_test_faults.py               工具测试原异常身份与运行时注入的最小故障夹具
 │   ├── resource_owners/sessions.py        Terminal/Browser共享Session与Thread前提
 │   ├── resource_owners/terminal.py        Terminal owner及传输替身
 │   ├── resource_owners/browser.py         Browser owner及传输替身

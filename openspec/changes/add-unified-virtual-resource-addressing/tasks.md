@@ -993,3 +993,10 @@
 - 核对结构化位置字段、SQL 位置列、原生根绑定、模型运行事实及具名例外；远端 projection 的 root binding 被原注册表拒绝，SSH 选项的 `initial_path` 因此为 null。迁齐两条 Docker 路由验收，以原远端 target ID 精确选择工作区并断言普通响应不含根路径；重启前清除声明改为编辑同一隔离 BOXTEAM_HOME 的 Gateway 配置，不再误写 Workspace 配置。
 - URI/配置/界面偏好/归档合同481项及Gateway注册表/目录/代理114项通过；范围不同，不冒称真实Docker或Web验收。Docker原HEAD实跑在远端Backend初始化失败：发行配置引用的`OPENCODE_ZEN_API_KEY`不可解析，1 failed/174.24秒，未进入业务断言；保留原件及代码TODO，不重复环境不变的长跑。
 - 准确命令、源码前后指纹、原始输出与退出码在`out/tests/temp/uri-global-closure/artifacts/`。本片未修改生产链路；整体审计仍发现模型工具测试将异常正文复制到普通状态和持久结果，须沿原owner处理后补验，2.2/7.2继续未勾。
+
+### 2026-10-28 模型工具测试失败记录的原生位置边界（2.2/7.2部分收口）
+
+- 原工具测试owner共用一个失败说明合同；运行、样本与模型交换错误只保存阶段、异常类别和适用errno/winerror。原异常及原因链随原请求ID进入诊断，失败工具回执不再经`tool_result`旁路落盘；成功正文、计数、失败统计及Provider重试规则保持。模型builder按实际keyword调用、用例身份按实际只读消费修正类型合同，无新运行/存储链。
+- 旧生产的21个反例全部失败，检出POSIX路径回显或缺失原异常诊断；最终用解码JSON值核POSIX/盘符/UNC，覆盖七个失败阶段、ASGI创建/状态API、真实结果落盘/冷读和原入口显式重试。完整工具测试回归121 passed/8.10秒，模型复用既有单元替身，不冒称真实Provider/Gateway/Web或Windows实机。Ruff、compileall与OpenSpec strict 48/48通过。
+- Pyright完整旧HEAD归档为12条、最终5条；按文件、最窄AST owner、规则与完整消息逐项核对无新增，生产及新增用例零诊断，不称全类型绿。准确命令、源码前后指纹、raw、实际退出码及失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-002.json`；临时完整源码已删除。该片只关闭本输出链，URI整体2.2/7.2和多工作区4.3/8.2仍未勾，团队协作继续TODO。
+- 最终目录审查将21项API/落盘验收迁入`tests/integration/backend/agents/test_tool_test_failure_records.py`，原异常身份故障夹具移入共享support，单元消费者同批迁齐，无重复模型协议。迁移后121 passed/8.55秒，Ruff/compileall/strict 48项通过，Pyright仍为同5项旧测试诊断；原件为同目录`tool-test-layout-{017,static-018,types-019}`。

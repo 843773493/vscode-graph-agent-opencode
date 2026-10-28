@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.agent_factory import build_model_from_provider
 from app.core.identifier import create_prefixed_id
+from app.core.trace_middleware import get_current_request_id
 from app.schemas.internal_v2.tool_test import (
     ToolTestAttemptDTO,
     ToolTestProviderResultDTO,
@@ -20,7 +22,11 @@ from app.schemas.internal_v2.tool_test import (
     ToolTestStartRequest,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.tool_testing.definitions import ToolTestCase, get_model_tool_parameters
+from app.tool_testing.definitions import (
+    ToolTestCase,
+    get_model_tool_parameters,
+    tool_test_failure_detail,
+)
 from app.tool_testing.model_invocation import (
     ToolCallProbeInvocationError,
     probe_tool_call_with_transient_retries,
@@ -28,7 +34,13 @@ from app.tool_testing.model_invocation import (
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.store import ToolTestStore
 
-ModelBuilder = Callable[[dict[str, Any], dict[str, Any]], Any]
+logger = logging.getLogger(__name__)
+
+
+class ModelBuilder(Protocol):
+    def __call__(
+        self, *, provider: dict[str, Any], runtime_config: dict[str, Any],
+    ) -> Any: ...
 
 
 class ToolTestService:
@@ -192,7 +204,9 @@ class ToolTestService:
             except BaseException as error:
                 if isinstance(error, asyncio.CancelledError):
                     raise
-                error_message = str(error)
+                logger.exception("工具测试运行失败: run_id=%s", run_id,
+                                 extra={"request_id": get_current_request_id()})
+                error_message = tool_test_failure_detail(error, stage="run")
                 await self._mutate_run(
                     run_id,
                     lambda run: self._fail_run(run, error_message),
@@ -280,6 +294,7 @@ class ToolTestService:
             "case_id": case.case_id,
             "provider": redacted_provider,
         }
+        stage = "prepare"
         try:
             prepared = case.prepare(
                 workspace_root=self._workspace_root,
@@ -303,10 +318,12 @@ class ToolTestService:
                 }
             )
             if model is None:
+                stage = "model_build"
                 model = self._model_builder(
                     provider=provider,
                     runtime_config=runtime_config,
                 )
+            stage = "model_call"
             probe = await probe_tool_call_with_transient_retries(
                 model=model,
                 tool=prepared.tool,
@@ -320,6 +337,7 @@ class ToolTestService:
             if tool_call is None:
                 raise RuntimeError(probe.failure or "模型未产生工具调用")
             tool_called = True
+            stage = "execute"
             arguments = tool_call.get("args")
             if not isinstance(arguments, dict):
                 raise TypeError(f"工具参数不是对象: {arguments!r}")
@@ -331,6 +349,7 @@ class ToolTestService:
             if isinstance(tool_result, ToolMessage) and tool_result.status == "error":
                 raise RuntimeError(f"工具执行失败: {tool_result.content}")
             execution_succeeded = True
+            stage = "evaluate"
             evaluation = case.evaluate(
                 attempt_root=attempt_root,
                 tool_result=tool_result,
@@ -350,12 +369,22 @@ class ToolTestService:
                 duration_ms=int((time.monotonic() - started) * 1000),
                 detail=evaluation.detail,
             )
-        except Exception as error:  # noqa: BLE001 - 独立用例需把构建、调用与评估异常记录为失败产物
+        except Exception as error:
+            logger.exception(
+                "工具测试样本失败: run_id=%s, attempt_id=%s, provider_id=%s, case_id=%s, stage=%s",
+                run_id, attempt_id, provider_id, case.case_id, stage,
+                extra={"request_id": get_current_request_id()},
+            )
+            failure = error
             if isinstance(error, ToolCallProbeInvocationError):
+                failure = error.cause
                 model_calls = error.model_calls
                 reasoning_only_calls = error.reasoning_only_calls
                 transient_retries = error.transient_retries
                 exchanges = list(error.exchanges)
+            if not execution_succeeded:
+                # 失败回执的原文已随原异常保留诊断，不能再复制进持久结果。
+                tool_result = None
             attempt = ToolTestAttemptDTO(
                 attempt_id=attempt_id,
                 case_id=case.case_id,
@@ -370,7 +399,7 @@ class ToolTestService:
                 transient_retries=transient_retries,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 detail="工具测试失败",
-                error=f"{type(error).__name__}: {error}",
+                error=tool_test_failure_detail(failure, stage=stage),
             )
         self._store.write_case_json(
             tool_name=case.tool_name,

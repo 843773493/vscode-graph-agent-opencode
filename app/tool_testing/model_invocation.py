@@ -10,6 +10,7 @@ from langchain_core.tools import BaseTool
 from app.prompting import internal_message_factory
 from app.runtime.provider_errors import is_transient_provider_error
 from app.services.mapping.itemized.provider_history import visible_text
+from app.tool_testing.definitions import tool_test_failure_detail
 
 MAX_MODEL_CALLS_PER_ATTEMPT = 3
 MAX_TRANSIENT_RETRIES = 3
@@ -47,7 +48,7 @@ class ToolCallProbeInvocationError(RuntimeError):
         transient_retries: int = 0,
         exchanges: tuple[ModelCallExchange, ...] = (),
     ) -> None:
-        super().__init__(f"模型调用失败: {type(cause).__name__}: {cause}")
+        super().__init__(tool_test_failure_detail(cause, stage="model_call"))
         self.cause = cause
         self.model_calls = model_calls
         self.reasoning_only_calls = reasoning_only_calls
@@ -132,7 +133,7 @@ async def probe_tool_call(
             exchanges.append(
                 ModelCallExchange(
                     request=request_payload,
-                    error={"type": type(error).__name__, "message": str(error)},
+                    error={"type": type(error).__name__, "message": tool_test_failure_detail(error, stage="model_call")},
                 )
             )
             raise ToolCallProbeInvocationError(
@@ -146,7 +147,7 @@ async def probe_tool_call(
             exchanges.append(
                 ModelCallExchange(
                     request=request_payload,
-                    error={"type": type(error).__name__, "message": str(error)},
+                    error={"type": type(error).__name__, "message": tool_test_failure_detail(error, stage="model_call")},
                 )
             )
             raise ToolCallProbeInvocationError(

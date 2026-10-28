@@ -213,7 +213,13 @@ async def test_probe_tool_call_reports_invocation_count_on_provider_error(
 
     assert captured.value.model_calls == 1
     assert captured.value.reasoning_only_calls == 0
-    assert "ConnectionError: 上游连接中断" in str(captured.value)
+    assert str(captured.value) == "工具测试失败: stage=model_call, type=ConnectionError"
+    assert str(captured.value.cause) == "上游连接中断"
+    assert captured.value.__cause__ is captured.value.cause
+    assert captured.value.exchanges[0].error == {
+        "type": "ConnectionError",
+        "message": "工具测试失败: stage=model_call, type=ConnectionError",
+    }
 
 
 @pytest.mark.asyncio

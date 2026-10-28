@@ -23,9 +23,14 @@ class ToolTestEvaluation:
 
 
 class ToolTestCase(Protocol):
-    case_id: str
-    tool_name: str
-    title: str
+    @property
+    def case_id(self) -> str: ...
+
+    @property
+    def tool_name(self) -> str: ...
+
+    @property
+    def title(self) -> str: ...
 
     def prepare(
         self,
@@ -44,3 +49,14 @@ class ToolTestCase(Protocol):
 
 
 get_model_tool_parameters = export_model_tool_json_schema
+
+
+def tool_test_failure_detail(error: BaseException, *, stage: str) -> str:
+    """失败记录只保存阶段和异常类别，原生位置随原异常进入诊断日志。"""
+    detail = f"工具测试失败: stage={stage}, type={type(error).__name__}"
+    if isinstance(error, OSError):
+        for name in ("errno", "winerror"):
+            code = getattr(error, name, None)
+            if isinstance(code, int):
+                detail += f", {name}={code}"
+    return detail

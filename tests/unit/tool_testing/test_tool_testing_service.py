@@ -3,28 +3,25 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
-from langchain_core.tools import InjectedToolArg, tool
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 import app.tool_testing.service as tool_test_service_module
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO, ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
-from app.tool_testing.definitions import (
-    PreparedToolTest,
-    ToolTestEvaluation,
-    get_model_tool_parameters,
-)
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
 from app.tool_testing.store import ToolTestStore
+from tests.support.tool_test_faults import (
+    RuntimeInjectedArgumentCase,
+    RuntimeInjectedArgumentModel,
+    SingleProviderRuntimeConfig,
+)
 
 
 class _TwoProviderConfigService:
@@ -123,86 +120,6 @@ def apply_patch_test_roots(tmp_path: Path) -> tuple[Path, Path]:
     return workspace_root, asset_root
 
 
-@dataclass(frozen=True, slots=True)
-class _RuntimeInjectedArgumentCase:
-    case_id: str = "runtime_injected_argument"
-    tool_name: str = "runtime_aware"
-    title: str = "隐藏运行时参数"
-
-    def prepare(
-        self,
-        *,
-        workspace_root: Path,
-        attempt_root: Path,
-        asset_root: Path,
-    ) -> PreparedToolTest:
-        del workspace_root, asset_root
-        attempt_root.mkdir(parents=True)
-
-        @tool
-        def runtime_aware(
-            value: str,
-            callback: Annotated[Callable[[], str], InjectedToolArg],
-        ) -> str:
-            """调用由后端注入的回调并拼接模型提供的公开参数。"""
-            return f"{callback()}:{value}"
-
-        return PreparedToolTest(
-            prompt="调用 runtime_aware，并将 value 设为 public。",
-            tool=runtime_aware,
-            injected_arguments={"callback": lambda: "injected"},
-        )
-
-    def evaluate(
-        self,
-        *,
-        attempt_root: Path,
-        tool_result: object,
-    ) -> ToolTestEvaluation:
-        del attempt_root
-        return ToolTestEvaluation(
-            passed=tool_result == "injected:public",
-            detail=f"tool_result={tool_result!r}",
-        )
-
-
-class _RuntimeInjectedArgumentBoundModel:
-    async def ainvoke(self, messages: list[object]) -> AIMessage:
-        del messages
-        return AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "runtime_aware",
-                    "args": {"value": "public"},
-                    "id": "call-runtime-aware",
-                    "type": "tool_call",
-                }
-            ],
-        )
-
-
-class _RuntimeInjectedArgumentModel:
-    def __init__(self) -> None:
-        self.bound_parameters: dict[str, Any] | None = None
-
-    def bind_tools(self, tools: list[object]) -> _RuntimeInjectedArgumentBoundModel:
-        assert len(tools) == 1
-        candidate = tools[0]
-        self.bound_parameters = get_model_tool_parameters(candidate)  # type: ignore[arg-type]
-        return _RuntimeInjectedArgumentBoundModel()
-
-
-class _SingleProviderRuntimeConfig:
-    def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
-        assert agent_id == "default"
-        return {
-            "providers": [
-                {"id": "provider_only", "model": "model-only", "api_key": "secret"}
-            ]
-        }
-
-
 @pytest.mark.asyncio
 async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_execution(
     tmp_path: Path,
@@ -210,8 +127,8 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
-    model = _RuntimeInjectedArgumentModel()
-    case = _RuntimeInjectedArgumentCase()
+    model = RuntimeInjectedArgumentModel()
+    case = RuntimeInjectedArgumentCase()
     prepared = case.prepare(
         workspace_root=workspace_root,
         attempt_root=tmp_path / "schema-check",
@@ -221,7 +138,7 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
         prepared.tool.args_schema.model_json_schema()
 
     service = ToolTestService(
-        config_service=_SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=[case]),
         store=store,
         workspace_root=workspace_root,
@@ -382,7 +299,7 @@ async def test_active_run_cache_serves_copies_and_recovers_after_write_failure(
     )
     store.write_run(run.run_id, run.model_dump(mode="json"))
     service = ToolTestService(
-        config_service=_SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=create_apply_patch_cases()[:1]),
         store=store,
         workspace_root=workspace_root,
@@ -482,5 +399,5 @@ async def test_failed_model_construction_is_retried_on_next_attempt(
     assert result.status == "completed"
     assert model_builds == 2
     assert [attempt.status for attempt in result.attempts] == ["failed", "completed"]
-    assert result.attempts[0].error == "RuntimeError: 模型客户端暂时不可用"
+    assert result.attempts[0].error == "工具测试失败: stage=model_build, type=RuntimeError"
     assert result.attempts[1].passed is True
