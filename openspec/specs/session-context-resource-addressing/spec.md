@@ -1,0 +1,226 @@
+# session-context-resource-addressing Specification
+
+## Purpose
+
+定义会话上下文资源的统一寻址与解析合同：资源位置一律以资源 URI表达，修订、视图与游标作为并列的结构化字段，从而在同一套资源语法上同时满足「地址不编码 revision」与「可重读的修订绑定 locator」两个约束。
+
+## Requirements
+
+### Requirement: 资源引用必须遵循三层分离
+
+**归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `资源 URI` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
+
+本 capability 的 `resource_identity` 与 `assembly_ref` 均复用该 owner 定义的 `ResourceIdentity`，MUST NOT 另建会话局部 identity 或专用 assembly ref 类型。
+
+#### Scenario: 持久化记录不得含 real path
+- **WHEN** 任意会话上下文资源被写入持久化记录或返回给模型
+- **THEN** 记录中只出现资源身份与 URI（以及独立的 revision 字段），不出现任何真实路径、绝对路径或 provider locator
+
+#### Scenario: 资源身份不随激活工作区变化
+- **WHEN** 同一资源在切换激活工作区前后被引用
+- **THEN** 其资源身份保持逐字节相同，且不因当前激活工作区改变而改变
+
+### Requirement: scope 必须取自闭合集且每个 scope 的 scope_id 一律必填
+
+**归属与引用**：scope 闭集与每个 scope 的 `scope_id` 取值语义的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」（含 `workspace`/`user`/`gateway`/`inline` 闭集、`builtin` 正名 `inline`、`memory` 移出、`scope_id` 由真实身份推导而非硬编码字面量，以及各 scope 的取值规则）。本 capability 只**具名引用**该 requirement，MUST NOT 复述其取值表、MUST NOT 另立第二份 scope/scope_id 定义。
+
+会话上下文资源使用的 URI MUST 遵守该闭集与「`scope_id` 对所有 scope 必填」规则，MUST NOT 自行发明 scope 名或 `scope_id` 语义。「当前工作区」MUST NOT 作为会话上下文寻址或持久化数据的隐含前提；「其它工作区」MUST 表达为同一 scope 加另一个 scope_id 取值，MUST NOT 引入新 scope；「其它 gateway」MUST 表达为 owner 定义的可选**网关授权段 / gateway authority**（缺省为本机）。`memory` MUST NOT 作为 scope 出现（其非 URI 判定与入口拒绝见以下 scenario）。
+
+#### Scenario: 拒绝未登记的 scope
+- **WHEN** 调用方提交 scope 不属于闭合集的 URI（例如 `memory`、`session`）
+- **THEN** 解析在访问任何 provider 之前以结构化拒绝码显式失败，不读取文件、网络或内存资源
+
+#### Scenario: 任何 scope 缺少 scope_id 必须失败
+- **WHEN** 调用方提交的 URI 在 scope 段之后缺少 scope_id 段（对任意 scope，而非仅某一种）
+- **THEN** 解析显式失败，且不得回退到隐含上下文补全
+
+#### Scenario: memory 两点式形态被拒绝
+- **WHEN** 调用方提交 `boxteam://memory/{scope}/{name}` 一类两点式字符串
+- **THEN** 系统以不明 scope 显式拒绝，不得按 URI 解释该字符串
+
+### Requirement: URI 语法形态统一且由单一 owner 规范化
+
+**归属与引用**：URI 语法本体、固定段序、`resources` 固定段、闭合 charset 与规范化单一实现的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「URI 语法必须保留固定段序并单一实现」；可选网关授权段的语义（缺省 = 本机、等于本机 gateway_id = 等价缺省、等于对端 = 跨 gateway）见其 requirement「gateway authority 承载稳定 gateway_id 且缺省等价本机」。本 capability 只**具名引用**上述 requirement，MUST NOT 定义 URI 语法本体、MUST NOT 复述其模板与取值、MUST NOT 另立第二套语法，也 MUST NOT 新增拒绝码。
+
+会话上下文资源 MUST 使用该统一形态（保留既有段序，MUST NOT 简化）；会话上下文侧的规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`（`session` 为 owner 定稿的 kind 取值）。本 capability MUST NOT 自行变更固定段序、MUST NOT 把 `scope_id` 改为可选、MUST NOT 省略 `resources` 固定段。
+
+#### Scenario: 会话身份编码和 fragment 不成为后门
+- **WHEN** 调用方提交身份/领域段百分号编码或原始 fragment
+- **THEN** 按统一寻址 owner 的分段合同显式拒绝；已公布的文件child段合法编码由owner处理，不在本change另设整体百分号拒绝规则
+
+#### Scenario: 规范化只走单一实现
+- **WHEN** 同一逻辑资源经不同调用入口被寻址
+- **THEN** 规范化结果逐字节一致，且由同一份实现产出
+
+#### Scenario: 固定段序不得被简化
+- **WHEN** 系统构造任何会话上下文资源的 URI
+- **THEN** URI 保留 `resources` 固定段且 `scope_id` 段必填，不得省略二者或调换段序
+
+### Requirement: 会话上下文以 URI 表达位置并用结构化兄弟字段承载修订
+
+会话上下文资源的位置 MUST 只由 URI 表达。`revision`、视图选择与分页游标 MUST 作为与 URI **并列的结构化字段**传递，MUST NOT 被编码进 URI 字符串。
+
+系统 MUST 同时满足：(a) URI 不编码 revision/hash；(b) 调用方可获得**可重读的修订绑定 locator**，即同一请求能声明期望 revision 并在不匹配时显式失败、且分页可在固定修订上继续。
+
+#### Scenario: 修订不进入 URI
+- **WHEN** 调用方按指定 revision 请求某会话上下文资源
+- **THEN** 生成的 URI 字符串在任何情况下都不包含该 revision 或任何 hash/snapshot 引用
+
+#### Scenario: 修订不匹配必须显式失败
+- **WHEN** 调用方声明的期望 revision 与目标资源当前 revision 不一致
+- **THEN** 系统返回显式的修订变更错误，且不得静默返回新修订内容
+
+#### Scenario: 分页在固定修订上继续
+- **WHEN** 调用方携带游标继续读取同一资源
+- **THEN** 系统校验游标绑定的资源与修订后在同一修订上继续，游标与当前资源或修订不匹配时显式失败
+
+### Requirement: 会话上下文视图选择必须结构化
+
+会话上下文的视图选择（原 `#information`、`#record={index}`、`#assembly={assembly_id}` 等 fragment 承载的信息）MUST 迁移为结构化字段，且 MUST NOT 再使用 `#fragment`。
+
+系统 MUST 对「视图字段」与「资源种类」的组合做显式校验，拒绝不兼容组合，且 MUST NOT 静默忽略未识别的视图取值。
+
+已识别的 view 不受资源 kind 支持时，拒绝码 MUST 引用 `add-unified-virtual-resource-addressing` 的 requirement「拒绝码必须分三套集中登记且命名不得自造」所登记的 resolve 码 `unsupported_view`；本 capability MUST NOT 自行定义或复制拒绝码闭集。
+
+#### Scenario: 原 fragment 信息可经结构化字段表达
+- **WHEN** 调用方需要读取原先以 `#assembly={id}` 指定的 assembly 视图
+- **THEN** 该选择经 `view=assembly` 与 owner 定义的 `assembly_ref: ResourceIdentity` 表达并被正确解析，生成的 URI 中不含 `#`，也不编码该资源身份
+
+#### Scenario: 不兼容的视图与资源组合被拒绝
+- **WHEN** 调用方对单个 Session 根资源（`kind=session`）请求仅适用于工作区会话清单的 `view=inventory`
+- **THEN** 系统以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败并说明不支持，不得降级为默认视图
+
+### Requirement: 解析必须遵循唯一星型顺序且 fail-closed
+
+**归属与引用**：星型解析 / star-topology resolution 的唯一顺序、hub/spoke 关系、policy 常量上界（`visited set`、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）与「locator 是输入，不是输出」不变量的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「URI 解析必须是星型且以 policy 常量界定上界」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 为会话上下文另立第二套解析顺序，也 MUST NOT 新增拒绝码。
+
+会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界传输 MUST 只包含资源身份、URI、revision 与内容，MUST NOT 传输 real path。
+
+已支持的单会话视图、会话清单与搜索 MUST 采用同一目标解析与授权链，由目标端既有查询 owner 执行。清单或搜索目标 MUST 保留真实资源引用，MUST NOT 伪造 Session ID 或回退到当前激活工作区；请求授权 MUST 绑定该资源引用与实际查询字段。
+
+#### Scenario: 跨 gateway 只回内容
+- **WHEN** URI 的 gateway authority 指向对端且对端可达
+- **THEN** 对端在本地解析该 URI，响应中只包含稳定身份、URI、revision 与内容，不含任何真实路径、provider locator 或解析 locator
+
+#### Scenario: information 与搜索不外投诊断物理位置
+- **WHEN** 读取 `view=information` 或搜索 `session_information`，包括其远端与持久观察入口
+- **THEN** 唯一 information owner 保留会话、工作区身份、名称和诊断状态，并下线软件生成的 `workspace.root_path`、`storage_path` 真实定位字段；API、工具、搜索与冻结载荷共同消费该输出，不以中继层过滤或仅检查 URI envelope 替代 owner 收口
+
+#### Scenario: 远端会话清单使用真实资源目标
+- **WHEN** 调用方读取已共享的远端工作区或 Gateway 会话清单
+- **THEN** 请求绑定该清单的 ResourceIdentity、URI 和 scope，由目标端既有清单 owner 执行，不转换成单个 Session 的通信请求
+
+#### Scenario: 远端搜索固定目标和查询
+- **WHEN** 调用方搜索已共享的远端会话上下文资源，并在请求途中切换激活工作区
+- **THEN** 授权仍绑定原目标及 query、view、revision、cursor 等实际字段，搜索在原目标端执行，不切换到本地或新的激活工作区
+
+#### Scenario: spoke 只经唯一 hub 做一次有界 transit
+- **WHEN** 本地 gateway 是 spoke，请求的目标位于另一个 spoke
+- **THEN** 解析经其唯一 hub 做一次有界 transit，携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline，不得继续递归到第四个 gateway
+
+#### Scenario: hub 可直接解析直接 spoke
+- **WHEN** 本地 gateway 是自身联邦的 hub，请求目标为其直接 spoke 的资源
+- **THEN** 本地 gateway 直接解析，不额外经过第二个 transit
+
+#### Scenario: 命中不返回 locator
+- **WHEN** 任意跨边界解析命中
+- **THEN** 响应只含稳定身份与内容，既不含 real path 也不含任何 locator 形式
+
+#### Scenario: 不可达时 fail-closed
+- **WHEN** URI 的 gateway authority 指向的对端不可达、未共享该资源或目标资源不存在
+- **THEN** 系统返回结构化拒绝码，且不猜测路径、不返回默认内容
+
+#### Scenario: 本地 parse 先行
+- **WHEN** 调用方提交非法或不完整 URI
+- **THEN** 系统在发起任何跨进程或跨 gateway 转发之前就本地显式拒绝
+
+### Requirement: 持久化资源引用必须使用身份加 URI
+
+**归属与引用**：持久化资源引用政策的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 URI 为默认形式」。本 capability 只**具名引用**该 requirement，MUST NOT 复述正文、MUST NOT 另立第二套持久化引用政策；会话上下文侧的落点由以下 scenario 验收。
+
+#### Scenario: 字段不含 real path
+- **WHEN** 会话上下文资源引用被写入持久化记录
+- **THEN** 该字段由资源身份、URI 与独立 revision 组成，不含任何真实路径
+
+### Requirement: 旧式上下文 URI 必须被入口拒绝且不保留历史数据兼容
+
+系统 MUST 停止接受旧式上下文 URI 形态（含身份/领域段 `%` 编码、`#fragment`、未登记 scope 的自有正则语法；合法文件段规则引用统一寻址 owner），入口 MUST 显式拒绝并指向结构化字段表示。
+
+本 change 按已授权的开发数据处理政策实施：开发生成的新旧中间数据无需保留，MUST NOT 为旧式上下文 URI 新增历史扫描、规范化、失效或兼容读写链路。该政策不依赖“历史存量为零”；建案取证摘要及原始收据未定位的限制只记录在 design D5，MUST NOT 当作本轮已复核的事实。新写入、封存、读取与恢复 MUST 完整兑现当前合同，MUST NOT 通过删除当前 fresh 数据掩盖 writer 或 caller 缺陷。
+
+因此本 capability 的迁移面只有两点：(a) 入口对旧形态 fail-closed 拒绝；(b) 由现有 owner 迁移确需资源引用的持久化字段，按新格式**新写入**并切换读路径——属「新写字段」，不是「存量数据迁移」。`resource_activation_bindings.display_uri` 复用已接通的 writer/reader；`context_source_control_states` 保持来源追踪事实，只有其 owner 确需持久资源定位时才增加 URI，不默认添加地址镜像。
+
+#### Scenario: 旧式 fragment 形态被拒绝
+- **WHEN** 调用方提交 `boxteam://session/{session_id}#assembly={id}` 一类旧式 URI
+- **THEN** 系统显式拒绝并提示使用新的资源身份加结构化字段表示，不得按新语法静默解释该字符串
+
+#### Scenario: 不构造历史数据迁移
+- **WHEN** 实施本次寻址统一
+- **THEN** 按已授权的数据政策不构造旧式 URI 的历史扫描、规范化、失效或兼容读写链路；不宣称历史零存量已复核，新 writer/reader 和恢复仍按当前合同验收
+
+#### Scenario: 新写入字段即迁移面
+- **WHEN** 某个既有持久化字段（如 `display_uri`、来源事实）需要承载资源引用
+- **THEN** 它以资源身份加 URI 的新格式写入并在读路径切换，旧写入形态物理下线，不留兼容层
+
+### Requirement: 配置来源位置字段遵循 owner URI 形态且不泄漏真实路径
+
+**归属与引用**：配置来源 URI 与 real path 迁移规范唯一归 `add-unified-virtual-resource-addressing` 所有；本 capability 只具名引用其 requirement「配置来源 URI 必须使用 config kind 且只标识来源文件」及「配置 layer 必须表示逻辑来源且与载体和快照分离」，MUST NOT 复制其 layer 表、URI 规则或 carrier/snapshot 规则，也 MUST NOT 另立第二套 config 迁移规范。以下 scenario 只保留会话上下文 change 对该义务的引用验收。
+
+#### Scenario: 配置来源记录不含真实路径
+- **WHEN** 配置来源层被持久化到 SQLite
+- **THEN** 记录不含 `source_path`/`backup_path` 一类真实路径字段；URI 是否存在遵循 owner 的可寻址来源文件规则
+
+#### Scenario: API 不输出配置来源真实路径
+- **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
+- **THEN** 响应体不含真实路径；URI 与其它来源字段遵循 owner 的平级字段和 nullable URI 规则
+
+#### Scenario: 配置来源 layer 规则单向引用唯一 owner
+- **WHEN** 会话上下文 change 描述配置来源的逻辑 layer、precedence、runtime override、物理 carrier 或 active/pending snapshot
+- **THEN** 它只具名引用上述 owner requirements，不重复定义或改写配置来源合同
+
+### Requirement: 已确证义务与 owner 已定稿项必须显式区分
+
+本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，MUST 把**已由「统一资源寻址」change 定稿**的内容（scope 闭集、scope_id 语义、kind 闭集、拒绝码）写为具名引用；MUST NOT 把已定稿项写成本地待定。**本 capability 无待该 owner 裁定的项。** 会话上下文资源**自身**的 kind 已由「统一资源寻址」change 在 kind 闭集内定稿为 `session`（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」），本 capability 直接引用、无需新登记。
+
+已明确的数据政策与独立义务：
+
+- 旧式会话上下文 URI 的迁移面按已授权数据政策限定为「入口拒绝 + 新写字段」；历史零存量摘要未在本轮复核，不能列为本轮实测结论；
+- 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 URI、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 URI）落地；
+- `inline` 配置来源的地址与逻辑 layer/precedence 规则均引用「统一资源寻址」change 的对应 owner requirement；`memory` 不是 URI scope。
+
+由「统一资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（含 view-kind 校验所用的 `unsupported_view`，见其拒绝码登记 requirement）。
+
+会话上下文资源**自身**使用的 `kind` 取值已由「统一资源寻址」change 在 kind 闭集内**定稿为 `session`**（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」；本 capability 不复述闭集表）。本 capability **直接引用该已登记取值，无需新登记、无待裁定项**；规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`。
+
+#### Scenario: owner 已定稿项写为具名引用
+- **WHEN** 某内容属于 scope 闭集、scope_id 语义、`kind` 闭集或拒绝码取值
+- **THEN** 它具名引用「统一资源寻址」change 对应 requirement，MUST NOT 写成本地待定或另行发明
+
+#### Scenario: 会话上下文 kind 引用已登记取值
+- **WHEN** 会话上下文资源自身的 `kind` 取值被引用
+- **THEN** 它具名引用「统一资源寻址」change 已定稿的 `session`，本 change 不自行发明取值、不再列作待裁定
+
+#### Scenario: 已确证结论可直接执行
+- **WHEN** 某内容已由本轮实测取证确证
+- **THEN** 它可直接写成 normative 断言或可执行任务，不再列作待验证
+
+### Requirement: Fork 的 source 与 target 消费统一领域 URI
+
+会话fork寻址 SHALL 具名消费统一寻址owner requirement「Session 集合与 Thread 创建目标必须有正式领域 URI」，并消费itemized checkpoint-context-branching的范围/目标/资源合同。本capability只负责将入口规范化结果传给精确领域owner，不复述模板、追加kind或维护fork专属parser。source完整Thread URI不得降级为Session main；Session快捷入口明确解析catalog main。view/revision/anchor和目标创建意图是结构化字段，不编码进URI。
+
+本地/跨端目标 SHALL 固定最终Gateway和Workspace及目标Session；source导出和target创建/导入由对应操作授权，不把read权限视为复制许可。`new_child_thread` 的 target URI 可以指向已有 Session 或其中一个已存在 Thread；Thread ID 必须由目标 owner 核验归属，但仅用于定位目标 Session，不建立新 Thread 的 parent-thread 关系。source URI 独立固定来源 Thread 与 fork context lineage，不得从目标 Thread URI 推断来源或导航 parent。发布后返回真实目标身份与URI；不可达、未授权或不支持明确失败，不回退当前激活工作区或同名目标。既有跨Session send/read/wait仍按其main-thread合同执行。
+
+#### Scenario: child来源与远端目标精确传递
+
+- **WHEN** fork输入为source child URI，target为远端Session容器加new_child_thread意图
+- **THEN** 统一解析保留精确来源和目标，目标端创建真实新child并返回URI，不读取source main、不把远端child挂入本地Session
+
+#### Scenario: Thread目标只定位其所属Session
+
+- **WHEN** fork 使用 `new_child_thread`，目标 URI 指向目标 Session 中一个已存在 Thread
+- **THEN** owner 验证该 Thread 属于 URI 中的 Session，并在该 Session 创建真实新 Thread；target Thread 不成为新 Thread 的 parent，source URI 仍单独决定 fork 来源
+
+#### Scenario: URI位置与修订选择分离
+
+- **WHEN** 同一Thread在不同view/revision/item锚点发起fork
+- **THEN** Thread URI保持位置语义，选择与继承意图在结构化字段中固定，不使用fragment或revision编码，也不因激活工作区变化改投

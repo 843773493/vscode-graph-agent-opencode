@@ -19,7 +19,7 @@
 
 ### Requirement: 附件必须保存原件并提供受界限的预览变体
 
-系统 SHALL 在当前会话的附件存储范围内保存用户上传的原始文件，并为需要预览的类型按稳定 `file_id` 生成可重复读取的预览变体。图片预览的最长边 SHALL 为 `min(512, max(原始宽度, 原始高度))`，不得放大原图；附件引用 SHALL 至少包含稳定 id、文件名、MIME 类型和相对路径或可解析的会话定位信息。其它文件类型仍按通用附件保存，不得因为没有直接预览器而伪造预览成功。
+系统 SHALL 在原附件 owner 管理的工作区独立目录内保存用户上传的原始文件，上传关联发起 Thread，目录级关联和回收遵循 managed-attachment-directories，并为需要预览的类型按稳定 `file_id` 生成可重复读取的预览变体。图片预览的最长边 SHALL 为 `min(512, max(原始宽度, 原始高度))`，不得放大原图；附件引用 SHALL 至少包含稳定 id、文件名、MIME 类型和由原附件 owner 提供的统一资源 URI（模板引用 add-unified-virtual-resource-addressing）。其它文件类型仍按通用附件保存，不得因为没有直接预览器而伪造预览成功。
 
 #### Scenario: 高清图片生成预览
 
@@ -55,38 +55,40 @@
 - **WHEN** 目标 provider 只接受标准 text/image content block
 - **THEN** 请求投影保留模型需要的文本和 rich block 字段，移除 block `metadata` 等 canonical-only 字段，checkpoint source 仍保留完整 metadata
 
-### Requirement: 模型必须获得可组合的相对附件路径元信息
+### Requirement: 模型必须获得可解析的附件资源引用
 
-系统 SHALL 由 `UserContentBuilder` 在生成用户 content blocks 的同一入口中提供相对于工作区可解析根的附件路径，以及文件名、MIME 类型和稳定附件身份等必要元信息。manifest 可以采用 `<attachment ...>` 形式并复用项目现有标记的转义规则，但不得调用只用于内部 `system_reminder` 的 `InternalMessageFactory` 或内部消息 middleware。模型可以使用现有文件读取、终端、查看或其它工具处理原件；系统不得要求新增 `attachment.xxx` 工具才能访问附件。
+系统 SHALL 由 `UserContentBuilder` 在生成用户 content blocks 的同一入口中提供明确绑定Gateway/工作区/会话目标的附件资源 URI，以及目录 URI、派生区输出 URI、文件名、MIME 类型和稳定附件身份等必要元信息，并提示处理结果写入目录内新文件或子目录。manifest 可以采用 `<attachment ...>` 形式并复用项目现有标记的转义规则，但不得调用只用于内部 `system_reminder` 的 `InternalMessageFactory` 或内部消息 middleware。模型可以使用理解统一寻址的现有文件读取或查看能力访问原件；Shell 的结构化 workdir 由目标机器通过同一文件 owner 解析目录 URI并取得目录占用，命令正文继续采用原生路径语义，不扫描替换命令字符串；相对路径、绝对路径与 URI workdir 共用原 PTY 链路；系统不得要求新增 `attachment.xxx` 工具才能访问附件。
+
+URI 读取 SHALL 按 `resource-file-operations` 的产物分派合同交原附件 owner；既有媒体 read_file、原件/thumbnail 内容接口和工具结果的 Provider 媒体投影保持同一行为。普通文本读取的严格 UTF-8 限制不适用于既有受支持媒体读取，变体继续由原 owner 的独立参数选择，不编码进 URI。
 
 #### Scenario: 模型收到图片附件说明
 
 - **WHEN** 用户消息带有持久化图片附件
-- **THEN** 模型文本中包含可解析的相对路径和附件元信息，路径不依赖本机绝对路径，模型可以据此组合现有工具读取原图或其它变体
+- **THEN** 模型文本中包含可解析的统一资源 URI 和附件元信息，不包含真实路径，模型可用支持该读取能力的工具访问原图或其它变体
 
 #### Scenario: 附件没有可直接注入的 rich block
 
 - **WHEN** 当前目标模型或 provider 不能直接接受某个附件类型的 rich content block
-- **THEN** 用户消息仍保留相对路径和元信息，系统不把附件伪装成已被模型解析的文本，也不因缺少专用附件工具而静默删除附件
+- **THEN** 用户消息仍保留资源 URI 和元信息，系统不把附件伪装成已被模型解析的文本，也不因缺少专用附件工具而静默删除附件
 
 ### Requirement: 预览 rich block 可以按目标能力选择性发送
 
-系统 SHALL 在目标模型声明支持图像输入且存在有效预览时，通过 LiteLLM 的模型请求入口发送预览；原始附件和相对路径文本仍是 canonical 用户消息的一部分。Chat Completions 与 Anthropic Messages 传给 LiteLLM 的图片 block SHALL 使用 `image_url` 形状，Responses 传给 LiteLLM 的图片 block SHALL 使用 `input_image` 及字符串 `image_url` 形状。应用层不得构造或发送 Anthropic 原生 `image/source` block，最终 provider wire 转换由 LiteLLM 完成。目标 provider 不支持该 rich block 时，系统 SHALL 保留路径文本并产生可诊断的未发送/失败投影结果，不得将可选 rich block 的失败伪装为成功解析或绕过 LiteLLM 直连 provider SDK。
+系统 SHALL 在目标模型声明支持图像输入且存在有效预览时，通过 LiteLLM 的模型请求入口发送预览；原始附件和资源 URI文本仍是 canonical 用户消息的一部分。Chat Completions 与 Anthropic Messages 传给 LiteLLM 的图片 block SHALL 使用 `image_url` 形状，Responses 传给 LiteLLM 的图片 block SHALL 使用 `input_image` 及字符串 `image_url` 形状。应用层不得构造或发送 Anthropic 原生 `image/source` block，最终 provider wire 转换由 LiteLLM 完成。目标 provider 不支持该 rich block 时，系统 SHALL 保留资源引用文本并产生可诊断的未发送/失败投影结果，不得将可选 rich block 的失败伪装为成功解析或绕过 LiteLLM 直连 provider SDK。
 
 #### Scenario: Chat Completions 或 Anthropic 支持图像输入
 
 - **WHEN** 目标协议为 Chat Completions 或 Anthropic Messages，且附件存在生成成功的预览
-- **THEN** 请求通过 LiteLLM 发送并包含 `{"type":"image_url","image_url":{"url":"data:image/...;base64,..."}}` block，同时保留用户文本和附件路径元信息；应用层不生成 Anthropic 原生 `image/source` block
+- **THEN** 请求通过 LiteLLM 发送并包含 `{"type":"image_url","image_url":{"url":"data:image/...;base64,..."}}` block，同时保留用户文本和附件资源 URI 元信息；应用层不生成 Anthropic 原生 `image/source` block
 
 #### Scenario: Responses 支持图像输入
 
 - **WHEN** 目标协议为 Responses，且附件存在生成成功的预览
-- **THEN** 请求通过 LiteLLM Responses 入口发送，并包含 `{"type":"input_image","image_url":"data:image/...;base64,..."}` block，同时保留用户文本和附件路径元信息
+- **THEN** 请求通过 LiteLLM Responses 入口发送，并包含 `{"type":"input_image","image_url":"data:image/...;base64,..."}` block，同时保留用户文本和附件资源 URI 元信息
 
 #### Scenario: 不支持图像输入的目标 provider
 
 - **WHEN** 目标 provider 不接受该图片 rich block
-- **THEN** 请求仍包含可见文本和相对附件路径，rich block 被明确标记为未发送或投影失败，原始用户消息和附件文件不被修改，系统不得绕过 LiteLLM 直连 provider SDK
+- **THEN** 请求仍包含可见文本和附件资源 URI，rich block 被明确标记为未发送或投影失败，原始用户消息和附件文件不被修改，系统不得绕过 LiteLLM 直连 provider SDK
 
 ### Requirement: 模型实际使用的预览 content 必须进入 checkpoint 和历史
 
@@ -123,7 +125,7 @@ Web 历史 API SHALL 为用户消息返回独立的可见文本和附件 DTO/元
 #### Scenario: 预览生成失败但原件已保存
 
 - **WHEN** 原件保存成功但预览生成失败
-- **THEN** 附件元数据保留原件和失败原因，模型仍可获得相对路径，Web 显示明确的预览不可用状态
+- **THEN** 附件元数据保留原件和失败原因，模型仍可获得附件资源 URI，Web 显示明确的预览不可用状态
 
 #### Scenario: 附件资源读取失败
 
