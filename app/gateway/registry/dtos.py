@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.core.failures import failure_detail
 from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.runtime.local_workspace import validate_workspace_health_identity
 from app.gateway.service_types import GatewayServiceName
@@ -89,7 +90,10 @@ class RegistryDtosMixin:
                     except RuntimeError as error:
                         status = "offline"
                         workspace_service_status = "offline"
-                        workspace_service_error = str(error)
+                        workspace_service_error = failure_detail(
+                            error, stage="backend_runtime_health",
+                            label=f"Backend 运行检查失败: owner={backend_contract.owner_id}",
+                        )
                 if check_health:
                     try:
                         if backend_owner is not None:
@@ -131,7 +135,10 @@ class RegistryDtosMixin:
                     except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         status = "offline"
                         workspace_service_status = "offline"
-                        workspace_service_error = str(error)
+                        workspace_service_error = failure_detail(
+                            error, stage="workspace_health",
+                            label=f"工作区健康检查失败: workspace_id={target.workspace_id}",
+                        )
                 config_reload = GatewayConfigReloadStatusDTO()
                 if check_health and status == "ready":
                     if backend_url is None:
@@ -168,7 +175,10 @@ class RegistryDtosMixin:
                     except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         config_reload = GatewayConfigReloadStatusDTO(
                             available=False,
-                            error=str(error),
+                            error=failure_detail(
+                                error, stage="config_status",
+                                label=f"工作区配置状态检查失败: workspace_id={target.workspace_id}",
+                            ),
                         )
                 health_paths: dict[GatewayServiceName, str] = {
                     "workspace_api": "/api/v1/health",
@@ -231,7 +241,10 @@ class RegistryDtosMixin:
                         service_statuses[service] = service_dto(
                             service,
                             "offline",
-                            error=str(error),
+                            error=failure_detail(
+                                error, stage="service_health",
+                                label=f"辅助服务健康检查失败: workspace_id={target.workspace_id}, service={service}",
+                            ),
                         )
                 remote_connection = (
                     self.remote_gateway_connection(

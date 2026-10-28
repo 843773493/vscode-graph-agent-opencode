@@ -1085,3 +1085,11 @@
 - 真实生产投影默认使用相同namespace，原SQLite去重键遗漏connection，导致两个Gateway导出同remote_workspace_id时误拒绝。唯一writer的remote_projection身份键现包含已有connection_id；其它owner原有去重保持，不改持久字段、SQL、事务、schema或历史记录，不新增命名空间回填/双读。
 - 新测试从人工注册和配置批量入口经原发现协议/DTO产生投影，修改前2 failed，修改后完整场景通过：不同backend UUID和路由保持独立，同连接重复仍拒绝且revision/注册表不变；一个远端刷新不改另一个，关闭writer后冷重开保留全部原身份，再从原重连入口恢复两条路由。扩大六文件回归238 passed/1 failed（12.81秒）；唯一提交观察者异常原对象断言，在完整旧提交`e265172f8`的git archive中单独复现同一失败，未修改断言，不称全绿。
 - Ruff8项与旧HEAD输出逐字一致；Pyright生产13→13，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，compileall通过。作者按架构技能核对：生产796行沿用唯一registry owner，仅新增键字段；测试置于既有federation目录（12个直接Python文件），无新目录、DDL或职责。SSH/HTTP分别为替身与MockTransport，不冒称真实网络或独立产品验收。命令、原始输出、源码指纹、实际退出码、旧提交归因及结构证据见`out/tests/temp/uri-global-closure/artifacts/verification-019.json`；临时旧源码已删除，baseline运行输出保留。URI与多工作区全局门仍未勾，团队/协作和MCP显式持有继续延期。
+
+
+### 2026-10-28 Gateway 健康列表错误事实及组投影收口
+
+- Backend运行检查、Workspace健康、配置状态和Terminal/Browser探针统一复用原failure_detail；普通服务错误、组connection_error与持久投影仅保留准确阶段/类别，完整原错进入具名诊断，日志sink失败不阻止响应与结算。保留健康并发、组锁内只读、旧快照不能污染新合同、活动工作区快照及无进程冷列表行为，不改SQL/schema/生命周期writer。
+- 新增30个三类原生位置×五个故障入口×正常/故障日志反例，修改前全部失败；最终五文件154 passed/12.33秒，经过真实列表路由/Depends/TraceMiddleware的ASGI序列化与SQLite writer，核request_id、成员generation/完整归属、原异常身份、全组失败持久投影、配置探针修复及独占writer关闭后的冷读。首次候选18失败来自新测试误将无进程冷列表的当前“未运行”事实等同磁盘历史故障；源码证明原加载不恢复内存owner.error、冷owner无进程，因此分开精确核当前backend_runtime_health类别、磁盘原故障及查询不写库，未改产品冷恢复语义。
+- 现有健康fixture和四个测试声明一次迁到`tests/unit/gateway/registry/test_health_projection.py`，不保留副本；其中三测试AST逐字一致，另一个按URI合同把详细原文断言移到诊断并保留准确RuntimeError/阶段和组锁行为。原根文件32个声明AST保持，旧接受矩阵路径仍对应保留声明且21项矩阵检查通过。新目录补四段AGENTS，生产345行、新测试334行；根注册表测试仍1150行的拆分风险保留。
+- Ruff与compileall通过；同三文件Pyright19→19，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称全类型绿。初轮搬迁残留httpx导入已删除。准确命令、原始输出、源码前后指纹、实际退出码和结构自审见`out/tests/temp/uri-global-closure/artifacts/verification-020.json`。HTTP/进程边界为ASGI/MockTransport/Probe，不代替独立Gateway或真实进程恢复/Web/Windows验收；完整Backend动作及其它普通错误出口继续待收口，2.2/7.2保持未勾，延期项不改为完成。
