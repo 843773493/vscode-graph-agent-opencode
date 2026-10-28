@@ -35,7 +35,7 @@ def _is_progress_event(event: dict[str, Any]) -> bool:
         and is_tracked_chat_model_event(name)
     ):
         return True
-    return event_type in {"on_tool_start", "on_tool_end"} or (
+    return event_type in {"on_tool_start", "on_tool_end", "on_tool_error"} or (
         event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
     )
 

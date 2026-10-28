@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from tests.integration.backend.sessions.fork.test_task_context import (
@@ -18,13 +20,28 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.support.api_helpers import create_session
 from tests.support.fork_deadline import ForkDeadlineRegistry
 
+LINEAGE_QUERY = (
+    "WITH RECURSIVE lineage(view_id) AS (SELECT branch.head_view_id "
+    "FROM checkpoint_namespace_state namespace JOIN branches branch "
+    "ON branch.branch_id=namespace.active_branch_id WHERE namespace.checkpoint_ns='' UNION "
+    "SELECT view.parent_view_id FROM context_views view JOIN lineage ON view.view_id=lineage.view_id "
+    "WHERE view.parent_view_id IS NOT NULL) SELECT view_id FROM lineage"
+)
 
-@pytest.mark.parametrize("source_case", [{
-    "managed_gateway": True, "terminal": True, "browser": True, "workspace_template": "model_tool_test_workspace",
-}], indirect=True)
-async def test_item_only_source_point_finds_latest_nonancestor_branch(
-    source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry,
-) -> None:
+
+@dataclass(frozen=True)
+class BranchedItemHistory:
+    session: str
+    thread: str
+    item_id: str
+    old_view: str
+    latest: dict[str, object]
+    ancestors: list[tuple]
+
+
+@pytest.fixture
+async def branched_item_history(source_case: RuntimeSourceCase) -> BranchedItemHistory:
+    """消息和两次回放生成非活跃候选，供公开 fork 与真实 task 共用。"""
     case = source_case
     session = await create_session(case.client, "全分支 item 定位")
     await case.plan(session, [{"content": content} for content in (
@@ -62,20 +79,27 @@ async def test_item_only_source_point_finds_latest_nonancestor_branch(
             assert point.json()["data"]["source_view_id"] == latest["source_view_id"]
             assert point.json()["data"]["anchor_item_id"] == item_id
 
-    lineage_query = (
-        "WITH RECURSIVE lineage(view_id) AS (SELECT branch.head_view_id "
-        "FROM checkpoint_namespace_state namespace JOIN branches branch "
-        "ON branch.branch_id=namespace.active_branch_id WHERE namespace.checkpoint_ns='' UNION "
-        "SELECT view.parent_view_id FROM context_views view JOIN lineage ON view.view_id=lineage.view_id "
-        "WHERE view.parent_view_id IS NOT NULL) SELECT view_id FROM lineage"
-    )
-    ancestors = case.sql(session, thread, lineage_query)
+    ancestors = case.sql(session, thread, LINEAGE_QUERY)
     assert case.sql(session, thread,
         "SELECT member.item_id FROM checkpoint_namespace_state namespace "
         "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
         "JOIN context_view_items member ON member.view_id=branch.head_view_id "
         "WHERE namespace.checkpoint_ns='' AND member.item_id=? AND member.visible=1 AND member.context_selected=1",
         (item_id,)) == []
+    return BranchedItemHistory(session, thread, item_id, old_view, latest, ancestors)
+
+
+@pytest.mark.parametrize("source_case", [{
+    "managed_gateway": True, "terminal": True, "browser": True, "workspace_template": "model_tool_test_workspace",
+}], indirect=True)
+async def test_item_only_source_point_finds_latest_nonancestor_branch(
+    source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry, branched_item_history: BranchedItemHistory,
+) -> None:
+    case, history = source_case, branched_item_history
+    session, thread, item_id = history.session, history.thread, history.item_id
+    old_view, latest, ancestors = history.old_view, history.latest, history.ancestors
+    endpoint = f"/api/v1/sessions/{session}/fork-source-point"
+    params = {"thread_id": thread, "item_id": item_id}
     explicit = await case.client.get(endpoint, params={**params, "source_view_id": old_view})
     assert explicit.status_code == 200, explicit.text
     assert explicit.json()["data"]["source_view_id"] == old_view
@@ -134,7 +158,7 @@ async def test_item_only_source_point_finds_latest_nonancestor_branch(
     assert copied.status_code == 200, copied.text
     deadline.complete()
     child = copied.json()["data"]["thread_id"]
-    child_ancestors = case.sql(session, child, lineage_query)
+    child_ancestors = case.sql(session, child, LINEAGE_QUERY)
     assert latest["source_view_id"] not in {row[0] for row in child_ancestors}
     child_point = await case.client.get(endpoint, params={**params, "thread_id": child})
     assert child_point.status_code == 200, child_point.text

@@ -18,6 +18,7 @@
 - `integration-fork-prefix-integrity` 核对缺失／损坏必需正文时不发布目标，以及非前缀模式的严格 revision，固定180秒/4GiB和原60秒fork监督器。
 - `integration-fork-prefix-receipts` 复用三端回执装具，以 item-only 和过期观察 revision 创建真实远端前缀，核对尾部排除、实际捕获坐标及来源离线后的目标进程重启与重试；固定240秒/4GiB和单次60秒fork期限。
 - `integration-fork-item-lookup` 通过真实消息、回放、前缀和完整 fork 入口生成非活跃、非祖先分支，核对 item-only/显式 view、inclusive/before 的真实有序前缀及观察 revision 推进，固定180秒/4GiB。业务 HTTP 使用 ASGI transport，Gateway 管理来源与 Terminal/Browser 为真实服务；不替代真实 Gateway 代理、task 前缀创建、一致捕获或恢复验收。
+- `integration-task-item-lookup` 复用消息／回放与完整 fork 生成独立根，通过真实模型 task 验证非祖先候选、显式旧 view、相同历史 ID 的精确 caller、先提交调用再捕获及 child 首次请求；另核无候选和来源覆盖拒绝。固定360秒/4GiB及单次60秒fork期限。业务HTTP使用ASGI transport，复用真实Gateway管理来源、Terminal/Browser与model_stream，不替代Gateway业务代理、进程重启或Web验收。
 - `integration-fork-prefix-consistency` 通过真实消息及回放，在创建 intent 后与私有快照复制后设置屏障，核对来源追加／分支切换、真实独占 writer 等待、冻结成员顺序、同键重试和 child 首次 Provider 请求；固定240秒/4GiB与原60秒fork期限。业务 HTTP 使用 ASGI transport，复用真实 Gateway 管理来源、Terminal/Browser及model_stream；不替代跨端、OS重启或Web验收。
 - `integration-fork-prefix-restart` 经真实 Backend HTTP 和 OS 硬重启，在 marker 已落盘／captured CAS 前及 Session main 已发布／回执前核对来源推进后不重选、原创建及 capture、两次冷启动、有序前缀和目标首次 Provider 请求。复用原进程、Terminal/Browser与model_stream装具，固定300秒/4GiB和单次60秒fork预算；不代表 Gateway 业务代理、跨端或Web验收。
 - `integration-fork-compacted-prefix` 经消息、HTTP压缩调度及后继模型执行生成真实摘要，再核对item-only／显式view、inclusive／before、有效上下文与展示顺序以及child首次请求，固定240秒/4GiB及原60秒fork预算。

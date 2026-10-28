@@ -180,6 +180,55 @@ async def process_agent_event_stream(
     else:
         raise TypeError("Agent 事件流 config.callbacks 必须是 list")
 
+    async def close_tool_callback(
+        run_id: str, display_context: ToolEventDisplayContext, result_text: str, *, failed: bool,
+    ) -> None:
+        """结束真实callback的展示活动和scope；canonical结果仍由原ToolMessage链提交。"""
+        if message_stream_runtime is not None:
+            activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
+            activities = message_stream_runtime.activities
+            if activity_bindings and activities is None:
+                raise RuntimeError(
+                    "message-stream activity runtime 不可在执行中消失"
+                )
+            for activity_id, activity_kind, resource_id in activity_bindings:
+                detail = activity_result_detail(
+                    result_text,
+                    tool_name=display_context.tool_name,
+                    agent_id=agent_id,
+                )
+                if activity_kind == "resource.operation":
+                    detail["operation"] = display_context.tool_name
+                    if resource_id is not None:
+                        detail["resource_id"] = resource_id
+                await activities.updated(
+                    activity_id=activity_id,
+                    kind=activity_kind,
+                    status="stopping",
+                    detail=detail,
+                )
+                if failed:
+                    await activities.failed(
+                        activity_id=activity_id,
+                        kind=activity_kind,
+                        outcome="outcome_unknown",
+                        summary=result_text,
+                        detail=detail,
+                    )
+                else:
+                    await activities.completed(
+                        activity_id=activity_id,
+                        kind=activity_kind,
+                        summary=(
+                            "子 Agent 已接受并独立运行"
+                            if activity_kind == "subagent.run"
+                            else f"资源操作已完成：{display_context.tool_name}"
+                        ),
+                    )
+        tool_scope = tool_scopes_by_run_id.pop(run_id, None)
+        if tool_scope is not None:
+            await tool_scope.close()
+
     def track_model_run(run_id: str) -> None:
         if run_id in tracked_model_run_ids:
             return
@@ -296,7 +345,7 @@ async def process_agent_event_stream(
             if (
                 is_model_event
                 or is_model_failed_event
-                or event_type in {"on_tool_start", "on_tool_end"}
+                or event_type in {"on_tool_start", "on_tool_end", "on_tool_error"}
             ):
                 validate_stream_event_identity(
                     metadata,
@@ -311,7 +360,7 @@ async def process_agent_event_stream(
                     progress_reporter("model")
                 elif is_model_failed_event:
                     progress_reporter("model_failed")
-                elif event_type in {"on_tool_start", "on_tool_end"}:
+                elif event_type in {"on_tool_start", "on_tool_end", "on_tool_error"}:
                     progress_reporter(f"tool:{name or 'unknown'}")
 
             if is_model_failed_event:
@@ -615,7 +664,7 @@ async def process_agent_event_stream(
                         activity_bindings_by_run_id[run_id] = tuple(activity_bindings)
                 continue
 
-            if event_type == "on_tool_end":
+            if event_type in {"on_tool_end", "on_tool_error"}:
                 run_id = event_run_id(event)
                 if not run_id:
                     raise RuntimeError(f"{name or 'unknown_tool'} 工具结束事件缺少 run_id")
@@ -625,6 +674,22 @@ async def process_agent_event_stream(
                         f"工具结束事件找不到对应的开始事件: run_id={run_id} "
                         f"tool={name or 'unknown_tool'}"
                     )
+                interrupt_state = SessionInterruptState.end_tool(session_id, thread_id=thread_id, run_id=run_id)
+                if interrupt_state.active_tools_by_run_id:
+                    set_interruptible_phase("tool")
+                    set_active_tool_name(interrupt_state.tool_name)
+                else:
+                    set_interruptible_phase("text")
+                    set_active_tool_name(None)
+                if event_type == "on_tool_error":
+                    error = data.get("error")
+                    if not isinstance(error, BaseException):
+                        raise TypeError("工具错误事件缺少真实异常")
+                    # SDK校验错误也有start/error，却没有end；不伪造ToolMessage覆盖框架处理后的结果。
+                    message_stream_tool_call_ids_by_run_id.pop(run_id, None)
+                    message_stream_tool_attempt_ids_by_run_id.pop(run_id, None)
+                    await close_tool_callback(run_id, display_context, str(error), failed=True)
+                    continue
                 raw_output = data.get("output")
                 raw_output = tool_message_from_output(
                     raw_output,
@@ -690,13 +755,6 @@ async def process_agent_event_stream(
                             )
                             if stored_edit is not None:
                                 stored_edits.append(stored_edit)
-                interrupt_state = SessionInterruptState.end_tool(session_id, thread_id=thread_id, run_id=run_id)
-                if interrupt_state.active_tools_by_run_id:
-                    set_interruptible_phase("tool")
-                    set_active_tool_name(interrupt_state.tool_name)
-                else:
-                    set_interruptible_phase("text")
-                    set_active_tool_name(None)
                 tool_attempt_id = message_stream_tool_attempt_ids_by_run_id.get(run_id, run_id)
                 payload = {
                     "part_id": tool_attempt_id,
@@ -748,49 +806,7 @@ async def process_agent_event_stream(
                         artifact=output.artifact,
                         error=result_text if effective_tool_status == "error" else None,
                     )
-                    activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
-                    activities = message_stream_runtime.activities
-                    if activity_bindings and activities is None:
-                        raise RuntimeError(
-                            "message-stream activity runtime 不可在执行中消失"
-                        )
-                    for activity_id, activity_kind, resource_id in activity_bindings:
-                        detail = activity_result_detail(
-                            result_text,
-                            tool_name=display_context.tool_name,
-                            agent_id=agent_id,
-                        )
-                        if activity_kind == "resource.operation":
-                            detail["operation"] = display_context.tool_name
-                            if resource_id is not None:
-                                detail["resource_id"] = resource_id
-                        await activities.updated(
-                            activity_id=activity_id,
-                            kind=activity_kind,
-                            status="stopping",
-                            detail=detail,
-                        )
-                        if effective_tool_status == "error":
-                            await activities.failed(
-                                activity_id=activity_id,
-                                kind=activity_kind,
-                                outcome="outcome_unknown",
-                                summary=result_text,
-                                detail=detail,
-                            )
-                        else:
-                            await activities.completed(
-                                activity_id=activity_id,
-                                kind=activity_kind,
-                                summary=(
-                                    "子 Agent 已接受并独立运行"
-                                    if activity_kind == "subagent.run"
-                                    else f"资源操作已完成：{display_context.tool_name}"
-                                ),
-                            )
-                tool_scope = tool_scopes_by_run_id.pop(run_id, None)
-                if tool_scope is not None:
-                    await tool_scope.close()
+                await close_tool_callback(run_id, display_context, result_text, failed=effective_tool_status == "error")
 
     finally:
         primary_error = sys.exception()
