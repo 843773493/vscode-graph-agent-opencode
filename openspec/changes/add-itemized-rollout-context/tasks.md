@@ -1165,7 +1165,7 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - [x] 14.5 复用原创建/capture/物化/证明/发布/清理/恢复链：原始 selector 进入请求 preimage，解析 view/revision/item/方向/前缀与 capture 进入原日志；同 tool-call 首次冻结后优先复用原记录，不重新定位。显式 view、item、方向、模式或任务变化返回冲突，capture 未完成只能按原冻结前缀继续或中止；无 idle fork 后补委派、第二 journal/复制器或重复 child/member/initial intent/Job。
 - [x] 14.6 验证真实模型 task 入口：模型只提交 item_id，断言 task 调用已在 canonical history 提交后进入定位，child 首个 Provider 请求包含选定前缀及自身 seed/reference，排除截止点后的 task 调用/新增消息/活跃执行。覆盖非 active 且非祖先分支中的最新候选、显式旧 view、多个 view、hidden/backing 非候选、跨 Thread 相同历史 ID、无候选和非法来源覆盖；新测试必须能区分 active-lineage 或跨 owner 误选实现。
 - [x] 14.7 验证 inclusive/before、摘要/保留成员顺序、协议不闭合与正文缺失不回退。用真实入口和可控并发屏障验证无关尾部追加、task 写入推进 revision 及来源分支切换下的前缀一致性；同时损坏冻结 revision/manifest/hash 的负例仍须拒绝，不能只证明删除检查后请求成功。
-- [ ] 14.8 覆盖首次冻结后更晚候选出现、同 tool-call 重试及启动恢复不换原 view/anchor/capture；在冻结与 capture、staging、物化、发布/绑定边界故障或取消后核唯一身份、不可见半成品与原 owner 中止。Session 删除继续排空 live holder、清理 abandoned 创建，不重选来源、不复活目标；准确区分服务实例恢复与 OS 强杀重启证据。
+- [x] 14.8 覆盖首次冻结后更晚候选出现、同 tool-call 重试及启动恢复不换原 view/anchor/capture；在冻结与 capture、staging、物化、发布/绑定边界故障或取消后核唯一身份、不可见半成品与原 owner 中止。Session 删除继续排空 live holder、清理 abandoned 创建，不重选来源、不复活目标；准确区分服务实例恢复与 OS 强杀重启证据。
 - [ ] 14.9 回归 task 默认 empty 不读取父 rollout、改名模式的 normal/internal/空来源、精确 child caller 及结果回报、普通公开 fork idle/no-member/no-initial-intent，以及未改模式的既有校验。完成受影响静态/真实类型检查和协议生成校验；涉及 Web 消费者时完成真实类型检查及 `bun run --cwd src/clients/web build`，按实际影响补真实 Gateway/Web 入口验证。
 - [ ] 14.10 全部测试保留既有进程外超时/内存保护及固定 60 秒 fork deadline/watchdog，不放宽单次预算。日志和工作区沿原 tests 输出规范；登记准确命令、源码指纹、原始输出、实际退出码与通过/失败/未验证范围。旧 124 单测、11 集成及其它历史 PASS 不代替本节新合同验收；Goal 与其它团队 TODO 不计入本切片完成。
 
@@ -1255,3 +1255,15 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 保留失败原件：002 的新增断言错误地把 replay 来源当作非祖先；004 的第三次 task 预期错误地冻结提交前的活跃 view。010 为选择表达式拼错而零用例；011 先复现真实未闭合活动，测试预期 completed 失败后原监督器终止运行（exit143），不算产品通过。016 在产品正常完成后误将 sqlite3.Row 与 tuple 比较；015/018 为新增单测误用 list/tuple 及事件名，均按实际合同修正。没有放宽业务身份、顺序、期限或错误断言。
 - 准确命令、4686项源码前后指纹、raw、真实退出码及运行组回收见 `out/tests/temp/fork-task-item-lookup/artifacts/runs/`；机械核验 `verification-029.json`，结构自查 `architecture-032.json`。processor 842→858行（净增16），仍为原事件消费 owner；两个新测试262／67行，fork目录9个Python文件，无新增源码目录、writer、协议资产或兼容层。suite固定360秒／4GiB，单次fork仍60秒。
 - 进度108/119，14.8–14.10及其它组合门继续未完成。本批业务HTTP使用ASGI transport，Gateway只提供真实管理来源，Terminal/Browser为真实服务，模型复用model_stream；没有新增Gateway业务代理、OS重启、跨端、Windows、真实Provider、Python Pyright或Web构建／浏览器验收。团队／协作与Goal专项继续TODO。
+
+
+### 2026-10-28 真实 task 前缀硬重启与原 owner 中止（14.8 闭合）
+
+- 新增 `test_task_prefix_restart.py`，复用既有真实 Backend HTTP、管理 Gateway、Terminal/Browser、model_stream 与固定60秒fork监督器。关键状态由消息和真实模型task产生；在私有marker已落盘/CAS前、child发布后、初始execution已准入/bound前分别OS强杀。冻结后经普通消息入口接受queued输入，三例均实际形成不同且更新的候选view，恢复仍保留原capture/marker、精确有序前缀、child/member/initial intent/Job，目标首次请求排除尾部、父活跃task与queued输入；二次启动核无重复执行/通知，原回报回执按既有语义对账为completed。
+- 正式matrix新增 `integration-task-prefix-restart`，整组三场景480秒/4GiB，不改变单次60秒fork预算。候选tree `76b0ab79df789f790d81381c14cc5504713c5cd2` 的 `product-all-016` 为3 passed/408.48秒、exit0；每例均核不同的三次Backend PID，不能把健康检查或服务实例重建当成OS重启。
+- 原 `test_task_context.py` 的staging、物化、发布和中止/删除阶段统一使用item-only前缀；无冻结坐标的prepared记录只保持原selector/seed/创建身份，marker阶段读取原marker，已captured阶段核原持久坐标。`recovery-boundaries-014` 为15 passed/590.87秒、exit0，覆盖四种真实模型输入/同tool-call重试及冲突、六阶段服务实例恢复、精确child caller/结果回报和四类故障/删除。服务注入组只证明原owner创建/准入与恢复，不冒称真实模型或OS强杀。
+- 追加中止后的显式恢复扫描，核零恢复、catalog拓扑不变、原record/capture保持aborted且零child/initial intent；含live holder排空和abandoned Session删除。最终候选tree `7b71220560818fb18199a1a8ea49eebaf6e67182` 的 `aborted-no-revival-024` 为4 passed/82.97秒、exit0。AST对照确认相对上述15项受测源码，只修改这四个参数用例所在函数；其余函数/依赖原件未变，按实际依赖复用证据。
+- Ruff最终 `static-025`、真实matrix解析 `matrix-011`、协议生成 `protocol-017`、`bun x tsc --noEmit -p src/clients/web/tsconfig.json` 的 `typescript-020` 和Web build `web-build-019`均exit0；早期compile检查另存 `compile-012`。本批不改app/src/packages/configs，结构自查为509/228行、fork目录10个直接Python文件，无新增目录或第二业务实现。
+- 初始失败原件全部保留：`product-capture-002` 错将canonical组合call ID用于原生delegation key，未命中屏障，exit143；`product-capture-005` 错把导入历史admission计为目标新执行，exit1，改为精确thread/key唯一性；`recovery-boundaries-007` 在preparing阶段提前读取尚无坐标的captured_point，exit143，改为按marker/原journal阶段读取；`product-all-009` 错要求启动对账后的可变回执逐字不变，exit1，现严格核原来源/通知/Job/执行身份及completed状态。没有放宽身份、顺序、hash或业务期限，也没有为测试更改产品行为。直接用Bun运行tsc的 `typescript-018` 在4GiB保护下内存耗尽exit-6；改用仓库标准 `bun x tsc` 后通过，未改变环境或保护上限。
+- 准确命令、完整源码逐文件指纹、raw、退出码及进程回收见 `out/tests/temp/task-prefix-restart/artifacts/runs/`；三例实际新候选、PID、源码依赖复用和结构机械核验见同目录上级 `verification-022.json`。正式工作区/产物位于各候选完整archive内的同名 `out/tests/integration/backend/sessions/fork/`，均保留；未新增项目根工作区或业务写入。
+- 进度109/119；14.9/14.10及其它组合门继续未勾。没有新增真实Gateway业务代理、跨端、Windows、外部Provider或浏览器交互证据，类型检查/构建不替代这些验收。团队/协作与Goal专项继续TODO。

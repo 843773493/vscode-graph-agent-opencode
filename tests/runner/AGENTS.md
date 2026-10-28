@@ -21,6 +21,7 @@
 - `integration-task-item-lookup` 复用消息／回放与完整 fork 生成独立根，通过真实模型 task 验证非祖先候选、显式旧 view、相同历史 ID 的精确 caller、先提交调用再捕获及 child 首次请求；另核无候选和来源覆盖拒绝。固定360秒/4GiB及单次60秒fork期限。业务HTTP使用ASGI transport，复用真实Gateway管理来源、Terminal/Browser与model_stream，不替代Gateway业务代理、进程重启或Web验收。
 - `integration-fork-prefix-consistency` 通过真实消息及回放，在创建 intent 后与私有快照复制后设置屏障，核对来源追加／分支切换、真实独占 writer 等待、冻结成员顺序、同键重试和 child 首次 Provider 请求；固定240秒/4GiB与原60秒fork期限。业务 HTTP 使用 ASGI transport，复用真实 Gateway 管理来源、Terminal/Browser及model_stream；不替代跨端、OS重启或Web验收。
 - `integration-fork-prefix-restart` 经真实 Backend HTTP 和 OS 硬重启，在 marker 已落盘／captured CAS 前及 Session main 已发布／回执前核对来源推进后不重选、原创建及 capture、两次冷启动、有序前缀和目标首次 Provider 请求。复用原进程、Terminal/Browser与model_stream装具，固定300秒/4GiB和单次60秒fork预算；不代表 Gateway 业务代理、跨端或Web验收。
+- `integration-task-prefix-restart` 经真实模型task与Backend HTTP，在快照落盘、child发布及初始执行准入后绑定前硬杀，核排队输入推进后复用原capture/child/Job、有序前缀、首请求和二次启动幂等。复用原进程、Terminal/Browser与model_stream，固定480秒/4GiB及单次60秒fork预算；不代表Gateway业务代理、跨端或Web验收。
 - `integration-fork-compacted-prefix` 经消息、HTTP压缩调度及后继模型执行生成真实摘要，再核对item-only／显式view、inclusive／before、有效上下文与展示顺序以及child首次请求，固定240秒/4GiB及原60秒fork预算。
 - `integration-fork-frozen-prefix-integrity` 经真实消息与工具循环核对未闭合前缀拒绝；捕获后中断并损坏原revision／manifest／正文hash，公开重试不得回源或发布目标。固定240秒/4GiB及原60秒fork预算。两套件业务HTTP使用ASGI transport，复用真实Gateway管理来源、Terminal/Browser及model_stream，不替代真实Gateway代理、进程重启或Web验收。
 

@@ -266,12 +266,10 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
     forks = container.session_context_fork_service
     delegate = {"parent_session_id": session_id, "parent_thread_id": parent_thread, "parent_agent_id": "default",
                 "parent_job_id": "task-recovery-parent", "parent_tool_call_id": "task-recovery-call",
-                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": SessionTaskCompletedContext()}
+                "description": "task-recovery-seed", "subagent_type": "general-purpose", "context": TypeAdapter(SessionTaskContext).validate_python({
+                    "mode": "view_prefix_fork", "item_id": _first_response_item(case, session_id, parent_thread),
+                })}
     prefix = phase.startswith("copy.source.")
-    if prefix:
-        delegate["context"] = TypeAdapter(SessionTaskContext).validate_python({
-            "mode": "view_prefix_fork", "item_id": _first_response_item(case, session_id, parent_thread),
-        })
     deadline = deadlines.for_operation(target=session_id, operation_key="task-recovery")
     original_materialize = forks._materialize
     original_publish = SessionControlStore.publish_thread_creation_record
@@ -307,8 +305,10 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
         assert frozen.state == ("published" if phase == "published" else "preparing")
         assert len(owner.control_store.list_child_thread_rows()) == (1 if phase == "published" else 0)
         assert len(owner.control_store.list_initial_execution_intents()) == (1 if phase == "published" else 0)
+    capture = container.session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
+    actual_point = capture.captured_point if capture is not None and capture.source_point_json is not None else None
+    marker_hash = capture.marker_sha256 if capture is not None else None
     if prefix:
-        capture = container.session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
         assert capture.state == ("preparing" if phase.endswith("before_captured_cas") else "source_captured")
         snapshot, marker_hash = read_captured_snapshot(container.checkpointer._storage.storage.sessions_dir, capture)
         actual_point = snapshot.source_point
@@ -350,7 +350,7 @@ async def test_task_context_recovers_original_creation_and_initial_intent(
                 worker.stop()
         assert owner.control_store.get_initial_execution_intent(key).job_id == intent.job_id
         assert owner.control_store.get_initial_execution_intent(key).state == "bound"
-    if prefix:
+    if actual_point is not None:
         recovered = container.session_service.path_resolver.catalog_store.get_fork_source_capture(creation_key=key)
         assert recovered.state == "materialized"
         assert (recovered.snapshot_id, recovered.marker_sha256, recovered.captured_point) == (capture.snapshot_id, marker_hash, actual_point)
@@ -446,7 +446,9 @@ async def test_task_context_abort_and_session_deletion_use_original_owner(
             return await container.session_subagent_service.delegate(
                 parent_session_id=session_id, parent_thread_id=parent, parent_agent_id="default",
                 parent_job_id="task-abort-parent", parent_tool_call_id="task-abort-call",
-                description="task-abort-seed", subagent_type="general-purpose", context=SessionTaskCompletedContext(),
+                description="task-abort-seed", subagent_type="general-purpose", context=TypeAdapter(SessionTaskContext).validate_python({
+                    "mode": "view_prefix_fork", "item_id": _first_response_item(case, session_id, parent),
+                }),
             )
 
     source_bytes = container.checkpointer._storage.storage.jsonl_path(session_id, thread_id=parent).read_bytes()
@@ -487,6 +489,13 @@ async def test_task_context_abort_and_session_deletion_use_original_owner(
             capture = resolver.catalog_store.get_fork_source_capture(creation_key=key)
             assert capture.state == "aborted" and capture.target_thread_id == record.child_thread_id
             deadline.complete()
+            topology = resolver.catalog_store.read_nodes_snapshot()
+            assert await container.session_context_fork_service.recover_prepared_forks() == 0
+            assert resolver.catalog_store.read_nodes_snapshot() == topology
+            assert owner.control_store.get_thread_creation_record(key) == record
+            assert resolver.catalog_store.get_fork_source_capture(creation_key=key) == capture
+            assert not owner.control_store.list_initial_execution_intents()
+            assert not owner.control_store.list_child_thread_rows()
         finally:
             release.set()
             for task in (creation, deleting):
