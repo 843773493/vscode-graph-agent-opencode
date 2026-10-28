@@ -39,12 +39,24 @@ def _included_config_paths(raw_pattern: str) -> list[Path]:
 
 
 def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
-    resolved_path = config_path.expanduser().resolve()
-    if resolved_path in visited or not resolved_path.is_file():
-        return []
-    visited.add(resolved_path)
+    try:
+        resolved_path = config_path.expanduser().resolve()
+        if resolved_path in visited or not resolved_path.is_file():
+            return []
+        visited.add(resolved_path)
+        config_text = resolved_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        # 主文件与 Include 共用读取边界；原始位置和正文只留诊断。
+        logger.exception("SSH 配置读取失败: stage=config_read")
+        detail = f"读取 SSH Host 配置失败: stage=config_read, type={type(error).__name__}"
+        if isinstance(error, OSError):
+            detail += f", errno={error.errno}"
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                raise type(error)(error.errno, f"{detail}, winerror={winerror}", None, winerror) from error
+            raise type(error)(error.errno, detail) from error
+        raise UnicodeError(detail) from error
     aliases: list[str] = []
-    for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in config_text.splitlines():
         config_tokens = _split_config_line(raw_line)
         if not config_tokens:
             continue

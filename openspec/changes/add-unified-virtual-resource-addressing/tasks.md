@@ -920,3 +920,9 @@
 - 原 `ssh -G` 非零退出分支不再把 stdout／stderr 复制到普通错误，改报 Host、effective_config 阶段和原退出码；两条原始输出完整留诊断。原命令、10秒期限、Host／Include解析、有界并行、异常类别与成功路径保持；全仓直接消费者继续复用同一 owner，没有新增读取链或重试。
 - 最终固定候选 `cae9905d9429c49a4c8cf59b0dab6c6108f1e5c1` 的相关测试11 passed／0.45秒；新增六项覆盖列表／选定Host入口、POSIX／Windows盘符／UNC原始错误，核普通异常无路径、两条原始输出仍留日志及原命令只调用一次。相同最终测试配完整旧生产六项均失败。Ruff与compileall通过，作者AST自查核整个模块除非零退出日志／文案外一致；准确命令、前后源码指纹、raw、实际退出码与进程组回收见 `out/tests/temp/ssh-effective-config-errors/artifacts/verification-009.json`。
 - 测试仅替换外部ssh进程边界，不代表真实OpenSSH、Gateway、Windows或完整Web；配置文件读取等其它原生I/O错误仍须另核，2.2／7.2全局门不勾。团队与协作继续TODO。
+
+### 2026-10-28 SSH 配置原生读取错误出口（2.2／7.2 部分收口）
+
+- 主配置及 Include 继续由原 Host 收集 owner 读取；文件解析／读取的 I/O 错误保留原类别、errno/winerror 与直接 cause，编码错误仍属于 ValueError 拒绝。普通错误只报告 config_read 阶段及原类型，完整原异常留具名诊断；不把失败投影为空或残缺 Host，不创建读取旁路、重试或新配置参数。
+- 新增24项覆盖列表／选定Host、主文件／Include、权限／编码和POSIX／盘符／UNC错误正文，逐项核公开无位置、诊断原异常身份、失败零ssh派发与同入口显式重试。完整旧生产配最终测试的 archive tree `2f00e3978a57f55506c3415d3bd6805a37c11209` 为24 failed；候选与SSH／转发相邻回归共61 passed／8 failed。8项均在未修改的旧转发装具访问已删除 `_gateway_root` 时失败；完整 HEAD 独立副本复现同一参数1 failed／2.57秒，未修改装具、生产路由或断言。
+- Ruff与两文件Pyright零诊断。准确命令、完整源码快照、前后指纹、raw／实际退出码及归因原件保留在 `out/tests/temp/ssh-config-read-errors/artifacts/`；本片不包含真实HTTP、OpenSSH连接、Windows或Web验收，不能据此勾全局2.2／7.2。团队与协作继续TODO。
