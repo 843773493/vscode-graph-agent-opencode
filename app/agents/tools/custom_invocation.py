@@ -267,8 +267,8 @@ def create_extension_tool_invoker_tool(
                             detail={"phase": "running", "progress": value, "total": total},
                         )
 
+                assert execution is not None
                 try:
-                    assert execution is not None
                     with mcp_progress_scope(progress), extension_execution_scope(execution):
                         execution.started = True
                         result = await _invoke_target_tool_without_nested_callbacks(
@@ -276,16 +276,19 @@ def create_extension_tool_invoker_tool(
                         )
                 except (Exception, asyncio.CancelledError):
                     if activities is not None and activity_id is not None:
+                        # SDK 已确认的回复继续沿原异常交付，不能改报远端结果未知。
+                        confirmed = execution.result_confirmed
                         async def record_failure() -> None:
                             await activities.failed(
-                                activity_id=activity_id, kind="resource.operation", outcome="outcome_unknown",
-                                summary="MCP 调用结束，远端结果未确认",
-                                detail={"phase": "ended", "code": "mcp_outcome_unknown", "retryable": False},
+                                activity_id=activity_id, kind="resource.operation",
+                                outcome="provider_error" if confirmed else "outcome_unknown",
+                                summary="MCP 返回后调用失败" if confirmed else "MCP 调用结束，远端结果未确认",
+                                detail={"phase": "ended", "code": "mcp_result_error" if confirmed else "mcp_outcome_unknown",
+                                        "retryable": False},
                             )
 
                         await run_cleanup_shielded(record_failure)
                     raise
-                assert execution is not None
                 unknown = isinstance(result, ToolMessage) and McpInvocationReceipt.from_artifact(result.artifact) is not None
                 if sealed_target.origin != "mcp":
                     execution.result_confirmed = True

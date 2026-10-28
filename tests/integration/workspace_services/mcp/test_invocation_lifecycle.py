@@ -8,11 +8,13 @@ import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 import uvicorn
+from mcp import types as mcp_types
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.shared.exceptions import McpError
 from sse_starlette.sse import AppStatus
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
@@ -29,6 +31,7 @@ from app.agents.tools.custom_invocation import (
 )
 from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import (
+    ModelDeltaSink,
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
@@ -162,8 +165,10 @@ async def test_direct_dictionary_unknown_result_does_not_release_original_occupa
 def activity_case():
     writer = SimpleNamespace(commit=AsyncMock())
     runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
+    sink = create_autospec(ModelDeltaSink, instance=True)
+    sink.activities = runtime
     context = ToolInvocationContext(thread_binding=ThreadRuntimeBinding("session", f"thr_{create_uuid_hex()}"))
-    return SimpleNamespace(writer=writer, runtime=runtime, context=context)
+    return SimpleNamespace(writer=writer, sink=sink, context=context)
 
 
 @pytest.mark.parametrize("mode, expected", [("progress", "success"), ("disconnect", "outcome_unknown")])
@@ -181,7 +186,7 @@ async def test_envelope_publishes_real_progress_and_terminal_activity(
             model_call_id=context.require_model_call_id(),
         ) as retain:
             retain([{"id": "activity-call", "name": "invoke_extension_tool", "args": {"tool_name": "mcp__schema__probe"}}])
-        sink_token = set_current_model_delta_sink(SimpleNamespace(activities=activity_case.runtime))
+        sink_token = set_current_model_delta_sink(activity_case.sink)
         try:
             invoker = create_extension_tool_invoker_tool(
                 case.owner.get_tools(), invocation_context=context,
@@ -346,3 +351,62 @@ async def test_real_http_progress_cancel_and_following_request(http_schema_serve
     assert result.status == "success" and result.tool_call_id == "http-following"
     assert progress_case.values == [(1, 2)]
     assert any(row.get("cancelled") for row in case.received())
+
+
+async def test_real_http_protocol_error_is_confirmed_in_activity_and_lease(
+    http_schema_server_case: SchemaServerCase, activity_case,
+) -> None:
+    from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+
+    case = http_schema_server_case
+    context = activity_case.context
+    binding = case.owner.binding_snapshot()
+    target = binding.resolve("mcp__schema__probe")
+    assert target.connection_ref is not None
+    thread = context.thread_binding
+    token = context.set_tool_call_id("protocol-error-call", projection_identity=ItemProjectionIdentity(model_call_id=create_uuid_hex()))
+    with case.owner.execution_handles.reserve_model_call(
+        binding, session_id=thread.session_id, thread_id=thread.thread_id,
+        model_call_id=context.require_model_call_id(),
+    ) as retain:
+        retain([{"id": "protocol-error-call", "name": "invoke_extension_tool", "args": {"tool_name": target.target_id}}])
+    sink_token = set_current_model_delta_sink(activity_case.sink)
+    try:
+        operation_id = context.require_operation_id("mcp_call")
+        invoker = create_extension_tool_invoker_tool(
+            case.owner.get_tools(), invocation_context=context,
+            catalog_binding_resolver=sealed_extension_catalog_binding_resolver(binding),
+            target_resolver=case.owner.execution_handles.execution_target,
+        )
+        with pytest.raises(McpError) as failed:
+            await asyncio.wait_for(call(invoker, "protocol-error-call", "protocol_error"), 5)
+    finally:
+        reset_current_model_delta_sink(sink_token)
+        context.reset_tool_call_id(token)
+
+    assert failed.value.error.code == mcp_types.URL_ELICITATION_REQUIRED
+    assert failed.value.error.data == {"elicitations": [{
+        "mode": "url", "message": "先完成远端授权", "url": "https://example.invalid/authorize",
+        "elicitationId": "protocol-error-authorization",
+    }]}
+    commits = activity_case.writer.commit.await_args_list
+    assert [entry.args[0] for entry in commits] == ["activity.started", "activity.failed"]
+    assert {entry.args[1]["activity_id"] for entry in commits} == {operation_id}
+    terminal = commits[-1].args[1]
+    assert terminal["outcome"] == "provider_error"
+    assert terminal["detail"] == {"phase": "ended", "code": "mcp_result_error", "retryable": False}
+    assert "mcp_outcome_unknown" not in repr(commits)
+    assert "https://example.invalid/authorize" not in repr(commits)
+    assert case.received() == [{"name": "probe", "arguments": {"call_mode": "protocol_error"}}]
+
+    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+    record = cold.get(target.connection_ref)
+    assert record is not None and record.status == "running"
+    assert cold.leases_for_resource(target.connection_ref) == []
+    sibling = await call(case.invoker(), "after-protocol-error", "progress")
+    assert sibling.status == "success" and sibling.tool_call_id == "after-protocol-error"
+    assert case.owner.binding_snapshot().resolve(target.target_id).connection_ref == target.connection_ref
+    assert case.received() == [
+        {"name": "probe", "arguments": {"call_mode": "protocol_error"}},
+        {"name": "probe", "arguments": {"call_mode": "progress"}},
+    ]

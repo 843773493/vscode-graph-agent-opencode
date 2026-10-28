@@ -14,6 +14,7 @@ from pathlib import Path
 from mcp import types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
+from mcp.shared.exceptions import UrlElicitationRequiredError
 
 RESULT_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMQCegBAAFsAPH6cDjBAAAAAElFTkSuQmCC"
 
@@ -57,6 +58,13 @@ def build_server(definitions_path: Path, receipt_path: Path) -> Server:
                 content=[types.TextContent(type="text", text=json.dumps(state))],
             )
         call_mode = arguments.get("call_mode")
+        if call_mode == "protocol_error":
+            raise UrlElicitationRequiredError([
+                types.ElicitRequestURLParams(
+                    mode="url", message="先完成远端授权", url="https://example.invalid/authorize",
+                    elicitationId="protocol-error-authorization",
+                ),
+            ])
         if call_mode == "disconnect":
             os._exit(0)
         if call_mode in {"progress", "wait"}:

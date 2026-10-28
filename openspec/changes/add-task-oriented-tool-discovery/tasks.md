@@ -367,3 +367,10 @@
 - 同一完整候选的正式 `integration-extension-discovery`（`lifecycle-003`）232 passed／152.24秒、exit0，复核Owner生命周期／旧通知、同schema替换／有界资格、账本冷读和写盘失败、真实stdio／HTTP的进度与取消及非自动重试的unknown；未重新运行完整审批／真实Backend重启组合，不能将其计入232项。
 - 新增内容仅为测试，不改生产连接、调度或持久化实现。受影响 Ruff `static-002` exit0；不重复未变化的 Web 构建。准确命令、完整候选／前后逐文件指纹、raw和实际退出码位于 `out/tests/temp/mcp-workspace-ownership/artifacts/`，最终机械核验见 `verification-005.json`。其它未修改场景继续引用本变更各具名收据，不能把本用例作为完整审批／冷恢复的重新运行。
 - 4.2 的额外“工具显式声明跨执行主动持有／释放”仍没有定义产品入口，已提出边界问题；目前不把 workspace 连接自身常驻、单次 operation 或结果未知记录当作该能力完成。4.2／4.6 和第9节总门保持未勾，团队／协作TODO不变。
+
+### 2026-10-28 已确认协议错误的 Activity 结算
+
+- SDK 已确认的协议错误沿原异常交付；信封消费同一 execution 的确认事实，以 provider_error／mcp_result_error 结束 Activity，原 operation lease 按已确认回复释放。取消、超时和断线没有确认结果时仍保留 outcome_unknown，不增加重试、连接实现或账本 writer。
+- 复用原 MCP handler、官方 URL elicitation 异常及真实 StreamableHTTP，核对原错误码／data、唯一原调用、精确 operation、Activity 无授权 URL、冷账本无待核实 lease，以及同连接后继调用成功。旧生产在相同新测试的 provider_error 断言精确失败；本项只验证 SDK／信封／Activity 与持久租约边界，不代替 Gateway／Agent／Web 或 Windows 验收。
+- `lifecycle-and-schema-002` 两个完整协议测试文件28 passed／31.06秒；`envelope-and-lease-regression-004` 相邻信封／租约／适配器52 passed／7.17秒；最终协议 mock 修正后 `final-fixture-008` 三项 Activity 场景3 passed／5.47秒。Ruff通过；Pyright与完整 HEAD 基线逐条对比为6项旧诊断／最终5项，零新增，消除原 fixture 的不完整 sink 诊断，不宣称静态全绿。原始失败、准确命令、源码前后指纹、raw与实际退出码保留于 `out/tests/temp/mcp-confirmed-protocol-error/artifacts/`。
+- 4.2／4.6 与第9节总门继续未勾；主动跨执行持有入口等待既有边界问题的答复，团队／协作继续 TODO。
