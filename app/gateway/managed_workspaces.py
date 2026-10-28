@@ -46,6 +46,7 @@ async def create_direct_managed_workspace(
     root_path: str,
     name: str | None,
     create_directory: bool,
+    request_id: str,
 ) -> WorkspaceTarget:
     requested_root = Path(root_path).expanduser()
     if not requested_root.is_absolute():
@@ -81,11 +82,7 @@ async def create_direct_managed_workspace(
     controller = GatewayWorkspaceRuntimeController(
         registry=registry, project_root=project_root, log_dir=log_dir,
     )
-    try:
-        await controller.start_managed_backend(workspace_id, request_id=f"create_{workspace_id}")
-    except BaseException as error:
-        registry.mark_connection_error(workspace_id, str(error))
-        raise
+    await controller.start_managed_backend(workspace_id, request_id=request_id)
     return registry.resolve(workspace_id)
 
 

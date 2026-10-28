@@ -220,11 +220,12 @@ async def create_federation_managed_workspace(
             root_path=str(resolve_management_directory(request, payload.root_path)),
             name=payload.name,
             create_directory=payload.create_directory,
+            request_id=request_id,
         )
     except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except (OSError, RuntimeError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     return APIResponse(
         data=await _managed_workspace_list(registry),
         request_id=request_id,

@@ -72,15 +72,19 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
                 assert item["backend_workspace_id"] == backend_id
                 assert item["status"] == "offline"
                 if stage == "registered":
-                    expected = (
-                        "工作区运行时目录不可写，无法保存会话和服务状态: "
-                        if scope == "metadata" else "工作区目录不可写，无法创建 .boxteam 运行时数据: "
-                    ) + "请将目录所有者或写权限授予当前用户"
-                    assert item["connection_error"] == expected
+                    assert item["connection_error"].startswith("Backend 启动失败: owner=backend_owner_")
+                    assert item["connection_error"].endswith(": stage=backend_start, error=PermissionError, errno=None")
                 else:
-                    assert item["connection_error"].startswith(
-                        f"{workspace_id}/workspace_api: managed Backend 未运行: owner=backend_owner_",
-                    )
+                    if check_health:
+                        assert item["connection_error"] == (
+                            f"{workspace_id}/workspace_api: 工作区健康检查失败: workspace_id={workspace_id}: "
+                            "stage=workspace_health, error=RuntimeError"
+                        )
+                    else:
+                        assert item["connection_error"].startswith(
+                            f"{workspace_id}/workspace_api: Backend 运行检查失败: owner=backend_owner_",
+                        )
+                        assert item["connection_error"].endswith(": stage=backend_runtime_health, error=RuntimeError")
                 assert item["services"]["workspace_api"]["error"] == item["connection_error"]
                 assert item["services"]["workspace_api"]["status"] == "offline"
                 evidence[f"{stage}-{scope}-{check_health}"] = item
@@ -157,7 +161,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
     workspace.mkdir()
     workspace_id = build_managed_local_workspace_id(str(workspace))
     gateway_root = context.boxteam_home / "state/gateway"
-    log_root = gateway_root / "logs"
+    log_root = context.boxteam_home / "state/logs/terminal"
     missing_executable = primary / "private-missing-node"
     native_location = str(log_root if failure == "log_directory" else missing_executable)
     extra_env = {"BOXTEAM_NODE_BIN": str(missing_executable)} if failure == "executable" else {}
@@ -167,6 +171,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
         for directory in ("app", "configs"):
             shutil.copytree(Path.cwd() / directory, installation / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(Path.cwd() / "resources/logging", installation / "resources/logging")
         for name in ("pyproject.toml", "package.json"):
             shutil.copyfile(Path.cwd() / name, installation / name)
         extra_env["BOXTEAM_PROJECT_ROOT"] = str(installation)
@@ -188,6 +193,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
         gateway = start_gateway()
         assert not log_root.exists()
         if failure == "log_directory":
+            log_root.parent.mkdir(parents=True, exist_ok=True)
             log_root.write_text("not a directory", encoding="utf-8")
         for stage in ("registered", "restarted"):
             if stage == "restarted":
@@ -215,10 +221,13 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
                     assert item["connection_error"]
                     assert item["services"]["workspace_api"]["status"] == "offline"
                     if stage == "registered" and not check_health:
-                        expected_stage = {"log_directory": "create_directory", "executable": "spawn", "entrypoint": "entrypoint"}[failure]
-                        expected_type = "FileExistsError" if failure == "log_directory" else "FileNotFoundError"
-                        assert f"stage={expected_stage}" in item["connection_error"]
-                        assert expected_type in item["connection_error"]
+                        assert item["connection_error"].startswith("Backend 启动失败: owner=backend_owner_")
+                        error_facts = {
+                            "log_directory": "FileExistsError, errno=17",
+                            "executable": "FileNotFoundError, errno=2",
+                            "entrypoint": "FileNotFoundError, errno=None",
+                        }[failure]
+                        assert item["connection_error"].endswith(f": stage=backend_start, error={error_facts}")
                     evidence[f"{stage}-{check_health}"] = item
             with closing(sqlite3.connect(f"{(gateway_root / 'gateway.sqlite').as_uri()}?mode=ro", uri=True)) as connection:
                 row, = connection.execute(
@@ -232,6 +241,8 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
         assert native_location in logs
         assert ("FileExistsError" if failure == "log_directory" else "FileNotFoundError") in logs
+        expected_stage = {"log_directory": "create_directory", "executable": "spawn", "entrypoint": "entrypoint"}[failure]
+        assert f"stage={expected_stage}" in logs
         if failure == "log_directory":
             assert log_root.read_text() == "not a directory"
         else:

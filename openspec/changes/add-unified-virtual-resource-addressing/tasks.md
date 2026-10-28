@@ -1106,3 +1106,9 @@
 - Gateway/Workspace 的 TraceMiddleware 复用唯一 failure_detail，普通500保持原封套、状态和request_id，只发布阶段、异常类别与适用错误码/解析坐标；异常正文、cause、notes和请求位置只留原始诊断。日志失败不阻止结算，已开始流响应保留原chunk并传播同一个原异常，取消与上下文释放保持。同步迁齐普通API及fork验收的错误消费者，原错误细节改核原诊断，身份、字节、hash、事务、清理、重试和期限断言保留。
 - Trace新增24例在旧实现18 failed/6 passed，最终全文件49 passed；相关单元307轮237 passed/2 failed，原HEAD同样复现两个测试未携工作区身份而提前400，改用原router/handler的独立fixture后333轮5 passed。真实独立Gateway的协议与凭据5 passed、真实PTY/Chromium落盘与lease 4 passed；本地调用方308轮29 passed/1 failed，临时文件位置断言精确修正后318轮文本文件3项通过。正式fork目标16、传输13、SQLite worker16、详情19、捕获6+4、manifest2、debug6项通过，另复用prefix4及goal1项。来源装具通过原资源平台激活配置，并复用原Skill owner处理发布长轮询，不伪造执行或恢复状态；未就绪在完整旧源码最小复现。曾将共享正式工作区的suite并行造成目录重建，改为顺序执行后4项捕获与6项debug全部通过；未放宽原期限，组合超时和失败原件均保留。
 - Ruff/compileall通过，Pyright106→106，按文件/最窄AST owner/规则/完整消息多重集无新增；strict51/51。准确命令、源码指纹、原始输出、实际退出码、复用范围和作者结构自审见out/tests/temp/uri-global-closure/artifacts/verification-022.json。无新目录、存储owner、schema或兼容链；本片不代表全部URI出口、完整Web或Windows验收，2.2/7.2继续未勾，直接创建等链路另行收口，延期项保持TODO。
+
+### 2026-10-28 托管工作区创建的单点失败结算（2.2/7.2部分收口）
+
+- 创建入口删除重复的connection_error写入及自造request_id，迁齐三个HTTP入口和全部直接调用方；目录/身份校验与启动失败由原Controller和Backend owner结算。普通错误复用failure_detail，保持原状态码，远端创建拒绝不复制上游正文；发布后观察者失败保留已公布的owner/generation/runtime，取消和清理/记录次错保留原异常身份。
+- 新增用例在旧生产实现12/12失败；最终创建、目录与完整组生命周期241 passed，覆盖POSIX/盘符/UNC、校验/进程两阶段、SQLite原writer重读、原入口恢复、发布后不回退、日志故障及取消。真实独立Gateway权限拒绝的注册/重启1 passed、日志目录冲突/可执行文件缺失/入口资产缺失3 passed、独立远端HTTP创建拒绝1 passed。真实权限用例发现校验在旧try之外，本片纳入唯一启动结算；旧装具日志位置与缺少日志合同资产导致未触达预期故障，按现行布局修正；中间失败、错误断言和修正前原件保留，不放宽状态、身份或期限。
+- compileall通过；Ruff40→40、Pyright64→61，按文件/最窄AST owner/规则/完整消息多重集无新增；三条移除诊断来自AsyncMock调用实存断言。严格OpenSpec、准确命令、源码指纹、原始输出、实际退出码及作者结构自审见out/tests/temp/uri-global-closure/artifacts/verification-023.json。无新源码目录/owner/存储schema或兼容链；本片不代表全部URI出口、完整Web或Windows验收，2.2/7.2继续未勾，延期项保持TODO。

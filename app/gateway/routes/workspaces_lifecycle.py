@@ -183,7 +183,7 @@ async def add_local_workspace(
     try:
         workspace_root = resolve_management_directory(request, payload.root_path)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     if not workspace_root.is_dir():
         raise HTTPException(
             status_code=400,
@@ -199,9 +199,10 @@ async def add_local_workspace(
                 root_path=str(workspace_root),
                 name=payload.name,
                 create_directory=False,
+                request_id=request_id,
             )
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     else:
         backend_url = payload.backend_url.rstrip("/")
         gateway_config = request.app.state.gateway_config

@@ -58,6 +58,15 @@ async def stub_management(request: Request) -> JSONResponse:
     return JSONResponse(content=response)
 
 
+@remote_stub_app.post("/api/gateway/federation/managed-workspaces")
+async def stub_creation(request: Request) -> JSONResponse:
+    control = Path(os.environ["BOXTEAM_TEST_FEDERATION_REPLY"])
+    response = json.loads(control.read_text())
+    with control.with_suffix(".requests.jsonl").open("a") as log:
+        log.write(json.dumps({"path": request.url.path, "request_id": request.headers["X-Request-ID"]}) + "\n")
+    return JSONResponse(content=response["body"], status_code=response["status"])
+
+
 @asynccontextmanager
 async def protocol_lifespan(application: FastAPI) -> AsyncIterator[None]:
     async with lifespan(application):
@@ -115,6 +124,44 @@ def remote_stub(
         processes.callback(terminate_process, process)
         wait_for_http_ok(f"http://127.0.0.1:{ports.port(0)}/api/gateway/health", process)
         yield context, control, ports.port(0), ports.port(1)
+
+
+@pytest.mark.asyncio
+async def test_remote_creation_preserves_http_rejection_without_copying_remote_body(
+    remote_stub: tuple[TestRunContext, Path, int, int],
+) -> None:
+    context, control, remote_port, gateway_port = remote_stub
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    evidence = []
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+            asgi_app=f"{__name__}:create_gateway_app",
+            extra_env={"BOXTEAM_TEST_FEDERATION_PORT": str(remote_port)},
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20,
+        ) as client:
+            for status, location in [(400, "/private/create-reply"), (404, r"C:\private\create-reply"),
+                                     (503, r"\\server\private\create-reply")]:
+                control.write_text(json.dumps({"status": status, "body": {"detail": location}}))
+                request_id = f"req_remote_create_{status}"
+                response = await client.post(
+                    "/api/gateway/managed-workspaces", headers={"X-Request-ID": request_id},
+                    json={"gateway_connection_id": CONNECTION_ID, "root_path": "/selected"},
+                )
+                assert response.status_code == (status if status < 500 else 502), response.text
+                assert response.json()["detail"] == "工作区创建失败: stage=workspace_create, error=HTTPStatusError"
+                assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+                assert "create-reply" not in response.text
+                evidence.append(response.json())
+    requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
+    assert [request["request_id"] for request in requests] == ["req_remote_create_400", "req_remote_create_404", "req_remote_create_503"]
+    (context.artifacts_dir / "creation-error-receipts.json").write_text(
+        json.dumps({"responses": evidence, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
+    )
 
 
 @pytest.mark.asyncio

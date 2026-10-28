@@ -1,10 +1,19 @@
-from dataclasses import replace
+import asyncio
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Self
 
 import httpx
 import pytest
+from fastapi import FastAPI, HTTPException
 
+from app.core.trace_middleware import TraceMiddleware
+from app.gateway.auth import (
+    GatewayAuthContext,
+    verify_gateway_access,
+    verify_gateway_token,
+)
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import request_remote_gateway_management
 from app.gateway.managed_workspaces import (
@@ -12,9 +21,241 @@ from app.gateway.managed_workspaces import (
     remove_direct_managed_workspace,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes import federation, workspaces_lifecycle, workspaces_managed
+from app.gateway.routes._shared import get_registry, get_workspace_runtime_controller
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server.port_forwarding import get_port_forward_manager
 from tests.support.gateway_managed_backends import ProcessProbe
+
+
+@dataclass
+class CreationBoundary:
+    error: BaseException | None = None
+    fail_validation: bool = False
+    processes: list[ProcessProbe] = field(default_factory=list)
+    request_ids: list[str] = field(default_factory=list)
+
+
+@pytest.fixture
+def creation_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """只替换工作区身份 CLI 和进程启动，保留原创建、发布及失败结算。"""
+    boundary = CreationBoundary()
+    backend_id = "00000000-0000-4000-8000-000000000001"
+    monkeypatch.setattr("app.gateway.managed_workspaces.resolve_backend_workspace_id", lambda *_, **__: backend_id)
+    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda *_, **__: backend_id)
+
+    async def validate(*_):
+        if boundary.fail_validation and boundary.error is not None:
+            raise boundary.error
+
+    async def start(*, owner: ManagedBackendOwner, **_):
+        process = ProcessProbe("backend")
+        boundary.processes.append(process)
+        owner.set_process(process)
+        member = owner.contract.members[0]
+        runtime = WorkspaceRuntime(
+            service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
+            backend_owner=owner, backend_workspace_id=backend_id,
+        )
+        owner.unpublished_runtimes[member.workspace_id] = runtime
+        if boundary.error is not None:
+            raise boundary.error
+        return replace(owner.contract, backend_url="http://127.0.0.1:42000"), {member.workspace_id: runtime}
+
+    original_start = GatewayWorkspaceRuntimeController.start_managed_backend
+
+    async def record_request(controller, workspace_id, *, request_id, group_request=None):
+        boundary.request_ids.append(request_id)
+        return await original_start(controller, workspace_id, request_id=request_id, group_request=group_request)
+
+    monkeypatch.setattr("app.gateway.runtime.group_actions.validate_managed_backend_bindings", validate)
+    monkeypatch.setattr("app.gateway.runtime.group_actions.start_managed_backend_runtime", start)
+    monkeypatch.setattr(GatewayWorkspaceRuntimeController, "start_managed_backend", record_request)
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "home"))
+    return boundary
+
+
+@pytest.fixture
+def creation_registry(tmp_path: Path):
+    with GatewayStateStore(path=tmp_path / "gateway.sqlite") as store:
+        yield GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=store)
+
+
+@pytest.fixture
+def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from app.gateway.main import gateway_http_exception_handler
+
+    application = FastAPI()
+    application.state.gateway_id = "gateway_00000000000070008000000000000001"
+    application.state.registry = creation_registry
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(gateway_http_exception_handler)
+    application.dependency_overrides[verify_gateway_token] = lambda: "local-token"
+    application.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
+    application.dependency_overrides[federation.require_managed_workspace_admin] = lambda: None
+    application.dependency_overrides[get_registry] = lambda: creation_registry
+    application.dependency_overrides[get_port_forward_manager] = lambda: None
+    application.dependency_overrides[get_workspace_runtime_controller] = lambda: GatewayWorkspaceRuntimeController(
+        registry=creation_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
+    )
+    original_list = creation_registry.list_dtos
+
+    async def list_without_network(**_):
+        return await original_list(check_health=False)
+
+    monkeypatch.setattr(creation_registry, "list_dtos", list_without_network)
+    for module in (workspaces_lifecycle, workspaces_managed, federation):
+        application.include_router(module.router)
+        monkeypatch.setattr(module, "get_project_root", lambda: tmp_path)
+        monkeypatch.setattr(module, "get_runtime_log_root", lambda: tmp_path / "logs")
+    return application
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["workspaces/local", "managed-workspaces", "federation/managed-workspaces"])
+@pytest.mark.parametrize("fail_validation", [False, True])
+@pytest.mark.parametrize(("error_type", "native_location"), [
+    (PermissionError, "/private/create-failure"), (ValueError, r"C:\private\create-failure"),
+    (RuntimeError, r"\\server\private\create-failure"),
+])
+async def test_creation_http_keeps_owner_failure_facts_and_recovers_by_original_start(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
+    tmp_path: Path, endpoint: str, error_type: type[Exception], native_location: str, fail_validation: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = creation_registry
+    root = tmp_path / "selected"
+    root.mkdir()
+    primary = error_type(f"startup failed: {native_location}")
+    creation_boundary.error = primary
+    creation_boundary.fail_validation = fail_validation
+    request_id = "req_creation_failure"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+        response = await client.post(f"/api/gateway/{endpoint}", json={"root_path": str(root)}, headers={"X-Request-ID": request_id})
+        expected_status = 400 if error_type is ValueError else (500 if endpoint == "workspaces/local" else 502)
+        assert response.status_code == expected_status, response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+        assert "create-failure" not in response.text and str(root) not in response.text
+        target, = registry.targets()
+        owner = registry.backend_owner(target.workspace_id)
+        assert owner is not None and owner.process is None and not owner.unpublished_runtimes
+        expected = f"Backend 启动失败: owner={owner.contract.owner_id}: stage=backend_start, error={error_type.__name__}"
+        if error_type is PermissionError:
+            expected += ", errno=None"
+        assert owner.error == target.connection_error == expected
+        assert creation_boundary.request_ids == [request_id]
+        if fail_validation:
+            assert not creation_boundary.processes
+        else:
+            assert creation_boundary.processes[0].closed
+        assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
+        assert cold.resolve(target.workspace_id).connection_error == expected
+        cold_owner = cold.backend_owner(target.workspace_id)
+        assert cold_owner is not None and cold_owner.contract == owner.contract
+        generation = owner.contract.generation
+        creation_boundary.error = None
+        retry = await client.post(f"/api/gateway/workspaces/{target.workspace_id}/runtime/start", headers={"X-Request-ID": "req_creation_retry"})
+        assert retry.status_code == 200, retry.text
+        assert registry.backend_owner(target.workspace_id) is owner and owner.contract.generation == generation
+        assert registry.resolve(target.workspace_id).connection_error is None and owner.error is None
+        assert registry.managed_runtime(target.workspace_id).backend_owner is owner
+        process = creation_boundary.processes[-1]
+        assert owner.process is process and not process.closed
+        assert root.is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["workspaces/local", "managed-workspaces", "federation/managed-workspaces"])
+async def test_creation_observer_failure_keeps_published_runtime_and_original_exception(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
+    tmp_path: Path, endpoint: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = creation_registry
+    root = tmp_path / "selected"
+    root.mkdir()
+    primary = RuntimeError(f"observer failed: {root}/private-observer")
+
+    def observer():
+        if any(registry.has_runtime(target.workspace_id) for target in registry.targets()):
+            raise primary
+
+    registry.add_commit_observer(observer)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+            response = await client.post(f"/api/gateway/{endpoint}", json={"root_path": str(root)}, headers={"X-Request-ID": "req_creation_observer"})
+        assert response.status_code == (500 if endpoint == "workspaces/local" else 502), response.text
+        assert "private-observer" not in response.text and str(root) not in response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_creation_observer"
+        target, = registry.targets()
+        owner = registry.backend_owner(target.workspace_id)
+        assert owner is not None and owner.error is None and target.connection_error is None
+        assert registry.managed_runtime(target.workspace_id).backend_owner is owner
+        process = creation_boundary.processes[0]
+        assert owner.process is process and not process.closed
+        assert not owner.unpublished_runtimes
+        assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
+        assert cold.resolve(target.workspace_id).connection_error is None
+        cold_owner = cold.backend_owner(target.workspace_id)
+        assert cold_owner is not None and cold_owner.contract == owner.contract
+    finally:
+        registry.remove_commit_observer(observer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sink_fails", [False, True])
+async def test_creation_cancellation_preserves_identity_and_owner_cleanup(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sink_fails: bool,
+) -> None:
+    primary = asyncio.CancelledError(f"cancelled: {tmp_path}/private-cancel")
+    creation_boundary.error = primary
+    if sink_fails:
+        def fail_log(*_, **__):
+            raise RuntimeError("diagnostic sink failed")
+        monkeypatch.setattr("app.core.failures.logger.error", fail_log)
+    root = tmp_path / "selected"
+    root.mkdir()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await client.post("/api/gateway/managed-workspaces", json={"root_path": str(root)}, headers={"X-Request-ID": "req_creation_cancel"})
+    assert raised.value is primary
+    target, = creation_registry.targets()
+    owner = creation_registry.backend_owner(target.workspace_id)
+    assert owner is not None and owner.process is None and not owner.unpublished_runtimes
+    assert owner.error is not None and owner.error == target.connection_error
+    assert "error=CancelledError" in owner.error
+    assert "private-cancel" not in owner.error
+    assert creation_boundary.processes[0].closed
+    assert creation_boundary.request_ids == ["req_creation_cancel"]
+    assert ("diagnostic_sink_error=RuntimeError" in owner.error) is sink_fails
+
+
+@pytest.mark.asyncio
+async def test_creation_recording_failure_does_not_replace_original_start_error(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    primary = RuntimeError(f"start failed: {tmp_path}/private-primary")
+    secondary = OSError(5, "record failed", str(tmp_path / "private-record"))
+    creation_boundary.error = primary
+
+    def fail_record(*_):
+        raise secondary
+
+    monkeypatch.setattr(creation_registry, "mark_backend_error", fail_record)
+    root = tmp_path / "selected"
+    root.mkdir()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+        response = await client.post("/api/gateway/managed-workspaces", json={"root_path": str(root)})
+    assert response.status_code == 502 and "private-" not in response.text
+    assert response.json()["detail"] == "工作区创建失败: stage=workspace_create, error=RuntimeError"
+    assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+    assert any("记录Backend启动失败状态出错" in note and "private-record" in note for note in primary.__notes__)
+    assert creation_boundary.processes[0].closed
 
 
 @pytest.fixture(autouse=True)
@@ -98,6 +339,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         root_path=str(workspace_root),
         name="Remote project",
         create_directory=True,
+        request_id="req_create_direct",
     )
 
     assert workspace_root.is_dir()
@@ -114,6 +356,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         await create_direct_managed_workspace(
             registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
             root_path=str(workspace_root), name=None, create_directory=False,
+            request_id="req_create_duplicate",
         )
     assert str(workspace_root) not in str(duplicate.value)
 
@@ -155,6 +398,7 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
             root_path=str(tmp_path / "missing"),
             name=None,
             create_directory=False,
+            request_id="req_create_missing",
         )
 
     with pytest.raises(ValueError, match="绝对路径"):
@@ -165,6 +409,7 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
             root_path="relative/workspace",
             name=None,
             create_directory=True,
+            request_id="req_create_relative",
         )
 
 

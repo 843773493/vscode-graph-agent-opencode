@@ -139,18 +139,6 @@ class ManagedBackendGroupActions:
                         if member_target.backend_workspace_id is None:
                             raise RuntimeError("加入项缺少 Backend UUID binding")
                         members.append(ManagedBackendMember(member_id, member_target.backend_workspace_id))
-                if members:
-                    # 完整身份集合在排空前校验；空目标只表达退出，不构造空运行合同。
-                    desired_contract = replace(owner.contract, members=tuple(members))
-                    await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(desired_contract), self._project_root)
-                await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(owner.contract), self._project_root)
-                for member in owner.contract.members:
-                    member_id = member.workspace_id
-                    member_target = self._registry.resolve(member_id)
-                    if (action == "stop" or member_id not in desired_ids) and (
-                        member_target.system_default or not member_target.removable
-                    ):
-                        raise PermissionError(f"默认工作区不能关闭或移出: {member_target.name}")
                 affected = sorted(set(owner.contract.workspace_ids) | set(desired_ids))
                 if action == "start":
                     if owner.process is not None and owner.process.is_alive() and owner.error is None:
@@ -162,6 +150,8 @@ class ManagedBackendGroupActions:
                     }
                     contract = None
                     try:
+                        # start 的目录/身份校验也由唯一 owner 结算，不由创建入口补写状态。
+                        await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(old_contract), self._project_root)
                         owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
                         contract, runtimes = await start_managed_backend_runtime(
                             owner=owner, registry=self._registry, project_root=self._project_root, log_dir=self._log_dir,
@@ -176,11 +166,26 @@ class ManagedBackendGroupActions:
                             owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
                         except BaseException as cleanup_error:  # noqa: BLE001 — 未关闭句柄留在唯一 owner 供重试。
                             start_error.add_note(f"启动发布失败清理错误: {cleanup_error}")
-                        self._registry.mark_backend_error(owner, failure_detail(
-                            start_error, stage="backend_start", label=f"Backend 启动失败: owner={owner.contract.owner_id}",
-                        ))
+                        try:
+                            self._registry.mark_backend_error(owner, failure_detail(
+                                start_error, stage="backend_start", label=f"Backend 启动失败: owner={owner.contract.owner_id}",
+                            ))
+                        except BaseException as record_error:  # noqa: BLE001 — 状态记录失败不能替换启动或取消原异常。
+                            start_error.add_note(f"记录Backend启动失败状态出错: {record_error}")
                         raise
                     return await self._group_result(workspace_id, "started", owner, affected)
+                if members:
+                    # 完整身份集合在排空前校验；空目标只表达退出，不构造空运行合同。
+                    desired_contract = replace(owner.contract, members=tuple(members))
+                    await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(desired_contract), self._project_root)
+                await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(owner.contract), self._project_root)
+                for member in owner.contract.members:
+                    member_id = member.workspace_id
+                    member_target = self._registry.resolve(member_id)
+                    if (action == "stop" or member_id not in desired_ids) and (
+                        member_target.system_default or not member_target.removable
+                    ):
+                        raise PermissionError(f"默认工作区不能关闭或移出: {member_target.name}")
                 if owner.process is None:
                     if desired is None and not remove_target:
                         raise ValueError("Backend 完整组尚未启动；使用完整组 start 恢复")

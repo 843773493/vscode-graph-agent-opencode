@@ -197,8 +197,10 @@ async def test_registration_http_consumes_selected_directory_uri(
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
         response = await client.post("/api/gateway/workspaces/local", json={"root_path": listing.path})
         assert response.status_code == 200, response.text
+        assert create.await_args is not None
         assert create.await_args.kwargs["root_path"] == str(directory_root)
         assert create.await_args.kwargs["create_directory"] is False
+        assert create.await_args.kwargs["request_id"] == "req-register-uri"
         foreign = listing.path.replace(app.state.gateway_id, "gateway_00000000000070008000000000000002")
         rejected = await client.post("/api/gateway/workspaces/local", json={"root_path": foreign})
         assert rejected.status_code == 400
@@ -246,7 +248,9 @@ async def test_managed_registration_http_uses_target_directory_binding(
         for value in [listing.path, str(directory_root)]:
             response = await client.post(path, json={"root_path": value, "create_directory": False})
             assert response.status_code == 200, response.text
+            assert create.await_args is not None
             assert create.await_args.kwargs["root_path"] == str(directory_root)
+            assert create.await_args.kwargs["request_id"] == "req-managed-uri"
         foreign = listing.path.replace(app.state.gateway_id, "gateway_00000000000070008000000000000002")
         rejected = await client.post(path, json={"root_path": foreign})
         assert rejected.status_code == 400 and create.await_count == 2
@@ -258,8 +262,10 @@ async def test_managed_registration_http_uses_target_directory_binding(
         for value in (str(gone), selected.path):
             failed = await client.post(path, json={"root_path": value, "create_directory": False})
             assert failed.status_code == 400, failed.text
-            assert "目录不存在" in failed.text and str(directory_root) not in failed.text
+            assert failed.json()["detail"] == "工作区创建失败: stage=workspace_create, error=FileNotFoundError, errno=None"
+            assert str(directory_root) not in failed.text
         gone.write_text("目录在选中后被替换为文件", encoding="utf-8")
         failed = await client.post(path, json={"root_path": selected.path, "create_directory": False})
         assert failed.status_code == 400, failed.text
-        assert "不是目录" in failed.text and str(directory_root) not in failed.text
+        assert failed.json()["detail"] == "工作区创建失败: stage=workspace_create, error=ValueError"
+        assert str(directory_root) not in failed.text

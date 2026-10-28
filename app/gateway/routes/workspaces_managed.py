@@ -210,6 +210,7 @@ async def create_gateway_managed_workspace(
                 root_path=str(resolve_management_directory(request, payload.root_path)),
                 name=payload.name,
                 create_directory=payload.create_directory,
+                request_id=request_id,
             )
         else:
             remote_data = await request_remote_gateway_management(
@@ -230,17 +231,17 @@ async def create_gateway_managed_workspace(
             )
             await port_forward_manager.reconcile_workspaces()
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except httpx.HTTPStatusError as error:
         status_code = error.response.status_code
         raise HTTPException(
             status_code=status_code if 400 <= status_code < 500 else 502,
-            detail=_remote_http_error_detail(error),
+            detail=failure_detail(error, stage="workspace_create", label="工作区创建失败"),
         ) from error
     except (PermissionError, OSError, RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     if connection_id is not None and remote_data is not None:
         return APIResponse(
             data=_remote_managed_workspace_list(
