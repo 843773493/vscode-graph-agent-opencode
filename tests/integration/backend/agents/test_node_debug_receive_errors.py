@@ -1,4 +1,4 @@
-"""真实 Node 握手中接收失败的 HTTP、持久动作与冷读。"""
+"""真实 Node 启动中的接收及进程身份失败，核对 HTTP、持久动作与冷读。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.node_debug.process import process_identity
 from app.services.infrastructure.node_debug.process.inspector import NodeDebugInspector
 from app.services.infrastructure.node_debug.process.process_identity import (
     probe_process_identity,
@@ -170,6 +171,92 @@ async def test_handshake_receive_failure_keeps_native_cause_private_and_persists
     assert [action for action in stopped.json()["data"]["actions"] if action["action"] == "start_failed"] == failures
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     (context.artifacts_dir / "receive-errors.json").write_text(json.dumps({
+        "failed": failed.json(), "live": state.json(), "manifest": manifest.model_dump(mode="json"),
+        "cold": cold.json(), "retried": retried.json(), "stopped": stopped.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(process_identity.sys.platform != "linux", reason="真实 /proc 读取边界只在 Linux 验证")
+@pytest.mark.parametrize("failure", ["stat_format", "stat_fields", "empty_boot_id"])
+async def test_process_identity_rejection_keeps_failed_start_private_and_retries(
+    debug_receive_client: DebugReceiveClient, failure: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    original_read = Path.read_text
+    observed: list[Path] = []
+    private = str(root / "identity-secret")
+
+    def read_identity(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        raw = original_read(path, encoding=encoding, errors=errors)
+        if observed:
+            return raw
+        if failure.startswith("stat_") and path.name == "stat" and path.parent.parent == Path("/proc"):
+            observed.append(path)
+            return private if failure == "stat_format" else f"{path.parent.name} ({private}) S 0"
+        if failure == "empty_boot_id" and path == Path("/proc/sys/kernel/random/boot_id"):
+            observed.append(path)
+            return "\n"
+        return raw
+
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "身份读取拒绝后重试", "script_path": "entry.mjs",
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    payload = {**owner, "configuration_id": configuration_id, "path": "entry.mjs"}
+    process_identity._read_linux_boot_id.cache_clear()
+    try:
+        with monkeypatch.context() as patch, caplog.at_level(logging.ERROR, logger=process_identity.__name__):
+            patch.setattr(Path, "read_text", read_identity)
+            failed = await client.post("/api/v1/debug/node/start", json=payload)
+    finally:
+        process_identity._read_linux_boot_id.cache_clear()
+    assert failed.status_code == 409, failed.text
+    assert len(observed) == 1
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    assert str(observed[0]) not in failed.text and "identity-secret" not in failed.text
+    assert "source=linux_proc_stat" in failed.text
+    assert str(observed[0]) in caplog.text
+    if failure.startswith("stat_"):
+        assert private in caplog.text
+
+    state = await client.get("/api/v1/debug/node", params=owner)
+    assert state.status_code == 200, state.text
+    data = state.json()["data"]
+    assert data["status"] == "failed" and isinstance(data["pid"], int)
+    assert probe_process_identity(data["pid"]) is None
+    assert data["error_message"] == failed.json()["detail"]
+    assert not any(action["action"] == "start" for action in data["actions"])
+    failures = [action for action in data["actions"] if action["action"] == "start_failed"]
+    assert len(failures) == 1 and failures[0]["message"] == data["error_message"]
+    manifest_bytes, manifest = store.read_manifest_payload(**owner)
+    assert manifest_bytes is not None and manifest is not None
+    assert [action.model_dump(mode="json") for action in manifest.actions] == data["actions"]
+    for text in (state.text, manifest_bytes.decode()):
+        assert str(observed[0]) not in text and "identity-secret" not in text
+    claim = store.read_launch_claim(**owner)
+    assert claim is not None and claim.phase == "settled" and claim.pid is None
+
+    await reopen()
+    cold = await client.get("/api/v1/debug/node", params=owner)
+    assert cold.status_code == 200, cold.text
+    restored = cold.json()["data"]
+    assert restored["status"] == "idle" and restored["pid"] is None
+    assert restored["actions"] == data["actions"] and restored["active_configuration_id"] == configuration_id
+    assert str(observed[0]) not in cold.text and "identity-secret" not in cold.text
+
+    retried = await client.post("/api/v1/debug/node/start", json=payload)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["data"]["status"] == "running"
+    assert retried.json()["data"]["active_configuration_id"] == configuration_id
+    stopped = await client.post("/api/v1/debug/node/action", json={**owner, "action": "stop"})
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["status"] == "exited"
+    assert [action for action in stopped.json()["data"]["actions"] if action["action"] == "start_failed"] == failures
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / f"identity-{failure}.json").write_text(json.dumps({
         "failed": failed.json(), "live": state.json(), "manifest": manifest.model_dump(mode="json"),
         "cold": cold.json(), "retried": retried.json(), "stopped": stopped.json(),
     }, ensure_ascii=False, indent=2) + "\n")

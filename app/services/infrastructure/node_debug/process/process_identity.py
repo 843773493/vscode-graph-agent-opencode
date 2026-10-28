@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
@@ -26,6 +27,7 @@ IDENTITY_SOURCE_LINUX_PROC = "linux_proc_stat"
 IDENTITY_SOURCE_PSUTIL = "psutil_create_time"
 
 _PROC_ROOT = Path("/proc")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,11 +90,15 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
     # comm 字段可能包含空格与括号，必须从最后一个 ')' 之后再切分。
     closing = raw.rfind(")")
     if closing < 0:
-        raise RuntimeError(f"/proc/{pid}/stat 格式异常，无法解析进程起始身份: {raw!r}")
+        logger.error("Linux 进程身份格式异常: pid=%s path=%s raw=%r", pid, stat_path, raw)
+        raise RuntimeError(f"进程 stat 格式异常，无法解析进程起始身份: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}")
     fields = raw[closing + 2 :].split()
     # 剩余字段从 state 开始：state 是第 3 个字段，starttime 是第 22 个字段。
     if len(fields) < 20:
-        raise RuntimeError(f"/proc/{pid}/stat 字段不足，无法解析进程起始身份: {raw!r}")
+        logger.error("Linux 进程身份字段不足: pid=%s path=%s raw=%r", pid, stat_path, raw)
+        raise RuntimeError(
+            f"进程 stat 字段不足，无法解析进程起始身份: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}, fields={len(fields)}"
+        )
     state = fields[0]
     starttime_ticks = fields[19]
     if state in {"Z", "X", "x"}:
@@ -113,7 +119,8 @@ def _read_linux_boot_id(boot_id_path: Path) -> str:
     """Linux 启动 ID 在本次启动内稳定，按路径缓存以避免每次身份读取重复开文件。"""
     boot_id = boot_id_path.read_text(encoding="utf-8").strip()
     if not boot_id:
-        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: {boot_id_path}")
+        logger.error("Linux 启动 ID 为空: path=%s", boot_id_path)
+        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: source={IDENTITY_SOURCE_LINUX_PROC}")
     return boot_id
 
 
@@ -126,7 +133,11 @@ def _probe_psutil_identity(pid: int) -> NodeDebugProcessIdentity | None:
     except psutil.NoSuchProcess:
         return None
     except psutil.Error as error:
-        raise RuntimeError(f"读取进程起始身份失败: pid={pid}: {error}") from error
+        # psutil 的异常可能包含可执行文件等原生位置，原异常只留诊断与 cause。
+        logger.exception("读取 psutil 进程起始身份失败: pid=%s", pid)
+        raise RuntimeError(
+            f"读取进程起始身份失败: pid={pid}, source={IDENTITY_SOURCE_PSUTIL}, error_type={type(error).__name__}"
+        ) from error
     return NodeDebugProcessIdentity(
         pid=pid,
         source=IDENTITY_SOURCE_PSUTIL,

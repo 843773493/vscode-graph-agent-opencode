@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
+import psutil
 import pytest
 
 from app.services.infrastructure.node_debug.process import process_identity
 from app.services.infrastructure.node_debug.process.process_identity import (
+    IDENTITY_SOURCE_LINUX_PROC,
     IDENTITY_SOURCE_PSUTIL,
     probe_process_identity,
 )
@@ -57,6 +60,7 @@ def test_linux_missing_proc_entry_is_authoritative(
 def test_linux_process_identity_requires_boot_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(process_identity.sys, "platform", "linux")
     monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
@@ -79,8 +83,61 @@ def test_linux_process_identity_requires_boot_id(
     boot_id_path = tmp_path / "sys" / "kernel" / "random" / "boot_id"
     boot_id_path.parent.mkdir(parents=True)
     boot_id_path.write_text("\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="启动 ID 为空"):
+    with caplog.at_level(logging.ERROR, logger=process_identity.__name__), pytest.raises(RuntimeError, match="启动 ID 为空") as caught:
         probe_process_identity(4242)
+    assert str(boot_id_path) not in str(caught.value)
+    assert f"source={IDENTITY_SOURCE_LINUX_PROC}" in str(caught.value)
+    assert str(boot_id_path) in caplog.text
+
+
+@pytest.mark.parametrize("raw,reason", [
+    ("进程身份原文 /private/identity-secret", "格式异常"),
+    ("4242 (/private/identity-secret) S 0", "字段不足"),
+])
+def test_linux_malformed_identity_rejects_without_publishing_private_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    raw: str, reason: str,
+) -> None:
+    process_root = tmp_path / "4242"
+    process_root.mkdir()
+    stat_path = process_root / "stat"
+    stat_path.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
+    monkeypatch.setattr(process_identity.sys, "platform", "linux")
+    monkeypatch.setattr(process_identity, "_probe_psutil_identity", lambda _pid: pytest.fail("损坏的 /proc 身份不得回落"))
+
+    with caplog.at_level(logging.ERROR, logger=process_identity.__name__), pytest.raises(RuntimeError, match=reason) as caught:
+        probe_process_identity(4242)
+    message = str(caught.value)
+    assert str(tmp_path) not in message and "identity-secret" not in message and "/proc/" not in message
+    assert "pid=4242" in message and f"source={IDENTITY_SOURCE_LINUX_PROC}" in message
+    assert str(stat_path) in caplog.text and raw in caplog.text
+
+
+@pytest.fixture(params=["/private/identity-secret", r"C:\private\identity-secret", r"\\server\private\identity-secret"])
+def psutil_identity_error(request: pytest.FixtureRequest) -> psutil.AccessDenied:
+    return psutil.AccessDenied(pid=4242, name=request.param, msg=f"读取失败: {request.param}")
+
+
+def test_psutil_identity_failure_keeps_cause_and_private_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    psutil_identity_error: psutil.AccessDenied,
+) -> None:
+    def denied_process(pid: int) -> None:
+        assert pid == 4242
+        raise psutil_identity_error
+
+    monkeypatch.setattr(psutil, "Process", denied_process)
+    monkeypatch.setattr(process_identity.sys, "platform", "darwin")
+    with caplog.at_level(logging.ERROR, logger=process_identity.__name__), pytest.raises(RuntimeError) as caught:
+        probe_process_identity(4242)
+    message = str(caught.value)
+    assert caught.value.__cause__ is psutil_identity_error
+    assert "identity-secret" not in message
+    assert "pid=4242" in message and f"source={IDENTITY_SOURCE_PSUTIL}" in message
+    assert "error_type=AccessDenied" in message
+    assert any(record.exc_info and record.exc_info[1] is psutil_identity_error for record in caplog.records)
+    assert str(psutil_identity_error) in caplog.text
 
 
 @pytest.mark.parametrize("state", ["Z", "X", "x"])

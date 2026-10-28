@@ -875,3 +875,10 @@
 - Gateway 普通/联邦快照和 Workspace 接受入口共用的 DTO 复用唯一 URI parser，拒绝原生路径及非 Skill 文档地址；非法原值仅留原始诊断，普通校验错误不回显输入。不改变来源身份、字节、revision 校验或既有 workspace 配置来源；拒绝不替换旧快照/ETag，合法回执可恢复可用性。
 - 完整固定候选相关回归156项通过；最终测试整理后两文件97项通过，生产字节未变，其余通过证据复用且不累加重叠计数。完整旧HEAD加最终反例为11 failed/3 passed，复现Gateway错误输出与network来源空尾段IndexError。Ruff通过；Pyright候选和原HEAD同为4项既有诊断，无新增。原始命令、源码前后指纹、raw、实际退出码及进程组回收见 `out/tests/temp/skill-source-uri-boundary/artifacts/verification-016.json`。
 - 本片覆盖真实owner、内存联邦channel及MockTransport，不代替真实HTTP/Gateway进程、Windows或完整Web；全局2.2/7.2继续未勾，团队协作继续TODO。
+
+### 2026-10-28 Node 进程身份错误出口（2.2／7.2 部分收口）
+
+- 原进程身份 owner 的三类拒绝不再把 Linux stat 原文、boot_id 位置或 psutil 异常正文写入普通错误；公开 PID、身份来源、字段数量或异常类型，原位置与原文留诊断，psutil 原异常仍为直接 cause。Linux 权威来源、消失／僵尸／dead 判定、非 Linux psutil 读取、claim 与停止链不变，不新增探测器或回退。
+- 完整旧生产配相同最终测试：6 failed／6 passed，六个失败均精确断言路径不得外泄；真实 Node 启动的三个反例 3 failed／1 deselected，复现 HTTP 启动错误外泄。最终候选的进程身份、启动、claim、process lease 与 phase barrier 回归 49 passed／44.97 秒；ASGI HTTP 配真实 Node 的完整接收／身份故障 4 passed／32.03 秒。后者核对原配置创建、单次读取故障、409 与头体 request_id、真实进程终结、failed 状态／持久动作／manifest 无路径、原 claim 结清、service 冷读及原配置重试启动和停止；不伪造运行历史。
+- Ruff、compileall 与 OpenSpec strict 通过；完整候选、准确命令、源码前后指纹、raw 日志、实际退出码和进程组回收核验见 `out/tests/temp/node-debug-identity/artifacts/verification-012.json`。早期候选与最终候选只调整新增断言顺序，原始运行均保留。
+- 这是作者自查及进程内 HTTP／真实 Linux Node 集成，不代表独立 Gateway、后端 OS 重启、真实 Web 或 Windows 实机；psutil 仅做外部读取边界故障验证。未运行 Python 类型检查，本机未安装 Pyright。全局 2.2／7.2 继续未勾，团队与协作继续 TODO。
