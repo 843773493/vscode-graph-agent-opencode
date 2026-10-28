@@ -1042,3 +1042,10 @@
 - 真实进程反例复现：坏 JSONC 被拒绝后，Gateway 唯一 watcher task 退出，用户修复文件仍不能恢复。watcher 回调现复用原 reload，失败保留旧 active 与明确错误并记录原异常，随后继续监听；显式 reload 仍抛错，取消不吞，不增加重试、状态或存储链。
 - 修改前真实 HTTP 反例1 failed/42.58秒，保留265次状态观察及服务日志；最终同入口1 passed/23.59秒，覆盖坏文件拒绝、原 revision 保持、文件修复后热应用、唯一事件与精确 applied_paths、管理接口和工作区代理的 request_id。两个新增单元场景通过，覆盖首次 watcher 对账失败后的修复与原取消身份；原 pending 启动失败回归29 passed/75.61秒。正常产品输入和 HTTP 观察生成全部关键状态，未直接准备 SQLite 业务事实。
 - 触达文件 Ruff、compileall 通过；生产三条 Pyright 诊断与已提交基线按文件/最窄 AST owner/规则/完整消息一致，两测试文件零诊断。准确命令、源码指纹、raw、退出码、红测快照和类型对照见`out/tests/temp/uri-global-closure/artifacts/verification-011.json`。未运行 Web、Windows或联邦验收，不关闭 URI 2.2/7.2 总门或延期项。
+
+### 2026-10-28 Activity 异常事实的统一发布（2.2/7.2部分收口）
+
+- 投影Handler、上下文压缩及工具错误callback共用失败事实格式：事件只保存phase、异常类别及适用errno/winerror，原异常/原因链留诊断；保持既有detail不可用回退、压缩原异常重抛、活动身份/顺序/outcome和后续ToolMessage的权威正文。全仓核对后删除无生产调用的ActivityRuntime.run及旧包装方法单测，实际调用方仍沿started/updated/completed/failed进入同一writer，无第二投影或字符串脱敏链。
+- 修改前6 failed/1 passed，检出POSIX/盘符/UNC路径进入detail_error或summary；最终定向回归65 passed，相邻编排/压缩归档/协议113 passed，存储活动/压缩5 passed。最后仅复用同一ModelRequest及收紧测试类型，受影响9项补验通过，其他声明AST一致。新增六项真实Activity→MessageStreamStore组合核对实时订阅、JSONL/state、完整续读及冷恢复快照，修复同一Handler后仍由原writer成功发布；原异常身份在日志可核对。压缩/工具callback仍为既有单元替身验证，不冒称完整Agent执行或外部模型验收。
+- Ruff、compileall通过；完整旧HEAD类型基线154条、最终151条，按文件/最窄AST owner/规则/完整消息多重集无新增，不称全类型绿。新用例初轮5条类型诊断已按真实payload结构收紧，压缩重复请求构造的3条诊断通过复用同一请求消除，未放宽规则。作者按架构审查技能核文件/owner/import/规模：生产净减少13行，无新目录或职责；processor既有858→865行及既有大型测试/目录风险保留，不称独立审查。
+- 准确命令、前后指纹、raw/实际退出码、红测原件、类型/AST/结构对照见`out/tests/temp/uri-global-closure/artifacts/verification-014.json`。临时完整旧源码在保留证据后删除；未验独立HTTP/Gateway/Web、Windows实机或真实Provider，2.2/7.2全局门和团队/协作延期项保持未完成。

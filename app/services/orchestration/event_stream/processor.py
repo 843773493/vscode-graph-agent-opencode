@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -40,6 +41,7 @@ from app.services.mapping.agent_content_mapper import (
     AgentStreamContentPart,
     extract_agent_stream_content_parts,
 )
+from app.services.orchestration.activity_runtime import activity_failure_message
 from app.services.orchestration.agent_stream_helpers import (
     extract_tool_result_text,
     is_tracked_chat_model_event,
@@ -78,6 +80,8 @@ from app.services.orchestration.event_stream.tool_events import (
     tool_message_from_output,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+
+logger = logging.getLogger(__name__)
 
 
 def _field_value(value: object, field_name: str) -> object | None:
@@ -685,10 +689,13 @@ async def process_agent_event_stream(
                     error = data.get("error")
                     if not isinstance(error, BaseException):
                         raise TypeError("工具错误事件缺少真实异常")
+                    logger.error("工具错误callback: run_id=%s", run_id, exc_info=error)
                     # SDK校验错误也有start/error，却没有end；不伪造ToolMessage覆盖框架处理后的结果。
                     message_stream_tool_call_ids_by_run_id.pop(run_id, None)
                     message_stream_tool_attempt_ids_by_run_id.pop(run_id, None)
-                    await close_tool_callback(run_id, display_context, str(error), failed=True)
+                    await close_tool_callback(
+                        run_id, display_context, activity_failure_message(error, phase="tool_callback"), failed=True,
+                    )
                     continue
                 raw_output = data.get("output")
                 raw_output = tool_message_from_output(

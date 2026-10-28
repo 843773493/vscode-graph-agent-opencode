@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,12 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
+from app.services.orchestration.activity_runtime import (
+    ActivityCapabilities,
+    ActivityHandlerRegistry,
+    ActivityRuntime,
+    DefaultActivityHandler,
+)
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
@@ -278,3 +286,74 @@ async def test_crash_after_interrupt_request_recovers_execution_lost(
     assert state["failure"]["code"] == "execution_lost"
     assert state["failure"]["after_interrupt_requested"] is True
     assert state["tool_executions"][0]["outcome"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_path", ["/private-activity/detail.json", r"C:\private-activity\detail.json", r"\\server\private-activity\detail.json"])
+@pytest.mark.parametrize("error_type", [PermissionError, RuntimeError])
+async def test_activity_projection_failure_keeps_native_location_in_diagnostics(
+    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    native_path: str, error_type: type[Exception], caplog: pytest.LogCaptureFixture,
+) -> None:
+    store, _, session_id, _ = runtime_context
+    error = error_type(13, f"投影无法读取 {native_path}", native_path) if error_type is PermissionError else error_type(native_path)
+
+    class RepairableHandler(DefaultActivityHandler):
+        failure: Exception | None = error
+
+        def normalize(self, payload: Mapping[str, object]) -> Mapping[str, object]:
+            if self.failure is not None:
+                raise self.failure
+            return super().normalize(payload)
+
+    handler = RepairableHandler()
+    registry = ActivityHandlerRegistry()
+    registry.register(kind="test.projection", handler=handler, capabilities=ActivityCapabilities(detail=True))
+    writer = await store.open(
+        session_id=session_id, thread_id=store._path_resolver.main_thread_id(session_id), turn_id="activity-error",
+    )
+    runtime = ActivityRuntime(writer, registry)
+    subscription = await store.subscribe(writer.turn_stream_id)
+    events = [
+        await runtime.started(activity_id="activity-1", kind="test.projection", summary="处理资源"),
+        await runtime.updated(activity_id="activity-1", kind="test.projection", summary="读取详情"),
+        await runtime.completed(activity_id="activity-1", kind="test.projection", summary="处理完成"),
+    ]
+    for event in events:
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        assert payload["detail_available"] is False
+        detail_error = payload["detail_error"]
+        assert isinstance(detail_error, str)
+        assert "phase=projection" in detail_error
+        assert error_type.__name__ in detail_error
+        assert "private-activity" not in json.dumps(event)
+        if error_type is PermissionError:
+            assert "errno=13" in detail_error
+        assert (await subscription.get()).event == event
+    await store.unsubscribe(subscription)
+    assert len([record for record in caplog.records if record.exc_info and record.exc_info[1] is error]) == 3
+
+    # 同一owner修复后正常发布，不替换handler或消息流。
+    handler.failure = None
+    repaired = await runtime.started(activity_id="activity-2", kind="test.projection", summary="再次处理")
+    assert isinstance(repaired["payload"], dict)
+    assert "detail_error" not in repaired["payload"]
+    await runtime.completed(activity_id="activity-2", kind="test.projection", summary="再次处理完成")
+    await writer.close_completed()
+    replay = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+    assert [event["event_seq"] for event in replay] == list(range(1, 8))
+    snapshot = await writer.snapshot()
+    assert [activity["status"] for activity in snapshot["payload"]["activities"]] == ["completed", "completed"]
+
+    # 检查实际JSONL与state文件，不能只证明返回值经过了安全投影。
+    for path in (store._stream_path(session_id, writer.turn_stream_id), store._state_path(session_id, writer.turn_stream_id)):
+        assert "private-activity" not in path.read_text()
+    restarted = MessageStreamStore(path_resolver=store._path_resolver)
+    cold = await restarted.open_existing(
+        session_id=session_id, thread_id=writer.thread_id, turn_id="activity-error", turn_stream_id=writer.turn_stream_id,
+    )
+    assert await restarted.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == replay
+    recovered = await cold.snapshot()
+    assert recovered["payload"] == snapshot["payload"]
+    assert "private-activity" not in json.dumps(recovered)

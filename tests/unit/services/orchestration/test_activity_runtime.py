@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from unittest.mock import AsyncMock
 
 import pytest
@@ -38,25 +39,30 @@ async def test_default_activity_handler_keeps_safe_fact_without_detail(
     )
 
     payload = event["payload"]
+    assert isinstance(payload, dict)
     assert payload["activity_id"] == "activity_1"
     assert payload["detail_available"] is False
     assert "detail" not in payload
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("native_path", ["/private-activity/error.json", r"C:\private-activity\error.json", r"\\server\private-activity\error.json"])
 async def test_activity_handler_failure_degrades_detail_only(
     activity_writer: AsyncMock,
+    native_path: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     activity_writer.commit.side_effect = lambda _event_type, payload: payload
+    error = PermissionError(13, f"不能读取 {native_path}", native_path)
 
     class BrokenHandler:
-        def normalize(self, payload):
-            raise RuntimeError("detail unavailable")
+        def normalize(self, payload: Mapping[str, object]) -> Mapping[str, object]:
+            raise error
 
-        def snapshot_detail(self, payload):
+        def snapshot_detail(self, payload: Mapping[str, object]) -> None:
             return None
 
-        def can_confirm_stop(self, payload):
+        def can_confirm_stop(self, payload: Mapping[str, object]) -> bool:
             return False
 
     activity_handler_registry = ActivityHandlerRegistry()
@@ -77,7 +83,13 @@ async def test_activity_handler_failure_degrades_detail_only(
 
     assert payload["activity_id"] == "activity_1"
     assert payload["detail_available"] is False
-    assert "detail_error" in payload
+    assert payload["summary"] == "浏览器仍在运行"
+    detail_error = payload["detail_error"]
+    assert isinstance(detail_error, str)
+    assert "PermissionError" in detail_error
+    assert "errno=13" in detail_error
+    assert native_path not in detail_error
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -102,23 +114,3 @@ async def test_known_activity_handler_only_projects_whitelisted_detail(
         "required_action": "confirm",
     }
     assert payload["detail_available"] is True
-
-
-@pytest.mark.asyncio
-async def test_activity_run_records_unknown_failure_before_reraising(
-    activity_writer: AsyncMock,
-    activity_runtime: ActivityRuntime,
-) -> None:
-    async def fail() -> None:
-        raise RuntimeError("外部资源状态未知")
-
-    with pytest.raises(RuntimeError, match="外部资源状态未知"):
-        await activity_runtime.run(
-            activity_id="activity_1",
-            kind="resource.operation",
-            operation=fail,
-        )
-    assert [call.args[0] for call in activity_writer.commit.await_args_list] == [
-        "activity.started",
-        "activity.failed",
-    ]

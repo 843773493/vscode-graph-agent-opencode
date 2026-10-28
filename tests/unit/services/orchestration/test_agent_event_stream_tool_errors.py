@@ -23,8 +23,10 @@ from tests.unit.services.orchestration.test_agent_event_stream_parallel_tools im
     ("task", {}, "subagent.run"),
     ("terminal_exec", {"resource_activity": {"resource_id": "terminal-test"}}, "resource.operation"),
 ])
+@pytest.mark.parametrize("native_path", ["/private-activity/tool.json", r"C:\private-activity\tool.json", r"\\server\private-activity\tool.json"])
 async def test_tool_error_closes_activity_without_fabricating_a_result(
     workspace_root: Path, tool_name: str, metadata: dict[str, object], kind: str,
+    native_path: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_tool_error")
     runtime = MessageStreamRuntime(writer)
@@ -32,11 +34,12 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     await runtime.accept_message_chunk(AIMessageChunk(content="", tool_call_chunks=[{
         "index": 0, "id": "call_invalid", "name": tool_name, "args": '{"invalid":true}',
     }]))
+    error = PermissionError(13, f"SDK校验失败 {native_path}", native_path)
     events = [
         {"event": "on_tool_start", "run_id": "run_invalid", "name": tool_name,
          "data": {"input": {"invalid": True}}, "metadata": metadata},
         {"event": "on_tool_error", "run_id": "run_invalid", "name": tool_name,
-         "data": {"error": ValueError("SDK原始校验错误")}, "metadata": metadata},
+         "data": {"error": error}, "metadata": metadata},
     ]
 
     async def publish(*_args, **_kwargs):
@@ -55,7 +58,11 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     assert [entry[0] for entry in activities] == ["activity.started", "activity.updated", "activity.failed"]
     assert {entry[1]["kind"] for entry in activities} == {kind}
     assert len({entry[1]["activity_id"] for entry in activities}) == 1
-    assert activities[-1][1]["summary"] == "SDK原始校验错误"
+    summary = activities[-1][1]["summary"]
+    assert "PermissionError" in summary and "errno=13" in summary
+    assert "phase=tool_callback" in summary
+    assert "private-activity" not in summary
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
     assert not [call for call in writer.commit.await_args_list if call.args[0] == "tool.completed"]
 
     # 框架处理异常后的配对消息才是权威正文，不能被早到callback异常字符串替换。

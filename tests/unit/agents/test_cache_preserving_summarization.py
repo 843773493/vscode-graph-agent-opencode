@@ -1500,7 +1500,13 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary(
 
 
 @pytest.mark.asyncio
-async def test_async_compaction_uses_context_activity_handler(preflight_runtime: SimpleNamespace) -> None:
+@pytest.mark.parametrize("failure", [None, PermissionError(13, "归档不可写", "/private-activity/archive.md"),
+    RuntimeError(r"归档不可写 C:\private-activity\archive.md"),
+    RuntimeError(r"归档不可写 \\server\private-activity\archive.md")])
+async def test_async_compaction_uses_context_activity_handler(
+    preflight_runtime: SimpleNamespace, failure: Exception | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     messages = _conversation(3)
     partition = CachePreservingPartition(
         prefix_messages=[],
@@ -1530,6 +1536,8 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
 
         @staticmethod
         async def _aoffload_to_backend(*_: object) -> str:
+            if failure is not None:
+                raise failure
             return "/.boxteam/test-compaction-history.md"
 
         @staticmethod
@@ -1549,11 +1557,32 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
         "payload": payload,
     }
     message_stream_runtime = MessageStreamRuntime(writer)
+    request = ModelRequest(model=None, messages=messages, runtime=preflight_runtime)
     token = set_current_model_delta_sink(message_stream_runtime)
     try:
+        if failure is not None:
+            with pytest.raises(type(failure)) as caught:
+                await CachePreservingSummarizationMiddleware.awrap_model_call(
+                    _CompactionStub(),  # type: ignore[arg-type]
+                    request,
+                    handler,
+                )
+            assert caught.value is failure
+            assert [call.args[0] for call in writer.commit.await_args_list] == [
+                "activity.started", "activity.failed",
+            ]
+            failed = writer.commit.await_args_list[-1].args[1]
+            assert failed["kind"] == "context.compaction"
+            assert failed["outcome"] == "outcome_unknown"
+            assert "private-activity" not in failed["summary"]
+            assert type(failure).__name__ in failed["summary"]
+            assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+            # 故障修复后仍走同一中间件和活动入口。
+            failure = None
+            writer.commit.reset_mock()
         response = await CachePreservingSummarizationMiddleware.awrap_model_call(
             _CompactionStub(),  # type: ignore[arg-type]
-            ModelRequest(model=None, messages=messages, runtime=preflight_runtime),
+            request,
             handler,
         )
     finally:

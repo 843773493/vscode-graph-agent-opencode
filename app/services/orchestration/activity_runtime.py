@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.services.infrastructure.message_stream_store import MessageStreamWriter
 
 logger = logging.getLogger(__name__)
-ActivityResult = TypeVar("ActivityResult")
+
+
+def activity_failure_message(error: BaseException, *, phase: str) -> str:
+    """活动事件只记录失败事实，原异常及位置交给关联诊断日志。"""
+    facts = [f"phase={phase}", f"error={type(error).__name__}"]
+    if isinstance(error, OSError):
+        for name in ("errno", "winerror"):
+            value = getattr(error, name, None)
+            if value is not None:
+                facts.append(f"{name}={value}")
+    return "活动处理失败: " + ", ".join(facts)
 
 
 def current_activity_runtime() -> ActivityRuntime | None:
@@ -293,50 +303,15 @@ class ActivityRuntime:
             payload["detail"] = dict(detail)
         return await self.writer.commit("activity.failed", self._normalize(kind, payload))
 
-    async def run(
-        self,
-        *,
-        activity_id: str,
-        kind: str,
-        operation: Callable[[], Awaitable[ActivityResult]],
-        summary: str | None = None,
-        resource_refs: tuple[str, ...] = (),
-        resumable: bool = False,
-    ) -> ActivityResult:
-        """统一包装可细化路径；失败事实先写入消息流再向调用方抛错。"""
-        await self.started(
-            activity_id=activity_id,
-            kind=kind,
-            summary=summary,
-            resource_refs=resource_refs,
-            resumable=resumable,
-        )
-        try:
-            result = await operation()
-        except Exception as error:
-            await self.failed(
-                activity_id=activity_id,
-                kind=kind,
-                outcome="outcome_unknown",
-                summary=str(error),
-            )
-            raise
-        await self.completed(
-            activity_id=activity_id,
-            kind=kind,
-            summary=summary,
-        )
-        return result
-
     def _normalize(self, kind: str, payload: Mapping[str, object]) -> dict[str, object]:
         registered = self.registry.resolve(kind)
         try:
             normalized = dict(registered.handler.normalize(payload))
         except Exception as error:
-            logger.exception("Activity Handler normalize 失败，降级通用投影: kind=%s", kind)
+            logger.exception("Activity Handler 投影失败: kind=%s", kind)
             normalized = dict(DefaultActivityHandler().normalize(payload))
             normalized["detail_available"] = False
-            normalized["detail_error"] = str(error)
+            normalized["detail_error"] = activity_failure_message(error, phase="projection")
         normalized.setdefault("kind", kind)
         normalized.setdefault("updated_at", self._now())
         return normalized
