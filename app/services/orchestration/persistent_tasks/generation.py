@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import NotFoundError
+from app.core.failures import failure_detail
 from app.core.job_event_bus import EventType
 from app.core.phase_observer import observe_phase
 from app.core.trace_middleware import (
@@ -225,7 +226,9 @@ async def advance_generation(runtime: PersistentTaskRuntime, configuration: Pers
     except (NotFoundError, KeyError, ValueError) as error:
         runtime._waiting_actions.discard(run.run_id)
         state = runtime.store.generation_state(run)
-        reason = f"会话动作失败: {type(error).__name__}: {error}"
+        reason = failure_detail(error, stage="generation-action", label=(
+            f"会话动作失败: task_id={run.task_id}, run_id={run.run_id}, workspace_id={runtime.store.workspace_id}"
+        ))
         lifecycle = "needs_attention" if action.generation.mount_missing == "pause" else None
         if state is None:
             runtime.store.advance(run, phase="failed", now=runtime.clock(), error=reason, lifecycle=lifecycle)

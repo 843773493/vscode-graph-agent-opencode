@@ -9,10 +9,17 @@ import sqlite3
 
 import pytest
 
+from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.core.exceptions import NotFoundError
+from app.services.business.job.service import JobService
 from tests.integration.backend.sessions.test_persistent_task_execution_events import (
     _event_configuration,
     _event_runs,
+)
+from tests.integration.backend.sessions.test_persistent_task_generations import (
+    generation_configuration,
+    generation_run,
+    generation_state,
 )
 from tests.integration.backend.sessions.test_persistent_task_models import (
     _answer,
@@ -222,3 +229,120 @@ async def test_model_result_read_failure_retains_accepted_evaluation_without_rep
     current = (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]
     assert current["lifecycle"] == "needs_attention" and current["reason"] == failed["error"]
     case.write_actual("task-model-result-failure", {"failed": failed, "current": current})
+
+
+@pytest.mark.parametrize("boundary", ["before-state", "after-acceptance"])
+@pytest.mark.parametrize("mount_missing", ["pause", "fail"])
+async def test_generation_failure_preserves_state_policy_and_accepted_job(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, boundary: str, mount_missing: str,
+) -> None:
+    case = source_case
+    session_id, thread_id, _target_uri = await _target(case)
+    workspace_id = case.client.headers["X-BoxTeam-Workspace-Id"]
+    configuration = generation_configuration(workspace_id, mode="continue_existing", target={
+        "workspace_id": workspace_id, "session_id": session_id, "thread_id": thread_id,
+    })
+    configuration["action"]["generation"]["mount_missing"] = mount_missing
+    task = await _create(case, configuration)
+    runtime, saver = case.container.persistent_task_runtime, case.container.checkpointer
+    jobs = case.container.job_service
+    assert isinstance(jobs, JobService)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_run = jobs._job_executor.run
+    native_locations = ("/private/generation-store.sqlite", r"C:\private\generation-store.sqlite", r"\\target\private\generation-store.sqlite")
+    raw_error = (ValueError if boundary == "before-state" else KeyError)("原始生成失败: " + " | ".join(native_locations))
+
+    async def hold_before_provider(job: JobRuntimeStateProtocol) -> str:
+        if job.session_id == session_id:
+            entered.set()
+            await release.wait()
+        return await original_run(job)
+
+    async def fail_preview(*_args: object, **_kwargs: object) -> None:
+        raise raw_error
+
+    def fail_outcome(*_args: object, **_kwargs: object) -> None:
+        raise raw_error
+
+    monkeypatch.setattr(jobs._job_executor, "run", hold_before_provider)
+    await case.plan(session_id, [{"content": "原生成任务完成。"}, {"content": "显式重试完成。"}])
+    original_job_id: str | None = None
+    original_job = None
+    original_task = None
+    admissions: list[tuple] = []
+    if boundary == "after-acceptance":
+        case.control.arm_match("generation-accepted", "task.generation.accepted_before_record", {"task_id": task["task_id"]})
+    try:
+        with monkeypatch.context() as fault, caplog.at_level(logging.ERROR):
+            if boundary == "before-state":
+                fault.setattr(runtime.generation, "preview", fail_preview)
+            run = await _check(case, task)
+            if boundary == "after-acceptance":
+                await asyncio.to_thread(case.control.acknowledged_match, "generation-accepted")
+                fault.setattr(saver, "runtime_execution_outcome", fail_outcome)
+                _release_match(case, "generation-accepted")
+            failed = await _run(case, task, run, "failed")
+        assert "generation-store.sqlite" not in failed["error"]
+        assert "stage=generation-action" in failed["error"] and f"error={type(raw_error).__name__}" in failed["error"]
+        assert all(identity in failed["error"] for identity in (task["task_id"], run["run_id"], workspace_id))
+        assert any(record.exc_info is not None and record.exc_info[1] is raw_error for record in caplog.records)
+        assert native_locations[0] in caplog.text and "generation-store.sqlite" in caplog.text
+        response = await case.client.get(f"{ROOT}/{task['task_id']}")
+        assert response.status_code == 200 and response.headers["X-Request-ID"] == response.json()["request_id"]
+        current = response.json()["data"]
+        assert current["lifecycle"] == ("needs_attention" if mount_missing == "pause" else "active")
+        assert current["revision"] == task["revision"] + (1 if mount_missing == "pause" else 0)
+        assert current["reason"] == (failed["error"] if mount_missing == "pause" else failed["decision"]["reason"])
+        with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+            stored_error, frozen_state = connection.execute(
+                "SELECT error,generation_json FROM persistent_task_runs WHERE run_id=?", (run["run_id"],),
+            ).fetchone()
+        assert stored_error == failed["error"] and "generation-store.sqlite" not in (frozen_state or "")
+        if boundary == "before-state":
+            assert frozen_state is None and failed["generation"] is None
+            assert await jobs.list(session_id=session_id) == []
+            assert case.call_count(session_id, thread_id) == 0
+        else:
+            await asyncio.wait_for(entered.wait(), 30)
+            state = generation_state(case, run)
+            assert state["status"] == "failed" and state["prepared_message"] is not None
+            original_job_id = state["execution_identity"]["job_id"]
+            assert isinstance(original_job_id, str)
+            original_job = jobs._jobs[original_job_id]
+            original_task = original_job.task
+            assert original_task is not None and not original_task.done()
+            admissions = case.sql(session_id, thread_id,
+                "SELECT job_id,turn_id,admission_idempotency_key,admission_payload_hash FROM executions")
+            assert len(admissions) == 1 and admissions[0][:3] == (
+                original_job_id, state["execution_identity"]["turn_id"], state["execution_identity"]["admission_idempotency_key"],
+            )
+            assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM model_calls") == [(0,)]
+    finally:
+        release.set()
+        if boundary == "after-acceptance":
+            _release_match(case, "generation-accepted")
+        # 红测也必须先让已接受执行正常结束，不能让断言失败制造关闭竞态。
+        for pending_job in await jobs.list(session_id=session_id):
+            await _job(case, pending_job.job_id)
+
+    if boundary == "after-acceptance":
+        assert original_job_id is not None and original_job is not None
+        assert jobs._jobs[original_job_id] is original_job and original_job.task is original_task
+        assert case.sql(session_id, thread_id,
+            "SELECT job_id,turn_id,admission_idempotency_key,admission_payload_hash FROM executions") == admissions
+    if mount_missing == "pause":
+        current = await _control(case, current, "resume")
+    retry = await _check(case, current, "retry-generation")
+    recovered = await generation_run(case, current, retry)
+    assert recovered["run_id"] != failed["run_id"] and recovered["error"] is None
+    assert await _check(case, current, "retry-generation") == recovered
+    response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+    assert response.status_code == 200 and response.json()["data"]["run"] == failed
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    assert "generation-store.sqlite" not in response.text
+    with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT error,generation_json FROM persistent_task_runs WHERE run_id=?", (run["run_id"],)).fetchone() == (stored_error, frozen_state)
+    expected_calls = 1 if boundary == "before-state" else 2
+    assert len(case.requests()) == expected_calls and len(await jobs.list(session_id=session_id)) == expected_calls
+    case.write_actual(f"generation-failure-{boundary}-{mount_missing}", {"failed": failed, "current": current, "recovered": recovered})

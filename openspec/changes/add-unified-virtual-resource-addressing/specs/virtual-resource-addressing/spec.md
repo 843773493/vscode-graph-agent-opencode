@@ -104,6 +104,11 @@
 - **WHEN** 已持久准入的runtime wakeup在执行状态读取、Job派发或回执保存阶段失败
 - **THEN** 原last_error只保存Session/Thread、Job/execution/admission、dispatch generation、阶段与异常类别等公开事实，完整原异常留冻结请求上下文的诊断并原样重抛；原pending、generation CAS及上下文释放保持。故障解除后沿原生命周期消费者或原派发入口恢复同一准入，回执失败前已经接受的Job、任务及canonical来源身份不变，不新增执行或重放已完成模型调用
 
+#### Scenario: 会话生成失败不改写已接受事实或失败策略
+
+- **WHEN** 会话生成动作在建立generation state之前或Job已经接受后遇到原有可处理异常
+- **THEN** 原失败结算保留任务、运行、工作区身份、失败阶段与异常类别，原生位置及异常全文只留诊断；原generation state和已接受Job/准入身份保持，mount_missing=pause仍令任务needs_attention，fail仍仅结清本次运行。故障修复后沿原管理入口恢复和触发新运行，原失败记录不因后续成功改写，不重复派发已接受执行
+
 #### Scenario: Gateway 目录浏览失败保留目标与原始诊断
 
 - **WHEN** 本机或联邦目录入口在原生目录解析、枚举或远端 HTTP 请求中失败
