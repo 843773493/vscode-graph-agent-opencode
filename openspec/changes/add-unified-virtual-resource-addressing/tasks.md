@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-28 持久任务失败落盘切片（2.2/7.2部分收口）：执行结束来源、动作对账/准入和模型判断对账/准入/结果读取，在原运行时的六处异常出口复用failure_detail；任务reason、run.error及普通详情只保存任务/运行、URI、阶段与原异常类别，完整原错误留诊断。不新增writer、schema、恢复链或错误正文扫描，原failed/needs_attention、revision、check_only和接受事实保持。
+
+原实现五类准入反例5 failed，候选5 passed/64.57秒，经真实Session/任务入口核SQL与API、显式恢复、幂等重试和原失败身份；模型沿用model_stream。新增来源终态与已接受模型结果读取2 passed/50.67秒；作者自查后将来源故障点限定为原canonical确有终态记录。最终组合在220秒外部上限退出124，保留四个成功call标记但不称整批通过，只独立补验未完成的来源事件和基础任务检查，两项均通过（72.10秒）；各轮准确范围及最终结果见`out/tests/temp/uri-global-closure/artifacts/verification-029.json`。首次新增测试5项类型收窄缺失已修，最终触达两文件Ruff/Pyright/compileall零诊断，strict 51/51；旧生产同样零类型诊断。原五场景最终函数AST与已通过快照一致，作者结构自查不替代独审。未验Gateway/Web、Windows、Backend硬重启或全部任务出口；会话生成、旧生成器导入和共享wakeup另按其owner核验，2.2/7.2仍未勾，团队协作继续TODO。
+
 2026-10-28 进程身份原生读取切片（2.2/7.2部分收口）：Linux stat/boot_id 的原读取点复用 failure_detail，只公开来源、阶段、异常类别及系统错误码，原异常和真实位置留诊断及直接 cause。stat 消失仍表示 PID 终结，boot_id 缺失仍明确失败，不改 HTTP 分类或回落身份来源。真实 Node 启动生成 claim 后的新服务冷读还发现原结算动作覆盖未加载 manifest；原 session_state 在追加前加载，保留方案和动作历史，不增恢复链。
 
 新增反例在原生产实现10 failed，包含真实Node/ASGI冷读404路径外泄。最终身份、接收、完整claim及会话存储120 passed；中间新增场景的3项错误断言按既有OSError合同修正，冷读方案断言保持并修复写入顺序。Ruff/compileall通过，完整旧HEAD与最终Pyright均3项、无新增；OpenSpec strict 51/51。准确命令、源码指纹、原始输出、实际退出码与作者结构自查见 out/tests/temp/uri-global-closure/artifacts/verification-027.json。未验Gateway/Web/Windows、独立Backend硬重启或全部URI出口；2.2/7.2和延期项继续未勾。

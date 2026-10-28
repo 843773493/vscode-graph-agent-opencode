@@ -17,6 +17,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.core.exceptions import NotFoundError
+from app.core.failures import failure_detail
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
@@ -380,7 +381,8 @@ class PersistentTaskRuntime:
                     page = self._saver.execution_completions(session_id, thread_id, after_commit_id=cursor)
             except NotFoundError as error:
                 self.store.control(task_id, expected_revision=task.revision, lifecycle="needs_attention",
-                                   now=self.clock(), reason=f"执行结束来源已删除: {error}")
+                                   now=self.clock(), reason=failure_detail(error, stage="execution-source",
+                                       label=f"执行结束来源已删除: task_id={task_id}, source={uri}"))
                 self.notify(task_id)
                 return
             if page.records:
@@ -430,7 +432,10 @@ class PersistentTaskRuntime:
                                 delivery = TaskDeliveryDTO(state="accepted", source_id=source_id, item_id=wakeup.source_item_id,
                                                            job_id=wakeup.job_id, execution_id=wakeup.execution_id)
                 except NotFoundError as error:
-                    self.store.advance(run, phase="failed", now=self.clock(), error=f"目标已删除: {error}", lifecycle="needs_attention")
+                    self.store.advance(run, phase="failed", now=self.clock(),
+                        error=failure_detail(error, stage="delivery-reconcile",
+                            label=f"目标已删除: task_id={run.task_id}, run_id={run.run_id}, target={action.target_uri}"),
+                        lifecycle="needs_attention")
                     self.notify(run.task_id, run.run_id)
                     return
             if delivery is None:
@@ -462,8 +467,11 @@ class PersistentTaskRuntime:
                         delivery = TaskDeliveryDTO(state="accepted", source_id=source_id, item_id=wakeup.source_item_id,
                                                    job_id=wakeup.job_id, execution_id=wakeup.execution_id)
                 except (NotFoundError, ValueError) as error:
-                    self.store.advance(run, phase="failed", now=self.clock(), error=f"{type(error).__name__}: {error}",
-                                       lifecycle="needs_attention")
+                    stage = "context-admission" if action.delivery_mode == "context_only" else "execution-admission"
+                    self.store.advance(run, phase="failed", now=self.clock(),
+                        error=failure_detail(error, stage=stage,
+                            label=f"持久任务动作准入失败: task_id={run.task_id}, run_id={run.run_id}, target={action.target_uri}"),
+                        lifecycle="needs_attention")
                     self.notify(run.task_id, run.run_id)
                     return
                 finally:
@@ -543,7 +551,8 @@ class PersistentTaskRuntime:
                     self._sessions.path_resolver.resolve_thread_node(session_id, thread_id)
                     wakeup = self._dispatcher.submitted(session_id, thread_id, idempotency_key=key)
             except NotFoundError as error:
-                raise TaskCheckError(f"判断Thread已删除: {error}") from error
+                raise TaskCheckError(failure_detail(error, stage="model-check-reconcile",
+                    label=f"判断Thread已删除: task_id={run.task_id}, run_id={run.run_id}, target={model.thread_uri}")) from error
             if wakeup is None:
                 if run.evaluation is not None:
                     raise RuntimeError("已记录判断的原准入事实缺失")
@@ -570,7 +579,8 @@ class PersistentTaskRuntime:
                         idempotency_key=key, delivery_policy="after_turn",
                     )
                 except (NotFoundError, ValueError) as error:
-                    raise TaskCheckError(f"判断准入失败: {type(error).__name__}: {error}") from error
+                    raise TaskCheckError(failure_detail(error, stage="model-check-admission",
+                        label=f"判断准入失败: task_id={run.task_id}, run_id={run.run_id}, target={model.thread_uri}")) from error
                 finally:
                     reset_current_gateway_id(gateway_token)
                     reset_current_request_id(request_token)
@@ -596,5 +606,6 @@ class PersistentTaskRuntime:
                     raise TaskCheckError(f"模型判断执行未成功: {outcome}")
                 content, _provenance = self._saver.execution_output(session_id, thread_id, wakeup.execution_id, final_only=True)
         except NotFoundError as error:
-            raise TaskCheckError(f"判断Thread已删除: {error}") from error
+            raise TaskCheckError(failure_detail(error, stage="model-check-result",
+                label=f"判断Thread已删除: task_id={run.task_id}, run_id={run.run_id}, target={model.thread_uri}")) from error
         return model_decision(content, run)
