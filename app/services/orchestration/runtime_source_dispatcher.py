@@ -15,6 +15,7 @@ from app.abstractions.internal_message import (
     RuntimeContextReceipt,
 )
 from app.abstractions.job_service import JobServiceProtocol
+from app.core.failures import failure_detail
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
@@ -281,6 +282,7 @@ class RuntimeSourceDispatcher:
                                          admission_idempotency_key=wakeup.admission_idempotency_key)
         gateway_token = set_current_gateway_id(wakeup.gateway_id)
         request_token = set_current_request_id(wakeup.request_id)
+        stage = "execution-outcome"
         try:
             outcome = self._saver.runtime_execution_outcome(wakeup.session_id, wakeup.thread_id, wakeup.execution_id)
             terminal = {"completed": "completed", "completed_empty": "completed", "failed": "failed",
@@ -292,6 +294,7 @@ class RuntimeSourceDispatcher:
                     queued_jobs_ahead=0, queued_job_count=0, pending_job_count=0,
                 )
             else:
+                stage = "job-dispatch"
                 dispatch = await self._jobs.start_job(
                     wakeup.session_id, str(message.content), thread_id=wakeup.thread_id,
                     execution_binding=intent, reserved_job_id=wakeup.job_id,
@@ -302,12 +305,17 @@ class RuntimeSourceDispatcher:
                 )
             accepted = MessageRunAccepted(message_id=message_id, job_id=wakeup.job_id, turn_id=None,
                                           status=dispatch.job_status, dispatch=dispatch, thread_id=wakeup.thread_id)
+            stage = "dispatch-receipt"
             self._saver.finish_runtime_wakeup(wakeup, dispatch_generation=generation,
                                             receipt=accepted.model_dump(mode="json"))
             return accepted
         except Exception as error:
             self._saver.finish_runtime_wakeup(wakeup, dispatch_generation=generation,
-                                            error=f"{type(error).__name__}: {error}")
+                error=failure_detail(error, stage=stage, label=(
+                    f"runtime wakeup 派发失败: session_id={wakeup.session_id}, thread_id={wakeup.thread_id}, "
+                    f"job_id={wakeup.job_id}, execution_id={wakeup.execution_id}, "
+                    f"admission_idempotency_key={wakeup.admission_idempotency_key}, dispatch_generation={generation}"
+                )))
             raise
         finally:
             reset_current_gateway_id(gateway_token)

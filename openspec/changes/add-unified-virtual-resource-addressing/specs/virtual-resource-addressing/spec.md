@@ -99,6 +99,11 @@
 - **WHEN** 持久任务的执行结束来源读取、动作对账/准入或模型判断对账/准入/结果读取遇到原有可处理异常
 - **THEN** 原运行时在任务reason或run.error写入前保留任务、运行、来源/目标URI、失败阶段和异常类别，原异常与完整原因链只留诊断；普通任务快照、运行详情与冷读不得通过这些字段复制原生位置。失败阶段、needs_attention、check_only、revision及已接受事实的对账规则保持，修复后由原管理入口显式恢复；原失败运行身份与记录不因新运行成功而改写，不重放已接受副作用
 
+#### Scenario: 共享 wakeup 派发失败保留原执行身份
+
+- **WHEN** 已持久准入的runtime wakeup在执行状态读取、Job派发或回执保存阶段失败
+- **THEN** 原last_error只保存Session/Thread、Job/execution/admission、dispatch generation、阶段与异常类别等公开事实，完整原异常留冻结请求上下文的诊断并原样重抛；原pending、generation CAS及上下文释放保持。故障解除后沿原生命周期消费者或原派发入口恢复同一准入，回执失败前已经接受的Job、任务及canonical来源身份不变，不新增执行或重放已完成模型调用
+
 #### Scenario: Gateway 目录浏览失败保留目标与原始诊断
 
 - **WHEN** 本机或联邦目录入口在原生目录解析、枚举或远端 HTTP 请求中失败

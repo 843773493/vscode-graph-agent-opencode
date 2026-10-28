@@ -41,7 +41,9 @@
 
 会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
 
-持久任务的执行结束来源读取、动作对账/准入及模型判断对账/准入/结果读取，在原异常被转为任务reason或run.error之前复用`failure_detail`。记录保留任务、运行、来源/目标URI、阶段及原异常类别，完整原异常与原因链只进入诊断；不从异常正文提取或改写路径。原失败阶段、needs_attention、check_only、revision复核、接受对账和显式恢复保持。脚本/模型返回的合法业务判断与用户正文继续遵守原输入合同，不用统一错误包装抹掉其语义；会话生成动作、旧生成器导入及共享runtime wakeup的其它失败出口须分别核验，不据本片宣称全部任务出口完成。
+持久任务的执行结束来源读取、动作对账/准入及模型判断对账/准入/结果读取，在原异常被转为任务reason或run.error之前复用`failure_detail`。记录保留任务、运行、来源/目标URI、阶段及原异常类别，完整原异常与原因链只进入诊断；不从异常正文提取或改写路径。原失败阶段、needs_attention、check_only、revision复核、接受对账和显式恢复保持。脚本/模型返回的合法业务判断与用户正文继续遵守原输入合同，不用统一错误包装抹掉其语义；会话生成动作、旧生成器导入等失败出口须分别核验，不据本片宣称全部任务出口完成。
+
+共享runtime wakeup在原派发catch内复用同一`failure_detail`，last_error保留Session/Thread、Job/execution/admission、dispatch generation和失败阶段，不复制异常正文。原异常在冻结的request/Gateway上下文内记录后原样重抛，finally恢复调用者上下文；原SQLite事务与generation CAS保持。恢复只消费原持久准入，回执写入失败不删除已接受的Job或创建第二份执行，终态重派只形成原Job回执。
 
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
