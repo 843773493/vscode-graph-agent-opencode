@@ -314,6 +314,137 @@ def test_auth_json_error_keeps_original_parse_coordinates(auth_read_case, caplog
     assert not caplog.records
 
 
+@pytest.mark.parametrize("auth_read_case,stage", [
+    *[(mode, stage) for mode in ("migration", "refresh")
+      for stage in ("prepare", "create_temp", "permissions", "fsync", "publish")],
+    ("migration", "cleanup"),
+], indirect=["auth_read_case"])
+def test_auth_publication_failure_preserves_files_and_closes_descriptor(
+    auth_read_case, monkeypatch, caplog, stage,
+):
+    from app.runtime import chatgpt_auth
+
+    source, target, invoke, _ = auth_read_case
+    source_before = source.read_bytes()
+    target_before = target.read_bytes() if target.exists() else None
+    failure = (RuntimeError(f"ACL失败 private-publish-marker {target}") if stage == "permissions"
+               else PermissionError(errno.EACCES, "private-publish-marker", str(target)))
+    descriptors = []
+    original_mkstemp = chatgpt_auth.tempfile.mkstemp
+    original_mkdir = Path.mkdir
+    original_unlink = Path.unlink
+    original_permissions = chatgpt_auth.restrict_private_path_access
+
+    def mkstemp(*args, **kwargs):
+        if stage == "create_temp":
+            raise failure
+        fd, name = original_mkstemp(*args, **kwargs)
+        descriptors.append(fd)
+        return fd, name
+
+    def mkdir(path, *args, **kwargs):
+        if stage == "prepare" and path == target.parent:
+            raise failure
+        return original_mkdir(path, *args, **kwargs)
+
+    def unlink(path, *args, **kwargs):
+        if stage == "cleanup" and path.name.startswith(".auth."):
+            raise failure
+        return original_unlink(path, *args, **kwargs)
+
+    def permissions(path, *, is_directory=False, descriptor=None):
+        if stage == "permissions" and descriptor is not None:
+            raise failure
+        return original_permissions(path, is_directory=is_directory, descriptor=descriptor)
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(chatgpt_auth.tempfile, "mkstemp", mkstemp)
+        patch.setattr(Path, "mkdir", mkdir)
+        patch.setattr(Path, "unlink", unlink)
+        patch.setattr(chatgpt_auth, "restrict_private_path_access", permissions)
+        if stage == "fsync":
+            patch.setattr(os, "fsync", fail)
+        elif stage == "publish":
+            patch.setattr(os, "link" if target_before is None else "replace", fail)
+        with pytest.raises(type(failure)) as caught:
+            invoke()
+    for descriptor in descriptors:
+        with pytest.raises(OSError) as closed:
+            os.fstat(descriptor)
+        assert closed.value.errno == errno.EBADF
+    error = caught.value
+    expected_stage = "write" if stage in {"permissions", "fsync"} else stage
+    assert f"artifact=chatgpt_auth, stage={expected_stage}" in str(error)
+    assert type(error) is type(failure) and error.__cause__ is failure
+    if isinstance(error, OSError):
+        assert error.errno == errno.EACCES and error.filename is None
+    assert "private-publish-marker" not in str(error) and str(target) not in str(error)
+    assert str(target) in caplog.text and "private-publish-marker" in caplog.text
+    assert "codex-refresh" not in caplog.text and "codex-id" not in caplog.text
+    assert source.read_bytes() == source_before
+    if stage == "cleanup":
+        assert json.loads(target.read_bytes())["access_token"] == _access_token(2_000_000_000)
+        assert len(list(target.parent.glob(".auth.*.tmp"))) == 1
+    else:
+        assert (target.read_bytes() if target.exists() else None) == target_before
+        assert list(target.parent.glob(".auth.*.tmp")) == []
+    invoke()
+    assert json.loads(target.read_bytes())["access_token"] == _access_token(2_000_000_000)
+
+
+@pytest.mark.parametrize("auth_read_case", ["migration", "refresh"], indirect=True)
+def test_auth_failed_publication_and_cleanup_keep_both_causes(auth_read_case, monkeypatch):
+    source, target, invoke, _ = auth_read_case
+    target_before = target.read_bytes() if target.exists() else None
+    source_before = source.read_bytes()
+    publication_error = OSError(errno.EIO, "private-publish-error", str(target))
+    cleanup_error = PermissionError(errno.EACCES, "private-cleanup-error", str(target.parent))
+    original_unlink = Path.unlink
+
+    def fail(*args, **kwargs):
+        raise publication_error
+
+    def unlink(path, *args, **kwargs):
+        if path.name.startswith(".auth."):
+            raise cleanup_error
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fsync", fail)
+        patch.setattr(Path, "unlink", unlink)
+        with pytest.raises(ExceptionGroup) as caught:
+            invoke()
+    primary, cleanup = caught.value.exceptions
+    assert primary.__cause__ is publication_error
+    assert cleanup.__cause__ is cleanup_error
+    assert caught.value.__cause__ is primary
+    assert "private-" not in str(caught.value) and str(target) not in str(caught.value)
+    assert source.read_bytes() == source_before
+    assert (target.read_bytes() if target.exists() else None) == target_before
+    invoke()
+    assert json.loads(target.read_bytes())["access_token"] == _access_token(2_000_000_000)
+
+
+@pytest.mark.parametrize("auth_read_case", ["migration"], indirect=True)
+def test_auth_migration_does_not_replace_concurrent_winner(auth_read_case, monkeypatch):
+    _, target, invoke, _ = auth_read_case
+    winner = b'{"access_token":"concurrent-winner","expires_at":2000000000}\n'
+    original_link = os.link
+
+    def link(source, destination):
+        target.write_bytes(winner)
+        return original_link(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", link)
+        invoke()
+    assert target.read_bytes() == winner
+    assert list(target.parent.glob(".auth.*.tmp")) == []
+
+
 def test_gpt_56_capabilities_register_only_while_litellm_is_missing_support(
     monkeypatch,
 ) -> None:

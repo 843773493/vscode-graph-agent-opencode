@@ -1,6 +1,6 @@
 # 目录用途
 
-`integration-chatgpt-auth-errors` 经真实认证、模型工厂、Agent服务及ASGI路由验证凭据读取与结构拒绝的错误归属、文件不变及同入口恢复，固定60秒/4GiB；仅替换原生读取故障和路由依赖装配，不代表真实OAuth网络、Gateway、独立Backend或Web验收。
+`integration-chatgpt-auth-errors` 经真实认证、模型工厂、Agent服务及ASGI路由验证凭据读取、结构拒绝及迁移/刷新发布失败的错误归属、文件不变与同入口恢复，固定60秒/4GiB；仅替换原生故障和路由依赖装配，不代表真实OAuth网络、Gateway、独立Backend或Web验收。
 
 存放测试套件注册、能力矩阵和统一命令入口，不包含具体测试实现。
 

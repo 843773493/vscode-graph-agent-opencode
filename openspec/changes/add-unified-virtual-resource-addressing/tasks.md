@@ -947,3 +947,9 @@
 - ChatGPT当前凭据、首次Codex迁移及过期同步共用原生读取错误出口；普通错误保留artifact、阶段、原异常类别、errno/winerror及直接cause，原文件位置和完整读取异常只留诊断，不记录凭据正文。缺access_token/tokens的原拒绝类别保持，位置移至诊断；JSON解析、登录提示、过期判断和原子发布未变，不保留第二条认证读取或写入链路，不回退可用状态。
 - 候选认证单元及真实Agent服务／模型工厂／ASGI响应共28 passed／29.32秒；相邻factory、Agent服务及上述ASGI回归9 passed／18.51秒（其中5项重叠，不累计）。覆盖失败原件不变、三种原生错误事实、JSON坐标、同入口修复、Agent仍可见及精确Provider归属。完整旧源码只替换原生产模块、使用相同最终测试时为17 failed／11 passed／20.37秒。两份完整tree与原始输出保留；基线正式输出另存后删除临时源码副本。
 - Ruff与三文件Pyright零诊断，strict OpenSpec47／0及矩阵加载通过；包装命令最后的git diff因隔离器设置GIT_INDEX_FILE=/dev/null退出128，原件保留，独立差异检查通过。准确命令、前后源码指纹、日志hash、真实退出码及零进程组残留见 `out/tests/temp/chatgpt-auth-error-boundary/artifacts/verification-004.json`。本片只关闭上述读取与缺字段出口，不代替凭据写入错误、真实OAuth网络、独立Backend/Gateway、Web或Windows验收；2.2／7.2仍未勾，团队与协作继续TODO。
+
+### 2026-10-28 OAuth 凭据唯一发布链与失败清理（2.2／7.2 部分收口）
+
+- 首次迁移和过期刷新合并为唯一临时文件发布链，分别保持不覆盖并发目标的link和原子replace；原两段writer及上一片的单用途read wrapper已物理删除、调用方迁齐。读取与发布共用具名artifact/阶段的原生错误出口，位置与完整异常只留诊断。权限设置前将描述符交原stream持有，修复权限拒绝漏关fd；发布与清理都失败时按发生顺序保留两份原因，不再由finally覆盖首错，不扫描或删除其它尝试的文件。
+- 最终认证、factory、Agent服务及ASGI回归48 passed／21.36秒，包含原读取/结构/JSON合同、发布前原件不变、描述符关闭、主错与清理双错、并发迁移不覆盖和两种发布失败后同入口真实重试。完整旧生产只替换该模块、使用相同最终新增用例为15 failed／1 passed／11.51秒，其中两项权限拒绝实际检出fd未关闭、两项HTTP实际检出原路径回显。初轮旧生产的两项HTTP因未设置无关Provider环境变量停在初始化，未计作产品反例；fixture现为模板声明的凭据变量注入仅用于本地构建的测试值，并使用SDK本地模型目录，不依赖个人配置或发真实模型请求。原失败和前两轮重叠绿测均保留，不累计数量。
+- Ruff及三文件Pyright零诊断，strict OpenSpec47／0通过；初轮Ruff的SIM117已合并上下文后补验。完整候选/基线tree、准确命令、前后源码指纹、原始输出/真实退出码、零进程组残留和作者AST自查见 `out/tests/temp/chatgpt-auth-publication/artifacts/verification-005.json`；基线正式产物另存后删除两份临时源码。此片不代表真实OAuth网络、独立Backend/Gateway、Web或Windows验收，也不代表整个URI路径审计完成；2.2／7.2保持未勾，团队与协作继续TODO。

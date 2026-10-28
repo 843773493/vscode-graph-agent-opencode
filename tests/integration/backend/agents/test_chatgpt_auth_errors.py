@@ -6,6 +6,7 @@ import base64
 import errno
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,7 @@ from tests.harness.python.run_context import TestRunContext
 
 @pytest.fixture
 def auth_service(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     home = tmp_path / "private-home"
     monkeypatch.setenv("HOME", str(home))
     if os.name == "nt":
@@ -41,7 +43,10 @@ def auth_service(tmp_path, monkeypatch):
     record = {**tokens, "expires_at": 2_000_000_000}
     target.write_text(json.dumps(record), encoding="utf-8")
     config = tmp_path / "workspace.jsonc"
-    config.write_bytes(Path("configs/workspace_inline.jsonc").read_bytes())
+    config_text = Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8")
+    for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", config_text):
+        monkeypatch.setenv(name, "test-only-not-sent")
+    config.write_text(config_text, encoding="utf-8")
     config_service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config)
     service = AgentService(config_service=config_service)
     app = FastAPI()
@@ -53,12 +58,15 @@ def auth_service(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["access_token", "tokens", "read_target", "read_migration", "read_refresh"])
+@pytest.mark.parametrize("failure", [
+    "access_token", "tokens", "read_target", "read_migration", "read_refresh",
+    "publish_migration", "publish_refresh",
+])
 async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
     auth_service, monkeypatch, caplog, request, failure,
 ):
     app, config_service, target, source, record = auth_service
-    artifact = "chatgpt_auth" if failure in {"access_token", "read_target"} else "codex_auth"
+    artifact = "codex_auth" if failure in {"tokens", "read_migration", "read_refresh"} else "chatgpt_auth"
     path = target if artifact == "chatgpt_auth" else source
     io_failure = PermissionError(errno.EACCES, "读取失败 private-auth-marker", str(path))
     original_read = Path.read_text
@@ -67,6 +75,9 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
         if current == path:
             raise io_failure
         return original_read(current, *args, **kwargs)
+
+    def publish(*args, **kwargs):
+        raise io_failure
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         initial = await client.get("/api/v1/agents/default")
@@ -78,15 +89,17 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
         elif failure == "tokens":
             source.write_bytes(b"{}\n")
             target.unlink()
-        elif failure == "read_migration":
+        elif failure in {"read_migration", "publish_migration"}:
             target.unlink()
-        elif failure == "read_refresh":
+        elif failure in {"read_refresh", "publish_refresh"}:
             target.write_text(json.dumps({**record, "expires_at": 0}), encoding="utf-8")
         before = {file: file.read_bytes() if file.exists() else None for file in (source, target)}
         responses = []
         with monkeypatch.context() as patch:
             if failure.startswith("read_"):
                 patch.setattr(Path, "read_text", read_text)
+            elif failure.startswith("publish_"):
+                patch.setattr(os, "link" if failure == "publish_migration" else "replace", publish)
             for endpoint in ("/api/v1/agents", "/api/v1/agents/default"):
                 response = await client.get(endpoint, headers={"X-Request-ID": "auth-diagnostics-contract"})
                 assert response.status_code == 200, response.text
@@ -105,19 +118,22 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
             assert "provider_id=backup_4" in str(caught.value)
             assert f"artifact={artifact}, stage=" in str(caught.value)
             assert str(path) not in str(caught.value)
-            if failure.startswith("read_"):
+            if failure.startswith(("read_", "publish_")):
                 assert type(caught.value.__cause__) is PermissionError
                 assert caught.value.__cause__.__cause__ is io_failure
         assert {file: file.read_bytes() if file.exists() else None for file in (source, target)} == before
         assert str(path) in caplog.text
-        if failure.startswith("read_"):
+        if failure.startswith(("read_", "publish_")):
             assert any(r.exc_info and r.exc_info[1] is io_failure for r in caplog.records)
-        target.write_text(json.dumps(record), encoding="utf-8")
+        assert list(target.parent.glob(".auth.*.tmp")) == []
+        if not failure.startswith("publish_"):
+            target.write_text(json.dumps(record), encoding="utf-8")
         if failure == "tokens":
             source.write_text(json.dumps({"tokens": {key: value for key, value in record.items() if key != "expires_at"}}), encoding="utf-8")
         recovered = await client.get("/api/v1/agents/default")
         assert recovered.status_code == 200, recovered.text
         assert recovered.json()["data"] == initial.json()["data"]
+        assert json.loads(target.read_bytes()) == record
         context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         (context.artifacts_dir / f"auth-errors-{failure}.json").write_text(json.dumps({
             "responses": responses, "recovered": recovered.json(),

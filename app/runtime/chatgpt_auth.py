@@ -6,7 +6,8 @@ import logging
 import os
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ def configure_litellm_chatgpt_auth_directory() -> Path:
 
     codex_auth_file = Path("~/.codex/auth.json").expanduser().resolve()
     if codex_auth_file.is_file():
-        _migrate_codex_auth(codex_auth_file, auth_file)
+        _publish_auth_record(auth_file, _build_litellm_auth_record(codex_auth_file), replace_existing=False)
     return token_directory
 
 
@@ -59,7 +60,9 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
             "ChatGPT OAuth 凭据不存在。请先执行 codex login，再重试请求。"
         )
 
-    auth_data = json.loads(_read_auth_text(auth_file, artifact="chatgpt_auth"))
+    with _auth_file_access(auth_file, artifact="chatgpt_auth", stage="read"):
+        auth_text = auth_file.read_text(encoding="utf-8")
+    auth_data = json.loads(auth_text)
     access_token = auth_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         logger.error("ChatGPT OAuth 凭据缺少 access_token: path=%s", auth_file)
@@ -82,7 +85,7 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
         raise RuntimeError(
             "ChatGPT OAuth 与 Codex 凭据均已过期。请先执行 codex login，再重试请求。"
         )
-    _replace_auth_record(auth_file, source_record)
+    _publish_auth_record(auth_file, source_record, replace_existing=True)
 
 
 def ensure_litellm_chatgpt_model_capabilities(model: str) -> bool:
@@ -126,47 +129,27 @@ def _resolve_litellm_auth_file(token_directory: Path) -> Path:
     return (token_directory / configured_auth_filename).expanduser().resolve()
 
 
-def _migrate_codex_auth(source: Path, target: Path) -> None:
-    record = _build_litellm_auth_record(source)
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    restrict_private_path_access(target.parent, is_directory=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=".auth.",
-        suffix=".tmp",
-        dir=target.parent,
-    )
+@contextmanager
+def _auth_file_access(source: Path, *, artifact: str, stage: str) -> Iterator[None]:
+    """同一凭据链路保留原生错误事实，位置与完整原因仅留诊断。"""
     try:
-        restrict_private_path_access(Path(temporary_name), descriptor=fd)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(record, stream, ensure_ascii=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary_name, target)
-        except FileExistsError:
-            return
-    finally:
-        if temporary_name:
-            Path(temporary_name).unlink(missing_ok=True)
-
-
-def _read_auth_text(source: Path, *, artifact: str) -> str:
-    """凭据内容仅交原解析器，原生读取位置与异常留在诊断。"""
-    try:
-        return source.read_text(encoding="utf-8")
-    except OSError as error:
+        yield
+    except (OSError, RuntimeError) as error:
         detail = (
-            f"OAuth 凭据读取失败: artifact={artifact}, stage=read, "
-            f"error={type(error).__name__}, errno={error.errno}, "
+            f"OAuth 凭据访问失败: artifact={artifact}, stage={stage}, "
+            f"error={type(error).__name__}, errno={getattr(error, 'errno', None)}, "
             f"winerror={getattr(error, 'winerror', None)}"
         )
         logger.exception("%s path=%s", detail, source)
-        raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+        if isinstance(error, OSError):
+            raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+        raise RuntimeError(detail) from error
 
 
 def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
-    source_data = json.loads(_read_auth_text(source, artifact="codex_auth"))
+    with _auth_file_access(source, artifact="codex_auth", stage="read"):
+        source_text = source.read_text(encoding="utf-8")
+    source_data = json.loads(source_text)
     tokens = source_data.get("tokens")
     if not isinstance(tokens, dict):
         logger.error("Codex 认证文件缺少 tokens 对象: path=%s", source)
@@ -199,28 +182,51 @@ def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
     return record
 
 
-def _replace_auth_record(target: Path, record: dict[str, Any]) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    restrict_private_path_access(target.parent, is_directory=True)
-    if target.exists():
-        restrict_private_path_access(target)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=".auth.",
-        suffix=".tmp",
-        dir=target.parent,
-    )
+def _publish_auth_record(target: Path, record: dict[str, Any], *, replace_existing: bool) -> None:
+    with _auth_file_access(target, artifact="chatgpt_auth", stage="prepare"):
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        restrict_private_path_access(target.parent, is_directory=True)
+        if replace_existing and target.exists():
+            restrict_private_path_access(target)
+    with _auth_file_access(target, artifact="chatgpt_auth", stage="create_temp"):
+        fd, temporary_name = tempfile.mkstemp(prefix=".auth.", suffix=".tmp", dir=target.parent)
+    temporary: Path | None = Path(temporary_name)
+    primary_error: BaseException | None = None
     try:
-        restrict_private_path_access(Path(temporary_name), descriptor=fd)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        with (
+            _auth_file_access(temporary, artifact="chatgpt_auth", stage="write"),
+            os.fdopen(fd, "w", encoding="utf-8") as stream,
+        ):
+            # 先交给stream持有fd，权限设置失败也必须关闭本次描述符。
+            restrict_private_path_access(temporary, descriptor=fd)
             json.dump(record, stream, ensure_ascii=False)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary_name, target)
-        temporary_name = ""
+        with _auth_file_access(target, artifact="chatgpt_auth", stage="publish"):
+            if replace_existing:
+                os.replace(temporary, target)
+                temporary = None
+            else:
+                try:
+                    os.link(temporary, target)
+                except FileExistsError:
+                    return
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        if temporary_name:
-            Path(temporary_name).unlink(missing_ok=True)
+        if temporary is not None:
+            try:
+                with _auth_file_access(temporary, artifact="chatgpt_auth", stage="cleanup"):
+                    temporary.unlink(missing_ok=True)
+            except (OSError, RuntimeError) as cleanup_error:
+                if primary_error is not None:
+                    raise BaseExceptionGroup(
+                        "OAuth 凭据发布与临时清理均失败: artifact=chatgpt_auth, stage=cleanup",
+                        [primary_error, cleanup_error],
+                    ) from primary_error
+                raise
 
 
 def _jwt_exp(token: str) -> int:
