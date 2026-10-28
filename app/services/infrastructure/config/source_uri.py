@@ -1,55 +1,32 @@
-"""配置来源的 URI 构造：config kind 的唯一构造点。
+"""配置文件 URI 的唯一构造点；逻辑来源层与实际文件载体分开。
 
-配置来源资源的 URI 形态由 owner change
-``add-unified-virtual-resource-addressing`` 的 requirement「配置来源寻址必须使用
-config kind 且 sqlite 层不可寻址」定稿：
-
-    boxteam://{scope}/{scope_id}/resources/config/{logical_source_name}
-
-- 尾段取**逻辑资源名**（如 ``workspace_inline``），MUST NOT 取原始文件名
-  （真实文件名含点号 ``.jsonc``，不在 URI 闭合 charset 内）；尾段 MUST NOT 含点号，
-  charset MUST NOT 放宽、MUST NOT 新增转义后门。
-- ``layer`` 是 URI 之外的**兄弟字段**，MUST NOT 塞进 URI。
-- ``sqlite`` 层 MUST NOT 编 URI：``user``/``user_local``/``workspace`` 三层在 state
-  store 存在时共享同一个 ``workspace.sqlite``（见 ``config_service._config_source``），
-  单一 URI 会立刻对应多个逻辑来源，故 ``sqlite`` 层不可寻址，返回 ``None``。
-
-构造一律走 ``resource_display_uri``（构造即校验、拒绝裸拼接），不在此复述语法。
+尾段使用不含扩展名的逻辑文件名，统一走公共 grammar。运行时来源仍只为
+可寻址文件提供 URI；共享 SQLite carrier 与无文件的 runtime override 不造地址。
+离线诊断可以引用实际读取的用户或工作区 JSONC 文件，不改变 ConfigSource 合同。
 """
 
 from __future__ import annotations
 
 from app.core.distribution_identity import load_distribution_id
-from app.core.resource_uri import (
-    resource_display_uri,
-)
+from app.core.resource_uri import resource_display_uri
 
-__all__ = [
-    "inline_config_source_uri",
-]
+__all__ = ["config_file_uri", "inline_config_source_uri"]
+
+
+def config_file_uri(*, scope: str, scope_id: str, logical_name: str) -> str:
+    """按真实归属构造单个配置文件的地址，不访问或注册原生文件。"""
+    return resource_display_uri(
+        scope=scope,
+        scope_id=scope_id,
+        kind="config",
+        tail_segments=(logical_name,),
+    )
 
 
 def inline_config_source_uri(*, logical_name: str) -> str:
-    """构造发行包内 ``inline`` 层配置来源的 URI。
-
-    config 来源中**只有 ``inline`` 层可寻址**：
-
-    - ``inline`` 层是发行包内真实存在的 JSONC 文件（``configs/{logical_name}.jsonc``，
-      经 ``resolve_config_resource_source`` 校验存在），有**稳定 disk 载体**，故有 URI；
-    - ``user``/``user_local``/``workspace`` 三层在 state store 存在时共享同一个
-      ``workspace.sqlite``（``config_service._config_source`` 统一把 layer 改写为
-      ``sqlite`` 并返回同一个 ``path``），把它映射成单一 URI 会立刻产生「同一 URI 对应
-      多个逻辑来源」的冲突（owner change 的 requirement「配置来源寻址必须使用 config
-      kind 且 sqlite 层不可寻址」明述）。故这三层与 ``sqlite`` 层一并**不可寻址**
-      （``uri=None``）；该结论的依据是**共享边界载体**，与 ``user`` 是否在 URI scope 闭集内无关。
-
-    尾段取**逻辑资源名**（即 ``configs/{logical_name}.jsonc`` 去扩展名的部分），
-    MUST NOT 取含点号的原文件名。``scope_id`` 取真实 ``distribution_id``
-    （按 manifest 的 distribution 与 version 推导，缺失即 fail-closed，绝不回退 ``local``）。
-    """
-    return resource_display_uri(
+    """发行文件沿既有 manifest owner 推导身份；缺失时明确失败。"""
+    return config_file_uri(
         scope="inline",
         scope_id=load_distribution_id(),
-        kind="config",
-        tail_segments=(logical_name,),
+        logical_name=logical_name,
     )

@@ -216,6 +216,8 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 **备选**：为 runtime override 或 SQLite carrier 新造 kind / URI（被否：它们不是新增资源类型或来源文件）；把 layer 塞进 URI（被否：URI 只承载位置，layer 是并列语义）。
 
+离线 `doctor` / `diagnose` 不属于原始日志管理例外。诊断实际读取的 JSONC 文件而非 SQLite 中的逻辑来源：发行文件复用原 `inline` URI 构造；用户文件使用 `user_scope_id()` 与文件逻辑名，工作区文件使用只读取得的真实 UUID。schema 按实际选择的发行或用户文件归属寻址。无发行 manifest 或既有工作区身份时，`uri=null` 并报告地址错误，仍诊断原输入，不创建身份或选取其他文件。源码中的原生路径与输出 URI 分开传递，同一稳定快照同时提供元数据与合并正文，不从输出字段反构造 Path。配置根和 SQLite 位置是冗余实现信息，直接删除；原 SQLite 状态分区、只读连接与冲突诊断保持，不给 carrier 新建地址或改变 ConfigSource 合同。失败报告保留阶段、异常类别、适用错误码及配置解析坐标，不能复制可能含路径的异常原文或配置值。
+
 ### D10：配置来源迁移直接复用 config 侧既有平级属性模式
 
 `ConfigSourceLayerRecord`（`config/state.py:475`）的 `source_path`/`backup_path` 与 `ConfigSourceJournalRecord.source_path`（`:632`）是已存在的 real path 持久化违约。迁移形态 = 把 `path` 换成 `uri`，其余 sibling 字段原样保留，与 `ConfigSource`（`config_sources.py:16`）平级结构对齐。

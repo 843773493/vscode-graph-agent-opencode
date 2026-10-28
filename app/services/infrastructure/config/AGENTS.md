@@ -9,7 +9,7 @@
 ```text
 app/services/infrastructure/config/
 ├── 来源与快照
-│   ├── source_uri.py       内置配置来源标识
+│   ├── source_uri.py       配置文件与内置来源的 URI 构造
 │   ├── source_owner.py     Workspace 配置来源与扇出记录
 │   ├── instruction_inputs.py 提示词文件句柄、稳定读取与 readiness
 │   ├── watcher.py          配置文件变化监听

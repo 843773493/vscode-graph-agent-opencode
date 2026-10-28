@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 
 from app.core.path_utils import resolve_boxteam_home
 from app.core.user_storage_migration import migrate_user_storage_layout
-from configs.diagnostics import diagnose_configuration
+from configs.diagnostics import diagnose_configuration, diagnostic_error
 from configs.gateway_development_assets import install_gateway_development_assets
 from configs.installer import (
     install_source_development_configuration,
@@ -88,69 +89,35 @@ def _validate_installed_configuration(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="管理 BoxTeam 双域 JSONC 配置")
-    parser.add_argument(
-        "action",
-        nargs="?",
-        choices=(
-            "initialize",
-            "install-source-development",
-            "migrate",
-            "migrate-runtime-logging",
-            "doctor",
-            "diagnose",
-        ),
-        default="initialize",
-    )
-    parser.add_argument("--project-root", type=Path)
-    parser.add_argument("--workspace", type=Path)
-    parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
-    parser.add_argument("--preview", action="store_true")
-    parser.add_argument("--restore", action="store_true", help="恢复最近一次日志配置迁移的原件")
-    parser.add_argument("--level")
-    parser.add_argument("--pretty", choices=("true", "false"))
-    parser.add_argument("--home", type=Path, default=Path.home())
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="显式用普通静态模板重建 Gateway 与 Workspace 用户配置",
-    )
-    args = parser.parse_args()
+class _DiagnosticLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        error = record.exc_info[1] if record.exc_info is not None else None
+        facts = (
+            diagnostic_error(error, stage="diagnostic_log")
+            if error is not None
+            else "详情见诊断 JSON"
+        )
+        return f"{record.levelname}: logger={record.name}, {facts}"
 
-    home = args.home.expanduser().resolve()
-    boxteam_home = resolve_boxteam_home(home)
-    config_root = boxteam_home / "config"
-    project_root = (
-        args.project_root.expanduser().resolve()
-        if args.project_root is not None
-        else None
-    )
-    if args.action == "migrate-runtime-logging":
-        from configs.runtime_logging_commit import commit_runtime_logging_migration
-        from configs.runtime_logging_migration import preview_runtime_logging_migration
 
-        workspaces = tuple(args.migration_workspace)
-        if args.workspace is not None:
-            workspaces = (args.workspace, *workspaces)
-        if args.preview and args.restore:
-            parser.error("--preview 与 --restore 不能同时使用")
-        options = {
-            "boxteam_home": boxteam_home, "workspaces": workspaces,
-            "level": args.level, "pretty": None if args.pretty is None else args.pretty == "true",
-            "project_root": project_root,
-            "gateway_sqlite_path": (
-                Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) / "gateway.sqlite"
-                if os.environ.get("BOXTEAM_GATEWAY_ROOT") else None
-            ),
-        }
-        report = (preview_runtime_logging_migration(**options).report() if args.preview
-                  else commit_runtime_logging_migration(**options, restore=args.restore))
-        print(json.dumps({"action": args.action, "preview": args.preview, **report}, ensure_ascii=False))
-        return
-    if args.preview or args.restore or args.level is not None or args.pretty is not None or args.migration_workspace:
-        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
-    if args.action in {"doctor", "diagnose"}:
+def _print_configuration_diagnostic(
+    *,
+    home: Path,
+    project_root: Path | None,
+    workspace_root: Path | None,
+) -> None:
+    # 离线终端没有原始服务日志例外；JSON 报告错误事实，日志只发布事件归属。
+    root_logger = logging.getLogger()
+    original_handlers = root_logger.handlers
+    handler = logging.StreamHandler()
+    handler.setFormatter(_DiagnosticLogFormatter())
+    root_logger.handlers = [handler]
+    try:
+        boxteam_home = resolve_boxteam_home(home.expanduser().resolve())
+        config_root = boxteam_home / "config"
+        project_root = (
+            project_root.expanduser().resolve() if project_root is not None else None
+        )
         gateway_schema_source, workspace_schema_source = _layout_schema_sources(
             project_root
         )
@@ -181,14 +148,105 @@ def main() -> None:
                     )
                     / "gateway.sqlite",
                     workspace_root=(
-                        args.workspace.expanduser().resolve()
-                        if args.workspace is not None
+                        workspace_root.expanduser().resolve()
+                        if workspace_root is not None
                         else None
                     ),
                 ),
                 ensure_ascii=False,
             )
         )
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        print(
+            json.dumps(
+                {
+                    "action": "diagnose",
+                    "read_only": True,
+                    "error": diagnostic_error(error, stage="select_resources"),
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(1) from None
+    finally:
+        root_logger.handlers = original_handlers
+        handler.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="管理 BoxTeam 双域 JSONC 配置")
+    parser.add_argument(
+        "action",
+        nargs="?",
+        choices=(
+            "initialize",
+            "install-source-development",
+            "migrate",
+            "migrate-runtime-logging",
+            "doctor",
+            "diagnose",
+        ),
+        default="initialize",
+    )
+    parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
+    parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--restore", action="store_true", help="恢复最近一次日志配置迁移的原件")
+    parser.add_argument("--level")
+    parser.add_argument("--pretty", choices=("true", "false"))
+    parser.add_argument("--home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="显式用普通静态模板重建 Gateway 与 Workspace 用户配置",
+    )
+    args = parser.parse_args()
+    if args.action != "migrate-runtime-logging" and (
+        args.preview
+        or args.restore
+        or args.level is not None
+        or args.pretty is not None
+        or args.migration_workspace
+    ):
+        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
+    if args.action in {"doctor", "diagnose"}:
+        _print_configuration_diagnostic(
+            home=args.home,
+            project_root=args.project_root,
+            workspace_root=args.workspace,
+        )
+        return
+
+    home = args.home.expanduser().resolve()
+    boxteam_home = resolve_boxteam_home(home)
+    config_root = boxteam_home / "config"
+    project_root = (
+        args.project_root.expanduser().resolve()
+        if args.project_root is not None
+        else None
+    )
+    if args.action == "migrate-runtime-logging":
+        from configs.runtime_logging_commit import commit_runtime_logging_migration
+        from configs.runtime_logging_migration import preview_runtime_logging_migration
+
+        workspaces = tuple(args.migration_workspace)
+        if args.workspace is not None:
+            workspaces = (args.workspace, *workspaces)
+        if args.preview and args.restore:
+            parser.error("--preview 与 --restore 不能同时使用")
+        options = {
+            "boxteam_home": boxteam_home, "workspaces": workspaces,
+            "level": args.level, "pretty": None if args.pretty is None else args.pretty == "true",
+            "project_root": project_root,
+            "gateway_sqlite_path": (
+                Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) / "gateway.sqlite"
+                if os.environ.get("BOXTEAM_GATEWAY_ROOT") else None
+            ),
+        }
+        report = (preview_runtime_logging_migration(**options).report() if args.preview
+                  else commit_runtime_logging_migration(**options, restore=args.restore))
+        print(json.dumps({"action": args.action, "preview": args.preview, **report}, ensure_ascii=False))
         return
     if args.action == "install-source-development":
         if project_root is None:

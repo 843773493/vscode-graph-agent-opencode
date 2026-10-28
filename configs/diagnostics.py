@@ -3,12 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 import jsonschema
 
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
+from app.core.distribution_identity import load_distribution_id
+from app.core.user_identity import user_scope_id
+from app.core.workspace_identity import read_workspace_id
+from app.services.infrastructure.config.source_uri import config_file_uri
 from configs.runtime import merge_json_objects, validate_config
 
 _REDACTED_JSON_FIELDS: Final[frozenset[str]] = frozenset(
@@ -21,6 +27,15 @@ _REDACTED_JSON_FIELDS: Final[frozenset[str]] = frozenset(
         "side_effects_json",
     }
 )
+
+
+class _DiagnosticConfigFile(NamedTuple):
+    path: Path
+    scope: str
+    logical_name: str
+    layer: str
+    precedence: int
+    source_key: str | None
 
 
 def _secret_binding_summary(value: object) -> dict[str, object]:
@@ -55,77 +70,136 @@ def _secret_digest(value: object) -> str | None:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
+def diagnostic_error(error: BaseException, *, stage: str) -> str:
+    """只发布错误事实；异常原文与用户配置值不属于离线诊断输出。"""
+    facts = [f"stage={stage}", f"error={type(error).__name__}"]
+    for field in ("errno", "winerror", "sqlite_errorcode", "sqlite_errorname"):
+        value = getattr(error, field, None)
+        if value is not None:
+            facts.append(f"{field}={value}")
+    cause: BaseException | None = error
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, (jsonschema.SchemaError, jsonschema.ValidationError)):
+            rule = cause.validator
+            if isinstance(rule, str) and rule in jsonschema.Draft202012Validator.VALIDATORS:
+                facts.append(f"rule={rule}")
+        for field in ("lineno", "colno", "line", "column", "start", "end"):
+            value = getattr(cause, field, None)
+            if isinstance(value, int):
+                facts.append(f"{field}={value}")
+        cause = cause.__cause__ or cause.__context__
+    return ", ".join(facts)
+
+
+def _read_diagnostic_identity(
+    loader: Callable[[], str], *, artifact: str
+) -> tuple[str | None, str | None]:
+    try:
+        return loader(), None
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        return None, f"artifact={artifact}, {diagnostic_error(error, stage='identity')}"
+
+
+def _file_address(
+    *,
+    scope: str,
+    logical_name: str,
+    identities: dict[str, tuple[str | None, str | None]],
+) -> dict[str, object]:
+    scope_id, error = identities[scope]
+    return {
+        "uri": config_file_uri(
+            scope=scope, scope_id=scope_id, logical_name=logical_name
+        )
+        if scope_id is not None
+        else None,
+        "address_error": error,
+    }
+
+
 def _inspect_jsonc_source(
     *,
     path: Path,
     layer: str,
     precedence: int,
     source_key: str | None,
-) -> dict[str, object]:
+    address: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object] | None]:
     result: dict[str, object] = {
-        "path": str(path.expanduser().resolve()),
+        **address,
         "layer": layer,
         "precedence": precedence,
         "source_key": source_key,
-        "presence": "absent",
+        "presence": None,
         "digest": None,
         "config_version": None,
         "parse_error": None,
     }
+    payload = None
+    stage = "read"
     try:
         snapshot = read_stable_config_file(path)
         result["presence"] = snapshot.presence
         result["digest"] = snapshot.digest
-        if snapshot.presence == "present":
-            payload = parse_stable_config_file(snapshot)
-            if payload is None:
-                raise TypeError("present JSONC 快照解析为空")
-            result["config_version"] = payload.get("config_version")
+        stage = "parse"
+        payload = parse_stable_config_file(snapshot)
+        if payload is not None:
+            version = payload.get("config_version")
+            if version is not None and type(version) is not int:
+                stage = "config_version"
+                raise TypeError("config_version 必须为整数")
+            result["config_version"] = version
     except (OSError, RuntimeError, TypeError, ValueError) as error:
-        result["parse_error"] = f"{type(error).__name__}: {error}"
-    return result
+        result["parse_error"] = diagnostic_error(error, stage=stage)
+    return result, payload
 
 
 def _jsonc_domain_diagnostic(
     *,
     domain: str,
-    layers: tuple[tuple[Path, str, int, str | None], ...],
+    layers: tuple[_DiagnosticConfigFile, ...],
     schema_path: Path,
+    schema_scope: str,
+    identities: dict[str, tuple[str | None, str | None]],
 ) -> dict[str, object]:
-    sources = [
-        _inspect_jsonc_source(
+    sources: list[dict[str, object]] = []
+    parsed_layers: list[dict[str, object]] = []
+    effective_result: dict[str, object] = {
+        "valid": False,
+        "digest": None,
+        "error": None,
+    }
+    schema_address = _file_address(
+        scope=schema_scope, logical_name=f"{domain}_schema", identities=identities
+    )
+    result: dict[str, object] = {
+        "schema_uri": schema_address["uri"],
+        "schema_address_error": schema_address["address_error"],
+        "sources": sources,
+        "effective": effective_result,
+    }
+    for path, scope, logical_name, layer, precedence, source_key in layers:
+        source, payload = _inspect_jsonc_source(
             path=path,
             layer=layer,
             precedence=precedence,
             source_key=source_key,
+            address=_file_address(
+                scope=scope, logical_name=logical_name, identities=identities
+            ),
         )
-        for path, layer, precedence, source_key in layers
-    ]
-    result: dict[str, object] = {
-        "schema_path": str(schema_path.expanduser().resolve()),
-        "sources": sources,
-        "effective": {
-            "valid": False,
-            "digest": None,
-            "error": None,
-        },
-    }
-    parsed_layers: list[dict[str, object]] = []
-    for source in sources:
-        if source["presence"] == "absent":
-            continue
+        sources.append(source)
         if source["parse_error"] is not None:
-            result["effective"]["error"] = (
-                f"{source['path']}: {source['parse_error']}"
+            effective_result["error"] = (
+                effective_result["error"]
+                or f"domain={domain}, layer={layer}, {source['parse_error']}"
             )
-            return result
-        snapshot = read_stable_config_file(Path(str(source["path"])))
-        payload = parse_stable_config_file(snapshot)
-        if payload is None:
-            result["effective"]["error"] = f"配置文件解析为空: {source['path']}"
-            return result
-        parsed_layers.append(payload)
-
+        elif payload is not None:
+            parsed_layers.append(payload)
+    if effective_result["error"] is not None:
+        return result
     try:
         effective: dict[str, object] = {}
         for payload in parsed_layers:
@@ -140,11 +214,9 @@ def _jsonc_domain_diagnostic(
             sort_keys=True,
             separators=(",", ":"),
         )
-        result["effective"] = {
-            "valid": True,
-            "digest": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-            "error": None,
-        }
+        effective_result.update(
+            valid=True, digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        )
     except (
         OSError,
         RuntimeError,
@@ -153,7 +225,7 @@ def _jsonc_domain_diagnostic(
         jsonschema.SchemaError,
         jsonschema.ValidationError,
     ) as error:
-        result["effective"]["error"] = f"{type(error).__name__}: {error}"
+        effective_result["error"] = diagnostic_error(error, stage="validate")
     return result
 
 
@@ -214,7 +286,6 @@ def _read_rows(
 def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
     resolved_path = path.expanduser().resolve()
     result: dict[str, object] = {
-        "path": str(resolved_path),
         "available": resolved_path.is_file(),
         "read_only": True,
         "schema_version": None,
@@ -240,7 +311,7 @@ def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA query_only = ON")
     except sqlite3.Error as error:
-        result["error"] = f"{type(error).__name__}: {error}"
+        result["error"] = diagnostic_error(error, stage="sqlite")
         return result
 
     try:
@@ -471,7 +542,7 @@ def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
         )
         result["conflicts"] = _diagnostic_conflicts(result)
     except sqlite3.Error as error:
-        result["error"] = f"{type(error).__name__}: {error}"
+        result["error"] = diagnostic_error(error, stage="sqlite")
     finally:
         connection.close()
     return result
@@ -521,37 +592,91 @@ def diagnose_configuration(
 
     resolved_config_root = config_root.expanduser().resolve()
     gateway_layers = (
-        (gateway_inline_path, "inline", 0, None),
-        (resolved_config_root / "gateway.jsonc", "user", 1, "gateway_mutable_override"),
-        (resolved_config_root / "gateway_local.jsonc", "user_local", 2, "gateway_local_mutable_override"),
+        _DiagnosticConfigFile(
+            gateway_inline_path, "inline", "gateway_inline", "inline", 0, None
+        ),
+        _DiagnosticConfigFile(
+            resolved_config_root / "gateway.jsonc",
+            "user",
+            "gateway",
+            "user",
+            1,
+            "gateway_mutable_override",
+        ),
+        _DiagnosticConfigFile(
+            resolved_config_root / "gateway_local.jsonc",
+            "user",
+            "gateway_local",
+            "user_local",
+            2,
+            "gateway_local_mutable_override",
+        ),
     )
     workspace_layers = [
-        (workspace_inline_path, "inline", 0, None),
-        (resolved_config_root / "workspace.jsonc", "user", 1, "workspace_mutable_override"),
-        (resolved_config_root / "workspace_local.jsonc", "user_local", 2, "workspace_local_mutable_override"),
+        _DiagnosticConfigFile(
+            workspace_inline_path, "inline", "workspace_inline", "inline", 0, None
+        ),
+        _DiagnosticConfigFile(
+            resolved_config_root / "workspace.jsonc",
+            "user",
+            "workspace",
+            "user",
+            1,
+            "workspace_mutable_override",
+        ),
+        _DiagnosticConfigFile(
+            resolved_config_root / "workspace_local.jsonc",
+            "user",
+            "workspace_local",
+            "user_local",
+            2,
+            "workspace_local_mutable_override",
+        ),
     ]
     resolved_workspace = (
         workspace_root.expanduser().resolve() if workspace_root is not None else None
     )
     if resolved_workspace is not None:
         workspace_layers.append(
-            (
+            _DiagnosticConfigFile(
                 resolved_workspace / ".boxteam" / "workspace.jsonc",
+                "workspace",
+                "workspace",
                 "workspace",
                 3,
                 "workspace_root_mutable_override",
             )
         )
 
+    identities: dict[str, tuple[str | None, str | None]] = {
+        "inline": _read_diagnostic_identity(
+            load_distribution_id, artifact="runtime_manifest"
+        ),
+        "user": (user_scope_id(), None),
+        "workspace": _read_diagnostic_identity(
+            partial(read_workspace_id, resolved_workspace),
+            artifact="workspace_identity",
+        )
+        if resolved_workspace is not None
+        else (None, "未选择工作区"),
+    }
     gateway_jsonc = _jsonc_domain_diagnostic(
         domain="gateway",
         layers=gateway_layers,
         schema_path=gateway_schema_path,
+        schema_scope="user"
+        if gateway_schema_path == resolved_config_root / "gateway_schema.jsonc"
+        else "inline",
+        identities=identities,
     )
     workspace_jsonc = _jsonc_domain_diagnostic(
         domain="workspace",
         layers=tuple(workspace_layers),
         schema_path=workspace_schema_path,
+        schema_scope="user"
+        if workspace_schema_path == resolved_config_root / "workspace_schema.jsonc"
+        else "inline",
+        identities=identities,
     )
     gateway_sqlite = _read_sqlite_diagnostic(
         path=gateway_sqlite_path,
@@ -576,7 +701,6 @@ def diagnose_configuration(
     return {
         "action": "diagnose",
         "read_only": True,
-        "config_root": str(resolved_config_root),
         "migration": {
             "executed": False,
             "backup_created": False,
@@ -590,7 +714,6 @@ def diagnose_configuration(
             "sqlite": gateway_sqlite,
         },
         "workspace": {
-            "root": str(resolved_workspace) if resolved_workspace is not None else None,
             "jsonc": workspace_jsonc,
             "sqlite": workspace_sqlite,
             "source_owner": workspace_source_owner,

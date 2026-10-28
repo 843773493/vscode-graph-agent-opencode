@@ -817,6 +817,29 @@ URI SHALL 只表达由资源 owner 公布模板与访问合同的真实可寻址
 - **WHEN** 系统处理没有稳定、可寻址来源文件的 `runtime_override`
 - **THEN** `uri` MAY 为空，来源仍按既有身份字段识别；系统 MUST NOT 为内部 SQLite carrier 或 runtime override 编造 URI
 
+### Requirement: 离线配置诊断必须使用资源引用且保持只读
+
+`python -m configs.boxteam doctor` 与 `diagnose` MUST 共用同一只读诊断链，不属于原始日志管理入口例外。实际读取的 JSONC 与 schema 文件 MUST 使用既有单文件 `config` URI：发行文件复用真实 distribution_id，用户文件使用既有 user 身份，工作区文件只读取既有 workspace_id；逻辑文件名不携带扩展名。这里诊断的是实际文件，不得因此改写运行时 ConfigSource 或 SQLite 来源的可寻址性。
+
+身份缺失或损坏时 MUST 显式报告地址不可生成，URI 为空，不编造 scope_id、不创建身份或目录、不跳过原文件诊断。重复的配置根、工作区原生根和 SQLite 位置字段 MUST 移除；已有 SQLite 诊断分区继续报告可用性、版本、来源与冲突，不为内部 carrier 编造 URI。读取使用原输入路径，同一稳定快照供元数据和有效配置合并使用，不从输出 URI 反构造原生路径。
+
+诊断错误 MUST 保留操作阶段、异常类别、适用系统错误码与解析坐标等事实，不复制可能包含原生位置或配置正文的异常全文；不得通过扫描、替换或截断字符串掩盖位置。诊断 MUST NOT 修改配置、迁移、创建备份、身份或状态库。
+
+#### Scenario: 两个离线命令报告真实文件 URI
+
+- **WHEN** 用户通过 doctor 或 diagnose 检查发行、用户及选定工作区配置
+- **THEN** 来源和实际选用的 schema 使用同一 config URI 规则，层级、优先级、摘要与配置有效性保持；输出不含原生位置，SQLite 分区保留状态但不输出载体位置
+
+#### Scenario: 未初始化的目标仍可只读诊断
+
+- **WHEN** 发行 manifest 或工作区身份缺失、损坏，或状态库尚不存在
+- **THEN** 对应地址明确报告不可生成且不编造 URI；原文件与数据库可用性仍被检查，缺失的目录、身份与库均不创建，已有字节不变
+
+#### Scenario: 失败不回显位置且显式重试有效
+
+- **WHEN** JSONC、schema 或 SQLite 读取或校验失败，原异常或输入含 POSIX、盘符或 UNC 路径
+- **THEN** 诊断保留失败阶段、类别及适用的错误码或坐标，不回显原生位置或配置值；修复原输入后同一命令沿原只读链重新检查，不更改目标或使用其他来源伪造成功
+
 ### Requirement: 配置 layer 必须表示逻辑来源且与载体和快照分离
 
 config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯一由本 requirement 定义：`inline` → 0，`user` → 1，`user_local` → 2，`workspace` → 3，`runtime_override` → 4。`sqlite` 是实现可选的内部持久化 carrier，MUST NOT 作为 layer 值或新增公开的 storage/carrier 字段暴露。读侧原以 `sqlite` 表示的 runtime override MUST 改用 `runtime_override`，并保持其既有 `precedence`；其它来源的既有 precedence MUST 保持不变。
