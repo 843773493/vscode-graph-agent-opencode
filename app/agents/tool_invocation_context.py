@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.core.failures import failure_detail
 from app.core.identifier import uuid7_datetime_from_hex, validate_thread_id
 from app.core.model_delta_context import (
     get_current_model_delta_sink,
@@ -377,7 +378,7 @@ def _timeout_tool_message(
     if mcp_receipt is not None:
         return ToolMessage(
             content=mcp_receipt.model_dump_json(), artifact=mcp_receipt.as_artifact(),
-            tool_call_id=tool_call_id, status="error",
+            name=tool_name, tool_call_id=tool_call_id, status="error",
         )
     if (
         isinstance(cause, asyncio.CancelledError)
@@ -387,6 +388,7 @@ def _timeout_tool_message(
         # 复用取消时已提交的原回执，不能把未知写入投影成可重试的通用超时。
         return ToolMessage(
             content=cause.args[0].model_dump_json(exclude_none=True),
+            name=tool_name,
             tool_call_id=tool_call_id,
             status="error",
         )
@@ -394,9 +396,9 @@ def _timeout_tool_message(
     payload: dict[str, object] = {
         "status": "error",
         "code": "tool_execution_timeout",
-        "error": (
-            f"{timeout_label}: tool={tool_name}, call_id={tool_call_id}；"
-            f"下游操作结果未确认: {error}"
+        "error": failure_detail(
+            error, stage="tool-timeout",
+            label=f"{timeout_label}: tool={tool_name}, call_id={tool_call_id}；下游操作结果未确认",
         ),
         "retryable": True,
         "recovery": "check_tool_state_before_retry",
@@ -405,6 +407,7 @@ def _timeout_tool_message(
         payload["timeoutMs"] = timeout_ms
     return ToolMessage(
         content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        name=tool_name,
         tool_call_id=tool_call_id,
         status="error",
     )

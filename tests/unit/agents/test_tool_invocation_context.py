@@ -59,7 +59,9 @@ async def test_mcp_cancel_commits_same_unknown_receipt_before_timeout_or_interru
         case.release_commit.set()
         if local_timeout:
             result = await task
+            assert isinstance(result, ToolMessage)
             assert result.status == "error" and result.tool_call_id == "mcp-call"
+            assert result.name == "test_tool"
             assert result.content == receipt.model_dump_json() and result.artifact == receipt.as_artifact()
         else:
             with pytest.raises(asyncio.CancelledError):
@@ -225,6 +227,7 @@ async def test_file_cancellation_commits_unknown_result_before_scheduler_continu
         if local_timeout:
             result = await task
             assert isinstance(result, ToolMessage) and result.status == "error"
+            assert result.name == "test_tool"
             assert json.loads(result.content) == TextMutationReceiptDTO.model_validate(
                 receipt
             ).model_dump(mode="json", exclude_none=True)
@@ -368,6 +371,7 @@ async def test_tool_local_timeout_returns_error_without_cancelling_turn():
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
+    assert result.name == "test_tool"
     assert "局部超时" in result.content
     assert scope.cancellation_signal.is_cancelled is False
 
@@ -398,6 +402,7 @@ async def test_transport_timeout_returns_recoverable_tool_result_without_abortin
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
+    assert result.name == "test_tool"
     assert result.tool_call_id == "call_transport_timeout"
     payload = json.loads(result.content)
     assert payload == {
@@ -405,7 +410,7 @@ async def test_transport_timeout_returns_recoverable_tool_result_without_abortin
         "code": "tool_execution_timeout",
         "error": (
             "工具执行超时: tool=test_tool, call_id=call_transport_timeout；"
-            "下游操作结果未确认: timed out"
+            "下游操作结果未确认: stage=tool-timeout, error=TimeoutError, errno=None"
         ),
         "retryable": True,
         "recovery": "check_tool_state_before_retry",

@@ -1150,3 +1150,9 @@
 - `import_generator`的原NotFoundError/KeyError/ValueError分支改用共享failure_detail；reason保存generator-import-validation阶段、task/workspace身份和原异常类别，原实例与完整正文留诊断。原安装、needs_attention、幂等与退休链不变，不修改旧历史错误或generation正文，不新增例外/存储/兼容链。定义校验的provider不可用类型已核对唯一两个显式构造点，仅含类型/版本说明，未盲改其业务文本。
 - 真实导入API分别注入三类含POSIX/Windows/UNC位置的校验错误，核普通响应/SQLite reason、原诊断实例与完整渲染、request_id、历史正文保全、显式resume及同导入重试不覆盖revision：旧生产3 failed，最终3 passed/19.83秒。既有历史导入与在途生成原canonical准入两回归2 passed/28.94秒，沿用model_stream；该两项的生产与测试源码和最终候选相同，新增测试仅修正日志repr转义断言，没有重复长跑。首次候选两项因预期日志中反斜杠未转义而失败，现核完整str(error)及原实例身份，不降低公开记录或历史断言，原件保留。
 - Ruff、Pyright与compileall触达两文件零诊断，OpenSpec strict通过；原测试声明AST保持，生产245行、新测试沿既有失败事实文件402行，无新目录或事实源。命令、源码指纹、raw/退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-033.json`。此片不代表Web/Gateway、Windows实机、独立进程恢复或URI全局门完成，2.2/7.2仍未勾、整体51/53；团队协作及MCP显式持有继续延期。
+
+### 2026-10-28 工具超时结果与配对身份（2.2/7.2部分收口）
+
+- 普通超时转换复用failure_detail，不再将TimeoutError原文复制到ToolMessage、canonical历史和下一次模型请求；保留超时码、errno、重试/检查状态提示及局部期限。所有超时分支保留原工具名称，修复名称缺失令request carrier与真实attempt终态冲突、整轮执行失败的问题；MCP及文件写入原结构化未知回执和artifact继续原样复用。
+- 使用现有model_stream和真实Session/Job入口，实际读取文件后注入含POSIX/Windows/UNC位置的超时，核原异常实例/完整日志、调用配对、canonical两种载体与全部恢复检查点。旧生产重现路径落盘与名称冲突；修复后集成通过，既有26项单元回归通过，涵盖取消提交顺序、MCP/文件回执、局部期限、并行调用和父scope保留。测试装配及检查点断言的错误尝试保留原件，不计业务反例；证据见`out/tests/temp/uri-global-closure/artifacts/verification-034.json`。
+- Ruff与compileall通过；Pyright既有文件17→13、按文件/最窄AST owner/规则/完整消息无新增，新集成文件零诊断。作者结构自查，无新增目录、事实源、schema或兼容链；全局门仍未勾，此片不替代同步执行、Web/Gateway、Windows实机、独立进程恢复或独立审查；两项明确延期设计保持TODO。
