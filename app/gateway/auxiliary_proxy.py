@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncIterator, Callable
 from functools import partial
@@ -37,6 +38,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.service_types import GatewayServiceName
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 SERVICE_PATHS: dict[str, GatewayServiceName] = {
     "terminal-manager": "terminal_manager",
@@ -222,14 +224,25 @@ async def proxy_auxiliary_http(
             )
             response = await send_upstream_request(client, forwarded)
         except httpx.RequestError as error:
+            logger.exception(
+                "Gateway 辅助服务上游请求失败: request_id=%s, workspace_id=%s, "
+                "service=%s, method=%s, stage=upstream_request, error=%s",
+                get_request_id(request), workspace_id, service, request.method, type(error).__name__,
+            )
             raise HTTPException(
                 status_code=502,
                 detail=(
                     f"无法连接工作区辅助服务: workspace_id={workspace_id}, "
-                    f"service={service}: {error}"
+                    f"service={service}, error_type={type(error).__name__}；请查看 Gateway 服务日志"
                 ),
             ) from error
         except TimeoutError as error:
+            logger.exception(
+                "Gateway 辅助服务上游响应头等待超时: request_id=%s, workspace_id=%s, "
+                "service=%s, method=%s, stage=upstream_headers, timeout_seconds=%s",
+                get_request_id(request), workspace_id, service,
+                request.method, UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+            )
             raise HTTPException(
                 status_code=504,
                 detail=(
@@ -440,9 +453,17 @@ async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
             headers=_proxy_request_headers(request),
         )
     except httpx.RequestError as error:
+        logger.exception(
+            "Gateway attach 前端上游请求失败: request_id=%s, kind=%s, "
+            "method=%s, stage=upstream_request, error=%s",
+            get_request_id(request), kind, request.method, type(error).__name__,
+        )
         raise HTTPException(
             status_code=502,
-            detail=f"attach 前端不可访问: kind={kind}: {error}",
+            detail=(
+                f"attach 前端不可访问: kind={kind}, "
+                f"error_type={type(error).__name__}；请查看 Gateway 服务日志"
+            ),
         ) from error
     return Response(
         content=response.content,

@@ -588,7 +588,10 @@ async def _proxy_workspace_request(
                 )
                 raise HTTPException(
                     status_code=502,
-                    detail=f"无法连接工作区后端 {target_url}: {error}",
+                    detail=(
+                        f"无法连接工作区后端: workspace_id={target.workspace_id}, "
+                        f"error_type={type(error).__name__}；请查看 Gateway 服务日志"
+                    ),
                 ) from error
             except TimeoutError as error:
                 if retry_upstream and attempt < len(retry_delays):

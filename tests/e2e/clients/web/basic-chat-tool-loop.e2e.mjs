@@ -664,6 +664,11 @@ function hasConnectedObservationTargets(response, subscriptions) {
   });
 }
 
+function isControlledRestartUpstreamFailure(detail, workspaceId) {
+  return ["ConnectError", "ReadError", "WriteError", "RemoteProtocolError"].some((errorType) =>
+    detail === `无法连接工作区后端: workspace_id=${workspaceId}, error_type=${errorType}；请查看 Gateway 服务日志`);
+}
+
 function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, failedRequests, requestFacts, responseFacts, restartWindows) {
   const handled = [];
   const consumedConsoleIndexes = new Set();
@@ -700,8 +705,6 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
     const isIncompleteObservationStream = endpoint === "observations"
       && error.text === "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING";
     if (isObservationsPostBadGateway) {
-      const observationsTarget = `/api/v1/workspace/observations/stream`;
-      const detailPrefix = `无法连接工作区后端 http://127.0.0.1:${window.backendRestart.port}${observationsTarget}: `;
       const responses = responseFacts.filter((response) => !consumedResponses.has(response)
         && response.restartWindowId === window.operationId && response.method === "POST" && response.status === 502
         && typeof error.cdpRequestId === "string" && error.cdpRequestId.length > 0
@@ -711,7 +714,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && response.requestFactId.length > 0 && typeof response.requestId === "string" && response.requestId.length > 0
         && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
         && response.bodyRequestId === response.requestId && response.bodyError === undefined
-        && typeof response.body.detail === "string" && response.body.detail.startsWith(detailPrefix)
+        && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
         && response.workspaceHeader === window.workspaceId
         && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
         && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
@@ -744,7 +747,6 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
       continue;
     }
     if (isBadGateway) {
-      const detailPrefix = `无法连接工作区后端 http://127.0.0.1:${window.backendRestart.port}${new URL(error.url).pathname}: `;
       const responses = responseFacts.filter((response) => !consumedResponses.has(response)
         && response.restartWindowId === window.operationId
         && response.method === (endpoint === "history" ? "POST" : "GET") && response.status === 502
@@ -755,7 +757,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && typeof response.requestFactId === "string" && response.requestFactId.length > 0
         && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
         && response.bodyRequestId === response.requestId && response.bodyError === undefined
-        && typeof response.body.detail === "string" && response.body.detail.startsWith(detailPrefix)
+        && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
         && response.workspaceHeader === window.workspaceId
         && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
         && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
@@ -1295,7 +1297,7 @@ function runMessageStreamDiagnosticsSelfTest() {
       restartResponses.push({ restartWindowId: window.operationId, url: targetUrl, method, status: 502, cdpRequestId: `cdp-${errorIndex}`,
         requestFactId, pageId: pageBinding.pageId, documentId: 1, pageRole: pageBinding.role,
         requestedAt: 140, receivedAt: 150, requestId, bodyRequestId: requestId,
-        body: { detail: `无法连接工作区后端 http://127.0.0.1:19000${new URL(targetUrl).pathname}: backend restart`, request_id: requestId },
+        body: { detail: `无法连接工作区后端: workspace_id=${window.workspaceId}, error_type=ConnectError；请查看 Gateway 服务日志`, request_id: requestId },
         workspaceHeader: window.workspaceId });
     }
   }
@@ -1429,8 +1431,17 @@ function runMessageStreamDiagnosticsSelfTest() {
   assertRestartRemainsUnhandled({ response: { ...baseRestartResponse, bodyError: "SyntaxError" } },
   "response JSON 读取或解析失败时不能分类");
   assertRestartRemainsUnhandled({ response: { ...baseRestartResponse,
-    body: { ...baseRestartResponse.body, detail: baseRestartResponse.body.detail.replace(":19000/", ":19002/") } } },
-  "502 正文指向其它 backend port 时不能分类");
+    body: { ...baseRestartResponse.body, detail: baseRestartResponse.body.detail.replace(restartWindows[0].workspaceId, "workspace-other") } } },
+  "502 正文指向其它 workspace 时不能分类");
+  for (const detail of [
+    `无法连接工作区后端 http://127.0.0.1:19000${new URL(baseRestartResponse.url).pathname}: /private/proxy-native-marker`,
+    baseRestartResponse.body.detail.replace("ConnectError", "PoolTimeout"),
+    `${baseRestartResponse.body.detail}: /private/proxy-native-marker`,
+  ]) {
+    assertRestartRemainsUnhandled({ response: { ...baseRestartResponse,
+      body: { ...baseRestartResponse.body, detail } } },
+    "旧错误正文、无关池耗尽和路径后缀不能冒充已核对的受控断连");
+  }
   assertRestartRemainsUnhandled({ response: { ...baseRestartResponse,
     body: { ...baseRestartResponse.body, detail: "工作区初始化业务失败" } } },
   "502 业务错误不能伪装成受控后端断连");
@@ -6749,7 +6760,7 @@ async function runCopyCaptureLifecycle(surface, owners, activeSessionId) {
       assert.ok(firstHttpElapsedMs >= FORK_OPERATION_DEADLINE_MS - 1_000,
         "本地 deadline 错误必须发生在原始预算边界");
     } else if (firstHttp.response.status === 502) {
-      assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /,
+      assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.workspaceId),
         "进程立即退出时原 HTTP 必须收到 Gateway 的明确上游连接失败");
       assert.ok(firstHttpElapsedMs < FORK_OPERATION_DEADLINE_MS, "502 必须发生在单次 fork 总期限内");
     } else {
@@ -6861,7 +6872,7 @@ async function runCopyMarkerCrashRecovery(surface, owners, activeSessionId) {
   const firstHttp = await pending;
   assert.equal(firstHttp.error, undefined, firstHttp.error);
   assert.equal(firstHttp.response.status, 502, "marker durable 后立即崩溃必须使原 fork HTTP 收到真实上游失败");
-  assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /);
+  assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.workspaceId));
   const firstHttpElapsedMs = performance.now() - requestStartedAt;
   assert.ok(firstHttpElapsedMs < 60_000, "原 HTTP 失败必须发生在 Gateway 60 秒期限前");
   const startRequestedAt = Date.now();
