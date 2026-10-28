@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import tempfile
 import time
@@ -18,6 +19,7 @@ DEFAULT_CHATGPT_AUTH_FILE = "auth.json"
 CHATGPT_OAUTH_TYPE = "oauth"
 CHATGPT_OAUTH_METHOD = "chatgpt"
 TOKEN_EXPIRY_SKEW_SECONDS = 60
+logger = logging.getLogger(__name__)
 
 
 def is_chatgpt_oauth_provider(provider: Mapping[str, object]) -> bool:
@@ -57,10 +59,11 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
             "ChatGPT OAuth 凭据不存在。请先执行 codex login，再重试请求。"
         )
 
-    auth_data = json.loads(auth_file.read_text(encoding="utf-8"))
+    auth_data = json.loads(_read_auth_text(auth_file, artifact="chatgpt_auth"))
     access_token = auth_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
-        raise ValueError(f"ChatGPT OAuth 凭据缺少 access_token: {auth_file}")
+        logger.error("ChatGPT OAuth 凭据缺少 access_token: path=%s", auth_file)
+        raise ValueError("ChatGPT OAuth 凭据缺少 access_token: artifact=chatgpt_auth, stage=validate")
     expires_at = auth_data.get("expires_at")
     if not isinstance(expires_at, int):
         expires_at = _jwt_exp(access_token)
@@ -148,11 +151,26 @@ def _migrate_codex_auth(source: Path, target: Path) -> None:
             Path(temporary_name).unlink(missing_ok=True)
 
 
+def _read_auth_text(source: Path, *, artifact: str) -> str:
+    """凭据内容仅交原解析器，原生读取位置与异常留在诊断。"""
+    try:
+        return source.read_text(encoding="utf-8")
+    except OSError as error:
+        detail = (
+            f"OAuth 凭据读取失败: artifact={artifact}, stage=read, "
+            f"error={type(error).__name__}, errno={error.errno}, "
+            f"winerror={getattr(error, 'winerror', None)}"
+        )
+        logger.exception("%s path=%s", detail, source)
+        raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+
+
 def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
-    source_data = json.loads(source.read_text(encoding="utf-8"))
+    source_data = json.loads(_read_auth_text(source, artifact="codex_auth"))
     tokens = source_data.get("tokens")
     if not isinstance(tokens, dict):
-        raise TypeError(f"Codex 认证文件缺少 tokens 对象: {source}")
+        logger.error("Codex 认证文件缺少 tokens 对象: path=%s", source)
+        raise TypeError("Codex 认证文件缺少 tokens 对象: artifact=codex_auth, stage=validate")
 
     required = ("access_token", "refresh_token", "id_token")
     missing = [

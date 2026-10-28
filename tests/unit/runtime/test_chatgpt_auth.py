@@ -1,8 +1,11 @@
 import base64
+import errno
 import json
 import os
 import time
 from pathlib import Path
+
+import pytest
 
 from app.runtime.chatgpt_auth import (
     configure_litellm_chatgpt_auth_directory,
@@ -216,6 +219,99 @@ def test_expired_chatgpt_auth_fails_fast_without_valid_codex_auth(
         assert "codex login" in str(error)
     else:
         raise AssertionError("过期凭据必须快速失败")
+
+
+@pytest.fixture(params=["target", "migration", "refresh"])
+def auth_read_case(request, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    _set_test_home(monkeypatch, home)
+    token_dir = tmp_path / "private-auth-location"
+    target = token_dir / "auth.json"
+    source = home / ".codex/auth.json"
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(token_dir))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    _write_codex_auth(source)
+    if request.param != "migration":
+        token_dir.mkdir()
+        target.write_text(json.dumps({
+            "access_token": _access_token(2_000_000_000),
+            "expires_at": 0 if request.param == "refresh" else 2_000_000_000,
+        }), encoding="utf-8")
+    if request.param == "target":
+        source = target
+    invoke = (configure_litellm_chatgpt_auth_directory if request.param == "migration"
+              else lambda: ensure_chatgpt_oauth_ready(token_dir))
+    artifact = "chatgpt_auth" if request.param == "target" else "codex_auth"
+    return source, target, invoke, artifact
+
+
+def test_auth_missing_fields_keep_location_in_diagnostics(auth_read_case, caplog):
+    source, target, invoke, artifact = auth_read_case
+    original = source.read_bytes()
+    source.write_bytes(b"{}\n")
+    target_before = target.read_bytes() if target.exists() else None
+    category = ValueError if artifact == "chatgpt_auth" else TypeError
+
+    with pytest.raises(category) as caught:
+        invoke()
+
+    assert f"artifact={artifact}, stage=validate" in str(caught.value)
+    assert str(source) not in str(caught.value)
+    assert str(source) in caplog.text
+    assert source.read_bytes() == b"{}\n"
+    assert (target.read_bytes() if target.exists() else None) == target_before
+    source.write_bytes(original)
+    invoke()
+    assert json.loads(target.read_bytes())["access_token"] == _access_token(2_000_000_000)
+
+
+@pytest.mark.parametrize("category,code,native", [
+    (PermissionError, errno.EACCES, "/private-auth-marker/auth.json"),
+    (FileNotFoundError, errno.ENOENT, r"C:\private-auth-marker\auth.json"),
+    (OSError, errno.EIO, r"\\private-auth-marker\share\auth.json"),
+])
+def test_auth_read_errors_keep_native_cause_and_retry(
+    auth_read_case, monkeypatch, caplog, category, code, native,
+):
+    source, target, invoke, artifact = auth_read_case
+    source_before = source.read_bytes()
+    target_before = target.read_bytes() if target.exists() else None
+    original_read = Path.read_text
+    failure = category(code, f"读取失败 {native}", native)
+
+    def read_text(path, *args, **kwargs):
+        if path == source:
+            raise failure
+        return original_read(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        with pytest.raises(category) as caught:
+            invoke()
+
+    error = caught.value
+    assert type(error) is category
+    assert error.errno == code and error.filename is None
+    assert getattr(error, "winerror", None) == getattr(failure, "winerror", None)
+    assert error.__cause__ is failure
+    assert f"artifact={artifact}, stage=read" in str(error)
+    assert native not in str(error) and str(source) not in str(error)
+    assert str(source) in caplog.text and native in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+    assert source.read_bytes() == source_before
+    assert (target.read_bytes() if target.exists() else None) == target_before
+    invoke()
+    assert json.loads(target.read_bytes())["access_token"] == _access_token(2_000_000_000)
+
+
+def test_auth_json_error_keeps_original_parse_coordinates(auth_read_case, caplog):
+    source, _, invoke, _ = auth_read_case
+    source.write_bytes(b'{\n"access_token":\n}')
+    with pytest.raises(json.JSONDecodeError) as caught:
+        invoke()
+    assert (caught.value.lineno, caught.value.colno) == (3, 1)
+    assert str(source) not in str(caught.value)
+    assert not caplog.records
 
 
 def test_gpt_56_capabilities_register_only_while_litellm_is_missing_support(

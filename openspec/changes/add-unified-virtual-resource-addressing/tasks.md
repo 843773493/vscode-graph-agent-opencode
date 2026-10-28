@@ -941,3 +941,9 @@
 - cgroup目录只在原内存采样器内部用于连续事件基线，不再随公开sample和健康响应返回；目录变更仍重建基线，同组增量与原压力迟滞保持。原调度轮次失败仍停止治理、保留上次成功采样，公开error只含阶段和错误码；完整原异常、cause与堆栈留统一诊断日志，不增加采样、调度或恢复链。
 - 原生产配新增单测为46 passed／4 failed，分别复现公开目录与错误堆栈；候选相关及相邻治理测试158 passed／1.99秒（含定向50项，不重复累计）。真实Node/HTTP的正式suite 3 passed／20.71秒，只替换Linux内核读取，核正常采样、三种原始错误路径、调度停止、上次事实、完整原因链及同服务重启后恢复。相同测试配完整旧生产archive为3 failed／18.17秒，均复现目录回显；失败健康JSON保留在基线正式产物中。两次候选HTTP运行重叠，不累加计数。
 - Ruff、新测试Pyright零诊断、Node语法及全量strict OpenSpec47／0通过。最初两次静态命令因未安装的uv pyright入口、缺少bunx可执行文件未完成后续阶段，改用现有`bun x --no-install pyright`后通过，不改环境或安装依赖。准确命令、候选／基线tree、源码前后指纹、raw、实际退出码、零进程组残留和作者结构自查见 `out/tests/temp/browser-governor-diagnostics/artifacts/verification-011.json`；纯临时完整源码副本在保存基线正式产物后删除。本片不创建Chromium，不代表Gateway/Web、其他平台实机或整个Browser位置审计，2.2／7.2保持未勾；团队与协作继续TODO。
+
+### 2026-10-28 OAuth 凭据读取与结构拒绝的位置边界（2.2／7.2 部分收口）
+
+- ChatGPT当前凭据、首次Codex迁移及过期同步共用原生读取错误出口；普通错误保留artifact、阶段、原异常类别、errno/winerror及直接cause，原文件位置和完整读取异常只留诊断，不记录凭据正文。缺access_token/tokens的原拒绝类别保持，位置移至诊断；JSON解析、登录提示、过期判断和原子发布未变，不保留第二条认证读取或写入链路，不回退可用状态。
+- 候选认证单元及真实Agent服务／模型工厂／ASGI响应共28 passed／29.32秒；相邻factory、Agent服务及上述ASGI回归9 passed／18.51秒（其中5项重叠，不累计）。覆盖失败原件不变、三种原生错误事实、JSON坐标、同入口修复、Agent仍可见及精确Provider归属。完整旧源码只替换原生产模块、使用相同最终测试时为17 failed／11 passed／20.37秒。两份完整tree与原始输出保留；基线正式输出另存后删除临时源码副本。
+- Ruff与三文件Pyright零诊断，strict OpenSpec47／0及矩阵加载通过；包装命令最后的git diff因隔离器设置GIT_INDEX_FILE=/dev/null退出128，原件保留，独立差异检查通过。准确命令、前后源码指纹、日志hash、真实退出码及零进程组残留见 `out/tests/temp/chatgpt-auth-error-boundary/artifacts/verification-004.json`。本片只关闭上述读取与缺字段出口，不代替凭据写入错误、真实OAuth网络、独立Backend/Gateway、Web或Windows验收；2.2／7.2仍未勾，团队与协作继续TODO。
