@@ -281,7 +281,13 @@ export async function terminateTerminalProcessTree({
       : "still_running";
   }
 
-  const termTargets = await terminalProcessIds({ pid, processSessionId, processStartTime });
+  const initialStat = await readProcessStat(pid);
+  const processIdentity = {
+    pid,
+    processSessionId: processSessionId || initialStat?.processSessionId || null,
+    processStartTime: processStartTime || initialStat?.processStartTime || null,
+  };
+  const termTargets = await terminalProcessIds(processIdentity);
   if (termTargets.length === 0) {
     return "missing";
   }
@@ -289,16 +295,18 @@ export async function terminateTerminalProcessTree({
   for (const targetPid of termTargets) {
     signalProcess(targetPid, "SIGTERM");
   }
-  if (await waitForProcessesExit(termTargets, TERMINATION_GRACE_MS)) {
+  await waitForProcessesExit(termTargets, TERMINATION_GRACE_MS);
+  // 已捕获的 PID 退出不证明整个 session 停止，信号处理期间仍可能创建后代。
+  const killTargets = await terminalProcessIds(processIdentity);
+  if (killTargets.length === 0) {
     return "terminated";
   }
 
-  const killTargets = await terminalProcessIds({ pid, processSessionId, processStartTime });
   for (const targetPid of killTargets) {
     signalProcess(targetPid, "SIGKILL");
   }
   await waitForProcessesExit(killTargets, TERMINATION_GRACE_MS);
-  return await hasLiveProcesses(killTargets)
+  return (await terminalProcessIds(processIdentity)).length > 0
     ? "still_running"
     : "force_killed";
 }

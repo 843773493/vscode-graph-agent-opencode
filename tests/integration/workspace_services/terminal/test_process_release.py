@@ -15,7 +15,11 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="验证 Linux session 与僵尸进程")
 
 _PROCESS_PARENT = """
-import os, signal, sys
+import ctypes, os, signal, sys
+if sys.argv[1] == 'fork-on-term':
+    # PR_SET_CHILD_SUBREAPER：根退出后由本测试父进程回收后代，不留给宿主 init。
+    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), '无法接管测试后代的回收')
 read_fd, write_fd = os.pipe()
 child = os.fork()
 if child == 0:
@@ -23,6 +27,22 @@ if child == 0:
     os.setsid()
     if sys.argv[1] == 'ignore-term':
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if sys.argv[1] == 'fork-on-term':
+        def fork_on_term(signum, frame):
+            ready_read, ready_write = os.pipe()
+            descendant = os.fork()
+            if descendant == 0:
+                os.close(ready_read)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.write(ready_write, b'ready')
+                os.close(ready_write)
+                while True:
+                    signal.pause()
+            os.close(ready_write)
+            os.read(ready_read, 5)
+            os.close(ready_read)
+            os._exit(0)
+        signal.signal(signal.SIGTERM, fork_on_term)
     os.write(write_fd, b'ready')
     os.close(write_fd)
     if sys.argv[1] == 'already-exited':
@@ -34,8 +54,16 @@ os.read(read_fd, 5)
 os.close(read_fd)
 print(child, flush=True)
 sys.stdin.readline()
-os.kill(child, signal.SIGKILL)
-os.waitpid(child, 0)
+if sys.argv[1] == 'fork-on-term':
+    os.killpg(child, signal.SIGKILL)
+    while True:
+        try:
+            os.waitpid(-1, 0)
+        except ChildProcessError:
+            break
+else:
+    os.kill(child, signal.SIGKILL)
+    os.waitpid(child, 0)
 """
 
 
@@ -81,6 +109,7 @@ def release_process() -> Callable[..., dict[str, object]]:
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
     module = (Path.cwd() / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js").as_uri()
     script = f"""
+import {{ readdir }} from 'node:fs/promises';
 import {{ readProcessStat, terminateTerminalProcessTree }} from {json.dumps(module)};
 const pid = Number(process.argv[1]);
 const before = await readProcessStat(pid);
@@ -89,7 +118,12 @@ const result = await terminateTerminalProcessTree({{
   processSessionId: before.processSessionId,
   processStartTime: before.processStartTime + Number(process.argv[2]),
 }});
-console.log(JSON.stringify({{ result, after: await readProcessStat(pid) }}));
+const stats = await Promise.all((await readdir('/proc'))
+  .filter(name => /^[0-9]+$/.test(name)).map(name => readProcessStat(Number(name))));
+const remaining = stats.filter(stat => stat
+  && stat.processSessionId === before.processSessionId
+  && !['Z', 'X', 'x'].includes(stat.state)).map(stat => stat.pid);
+console.log(JSON.stringify({{ result, after: await readProcessStat(pid), remaining }}));
 """
 
     def release(pid: int, *, stale_identity: bool = False) -> dict[str, object]:
@@ -134,3 +168,16 @@ def test_release_preserves_live_process_when_start_identity_is_stale(
     assert result["result"] == "missing"
     assert result["after"]["state"] not in {"Z", "X", "x"}
     os.kill(pid, 0)
+
+
+def test_release_stops_descendant_forked_during_term(
+    unreaped_process: Callable[[str], int],
+    release_process: Callable[..., dict[str, object]],
+) -> None:
+    pid = unreaped_process("fork-on-term")
+    result = release_process(pid)
+
+    assert {key: result[key] for key in ("result", "remaining")} == {
+        "result": "force_killed",
+        "remaining": [],
+    }

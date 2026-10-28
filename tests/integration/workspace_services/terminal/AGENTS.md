@@ -6,12 +6,14 @@
 
 ```text
 terminal/
-├── test_process_release.py         Linux session、僵尸状态与过期启动身份
+├── test_process_release.py         Linux session、僵尸、过期身份及SIGTERM中新建后代
 ├── test_process_release_windows.py Windows taskkill 对真实父子进程树的回收
 └── test_operation_receipts.py      真实PTY回执核验、工作区完成与目录占用结算
 ```
 
 Linux 僵尸断言只描述 Linux 的回收语义；Windows 用原生 `taskkill /T` 终止并分别核对进程根与子进程退出。两类验证使用各自平台的操作系统证据，不以模拟 `taskkill` 或 `/proc` 状态替代原生验证。
+
+Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，同session后代忽略SIGTERM；停止返回后独立枚举进程表核对没有仍在执行的成员。测试父进程以subreaper回收自己产生的根与后代，失败收尾只操作本例隔离的进程组，不把该边界测试称为完整PTY或Backend重启验收。
 
 `test_operation_receipts.py`通过正式Session、消息附件上传、Terminal创建及原工具operation生成真实Node/PTY/HTTP状态，仅注入回执版本或核实状态。读、真实命令写入及workspace完成的错误回执保留精确原lease和目录占用；显式管理停止核实后才结清并允许到期GC。独立终态场景暂停steering轮询，由完成查询独占提交真实外部停止事实，仍保留workspace记录与关联。suite `integration-terminal-operation-receipts`固定90秒/4GiB，Linux和Windows均运行；原生PTY以回车提交命令，不替代Gateway/Web、独立Backend重启或完整旧代接管验收。
 

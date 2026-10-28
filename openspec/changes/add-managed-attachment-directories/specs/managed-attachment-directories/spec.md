@@ -158,6 +158,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原 PTY 进程树已进入停止链，但 Worker 退出未确认或最终终态写盘失败
 - **THEN** 保留原 Worker 句柄和未知状态，不提前发布停止完成事件；显式重试复用原执行及唯一停止链，只有进程树停止、Worker 退出确认与终态写盘均成功后才清除句柄和返回成功；未知状态写盘也失败时保留两份原异常及因果关系
 
+#### Scenario: POSIX 终端在停止快照后创建后代
+
+- **WHEN** 原停止链捕获的 PID 收到 SIGTERM 或 SIGKILL 后退出，但快照到信号生效之间创建了同一操作系统 session 的新后代
+- **THEN** 复用首次取得的 session 与启动身份，在宽限等待结束后重新核对整个 session；SIGTERM 阶段遗留后代沿原强杀链处理，强杀阶段仍发现存活后代则返回未停止，不凭旧 PID 集合退出发布成功或结清目录占用。根 PID 已回收不得丢失原 session，身份不匹配时继续保护无关进程
+
 #### Scenario: Browser 已关闭运行时但最终发布失败
 
 - **WHEN** Browser 已关闭原 context，但删除检查点或最终终态写盘失败
