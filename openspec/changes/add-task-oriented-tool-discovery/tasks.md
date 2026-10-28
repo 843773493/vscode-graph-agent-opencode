@@ -358,3 +358,12 @@
 - 004已完成拒绝/取消并进入真实期限等待；源码复查发现新测试误将“每Server最新操作”列表当历史列表，因此主动SIGINT中断，实际退出130，保留原件。最终按页面取得的ID逐条读取现有详情API，另核对最新列表仍只返回最新一项，未改变或放宽产品API。新测试额外核唯一资源账本，避免仅凭页面文字或操作接收回执宣称关闭。
 - 001三文件Pyright零诊断、Ruff与Bun脚本解析通过；005相对001仅修改新测试和矩阵注册，最终006 Pyright/007 Ruff均零诊断，复用未变OAuth资产与脚本检查。正式套件固定480秒/4GiB，外层540秒；准确命令、tree、源码前后指纹、raw、退出码与中断原件在`out/tests/temp/mcp-web-errors/artifacts/`，正式工作区和输出保留在各archive同名测试路径。未改产品Web源码/协议，复用此前Web类型及构建结果。
 - 结合第6节turn/model_call自动after_turn、原child冷重建、原期限与准入，以及上方三节点联邦Web回调证据关闭8.4，当前43/52。4.2持续持有、4.6剩余综合门、8.5真实Provider指标和第9节最终交付检查继续未完成；团队/协作TODO不变。
+
+
+### 2026-10-28 4.6 同 Backend 多工作区的真实调用隔离补证
+
+- 补强既有 watcher／Runner／HTTP MCP 用例：两个工作区均通过精确工作区消息 API 创建 canonical acceptance 和真实执行，不再只断言兄弟目录未变。相同 Server ID、完整 schema 和原始 URL 仍取得不同 connection_ref；第一工作区替换后，旧封存调用仍发往原连接，新执行发往新连接，兄弟工作区真实调用继续走自己的原连接。
+- 完整候选 tree `49690ab3943bef5b34a2aa44b88225bb94635ccf` 的正式 matrix 定向 `product-001` 为1 passed／3 deselected、87.43秒、exit0。逐一验证三个远端收据、两边资源身份集合不相交、ledger holder 的 Session／Thread 归属和释放状态，以及六份实际模型请求与各自 sealed assembly 的 preimage／request_hash 一致。模型复用 model_stream；业务 HTTP 为 ASGI transport、MCP 为真实 HTTP，同进程挂载验证不等于真实 Gateway 业务代理或外部 Provider 验收。
+- 同一完整候选的正式 `integration-extension-discovery`（`lifecycle-003`）232 passed／152.24秒、exit0，复核Owner生命周期／旧通知、同schema替换／有界资格、账本冷读和写盘失败、真实stdio／HTTP的进度与取消及非自动重试的unknown；未重新运行完整审批／真实Backend重启组合，不能将其计入232项。
+- 新增内容仅为测试，不改生产连接、调度或持久化实现。受影响 Ruff `static-002` exit0；不重复未变化的 Web 构建。准确命令、完整候选／前后逐文件指纹、raw和实际退出码位于 `out/tests/temp/mcp-workspace-ownership/artifacts/`，最终机械核验见 `verification-005.json`。其它未修改场景继续引用本变更各具名收据，不能把本用例作为完整审批／冷恢复的重新运行。
+- 4.2 的额外“工具显式声明跨执行主动持有／释放”仍没有定义产品入口，已提出边界问题；目前不把 workspace 连接自身常驻、单次 operation 或结果未知记录当作该能力完成。4.2／4.6 和第9节总门保持未勾，团队／协作TODO不变。

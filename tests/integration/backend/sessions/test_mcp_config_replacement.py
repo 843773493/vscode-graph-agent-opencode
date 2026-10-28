@@ -11,6 +11,7 @@ import pytest
 
 from app import main
 from app.core.path_utils import workspace_context
+from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.common import JobStatus
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from configs.runtime import read_jsonc_object
@@ -72,8 +73,24 @@ def mcp_servers(payload):
     return servers
 
 
+@pytest.fixture
+def start_workspace_message():
+    async def start(container, session_id, content):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+            headers=LOCAL_TOKEN_HEADERS,
+        ) as client:
+            response = await client.post(
+                f"/api/v1/workspaces/{container.workspace_id}/sessions/{session_id}/messages",
+                json={"message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"}},
+            )
+            assert response.status_code == 200, response.text
+            return container.job_service._jobs[response.json()["data"]["job_id"]]
+    return start
+
+
 async def test_watcher_replacement_preserves_sealed_network_target_and_publishes_new_calls(
-    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch,
+    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch, start_workspace_message,
 ):
     replay, controller = inprocess_model_replay
     ready, release = asyncio.Event(), asyncio.Event()
@@ -96,13 +113,17 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
             first, sibling = mounted_case.containers
             service, owner = first.config_service, first.mcp_catalog_owner
             previous, sibling_binding = owner.binding_snapshot(), sibling.mcp_catalog_owner.binding_snapshot()
+            original_target = previous.resolve("mcp__schema__probe")
+            sibling_target = sibling_binding.resolve("mcp__schema__probe")
+            assert original_target.schema_hash == sibling_target.schema_hash
+            assert original_target.connection_ref != sibling_target.connection_ref
             path = first.workspace_root / ".boxteam/workspace.jsonc"
             with workspace_context(first.workspace_id, first.workspace_root, session_catalog=first.session_catalog):
                 runner = RunnerCase(first, first.workspace_root)
                 session_id, thread_id = await _session(runner)
                 calls = plan_tool_loop(replay, first, session_id, thread_id, "sealed-old")
                 blocked_call = calls[0]
-                job = await _start_job(runner, "user", session_id, thread_id)
+                job = await start_workspace_message(first, session_id, "使用替换前封存的连接。")
                 try:
                     await asyncio.wait_for(ready.wait(), 30)
                     payload = read_jsonc_object(path)
@@ -122,12 +143,55 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
                 assert job.status == JobStatus.completed, job.error_message
                 assert [json.loads(line) for line in old.receipts.read_text().splitlines()] == [{"name": "probe", "arguments": {"marker": "sealed-old"}}]
                 assert not new.receipts.exists()
-                plan_tool_loop(replay, first, session_id, thread_id, "current-new")
-                job = await _start_job(runner, "user", session_id, thread_id)
+                new_calls = plan_tool_loop(replay, first, session_id, thread_id, "current-new")
+                job = await start_workspace_message(first, session_id, "使用当前连接发起新的独立调用。")
                 await asyncio.wait_for(asyncio.shield(job.task), 30)
                 assert job.status == JobStatus.completed, job.error_message
                 assert [json.loads(line) for line in new.receipts.read_text().splitlines()] == [{"name": "probe", "arguments": {"marker": "current-new"}}]
                 assert controller.transport.call_count == 4
+            # 兄弟工作区也必须真实执行；同名、同 schema 和同 URL 不构成共享连接。
+            with workspace_context(sibling.workspace_id, sibling.workspace_root, session_catalog=sibling.session_catalog):
+                sibling_runner = RunnerCase(sibling, sibling.workspace_root)
+                sibling_session, sibling_thread = await _session(sibling_runner)
+                sibling_calls = plan_tool_loop(replay, sibling, sibling_session, sibling_thread, "sibling-original")
+                sibling_job = await start_workspace_message(sibling, sibling_session, "在兄弟工作区独立调用同名工具。")
+                await asyncio.wait_for(asyncio.shield(sibling_job.task), 30)
+                assert sibling_job.status == JobStatus.completed, sibling_job.error_message
+                assert sibling.mcp_catalog_owner.binding_snapshot() == sibling_binding
+            assert [json.loads(line) for line in old.receipts.read_text().splitlines()] == [
+                {"name": "probe", "arguments": {"marker": "sealed-old"}},
+                {"name": "probe", "arguments": {"marker": "sibling-original"}},
+            ]
+            assert [json.loads(line) for line in new.receipts.read_text().splitlines()] == [
+                {"name": "probe", "arguments": {"marker": "current-new"}},
+            ]
+            assert controller.transport.call_count == 6
+            resource_sets = []
+            for container, session, thread, model_calls in (
+                (first, session_id, thread_id, (*calls, *new_calls)),
+                (sibling, sibling_session, sibling_thread, sibling_calls),
+            ):
+                with workspace_context(container.workspace_id, container.workspace_root, session_catalog=container.session_catalog):
+                    # 每个实际模型请求均能由其 owner 的历史 assembly 精确重建。
+                    for call_id in model_calls:
+                        record = json.loads((replay.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+                        assert record["identity"]["session_id"] == session and record["identity"]["thread_id"] == thread
+                        with container.checkpointer._storage.storage.read_connection(session, thread) as connection:
+                            assembly_id, = connection.execute(
+                                "SELECT assembly_id FROM context_assemblies WHERE model_call_id=?", (call_id,),
+                            ).fetchone()
+                        assembly = container.checkpointer.get_context_assembly(session, thread, assembly_id=assembly_id)
+                        assert assembly.request_hash_preimage == normalize_wire_request(record["request"])
+                        assembly.validate_hashes()
+                    ledger = json.loads((container.workspace_root / ".boxteam/resources.json").read_text(encoding="utf-8"))
+                    resources = {record["resource_id"] for record in ledger["records"] if record["kind"] == "mcp_connection"}
+                    assert resources
+                    assert {lease["holder_session_id"] for lease in ledger["leases"]} == {session}
+                    assert {lease["holder_thread_id"] for lease in ledger["leases"]} == {thread}
+                    assert {lease["status"] for lease in ledger["leases"]} == {"released"}
+                    assert {lease["resource_id"] for lease in ledger["leases"]} <= resources
+                    resource_sets.append(resources)
+            assert resource_sets[0].isdisjoint(resource_sets[1])
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
                 headers=LOCAL_TOKEN_HEADERS,
