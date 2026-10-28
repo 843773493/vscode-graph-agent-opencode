@@ -374,3 +374,9 @@
 - 复用原 MCP handler、官方 URL elicitation 异常及真实 StreamableHTTP，核对原错误码／data、唯一原调用、精确 operation、Activity 无授权 URL、冷账本无待核实 lease，以及同连接后继调用成功。旧生产在相同新测试的 provider_error 断言精确失败；本项只验证 SDK／信封／Activity 与持久租约边界，不代替 Gateway／Agent／Web 或 Windows 验收。
 - `lifecycle-and-schema-002` 两个完整协议测试文件28 passed／31.06秒；`envelope-and-lease-regression-004` 相邻信封／租约／适配器52 passed／7.17秒；最终协议 mock 修正后 `final-fixture-008` 三项 Activity 场景3 passed／5.47秒。Ruff通过；Pyright与完整 HEAD 基线逐条对比为6项旧诊断／最终5项，零新增，消除原 fixture 的不完整 sink 诊断，不宣称静态全绿。原始失败、准确命令、源码前后指纹、raw与实际退出码保留于 `out/tests/temp/mcp-confirmed-protocol-error/artifacts/`。
 - 4.2／4.6 与第9节总门继续未勾；主动跨执行持有入口等待既有边界问题的答复，团队／协作继续 TODO。
+
+### 2026-10-28 取消清理与同 Server 准入收口
+
+- 修复重复取消再次打断原任务、终态已提交但清理未结束时新意图提前进入的两个真实 OAuth/MCP 反例；原任务和失败句柄继续由既有 scope 持有。单次取消最多观察30秒，超时原操作登记 cleanup_wait_timeout，API返回503及同一request_id；同 Server 新意图409，alias／旧意图仍读原事实，清理完成后显式新意图可正常授权。无新增账本、schema或网络链路。
+- 旧实现两项反例均失败；最终正式 `integration-mcp-connection-operations` 为13 passed／119.41秒、exit0，含真实30秒等待、请求中断、清理失败、晚完成后重连及既有独立Backend重启。三文件Ruff、Pyright、compileall通过；OpenSpec strict 48/48。同步审计确认三个配置delta保留最新主规格的全部原scenario及日志合同。准确命令、源码前后指纹、raw与退出码在 `out/tests/temp/mcp-cancel-cleanup/artifacts/`，初轮新增测试静态诊断及审计脚本正则错误原件保留。
+- 本片未改Web，不重复构建；ASGI业务API与真实OAuth/MCP不代替Gateway/Web、Windows或同步阻塞可抢占验收。同步清理回调阻塞事件循环仍在代码保留5.4 TODO。4.2主动跨执行持有待既有设计答复，4.6及第9节整体门继续未勾。

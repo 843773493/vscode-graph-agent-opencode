@@ -27,6 +27,7 @@ from app.services.infrastructure.mcp.session_runtime import (
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 _OPERATION_TIMEOUT_SECONDS = 300
+_CANCEL_WAIT_SECONDS = 30
 
 
 class McpConnectionSummary(TypedDict):
@@ -114,6 +115,13 @@ class McpConnectionService:
             if (existing.connection_id, existing.action) != (connection_id, request.action):
                 raise ValueError("MCP operation_id 已被不同连接意图使用")
             return existing
+        for operation_id, task in self._tasks.items():
+            operation = self._store.get(operation_id)
+            if (operation.connection_id == connection_id and operation.terminal
+                    and (not task.done() or (not task.cancelled() and task.exception() is not None))):
+                raise PermissionError(
+                    f"MCP 连接原操作的清理尚未完成: operation_id={operation_id}"
+                )
         configuration_ref = self._configuration_ref(request.server_id)
         if request.action == "disconnect":
             for active in self._store.active():
@@ -128,8 +136,13 @@ class McpConnectionService:
                 partial(self._run, operation), label=operation.operation_id,
             )
             self._tasks[operation.operation_id] = task
-            task.add_done_callback(lambda _task: self._tasks.pop(operation.operation_id, None))
+            task.add_done_callback(partial(self._operation_finished, operation.operation_id))
         return operation
+
+    def _operation_finished(self, operation_id: str, task: asyncio.Future[object]) -> None:
+        # 清理失败仍由原 scope 持有并报告；保留 handle，防止同 Server 另开连接。
+        if task.cancelled() or task.exception() is None:
+            self._tasks.pop(operation_id, None)
 
     def _advance(self, operation_id: str, *, status: str, stage: str, error_code: str | None = None) -> McpConnectionOperationDTO:
         operation = self._store.advance(operation_id, status=status, stage=stage, error_code=error_code)
@@ -258,12 +271,20 @@ class McpConnectionService:
 
     async def cancel(self, operation_id: str) -> McpConnectionOperationDTO:
         operation = self._store.get(operation_id)
+        task = self._tasks.get(operation.operation_id)
         if not operation.terminal:
             operation = self._advance(operation.operation_id, status="cancelled", stage=operation.stage, error_code="operation_cancelled")
-        task = self._tasks.get(operation.operation_id)
+            if task is not None:
+                task.cancel()
         if task is not None:
-            task.cancel()
-            outcomes = await asyncio.gather(asyncio.shield(task), return_exceptions=True)
-            if any(isinstance(outcome, Exception) for outcome in outcomes):
-                raise RuntimeError("MCP 连接操作取消后的清理未完成")
+            # 重复取消只观察同一原任务；不能再次打断 finally 中的 SDK 清理。
+            # TODO(5.4)：同步回调阻塞事件循环的隔离仍归原 owner，本预算只限制异步观察。
+            done, _ = await asyncio.wait((task,), timeout=_CANCEL_WAIT_SECONDS)
+            if not done:
+                self._store.record_cleanup_failure(operation.operation_id, "cleanup_wait_timeout")
+                raise TimeoutError(
+                    f"MCP 连接操作清理等待超过 30 秒: operation_id={operation.operation_id}"
+                )
+            if not task.cancelled() and (error := task.exception()) is not None:
+                raise RuntimeError("MCP 连接操作取消后的清理未完成") from error
         return self._store.get(operation.operation_id)

@@ -115,6 +115,8 @@ HTTP Server 以可选的 `mcp.servers.<id>.oauth.redirect_uri` 显式选择标�
 
 连接操作复用唯一 WorkspaceStateStore，实际新增 operations 与 intent aliases 两张表，因此 schema 从14升至15；DDL 由015.sql显式迁移。稳定连接身份由工作区与已配置 Server 组成；同一意图终态重放返回原事实，不同意图加入同一活动连接时持久记录 alias，避免重启后重新发起授权。操作期限为300秒，短 status 观察最多5000ms且不取消共享操作；期限先撤销发布资格，清理失败补全同一取消／过期终态的安全诊断，不重新开放准入。
 
+显式取消只在首次终态转换时取消原操作任务，重入及 alias 共用原任务的观察。取消请求最多等待30秒，超过预算返回503并补全原行的 cleanup_wait_timeout，原任务仍归既有 LifetimeScope。原任务尚未结束或清理失败时，同 Server 的新意图返回409；成功清理后释放短期任务引用。该准入核对只读原操作行与原 task，不建立连接占用表或第二套资源账本，取消请求被中断也不取消原清理。
+
 受保护的 `/mcp/connection-operations` API 与本地控制目标共用同一 service。GET 列表直接投影各 Server 最新的原操作行，不建立管理状态表；实际授权 URL 仅经 no-store 管理读取返回，code／state 仅以受保护 POST body 交给实际工作区 owner；它们只在原操作内存中传递，模型、普通操作行、SSE和会话不保存这些值。显式私有回调模型的校验失败也不把输入写入日志。
 
 Web 管理复用同一个工作区连接组件、hook 与 Gateway API 客户端。会话中的非敏感链接只携带 Gateway 已注册目标身份，进入管理页后先解析目标，再读取完整操作对象；主窗口底部面板提供同一管理能力并按工作区保存标签。浏览器授权由用户主动打开弹窗，Web 要求现有 `oauth.redirect_uri` 显式配置为当前客户端 origin 的 `/mcp-oauth-callback.html`；不匹配时明确报告配置要求，不能用客户端 localhost 冒充目标 owner。SDK 的 state／PKCE 校验仍归目标工作区。

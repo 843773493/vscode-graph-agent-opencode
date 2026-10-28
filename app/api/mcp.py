@@ -71,6 +71,8 @@ def _connection_errors():
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except TimeoutError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/connection-operations", response_model=APIResponse[list[McpConnectionOperationDTO]])
