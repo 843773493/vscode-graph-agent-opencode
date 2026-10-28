@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -15,7 +16,6 @@ from app.services.infrastructure.config import (
     ConfigSnapshot,
 )
 from app.services.infrastructure.config.contracts import ConfigPublication
-from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.shadow_scope import (
     ConfigShadowLifecycleError,
@@ -293,7 +293,7 @@ class ConfigReloadMixin:
                     state, result = "conflict", "conflict"
                 else:
                     state, result = "rejected", "apply_failed"
-                error_detail = config_failure_detail(error, stage=result, label="Workspace 配置应用失败")
+                error_detail = failure_detail(error, stage=result, label="Workspace 配置应用失败")
                 self._finish_candidate(
                     pending,
                     attempt_id=attempt_id,

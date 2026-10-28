@@ -13,8 +13,8 @@ from app.core.config_sources import (
     read_stable_config_file,
     verify_stable_config_file,
 )
+from app.core.failures import failure_detail
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.state import (
     SecretReferenceRequiredError,
     dump_json,
@@ -44,7 +44,7 @@ def record_gateway_restart_startup_failure(
         gateway_id=gateway_id,
         target_generation=target_generation,
         fencing_token=fencing_token,
-        error=config_failure_detail(error, stage="startup", label="Gateway pending generation 启动失败"),
+        error=failure_detail(error, stage="startup", label="Gateway pending generation 启动失败"),
     )
 
 
@@ -183,7 +183,7 @@ def _load_or_migrate_gateway_override(
                         encoding="utf-8",
                     )
             except OSError as error:
-                detail = config_failure_detail(error, stage="source_deleted_backup", label="Gateway 配置应用失败")
+                detail = failure_detail(error, stage="source_deleted_backup", label="Gateway 配置应用失败")
                 raise type(error)(error.errno, detail) from error
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
@@ -240,7 +240,7 @@ def _load_or_migrate_gateway_override(
         if not backup_path.exists():
             shutil.copy2(path, backup_path)
     except OSError as error:
-        detail = config_failure_detail(error, stage="source_backup", label="Gateway 配置应用失败")
+        detail = failure_detail(error, stage="source_backup", label="Gateway 配置应用失败")
         raise type(error)(error.errno, detail) from error
     source_record = state_store.sync_config_source(
         config_key=config_key,

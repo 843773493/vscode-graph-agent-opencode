@@ -6,13 +6,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.failures import failure_detail
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerApplyError,
     GatewayRuntimeConsumerApplyResult,
 )
 from app.services.infrastructure.config import ConfigFileWatcher, ConfigReloadStatus
-from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -545,7 +545,7 @@ class ReloadLifecycleMixin:
                     ),
                 )
             except Exception as error:
-                error_detail = config_failure_detail(error, stage=failure_stage, label="Gateway 配置应用失败")
+                error_detail = failure_detail(error, stage=failure_stage, label="Gateway 配置应用失败")
                 (
                     recovery_required,
                     recovery_error,
@@ -636,7 +636,7 @@ class ReloadLifecycleMixin:
                 self._status,
                 healthy=False,
                 last_attempt_at=now,
-                last_error=(error_detail if error is reported_error else config_failure_detail(
+                last_error=(error_detail if error is reported_error else failure_detail(
                     error, stage="reload", label="Gateway 配置应用失败",
                 )),
                 reason=self._status.reason or "invalid_config",
@@ -689,7 +689,7 @@ class ReloadLifecycleMixin:
         try:
             await runtime_result.rollback()
         except Exception as rollback_error:  # noqa: BLE001 - 回退必须捕获所有运行时故障
-            rollback_detail = config_failure_detail(rollback_error, stage="runtime_rollback", label="Gateway 配置应用失败")
+            rollback_detail = failure_detail(rollback_error, stage="runtime_rollback", label="Gateway 配置应用失败")
             self._state_store.record_config_apply_compensation(
                 apply_id=apply_id,
                 compensation={

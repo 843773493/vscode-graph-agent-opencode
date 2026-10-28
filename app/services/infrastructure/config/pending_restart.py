@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable
 
-from app.services.infrastructure.config.failures import config_failure_detail
+from app.core.failures import failure_detail
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.snapshot import ConfigReloadStatus
 from app.services.infrastructure.config.state import (
@@ -287,7 +287,7 @@ class PendingRestartCoordinator:
                 ),
             )
         except Exception as error:
-            error_detail = config_failure_detail(error, stage="pending_resolve", label="Workspace 配置应用失败")
+            error_detail = failure_detail(error, stage="pending_resolve", label="Workspace 配置应用失败")
             self._store.update_config_apply_journal(
                 apply_id=claim.apply_id,
                 expected_state="applying",

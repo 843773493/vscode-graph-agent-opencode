@@ -23,7 +23,7 @@ app/core/
 ├── 标识、内容与协议基础
 │   ├── identifier.py / hashing.py / bounded_json.py
 │   ├── resource_uri.py
-│   └── exceptions.py
+│   └── exceptions.py / failures.py
 ├── 并发、生命周期与后台工作
 │   ├── key_lock_pool.py / lifecycle.py / session_lifecycle_gate.py
 │   ├── shielded_cleanup.py / phase_observer.py / job_event_bus.py
@@ -49,6 +49,7 @@ app/core/
 
 - `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供core registry与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
+- `failures.py`：公开错误事实与完整原始日志的唯一共享原语；只处理调用方提供的阶段、标签与异常类别／系统错误码，不判断业务状态，不将异常正文或 notes 复制进普通响应和持久记录。日志 sink 失败附在原异常上，原失败结算继续。
 - `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建与子树删除共用同一套

@@ -1063,3 +1063,11 @@
 - 修改前六项原恢复场景均检出异常被提前转字符串。最终110项重连/生命周期原文件通过，新增12项HTTPX→ASGI→真实Workspace配置owner/SQLite组合通过，覆盖POSIX/盘符/UNC、原组恢复与未恢复、正常/故障日志sink、序列化及持久事件、claim、旧active、原入口重试和冷读。网络transport与进程启动仍使用明确测试边界，不冒称独立Gateway/Backend或真实进程恢复。
 - 首轮新增夹具遗漏WorkspaceTarget必填connection_kind，12 failed/6 passed；按实际构造合同补齐后12项通过，未改业务断言。Ruff/compileall通过；同四文件Pyright72→72，按基线源码指纹确认AST后以文件/最窄owner/规则/完整消息比较无新增，不称类型全绿。初次比较误用HEAD定位已加单测的基线行号，四条owner误差已按实际指纹纠正，原报告保留。strict51/51与diff检查通过。
 - 准确命令、源码指纹、raw/退出码、类型对照和作者结构自审见`out/tests/temp/uri-global-closure/artifacts/verification-016.json`。尚未验Web、Windows或真实Provider；普通Backend运行错误的registry投影仍有原文来源，URI2.2/7.2与多工作区全局门保持未勾，团队/协作与MCP显式持有继续TODO。
+
+
+### 2026-10-28 Gateway reconnect 失败响应及新持久错误收口
+
+- reconnect 不再将主异常和 notes 拼入普通响应或新 connection_error，404/409/502 共用阶段、类别和系统错误事实；次错以独立阶段公布，完整原异常及次错堆栈保留诊断与原异常注记。日志 sink 故障不阻止原结算；原状态码、request_id、取消传播、提交观察者失败后的新合同/runtime 保留及禁止回退规则保持。错误事实原语从配置目录物理迁至无业务语义的 app/core/failures.py，配置 writer、调用方及日志注入点全量迁齐，生产与测试中旧模块、名称零残留，不保留转发层。
+- 原实现7项失败/1项取消通过，精确复现主异常及次错原生位置进入502响应；另9项404/409拒绝反例全失败。最终不重叠文件组316 passed（重连/生命周期130、ConfigService117、Gateway配置51、配置故障HTTPX/ASGI及SQLite18）。新增覆盖POSIX/盘符/UNC、注册表记录成功/失败、日志正常/失败、原异常身份和完整诊断、同request_id、重建registry后的SQLite重读和列表序列化；已发布合同、旧/新runtime关闭归属和取消原因链沿原场景核验。首轮4 failed/117 passed仅因测试按未转义文本匹配OSError的Windows路径展示，修为精确核原异常对象及filename，未放宽业务约束。
+- Ruff对触达文件及完整config_service目录按文件/最窄AST owner/规则/完整消息核对58→55、无新增；同12文件Pyright50→50、无新增，不称全静态绿。compileall、strict 51/51及差异检查通过。作者按架构技能自审：无新目录或业务owner，通用原语29行且只依赖标准库；core49个直接Python模块及既有大型生命周期测试文件仍有拆分风险，本次沿既有夹具补验收，不引入第二套拓扑装具，不称独立审查。
+- 准确命令、源码前后指纹、raw/实际退出码、反例及类型/结构对照见 out/tests/temp/uri-global-closure/artifacts/verification-017.json。测试含明确控制器/远端边界替身及ASGI，不冒称独立Gateway/SSH/Windows/Web验收；不改写旧connection_error数据，其它启动、完整Backend组及健康投影的原文来源仍待后续收口。2.2/7.2全局门保持未勾，团队/协作与MCP显式持有继续TODO。

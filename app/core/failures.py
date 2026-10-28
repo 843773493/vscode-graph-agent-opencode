@@ -1,4 +1,4 @@
-"""配置失败的公开事实与原始诊断共用出口。"""
+"""失败的公开事实与原始诊断共用出口。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from traceback import format_exception
 logger = logging.getLogger(__name__)
 
 
-def config_failure_detail(error: BaseException, *, stage: str, label: str) -> str:
-    """不把异常正文复制到状态或事件，日志故障也不能阻止原配置结算。"""
+def failure_detail(error: BaseException, *, stage: str, label: str) -> str:
+    """不把异常正文复制到状态或事件，日志故障也不能阻止原失败结算。"""
     detail = f"{label}: stage={stage}, error={type(error).__name__}"
     if isinstance(error, OSError):
         detail += f", errno={error.errno}"

@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 import app.gateway.runtime.controller as runtime_controller_module
+from app.core import failures
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
@@ -298,6 +299,7 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
     workspace_runtime_controller_case,
     deletion_http_application,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     cancel_reconcile: bool,
 ) -> None:
     registry = workspace_runtime_controller_case.registry
@@ -404,13 +406,13 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
                 assert response.status_code == 502, response.text
                 assert response.headers["X-Request-ID"] == "reconnect-postcommit-01"
                 assert response.json() == {
-                    "detail": (
-                        "observer failed after remote projection commit\n"
-                        "远程 Gateway 新 URL 已提交，但依赖资源对账失败: "
-                        "port-forward reconcile failed after commit"
-                    ),
+                    "detail": "工作区重连失败: stage=workspace_reconnect, error=RuntimeError",
                     "request_id": "reconnect-postcommit-01",
                 }
+                record = next(record for record in caplog.records if record.exc_info and record.exc_info[1] is primary_error)
+                assert record.exc_text is not None
+                assert "observer failed after remote projection commit" in record.exc_text
+                assert "port-forward reconcile failed after commit" in record.exc_text
 
         assert primary_error.args == (
             "observer failed after remote projection commit",
@@ -437,11 +439,53 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("native_location", ["/private/reconnect-refusal", r"C:\private\reconnect-refusal", r"\\server\private\reconnect-refusal"])
+@pytest.mark.parametrize(("error_type", "status"), [(LookupError, 404), (ValueError, 409), (PermissionError, 409)])
+async def test_reconnect_refusal_keeps_status_without_publishing_exception_body(
+    workspace_runtime_controller_case,
+    deletion_http_application,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    native_location: str,
+    error_type: type[Exception],
+    status: int,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    error = error_type(native_location)
+    previous_commit = registry._last_committed_snapshot
+
+    async def reject_reconnect(_workspace_id: str) -> None:
+        raise error
+
+    monkeypatch.setattr(workspace_runtime_controller_case.controller, "reconnect_ssh", reject_reconnect)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
+        response = await client.post("/api/gateway/workspaces/member-a/reconnect", headers={"X-Request-ID": "reconnect-refusal-01"})
+    assert response.status_code == status
+    assert response.json() == {
+        "detail": f"工作区重连失败: stage=workspace_reconnect, error={error_type.__name__}" + (", errno=None" if error_type is PermissionError else ""),
+        "request_id": "reconnect-refusal-01",
+    }
+    assert response.headers["X-Request-ID"] == "reconnect-refusal-01"
+    assert registry._last_committed_snapshot is previous_commit
+    assert registry.resolve("member-a").connection_error is None
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert error.args == (native_location,)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+@pytest.mark.parametrize("native_location", ["/private/reconnect-failure", r"C:\private\reconnect-failure", r"\\server\private\reconnect-failure"])
+@pytest.mark.parametrize("record_fails", [False, True])
+@pytest.mark.parametrize("sink_fails", [False, True])
 async def test_reconnect_http_preserves_primary_error_when_connection_error_recording_fails(
     workspace_runtime_controller_case,
     deletion_http_application,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    native_location: str,
+    record_fails: bool,
+    sink_fails: bool,
+    tmp_path: Path,
 ) -> None:
     registry = workspace_runtime_controller_case.registry
     controller = workspace_runtime_controller_case.controller
@@ -462,9 +506,13 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
         ),
         activate=False,
     )
-    primary_error = OSError("reconnect failed before registry commit")
-    secondary_error = RuntimeError("connection_error persistence failed")
+    primary_error = OSError(5, "reconnect failed before registry commit", native_location)
+    primary_error.add_note(f"原始连接诊断: {native_location}")
+    secondary_error = RuntimeError(f"connection_error persistence failed: {native_location}")
+    sink_error = OSError(5, "diagnostic sink failed", native_location)
     calls = 0
+    recorded_errors: list[str] = []
+    mark_connection_error = registry.mark_connection_error
 
     async def fail_reconnect(_workspace_id: str) -> None:
         raise primary_error
@@ -472,10 +520,17 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
     def fail_mark_connection_error(_workspace_id: str, _error: str) -> None:
         nonlocal calls
         calls += 1
-        raise secondary_error
+        recorded_errors.append(_error)
+        if record_fails:
+            raise secondary_error
+        mark_connection_error(_workspace_id, _error)
 
     monkeypatch.setattr(controller, "reconnect_ssh", fail_reconnect)
     monkeypatch.setattr(registry, "mark_connection_error", fail_mark_connection_error)
+    if sink_fails:
+        def reject_log(*_args: object, **_kwargs: object) -> None:
+            raise sink_error
+        monkeypatch.setattr(failures.logger, "error", reject_log)
     previous_revision = registry.registry_revision
     previous_commit = registry._last_committed_snapshot
     state = registry._state_store
@@ -492,19 +547,45 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
 
     assert response.status_code == 502, response.text
     assert response.headers["X-Request-ID"] == "reconnect-mark-error-secondary-01"
+    expected = "工作区重连失败: stage=workspace_reconnect, error=OSError, errno=5"
+    if sink_fails:
+        expected += ", diagnostic_sink_error=OSError"
+    secondary_detail = "; 记录连接失败状态失败: stage=workspace_reconnect_record, error=RuntimeError"
+    if sink_fails:
+        secondary_detail += ", diagnostic_sink_error=OSError"
     assert response.json() == {
-        "detail": (
-            "reconnect failed before registry commit\n"
-            "记录 connection_error 失败: connection_error persistence failed"
-        ),
+        "detail": expected + (secondary_detail if record_fails else ""),
         "request_id": "reconnect-mark-error-secondary-01",
     }
-    assert primary_error.args == ("reconnect failed before registry commit",)
+    assert primary_error.args == (5, "reconnect failed before registry commit")
+    assert primary_error.filename == native_location
+    assert recorded_errors == [expected]
+    if sink_fails:
+        assert any("诊断日志输出失败" in note and str(sink_error) in note for note in primary_error.__notes__)
+    else:
+        record = next(record for record in caplog.records if record.exc_info and record.exc_info[1] is primary_error)
+        assert record.exc_info is not None and record.exc_text is not None
+        assert record.exc_info[1] is primary_error
+        assert f"原始连接诊断: {native_location}" in record.exc_text
+    if record_fails:
+        if sink_fails:
+            assert any("诊断日志输出失败" in note and str(sink_error) in note for note in secondary_error.__notes__)
+        else:
+            assert any(record.exc_info and record.exc_info[1] is secondary_error for record in caplog.records)
+        assert any(str(secondary_error) in note for note in primary_error.__notes__)
     assert calls == 1
-    assert registry.registry_revision == previous_revision
-    assert registry._last_committed_snapshot is previous_commit
-    assert state.get_registry_revision() == previous_revision
-    assert registry.resolve(target.workspace_id).connection_error is None
+    assert registry.registry_revision == previous_revision + (0 if record_fails else 1)
+    assert (registry._last_committed_snapshot is previous_commit) is record_fails
+    assert state.get_registry_revision() == registry.registry_revision
+    expected_record = None if record_fails else expected
+    assert registry.resolve(target.workspace_id).connection_error == expected_record
+    # 从真实 SQLite 重新加载并经 DTO 序列化，不能只证明路由的响应格式。
+    cold = GatewayWorkspaceRegistry(storage_path=tmp_path / "cold-registry.json", state_store=state)
+    assert cold.resolve(target.workspace_id).connection_error == expected_record
+    items = await cold.list_dtos(check_health=False)
+    item = next(item for item in items if item.workspace_id == target.workspace_id)
+    assert item.connection_error == expected_record
+    assert native_location not in item.model_dump_json()
 
 
 @pytest.mark.asyncio

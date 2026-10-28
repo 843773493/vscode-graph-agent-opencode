@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
@@ -34,7 +35,6 @@ from app.schemas.gateway.lifecycle import (
     GatewayRuntimeStateResultDTO,
 )
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
-from app.services.infrastructure.config.failures import config_failure_detail
 
 _LOCK_SHARDS = 64
 logger = logging.getLogger(__name__)
@@ -168,7 +168,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         old_runtime_recovered: bool,
         request_id: str,
     ) -> None:
-        detail = config_failure_detail(error, stage="workspace_restart", label="Workspace 配置应用失败")
+        detail = failure_detail(error, stage="workspace_restart", label="Workspace 配置应用失败")
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.post(
                 f"{target.backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",

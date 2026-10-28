@@ -242,7 +242,7 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
         with monkeypatch.context() as patch:
             patch.setattr("app.gateway.runtime.controller.httpx.AsyncClient", workspace_client)
             if sink_fails:
-                patch.setattr("app.services.infrastructure.config.failures.logger.error", reject_log)
+                patch.setattr("app.core.failures.logger.error", reject_log)
             await controller._record_pending_restart_failure(
                 WorkspaceTarget(workspace_id="member", name="Member", root_path=str(case.workspace),
                                 backend_url="http://workspace-backend", backend_workspace_id=workspace_id, connection_kind="local"),

@@ -6,8 +6,8 @@ from _thread import RLock
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from app.core.failures import failure_detail
 from app.services.infrastructure.config.contracts import ConfigSnapshotPublisher
-from app.services.infrastructure.config.failures import config_failure_detail
 from app.services.infrastructure.config.snapshot import (
     ConfigReloadFailureReason,
     ConfigReloadStatus,
@@ -109,7 +109,7 @@ class ConfigSnapshotStore:
                 else active.loaded_at
             ),
             last_attempt_at=now,
-            last_error=config_failure_detail(error, stage=reason, label="Workspace 配置热重载失败"),
+            last_error=failure_detail(error, stage=reason, label="Workspace 配置热重载失败"),
             restart_required=restart_required,
             reason=reason,
             changed_sections=(

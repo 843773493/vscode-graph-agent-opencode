@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from traceback import format_exception
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -18,6 +19,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
@@ -392,10 +394,15 @@ async def reconnect_workspace(
     try:
         await controller.reconnect_ssh(workspace_id)
     except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(
+            error, stage="workspace_reconnect", label="工作区重连失败",
+        )) from error
     except (PermissionError, ValueError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=failure_detail(
+            error, stage="workspace_reconnect", label="工作区重连失败",
+        )) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
+        detail = failure_detail(error, stage="workspace_reconnect", label="工作区重连失败")
         target = registry.resolve(workspace_id)
         current_runtime = (
             registry._remote_gateway_runtimes.get(connection_id)
@@ -422,14 +429,13 @@ async def reconnect_workspace(
             and (target.connection_kind != "local" or not target.managed)
         ):
             try:
-                registry.mark_connection_error(workspace_id, str(error))
+                registry.mark_connection_error(workspace_id, detail)
             # 同步 registry 写入普通失败附加原错，进程级异常继续直传。
             except Exception as secondary_error:  # noqa: BLE001
-                note = f"记录 connection_error 失败: {secondary_error}"
-                error.add_note(note)
-        detail = str(error)
-        for note in getattr(error, "__notes__", ()):
-            detail = f"{detail}\n{note}"
+                error.add_note("记录 connection_error 失败:\n" + "".join(format_exception(secondary_error)))
+                detail += "; " + failure_detail(
+                    secondary_error, stage="workspace_reconnect_record", label="记录连接失败状态失败",
+                )
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
