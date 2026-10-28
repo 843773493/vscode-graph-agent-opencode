@@ -1276,7 +1276,7 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
         finally:
             state.close()
 
-        with pytest.raises(RuntimeError, match="Gateway 提前退出"):
+        with pytest.raises(RuntimeError, match=r"测试进程提前退出: .*returncode=3,"):
             start_gateway_process(
                 workspace_root=primary_workspace,
                 default_backend_url=f"http://127.0.0.1:{primary_backend.port}",
@@ -1301,8 +1301,14 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
             assert failed_intent is not None
             assert failed_intent.state == "recovery_required"
             assert failed_intent.last_error is not None
+            assert failed_intent.last_error.startswith(
+                "Gateway pending generation 启动失败: stage=startup, error="
+            )
             assert failed_pending is not None
             assert failed_pending.state == "recovery_required"
+            assert failed_pending.last_error == failed_intent.last_error
+            assert str(primary_workspace) not in failed_intent.last_error
+            assert str(gateway_state_path) not in failed_intent.last_error
             assert active_snapshot is not None
             assert active_snapshot.state == "active"
             assert (

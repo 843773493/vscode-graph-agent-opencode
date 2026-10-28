@@ -1018,3 +1018,9 @@
 - 按用户裁定不增例外：doctor/diagnose 共用 config 文件 URI，来源元数据与有效配置共用同一稳定快照；缺少真实 manifest 或工作区身份时明确报告地址错误，不创建身份。移除冗余根和 SQLite 位置，不给内部 carrier 编造 URI。CLI 的 JSON、日志和资源选择失败只公布阶段、异常类别、适用错误码及解析坐标，不回显原位置或配置值。
 - 最终定向回归102 passed，含两个真实命令进程、缺失/损坏身份、三类原生路径输入的四种诊断故障、原生读取故障与显式重试、快照一致性及未checkpoint的WAL可见性。第一轮33 passed/2 failed检出SQLite原只读连接生成锁sidecar，后续38 passed/1 failed定位到验收未保有reader、WAL已由最后连接关闭回收；按实际锁生命周期修正测试准备，最终数据库/已提交WAL正文与配置字节保持，不使用忽略WAL的immutable读取。
 - Ruff、compileall、strict OpenSpec51/51及差异检查通过。完整旧HEAD类型基线5条、最终2条，按文件/最窄AST owner/规则/完整消息核对无新增；余下两条属于原安装分支，不称类型全绿。命令、前后源码指纹、raw与实际退出码在`out/tests/temp/uri-global-closure/artifacts/verification-007.json`及其运行目录；临时完整旧源码已删除，证据保留。本片不代替独立Gateway/Backend/Web/Windows或执行恢复验收；持久失败原文仍按writer继续收口，2.2/7.2与团队协作TODO保持。
+
+### 2026-10-28 Gateway pending 启动失败记录（2.2/7.2部分收口）
+
+- 早期加载和后续启动入口直接传递原异常，sources facade 复用配置热应用原有的错误事实/原始日志出口，删除旧 helper 定义、迁齐调用与日志故障注入位置；不修改原 SQLite 事务、CAS、schema 或候选归属。失败记录只保存阶段、类别和适用系统错误码，原异常/原因链留原始日志，sink 再次失败仍保留注记并结算恢复态；旧预拼字符串明确拒绝。
+- 18项新合同、59项原配置回归和25项运行时/生命周期回归通过。首个混合运行90秒超时，拆分后的单例定位到测试同时打开第二个独占SQLite owner；移除重复owner准备后，由真实进程检查冷读。真实HTTP已通过原watcher生成pending、实际故障启动、恢复态/错误事实冷读及旧active保持，最终普通恢复启动仍因watcher重交损坏候选触发idempotency CAS冲突而失败，完整验收不能记通过；生产start处保留候选隔离与显式重试TODO。原create_pending协调AST保持，reload仅替换错误出口符号，规范化AST一致。原启动器文案断言同步为实际进程退出消息并保留退出码3约束。
+- 触达错误owner和测试Ruff通过，完整触达集13项旧Ruff诊断与完整旧HEAD一致；Pyright132→132，按文件/最窄AST owner/规则/完整消息核对无新增，不称全静态绿。compileall、strict OpenSpec51/51与差异检查通过；原件、准确命令、前后源码指纹、实际退出码、类型/静态对照及失败服务日志快照见`out/tests/temp/uri-global-closure/artifacts/verification-008.json`。临时完整旧源码已删除，正式产物与原始失败保留；不代替完整冷启动、Web、Windows或联邦验收，2.2/7.2与团队协作TODO保持。

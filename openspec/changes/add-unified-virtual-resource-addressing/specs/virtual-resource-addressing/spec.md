@@ -54,6 +54,11 @@
 - **WHEN** Workspace 或 Gateway 创建、重放、冷读 pending 配置候选，或升级包含候选记录的旧状态库
 - **THEN** SQLite 位置由原存储 owner 持有，候选记录及其诊断条目不另存或输出该位置；原有冗余位置列通过同一 owner 的有序 SQL 迁移删除，候选正文、来源基线、密钥引用、revision、幂等身份及应用和重启关联保持，普通重启不重建候选
 
+#### Scenario: Gateway pending 启动失败不将异常全文持久化
+
+- **WHEN** 拥有正确 generation 与 fencing token 的 Gateway 在配置加载或后续启动阶段失败
+- **THEN** 原启动入口将同一个原异常交给配置 owner，复用配置应用的错误事实与原始日志出口；intent、pending、journal、事件及后续普通诊断只保存阶段、异常类别和适用系统错误码，不保存原生位置或异常全文。原异常及原因链只留原始日志；日志 sink 失败不阻止原事务结算，异常仍保留日志故障说明。原 CAS、授权归属、过期拒绝、active 保留与显式重试保持
+
 #### Scenario: 文件导航库初始化错误保留身份和原始诊断
 
 - **WHEN** 文件导航库因未知schema、缺少权威表、owner不一致、损坏数据库或SQL资产不可读而拒绝初始化

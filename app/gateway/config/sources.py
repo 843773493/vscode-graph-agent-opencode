@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import shutil
+import sqlite3
 from pathlib import Path
+from traceback import format_exception
 from typing import cast
 
 from app.core.config_sources import (
@@ -21,27 +24,49 @@ from app.services.infrastructure.config.state import (
 
 from .values import _GATEWAY_SOURCE_LAYER_AUTHORITY
 
+logger = logging.getLogger(__name__)
+
+
+def gateway_config_failure_detail(error: BaseException, *, stage: str) -> str:
+    """运行时失败只发布阶段和系统错误事实，原始异常留在管理诊断日志。"""
+    label = "Gateway pending generation 启动失败" if stage == "startup" else "Gateway 配置应用失败"
+    detail = f"{label}: stage={stage}, error={type(error).__name__}"
+    if isinstance(error, OSError):
+        detail += f", errno={error.errno}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+    elif isinstance(error, sqlite3.Error):
+        detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
+    try:
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+    except Exception as sink_error:  # noqa: BLE001 — 诊断输出失败不能阻止配置事务结算，也不能递归写入同一 sink。
+        error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
+        detail += f", diagnostic_sink_error={type(sink_error).__name__}"
+    return detail
+
 
 def record_gateway_restart_startup_failure(
     *,
     state_store: GatewayStateStore,
     candidate_ref: str,
-    error: str,
+    error: BaseException,
     gateway_id: str,
     target_generation: str,
     fencing_token: str,
 ) -> None:
     """在 Gateway 配置解析尚未完成时，把 owned pending 固定到恢复态。"""
 
-    if not error:
-        raise ValueError("Gateway restart_failed 错误不能为空")
+    if not isinstance(error, BaseException):
+        raise TypeError("Gateway 启动失败必须提供原异常")
     state_store.record_gateway_restart_startup_failure(
         candidate_ref=candidate_ref,
         gateway_id=gateway_id,
         target_generation=target_generation,
         fencing_token=fencing_token,
-        error=error,
+        error=gateway_config_failure_detail(error, stage="startup"),
     )
+
+
 def _gateway_source_detail(
     state_store: GatewayStateStore,
     config_key: str,

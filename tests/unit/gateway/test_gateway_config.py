@@ -1566,7 +1566,7 @@ async def test_gateway_config_reload_keeps_old_active_for_runtime_pending(
             candidate_ref=status.candidate_ref,
             target_generation=restart_intent.target_generation,
             fencing_token=restart_intent.fencing_token,
-            error="新 Gateway generation 健康检查失败",
+            error=RuntimeError("新 Gateway generation 健康检查失败"),
         )
         assert failed_status.state == "recovery_required"
         failed_intent = state.get_gateway_restart_intent(
@@ -1639,7 +1639,7 @@ async def test_gateway_pending_restart_failure_rejects_stale_startup_contract(
                     candidate_ref=candidate_ref,
                     target_generation=generation,
                     fencing_token=fencing_token,
-                    error="迟到的 Gateway generation 失败回报",
+                    error=RuntimeError("迟到的 Gateway generation 失败回报"),
                 )
 
         unchanged_intent = state.get_gateway_restart_intent(
@@ -1661,7 +1661,7 @@ async def test_gateway_pending_restart_failure_rejects_stale_startup_contract(
             candidate_ref=candidate_ref,
             target_generation=intent.target_generation,
             fencing_token=intent.fencing_token,
-            error="匹配契约的 Gateway generation 失败回报",
+            error=RuntimeError("匹配契约的 Gateway generation 失败回报"),
         )
         assert failed_status.state == "recovery_required"
         recovery_event = service.list_events()[-1]
@@ -1731,7 +1731,7 @@ async def test_gateway_recovery_pending_requires_matching_proof_before_resolve(
             candidate_ref=candidate_ref,
             target_generation=restart_intent.target_generation,
             fencing_token=restart_intent.fencing_token,
-            error="新 generation 启动失败",
+            error=RuntimeError("新 generation 启动失败"),
         )
         failed_intent = state.get_gateway_restart_intent(candidate_ref=candidate_ref)
         assert failed_intent is not None

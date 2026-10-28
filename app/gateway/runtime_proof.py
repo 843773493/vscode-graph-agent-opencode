@@ -659,7 +659,7 @@ def _record_owned_gateway_startup_failure(
     gateway_state: GatewayStateStore,
     gateway_id: str,
     candidate_ref: str,
-    error: str,
+    error: BaseException,
 ) -> bool:
     """仅记录当前 Gateway、未过期且 token 完整匹配的启动早期失败。"""
 
@@ -682,7 +682,7 @@ def _record_owned_gateway_startup_failure(
     record_gateway_restart_startup_failure(
         state_store=gateway_state,
         candidate_ref=candidate_ref,
-        error=f"Gateway pending generation 启动失败: {error}",
+        error=error,
         gateway_id=gateway_id,
         target_generation=generation,
         fencing_token=fencing_token,

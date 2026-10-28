@@ -8,7 +8,7 @@ app/gateway/config/
 ├── __init__.py                 facade：组装 ReloadService，并维护原公开导入出口
 ├── values.py                   配置值对象与无副作用的值解析
 ├── loader.py                   合并来源、校验配置、生成 GatewayConfig
-├── sources.py                  来源层读取、迁移和来源明细
+├── sources.py                  来源层读取、迁移、来源明细及配置失败的诊断事实出口
 ├── connection_ids.py           connection_id 规范化、迁移和回滚
 ├── reload_lifecycle.py         ReloadLifecycleMixin：watcher、事件游标与 reload
 └── reload_pending_restart.py   ReloadPendingRestartMixin：pending restart 与 health proof

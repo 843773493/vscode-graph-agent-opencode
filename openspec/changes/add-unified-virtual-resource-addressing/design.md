@@ -108,6 +108,8 @@ rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（arti
 
 目标 rollout 暂存沿原逐文件复制和准备链路使用同一 storage 错误出口（artifact=fork_target；stage 为 staging / staging_copy / staging_cleanup / preparation_sync），保留原生类别、errno/winerror 与 cause，位置及原错只留诊断。目录创建仍在当前请求取得所有权后的清理范围之外，碰撞不得删除既有目录。复制的布局/hash拒绝不向普通错误输出内部 locator；失败清理若再失败保留两份原因。准备后的 bottom-up 文件/目录同步显式传播扫描错误，拒绝缺失根、符号链接和非普通文件，不能将漏同步当成功；保持原字节复制、SQL、hash、同步顺序及发布/journal owner，不另建安装链。
 
+Gateway pending 早期加载与后续启动失败继续走原 sources facade 和同一状态库事务，直接传递 BaseException，不能先转字符串。配置热应用与启动复用原错误事实生成器，原异常及原因链进入具名原始服务日志；持久化只消费阶段、类别与适用错误码。该错误出口归入既有 sources 模块，删除 reload_lifecycle 的旧定义并迁齐调用与故障注入位置，不新增恢复链、状态字段或 schema。日志 sink 再次失败仍沿原注记保留故障，不能妨碍 pending 的恢复态结算。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

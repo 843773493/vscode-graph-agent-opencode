@@ -469,7 +469,7 @@ async def test_logging_reload_confirms_shared_processes_and_settles_actual_failu
         def fail_diagnostic(*_args, **_kwargs):
             raise OSError("产品诊断 sink 无法写入")
 
-        monkeypatch.setattr("app.gateway.config.reload_lifecycle.logger.error", fail_diagnostic)
+        monkeypatch.setattr("app.gateway.config.sources.logger.error", fail_diagnostic)
     config.path.write_text(json.dumps({"config_version": 3, "logging": {"runtime": {"level": "debug", "pretty": False}}}))
 
     def reject_promotion(**_kwargs):

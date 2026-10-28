@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI):
                     gateway_state=gateway_state,
                     gateway_id=gateway_id,
                     candidate_ref=startup_candidate_ref,
-                    error=str(error),
+                    error=error,
                 )
             except Exception as failure_error:
                 recovery_error = failure_error
@@ -629,7 +629,7 @@ async def lifespan(app: FastAPI):
                         candidate_ref=startup_candidate_ref,
                         target_generation=startup_generation,
                         fencing_token=startup_fencing_token or "",
-                        error=f"Gateway pending generation 启动失败: {error}",
+                        error=error,
                     )
                 except Exception as failure_error:
                     recovery_errors.append(failure_error)

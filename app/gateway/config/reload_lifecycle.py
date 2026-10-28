@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from traceback import format_exception
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.runtime.consumer_protocol import (
@@ -25,29 +22,11 @@ from app.services.infrastructure.config.state import (
 )
 
 from .loader import load_gateway_config
+from .sources import gateway_config_failure_detail
 from .values import (
     GatewayConfig,
     GatewayConfigRuntimeApplier,
 )
-
-logger = logging.getLogger(__name__)
-
-
-def _apply_failure_detail(error: Exception, *, stage: str) -> str:
-    """运行时失败只发布阶段和系统错误事实，原始异常留在管理诊断日志。"""
-    detail = f"Gateway 配置应用失败: stage={stage}, error={type(error).__name__}"
-    if isinstance(error, OSError):
-        detail += f", errno={error.errno}"
-        if (winerror := getattr(error, "winerror", None)) is not None:
-            detail += f", winerror={winerror}"
-    elif isinstance(error, sqlite3.Error):
-        detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
-    try:
-        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
-    except Exception as sink_error:  # noqa: BLE001 — 诊断输出失败不能阻止配置事务结算，也不能递归写入同一 sink。
-        error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
-        detail += f", diagnostic_sink_error={type(sink_error).__name__}"
-    return detail
 
 
 class ReloadLifecycleMixin:
@@ -292,6 +271,8 @@ class ReloadLifecycleMixin:
             candidate_paths={self._config_path, self._local_config_path},
             on_change=self.reload,
         )
+        # TODO: recovery_required 候选的冷启动对账仍会重交同一幂等正文；损坏候选可触发
+        # CAS 冲突并阻止旧 active 启动。须按显式恢复合同另做候选隔离与重试的纵向修复。
         await watcher.start()
         self._watcher = watcher
     async def stop(self) -> None:
@@ -557,7 +538,7 @@ class ReloadLifecycleMixin:
                     ),
                 )
             except Exception as error:
-                error_detail = _apply_failure_detail(error, stage=failure_stage)
+                error_detail = gateway_config_failure_detail(error, stage=failure_stage)
                 (
                     recovery_required,
                     recovery_error,
@@ -698,7 +679,7 @@ class ReloadLifecycleMixin:
         try:
             await runtime_result.rollback()
         except Exception as rollback_error:  # noqa: BLE001 - 回退必须捕获所有运行时故障
-            rollback_detail = _apply_failure_detail(rollback_error, stage="runtime_rollback")
+            rollback_detail = gateway_config_failure_detail(rollback_error, stage="runtime_rollback")
             self._state_store.record_config_apply_compensation(
                 apply_id=apply_id,
                 compensation={

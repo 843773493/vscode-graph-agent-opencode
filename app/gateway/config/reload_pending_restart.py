@@ -91,7 +91,7 @@ class ReloadPendingRestartMixin:
         candidate_ref: str,
         target_generation: str,
         fencing_token: str,
-        error: str,
+        error: BaseException,
     ) -> ConfigReloadStatus:
         """将失败的 Gateway pending 固定到恢复态，等待显式重试。"""
 
