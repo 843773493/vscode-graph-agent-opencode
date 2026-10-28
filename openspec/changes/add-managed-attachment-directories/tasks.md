@@ -394,3 +394,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Backend复用原同步I/O原语执行唯一registry关闭链，线程池排队前同步撤销装配准入；服务图、catalog和registry作用域入口先拒绝已关闭状态，原锁内仍复核。线程排队、事务锁等待继续由同一关闭owner持有；观察预算到期或等待者取消不提前归还维护锁、不重复关闭，原执行结束后才继续后续依赖。未新增账本、schema或关闭实现。
 - 原生产的新单元反例2项失败（排队装具另有5秒屏障超时，已改为15秒且保留原件）；真实catalog事务反例1项失败。仅异步关闭、未修准入的中间候选又复现工作区请求等待5秒，修复后经真实双挂载、产品Session、SQLite事务锁及ASGI请求核验即时拒绝、诊断可读、原owner/locator/维护互斥保留与迟到完成。相关单元/catalog回归14 passed，完整关闭matrix 8 passed/168.04秒（新场景与前14项重叠1项），启动失败3 passed，合计24个不同用例；模型沿用model_stream，未手填执行或恢复事实。
 - Ruff、compileall及OpenSpec strict 51/0通过；Pyright原HEAD完整归档24项、最终候选24项，按文件/最窄AST owner/规则/完整消息比较无新增，不称类型全绿。原有集成用例AST保持，作者结构自查不等于独审。准确命令、源码指纹、原始输出/退出码及限定证据见 `out/tests/temp/uri-global-closure/artifacts/verification-026.json`。本片不证明真实等待30秒、Gateway/Web、Windows、独立Backend硬重启、原生线程强制终止或整个shutdown期限；其它同步关闭、未交付PID及不合作执行继续TODO，5.2/5.4仍未勾、整体21/23，团队协作继续暂缓。
+
+### 2026-10-28 文件存储关闭的事务等待（5.4部分收口）
+
+- 文件worker排空后，原Workspace任务复用`run_sync_shielded`等待唯一同步关闭，事务锁竞争不再阻塞事件循环；原步骤结束前保留catalog、locator与维护锁，不重复关闭或移动MCP scope。真实双挂载、产品Session及SQLite事务反例在原实现1 failed，候选1 passed；完整相关关闭回归17 passed/171.60秒，核对peer关闭、ASGI诊断/request_id、观察到期及原事务释放后的同owner收尾。观察期限由测试外置推进，不冒充真实等待30秒。
+- Ruff、compileall与OpenSpec strict通过。完整旧HEAD归档4730个blob逐字核对，生产Pyright 4→4、测试17→17，无新增，不称类型全绿；原有测试函数AST保持。首次归档比对因Git中文路径转义而失败，改用NUL分隔核对后确认源码一致，未修改候选。准确命令、前后指纹、原始输出/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-028.json`。未验Gateway/Web、Windows、独立Backend硬重启、任意线程终止或整个shutdown硬期限；其它同步关闭、旧代接管与不合作取消继续TODO，5.2/5.4保持未勾，整体21/23，团队协作继续暂缓。

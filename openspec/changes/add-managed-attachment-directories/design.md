@@ -210,6 +210,8 @@ Backend的唯一关闭owner迁入`app/backend_lifecycle.py`，`main`直接使用
 
 Catalog关闭复用既有`run_sync_shielded`执行原`registry.close()`，原Backend关闭owner持有线程池排队及同步执行；不新增关闭实现或任务账本。排队前同步撤销registry装配准入，各装配入口在取原锁前拒绝已关闭状态，锁内仍复核，避免关闭线程持锁时新请求再次阻塞事件循环。全部Workspace仍先沿原任务排空，catalog未完成不进入维护锁/model_stream步骤；等待者到期或取消不取消原同步执行，同一owner迟到完成后继续原依赖链。
 
+Workspace文件worker排空后的`workspace_service.close`同样由原Workspace任务等待`run_sync_shielded`，只将原同步关闭交给线程；原文件存储事务锁等待不占事件循环。Backend观察到期继续保留该步骤、文件存储、catalog、locator和维护锁，其它挂载及进程级诊断可继续推进；原事务结束后同一关闭owner继续后续依赖，不重复关闭。此处只覆盖文件存储关闭，不将MCP/AnyIO scope移出原任务，也不宣称其它同步回调或整个进程退出已有硬期限。
+
 TODO：30秒限制调用者对整批关闭的等待，不保证原生线程可抢占，也不证明不合作任务或外部进程已终止。其它同步关闭、生产进程退出协调与强制终止核实继续按5.2/5.4验收，两项保持未勾；完整Gateway/Web及Windows关闭组合不由本次进程内生命周期测试替代。团队、成员、委派与协作继续TODO。
 
 
