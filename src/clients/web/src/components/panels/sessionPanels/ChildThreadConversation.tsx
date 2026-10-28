@@ -5,7 +5,7 @@ import type { ChatTurnHandlers } from "../../chat/turn/types";
 import { conversationFromTurn } from "../../../state/conversations/turnProjection";
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import MarkdownContent from "../../chat/MarkdownContent";
-import { TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
+import { ForkItemButtons, TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
 
 type Conversation = ReturnType<typeof useChildThreadConversation>;
 type ChatTurnForkPoint = Parameters<NonNullable<ChatTurnHandlers["onForkConversation"]>>[0];
@@ -42,6 +42,10 @@ const ChildTurn = memo(function ChildTurn({ turn, threadId, onFork }: { turn: Tu
       <div className="child-thread-assistant chat-assistant-content">
         <TurnActivitySummary conversation={conversation} groups={groups} showRawDetails={false}
           onForkItem={onFork ? (itemId) => onFork({ ...sourceSnapshot, itemId }) : undefined} />
+        {onFork ? groups.map((group) => group.kind === "response"
+          ? <ForkItemButtons key={group.id} item={group.item}
+            onForkItem={(itemId) => onFork({ ...sourceSnapshot, itemId })} />
+          : null) : null}
       </div>
       {turn.detail_truncated ? <p>当前记录达到历史读取预算；可在调试视图查看执行详情。</p> : null}
     </article>

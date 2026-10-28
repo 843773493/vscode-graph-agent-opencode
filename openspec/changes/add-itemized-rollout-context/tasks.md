@@ -1166,8 +1166,8 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - [x] 14.6 验证真实模型 task 入口：模型只提交 item_id，断言 task 调用已在 canonical history 提交后进入定位，child 首个 Provider 请求包含选定前缀及自身 seed/reference，排除截止点后的 task 调用/新增消息/活跃执行。覆盖非 active 且非祖先分支中的最新候选、显式旧 view、多个 view、hidden/backing 非候选、跨 Thread 相同历史 ID、无候选和非法来源覆盖；新测试必须能区分 active-lineage 或跨 owner 误选实现。
 - [x] 14.7 验证 inclusive/before、摘要/保留成员顺序、协议不闭合与正文缺失不回退。用真实入口和可控并发屏障验证无关尾部追加、task 写入推进 revision 及来源分支切换下的前缀一致性；同时损坏冻结 revision/manifest/hash 的负例仍须拒绝，不能只证明删除检查后请求成功。
 - [x] 14.8 覆盖首次冻结后更晚候选出现、同 tool-call 重试及启动恢复不换原 view/anchor/capture；在冻结与 capture、staging、物化、发布/绑定边界故障或取消后核唯一身份、不可见半成品与原 owner 中止。Session 删除继续排空 live holder、清理 abandoned 创建，不重选来源、不复活目标；准确区分服务实例恢复与 OS 强杀重启证据。
-- [ ] 14.9 回归 task 默认 empty 不读取父 rollout、改名模式的 normal/internal/空来源、精确 child caller 及结果回报、普通公开 fork idle/no-member/no-initial-intent，以及未改模式的既有校验。完成受影响静态/真实类型检查和协议生成校验；涉及 Web 消费者时完成真实类型检查及 `bun run --cwd src/clients/web build`，按实际影响补真实 Gateway/Web 入口验证。
-- [ ] 14.10 全部测试保留既有进程外超时/内存保护及固定 60 秒 fork deadline/watchdog，不放宽单次预算。日志和工作区沿原 tests 输出规范；登记准确命令、源码指纹、原始输出、实际退出码与通过/失败/未验证范围。旧 124 单测、11 集成及其它历史 PASS 不代替本节新合同验收；Goal 与其它团队 TODO 不计入本切片完成。
+- [x] 14.9 回归 task 默认 empty 不读取父 rollout、改名模式的 normal/internal/空来源、精确 child caller 及结果回报、普通公开 fork idle/no-member/no-initial-intent，以及未改模式的既有校验。完成受影响静态/真实类型检查和协议生成校验；涉及 Web 消费者时完成真实类型检查及 `bun run --cwd src/clients/web build`，按实际影响补真实 Gateway/Web 入口验证。
+- [x] 14.10 全部测试保留既有进程外超时/内存保护及固定 60 秒 fork deadline/watchdog，不放宽单次预算。日志和工作区沿原 tests 输出规范；登记准确命令、源码指纹、原始输出、实际退出码与通过/失败/未验证范围。旧 124 单测、11 集成及其它历史 PASS 不代替本节新合同验收；Goal 与其它团队 TODO 不计入本切片完成。
 
 
 ### 2026-10-27 14.1 fork 范围模式统一命名
@@ -1274,3 +1274,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 默认empty单元回归将父rollout置为不可读取的普通文件，仍按原入口委派、父sentinel不变且不调用context copy；`empty-unit-006` 为18 passed／1.81秒。此组下游使用原recording binder，只证明服务合同，不代替14.6／14.8已经登记的真实task及硬重启产品验收。
 - 新纳入的历史血缘测试两处checkpoint版本与new_versions不一致；负例先修正为沿用原消息版本，再核canonical正文冲突、JSONL及最新checkpoint不变，正例传递自身真实channel_versions。保留原严格正文／身份／错误断言，不改生产校验。008／011／014的失败原件保留：分别在版本校验、合法新版本修订分支和后继checkpoint版本校验处拒绝。最终Ruff、JS语法及matrix解析通过；前端生产代码／协议与上一边界逐文件相同，复用真实tsc／protocol检查及本轮`web-build-002`成功证据。
 - Web唯一owner补充范围选项与preview切换断言，但`web-ui-004`在fixture租约检查失败，尚未进入浏览器业务：44000是Codex到本地代理的活跃ESTAB出站连接，不终止未知owner或修改系统环境。新增Web断言未执行，14.9／14.10保持未勾，整体仍109/119；未新增跨端、Windows或外部Provider验收。运行命令、完整候选tree `aa50afe492262a7368fe15431968ff6077dd32f0`、4687文件前后指纹、raw／实际退出码及进程组回收见 `out/tests/temp/fork-regression-closure/artifacts/verification-021.json`和runs；020仅为本地审计脚本误用候选cwd的路径失败，修正后022通过。结构作者自审未新增职责或目录，原大型测试文件拆分风险仍存在，不称独立审查。团队／协作与Goal专项继续TODO。
+
+### 2026-10-28 fork Web 回归与 child 最终回答入口（14.9／14.10 闭合）
+
+- 唯一 Web owner 的精确 model_stream 回放不再依赖个人 Provider 凭据；保留原 Provider／model／URL 与 call_identity 匹配合同，只在隔离测试配置替换密钥并移除个人 auth。exact replay 配置本身拒绝 record/off，无真实 Provider 请求或第二套模型协议。
+- 真实浏览器复现 child 最终回答缺少分支按钮，中间消息与主线程原入口正常；ChildTurn 现复用原 ForkItemButtons，携带实际展示的 thread/view/revision/item，不新增解析器、状态或创建链。相同最终单测配旧生产为1 failed／1.73秒，精确缺失 child_item_final；候选与反例仅该生产组件不同。修复后两项 child／main 精确来源回调回归通过／0.575秒，没有放宽身份或正文顺序断言。
+- 完整候选 tree `f2c6250454d02caf07a8d647794b2250820d07d8` 的 `web-ui-040` 为1 passed／225.42秒，聚焦 `empty_fork_ui,fork_child_ui` 两场景：真实三 Gateway／Backend、loopback SSH/channel 和 Chromium 页面初始化、空来源分支首次续聊、三模式选项与来源候选切换、附件继承、idle／无新执行、精确 child 用户／最终回答按钮、二次分支、关闭／重开／刷新零重复创建均通过。模型为回放，不能称外部 Provider E2E；不是完整 default 或团队／协作专项验收。原单次60秒fork deadline/watchdog、4GiB保护与正式同名工作区／产物路径保持。
+- 本轮真实 `bun x tsc --noEmit -p src/clients/web/tsconfig.json` 通过；Web fixture 在同一候选中执行正式 `bun run build`（cwd 为 src/clients/web），19.69秒／退出0。Python fixture 与 `fixture-static-033` 逐字相同，Ruff结果复用；协议源码及生成类型与此前 `protocol-017` 逐文件相同，复用其生成校验。normal／空来源11项、internal／retry／tool lineage及公开idle四项、默认empty不可读父rollout18项沿上条具名收据复用；精确task caller／回报及OS硬重启沿14.8收据复用，不将不同范围累加成一次重跑。
+- 失败原件均保留：026在浏览器前缺个人密钥；028因本次测试误改endpoint而不匹配精确资产；032空来源通过后在真实child最终回答按钮处失败，未计整组通过。未改回放匹配或产品期限。准确命令、完整源码前后指纹、raw／实际退出码、进程组回收、红绿源码差异与结构作者自查见 `out/tests/temp/fork-regression-closure/artifacts/verification-041.json` 及 runs。未新增目录、顶层职责或writer；既有大型测试文件结构风险保留，不称独立审查。第14节10/10，整体111/119；其它未完成组合门、团队／协作TODO与goal仍保留，未新增Windows／跨端／外部Provider验证。

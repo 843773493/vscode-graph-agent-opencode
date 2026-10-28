@@ -124,12 +124,19 @@ describe("子会话线程面板", () => {
     ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
     const expected = turn.response_parts!.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
     expect(sources()).toEqual([expected[1], expected[3]]);
+    const finalFork = renderer!.root.findByProps({ "data-fork-item-id": "child_item_final" });
+    act(() => { finalFork.props.onClick(); });
+    expect(clicks).toEqual([{ threadId: selected.thread_id, point: {
+      sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_final",
+    } }]);
     const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
     await act(async () => { await toggle.props.onClick(); });
     expect(sources()).toEqual(expected);
     expect(renderer!.root.findAllByProps({ className: "chat-thinking-toggle" })).toHaveLength(1);
     act(() => { renderer!.root.findByProps({ "data-fork-item-id": "child_item_after" }).props.onClick(); });
     expect(clicks).toEqual([{ threadId: selected.thread_id, point: {
+      sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_final",
+    } }, { threadId: selected.thread_id, point: {
       sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_after",
     } }]);
     await act(async () => { await toggle.props.onClick(); });

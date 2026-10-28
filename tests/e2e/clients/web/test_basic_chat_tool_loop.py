@@ -189,7 +189,7 @@ async def section8_product_nodes(
     section8_web_build: None,
     section8_mcp_catalogs: dict[str, dict[str, Path]],
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
-    """唯一产品 owner 的三工作区；正常配置与真实 SSH/channel，不改 Provider。"""
+    """唯一产品 owner 的三工作区；真实 SSH/channel，模型沿显式回放 transport。"""
     del section8_web_build
     project = Path.cwd().resolve()
     context = TestRunContext.from_test_file(Path(request.node.path), project_root=project)
@@ -214,6 +214,10 @@ async def section8_product_nodes(
                 schema_path=project / "configs/workspace_schema.jsonc",
             )
         config = commentjson.loads(config_path.read_text())
+        # 保留协议资产的 Provider URL；精确回放 transport 隔离网络与个人凭据。
+        for provider in config["llm"]["providers"]:
+            provider["api_key"] = "model-stream-replay-unused-key"
+            provider.pop("auth", None)
         config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
         if node_context.workspace_root.name == "workspace" and node_context.workspace_root.parent.name in {"a", "c"}:
             config["runtime"].setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
