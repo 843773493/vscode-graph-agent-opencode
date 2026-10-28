@@ -279,14 +279,14 @@ async def list_federation_directories(
     try:
         listing = await _directory_listing(request, path, limit=limit, base_path=base_path)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
     except PermissionError as error:
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise HTTPException(status_code=403, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
     except OSError as error:
         raise HTTPException(
             status_code=400,
-            detail=f"读取远程 Gateway 目录失败: {error}",
+            detail=failure_detail(error, stage="directory_browse", label="目录浏览失败"),
         ) from error
     return APIResponse(data=listing, request_id=request_id)

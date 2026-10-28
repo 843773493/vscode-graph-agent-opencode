@@ -15,6 +15,7 @@ from fastapi import (
 )
 
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.core.path_utils import (
     get_gateway_root,
     is_resource_uri_input,
@@ -168,9 +169,8 @@ async def _directory_listing(
         try:
             entries, truncated = _scan_local_directories(root, limit)
         except OSError as error:
-            # 原异常留在本机原因链；普通响应发布阶段与系统错误码，不复制根路径。
             raise HTTPException(403 if isinstance(error, PermissionError) else 400,
-                                f"目录枚举失败: {type(error).__name__}, errno={error.errno}") from error
+                                failure_detail(error, stage="directory_scan", label="目录枚举失败")) from error
         return GatewayDirectoryListDTO(
             name=root.name or "文件系统根目录",
             path=_management_directory_uri(request, root),

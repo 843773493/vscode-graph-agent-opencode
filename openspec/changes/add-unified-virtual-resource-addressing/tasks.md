@@ -1112,3 +1112,11 @@
 - 创建入口删除重复的connection_error写入及自造request_id，迁齐三个HTTP入口和全部直接调用方；目录/身份校验与启动失败由原Controller和Backend owner结算。普通错误复用failure_detail，保持原状态码，远端创建拒绝不复制上游正文；发布后观察者失败保留已公布的owner/generation/runtime，取消和清理/记录次错保留原异常身份。
 - 新增用例在旧生产实现12/12失败；最终创建、目录与完整组生命周期241 passed，覆盖POSIX/盘符/UNC、校验/进程两阶段、SQLite原writer重读、原入口恢复、发布后不回退、日志故障及取消。真实独立Gateway权限拒绝的注册/重启1 passed、日志目录冲突/可执行文件缺失/入口资产缺失3 passed、独立远端HTTP创建拒绝1 passed。真实权限用例发现校验在旧try之外，本片纳入唯一启动结算；旧装具日志位置与缺少日志合同资产导致未触达预期故障，按现行布局修正；中间失败、错误断言和修正前原件保留，不放宽状态、身份或期限。
 - compileall通过；Ruff40→40、Pyright64→61，按文件/最窄AST owner/规则/完整消息多重集无新增；三条移除诊断来自AsyncMock调用实存断言。严格OpenSpec、准确命令、源码指纹、原始输出、实际退出码及作者结构自审见out/tests/temp/uri-global-closure/artifacts/verification-023.json。无新源码目录/owner/存储schema或兼容链；本片不代表全部URI出口、完整Web或Windows验收，2.2/7.2继续未勾，延期项保持TODO。
+
+
+### 2026-10-28 目录浏览失败的响应与诊断边界（2.2/7.2部分收口）
+
+- 本机及联邦目录入口复用唯一failure_detail，解析/远端请求报告directory_browse、扫描报告directory_scan，保留原400/403/404/502和request_id；普通响应不复制异常原文或上游拒绝正文，原异常、cause及日志sink再次失败的说明保留诊断。原生路径输入、未注册目录与同目标重试保持，扫描不新增文件操作链。远端错误正文helper仍被托管清单及删除消费，本片只移除目录消费者，不宣称全局下线。
+- 修改前新增24例全部失败；最终目录全文件36 passed，覆盖POSIX/盘符/UNC、解析/扫描、正常/失败日志sink、原始异常身份及同目标真实目录内容。真实独立Gateway加独立远端HTTP整文件8 passed，覆盖三类HTTP拒绝、真实POSIX目录权限拒绝与修复、两个鉴权入口、同URI及原目录无.boxteam副作用；共用替身响应控制格式已一次迁齐，合并重复管理响应函数，不留旧格式回退。未将Linux验证表述为Windows实机或Web验收。
+- compileall、严格OpenSpec及diff检查通过；Ruff37→37、Pyright12→12，按完整旧HEAD的文件/最窄AST owner/规则/完整消息多重集无新增。作者按结构审查技能核对目录及AST：生产净减3行，无新源码目录、owner、schema或兼容层；既有739行生命周期路由、550行协议集成测试及46文件的单元测试根目录仍为拆分候选，本片保持既有职责，不开展无关迁移。
+- 准确命令、源码前后指纹、原始输出、实际退出码、红测原件、静态基线及作者结构自审见out/tests/temp/uri-global-closure/artifacts/verification-024.json。正式同名产物保留，未增二进制基线；2.2/7.2全局门和团队/协作延期项继续未勾。

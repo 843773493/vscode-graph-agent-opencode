@@ -3,15 +3,21 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.core.trace_middleware import TraceMiddleware
+from app.gateway.auth import verify_federation_token, verify_gateway_token
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.managed_workspaces import create_direct_managed_workspace
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes import _shared, federation, workspaces_lifecycle
 from app.gateway.routes._shared import (
     _directory_listing,
     _scan_local_directories,
+    get_registry,
     resolve_management_directory,
 )
 from app.gateway.routes.workspaces_lifecycle import list_local_directories
@@ -35,6 +41,83 @@ def directory_root(tmp_path: Path) -> Path:
     (root / "alpha").mkdir()
     (root / "README.md").write_text("not a directory", encoding="utf-8")
     return root
+
+
+@pytest.fixture
+def directory_http_app(gateway_directory_request: Request, tmp_path: Path):
+    from app.gateway.main import gateway_http_exception_handler
+
+    app = gateway_directory_request.app
+    app.add_middleware(TraceMiddleware)
+    app.exception_handler(HTTPException)(gateway_http_exception_handler)
+    app.include_router(workspaces_lifecycle.router)
+    app.include_router(federation.router)
+    app.dependency_overrides[verify_gateway_token] = lambda: "local-token"
+    app.dependency_overrides[verify_federation_token] = lambda: "federation-token"
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    app.dependency_overrides[get_registry] = lambda: registry
+    return app
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["local-directories", "federation/directories"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.parametrize(("phase", "error_type", "error_number", "native_location", "status"), [
+    ("resolve", ValueError, None, "/private/directory-failure", 400),
+    ("resolve", FileNotFoundError, 2, r"C:\private\directory-failure", 404),
+    ("resolve", PermissionError, 13, r"\\server\private\directory-failure", 403),
+    ("resolve", OSError, 5, "/private/directory-failure", 400),
+    ("scan", PermissionError, 13, r"C:\private\directory-failure", 403),
+    ("scan", OSError, 5, r"\\server\private\directory-failure", 400),
+])
+async def test_directory_failure_keeps_status_original_diagnostic_and_same_target_retry(
+    directory_http_app: FastAPI, directory_root: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, endpoint: str, sink_fails: bool, phase: str,
+    error_type: type[Exception], error_number: int | None, native_location: str, status: int,
+) -> None:
+    primary = (
+        error_type(error_number, "directory failed", native_location)
+        if error_number is not None else error_type(f"directory failed: {native_location}")
+    )
+    name = "resolve_native_file_path" if phase == "resolve" else "_scan_local_directories"
+    original = getattr(_shared, name)
+
+    def fail(*_, **__):
+        raise primary
+
+    monkeypatch.setattr(_shared, name, fail)
+    if sink_fails:
+        def fail_log(*_, **__):
+            raise RuntimeError("directory diagnostic sink failed")
+        monkeypatch.setattr("app.core.failures.logger.error", fail_log)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=directory_http_app), base_url="http://gateway") as client:
+        response = await client.get(
+            f"/api/gateway/{endpoint}", params={"path": str(directory_root)}, headers={"X-Request-ID": "req_directory_failure"},
+        )
+        assert response.status_code == status, response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_directory_failure"
+        assert "directory-failure" not in response.text and str(directory_root) not in response.text
+        stage = "directory_browse" if phase == "resolve" else "directory_scan"
+        assert f"stage={stage}, error={error_type.__name__}" in response.json()["detail"]
+        if error_number is not None:
+            assert f"errno={error_number}" in response.json()["detail"]
+        if sink_fails:
+            assert "diagnostic_sink_error=RuntimeError" in response.json()["detail"]
+            assert any("directory diagnostic sink failed" in note for note in primary.__notes__)
+        else:
+            assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+        monkeypatch.setattr(_shared, name, original)
+        recovered = await client.get(
+            f"/api/gateway/{endpoint}", params={"path": str(directory_root)}, headers={"X-Request-ID": "req_directory_retry"},
+        )
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"] == "req_directory_retry"
+        listing = GatewayDirectoryListDTO.model_validate(recovered.json()["data"])
+        assert [entry.name for entry in listing.entries] == ["alpha", "Zulu"]
+        assert resolve_management_directory(Request({"type": "http", "app": directory_http_app}), listing.path) == directory_root
+        assert str(directory_root) not in recovered.text
+    assert (directory_root / "README.md").read_text() == "not a directory"
+    assert not (directory_root / ".boxteam").exists()
 
 
 def test_scan_local_directories_only_returns_sorted_directories(directory_root: Path) -> None:

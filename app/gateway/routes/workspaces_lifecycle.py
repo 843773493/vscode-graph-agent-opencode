@@ -43,10 +43,7 @@ from app.gateway.routes._shared import (
     get_workspace_runtime_controller,
     resolve_management_directory,
 )
-from app.gateway.routes.workspaces_managed import (
-    _remote_gateway_credential,
-    _remote_http_error_detail,
-)
+from app.gateway.routes.workspaces_managed import _remote_gateway_credential
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.local_workspace import wait_for_workspace_health
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
@@ -120,32 +117,32 @@ async def list_local_directories(
             )
             listing = GatewayDirectoryListDTO.model_validate(remote_data)
         except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise HTTPException(status_code=404, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
         except httpx.HTTPStatusError as error:
             status_code = error.response.status_code
             raise HTTPException(
                 status_code=status_code if 400 <= status_code < 500 else 502,
-                detail=_remote_http_error_detail(error),
+                detail=failure_detail(error, stage="directory_browse", label="目录浏览失败"),
             ) from error
         except (PermissionError, RuntimeError, httpx.HTTPError) as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(status_code=502, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
         return APIResponse(data=listing, request_id=request_id)
 
     try:
         listing = await _directory_listing(request, path, limit=limit, base_path=base_path)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=failure_detail(error, stage="directory_browse", label="目录浏览失败")) from error
     except PermissionError as error:
         raise HTTPException(
             status_code=403,
-            detail=str(error),
+            detail=failure_detail(error, stage="directory_browse", label="目录浏览失败"),
         ) from error
     except OSError as error:
         raise HTTPException(
             status_code=400,
-            detail=f"读取本机目录失败: {error}",
+            detail=failure_detail(error, stage="directory_browse", label="目录浏览失败"),
         ) from error
     return APIResponse(data=listing, request_id=request_id)
 

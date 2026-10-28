@@ -50,16 +50,8 @@ async def stub_health() -> dict[str, str]:
 @remote_stub_app.get("/api/gateway/federation/directories")
 @remote_stub_app.get("/api/gateway/federation/diagnostics")
 @remote_stub_app.post("/api/gateway/workspaces/remote_protocol/runtime/{action}")
-async def stub_management(request: Request) -> JSONResponse:
-    control = Path(os.environ["BOXTEAM_TEST_FEDERATION_REPLY"])
-    response = json.loads(control.read_text())
-    with control.with_suffix(".requests.jsonl").open("a") as log:
-        log.write(json.dumps({"path": request.url.path, "request_id": request.headers["X-Request-ID"]}) + "\n")
-    return JSONResponse(content=response)
-
-
 @remote_stub_app.post("/api/gateway/federation/managed-workspaces")
-async def stub_creation(request: Request) -> JSONResponse:
+async def stub_management(request: Request) -> JSONResponse:
     control = Path(os.environ["BOXTEAM_TEST_FEDERATION_REPLY"])
     response = json.loads(control.read_text())
     with control.with_suffix(".requests.jsonl").open("a") as log:
@@ -111,7 +103,7 @@ def remote_stub(
     assert context.workspace_root == Path(integration_workspace_root_path)
     control = context.runtime_root_for_node(request.node.nodeid) / "federation-response.json"
     control.parent.mkdir(parents=True, exist_ok=True)
-    control.write_text("{}")
+    control.write_text(json.dumps({"status": 200, "body": {}}))
     ports = integration_port_block_for_file(Path(request.node.fspath))
     ensure_local_port_available(ports.port(0), service_name="远端 Gateway HTTP 协议替身")
     with ExitStack() as processes:
@@ -127,8 +119,9 @@ def remote_stub(
 
 
 @pytest.mark.asyncio
-async def test_remote_creation_preserves_http_rejection_without_copying_remote_body(
-    remote_stub: tuple[TestRunContext, Path, int, int],
+@pytest.mark.parametrize("operation", ["create", "directory"])
+async def test_remote_management_preserves_http_rejection_without_copying_remote_body(
+    remote_stub: tuple[TestRunContext, Path, int, int], operation: str,
 ) -> None:
     context, control, remote_port, gateway_port = remote_stub
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
@@ -147,20 +140,94 @@ async def test_remote_creation_preserves_http_rejection_without_copying_remote_b
             for status, location in [(400, "/private/create-reply"), (404, r"C:\private\create-reply"),
                                      (503, r"\\server\private\create-reply")]:
                 control.write_text(json.dumps({"status": status, "body": {"detail": location}}))
-                request_id = f"req_remote_create_{status}"
-                response = await client.post(
-                    "/api/gateway/managed-workspaces", headers={"X-Request-ID": request_id},
-                    json={"gateway_connection_id": CONNECTION_ID, "root_path": "/selected"},
-                )
+                request_id = f"req_remote_{operation}_{status}"
+                if operation == "create":
+                    response = await client.post(
+                        "/api/gateway/managed-workspaces", headers={"X-Request-ID": request_id},
+                        json={"gateway_connection_id": CONNECTION_ID, "root_path": "/selected"},
+                    )
+                    prefix = "工作区创建失败: stage=workspace_create"
+                else:
+                    response = await client.get(
+                        "/api/gateway/local-directories", headers={"X-Request-ID": request_id},
+                        params={"gateway_connection_id": CONNECTION_ID, "path": "/selected"},
+                    )
+                    prefix = "目录浏览失败: stage=directory_browse"
                 assert response.status_code == (status if status < 500 else 502), response.text
-                assert response.json()["detail"] == "工作区创建失败: stage=workspace_create, error=HTTPStatusError"
+                assert response.json()["detail"] == f"{prefix}, error=HTTPStatusError"
                 assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
                 assert "create-reply" not in response.text
                 evidence.append(response.json())
     requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
-    assert [request["request_id"] for request in requests] == ["req_remote_create_400", "req_remote_create_404", "req_remote_create_503"]
-    (context.artifacts_dir / "creation-error-receipts.json").write_text(
+    assert [request["request_id"] for request in requests] == [f"req_remote_{operation}_{status}" for status in (400, 404, 503)]
+    (context.artifacts_dir / f"{operation}-error-receipts.json").write_text(
         json.dumps({"responses": evidence, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="此项核真实POSIX目录读取拒绝；Windows ACL另行验收")
+@pytest.mark.asyncio
+async def test_native_directory_permission_failure_logs_original_and_retries_same_binding(
+    integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    assert context.workspace_root == Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    directory = context.workspace_root / "private-directory-read"
+    directory.mkdir()
+    (directory / "child").mkdir()
+    original_mode = directory.stat().st_mode
+    port = integration_port_block_for_file(Path(__file__)).port(1)
+    receipts = []
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        store = FederationCredentialStore(storage_path=context.boxteam_home / "state/gateway/credentials/federation.json")
+        credential = store.issue(connection_id="rgw_directory_read", peer_gateway_id="gateway_peer")
+        cases = [
+            ("local-directories", LOCAL_TOKEN_HEADERS),
+            ("federation/directories", {"X-BoxTeam-Federation-Token": credential.token}),
+        ]
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=20) as client:
+            directory.chmod(0o000)
+            try:
+                if os.access(directory, os.R_OK):
+                    pytest.skip("当前用户不受POSIX目录读取权限限制")
+                for index, (endpoint, headers) in enumerate(cases):
+                    request_id = f"req_directory_denied_{index}"
+                    response = await client.get(
+                        f"/api/gateway/{endpoint}", params={"path": str(directory)},
+                        headers={**headers, "X-Request-ID": request_id},
+                    )
+                    assert response.status_code == 403, response.text
+                    assert response.json()["detail"] == "目录枚举失败: stage=directory_scan, error=PermissionError, errno=13"
+                    assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+                    assert str(directory) not in response.text
+                    receipts.append(response.json())
+            finally:
+                directory.chmod(original_mode)
+            bindings = []
+            for index, (endpoint, headers) in enumerate(cases):
+                response = await client.get(
+                    f"/api/gateway/{endpoint}", params={"path": str(directory)},
+                    headers={**headers, "X-Request-ID": f"req_directory_recovered_{index}"},
+                )
+                assert response.status_code == 200, response.text
+                assert [entry["name"] for entry in response.json()["data"]["entries"]] == ["child"]
+                assert str(directory) not in response.text
+                bindings.append(response.json()["data"]["path"])
+                receipts.append(response.json())
+            assert bindings[0] == bindings[1] and bindings[0].startswith("boxteam://gateway/")
+    assert not (directory / ".boxteam").exists()
+    logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert str(directory) in logs and "PermissionError: [Errno 13]" in logs
+    for index in (0, 1):
+        assert f'request_id="req_directory_denied_{index}"' in logs
+    (context.artifacts_dir / "directory-permission-receipts.json").write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2) + "\n",
     )
 
 
@@ -185,20 +252,20 @@ async def test_invalid_envelope_and_explicit_raw_diagnostics_use_separate_respon
             base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20,
         ) as client:
             for index, payload in enumerate(({"detail": paths}, {"data": paths}, paths)):
-                control.write_text(json.dumps(payload))
+                control.write_text(json.dumps({"status": 200, "body": payload}))
                 response = await client.get(
                     "/api/gateway/local-directories", params={"gateway_connection_id": CONNECTION_ID},
                     headers={"X-Request-ID": f"req_protocol_invalid_{index}"},
                 )
                 evidence[f"invalid-{index}"] = response.json()
                 assert response.status_code == 502, response.text
-                assert response.json()["detail"] == "远程 Gateway 响应缺少 data 对象: status=200"
+                assert response.json()["detail"] == "目录浏览失败: stage=directory_browse, error=RuntimeError"
                 assert response.json()["request_id"] == response.headers["X-Request-ID"] == f"req_protocol_invalid_{index}"
                 assert "remote-private-marker" not in response.text
             directory_uri = f"boxteam://gateway/{REMOTE_GATEWAY_ID}/resources/files/01900000000070008000000000000001"
             listing = {"name": "远端目录", "path": directory_uri, "home_path": directory_uri,
                        "entries": [], "limit": 120}
-            control.write_text(json.dumps({"data": listing}))
+            control.write_text(json.dumps({"status": 200, "body": {"data": listing}}))
             recovered = await client.get(
                 "/api/gateway/local-directories", params={"gateway_connection_id": CONNECTION_ID},
                 headers={"X-Request-ID": "req_protocol_recovered"},
@@ -211,7 +278,7 @@ async def test_invalid_envelope_and_explicit_raw_diagnostics_use_separate_respon
                            "connection_kind": "local", "status": "ready", "checked_at": "2026-10-24T00:00:00Z",
                            "logs": [{"log_id": "gateway-stderr", "source": "gateway", "service": "gateway",
                                      "label": "原始服务日志", "status": "available", "tail": tail}]}
-            control.write_text(json.dumps({"data": diagnostics}))
+            control.write_text(json.dumps({"status": 200, "body": {"data": diagnostics}}))
             raw = await client.get(
                 "/api/gateway/diagnostics", params={"gateway_connection_id": CONNECTION_ID},
                 headers={"X-Request-ID": "req_protocol_raw_logs"},
@@ -223,6 +290,7 @@ async def test_invalid_envelope_and_explicit_raw_diagnostics_use_separate_respon
             evidence["raw-diagnostics"] = raw.json()
     log = (context.artifacts_dir / "gateway.stderr.log").read_text()
     assert "remote-private-marker" in log
+    assert "远程 Gateway 响应缺少 data 对象: status=200" in log
     requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
     assert [request["request_id"] for request in requests] == [
         "req_protocol_invalid_0", "req_protocol_invalid_1", "req_protocol_invalid_2",
@@ -255,7 +323,7 @@ async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_respon
         ) as client:
             for action in ("start", "stop", "restart-safe", "restart-force"):
                 for index, payload in enumerate(({"detail": paths}, {"data": paths}, paths)):
-                    control.write_text(json.dumps(payload))
+                    control.write_text(json.dumps({"status": 200, "body": payload}))
                     request_id = f"req_runtime_{action.replace('-', '_')}_{index}"
                     response = await client.post(
                         f"/api/gateway/workspaces/{PROJECTED_WORKSPACE_ID}/runtime/{action}",
