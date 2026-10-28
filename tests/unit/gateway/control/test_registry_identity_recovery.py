@@ -109,3 +109,51 @@ def test_default_target_owner_cannot_be_reassigned_by_upsert(tmp_path: Path) -> 
         registry.upsert(replace(target, owner="system"))
     assert registry.resolve(target.workspace_id) == target
     assert path.read_bytes() == before
+
+
+@pytest.fixture(params=[
+    "/private/registry-identity-secret", r"C:\private\registry-identity-secret",
+    r"\\server\private\registry-identity-secret",
+    "00000000-0000-4000-8000-00000000000A", "00000000000040008000000000000001",
+])
+def invalid_backend_identity(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+def test_invalid_backend_identity_upsert_preserves_published_registry(
+    published_registry, invalid_backend_identity: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    path, state, target = published_registry
+    with closing(GatewayWorkspaceRegistry(storage_path=path, state_store=state)) as registry:
+        before = state.load_workspace_registry() if state is not None else path.read_bytes()
+        with pytest.raises(ValueError, match="backend_workspace_id") as caught:
+            registry.upsert(replace(target, backend_workspace_id=invalid_backend_identity))
+        assert invalid_backend_identity not in str(caught.value)
+        assert "identity-secret" not in str(caught.value)
+        assert isinstance(caught.value.__cause__, RuntimeError)
+        assert repr(invalid_backend_identity) in caplog.text
+        assert registry.resolve(target.workspace_id) == target
+        assert (state.load_workspace_registry() if state is not None else path.read_bytes()) == before
+
+
+def test_invalid_backend_identity_cold_reopen_never_echoes_or_repairs_value(
+    published_registry, invalid_backend_identity: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    path, state, _ = published_registry
+    payload = state.load_workspace_registry() if state is not None else json.loads(path.read_text())
+    payload["targets"][0]["backend_workspace_id"] = invalid_backend_identity
+    if state is not None:
+        with closing(sqlite3.connect(path.with_name("gateway.sqlite"))) as database:
+            database.execute("UPDATE gateway_workspace_registry SET payload_json = ?", (json.dumps(payload["targets"][0]),))
+            database.commit()
+        before = state.load_workspace_registry()
+    else:
+        path.write_text(json.dumps(payload))
+        before = path.read_bytes()
+    for _ in range(2):
+        with pytest.raises(ValueError, match="backend_workspace_id") as caught:
+            GatewayWorkspaceRegistry(storage_path=path, state_store=state)
+        assert invalid_backend_identity not in str(caught.value)
+        assert "identity-secret" not in str(caught.value)
+        assert repr(invalid_backend_identity) in caplog.text
+        assert (state.load_workspace_registry() if state is not None else path.read_bytes()) == before

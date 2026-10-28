@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 from .core import _UNSET, WorkspaceTarget
@@ -118,19 +119,11 @@ class RegistryCrudMixin:
             )
         if target.backend_workspace_id is not None:
             try:
-                parsed_backend_workspace_id = UUID(target.backend_workspace_id)
-            except ValueError as error:
+                validate_workspace_id(target.backend_workspace_id)
+            except RuntimeError as error:
                 raise ValueError(
-                    "Gateway registry backend_workspace_id 必须是标准 UUID: "
-                    f"workspace_id={target.workspace_id}, "
-                    f"backend_workspace_id={target.backend_workspace_id!r}"
+                    f"Gateway registry backend_workspace_id 非法: {error}"
                 ) from error
-            if str(parsed_backend_workspace_id) != target.backend_workspace_id:
-                raise ValueError(
-                    "Gateway registry backend_workspace_id 必须使用标准 UUID 文本: "
-                    f"workspace_id={target.workspace_id}, "
-                    f"backend_workspace_id={target.backend_workspace_id!r}"
-                )
         if (
             target.connection_kind == "remote_gateway"
             and target.backend_workspace_id is None

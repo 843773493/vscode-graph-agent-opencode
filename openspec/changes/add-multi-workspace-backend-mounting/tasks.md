@@ -161,3 +161,5 @@
 - 唯一 UUID 校验器的非法输入和来源位置只写诊断；原异常类别、解析 cause、canonical 判定与合法返回值保持。路径段与 header 均先独立校验再比较，冲突错误不回显未经校验的原生路径；缺失400、合法身份冲突400与未挂载404保持，拒绝前不查 registry、不选择默认工作区。
 - 身份、mount、请求作用域及 Gateway CLI 四文件49 passed／1.87秒；新增三种路径与三种载体组合后，请求作用域10 passed／0.43秒。完整旧生产配相同测试为身份5 failed／1 passed、请求载体9 failed／1 deselected、真实双挂载HTTP反例1 failed／13 deselected，均复现非法值外泄。最终正式 mounted matrix 定向3 passed／24 deselected／55.12秒，覆盖产品API先创建两个独立会话、12个非法请求零registry查找／头体request_id／无业务写入、真实Job与编译图隔离、启动失败回收及逆序关闭；计数有重叠不累加。
 - Ruff、compileall和两项OpenSpec strict通过；完整候选、准确命令、源码前后指纹、raw与真实退出码核验见 `out/tests/temp/mount-identity-inputs/artifacts/verification-013.json`。这是作者自查及ASGI HTTP／真实容器集成，不代表真实Gateway／独立Backend重启、Web或Windows实机；本机无Pyright，未运行类型检查。4.3／8.2整体和URI全局2.2／7.2仍未勾，团队协作继续TODO。
+
+同日Gateway续片将注册／冷恢复、代理与生命周期中的UUID规则统一到同一owner，保留错误类别，辅助服务在打开日志前拒绝非法身份。七文件298项回归、最终30运行边界反例、JSON／SQLite冷重开及真实Gateway身份失败／恢复3项均已验证；详细范围及旧生产失败见URI change同日「Gateway 工作区身份校验归一」与 `out/tests/temp/gateway-identity-owner/artifacts/verification-013.json`。4.3／8.2全局门仍未勾。

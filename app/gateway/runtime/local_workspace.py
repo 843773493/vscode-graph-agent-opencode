@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 
@@ -18,6 +18,7 @@ from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 from app.gateway.runtime.managed_backend import (
@@ -186,12 +187,9 @@ async def wait_for_workspace_health(
 
 def _validate_backend_workspace_id(workspace_id: str) -> str:
     try:
-        parsed_workspace_id = UUID(workspace_id)
-    except ValueError as error:
-        raise ValueError(f"Workspace backend UUID 非法: {workspace_id!r}") from error
-    if str(parsed_workspace_id) != workspace_id:
-        raise ValueError(f"Workspace backend UUID 必须是标准文本: {workspace_id!r}")
-    return workspace_id
+        return validate_workspace_id(workspace_id)
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
 
 
 def _workspace_backend_headers(workspace_id: str) -> dict[str, str]:

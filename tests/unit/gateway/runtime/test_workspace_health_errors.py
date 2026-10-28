@@ -16,9 +16,56 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.runtime.workspace_process import start_local_node_service_process
 
 UUID = "00000000-0000-4000-8000-000000000001"
 URL = "http://127.0.0.1:41000"
+
+
+@pytest.fixture(params=[
+    "/private/backend-identity-secret", r"C:\private\backend-identity-secret",
+    r"\\server\private\backend-identity-secret",
+    "00000000-0000-4000-8000-00000000000A", "00000000000040008000000000000001",
+])
+def invalid_backend_identity(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["wait", "config-wait", "adopt", "proxy", "terminal", "browser"])
+async def test_invalid_bound_identity_is_rejected_without_io_or_public_input(
+    invalid_backend_identity: str, entry: str, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    def unexpected_io(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("非法身份必须在网络或进程副作用前拒绝")
+
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_io)
+    monkeypatch.setattr("app.gateway.runtime.workspace_process._spawn_logged_process", unexpected_io)
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", "unused-node")
+    # 已有入口文件可用，避免缺失安装文件替代身份校验而让测试误通过。
+    expected_type = RuntimeError if entry == "proxy" else ValueError
+    with pytest.raises(expected_type) as caught:
+        if entry == "wait":
+            await local_workspace.wait_for_workspace_health(URL, invalid_backend_identity)
+        elif entry == "config-wait":
+            await local_workspace.wait_for_workspace_config_proof(URL, None, backend_workspace_id=invalid_backend_identity, expected_proof={})
+        elif entry == "adopt":
+            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=invalid_backend_identity, log_dir=tmp_path / "logs")
+        elif entry == "proxy":
+            GatewayWorkspaceRegistry._target_headers(WorkspaceTarget(
+                workspace_id="bound-target", name="目标", root_path=str(tmp_path),
+                backend_url=URL, backend_workspace_id=invalid_backend_identity, connection_kind="local",
+            ))
+        else:
+            start_local_node_service_process(
+                project_root=Path.cwd(), workspace_root=tmp_path, workspace_id=invalid_backend_identity,
+                log_dir=tmp_path / "logs", port=41000, service=entry,
+            )
+    assert invalid_backend_identity not in str(caught.value)
+    assert "identity-secret" not in str(caught.value)
+    assert not (tmp_path / "logs").exists(), "非法身份不能打开辅助服务日志或保留写入归属"
+    assert repr(invalid_backend_identity) in caplog.text
 
 
 @pytest.fixture(params=["posix", "windows", "object", "missing"])

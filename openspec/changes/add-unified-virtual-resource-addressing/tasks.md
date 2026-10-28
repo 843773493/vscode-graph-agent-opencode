@@ -887,3 +887,10 @@
 
 - UUID校验及路径段／header冲突比较不再回显非法原生路径，原值和来源位置仅留诊断；合法身份、状态码和显式mount选择不变。真实双容器、Job与编译图隔离、无效请求零registry查找及原生产反例证据见 `add-multi-workspace-backend-mounting/tasks.md` 同日条目与 `out/tests/temp/mount-identity-inputs/artifacts/verification-013.json`。
 - 本片不代替真实Gateway、独立Backend重启、Web、Windows或全局路径审计，2.2／7.2仍未勾。
+
+### 2026-10-28 Gateway 工作区身份校验归一（2.2／7.2 部分收口）
+
+- 注册与冷恢复、代理头、健康／配置证明等待、辅助服务接管、身份CLI输出及Terminal／Browser启动统一调用 `app.core.workspace_identity.validate_workspace_id`；Gateway内手写UUID解析已删除。边界只转换既有ValueError／RuntimeError类别，错误使用唯一owner的UUID规则，非法原值留诊断；CLI两项断言同步使用该规则的理由，不取消格式与非canonical区分。辅助服务在检查身份后才打开日志，非法输入无网络、日志写入归属或进程副作用；合法身份、启动参数、路由与持久格式不变。
+- 七文件回归298 passed／13.92秒；随后只去掉新增运行反例的措辞匹配并先检查路径／日志副作用，最终30项通过／0.66秒，生产字节不变且其余证据复用，不累加重复计数。完整旧生产配相同注册反例20项均失败；最终运行反例30项均失败／1.06秒，直接复现路径回显或提前打开日志。JSON／SQLite分别覆盖合法发布后非法upsert原记录不变、外部损坏后连续冷重开拒绝且不回写，POSIX／盘符／UNC与两种非canonical身份均覆盖。
+- 真实Gateway／Backend进程的身份失败恢复与健康协议集成3 passed／79.89秒：注册、停止、损坏后502、原文件不被初始化替代、列表与持久错误不泄漏、修复原身份后启动，以及健康失败后的恢复；HTTP健康替身不代表模型执行或完整Web。Ruff、compileall及全量OpenSpec strict通过；准确命令、完整tree／源码前后指纹、raw、实际退出码与进程组回收核验见 `out/tests/temp/gateway-identity-owner/artifacts/verification-013.json`。
+- 首轮新增测试有上下文管理与必填字段装配错误（15 failed／118 passed），修正装具后再做上述验证，失败原件保留。未执行Pyright、Web或Windows；全局2.2／7.2与mounting的4.3／8.2保持未勾，团队协作继续TODO。

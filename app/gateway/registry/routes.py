@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from uuid import UUID
 
 from app.core.path_utils import get_gateway_root
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.service_types import GatewayServiceName
 
@@ -178,23 +178,9 @@ class RegistryRoutesMixin:
                     "本地 Gateway target 缺少 backend UUID: "
                     f"workspace_id={target.workspace_id}"
                 )
-            try:
-                parsed_workspace_id = UUID(backend_workspace_id)
-            except ValueError as error:
-                raise RuntimeError(
-                    "本地 Gateway target backend UUID 非法: "
-                    f"workspace_id={target.workspace_id}, "
-                    f"backend_workspace_id={backend_workspace_id!r}"
-                ) from error
-            if str(parsed_workspace_id) != backend_workspace_id:
-                raise RuntimeError(
-                    "本地 Gateway target backend UUID 必须是标准文本: "
-                    f"workspace_id={target.workspace_id}, "
-                    f"backend_workspace_id={backend_workspace_id!r}"
-                )
             return {
                 "X-Local-Token": "local-dev-token",
-                "X-BoxTeam-Workspace-Id": backend_workspace_id,
+                "X-BoxTeam-Workspace-Id": validate_workspace_id(backend_workspace_id),
             }
         connection_id = target.remote_gateway_connection_id
         remote_workspace_id = target.remote_workspace_id

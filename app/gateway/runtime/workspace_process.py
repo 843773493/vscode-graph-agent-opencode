@@ -8,11 +8,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
-from uuid import UUID
 
 import httpx
 
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.process_lifecycle import ManagedProcess, _spawn_logged_process
 from app.gateway.runtime.process_logs import ProcessLogStore
@@ -141,21 +141,13 @@ def resolve_backend_workspace_ids(
                 "输出行数或换行符不符合协议"
             )
 
-        for workspace_root, workspace_id in zip(
-            resolved_workspace_roots, workspace_ids, strict=True
-        ):
+        for workspace_id in workspace_ids:
             try:
-                parsed_workspace_id = UUID(workspace_id)
-            except ValueError as error:
+                validate_workspace_id(workspace_id)
+            except RuntimeError as error:
                 raise ValueError(
-                    "Workspace backend UUID CLI 返回非 UUID: "
-                    "输出成员身份不符合协议"
+                    f"Workspace backend UUID CLI 输出成员身份不符合协议: {error}"
                 ) from error
-            if str(parsed_workspace_id) != workspace_id:
-                raise ValueError(
-                    "Workspace backend UUID CLI 返回非标准 UUID 文本: "
-                    "输出成员身份不符合协议"
-                )
         return tuple(workspace_ids)
     except (RuntimeError, TypeError, ValueError):
         logger.error(
@@ -302,6 +294,10 @@ def start_local_node_service_process(
 ) -> ManagedProcess:
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
+    try:
+        validate_workspace_id(workspace_id)
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
     backend_path = (
         project_root / "src" / "workspace-services" / service / "server" / "backend.js"
     )
@@ -332,9 +328,6 @@ def start_local_node_service_process(
         "--workspace-root",
         str(workspace_root),
     ]
-    parsed_workspace_id = UUID(workspace_id)
-    if str(parsed_workspace_id) != workspace_id:
-        raise ValueError("辅助服务必须提供标准 backend UUID 文本")
     command.extend(["--workspace-id", workspace_id])
     if service == "browser":
         command.extend(

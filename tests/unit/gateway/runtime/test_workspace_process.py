@@ -112,8 +112,8 @@ def test_resolve_backend_workspace_id_consumes_canonical_single_line_cli_output(
             "stderr 必须为空",
             RuntimeError,
         ),
-        (0, "00000000-0000-4000-8000-00000000000A\n", "", "非标准 UUID 文本", ValueError),
-        (0, "/private/identity-marker\n", "", "非 UUID", ValueError),
+        (0, "00000000-0000-4000-8000-00000000000A\n", "", "必须使用标准 UUID 文本", ValueError),
+        (0, "/private/identity-marker\n", "", "必须是标准 UUID", ValueError),
     ],
 )
 def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
