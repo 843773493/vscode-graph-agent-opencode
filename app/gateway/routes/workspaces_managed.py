@@ -47,7 +47,10 @@ from app.schemas.gateway.federation import (
     GatewayInboundPeerDTO,
     GatewayInboundWorkspaceDTO,
 )
-from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
+from app.schemas.gateway.lifecycle import (
+    GatewayRuntimeGroupRequest,
+    GatewayRuntimeStateResultDTO,
+)
 from app.schemas.gateway.workspaces import (
     CreateGatewayManagedWorkspaceRequest,
     GatewayManagedWorkspaceListDTO,
@@ -77,16 +80,6 @@ def _remote_managed_workspace_list(
             "connection_kind": "remote_gateway",
         }
     )
-
-
-def _remote_http_error_detail(error: httpx.HTTPStatusError) -> str:
-    try:
-        payload = error.response.json()
-    except ValueError:
-        return error.response.text[:1000]
-    if isinstance(payload, dict) and isinstance(payload.get("detail"), str):
-        return payload["detail"]
-    return error.response.text[:1000]
 
 
 async def _inbound_gateway_access_list(
@@ -149,15 +142,15 @@ async def gateway_managed_workspaces(
             )
             await port_forward_manager.reconcile_workspaces()
         except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_list", label="工作区清单失败")) from error
         except httpx.HTTPStatusError as error:
             status_code = error.response.status_code
             raise HTTPException(
                 status_code=status_code if 400 <= status_code < 500 else 502,
-                detail=_remote_http_error_detail(error),
+                detail=failure_detail(error, stage="workspace_list", label="工作区清单失败"),
             ) from error
         except (PermissionError, RuntimeError, httpx.HTTPError) as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_list", label="工作区清单失败")) from error
         return APIResponse(
             data=_remote_managed_workspace_list(
                 registry,
@@ -304,10 +297,19 @@ async def remove_gateway_managed_workspace(
         raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except httpx.HTTPStatusError as error:
         status_code = error.response.status_code
-        remote_detail = error.response.json().get("detail") if status_code == 409 else _remote_http_error_detail(error)
+        detail: str | dict[str, object] = failure_detail(error, stage="workspace_remove", label="工作区删除失败")
+        if status_code == 409:
+            try:
+                blocked = GatewayRuntimeStateResultDTO.model_validate(error.response.json()["detail"])
+                if blocked.status != "blocked":
+                    raise ValueError("远端删除409响应必须是blocked完整组回执")
+            except (ValueError, KeyError, TypeError) as protocol_error:
+                failure_detail(protocol_error, stage="workspace_remove_response", label="远端删除回执无效")
+            else:
+                detail = blocked.model_dump(mode="json")
         raise HTTPException(
             status_code=status_code if 400 <= status_code < 500 else 502,
-            detail=remote_detail,
+            detail=detail,
         ) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
         raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error

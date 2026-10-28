@@ -1120,3 +1120,11 @@
 - 修改前新增24例全部失败；最终目录全文件36 passed，覆盖POSIX/盘符/UNC、解析/扫描、正常/失败日志sink、原始异常身份及同目标真实目录内容。真实独立Gateway加独立远端HTTP整文件8 passed，覆盖三类HTTP拒绝、真实POSIX目录权限拒绝与修复、两个鉴权入口、同URI及原目录无.boxteam副作用；共用替身响应控制格式已一次迁齐，合并重复管理响应函数，不留旧格式回退。未将Linux验证表述为Windows实机或Web验收。
 - compileall、严格OpenSpec及diff检查通过；Ruff37→37、Pyright12→12，按完整旧HEAD的文件/最窄AST owner/规则/完整消息多重集无新增。作者按结构审查技能核对目录及AST：生产净减3行，无新源码目录、owner、schema或兼容层；既有739行生命周期路由、550行协议集成测试及46文件的单元测试根目录仍为拆分候选，本片保持既有职责，不开展无关迁移。
 - 准确命令、源码前后指纹、原始输出、实际退出码、红测原件、静态基线及作者结构自审见out/tests/temp/uri-global-closure/artifacts/verification-024.json。正式同名产物保留，未增二进制基线；2.2/7.2全局门和团队/协作延期项继续未勾。
+
+
+### 2026-10-28 远端托管管理拒绝与完整阻塞回执（2.2/7.2部分收口）
+
+- 远端清单和删除拒绝改用原failure_detail，保留状态规则、request_id、原HTTP异常及响应；全部消费者迁齐后物理删除旧_remote_http_error_detail，不再提取任意detail或截断上游正文。删除409复用GatewayRuntimeStateResultDTO校验blocked完整组回执，保留generation、完整成员、blocker和工作区状态；损坏JSON/信封/DTO或非blocked回执明确失败且维持409，不伪造成功或因解析异常变500。失败不刷新投影或端口对账，同目标显式重试仍沿原链。
+- 完整红测38 failed/9 passed；修复后新增47项及既有创建/目录65项在组合中全部通过。组合共133 passed/6 failed，六项为原协议测试断言所有logger均无日志，却捕获到导入Gateway后的HTTPX INFO；完整旧HEAD相同组合86 passed/同6 failed，协议单文件27 passed，不改弱原断言或扩修全局日志。新增fixture首轮遗漏remote路径不使用的Controller依赖，已按原Depends覆盖修正，保留原失败记录。
+- 真实独立Gateway及远端HTTP管理拒绝4项通过；新增完整blocker与损坏409用例首次因测试装具错误使用app_target/factory参数未启动Gateway，改为既有asgi_app后1项通过。该轮期间仅生产import排版及这个新测试有改动，前后字节指纹与AST核对证明其余四项owner、装具和生产逻辑不变，未伪称整轮源码指纹稳定。修正后用例单独重跑且指纹稳定，完整原件保留。
+- 最终compileall通过；Ruff7→7、Pyright3→3，以完整旧HEAD的文件/最窄AST owner/规则/完整消息多重集无新增，新增单元文件无静态诊断；初轮新增import排版和错误装具签名均已修复。作者结构自审：无新目录、存储owner、schema、公开字段或兼容链，生产326→328行；新216行测试放既有联邦目录，608行协议集成测试仍为聚焦拆分候选。严格OpenSpec及差异检查通过，证据见out/tests/temp/uri-global-closure/artifacts/verification-025.json；未验完整Web、Windows或真实远端进程删除/恢复，2.2/7.2全局门和延期项继续未勾。
