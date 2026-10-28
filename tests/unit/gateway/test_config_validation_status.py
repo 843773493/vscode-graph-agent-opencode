@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 from dataclasses import asdict, replace
@@ -114,6 +115,45 @@ async def test_native_source_message_does_not_enter_reload_status_or_persistent_
     (context.artifacts_dir / "config-source-io.json").write_text(json.dumps({
         "failure": body, "recovered": recovered.json(),
     }, ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_watcher_initial_reconcile_reports_failure_and_observes_repair(validation_owner) -> None:
+    _, service, store, config_path, _, original = validation_owner
+    active = store.get_active_config_snapshot("gateway")
+    config_path.write_text("{ broken", encoding="utf-8")
+    try:
+        await service.start()
+        failed = service.status()
+        assert failed.healthy is False and failed.reason == "invalid_config"
+        assert "配置 JSONC 解析失败" in (failed.last_error or "")
+        assert store.get_active_config_snapshot("gateway") == active
+        config_path.write_text(original, encoding="utf-8")
+        async with asyncio.timeout(10):
+            while not service.status().healthy:
+                await asyncio.sleep(0.05)
+        assert service.status().last_error is None
+        assert store.get_active_config_snapshot("gateway") == active
+        assert service.list_events() == ()
+    finally:
+        await service.stop()
+
+
+async def test_watcher_callback_preserves_caller_cancellation(
+    validation_owner, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, service, store, _, _, _ = validation_owner
+    active = store.get_active_config_snapshot("gateway")
+    cancellation = asyncio.CancelledError("停止原监听")
+
+    async def cancelled() -> None:
+        raise cancellation
+
+    monkeypatch.setattr(service, "reload", cancelled)
+    with pytest.raises(asyncio.CancelledError) as failure:
+        await service._reload_from_watcher()
+    assert failure.value is cancellation
+    assert store.get_active_config_snapshot("gateway") == active
+    assert service.list_events() == ()
 
 
 @pytest.mark.parametrize("operation", ["source_backup", "source_deleted_backup"])

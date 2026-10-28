@@ -1036,3 +1036,9 @@
 - 原导入备份与删除备份在存在性检查、copy2/write_text的原生I/O边界复用既有配置错误事实出口，保留原OSError类别、errno及直接cause，winerror进入诊断事实；完整原错与原因链留原始日志。失败前不提交来源、候选或事件，不改备份格式、复制顺序、SQL或CAS；三处解析空值拒绝仅使用逻辑source_key，不回显本机位置。
 - 最终错误出口45 passed/77.85秒、原配置回归59 passed/46.44秒；新增两种备份×两种失败阶段×三类原生位置，经真实ConfigReloadService与ASGI状态序列化核对旧active、来源版本、输入原件、空pending/claim/事件、原始日志及修复后同入口重试。Ruff、compileall通过；生产文件8条类型诊断与前次已提交基线按最窄AST owner/规则/完整消息一致，新测试0条。首轮测试直接构造Windows错误属性触发Ruff或Pyright诊断，已改用pytest monkeypatch注入，未忽略规则或修改生产合同；原件保留。
 - 原始命令、前后源码指纹、raw、退出码和类型对照见`out/tests/temp/uri-global-closure/artifacts/verification-010.json`。本片未运行独立Gateway/Backend、Web、Windows或联邦验收，不将模拟Windows异常称为Windows实机通过；URI全局门与延期协作项保持未完成。
+
+### 2026-10-28 Gateway 配置监听在拒绝后继续观察修复
+
+- 真实进程反例复现：坏 JSONC 被拒绝后，Gateway 唯一 watcher task 退出，用户修复文件仍不能恢复。watcher 回调现复用原 reload，失败保留旧 active 与明确错误并记录原异常，随后继续监听；显式 reload 仍抛错，取消不吞，不增加重试、状态或存储链。
+- 修改前真实 HTTP 反例1 failed/42.58秒，保留265次状态观察及服务日志；最终同入口1 passed/23.59秒，覆盖坏文件拒绝、原 revision 保持、文件修复后热应用、唯一事件与精确 applied_paths、管理接口和工作区代理的 request_id。两个新增单元场景通过，覆盖首次 watcher 对账失败后的修复与原取消身份；原 pending 启动失败回归29 passed/75.61秒。正常产品输入和 HTTP 观察生成全部关键状态，未直接准备 SQLite 业务事实。
+- 触达文件 Ruff、compileall 通过；生产三条 Pyright 诊断与已提交基线按文件/最窄 AST owner/规则/完整消息一致，两测试文件零诊断。准确命令、源码指纹、raw、退出码、红测快照和类型对照见`out/tests/temp/uri-global-closure/artifacts/verification-011.json`。未运行 Web、Windows或联邦验收，不关闭 URI 2.2/7.2 总门或延期项。

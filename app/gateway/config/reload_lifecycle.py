@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,8 @@ from .values import (
     GatewayConfig,
     GatewayConfigRuntimeApplier,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReloadLifecycleMixin:
@@ -269,7 +272,7 @@ class ReloadLifecycleMixin:
         watcher = ConfigFileWatcher(
             directories={self._config_path.parent, self._local_config_path.parent},
             candidate_paths={self._config_path, self._local_config_path},
-            on_change=self.reload,
+            on_change=self._reload_from_watcher,
         )
         await watcher.start()
         self._watcher = watcher
@@ -278,6 +281,12 @@ class ReloadLifecycleMixin:
         self._watcher = None
         if watcher is not None:
             await watcher.stop()
+    async def _reload_from_watcher(self) -> None:
+        try:
+            await self.reload()
+        except Exception:
+            # reload 已保留旧 active 和真实失败状态；本次失败不能终止后续文件修复的监听。
+            logger.exception("Gateway 配置 watcher reload 失败，继续监听后续修改")
     async def reload(self) -> None:
         now = datetime.now(UTC)
         try:
