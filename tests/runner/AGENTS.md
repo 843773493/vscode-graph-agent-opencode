@@ -13,6 +13,8 @@
 
 ## 规范
 
+- `integration-browser-governor-diagnostics`通过真实Node/HTTP及受控Linux内核读取验证治理健康状态与原始日志边界，固定60秒/4GiB；不代表Chromium、Gateway/Web或其他平台实机。
+
 - `integration-fork-capture-receipts` 使用真实 B→A→C Gateway/SSH 和 model_stream，从用户消息入口生成来源，核冻结坐标、双端 journal、公开回执及来源离线后目标进程重启、幂等重试和新输入。固定240秒/4GiB及原60秒fork预算；小负载合同验收不替代完整附件/Goal负载的期限与恢复验收。
 
 - `integration-fork-prefix-integrity` 核对缺失／损坏必需正文时不发布目标，以及非前缀模式的严格 revision，固定180秒/4GiB和原60秒fork监督器。

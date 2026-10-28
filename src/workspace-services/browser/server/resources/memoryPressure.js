@@ -217,18 +217,19 @@ export class BrowserMemoryPressureMonitor {
       this.hostMemory(),
       this.cgroupMemory(),
     ]);
+    const { directory: cgroupDirectory, ...cgroupSample } = cgroup ?? {};
     const hostUsedRatio = Math.min(1, Math.max(0, 1 - host.availableBytes / host.totalBytes));
     const effectiveUsedRatio = Math.max(hostUsedRatio, cgroup?.usedRatio ?? 0);
     const currentEvents = cgroup?.events ?? {};
     const eventDelta = {};
     const previousSample = this.previousCgroupEventSample;
-    if (cgroup && previousSample?.directory === cgroup.directory) {
+    if (cgroup && previousSample?.directory === cgroupDirectory) {
       for (const key of new Set([...Object.keys(previousSample.counters), ...Object.keys(currentEvents)])) {
         eventDelta[key] = Math.max(0, (currentEvents[key] || 0) - (previousSample.counters[key] || 0));
       }
     }
     // 换组或中断观测后只建立基线，不能把另一来源的历史累计量算作本轮新增事件。
-    this.previousCgroupEventSample = cgroup ? { directory: cgroup.directory, counters: currentEvents } : null;
+    this.previousCgroupEventSample = cgroup ? { directory: cgroupDirectory, counters: currentEvents } : null;
     const classified = classifyMemoryPressure({
       usedRatio: effectiveUsedRatio,
       psiSomeAvg10: cgroup?.someAvg10 ?? 0,
@@ -249,7 +250,7 @@ export class BrowserMemoryPressureMonitor {
         ...host,
         usedRatio: hostUsedRatio,
       },
-      cgroup,
+      cgroup: cgroup ? cgroupSample : null,
       event_delta: eventDelta,
     };
   }

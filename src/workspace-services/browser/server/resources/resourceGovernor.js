@@ -112,9 +112,8 @@ export class BrowserResourceGovernor {
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.runCycle().catch((error) => {
-        const message = error instanceof Error ? (error.stack || error.message) : String(error);
-        this.state.error = message;
-        logger.error(`[browser-resource-governor] 资源调度停止: ${message}`);
+        this.state.error = `浏览器资源调度停止: stage=resource_cycle, code=${error?.code || "unknown"}`;
+        logger.error("[browser-resource-governor] 资源调度停止", error);
         this.stop();
       });
     }, delayMs);

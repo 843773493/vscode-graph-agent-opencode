@@ -1,7 +1,54 @@
-import { describe, expect, test } from "bun:test";
+import { inspect } from "node:util";
+import { describe, expect, spyOn, test } from "bun:test";
+import { BrowserMemoryPressureMonitor } from "./memoryPressure.js";
 import { BrowserResourceGovernor } from "./resourceGovernor.js";
 
 describe("浏览器资源调度器", () => {
+  test.each([
+    "/private/browser/memory",
+    String.raw`C:\private\browser\memory`,
+    String.raw`\\host\share\browser\memory`,
+  ])("采样失败停止调度，原生位置与堆栈只留诊断: %s", async (nativePath) => {
+    const cause = Object.assign(new Error(`EACCES: ${nativePath}`, {
+      cause: new Error(`原始采样来源: ${nativePath}`),
+    }), { code: "EACCES" });
+    let readCalls = 0;
+    const governor = new BrowserResourceGovernor({
+      manager: { runningSessions: () => { throw new Error("采样失败不能继续治理"); } },
+      memoryMonitor: new BrowserMemoryPressureMonitor({
+        platform: "linux", pathExists: () => false,
+        readText: async () => { readCalls += 1; throw cause; },
+      }),
+    });
+    const logged = spyOn(process.stderr, "write").mockImplementation(() => undefined);
+    try {
+      governor.start();
+      const deadline = performance.now() + 1_000;
+      while (governor.snapshot().running && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+      const state = governor.snapshot();
+      expect(state.running).toBe(false);
+      expect(state.last_sample).toBeNull();
+      expect(state.last_cycle).toBeNull();
+      expect(state.error).toContain("资源调度停止");
+      expect(state.error).toContain("stage=resource_cycle");
+      expect(state.error).toContain("EACCES");
+      const serialized = JSON.stringify(state);
+      expect(serialized).not.toContain(nativePath.replaceAll("\\", "\\\\"));
+      expect(serialized).not.toContain(process.cwd());
+      expect(serialized).not.toContain(".js:");
+      const diagnostics = logged.mock.calls.map(args => args[0]).join("\n");
+      expect(diagnostics).toContain(inspect(cause));
+      expect(diagnostics).toContain("[cause]:");
+      expect(readCalls).toBe(1);
+      expect(governor.timer).toBeNull();
+    } finally {
+      governor.stop();
+      logged.mockRestore();
+    }
+  });
+
   test("普通状态按批次冻结多个候选", async () => {
     const frozen = [];
     const sessions = ["browser_a", "browser_b"].map((browserId) => ({

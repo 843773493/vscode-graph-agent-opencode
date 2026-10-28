@@ -935,3 +935,9 @@
 - Ruff、三文件 Pyright 零诊断及 OpenSpec strict 47／0通过。首轮新增校验异常断言误用转义后的文本比较，已改为精确核原异常的 input；新装具的同步文件处理和进程文本类型问题已修正，失败原件全部保留。准确命令、前后源码指纹、raw、真实退出码、零进程组残留及作者结构自查见 `out/tests/temp/resource-catalog-error-boundary/artifacts/verification-012.json`。未新增Web、Windows或真实Backend资源执行验收，全局2.2／7.2仍未勾，团队与协作继续TODO。
 
 上一节的过期日志装具另由 `e1f4edfab` 迁到实际 `get_runtime_log_root` 入口，原提交后错误归属、状态及显式重试断言保持；完整转发文件32 passed／3.45秒，Ruff通过，原件见 `out/tests/temp/logging-test-caller-convergence/artifacts/`。
+
+### 2026-10-28 Browser 治理健康状态的位置边界（2.2／7.2 部分收口）
+
+- cgroup目录只在原内存采样器内部用于连续事件基线，不再随公开sample和健康响应返回；目录变更仍重建基线，同组增量与原压力迟滞保持。原调度轮次失败仍停止治理、保留上次成功采样，公开error只含阶段和错误码；完整原异常、cause与堆栈留统一诊断日志，不增加采样、调度或恢复链。
+- 原生产配新增单测为46 passed／4 failed，分别复现公开目录与错误堆栈；候选相关及相邻治理测试158 passed／1.99秒（含定向50项，不重复累计）。真实Node/HTTP的正式suite 3 passed／20.71秒，只替换Linux内核读取，核正常采样、三种原始错误路径、调度停止、上次事实、完整原因链及同服务重启后恢复。相同测试配完整旧生产archive为3 failed／18.17秒，均复现目录回显；失败健康JSON保留在基线正式产物中。两次候选HTTP运行重叠，不累加计数。
+- Ruff、新测试Pyright零诊断、Node语法及全量strict OpenSpec47／0通过。最初两次静态命令因未安装的uv pyright入口、缺少bunx可执行文件未完成后续阶段，改用现有`bun x --no-install pyright`后通过，不改环境或安装依赖。准确命令、候选／基线tree、源码前后指纹、raw、实际退出码、零进程组残留和作者结构自查见 `out/tests/temp/browser-governor-diagnostics/artifacts/verification-011.json`；纯临时完整源码副本在保存基线正式产物后删除。本片不创建Chromium，不代表Gateway/Web、其他平台实机或整个Browser位置审计，2.2／7.2保持未勾；团队与协作继续TODO。

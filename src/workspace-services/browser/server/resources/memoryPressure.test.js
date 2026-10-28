@@ -169,7 +169,10 @@ describe("浏览器内存压力", () => {
     reading.directoryName = "second";
     reading.oomKillCount = 20;
     const switched = await monitor.sample();
-    expect(switched.cgroup.directory).toBe(path.join("/sys/fs/cgroup", "second"));
+    expect(switched.cgroup).toEqual({
+      currentBytes: 400, maxBytes: 1000, availableBytes: 600, usedRatio: 0.4,
+      events: { high: 0, oom: 0, oom_kill: 20 }, someAvg10: 0,
+    });
     expect(switched.event_delta).toEqual({});
     expect(switched.level).toBe("normal");
 
