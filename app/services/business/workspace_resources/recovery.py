@@ -110,22 +110,26 @@ class ResourceRecovery:
             }
 
     async def _recover_resource(self, resource_id: str) -> Exception | None:
+        async with self._owner._resource_lock(resource_id):
+            return await self.recover_locked(resource_id, for_stop=False)
+
+    async def recover_locked(self, resource_id: str, *, for_stop: bool) -> Exception | None:
+        """调用方持原资源锁；管理停止先核准入，再撤权而不等待依赖停止的旧执行。"""
         owner = self._owner
-        async with owner._resource_lock(resource_id):
-            assert self._pending is not None
-            if resource_id not in self._pending:
-                return None
-            record = owner._require_owned_resource_record(resource_id)
-            revision = self._pending[resource_id]
-            failure = None
-            try:
-                if revision is not None:
-                    await owner._transport.sync_owner_revision(resource_id, revision, for_stop=False)
-            except BaseException as error:
-                owner._unknown(record, error)
-                if not isinstance(error, Exception):
-                    raise
-                failure = error
-            owner._sync_ledger(owner._require_owned_resource_record(resource_id))
-            del self._pending[resource_id]
-            return failure
+        assert self._pending is not None
+        if resource_id not in self._pending:
+            return None
+        record = owner._require_owned_resource_record(resource_id)
+        revision = self._pending[resource_id]
+        failure = None
+        try:
+            if revision is not None:
+                await owner._transport.sync_owner_revision(resource_id, revision, for_stop=for_stop)
+        except BaseException as error:
+            owner._unknown(record, error)
+            if not isinstance(error, Exception):
+                raise
+            failure = error
+        owner._sync_ledger(owner._require_owned_resource_record(resource_id))
+        del self._pending[resource_id]
+        return failure

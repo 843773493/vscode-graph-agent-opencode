@@ -188,6 +188,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 管理停止仍遇到 active lease、重复的未知 operation 身份、不匹配的外部版本或尚未核实完成的删除
 - **THEN** 原 owner 明确拒绝冲突并保留原占用；普通资源列表为身份和版本可核对的未知资源提供候选停止/删除动作，使用、关联和授权仍须 verified；自动恢复、卸载与扫描不得据此重发未知副作用，缺少外部身份或 native 停止证明仍保持待核实
 
+#### Scenario: 冷恢复取消后显式停止等待关闭的旧执行
+
+- **WHEN** 普通冷恢复已冻结并发送授权版本，但等待旧执行排空时被取消，用户随后从原管理入口显式发起stop/delete
+- **THEN** 原owner在同一资源锁内先核expected_revision、active lease和delete关联限制，再以停止意图同步尚未完成的同一冻结版本；不先等待依赖context关闭才能结束的旧执行。实际关闭、原执行排空、当前版本终态提交与原占用结清继续复用唯一停止链；普通访问仍使用普通排空。过期版本或仍有关联的delete在撤权前明确拒绝，保留原pending、记录及占用；取消本次同步仍保留未核实版本，不把停止准备当作真实停止证明
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

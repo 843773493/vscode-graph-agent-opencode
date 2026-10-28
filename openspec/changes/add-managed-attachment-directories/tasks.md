@@ -381,3 +381,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原worker在native创建返回时交付唯一PID，ready和正式启动失败证明必须匹配原身份；非法、重复及晚到消息不能覆盖身份。Session先保留unknown，再复用原进程树停止/worker退出/终态落盘链；只有实际返回停止成功才签failed回执，失败保留原句柄，created/unknown可经原管理kill重试。未取得PID的created明确拒绝伪报终止；无第二套停止实现、writer或schema。
 - 最终Node定向97 passed/3.43秒；Linux新增真实HTTP/PTY父子进程2 passed/13.71秒，原信号关闭6 passed/60.64秒、进程树5 passed/13.70秒，均有进程外超时及4GiB保护。新用例只注入就绪交付错误和首次停止故障，父子忽略SIGTERM，独立核强杀/worker退出、原恢复记录、peer及同管理入口重试。完整旧HEAD e1adea8ae的4699份文件逐字核对后仅叠相同最终产品测试/故障边界/matrix，两项均因原os_pid丢失失败；原业务输出封存在out/tests/temp/terminal-startup-cleanup/artifacts/old-product-output，纯临时旧树与tar已删除。
 - Ruff、新测试Pyright零诊断及Node语法检查通过。初轮新工作负载字符串误多加号导致SyntaxError，修正后真实场景通过；初轮Ruff未使用导入也已修复，原失败输出保留。准确命令、前后源码指纹、原始输出/退出码、作者结构自查及限定证据见out/tests/temp/terminal-startup-cleanup/artifacts/verification-001.json；不称Gateway/Web、Windows或独立Backend重启验收。native尚未交付PID、同步阻塞、不合作取消及整个shutdown期限继续TODO，5.2/5.4仍未勾，整体21/23；团队协作继续暂缓。
+
+### 2026-10-28 冷恢复取消后的显式管理停止（5.2部分收口）
+
+- 原stop/delete只准备清单与冻结版本，在原资源锁内先核版本、active lease及delete关联限制，再与普通恢复共用唯一锁内同步主体；停止意图不先等待依赖context关闭的旧执行。同步后重读原记录，真实停止、终态持久化和原lease结算仍沿原链；终态对账后重新读取当前lease，避免已settle的旧列表阻断后续delete。过期版本和有关联的delete不消耗pending或派发撤权，无新账本、schema、任务或停止实现。
+- 最终共享owner/账本/等待预算定向413 passed；真实Session/ASGI、冷owner及Node/Chromium/HTTP组合10 passed/90.42秒，新增stop/delete由正式matrix独立补验2 passed/24.07秒（与10项重叠，不累计）。原真实PTY的unknown/read与管理停止1 passed，核原目录及精确lease结算。新matrix固定60秒/4GiB，原Browser suite的90秒及产品期限未改变。
+- 原生产对新增停止/过期版本用例12项均失败，真实Browser的stop返回408而非200；完整HEAD `05bac2c1b`归档4706份文件逐字核对。扩大回归中的32项旧I/O断言也在该完整HEAD复现，现按已生效URI合同核公开安全错误和原生cause身份/顺序，保留全部状态及占用断言。作者差异审查发现的旧lease列表窗口另以2项失败反例确认后修复，原始失败、首次测试计数误用及筛选未启动均保留，未把它们计作通过。
+- Ruff、compileall及OpenSpec strict 47/0通过；触达五文件Pyright基线96项、候选95项，按文件/规则/完整消息核新增0、减少1，新测试无诊断，不称类型全绿。AST核原恢复主体除显式停止意图外保持相同，作者结构自查、准确命令、源码指纹、raw/退出码及限定证据见 `out/tests/temp/resource-cold-management/artifacts/verification-001.json`。不代表Gateway/Web、Windows、Backend硬重启、未知native身份或任意脚本强制终止；同步阻塞、不合作取消及整个shutdown期限继续TODO，5.2/5.4保持未勾，团队协作继续暂缓。

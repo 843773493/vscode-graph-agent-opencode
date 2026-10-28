@@ -365,3 +365,7 @@ Thread准入的holder、Session锁和读取共用入口一次30秒协作式预�
 已取得PID但启动失败时，原Session先持久化unknown，再沿既有terminateForRelease核实整棵进程树、确认worker退出及持久化终态；只有实际停止成功才签本次failed创建回执，返回“未执行停止”不构成证明。失败保留原句柄和恢复记录，created/unknown可由原管理kill重试同一执行。Linux保留forkpty创建时PID即SID的事实，执行根已回收时仍核对同SID后代。
 
 Linux真实HTTP/PTY用例只在原就绪消息交付处注入失败，父子均忽略SIGTERM，独立核对强杀后的进程状态、worker退出、原记录及peer可用；首次停止故障后经同一管理入口重试。此切片不证明Gateway/Web、Windows、独立Backend重启或native尚未交付PID的阻塞接管；后者及同步阻塞、不合作取消和整个shutdown期限继续TODO，5.2/5.4仍未完成。
+
+### 冷恢复取消后显式管理停止（5.2部分收口）
+
+普通冷恢复取消时继续保留原pending与冻结版本；显式stop/delete只准备原清单，在原资源锁内核expected_revision、active lease和delete关联限制后，复用`ResourceRecovery`唯一锁内同步主体并携带停止意图。普通访问仍沿普通排空；管理停止不先等待只能由context关闭才能结束的旧执行。同步后重读原记录，再沿原接管、版本推进、停止回执、持久终态和lease结算链完成，不新增任务、账本、schema或另一个停止实现。过期版本及有关联的delete在派发前拒绝，不消耗pending或撤权。缺少外部身份、同步阻塞、不合作执行和整个shutdown期限继续TODO；不能把本片当作5.2/5.4全部完成。

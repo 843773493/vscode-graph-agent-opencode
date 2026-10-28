@@ -299,7 +299,7 @@ class WorkspaceResourceOwner:
         deadline = timeout(30)
         try:
             async with deadline:
-                await self.recover((resource_id,))
+                await self.recover(() if action in {"stop", "delete"} else (resource_id,))
                 if action in {"attach", "detach"}:
                     if thread is None:
                         raise ValueError(f"外部资源 {action} 缺少精确 Thread")
@@ -431,6 +431,19 @@ class WorkspaceResourceOwner:
             raise ResourceConflict(
                 f"外部资源 版本冲突: expected={expected_revision}, actual={record.owner_revision}"
             )
+        if action == "delete" and record.thread_associations:
+            raise ResourceConflict("外部资源 仍有关联；请先解除关联")
+        if action in {"stop", "delete"}:
+            if any(
+                lease.status == "active" and lease.lease_id != lease_id
+                for lease in self._leases.leases_for_resource(resource_id)
+            ):
+                raise ResourceConflict("外部资源 仍有有效或待核实 operation lease")
+            # 冷恢复沿同一冻结版本撤权，不能先等待只有真正停止才能结束的旧执行。
+            failure = await self._recovery.recover_locked(resource_id, for_stop=True)
+            if failure is not None:
+                raise failure
+            record = self._require_owned_resource_record(resource_id)
         takeover = False
         if record.reconciliation_status != "verified" and action in {"stop", "delete"}:
             # 已停止时只对账；仍未知时必须以新的管理身份沿原停止链终止。
@@ -451,6 +464,7 @@ class WorkspaceResourceOwner:
                 takeover = True
         if not takeover:
             self._verified(record)
+        # 终态对账可能已settle原占用，后续准入必须读取当前账本。
         leases = [
             lease
             for lease in self._leases.leases_for_resource(resource_id)
@@ -466,12 +480,10 @@ class WorkspaceResourceOwner:
                     "目标 Thread 仍持有有效或待核实 operation lease"
                 )
         elif action in {"stop", "delete"}:
-            if any(lease.status == "active" for lease in leases) or (leases and not takeover):
+            if leases and not takeover:
                 raise ResourceConflict("外部资源 仍有有效或待核实 operation lease")
             if any((lease.turn_stream_id, lease.operation_id) == (holder_id, operation_id) for lease in leases):
                 raise ResourceConflict("外部资源 原 operation 结果尚未核实；请发起新的管理操作")
-        if action == "delete" and record.thread_associations:
-            raise ResourceConflict("外部资源 仍有关联；请先解除关联")
         if (
             action == "attach"
             and record.retention_scope == "thread"

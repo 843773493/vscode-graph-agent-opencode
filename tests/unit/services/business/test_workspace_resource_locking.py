@@ -181,9 +181,12 @@ async def test_operation_close_failure_keeps_exact_lease_for_retry_and_drains_ot
             with pytest.raises(OSError if failure_count == 1 else ExceptionGroup) as caught:
                 await operation.close()
         if failure_count == 1:
-            assert caught.value is failures[0]
+            assert caught.value.__cause__ is failures[0]
+            assert str(failures[0]) not in str(caught.value)
         else:
-            assert caught.value.exceptions == tuple(failures) == tuple(errors.values())
+            assert isinstance(caught.value, ExceptionGroup)
+            assert tuple(error.__cause__ for error in caught.value.exceptions) == tuple(failures) == tuple(errors.values())
+            assert all(str(error.__cause__) not in str(error) for error in caught.value.exceptions)
         cold = type(bundle.leases)(state_path=ledger_path)
         for item in [lease, other_lease]:
             expected = "active" if item.lease_id in errors else "released"
@@ -485,7 +488,8 @@ async def test_failed_record_creation_does_not_publish_an_unstored_resource(
     failures = fail_record_write(lambda _payload: True)
     with pytest.raises(OSError) as caught:
         await bundle.create()
-    assert caught.value is failures[0]
+    assert caught.value.__cause__ is failures[0]
+    assert str(failures[0]) not in str(caught.value)
     assert owner._store.all() == ()
     assert not bundle.transport.records
     resource = await bundle.create()
@@ -502,7 +506,8 @@ async def test_failed_revision_write_does_not_advance_authority_or_transport(
     failures = fail_record_write(lambda payload: payload["records"][0]["owner_revision"] == 2)
     with pytest.raises(OSError) as caught:
         await bundle.command(rid, action="promote", expected_revision=1)
-    assert caught.value is failures[0]
+    assert caught.value.__cause__ is failures[0]
+    assert str(failures[0]) not in str(caught.value)
     stored = json.loads(owner._store.path.read_bytes())["records"][0]
     assert stored["owner_revision"] == owner._store.get(rid).owner_revision == 1
     assert stored["retention_scope"] == "thread"
@@ -521,7 +526,8 @@ async def test_failed_promotion_commit_retains_last_durable_scope(
     failures = fail_record_write(lambda payload: payload["records"][0]["retention_scope"] == "workspace")
     with pytest.raises(OSError) as caught:
         await bundle.command(rid, action="promote", expected_revision=1)
-    assert caught.value is failures[0]
+    assert caught.value.__cause__ is failures[0]
+    assert str(failures[0]) not in str(caught.value)
     record = owner._store.get(rid)
     stored = json.loads(owner._store.path.read_bytes())["records"][0]
     assert record.retention_scope == stored["retention_scope"] == "thread"
@@ -542,7 +548,8 @@ async def test_failed_cold_freeze_retries_the_original_version_once(
     failures = fail_record_write(lambda payload: payload["records"][0]["owner_revision"] == 2)
     with pytest.raises(OSError) as caught:
         await owner.recover()
-    assert caught.value is failures[0]
+    assert caught.value.__cause__ is failures[0]
+    assert str(failures[0]) not in str(caught.value)
     assert owner._store.get(rid).owner_revision == 1
     assert json.loads(owner._store.path.read_bytes())["records"][0]["owner_revision"] == 1
     assert bundle.transport.records[rid]["transport_owner_revision"] == 1
@@ -595,8 +602,11 @@ async def test_failed_unknown_write_keeps_lease_and_last_published_record(
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "replace", fail_terminal_record)
-        with pytest.raises(OSError, match="均失败"):
+        with pytest.raises(OSError) as caught:
             await bundle.command(rid, action="stop", expected_revision=1)
+        assert isinstance(caught.value.__cause__, OSError)
+        assert str(caught.value.__cause__) == "终态和 unknown 记录写盘均失败"
+        assert "均失败" not in str(caught.value)
     record = owner._store.get(rid)
     assert record.status == "stopping" and record.owner_revision == 2
     assert record.reconciliation_status == "verified"
@@ -640,13 +650,16 @@ async def test_unstored_unknown_cannot_be_cleared_by_a_live_snapshot(
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "replace", fail_owner_file)
-        with pytest.raises(OSError, match="均不能写盘"):
+        with pytest.raises(OSError) as caught:
             async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
                                        holder_id="request:unstored-unknown", operation_id="unstored-unknown") as operation:
                 if isinstance(bundle, TerminalOwnerFixture):
                     await operation.write_terminal(terminal_id=rid, data="already-written")
                 else:
                     await operation.perform(rid, "navigate", {"url": "https://already-navigated.test"})
+        assert isinstance(caught.value.__cause__, OSError)
+        assert str(caught.value.__cause__) == "owner 观察与 unknown 均不能写盘"
+        assert "均不能写盘" not in str(caught.value)
     pending, = bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
     observed = await owner.get_resource(rid)

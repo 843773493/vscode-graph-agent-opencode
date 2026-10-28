@@ -7,7 +7,7 @@ Terminal 与 Browser 两个领域 owner 共用资源保留、Thread 关联、ope
 ```text
 workspace_resources/
 ├── owner.py       串联准入、资源状态转换、关联释放与授权核实
-├── recovery.py    一次性冻结恢复版本，按资源锁核实授权，取消排空原等待者
+├── recovery.py    一次性冻结恢复版本，共用锁内授权同步，取消排空原等待者
 ├── records.py     Thread 引用、持久 owner 记录及文件存储
 ├── facts.py       校验外部运行快照并派生领域投影
 └── operations.py  单次工具调用持有和释放自己的 operation lease
@@ -43,4 +43,5 @@ workspace_resources/
 - 停止链的phase观察复用原operation lease身份，仅在真实派发前和正式回执返回后观察；不由观察端提交终态、结清占用或重放管理动作。
 - 单次管理命令从入口取得一次30秒协作式等待预算，覆盖冷恢复、Thread准入、资源锁、撤权及正式回执；阶段不重置。到期只排空本调用的等待，尚未派发的管理动作不补造unknown或管理lease，已提交的冷恢复事实保留，派发未核实仍由原异常链保留unknown及精确占用；底层TimeoutError和调用方取消保留归属，新管理请求沿原owner核实，不自动重放动作。同步阻塞及不合作取消仍TODO。
 - 未知结果保留可发现状态；只有核实停止后才能报告成功。
+- 显式stop/delete的冷恢复只准备原清单与冻结版本；在原资源锁内先核expected_revision、有效lease和delete关联限制，再以停止意图同步尚未完成的同一版本。不等待依赖context关闭的旧执行，真实停止、终态提交与结清占用仍沿原链。普通访问继续普通排空；未完成版本不另建恢复事实，过期或有关联的拒绝不消耗pending、不派发撤权。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
