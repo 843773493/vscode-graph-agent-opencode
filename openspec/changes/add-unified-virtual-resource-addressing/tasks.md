@@ -1000,3 +1000,9 @@
 - 旧生产的21个反例全部失败，检出POSIX路径回显或缺失原异常诊断；最终用解码JSON值核POSIX/盘符/UNC，覆盖七个失败阶段、ASGI创建/状态API、真实结果落盘/冷读和原入口显式重试。完整工具测试回归121 passed/8.10秒，模型复用既有单元替身，不冒称真实Provider/Gateway/Web或Windows实机。Ruff、compileall与OpenSpec strict 48/48通过。
 - Pyright完整旧HEAD归档为12条、最终5条；按文件、最窄AST owner、规则与完整消息逐项核对无新增，生产及新增用例零诊断，不称全类型绿。准确命令、源码前后指纹、raw、实际退出码及失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-002.json`；临时完整源码已删除。该片只关闭本输出链，URI整体2.2/7.2和多工作区4.3/8.2仍未勾，团队协作继续TODO。
 - 最终目录审查将21项API/落盘验收迁入`tests/integration/backend/agents/test_tool_test_failure_records.py`，原异常身份故障夹具移入共享support，单元消费者同批迁齐，无重复模型协议。迁移后121 passed/8.55秒，Ruff/compileall/strict 48项通过，Pyright仍为同5项旧测试诊断；原件为同目录`tool-test-layout-{017,static-018,types-019}`。
+
+### 2026-10-28 工具测试存储的统一访问边界（2.2/7.2部分收口）
+
+- 原存储共用失败阶段合同，初始化、目录准备/重置、运行/样本读写和查询保留原生类别、errno/winerror及直接cause，完整原错关联原request_id进入诊断；移除Path隐式转字符串落盘。读取/列表共用scandir，根丢失、扫描故障及非文件记录明确失败，不再由glob/is_file伪装为空；正常空列表、覆盖历史和GET缺失404保持。
+- 最终工具测试与真实HTTP默认模型入口回归164 passed/11.35秒，含七阶段×三种路径、损坏原件、12项ASGI查询失败/重试及扫描反例；仅查询使用静态记录，执行仍沿原入口。旧生产25项反例失败；扫描变更前另6项失败，最终去掉重复GET参数为5项。Ruff/compileall/strict 48项通过，触达三文件Pyright零诊断；HTTP handler注册类型错误已沿官方decorator修正，原始失败保留。
+- 准确命令、前后源码指纹、raw、退出码和限定范围见`out/tests/temp/uri-global-closure/artifacts/verification-003.json`。不代替独立Gateway/Backend、真实外部Provider、Web或Windows验收；整体2.2/7.2及多工作区4.3/8.2继续未勾。

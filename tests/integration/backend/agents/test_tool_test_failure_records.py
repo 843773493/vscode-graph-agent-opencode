@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -16,6 +17,7 @@ from langchain_core.tools import tool
 from app.api import tools as tools_api
 from app.api.deps import get_tool_test_service, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
+from app.main import workspace_http_exception_handler
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.model_invocation import ToolCallProbeInvocationError
@@ -34,6 +36,7 @@ from tests.support.tool_test_faults import (
 def tool_test_http_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
+    app.exception_handler(HTTPException)(workspace_http_exception_handler)
     app.include_router(tools_api.router, prefix="/api/v1")
     app.dependency_overrides[verify_local_token] = lambda: "test-token"
     return app
@@ -186,3 +189,56 @@ async def test_failure_records_keep_native_details_in_diagnostics(
         assert attempt.passed and attempt.execution_succeeded and attempt.error is None
         assert attempt.model_calls == 1 and retried.providers[0].passed == 1
     await service.shutdown()
+
+
+@pytest.mark.parametrize("native", ["/private/tool-test.json", r"C:\private\tool-test.json", r"\\server\share\tool-test.json"])
+@pytest.mark.parametrize("listing", [False, True])
+@pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
+@pytest.mark.asyncio
+async def test_store_read_failure_uses_original_api_and_diagnostics(
+    tmp_path: Path, tool_test_http_app: FastAPI, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, native: str, listing: bool, error_type: type[OSError],
+) -> None:
+    # 此处只验查询；局部历史夹具不代替执行、fork 或恢复验收。
+    workspace = tmp_path / "workspace"
+    store = ToolTestStore(root=workspace / ".boxteam/tool_tests")
+    directory = store.reset_tool("runtime_aware")
+    now = datetime.now(UTC)
+    run = ToolTestRunDTO(run_id="run_a", tool_name="runtime_aware", status="completed",
+                         created_at=now, updated_at=now, repetitions=1)
+    store.write_run(run.run_id, run.model_dump(mode="json"))
+    record_path = directory / "run.json"
+    before = record_path.read_bytes()
+    service = ToolTestService(
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[]), store=store, workspace_root=workspace, asset_root=tmp_path / "assets",
+    )
+    tool_test_http_app.dependency_overrides[get_tool_test_service] = lambda: service
+    original = error_type(2 if error_type is FileNotFoundError else 13, f"原生存储错误 {native}", native)
+    read = Path.read_text
+
+    def fail(path: Path, *args: object, **kwargs: object) -> str:
+        if path == record_path:
+            raise original
+        return read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    endpoint = "/api/v1/tools/tests?tool_name=runtime_aware" if listing else f"/api/v1/tools/tests/{run.run_id}"
+    request_id = "tool-test-store-original-request"
+    async with AsyncClient(transport=ASGITransport(app=tool_test_http_app), base_url="http://test") as client:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", fail)
+            response = await client.get(endpoint, headers={"X-Request-ID": request_id})
+        assert response.status_code == (404 if not listing and error_type is FileNotFoundError else 500)
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+        message = response.json().get("detail", response.json().get("message"))
+        assert isinstance(message, str) and native not in message and str(workspace) not in message
+        assert f"stage={'list_runs' if listing else 'read_run'}" in message
+        assert f"type={error_type.__name__}" in message
+        record, = [entry for entry in caplog.records if entry.name == "app.tool_testing.store"]
+        assert record.exc_info is not None and record.exc_info[1] is original
+        assert record.__dict__["request_id"] == request_id
+        assert record_path.read_bytes() == before
+        recovered = await client.get(endpoint)
+        assert recovered.status_code == 200
+        value = recovered.json()["data"]
+        assert ToolTestRunDTO.model_validate(value["items"][0] if listing else value) == run
