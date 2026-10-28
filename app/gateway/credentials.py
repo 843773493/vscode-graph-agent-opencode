@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from app.core.file_permissions import (
     require_private_file_access,
@@ -125,27 +126,35 @@ class FederationCredentialStore:
             # 只有尚未打开的缺文件表示空库；权限核验等后续失败不能被当作未配置。
             if stage == "open" and isinstance(error, FileNotFoundError):
                 return {}
-            raise self._read_error(stage, error) from error
+            raise self._access_error("read", stage, error) from error
 
-    def _read_error(self, stage: str, error: OSError | ValueError | TypeError | KeyError | RuntimeError) -> Exception:
-        detail = f"联邦凭据读取失败: artifact=federation_credentials, stage={stage}, error={type(error).__name__}"
+    def _access_error(self, operation: Literal["read", "write"], stage: str,
+                      error: OSError | ValueError | TypeError | KeyError | RuntimeError) -> Exception:
+        action = "读取" if operation == "read" else "写入"
+        detail = f"联邦凭据{action}失败: artifact=federation_credentials, stage={stage}, error={type(error).__name__}"
         if isinstance(error, OSError):
             detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
         # 解码与字段校验的原异常可能含凭据正文，只保留在cause，不写入日志。
         logger.error("%s path=%s request_id=%s", detail, self._storage_path, get_current_request_id(),
-                     exc_info=(type(error), error, error.__traceback__) if stage in {"open", "permissions", "close"} else None)
+                     exc_info=(type(error), error, error.__traceback__) if isinstance(error, (OSError, RuntimeError)) else None)
+        projected: Exception
         if isinstance(error, OSError):
             if error.errno is None:
-                return type(error)(detail)
-            return type(error)(error.errno, detail, None, getattr(error, "winerror", None))
-        if isinstance(error, UnicodeDecodeError):
-            return UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail)
-        if isinstance(error, json.JSONDecodeError):
-            return json.JSONDecodeError(detail, error.doc, error.pos)
-        return type(error)(detail)
+                projected = type(error)(detail)
+            else:
+                projected = type(error)(error.errno, detail, None, getattr(error, "winerror", None))
+        elif isinstance(error, UnicodeDecodeError):
+            projected = UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail)
+        elif isinstance(error, UnicodeEncodeError):
+            projected = UnicodeEncodeError(error.encoding, error.object, error.start, error.end, detail)
+        elif isinstance(error, json.JSONDecodeError):
+            projected = json.JSONDecodeError(detail, error.doc, error.pos)
+        else:
+            projected = type(error)(detail)
+        projected.__cause__ = error
+        return projected
 
     def _save(self, credentials: dict[str, FederationCredential]) -> None:
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 1,
             "credentials": [
@@ -158,24 +167,63 @@ class FederationCredentialStore:
                 for item in credentials.values()
             ],
         }
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._storage_path.name}.",
-            dir=self._storage_path.parent,
-        )
-        temporary_path = Path(temporary_name)
+        descriptor: int | None = None
+        temporary_path: Path | None = None
+        primary_error: BaseException | None = None
+        stage = "prepare"
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            stage = "create_temp"
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{self._storage_path.name}.", dir=self._storage_path.parent,
+            )
+            temporary_path = Path(temporary_name)
+            stage = "open_stream"
+            file = os.fdopen(descriptor, "w", encoding="utf-8")
+            descriptor = None  # fdopen成功后由同一stream负责关闭；失败仍由本次finally持有。
+            with file:
+                stage = "permissions"
                 restrict_private_path_access(
                     temporary_path,
                     descriptor=file.fileno(),
                 )
+                stage = "write"
                 json.dump(payload, file, ensure_ascii=False, indent=2)
                 file.write("\n")
+                stage = "flush"
                 file.flush()
+                stage = "fsync"
                 os.fsync(file.fileno())
+                stage = "close"
+            stage = "publish"
             os.replace(temporary_path, self._storage_path)
+            temporary_path = None
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            primary_error = self._access_error("write", stage, error)
+            raise primary_error from error
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            temporary_path.unlink(missing_ok=True)
+            cleanup_errors: list[BaseException] = []
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    cleanup_errors.append(self._access_error("write", "close_descriptor", error))
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as error:
+                    cleanup_errors.append(self._access_error("write", "cleanup", error))
+            if cleanup_errors:
+                if primary_error is not None:
+                    cleanup_errors.insert(0, primary_error)
+                if len(cleanup_errors) == 1:
+                    raise cleanup_errors[0]
+                raise BaseExceptionGroup(
+                    "联邦凭据发布与收尾均失败: artifact=federation_credentials, stage=cleanup", cleanup_errors,
+                ) from primary_error
 
 
 def load_or_create_gateway_id(storage_path: Path) -> str:

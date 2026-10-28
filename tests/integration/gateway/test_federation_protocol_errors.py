@@ -287,3 +287,70 @@ async def test_federation_credential_permission_failure_keeps_request_identity_a
     assert "req_credential_reject" in log
     assert credential.token not in log
     (context.artifacts_dir / "credential-read-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="此项核真实POSIX目录权限；Windows ACL另有专门验收")
+@pytest.mark.asyncio
+async def test_device_credential_publish_failure_keeps_authorization_until_explicit_retry(
+    integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    assert context.workspace_root == Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    port = integration_port_block_for_file(Path(__file__)).port(1)
+    credential_path = context.workspace_root.parent / "boxteam-home/state/gateway/credentials/federation.json"
+    receipts: dict[str, object] = {}
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS, timeout=20) as client:
+            body = {"device_name": "原设备", "gateway_url": f"http://127.0.0.1:{port}"}
+            created = await client.post("/api/gateway/device-connections", json=body)
+            assert created.status_code == 200, created.text
+            original_connection = created.json()["data"]["connection"]
+            original_token = created.json()["data"]["connection_info"]["federation_token"]
+            original = credential_path.read_bytes()
+            mode = credential_path.parent.stat().st_mode & 0o777
+            credential_path.parent.chmod(0o500)
+            try:
+                for method, endpoint, payload in (
+                    ("POST", "/api/gateway/device-connections", {**body, "device_name": "新设备"}),
+                    ("DELETE", f"/api/gateway/device-connections/{original_connection['connection_id']}", None),
+                ):
+                    request_id = f"req_credential_publish_{method.lower()}"
+                    failed = await client.request(method, endpoint, json=payload, headers={"X-Request-ID": request_id})
+                    assert failed.status_code == 500, failed.text
+                    assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == request_id
+                    assert "artifact=federation_credentials" in failed.json()["message"]
+                    assert "stage=create_temp" in failed.json()["message"]
+                    assert "PermissionError" in failed.json()["message"]
+                    assert str(credential_path.parent) not in failed.text
+                    assert original_token not in failed.text
+                    assert credential_path.read_bytes() == original
+                    receipts[request_id] = failed.json()
+                listed = await client.get("/api/gateway/device-connections")
+                assert listed.status_code == 200, listed.text
+                assert listed.json()["data"]["items"] == [original_connection]
+                authenticated = await client.get("/api/gateway/federation/workspaces", headers={"X-Local-Token": "", "X-BoxTeam-Federation-Token": original_token})
+                assert authenticated.status_code == 200, authenticated.text
+            finally:
+                credential_path.parent.chmod(mode)
+            added = await client.post("/api/gateway/device-connections", json={**body, "device_name": "新设备"})
+            assert added.status_code == 200, added.text
+            new_connection = added.json()["data"]["connection"]
+            new_token = added.json()["data"]["connection_info"]["federation_token"]
+            revoked = await client.delete(f"/api/gateway/device-connections/{original_connection['connection_id']}")
+            assert revoked.status_code == 200, revoked.text
+            assert revoked.json()["data"]["items"] == [new_connection]
+            for token, status in ((original_token, 401), (new_token, 200)):
+                response = await client.get("/api/gateway/federation/workspaces", headers={"X-Local-Token": "", "X-BoxTeam-Federation-Token": token})
+                assert response.status_code == status, response.text
+            receipts["revoked"] = revoked.json()
+    log = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert str(credential_path) in log
+    assert "req_credential_publish_post" in log and "req_credential_publish_delete" in log
+    assert original_token not in log and new_token not in log
+    (context.artifacts_dir / "credential-publish-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")

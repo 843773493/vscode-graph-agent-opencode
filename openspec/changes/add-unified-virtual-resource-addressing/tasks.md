@@ -973,3 +973,10 @@
 - 修改前反例16 failed/1 passed，已复现真实POSIX权限错误经原认证路由回显路径。最终单元及相邻认证/凭据/联邦/请求ID回归63 passed/2 skipped/1 deselected；新增独立Gateway/TCP验收1 passed/24.90秒，核401、同request_id、原件不变、修复权限后同凭据成功及无效凭据继续拒绝。单元18项覆盖读取/关闭失败、JSON/UTF-8/字段拒绝、描述符关闭及修复重试。
 - Ruff/compileall通过；生产与新单测Pyright零诊断，集成文件两条原Popen类型诊断与完整旧HEAD按规则/消息/位置逐项一致。唯一排除的观察者异常身份断言在完整旧HEAD同样失败，未放宽或扩修；两项skip为既有Windows DACL实机检查。严格OpenSpec47/0。准确命令、前后源码指纹、raw/实际退出码、完整旧版核验及作者结构审查见`out/tests/temp/federation-credential-read/artifacts/verification-001.json`。
 - 本片未验Web、Windows、真实跨Gateway连接或凭据发布错误；原完整临时源码与tar在保存基线产物后删除。2.2/7.2全局门保持未勾，团队协作继续TODO。
+
+### 2026-10-28 联邦凭据唯一发布链与本次收尾（2.2/7.2部分收口）
+
+- 原发布链迁齐准备、临时文件、stream接管、权限、写入/同步、关闭及发布的失败出口，复用读取错误合同并物理移除旧私有函数名；三类writer的签名、JSON格式、私有权限及原子替换保持。fdopen失败仍由本次调用关闭原fd，成功替换后不再unlink已不存在的临时文件；清理只涉及本次尝试，主失败/描述符关闭/临时清理多重失败保留各直接cause，stream关闭的嵌套失败保留原生context，取消身份不改写。
+- 修改前31项为30 failed/1 passed，明确复现fdopen失败遗留原fd和清理错误覆盖主错误。候选扩大定向回归144 passed/2 skipped/1 deselected；最终补充发布成功后无意义清理拒绝的反例，发布/读取合同52 passed（含34项发布用例）。覆盖三类writer、九个失败阶段、原件/授权保持、句柄关闭、两/三重收尾失败、取消、UTF-8编码失败及显式重试不删除其它尝试；各组有重叠，不累计。
+- 独立Gateway真实POSIX权限/TCP验收：发布链1 passed/25.19秒，原认证读取链复验1 passed；经产品API先生成设备授权，再使凭据目录只读，核创建与撤销500、同request_id、公开原因无原生位置、原件和授权不变，恢复权限后原入口成功并核旧/新token归属。测试与生产均无网络替身；不代替Web、Windows或真实跨Gateway连接。
+- Ruff/compileall及生产/新单测Pyright通过；集成文件两项Popen诊断与上轮完整旧HEAD按规则/消息/位置一致，原装具AST保持，不称全类型绿。唯一排除的观察者身份断言沿用上轮旧版复现证据，两个skip为既有Windows DACL实机检查。严格OpenSpec47/0；准确命令、前后源码指纹、raw/退出码、原诊断对照及作者结构自查见`out/tests/temp/federation-credential-publish/artifacts/verification-001.json`。没有新建临时源码副本，验收产物保留；2.2/7.2仍未勾，团队协作继续TODO。
