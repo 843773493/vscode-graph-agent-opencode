@@ -589,7 +589,7 @@ class GatewayRegistryMixin:
                     ]
 
                 final_target_ids: set[str] = set()
-                target_identity_keys: set[tuple[str, str, str]] = set()
+                target_identity_keys: set[tuple[str, str, str | None, str]] = set()
                 for position, target in enumerate(final_targets):
                     if (
                         target.get("connection_kind") == "remote_gateway"
@@ -648,6 +648,8 @@ class GatewayRegistryMixin:
                     identity_key = (
                         str(target_owner),
                         namespace,
+                        # 远端工作区身份仅在所属连接内唯一，不能跨 Gateway 去重。
+                        connection_id if target_owner == "remote_projection" else None,
                         identity_value,
                     )
                     if identity_key in target_identity_keys:

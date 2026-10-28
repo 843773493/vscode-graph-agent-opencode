@@ -1078,3 +1078,10 @@
 - 完整 Backend 组和远端 Gateway 启动恢复共用既有 failure_detail，不再将原生异常正文写入 connection_error 或普通列表响应；保留 owner/connection、准确阶段、异常类别及适用系统错误码，原异常链留具名诊断。日志 sink 失败仍保留原错误注记并完成恢复失败结算；原恢复顺序、默认工作区回退、其它连接恢复及重试行为保持。
 - 修改前24项反例失败；最终整个启动恢复文件60 passed/7.07秒，覆盖三类原生位置、RuntimeError/OSError、日志正常/失败，核对SQLite重读、ASGI列表及request_id、其它成员正常恢复和原连接重试清错。初轮24失败中的新远端场景同时揭示独立的SQLite身份去重冲突，错误出口场景改用不同远端工作区ID后通过；同ID跨连接问题另行处理，不算本片已修复。
 - Ruff、Pyright两文件零诊断、compileall和strict变更校验通过。复用215/216/217原结果前核对2595项源码指纹均与当前一致，没有无变化重跑。原命令、源码指纹、raw/实际退出码与失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-018.json`。测试中的启动/重连为替身，HTTP为ASGI，不冒称独立Gateway/SSH/Web/Windows实机；2.2/7.2全局门保持未勾，团队协作与MCP显式持有继续TODO。
+
+
+### 2026-10-28 两个远端同工作区 ID 的 SQLite 身份冲突修复
+
+- 真实生产投影默认使用相同namespace，原SQLite去重键遗漏connection，导致两个Gateway导出同remote_workspace_id时误拒绝。唯一writer的remote_projection身份键现包含已有connection_id；其它owner原有去重保持，不改持久字段、SQL、事务、schema或历史记录，不新增命名空间回填/双读。
+- 新测试从人工注册和配置批量入口经原发现协议/DTO产生投影，修改前2 failed，修改后完整场景通过：不同backend UUID和路由保持独立，同连接重复仍拒绝且revision/注册表不变；一个远端刷新不改另一个，关闭writer后冷重开保留全部原身份，再从原重连入口恢复两条路由。扩大六文件回归238 passed/1 failed（12.81秒）；唯一提交观察者异常原对象断言，在完整旧提交`e265172f8`的git archive中单独复现同一失败，未修改断言，不称全绿。
+- Ruff8项与旧HEAD输出逐字一致；Pyright生产13→13，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，compileall通过。作者按架构技能核对：生产796行沿用唯一registry owner，仅新增键字段；测试置于既有federation目录（12个直接Python文件），无新目录、DDL或职责。SSH/HTTP分别为替身与MockTransport，不冒称真实网络或独立产品验收。命令、原始输出、源码指纹、实际退出码、旧提交归因及结构证据见`out/tests/temp/uri-global-closure/artifacts/verification-019.json`；临时旧源码已删除，baseline运行输出保留。URI与多工作区全局门仍未勾，团队/协作和MCP显式持有继续延期。

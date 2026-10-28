@@ -185,3 +185,10 @@
 ### 2026-10-28 Docker 路由验收的身份与配置 owner
 
 - 两条Docker调用方不再依赖普通响应中的真实根路径，改用既有远端target身份并保留精确目标断言；注册表重启场景从同一隔离BOXTEAM_HOME删除Gateway启动声明。相关114项Gateway回归通过；实际Docker运行在远端默认Provider凭据解析失败，尚未进入业务阶段，不计为完成。原始证据与URI整体审计共用`out/tests/temp/uri-global-closure/artifacts/`，4.3/8.2继续未勾。
+
+
+### 2026-10-28 两个远端同工作区 ID 的 SQLite 身份冲突修复
+
+- 真实生产投影默认使用相同namespace，原SQLite去重键遗漏connection，导致两个Gateway导出同remote_workspace_id时误拒绝。唯一writer的remote_projection身份键现包含已有connection_id；其它owner原有去重保持，不改持久字段、SQL、事务、schema或历史记录，不新增命名空间回填/双读。
+- 新测试从人工注册和配置批量入口经原发现协议/DTO产生投影，修改前2 failed，修改后完整场景通过：不同backend UUID和路由保持独立，同连接重复仍拒绝且revision/注册表不变；一个远端刷新不改另一个，关闭writer后冷重开保留全部原身份，再从原重连入口恢复两条路由。扩大六文件回归238 passed/1 failed（12.81秒）；唯一提交观察者异常原对象断言，在完整旧提交`e265172f8`的git archive中单独复现同一失败，未修改断言，不称全绿。
+- Ruff8项与旧HEAD输出逐字一致；Pyright生产13→13，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，compileall通过。作者按架构技能核对：生产796行沿用唯一registry owner，仅新增键字段；测试置于既有federation目录（12个直接Python文件），无新目录、DDL或职责。SSH/HTTP分别为替身与MockTransport，不冒称真实网络或独立产品验收。命令、原始输出、源码指纹、实际退出码、旧提交归因及结构证据见`out/tests/temp/uri-global-closure/artifacts/verification-019.json`；临时旧源码已删除，baseline运行输出保留。URI与多工作区全局门仍未勾，团队/协作和MCP显式持有继续延期。
