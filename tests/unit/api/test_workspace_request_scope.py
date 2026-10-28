@@ -7,10 +7,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from app import container as container_module
-from app.api.deps import workspace_container_scope
+from app.api.deps import get_workspace_container, workspace_container_scope
 from app.container import WorkspaceContainerRegistry
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import (
@@ -20,6 +20,34 @@ from app.core.path_utils import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
+
+
+@pytest.fixture(params=["/private/workspace-identity-secret", r"C:\private\workspace-identity-secret", r"\\server\private\workspace-identity-secret"])
+def invalid_workspace_identity(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.fixture(params=["header", "path", "path_and_header"])
+def invalid_workspace_carrier(
+    request: pytest.FixtureRequest, invalid_workspace_identity: str,
+) -> Request:
+    value = invalid_workspace_identity
+    headers = [] if request.param == "path" else [(b"x-boxteam-workspace-id", value.encode())]
+    path_params = {} if request.param == "header" else {
+        "workspace_id": value if request.param == "path" else "00000000-0000-4000-8000-000000000001",
+    }
+    return Request({"type": "http", "headers": headers, "path_params": path_params})
+
+
+def test_invalid_identity_carriers_never_echo_paths_or_lookup_a_container(
+    invalid_workspace_carrier: Request, invalid_workspace_identity: str,
+) -> None:
+    # Request 未装配 app/registry，越过身份拒绝进入服务图查找会直接使本例失败。
+    with pytest.raises(HTTPException) as caught:
+        get_workspace_container(invalid_workspace_carrier)
+    assert caught.value.status_code == 400
+    assert invalid_workspace_identity not in str(caught.value.detail)
+    assert caught.value.detail == "Workspace 后端工作区 ID 必须是标准 UUID"
 
 
 @pytest.fixture

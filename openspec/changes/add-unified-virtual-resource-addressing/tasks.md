@@ -882,3 +882,8 @@
 - 完整旧生产配相同最终测试：6 failed／6 passed，六个失败均精确断言路径不得外泄；真实 Node 启动的三个反例 3 failed／1 deselected，复现 HTTP 启动错误外泄。最终候选的进程身份、启动、claim、process lease 与 phase barrier 回归 49 passed／44.97 秒；ASGI HTTP 配真实 Node 的完整接收／身份故障 4 passed／32.03 秒。后者核对原配置创建、单次读取故障、409 与头体 request_id、真实进程终结、failed 状态／持久动作／manifest 无路径、原 claim 结清、service 冷读及原配置重试启动和停止；不伪造运行历史。
 - Ruff、compileall 与 OpenSpec strict 通过；完整候选、准确命令、源码前后指纹、raw 日志、实际退出码和进程组回收核验见 `out/tests/temp/node-debug-identity/artifacts/verification-012.json`。早期候选与最终候选只调整新增断言顺序，原始运行均保留。
 - 这是作者自查及进程内 HTTP／真实 Linux Node 集成，不代表独立 Gateway、后端 OS 重启、真实 Web 或 Windows 实机；psutil 仅做外部读取边界故障验证。未运行 Python 类型检查，本机未安装 Pyright。全局 2.2／7.2 继续未勾，团队与协作继续 TODO。
+
+### 2026-10-28 工作区身份请求拒绝边界（2.2／7.2 部分收口）
+
+- UUID校验及路径段／header冲突比较不再回显非法原生路径，原值和来源位置仅留诊断；合法身份、状态码和显式mount选择不变。真实双容器、Job与编译图隔离、无效请求零registry查找及原生产反例证据见 `add-multi-workspace-backend-mounting/tasks.md` 同日条目与 `out/tests/temp/mount-identity-inputs/artifacts/verification-013.json`。
+- 本片不代替真实Gateway、独立Backend重启、Web、Windows或全局路径审计，2.2／7.2仍未勾。

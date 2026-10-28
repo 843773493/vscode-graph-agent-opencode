@@ -183,6 +183,17 @@ def get_workspace_container(request: Request) -> _AppContainerProtocol:
 
     path_workspace_id = request.path_params.get("workspace_id")
     header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+    workspace_id = path_workspace_id or header_workspace_id
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise HTTPException(status_code=400, detail="缺少显式 workspace_id")
+    try:
+        # 两个载体均先经过唯一身份校验，冲突错误不能回显未校验的原生路径。
+        if path_workspace_id is not None:
+            validate_workspace_id(path_workspace_id)
+        if header_workspace_id is not None:
+            validate_workspace_id(header_workspace_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if (
         path_workspace_id is not None
         and header_workspace_id is not None
@@ -195,14 +206,6 @@ def get_workspace_container(request: Request) -> _AppContainerProtocol:
                 f"path={path_workspace_id!r}, header={header_workspace_id!r}"
             ),
         )
-    workspace_id = path_workspace_id or header_workspace_id
-    if not isinstance(workspace_id, str) or not workspace_id:
-        raise HTTPException(status_code=400, detail="缺少显式 workspace_id")
-    try:
-        workspace_id = validate_workspace_id(workspace_id)
-    except RuntimeError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
     registry = cast(
         _WorkspaceContainerRegistryProtocol | None,
         getattr(request.app.state, "workspace_container_registry", None),

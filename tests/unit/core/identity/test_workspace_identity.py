@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import pytest
 
 from app.core.workspace_identity import (
     load_or_create_workspace_id,
+    validate_workspace_id,
     workspace_identity_path,
 )
 
@@ -52,6 +54,33 @@ def test_workspace_identity_is_a_persistent_uuid4(tmp_path):
     assert json.loads(
         workspace_identity_path(tmp_path).read_text(encoding="utf-8")
     ) == {"workspace_id": first_id}
+
+
+@pytest.mark.parametrize("value,reason", [
+    ("/private/workspace-identity-secret", "必须是标准 UUID"),
+    (r"C:\private\workspace-identity-secret", "必须是标准 UUID"),
+    (r"\\server\private\workspace-identity-secret", "必须是标准 UUID"),
+    ("00000000-0000-4000-8000-00000000000A", "必须使用标准 UUID 文本"),
+    ("00000000000040008000000000000001", "必须使用标准 UUID 文本"),
+])
+def test_invalid_workspace_identity_keeps_input_and_source_only_in_diagnostics(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, value: str, reason: str,
+) -> None:
+    source = tmp_path / "workspace-identity-secret.json"
+    with caplog.at_level(logging.ERROR, logger="app.core.workspace_identity"), pytest.raises(RuntimeError, match=reason) as caught:
+        validate_workspace_id(value, source=source)
+    assert value not in str(caught.value) and str(source) not in str(caught.value)
+    assert str(source) in caplog.text and repr(value) in caplog.text
+    if "必须是" in reason:
+        assert isinstance(caught.value.__cause__, ValueError)
+    assert not source.exists() and not (tmp_path / ".boxteam").exists()
+
+
+def test_canonical_workspace_identity_is_preserved_without_reading_source(tmp_path: Path) -> None:
+    value = "00000000-0000-4000-8000-000000000001"
+    source = tmp_path / "workspace-identity-secret.json"
+    assert validate_workspace_id(value, source=source) == value
+    assert not source.exists() and not (tmp_path / ".boxteam").exists()
 
 
 def test_identity_cli_prints_and_reuses_one_workspace_uuid(cli_workspace: Path) -> None:

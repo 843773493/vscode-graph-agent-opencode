@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from uuid import UUID, uuid4
 from app.core.atomic_fs import native_io_path
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
+logger = logging.getLogger(__name__)
 
 
 def workspace_identity_path(workspace_root: Path) -> Path:
@@ -25,16 +27,12 @@ def validate_workspace_id(workspace_id: str, *, source: Path | None = None) -> s
     try:
         parsed = UUID(workspace_id)
     except (AttributeError, ValueError) as error:
-        location = f": {source}" if source is not None else ""
-        raise RuntimeError(
-            f"Workspace 后端工作区 ID 必须是标准 UUID{location}: {workspace_id!r}"
-        ) from error
+        logger.error("Workspace 身份格式拒绝: source=%s value=%r", source, workspace_id)
+        raise RuntimeError("Workspace 后端工作区 ID 必须是标准 UUID") from error
     normalized = str(parsed)
     if normalized != workspace_id:
-        location = f": {source}" if source is not None else ""
-        raise RuntimeError(
-            f"Workspace 后端工作区 ID 必须使用标准 UUID 文本{location}: {workspace_id!r}"
-        )
+        logger.error("Workspace 身份非规范文本: source=%s value=%r", source, workspace_id)
+        raise RuntimeError("Workspace 后端工作区 ID 必须使用标准 UUID 文本")
     return normalized
 
 

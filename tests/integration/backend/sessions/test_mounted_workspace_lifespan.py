@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -47,6 +49,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _start_job,
 )
 from tests.support.model_stream.config import ModelStreamReplay
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -308,6 +311,76 @@ async def test_second_mount_failure_closes_both_real_containers(mounted_case: Mo
             raise AssertionError("部分启动失败不得进入 ready")
     assert len(mounted_case.containers) == 2
     assert_closed(mounted_case)
+
+
+@pytest.mark.asyncio
+async def test_workspace_identity_carriers_reject_paths_before_resolving_mounts(
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    case = mounted_case
+    evidence = []
+    async with main.lifespan(main.app):
+        registry = main.app.state.workspace_container_registry
+        assert registry is not None
+        identities = list(case.roots)
+        marker = case.roots[identities[0]] / "workspace-identity-secret.txt"
+        marker.write_bytes(b"identity validation must not access this file\n")
+        invalid_values = [str(marker), r"C:\private\workspace-identity-secret", r"\\server\private\workspace-identity-secret"]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test", headers=LOCAL_TOKEN_HEADERS,
+        ) as client:
+            before = []
+            for identity in identities:
+                created = await client.post(f"/api/v1/workspaces/{identity}/sessions", json={"title": f"owner-{identity}"})
+                assert created.status_code == 200, created.text
+                response = await client.get(f"/api/v1/workspaces/{identity}/sessions")
+                assert response.status_code == 200, response.text
+                before.append(response.json()["data"])
+
+            resolved: list[str] = []
+            original_get = registry.get
+
+            def get(workspace_id: str) -> AppContainer:
+                resolved.append(workspace_id)
+                return original_get(workspace_id)
+
+            with monkeypatch.context() as patch, caplog.at_level(logging.ERROR, logger="app.core.workspace_identity"):
+                patch.setattr(registry, "get", get)
+                for suffix in ("/health", "/sessions"):
+                    for prefix in ("/api/v1", f"/api/v1/workspaces/{identities[0]}"):
+                        for value in invalid_values:
+                            response = await client.get(prefix + suffix, headers={"X-BoxTeam-Workspace-Id": value})
+                            assert response.status_code == 400, response.text
+                            assert value not in response.text and "workspace-identity-secret" not in response.text
+                            assert response.json()["detail"] == "Workspace 后端工作区 ID 必须是标准 UUID"
+                            assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                            evidence.append({"status": response.status_code, "response": response.json()})
+                assert resolved == [], "非法身份不能构造、查询或回退到任何工作区服务图"
+                for value in invalid_values:
+                    assert repr(value) in caplog.text
+
+                conflict = await client.get(f"/api/v1/workspaces/{identities[0]}/health", headers={
+                    "X-BoxTeam-Workspace-Id": identities[1],
+                })
+                assert conflict.status_code == 400 and all(identity in conflict.text for identity in identities)
+                missing = await client.get("/api/v1/health")
+                assert missing.status_code == 400 and missing.json()["detail"] == "缺少显式 workspace_id"
+                assert resolved == []
+                unmounted = str(uuid4())
+                absent = await client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": unmounted})
+                assert absent.status_code == 404, absent.text
+                assert resolved == [unmounted]
+                evidence.extend({"status": response.status_code, "response": response.json()} for response in (conflict, missing, absent))
+
+            for identity, expected in zip(identities, before, strict=True):
+                response = await client.get(f"/api/v1/workspaces/{identity}/sessions", headers={"X-BoxTeam-Workspace-Id": identity})
+                assert response.status_code == 200 and response.json()["data"] == expected
+                assert len(expected["items"]) == 1 and expected["items"][0]["workspace_id"] == identity
+            assert marker.read_bytes() == b"identity validation must not access this file\n"
+            assert len(case.containers) == 2 and not case.compiled
+    assert_closed(case)
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "identity-input-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.fixture
