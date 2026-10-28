@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 
@@ -15,6 +16,8 @@ from app.schemas.gateway_control import (
     GatewayResourceScopeErrorDTO,
 )
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceListDTO
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayResourceCatalogService:
@@ -67,7 +70,7 @@ class GatewayResourceCatalogService:
             data = await self._get_data(target, "resources", request_id=request_id)
             resources = WorkspaceResourceListDTO.model_validate(data)
         except (httpx.HTTPError, LookupError, RuntimeError, TypeError, ValueError) as error:
-            return [], [self._scope_error(target.workspace_id, workspace_label, error)]
+            return [], [self._scope_error(target.workspace_id, workspace_label, error, request_id=request_id)]
         return [
             GatewayResourceDTO(
                 gateway_connection_id=target.remote_gateway_connection_id,
@@ -159,9 +162,18 @@ class GatewayResourceCatalogService:
         scope_key: str,
         label: str,
         error: BaseException,
+        *,
+        request_id: str,
     ) -> GatewayResourceScopeErrorDTO:
+        logger.error(
+            "工作区资源目录读取失败: workspace_id=%s request_id=%s", scope_key, request_id,
+            exc_info=error,
+        )
+        message = f"工作区资源目录读取失败: {type(error).__name__}"
+        if isinstance(error, httpx.HTTPStatusError):
+            message += f", status={error.response.status_code}"
         return GatewayResourceScopeErrorDTO(
             scope_key=scope_key,
             label=label,
-            message=f"{type(error).__name__}: {error}",
+            message=message,
         )

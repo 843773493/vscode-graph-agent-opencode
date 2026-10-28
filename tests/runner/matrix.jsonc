@@ -3,6 +3,7 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-gateway-resource-catalog-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/resources/test_catalog_errors.py"]},
     {"id":"integration-resource-lease-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/test_resource_record_errors.py","-k","grant_ledger"]},
     {"id":"integration-resource-record-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/test_resource_record_errors.py","-k","creation_disk"]},
     {"id":"integration-mcp-real-provider-discovery","layer":"integration","client":null,"enabled":true,"requiredEnvironment":["CCTQ_API_KEY"],"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/mcp/test_provider_discovery.py"]},

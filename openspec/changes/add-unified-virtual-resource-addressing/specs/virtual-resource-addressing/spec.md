@@ -59,6 +59,11 @@
 - **WHEN** 系统持久化已注册工作区的物理根
 - **THEN** 该根 MUST 只保存在负责原生 target 的 Gateway 控制面 registry，并按 target ID 与 Backend `workspace_id` 绑定；用户提供的注册根只可经身份认证且通过 `add-multi-workspace-backend-mounting` 目标 Gateway 授权的请求送达该 owner。managed group、业务记录、普通 DTO、解析结果、模型载荷和联邦资源投影均 MUST NOT 复制或输出该根
 
+#### Scenario: Gateway 资源目录错误保留作用域和原始诊断
+
+- **WHEN** 聚合工作区资源时出现下游 HTTP、传输、响应信封或资源正文校验错误
+- **THEN** 原有工作区错误 DTO 保留目标作用域、标签、异常类型及适用的 HTTP 状态；完整异常及堆栈留具名诊断，并携带同一 request_id，不将异常全文复制到普通响应，不修改原异常携带的响应或校验输入。健康工作区继续返回其原资源；失败目标仅由后续显式查询重试，不改资源状态、不伪造空目录成功
+
 #### Scenario: 原生文件附件在消息创建时取得统一引用
 
 - **WHEN** 用户以工作区内相对路径、绝对路径或 files URI 添加同一文件附件

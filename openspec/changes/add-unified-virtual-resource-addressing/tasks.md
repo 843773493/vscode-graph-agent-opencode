@@ -926,3 +926,11 @@
 - 主配置及 Include 继续由原 Host 收集 owner 读取；文件解析／读取的 I/O 错误保留原类别、errno/winerror 与直接 cause，编码错误仍属于 ValueError 拒绝。普通错误只报告 config_read 阶段及原类型，完整原异常留具名诊断；不把失败投影为空或残缺 Host，不创建读取旁路、重试或新配置参数。
 - 新增24项覆盖列表／选定Host、主文件／Include、权限／编码和POSIX／盘符／UNC错误正文，逐项核公开无位置、诊断原异常身份、失败零ssh派发与同入口显式重试。完整旧生产配最终测试的 archive tree `2f00e3978a57f55506c3415d3bd6805a37c11209` 为24 failed；候选与SSH／转发相邻回归共61 passed／8 failed。8项均在未修改的旧转发装具访问已删除 `_gateway_root` 时失败；完整 HEAD 独立副本复现同一参数1 failed／2.57秒，未修改装具、生产路由或断言。
 - Ruff与两文件Pyright零诊断。准确命令、完整源码快照、前后指纹、raw／实际退出码及归因原件保留在 `out/tests/temp/ssh-config-read-errors/artifacts/`；本片不包含真实HTTP、OpenSSH连接、Windows或Web验收，不能据此勾全局2.2／7.2。团队与协作继续TODO。
+
+### 2026-10-28 Gateway 资源目录错误出口（2.2／7.2 部分收口）
+
+- 原聚合 owner 的单一错误出口仅公布目标作用域、标签、异常类型及 HTTP 状态，完整原异常和堆栈携带同一 request_id 留诊断；原响应和校验输入不变。健康目标继续返回原资源，失败目标只在后续显式查询重试；不改 DTO 结构、资源状态或聚合失败隔离行为，不增加查询或错误解析旁路。
+- 旧生产上的12个反例全部复现路径外泄；最终目录及相邻生成器导入回归21 passed／0.80秒。真实独立 Gateway 与 HTTP 下游经原注册和资源查询入口，核九类信封／正文校验／HTTP错误、健康资源及精确工作区归属、同一请求身份、原始诊断及修复后的同入口恢复，正式 matrix 1 passed／12.81秒。查询测试允许合成资源数据，不作为真实执行、fork或恢复证据；两次真实HTTP结果重叠，不累计计数。
+- Ruff、三文件 Pyright 零诊断及 OpenSpec strict 47／0通过。首轮新增校验异常断言误用转义后的文本比较，已改为精确核原异常的 input；新装具的同步文件处理和进程文本类型问题已修正，失败原件全部保留。准确命令、前后源码指纹、raw、真实退出码、零进程组残留及作者结构自查见 `out/tests/temp/resource-catalog-error-boundary/artifacts/verification-012.json`。未新增Web、Windows或真实Backend资源执行验收，全局2.2／7.2仍未勾，团队与协作继续TODO。
+
+上一节的过期日志装具另由 `e1f4edfab` 迁到实际 `get_runtime_log_root` 入口，原提交后错误归属、状态及显式重试断言保持；完整转发文件32 passed／3.45秒，Ruff通过，原件见 `out/tests/temp/logging-test-caller-convergence/artifacts/`。
