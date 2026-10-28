@@ -9,6 +9,7 @@ from typing import cast
 from uuid import uuid4
 
 from app.core.env import get_project_root
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
@@ -116,8 +117,10 @@ async def _restore_managed_local_runtimes(
             except Exception as error:
                 if contract is not None and owner.contract is contract:
                     raise
-                registry.mark_backend_error(owner, f"Gateway 启动恢复完整 Backend 失败: {error}")
-                logger.exception("Gateway 完整 Backend 恢复失败: owner=%s", owner.contract.owner_id)
+                registry.mark_backend_error(owner, failure_detail(
+                    error, stage="backend_restore",
+                    label=f"Gateway 启动恢复完整 Backend 失败: owner={owner.contract.owner_id}",
+                ))
                 if registry.active_workspace_id in ids and registry.has_target(default_workspace_id):
                     registry.activate(default_workspace_id)
                     logger.warning("Gateway 完整组恢复失败，已回退到默认工作区: owner=%s", owner.contract.owner_id)
@@ -318,15 +321,14 @@ async def _complete_registry_startup(
                     resolved_gateway_config.gateway_process_health_poll_interval_seconds
                 ),
             )
-        except Exception as error:
-            message = (
-                "恢复远程 Gateway 失败: "
-                f"connection_id={connection.connection_id}: {error}"
+        except Exception as error:  # noqa: BLE001 — 独立记录各远端恢复失败，继续其它连接。
+            message = failure_detail(
+                error, stage="remote_gateway_restore",
+                label=f"恢复远程 Gateway 失败: connection_id={connection.connection_id}",
             )
             for target in registry.targets():
                 if target.remote_gateway_connection_id == connection.connection_id:
                     registry.mark_connection_error(target.workspace_id, message)
-            logger.exception(message)
 
     requested_active_workspace_id = (
         configured_active_workspace_id

@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
+from app.core import failures
+from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
+from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfig
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes import workspaces
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
@@ -88,9 +96,18 @@ def startup_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StartupCase
 
 
 @pytest.fixture
-def persisted_targets(startup_case: StartupCase, managed_backend_factory):
+def restore_state_store(request: pytest.FixtureRequest, startup_case: StartupCase) -> Iterator[GatewayStateStore | None]:
+    if getattr(request, "param", False):
+        with GatewayStateStore(path=startup_case.gateway_root / "restore.sqlite") as state:
+            yield state
+    else:
+        yield None
+
+
+@pytest.fixture
+def persisted_targets(startup_case: StartupCase, managed_backend_factory, restore_state_store):
     case = startup_case
-    registry = GatewayWorkspaceRegistry(storage_path=case.gateway_root / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(storage_path=case.gateway_root / "workspaces.json", state_store=restore_state_store)
     count = 1
 
     def add(names: tuple[str, ...], *, desired_running: bool = True, default: bool = False, missing: bool = False, owner: bool = True):
@@ -117,6 +134,47 @@ def persisted_targets(startup_case: StartupCase, managed_backend_factory):
             registry.register_backend_owner(graph.owner)
         return targets, graph
     return registry, add
+
+
+@pytest.fixture(params=["/private/restore-failure", r"C:\private\restore-failure", r"\\server\private\restore-failure"])
+def native_restore_location(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.fixture(params=[False, True], ids=["runtime", "native-io"])
+def restore_error(request: pytest.FixtureRequest, native_restore_location: str) -> Exception:
+    if request.param:
+        return OSError(5, "restore rejected", native_restore_location)
+    return RuntimeError(f"restore rejected: {native_restore_location}")
+
+
+@pytest.fixture(params=[False, True], ids=["log", "failed-log"])
+def restore_sink_error(request: pytest.FixtureRequest, native_restore_location: str, monkeypatch: pytest.MonkeyPatch) -> OSError | None:
+    if not request.param:
+        return None
+    error = OSError(5, "diagnostic sink failed", native_restore_location)
+
+    def reject_log(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(failures.logger, "error", reject_log)
+    return error
+
+
+@pytest.fixture
+def list_workspace_http():
+    async def listed(registry: GatewayWorkspaceRegistry) -> httpx.Response:
+        app = FastAPI()
+        app.add_middleware(TraceMiddleware)
+        app.include_router(workspaces.router)
+        app.dependency_overrides[verify_gateway_token] = lambda: "test-token"
+        app.dependency_overrides[workspaces.get_registry] = lambda: registry
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response = await client.get("/api/gateway/workspaces", params={"check_health": False}, headers={"X-Request-ID": "restore-failure-01"})
+        assert response.status_code == 200, response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == "restore-failure-01"
+        return response
+    return listed
 
 
 def test_default_backend_port_is_optional_and_validated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,8 +223,11 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restore_state_store", [True], indirect=True)
 async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_targets(
-    startup_case, persisted_targets, monkeypatch, caplog,
+    startup_case, persisted_targets, monkeypatch, caplog, restore_state_store,
+    restore_error: Exception, restore_sink_error: OSError | None,
+    native_restore_location: str, list_workspace_http,
 ) -> None:
     registry, add = persisted_targets
     defaults, _ = add(("Default",), default=True)
@@ -176,7 +237,7 @@ async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_ta
 
     async def start(*, owner, **options):
         if owner is graph.owner:
-            raise RuntimeError("Backend start rejected")
+            raise restore_error
         return await startup_case.start(owner=owner, **options)
 
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", start)
@@ -184,11 +245,125 @@ async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_ta
         registry=registry, default_workspace_id=defaults[0].workspace_id,
     )
     assert all(registry.resolve(target.workspace_id).desired_running for target in unavailable)
-    assert all("Backend start rejected" in registry.resolve(target.workspace_id).connection_error for target in unavailable)
+    expected = f"Gateway 启动恢复完整 Backend 失败: owner={graph.owner.contract.owner_id}: stage=backend_restore, error={type(restore_error).__name__}"
+    if isinstance(restore_error, OSError):
+        expected += ", errno=5"
+    if restore_sink_error is not None:
+        expected += ", diagnostic_sink_error=OSError"
+    assert graph.owner.error == expected
+    assert all(registry.resolve(target.workspace_id).connection_error == expected for target in unavailable)
+    if restore_sink_error is not None:
+        assert any(str(restore_sink_error) in note for note in restore_error.__notes__)
+    else:
+        assert any(record.exc_info and record.exc_info[1] is restore_error for record in caplog.records)
     assert registry.has_runtime(healthy[0].workspace_id)
     assert registry.active_workspace_id == defaults[0].workspace_id
     assert any("已回退到默认工作区" in record.getMessage() for record in caplog.records)
+    listed = await list_workspace_http(registry)
+    assert native_restore_location not in listed.text
+    by_id = {item["workspace_id"]: item for item in listed.json()["data"]["items"]}
+    assert all(by_id[member_id]["connection_error"] == expected for member_id in graph.owner.contract.workspace_ids)
+    old_contract = graph.owner.contract
     registry.close()
+    restore_state_store.close()
+    # 关闭原writer后重新打开，遵守生产SQLite唯一写进程合同。
+    with GatewayStateStore(path=startup_case.gateway_root / "restore.sqlite") as cold_state:
+        cold = GatewayWorkspaceRegistry(storage_path=startup_case.gateway_root / "workspaces.json", state_store=cold_state)
+        for target in unavailable:
+            restored = cold.resolve(target.workspace_id)
+            assert restored.connection_error == expected
+            assert restored.desired_running and restored.backend_workspace_id == target.backend_workspace_id
+            assert restored.root_path == target.root_path
+        assert native_restore_location not in (await list_workspace_http(cold)).text
+        monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", startup_case.start)
+        await bootstrap._restore_managed_local_runtimes(registry=cold, default_workspace_id=defaults[0].workspace_id)
+        restored_owner = cold.backend_owner(unavailable[0].workspace_id)
+        assert restored_owner is not None
+        assert restored_owner.contract.generation == old_contract.generation
+        assert restored_owner.contract.owner_id == old_contract.owner_id
+        assert restored_owner.error is None
+        assert all(cold.resolve(target.workspace_id).connection_error is None for target in unavailable)
+        assert all(cold.managed_runtime(target.workspace_id).backend_owner is restored_owner for target in unavailable)
+        cold.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore_state_store", [True], indirect=True)
+async def test_gateway_remote_restore_persists_failure_facts_and_retries_original_connection(
+    startup_case, persisted_targets, restore_state_store, monkeypatch, caplog,
+    restore_error: Exception, restore_sink_error: OSError | None,
+    native_restore_location: str, list_workspace_http,
+) -> None:
+    persisted, _ = persisted_targets
+    connections = []
+    projections: dict[str, tuple[WorkspaceTarget, ...]] = {}
+    for index, name in enumerate(("failed", "healthy"), start=1):
+        connection = RemoteGatewayConnection(
+            connection_id="rgw_" + str(index) * 32, name=name,
+            host=f"{name}.example.com", port=22, username="developer",
+            private_key_path=None, ssh_config_host=name, remote_gateway_port=8014,
+            remote_gateway_id="gateway_" + str(index) * 32, protocol_version=1, source_owner="manual",
+        )
+        targets = tuple(WorkspaceTarget(
+            workspace_id=f"{name}-{member}", name=f"{name}-{member}", root_path=None,
+            backend_url=f"http://127.0.0.1:{43000 + index}", connection_kind="remote_gateway",
+            backend_workspace_id=f"00000000-0000-4000-8000-{index:012d}",
+            owner="remote_projection", connection_id=connection.connection_id,
+            remote_gateway_connection_id=connection.connection_id, remote_workspace_id=f"{name}-remote-{member}",
+            remote_service_names=("workspace_api",),
+        ) for member in range(2 if name == "failed" else 1))
+        projections[connection.connection_id] = targets
+        persisted.apply_remote_projection_snapshot(connection=connection, projections=targets)
+        connections.append(connection)
+    failed, healthy = connections
+    attempts: list[str] = []
+    fail_restore = True
+
+    async def reconnect(*, registry, connection_id: str, **_options):
+        attempts.append(connection_id)
+        if connection_id == failed.connection_id and fail_restore:
+            raise restore_error
+        targets = projections[connection_id]
+        registry.apply_remote_projection_snapshot(
+            connection=registry.remote_gateway_connection(connection_id), projections=targets,
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": targets[0].backend_url}),
+        )
+        return targets
+
+    monkeypatch.setattr(bootstrap, "reconnect_remote_gateway", reconnect)
+    registry = await bootstrap.create_registry(state_store=restore_state_store)
+    assert attempts == [failed.connection_id, healthy.connection_id]
+    expected = f"恢复远程 Gateway 失败: connection_id={failed.connection_id}: stage=remote_gateway_restore, error={type(restore_error).__name__}"
+    if isinstance(restore_error, OSError):
+        expected += ", errno=5"
+    if restore_sink_error is not None:
+        expected += ", diagnostic_sink_error=OSError"
+    failed_ids = tuple(target.workspace_id for target in projections[failed.connection_id])
+    assert all(registry.resolve(member_id).connection_error == expected for member_id in failed_ids)
+    assert registry.resolve_service_url(projections[healthy.connection_id][0].workspace_id, "workspace_api") == projections[healthy.connection_id][0].backend_url
+    if restore_sink_error is not None:
+        assert any(str(restore_sink_error) in note for note in restore_error.__notes__)
+    else:
+        assert any(record.exc_info and record.exc_info[1] is restore_error for record in caplog.records)
+    listed = await list_workspace_http(registry)
+    by_id = {item["workspace_id"]: item for item in listed.json()["data"]["items"]}
+    assert all(by_id[member_id]["connection_error"] == expected and by_id[member_id]["status"] == "offline" for member_id in failed_ids)
+    assert by_id[projections[healthy.connection_id][0].workspace_id]["status"] == "ready"
+    assert native_restore_location not in listed.text
+    registry.close()
+    restore_state_store.close()
+    with GatewayStateStore(path=startup_case.gateway_root / "restore.sqlite") as cold_state:
+        cold = GatewayWorkspaceRegistry(storage_path=startup_case.gateway_root / "workspaces.json", state_store=cold_state)
+        assert all(cold.resolve(member_id).connection_error == expected for member_id in failed_ids)
+        assert cold.remote_gateway_connection(failed.connection_id) == failed
+        assert native_restore_location not in (await list_workspace_http(cold)).text
+        fail_restore = False
+        restored = await bootstrap.create_registry(state_store=cold_state)
+        assert attempts == [failed.connection_id, healthy.connection_id] * 2
+        assert all(restored.resolve(member_id).connection_error is None for member_id in failed_ids)
+        assert all(restored.resolve_service_url(member_id, "workspace_api") == projections[failed.connection_id][0].backend_url for member_id in failed_ids)
+        assert all(restored.resolve(member_id).backend_workspace_id == projections[failed.connection_id][0].backend_workspace_id for member_id in failed_ids)
+        restored.close()
 
 
 @pytest.mark.asyncio

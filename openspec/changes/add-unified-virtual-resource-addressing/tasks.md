@@ -1071,3 +1071,10 @@
 - 原实现7项失败/1项取消通过，精确复现主异常及次错原生位置进入502响应；另9项404/409拒绝反例全失败。最终不重叠文件组316 passed（重连/生命周期130、ConfigService117、Gateway配置51、配置故障HTTPX/ASGI及SQLite18）。新增覆盖POSIX/盘符/UNC、注册表记录成功/失败、日志正常/失败、原异常身份和完整诊断、同request_id、重建registry后的SQLite重读和列表序列化；已发布合同、旧/新runtime关闭归属和取消原因链沿原场景核验。首轮4 failed/117 passed仅因测试按未转义文本匹配OSError的Windows路径展示，修为精确核原异常对象及filename，未放宽业务约束。
 - Ruff对触达文件及完整config_service目录按文件/最窄AST owner/规则/完整消息核对58→55、无新增；同12文件Pyright50→50、无新增，不称全静态绿。compileall、strict 51/51及差异检查通过。作者按架构技能自审：无新目录或业务owner，通用原语29行且只依赖标准库；core49个直接Python模块及既有大型生命周期测试文件仍有拆分风险，本次沿既有夹具补验收，不引入第二套拓扑装具，不称独立审查。
 - 准确命令、源码前后指纹、raw/实际退出码、反例及类型/结构对照见 out/tests/temp/uri-global-closure/artifacts/verification-017.json。测试含明确控制器/远端边界替身及ASGI，不冒称独立Gateway/SSH/Windows/Web验收；不改写旧connection_error数据，其它启动、完整Backend组及健康投影的原文来源仍待后续收口。2.2/7.2全局门保持未勾，团队/协作与MCP显式持有继续TODO。
+
+
+### 2026-10-28 Gateway 启动恢复的失败事实收口
+
+- 完整 Backend 组和远端 Gateway 启动恢复共用既有 failure_detail，不再将原生异常正文写入 connection_error 或普通列表响应；保留 owner/connection、准确阶段、异常类别及适用系统错误码，原异常链留具名诊断。日志 sink 失败仍保留原错误注记并完成恢复失败结算；原恢复顺序、默认工作区回退、其它连接恢复及重试行为保持。
+- 修改前24项反例失败；最终整个启动恢复文件60 passed/7.07秒，覆盖三类原生位置、RuntimeError/OSError、日志正常/失败，核对SQLite重读、ASGI列表及request_id、其它成员正常恢复和原连接重试清错。初轮24失败中的新远端场景同时揭示独立的SQLite身份去重冲突，错误出口场景改用不同远端工作区ID后通过；同ID跨连接问题另行处理，不算本片已修复。
+- Ruff、Pyright两文件零诊断、compileall和strict变更校验通过。复用215/216/217原结果前核对2595项源码指纹均与当前一致，没有无变化重跑。原命令、源码指纹、raw/实际退出码与失败原件见`out/tests/temp/uri-global-closure/artifacts/verification-018.json`。测试中的启动/重连为替身，HTTP为ASGI，不冒称独立Gateway/SSH/Web/Windows实机；2.2/7.2全局门保持未勾，团队协作与MCP显式持有继续TODO。
