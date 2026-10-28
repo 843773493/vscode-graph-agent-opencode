@@ -85,7 +85,7 @@ async def test_goal_real_backend_restart_keeps_identity_and_clear_does_not_resur
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"terminal": True, "browser": True, "managed_gateway": True}], indirect=True)
 async def test_fork_goal_install_publish_replay_and_abort_use_the_same_owner(
-    source_case: RuntimeSourceCase, fork_deadlines, monkeypatch: pytest.MonkeyPatch,
+    source_case: RuntimeSourceCase, fork_deadlines, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     case = source_case
     source_id, _, _ = await _target(case)
@@ -149,7 +149,9 @@ async def test_fork_goal_install_publish_replay_and_abort_use_the_same_owner(
     try:
         failed = await deadline.wait(case.client.post(f"/api/v1/sessions/{source_id}/fork-context", json=failed_request), "Goal fork abort")
         assert failed.status_code == 500, failed.text
-        assert "goal-installed-before-publish-fault" in failed.json()["message"]
+        assert failed.json()["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+        assert any(record.exc_info and isinstance(record.exc_info[1], RuntimeError)
+                   and str(record.exc_info[1]) == "goal-installed-before-publish-fault" for record in caplog.records)
         assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
         record = prepared[-1]
         current = case.container.session_service.path_resolver.catalog_store.get_creation_record(record.session_creation_idempotency_key)

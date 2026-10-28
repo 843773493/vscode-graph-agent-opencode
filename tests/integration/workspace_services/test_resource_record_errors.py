@@ -47,7 +47,7 @@ def resource_workspace(
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explicit_retry(
     resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
-    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     _browser, root, run = resource_workspace
     async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
@@ -79,7 +79,8 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
                                            headers={"X-Request-ID": request_id})
             assert failed.status_code == 500, failed.text
             assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
-            assert "PermissionError" in failed.text and "stage=write" in failed.text and f"kind={kind}" in failed.text
+            assert failed.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
+            assert "stage=write" in caplog.text and f"kind={kind}" in caplog.text
             assert str(root) not in failed.text and str(pending) not in failed.text
             assert owner._store.path.read_bytes() == before and owner._store.all() == records
             assert ledger_path.read_bytes() == leases
@@ -100,7 +101,7 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_dispatch(
     resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
-    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     _browser, root, run = resource_workspace
     async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
@@ -145,7 +146,8 @@ async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_d
                 assert failed.status_code == 500, failed.text
                 assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
                 assert str(root) not in failed.text and str(pending) not in failed.text
-                assert "artifact=external_resource_leases" in failed.text and "stage=write" in failed.text
+                assert failed.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
+                assert "artifact=external_resource_leases" in caplog.text and "stage=write" in caplog.text
                 assert not issued and ledger_path.read_bytes() == ledger
                 assert owner._store.path.read_bytes() == records
                 assert owner._leases.leases_for_resource(rid) == [active]

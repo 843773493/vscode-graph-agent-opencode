@@ -174,7 +174,7 @@ async def creation_client(startup_container: AppContainer):
 @pytest.mark.parametrize("stage", ["path_budget", "rename"])
 async def test_create_http_error_and_explicit_retry(
     creation_client: httpx.AsyncClient, startup_container: AppContainer,
-    monkeypatch: pytest.MonkeyPatch, stage: str,
+    monkeypatch: pytest.MonkeyPatch, stage: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     original = session_creation.os.rename
 
@@ -196,14 +196,18 @@ async def test_create_http_error_and_explicit_retry(
     assert response.status_code == (400 if stage == "path_budget" else 500)
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "creation-error-request"
     assert str(startup_container.workspace_root) not in response.text and "/private/" not in response.text
-    assert f"stage={stage}" in response.text
+    if stage == "path_budget":
+        assert f"stage={stage}" in response.text
+    else:
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+        assert any(record.exc_info and record.exc_info[1] and f"stage={stage}" in str(record.exc_info[1]) for record in caplog.records)
     catalog = startup_container.session_service.path_resolver.catalog_store
     records = catalog.connection.execute("SELECT state, abort_reason FROM session_creation_records").fetchall()
     if stage == "path_budget":
         assert not records
     else:
         assert len(records) == 1 and records[0][0] == "aborted"
-        assert records[0][1] in response.json()["message"]
+        assert any(record.exc_info and record.exc_info[1] and records[0][1] in str(record.exc_info[1]) for record in caplog.records)
     retried = await creation_client.post("/api/v1/sessions", json={"title": "HTTP修复重试"},
                                         headers={"X-Request-ID": "creation-retry-request"})
     assert retried.status_code == 200, retried.text

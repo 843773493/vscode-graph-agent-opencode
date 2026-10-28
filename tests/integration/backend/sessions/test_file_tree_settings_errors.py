@@ -81,6 +81,8 @@ async def test_file_tree_settings_errors_preserve_original_and_recover(
     request_id = f"req_shortcut_{scope}_{failure}"
     headers = {"X-Request-ID": request_id}
     base = f"/api/v1/sessions/{session}"
+    log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+    log_offset = log_path.stat().st_size
     response = (
         await integration_client.post(
             base + "/file-tree-shortcuts" + ("/apply-to-workspace" if scope == "workspace" else ""),
@@ -92,7 +94,21 @@ async def test_file_tree_settings_errors_preserve_original_and_recover(
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
     assert str(root) not in response.text
     assert "private-input.txt" not in response.text
-    assert "artifact=file_tree_shortcuts" in response.json()["message"]
+    error_type = {"shape": "TypeError", "validation": "ValueError", "permission": "PermissionError", "write": "PermissionError"}[failure]
+    expected = f"请求处理失败: stage=http_request, error={error_type}"
+    if failure in {"permission", "write"}:
+        expected += ", errno=13"
+    assert response.json()["message"] == expected
+    # 后端是独立进程，直接核本次请求的原始服务日志。
+    with log_path.open("rb") as log:
+        log.seek(log_offset)
+        diagnostics = log.read().decode()
+    assert f"request_id={request_id} response_started=false" in diagnostics
+    assert "artifact=file_tree_shortcuts" in diagnostics
+    if failure == "permission":
+        assert str(path) in diagnostics
+    elif failure == "write":
+        assert str(path.parent / f".{path.name}.") in diagnostics
     if failure in {"permission", "write"}:
         assert "PermissionError" in response.text and "errno=13" in response.text
     path.parent.chmod(0o755)

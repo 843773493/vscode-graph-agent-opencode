@@ -84,7 +84,7 @@ async def test_public_fork_capture_io_failure_keeps_original_and_can_retry(
             failed = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
         assert failed.status_code == 500, failed.text
         stage = "publication" if fault in {"scan", "marker_write", "marker_replace"} else fault
-        assert "artifact=fork_capture stage=" + stage in failed.text
+        assert "artifact=fork_capture stage=" + stage in caplog.text
         assert len(failures) == 1
         assert "PermissionError" in failed.text and "errno=13" in failed.text
         assert str(container.workspace_root) not in failed.text

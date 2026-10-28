@@ -109,7 +109,7 @@ async def test_public_fork_target_failure_keeps_history_and_can_retry(
         assert len(stages) == 1 and not stages[0].exists()
         stage = (publication_phase if fault in publication_faults else "preparation_sync" if fault in {"scan", "file_sync", "directory_symlink"}
                  else "staging" if fault == "mkdir" else "staging_cleanup" if fault == "cleanup" else "staging_copy")
-        assert "artifact=fork_target stage=" + stage in failed.text
+        assert "artifact=fork_target stage=" + stage in caplog.text
         if fault != "directory_symlink":
             assert "PermissionError" in failed.text and "errno=13" in failed.text
             injected = publication_fault if fault in publication_faults else staging_fault

@@ -90,7 +90,7 @@ def test_snapshot_rejects_root_override_and_unknown_identity(snapshot_endpoint) 
     assert client.get(base.replace(workspace_id, "00000000-0000-4000-8000-000000000099") + "/bad-id/html").status_code == 404
 
 
-def test_snapshot_corrupt_metadata_is_explicit_server_failure(snapshot_endpoint) -> None:
+def test_snapshot_corrupt_metadata_is_explicit_server_failure(snapshot_endpoint, caplog: pytest.LogCaptureFixture) -> None:
     client, workspace_root, _, workspace_id = snapshot_endpoint
     response = client.post(f"/api/v1/workspaces/{workspace_id}/runtime/log-snapshot", json={"html": "<p>x</p>"})
     result = response.json()["data"]
@@ -98,7 +98,8 @@ def test_snapshot_corrupt_metadata_is_explicit_server_failure(snapshot_endpoint)
     path.write_text("{")
     failure = client.get(result["metadata_url"])
     assert failure.status_code == 500
-    assert "metadata 损坏" in failure.text
+    assert failure.json()["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+    assert "metadata 损坏" in caplog.text
 
 
 def test_snapshot_wire_roundtrip_and_http_contract_reserve_removed_location() -> None:

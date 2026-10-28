@@ -18,6 +18,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
 from app.schemas.internal_v2.attachment import AttachmentRef
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import (
@@ -76,11 +77,19 @@ async def fork_execution_message(
                 sources = container.resource_platform.gateway_skill_sources
                 assert sources is not None
 
-                def skill_response(request: httpx.Request) -> httpx.Response:
-                    assert request.url.path == f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{container.workspace_id}"
+                async def skill_response(request: httpx.Request) -> httpx.Response:
+                    path = f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{container.workspace_id}"
+                    if request.method == "POST":
+                        assert request.url.path == path + "/publications/wait"
+                        result = await skills.wait_for_publication(
+                            GatewaySkillPublicationRequest.model_validate_json(request.content), workspace_id=container.workspace_id,
+                        )
+                    else:
+                        assert request.method == "GET" and request.url.path == path
+                        result = skills.snapshot(workspace_id=container.workspace_id)
                     request_id = request.headers.get("X-Request-ID", "cold-fork-independent-skill-poll")
                     return httpx.Response(200, headers={"X-Request-ID": request_id}, json={
-                        "code": 0, "data": skills.snapshot(workspace_id=container.workspace_id).model_dump(mode="json"),
+                        "code": 0, "data": result.model_dump(mode="json"),
                         "request_id": request_id,
                     })
 
@@ -89,6 +98,11 @@ async def fork_execution_message(
             # 每个成功启动都有逆序释放；失败不留下半初始化的执行面。
             await type(container.mcp_catalog_owner).start(container.mcp_catalog_owner)
             cleanup.push_async_callback(type(container.mcp_catalog_owner).shutdown, container.mcp_catalog_owner)
+            platform = container.resource_platform
+            activate_resources = await platform.prepare_config(
+                container.config_service.get_snapshot().to_dict(), platform.process_root_scope,
+            )
+            activate_resources()
             await type(container.workspace_file_resource_registry).start(container.workspace_file_resource_registry)
             cleanup.push_async_callback(type(container.workspace_file_resource_registry).stop, container.workspace_file_resource_registry)
             if start_fanout:

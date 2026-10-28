@@ -106,7 +106,7 @@ async def test_public_debug_fork_failure_preserves_source_and_safe_error(
             response = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
         assert response.status_code == 500, response.text
         assert len(errors) == 1
-        assert f"artifact=fork_debug stage={fault}" in response.text
+        assert f"artifact=fork_debug stage={fault}" in caplog.text
         assert "PermissionError" in response.text and "errno=13" in response.text
         assert str(container.workspace_root) not in response.text
         assert str(failed_paths[0]) in caplog.text

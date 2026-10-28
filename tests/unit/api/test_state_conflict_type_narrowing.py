@@ -18,28 +18,34 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import get_runtime_service
 from app.api.errors import state_conflict_error, state_conflict_http_error
-from app.main import app
+from app.api.runtime import router
+from app.core.trace_middleware import TraceMiddleware
+from app.main import workspace_http_exception_handler
 from app.services.infrastructure.runtime_service import RuntimeService
 
 
-def _client_with_service(service: MagicMock) -> TestClient:
-    app.dependency_overrides[get_runtime_service] = lambda: service
-    return TestClient(app, raise_server_exceptions=False)
-
-
-def _runtime_service_raising(error: Exception) -> MagicMock:
+@pytest.fixture
+def runtime_api() -> Iterator[tuple[TestClient, MagicMock]]:
     service = MagicMock(spec=RuntimeService)
-    service.begin_drain = AsyncMock(side_effect=error)
-    service.cancel_drain = AsyncMock(side_effect=error)
-    service.force_interrupt = AsyncMock(side_effect=error)
-    return service
+    service.begin_drain = AsyncMock()
+    service.cancel_drain = AsyncMock()
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(workspace_http_exception_handler)
+    application.include_router(router, prefix="/api/v1")
+    application.dependency_overrides[get_runtime_service] = lambda: service
+    with TestClient(application, raise_server_exceptions=False) as client:
+        yield client, service
 
 
 # --- 映射层单元：类型即契约 ---------------------------------------------------
@@ -75,22 +81,15 @@ def test_both_conflict_entrypoints_share_one_implementation() -> None:
 # --- 真实 HTTP 封套：类A → 409，类B → 5xx ------------------------------------
 
 
-def test_client_state_conflict_stays_409_over_real_http() -> None:
+def test_client_state_conflict_stays_409_over_real_http(runtime_api: tuple[TestClient, MagicMock]) -> None:
     """类A 零回归：类型化状态冲突仍落 409 + 纯文本 detail。"""
     message = "只有 draining 状态可以取消排空，当前状态: ready"
-    client = _client_with_service(
-        _runtime_service_raising(ClientStateConflictError(message))
+    client, service = runtime_api
+    service.cancel_drain.side_effect = ClientStateConflictError(message)
+    response = client.post(
+        "/api/v1/runtime/drain/cancel",
+        headers={"X-Local-Token": "local-dev-token", "X-Request-ID": "req_typed_conflict"},
     )
-    try:
-        response = client.post(
-            "/api/v1/runtime/drain/cancel",
-            headers={
-                "X-Local-Token": "local-dev-token",
-                "X-Request-ID": "req_typed_conflict",
-            },
-        )
-    finally:
-        app.dependency_overrides.pop(get_runtime_service, None)
 
     assert response.status_code == 409
     assert response.headers["X-Request-ID"] == "req_typed_conflict"
@@ -100,28 +99,23 @@ def test_client_state_conflict_stays_409_over_real_http() -> None:
     }
 
 
-def test_server_integrity_runtime_error_is_not_masqueraded_as_409() -> None:
+def test_server_integrity_runtime_error_is_not_masqueraded_as_409(
+    runtime_api: tuple[TestClient, MagicMock], caplog: pytest.LogCaptureFixture,
+) -> None:
     """类B：裸 `RuntimeError`（服务端完整性故障）不再伪装成 409，落 5xx。
 
     这是本轮语义修复的核心：路由不再用 `except RuntimeError` 全捕获，异常冒泡到
-    `TraceMiddleware` 落 500，并在服务端日志保留完整堆栈（`logger.exception`）。
+    `TraceMiddleware` 落 500，并在服务端日志保留完整堆栈。
     """
-    client = _client_with_service(
-        _runtime_service_raising(RuntimeError("内部不变量被破坏: drain 账本损坏"))
+    client, service = runtime_api
+    service.begin_drain.side_effect = RuntimeError("内部不变量被破坏: drain 账本损坏")
+    response = client.post(
+        "/api/v1/runtime/drain",
+        headers={"X-Local-Token": "local-dev-token", "X-Request-ID": "req_integrity_failure"},
     )
-    try:
-        response = client.post(
-            "/api/v1/runtime/drain",
-            headers={
-                "X-Local-Token": "local-dev-token",
-                "X-Request-ID": "req_integrity_failure",
-            },
-        )
-    finally:
-        app.dependency_overrides.pop(get_runtime_service, None)
 
     assert response.status_code == 500
     assert response.status_code != 409
     assert response.headers["X-Request-ID"] == "req_integrity_failure"
-    # 5xx 响应体是 TraceMiddleware 的通用封套，携带服务端诊断信息。
-    assert "内部不变量被破坏: drain 账本损坏" in response.text
+    assert response.json()["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+    assert "内部不变量被破坏: drain 账本损坏" in caplog.text

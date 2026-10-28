@@ -40,6 +40,7 @@ pytestmark = pytest.mark.parametrize("source_case", [{
 
 async def test_public_prefix_rejects_open_real_tool_group(
     source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     case = source_case
     session = await create_session(case.client, "真实工具组前缀")
@@ -75,7 +76,9 @@ async def test_public_prefix_rejects_open_real_tool_group(
             "target_container_uri": point["child_container_uri"], "anchor_item_id": anchor, "anchor_mode": mode,
         }), "拒绝未闭合的真实工具组")
         assert response.status_code == 500, response.text
-        assert "ToolProtocolBoundaryConflict: tool-protocol-boundary-conflict" in response.json()["message"]
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=ToolProtocolBoundaryConflict"
+        assert any(record.exc_info and record.exc_info[1] and type(record.exc_info[1]).__name__ == "ToolProtocolBoundaryConflict"
+                   and "tool-protocol-boundary-conflict" in str(record.exc_info[1]) for record in caplog.records)
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         deadline.complete()
     children = await case.client.get(f"/api/v1/sessions/{session}/child-threads")
@@ -89,7 +92,7 @@ async def test_public_prefix_rejects_open_real_tool_group(
 @pytest.mark.parametrize("fault", ["revision", "manifest", "body_hash"])
 async def test_public_prefix_retry_rejects_corrupted_frozen_facts(
     source_case: RuntimeSourceCase, deadlines: ForkDeadlineRegistry,
-    monkeypatch: pytest.MonkeyPatch, fault: str,
+    monkeypatch: pytest.MonkeyPatch, fault: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     case = source_case
     session, thread = await _completed_parent(case)
@@ -153,7 +156,8 @@ async def test_public_prefix_retry_rejects_corrupted_frozen_facts(
         case.write_actual("prefix-corruption-response-" + fault, {"status": response.status_code, "body": response.text})
         assert response.status_code == 500, response.text
         assert response.json()["code"] == 500 and response.json()["data"] is None
-        assert response.json()["message"].startswith("RuntimeError: ") and expected in response.json()["message"]
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+        assert any(record.exc_info and isinstance(record.exc_info[1], RuntimeError) and expected in str(record.exc_info[1]) for record in caplog.records)
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
     except BaseException:
         # 原watchdog继续监督未确认结束的操作，先保留不会被teardown遮蔽的测试错误。

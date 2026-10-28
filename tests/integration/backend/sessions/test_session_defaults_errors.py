@@ -70,6 +70,8 @@ async def test_session_defaults_errors_preserve_original_and_recover(
         path.parent.chmod(0o555)
     request_id = f"req_defaults_{failure}"
     headers = {"X-Request-ID": request_id}
+    log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+    log_offset = log_path.stat().st_size
     response = (
         await integration_client.put("/api/v1/agents/workspace-default", json=agent_payload, headers=headers)
         if failure == "write" else await integration_client.get("/api/v1/agents", headers=headers)
@@ -77,7 +79,12 @@ async def test_session_defaults_errors_preserve_original_and_recover(
     assert response.status_code == 500, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
     assert str(root) not in response.text and "private-input.txt" not in response.text
-    assert "artifact=session_defaults" in response.text
+    with log_path.open("rb") as log:
+        log.seek(log_offset)
+        diagnostics = log.read().decode()
+    assert "artifact=session_defaults" in diagnostics
+    assert f"request_id={request_id} response_started=false" in diagnostics
+    assert "stage=http_request" in response.json()["message"]
     if failure in {"permission", "write"}:
         assert "PermissionError" in response.text and "errno=13" in response.text
     path.parent.chmod(0o755)

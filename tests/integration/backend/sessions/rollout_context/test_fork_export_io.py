@@ -222,9 +222,9 @@ async def test_public_remote_fork_transfer_failure_keeps_history_and_can_retry(
                  "receive_write": "receive_write", "receive_fsync": "receive_flush", "receive_close": "receive_close",
                  "receive_publish": "receive_publish", "receive_root_publish": "receive_publish"}.get(
                      fault, "export_chunk" if fault == "chunk_open" else "export_manifest")
-        assert "artifact=fork_transfer stage=" + stage in failed.text
+        assert "artifact=fork_transfer stage=" + stage in caplog.text
         if fault == "directory_symlink":
-            assert "符号链接目录" in failed.text
+            assert "符号链接目录" in caplog.text
         else:
             assert len(failures) == 1 and "PermissionError" in failed.text and "errno=13" in failed.text
         assert str(paths[0]) in caplog.text

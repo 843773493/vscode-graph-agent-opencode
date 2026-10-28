@@ -202,7 +202,7 @@ async def test_public_fork_detail_failure_preserves_product_history_hash_and_ret
             patch.setattr(source_snapshot, '_copy_declared_details', inject)
             failed = await client.post(f'/api/v1/sessions/{source.session_id}/fork-context', json=request.model_dump(mode='json'))
         assert failed.status_code == 500, failed.text
-        assert invoked and 'artifact=fork_source stage=detail_copy' in failed.text
+        assert invoked and 'artifact=fork_source stage=detail_copy' in caplog.text
         assert str(container.workspace_root) not in failed.text
         diagnosed_path = path.parent if fault == 'symlink_parent' else path
         assert str(diagnosed_path) in caplog.text

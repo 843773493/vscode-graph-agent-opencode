@@ -84,7 +84,10 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
         assert failed.json() == {"detail": expected}
         assert failed.headers["X-Request-ID"]
     else:
-        assert failed.json()["message"] == expected
+        expected_type = "RuntimeError" if stage is None else exception_type
+        assert failed.json()["message"] == f"请求处理失败: stage=http_request, error={expected_type}"
+        assert any(record.exc_info and record.exc_info[1] and
+                   f"{type(record.exc_info[1]).__name__}: {record.exc_info[1]}" == expected for record in caplog.records)
         assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
     diagnostics = [
         record for record in caplog.records
@@ -160,7 +163,9 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
         failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
     assert failed.status_code == 500, failed.text
     expected = "TypeError: 浏览器管理器响应协议错误: stage=grant.receipt；请查看工作区浏览器服务日志"
-    assert failed.json()["message"] == expected
+    assert failed.json()["message"] == "请求处理失败: stage=http_request, error=TypeError"
+    assert any(record.exc_info and record.exc_info[1] and
+               f"{type(record.exc_info[1]).__name__}: {record.exc_info[1]}" == expected for record in caplog.records)
     assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
     assert any(isinstance(record.args, tuple) and record.args[-1] == grant for record in caplog.records)
     browser_owner_bundle.restart()

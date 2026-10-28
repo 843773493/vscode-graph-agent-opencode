@@ -118,6 +118,8 @@ async def test_text_file_errors_keep_uri_original_bytes_and_effects(
     receipts = []
     for index, value in enumerate((target.relative_to(root).as_posix(), str(target), uri)):
         request_id = f"req_text_file_{failure}_{index}"
+        log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+        log_offset = log_path.stat().st_size
         arguments = {"params": {"path": value}, "headers": {"X-Request-ID": request_id}}
         response = (
             await client.get("/api/v1/workspace/files/content", **arguments)
@@ -129,9 +131,14 @@ async def test_text_file_errors_keep_uri_original_bytes_and_effects(
         assert response.status_code == 500, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
         assert str(root) not in response.text
-        assert "PermissionError" in response.json()["message"]
-        assert "errno=13" in response.json()["message"]
-        assert uri in response.json()["message"]
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
+        with log_path.open("rb") as log:
+            log.seek(log_offset)
+            diagnostics = log.read().decode()
+        assert uri in diagnostics
+        native_target = str(target) if failure == "read" else str(target.parent / f".{target.name}.")
+        assert native_target in diagnostics
+        assert f"request_id={request_id} response_started=false" in diagnostics
         receipts.append({"preview": response.json()})
 
     command = EditText(target=uri, old_string="before", new_string="after",

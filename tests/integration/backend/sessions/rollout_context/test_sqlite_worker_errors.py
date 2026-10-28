@@ -184,12 +184,12 @@ async def test_public_fork_worker_failure_preserves_history_and_retry(
                  'lock_copy': 'lock_copy', 'rollout_copy': 'rollout_copy', 'sqlite_snapshot': 'sqlite_snapshot',
                  'jsonl_open': 'jsonl_snapshot', 'control_read': 'control_snapshot',
                  'manifest_write': 'manifest_publish', 'manifest_fsync': 'manifest_publish'}.get(fault, 'sqlite_worker')
-        assert 'artifact=fork_source stage=' + stage in failed.text
+        assert 'artifact=fork_source stage=' + stage in caplog.text
         if fault == 'child_exit':
-            assert 'returncode=1' in failed.text and 'error_type=CalledProcessError' in failed.text
+            assert 'returncode=1' in caplog.text and 'error_type=CalledProcessError' in caplog.text
             assert 'FileNotFoundError' in caplog.text
         elif fault in {'acl_runtime', 'rollout_copy'}:
-            assert 'error_type=' + ('RuntimeError' if fault == 'acl_runtime' else 'Error') in failed.text
+            assert 'error_type=' + ('RuntimeError' if fault == 'acl_runtime' else 'Error') in caplog.text
         else:
             assert 'PermissionError' in failed.text and 'errno=13' in failed.text
         if fault in {'combined', 'capture_cleanup'}:

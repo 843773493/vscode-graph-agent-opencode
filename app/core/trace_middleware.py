@@ -7,6 +7,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.failures import failure_detail
 from app.core.identifier import validate_gateway_id
 
 logger = logging.getLogger(__name__)
@@ -199,27 +200,17 @@ class TraceMiddleware:
             if not response_started:
                 raise RuntimeError("No response returned.")
         except Exception as error:
-            if response_started:
-                logger.exception(
-                    "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s response_started=true",
-                    request.method,
-                    request.url.path,
-                    response_status,
-                    time.perf_counter() - start_time,
-                    request_id,
-                )
-                raise
             duration = time.perf_counter() - start_time
-            logger.exception(
-                "[TRACE] method=%s path=%s status=500 duration=%.4fs request_id=%s",
-                request.method,
-                request.url.path,
-                duration,
-                request_id,
+            # 请求位置与原notes只留诊断；日志失败也不能替换原流异常或阻止500结算。
+            error.add_note(
+                f"[TRACE] method={request.method} path={request.url.path} status={response_status} "
+                f"duration={duration:.4f}s request_id={request_id} response_started={str(response_started).lower()}"
             )
-            message = f"{type(error).__name__}: {error}"
-            for note in getattr(error, "__notes__", ()):
-                message = f"{message}\n{note}"
+            message = failure_detail(
+                error, stage="http_response_stream" if response_started else "http_request", label="请求处理失败",
+            )
+            if response_started:
+                raise
             response = JSONResponse(
                 status_code=500,
                 headers={"X-Request-ID": request_id},

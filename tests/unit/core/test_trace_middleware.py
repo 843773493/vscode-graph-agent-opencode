@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Iterator
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
 from app.api.deps import get_request_id
+from app.core import failures
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
@@ -190,7 +192,7 @@ def test_failed_request_trace_is_emitted_with_exception(
     assert response.headers["X-Request-ID"] == "req_trace_failure"
     assert response.json() == {
         "code": 500,
-        "message": "RuntimeError: 测试请求失败",
+        "message": "请求处理失败: stage=http_request, error=RuntimeError",
         "data": None,
         "request_id": "req_trace_failure",
     }
@@ -290,7 +292,7 @@ def test_gateway_identity_consumers_reject_invalid_header(
             },
         )
         assert response.status_code == 500
-        assert "非法 gateway_id" in response.json()["message"]
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=ValueError"
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "invalid-gateway"
     assert get_current_gateway_id() is None
 
@@ -393,12 +395,12 @@ async def test_stream_chunk_is_forwarded_and_started_response_error_propagates(
         record = next(
             record
             for record in caplog.records
-            if "request_id=req_stream" in record.getMessage()
+            if record.exc_info and record.exc_info[1]
+            and any("request_id=req_stream" in note for note in record.exc_info[1].__notes__)
         )
-        assert "response_started=true" in record.getMessage()
-        assert "status=200" in record.getMessage()
         assert record.exc_info is not None
         assert record.exc_info[1] is not None
+        assert any("response_started=true" in note and "status=200" in note for note in record.exc_info[1].__notes__)
         assert str(record.exc_info[1]) == "流式响应开始后失败"
     finally:
         release_app.set()
@@ -428,3 +430,78 @@ async def test_non_http_scope_is_passed_through() -> None:
     assert len(downstream_scopes) == 1
     assert downstream_scopes[0] is scope
     assert messages == [{"type": "lifespan.startup.complete"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_location", ["/private/http-failure", r"C:\private\http-failure", r"\\server\private\http-failure"])
+@pytest.mark.parametrize("error_type", [RuntimeError, OSError])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.parametrize("response_started", [False, True])
+async def test_http_failure_keeps_native_diagnostics_and_original_stream_identity(
+    native_location: str, error_type: type[RuntimeError | OSError],
+    sink_fails: bool, response_started: bool,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = OSError(5, "request failed", native_location) if error_type is OSError else RuntimeError(f"request failed: {native_location}")
+    cause = ValueError(f"source failed: {native_location}")
+    failure.__cause__ = cause
+    failure.add_note(f"cleanup failed: {native_location}")
+    sink = OSError(28, "diagnostic sink failed", native_location)
+    if sink_fails:
+        def reject_log(*_args: object, **_kwargs: object) -> None:
+            raise sink
+
+        monkeypatch.setattr(failures.logger, "error", reject_log)
+    scope: Scope = {
+        "type": "http", "method": "GET", "path": "/http-failure", "raw_path": b"/http-failure",
+        "scheme": "http", "query_string": b"", "server": ("127.0.0.1", 80),
+        "headers": [(b"x-request-id", b"req_failure"), (b"x-boxteam-navigation-actor", b"actor_failure"),
+                    (GATEWAY_ID_HEADER.lower().encode(), b"gateway_cccccccccccccccccccccccccccc")],
+    }
+    messages: list[Message] = []
+    fail_request = True
+
+    async def app(_: Scope, __: Receive, send: Send) -> None:
+        assert get_current_request_id() == "req_failure"
+        assert get_current_navigation_actor() == "actor_failure"
+        if response_started or not fail_request:
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"first chunk", "more_body": fail_request})
+        if fail_request:
+            raise failure
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    middleware = TraceMiddleware(app)
+    if response_started:
+        with pytest.raises(error_type) as caught:
+            await middleware(scope, receive, send)
+        assert caught.value is failure and caught.value.__cause__ is cause
+        assert len(messages) == 2 and messages[1]["body"] == b"first chunk"
+        assert messages[0]["status"] == 200 and messages[1]["more_body"] is True
+    else:
+        await middleware(scope, receive, send)
+        body = json.loads(b"".join(message["body"] for message in messages if message["type"] == "http.response.body"))
+        expected = "请求处理失败: stage=http_request, error=" + error_type.__name__
+        if error_type is OSError:
+            expected += ", errno=5"
+        if sink_fails:
+            expected += ", diagnostic_sink_error=OSError"
+        assert messages[0]["status"] == 500
+        assert body == {"code": 500, "message": expected, "data": None, "request_id": "req_failure"}
+    assert (b"x-request-id", b"req_failure") in messages[0]["headers"]
+    assert get_current_request_id() is get_current_gateway_id() is get_current_navigation_actor() is None
+    if sink_fails:
+        assert any(str(sink) in note for note in failure.__notes__)
+    else:
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert str(cause) in caplog.text and f"cleanup failed: {native_location}" in caplog.text
+    fail_request = False
+    messages.clear()
+    await middleware(scope, receive, send)
+    assert messages[0]["status"] == 200 and messages[1]["more_body"] is False
+    assert get_current_request_id() is get_current_gateway_id() is get_current_navigation_actor() is None

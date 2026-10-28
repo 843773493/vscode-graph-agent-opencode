@@ -127,8 +127,12 @@ def test_runtime_inventory_rejection_publishes_facts_without_foreign_identity(
     assert failed.status_code == 500, failed.text
     assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
     message = failed.json()["message"]
-    assert f"kind={kind}" in message and f"reason={reason}" in message
-    assert "index=1" in message
+    assert message == "请求处理失败: stage=http_request, error=RuntimeError"
+    assert any(
+        record.exc_info and record.exc_info[1]
+        and str(record.exc_info[1]) == f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index=1"
+        for record in caplog.records
+    )
     assert rejected_id not in message
     assert any(
         record.name == "app.services.business.workspace_resources.facts"

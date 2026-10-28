@@ -89,7 +89,10 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
         assert failed.json() == {"detail": expected}
         assert failed.headers["X-Request-ID"]
     else:
-        assert failed.json()["message"] == expected
+        expected_type = "TerminalRequestError" if failure == "http" else error_type
+        assert failed.json()["message"] == f"请求处理失败: stage=http_request, error={expected_type}"
+        assert any(record.exc_info and record.exc_info[1] and
+                   f"{type(record.exc_info[1]).__name__}: {record.exc_info[1]}" == expected for record in caplog.records)
         assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
     assert native_path not in failed.text
     diagnostic_records = [

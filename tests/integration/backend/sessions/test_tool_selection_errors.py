@@ -59,6 +59,8 @@ async def test_tool_selection_storage_errors_preserve_original_and_recover(
         path.parent.chmod(0o555)
     request_id = f"req_selection_{failure}"
     headers = {"X-Request-ID": request_id}
+    log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+    log_offset = log_path.stat().st_size
     response = (
         await integration_client.patch("/api/v1/tools/selection", json=payload, headers=headers)
         if failure == "write" else await integration_client.get("/api/v1/tools", headers=headers)
@@ -66,7 +68,16 @@ async def test_tool_selection_storage_errors_preserve_original_and_recover(
     assert response.status_code == (400 if failure in {"json", "utf8"} else 500), response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
     assert str(root) not in response.text and "private-input.txt" not in response.text
-    assert "artifact=tool_selection" in response.text
+    if failure in {"json", "utf8"}:
+        assert "artifact=tool_selection" in response.text
+    else:
+        error_type = "PermissionError, errno=13" if failure in {"permission", "write"} else "TypeError"
+        assert response.json()["message"] == f"请求处理失败: stage=http_request, error={error_type}"
+        with log_path.open("rb") as log:
+            log.seek(log_offset)
+            diagnostics = log.read().decode()
+        assert "artifact=tool_selection" in diagnostics
+        assert f"request_id={request_id} response_started=false" in diagnostics
     if failure in {"permission", "write"}:
         assert "PermissionError" in response.text and "errno=13" in response.text
     path.parent.chmod(0o755)
@@ -95,6 +106,8 @@ async def test_tool_selection_real_lock_timeout_is_bounded_and_recoverable(
 ):
     root, path, original, _payload, _expected = selection_error_target
     request_id = "req_selection_lock_timeout"
+    log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+    log_offset = log_path.stat().st_size
     with path.with_suffix(".lock").open("a+b") as lock_file:
         portalocker.lock(lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB)
         try:
@@ -105,8 +118,12 @@ async def test_tool_selection_real_lock_timeout_is_bounded_and_recoverable(
             portalocker.unlock(lock_file)
     assert response.status_code == 500, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
-    assert "TimeoutError" in response.text and "timeout_seconds=10" in response.text
-    assert "artifact=tool_selection" in response.text
+    assert response.json()["message"] == "请求处理失败: stage=http_request, error=TimeoutError, errno=None"
+    with log_path.open("rb") as log:
+        log.seek(log_offset)
+        diagnostics = log.read().decode()
+    assert "timeout_seconds=10" in diagnostics and "artifact=tool_selection" in diagnostics
+    assert f"request_id={request_id} response_started=false" in diagnostics
     assert str(root) not in response.text
     assert path.read_bytes() == original
     repaired = await integration_client.get("/api/v1/tools")

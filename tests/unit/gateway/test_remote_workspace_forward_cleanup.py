@@ -394,11 +394,12 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
         assert response.headers["X-Request-ID"] == "add-remote-postcommit-01"
         response_body = response.json()
         assert response_body["request_id"] == "add-remote-postcommit-01"
-        assert "remote registry observer failed after commit" in response_body["message"]
-        assert "SSH 端口转发对账失败" in response_body["message"]
+        assert response_body["message"] == "请求处理失败: stage=http_request, error=RuntimeError"
+        assert any(record.exc_info and record.exc_info[1] is primary_error for record in caplog.records)
+        assert "remote registry observer failed after commit" in str(primary_error)
+        assert any("SSH 端口转发对账失败" in note and f"errno={close_error.errno}" in note
+                   and "winerror=206" in note for note in primary_error.__notes__)
         assert close_error.filename not in response_body["message"]
-        assert f"errno={close_error.errno}" in response_body["message"]
-        assert "winerror=206" in response_body["message"]
         assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
         assert primary_error.args == (
             "remote registry observer failed after commit",

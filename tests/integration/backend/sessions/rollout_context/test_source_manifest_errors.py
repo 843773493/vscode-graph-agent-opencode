@@ -74,7 +74,7 @@ async def test_public_fork_source_manifest_failure_keeps_original_and_can_retry(
             if fault == "symlink":
                 link.unlink()
         assert failed.status_code == 500, failed.text
-        assert "artifact=fork_source stage=manifest" in failed.text
+        assert "artifact=fork_source stage=manifest" in caplog.text
         assert str(container.workspace_root) not in failed.text
         assert str(source_rollout) in caplog.text
         assert failed.headers["X-Request-ID"] == failed.json()["request_id"]

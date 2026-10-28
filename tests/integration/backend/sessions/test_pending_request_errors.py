@@ -65,6 +65,8 @@ async def test_pending_request_failure_does_not_publish_native_storage(
     receipts = []
     for index, scope in enumerate(("", "/main-thread")):
         request_id = f"req_pending_error_{failure}_{index}"
+        log_path = root / ".boxteam/logs/integration-backend.stderr.log"
+        log_offset = log_path.stat().st_size
         response = await integration_client.get(
             f"/api/v1/sessions/{session_id}{scope}/pending-requests",
             headers={"X-Request-ID": request_id},
@@ -74,7 +76,12 @@ async def test_pending_request_failure_does_not_publish_native_storage(
         assert str(root) not in response.text
         assert "private-input.txt" not in response.text
         message = response.json()["message"]
-        assert session_id in message and "migrate_schema" in message
+        assert message == "请求处理失败: stage=http_request, error=RuntimeError"
+        with log_path.open("rb") as log:
+            log.seek(log_offset)
+            diagnostics = log.read().decode()
+        assert session_id in diagnostics and "migrate_schema" in diagnostics
+        assert f"request_id={request_id} response_started=false" in diagnostics
         receipts.append(response.json())
     path.chmod(0o644)
     assert path.read_bytes() == corrupted

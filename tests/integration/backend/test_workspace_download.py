@@ -75,11 +75,17 @@ async def download_case(tmp_path, monkeypatch, request):
         service.close()
 
 
-def assert_failure(response, case, *, stage, request_id):
+def assert_failure(response, case, caplog, *, stage, request_id):
     assert response.status_code == 500, response.text
     body = response.json()
     assert body["request_id"] == response.headers["X-Request-ID"] == request_id
-    assert f"stage={stage}" in body["message"]
+    assert "stage=http_request" in body["message"]
+    assert any(
+        record.exc_info and (error := record.exc_info[1])
+        and f"stage={stage}" in str(error)
+        and any(f"request_id={request_id} " in note for note in getattr(error, "__notes__", []))
+        for record in caplog.records if record.name == "app.core.failures"
+    )
     assert str(case.workspace) not in response.text
     assert all(str(path) not in response.text for path in case.archives)
     return body["message"]
@@ -157,9 +163,9 @@ async def test_download_stat_error_keeps_native_cause_in_diagnostics(download_ca
         response = await case.client.get(
             f"/api/v1/workspace/files/{endpoint}", params={"path": case.uri}, headers={"X-Request-ID": "req-download-stat"},
         )
-    message = assert_failure(response, case, stage="文件检查", request_id="req-download-stat")
+    message = assert_failure(response, case, caplog, stage="文件检查", request_id="req-download-stat")
     assert "PermissionError" in message and f"errno={errno.EACCES}" in message
-    assert case.uri in message
+    assert case.uri in caplog.text
     assert str(case.target) in caplog.text
     assert case.target.read_bytes() == bytes(range(256)) * 600
 
@@ -192,7 +198,7 @@ async def test_archive_preparation_failure_cleans_temp_and_preserves_source(down
         response = await case.client.get(
             "/api/v1/workspace/files/download", params={"path": str(directory)}, headers={"X-Request-ID": "req-archive-prep"},
         )
-    message = assert_failure(response, case, stage=stage, request_id="req-archive-prep")
+    message = assert_failure(response, case, caplog, stage=stage, request_id="req-archive-prep")
     assert f"errno={errno.EIO}" in message
     assert str(source) in caplog.text
     assert all(not path.exists() for path in case.archives)
@@ -222,8 +228,8 @@ async def test_delayed_file_access_failure_returns_safe_error_and_can_retry(down
         response = await case.client.get(
             f"/api/v1/workspace/files/{endpoint}", params={"path": case.uri}, headers={"X-Request-ID": "req-delayed-download"},
         )
-    message = assert_failure(response, case, stage="文件传输", request_id="req-delayed-download")
-    assert case.uri in message
+    assert_failure(response, case, caplog, stage="文件传输", request_id="req-delayed-download")
+    assert case.uri in caplog.text
     assert str(case.target) in caplog.text
     retried = await case.client.get(f"/api/v1/workspace/files/{endpoint}", params={"path": case.uri})
     assert retried.status_code == 200
@@ -268,7 +274,7 @@ async def test_real_permission_denial_keeps_source_and_download_target(download_
             response = await case.client.get(
                 "/api/v1/workspace/files/raw", params={"path": str(case.target)}, headers={"X-Request-ID": "req-real-eacces"},
             )
-        message = assert_failure(response, case, stage="文件传输", request_id="req-real-eacces")
+        message = assert_failure(response, case, caplog, stage="文件传输", request_id="req-real-eacces")
         assert "PermissionError" in message and f"errno={errno.EACCES}" in message
         assert str(case.target) in caplog.text
     finally:

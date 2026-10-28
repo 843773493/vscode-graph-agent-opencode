@@ -217,12 +217,13 @@ async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_respon
                     assert response.status_code == 500, response.text
                     assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
                     assert "runtime-private-marker" not in response.text, response.text
-                    assert response.json()["message"] == "TypeError: Workspace API 生命周期响应缺少 data 对象: status=200"
+                    assert response.json()["message"] == "请求处理失败: stage=http_request, error=TypeError"
                     evidence[request_id] = response.json()
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
     log = (context.artifacts_dir / "gateway.stderr.log").read_text()
     assert "runtime-private-marker" in log
+    assert "TypeError: Workspace API 生命周期响应缺少 data 对象: status=200" in log
     requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
     assert len(requests) == 12
     assert [request["request_id"] for request in requests] == list(evidence)
@@ -329,8 +330,16 @@ async def test_gateway_identity_failure_keeps_original_identity_and_request_unti
                     failed = await client.get("/api/gateway/federation/workspaces", headers=headers)
                     assert failed.status_code == 500, failed.text
                     assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == request_id
-                    assert "artifact=gateway_identity" in failed.json()["message"]
-                    assert f"stage={stage}" in failed.json()["message"]
+                    error_type = {"value": "ValueError", "json": "JSONDecodeError", "utf8": "UnicodeDecodeError", "directory": "IsADirectoryError"}[kind]
+                    expected = f"请求处理失败: stage=http_request, error={error_type}"
+                    if kind == "directory":
+                        expected += ", errno=21"
+                    elif kind == "json":
+                        expected += ", lineno=1, colno=15, pos=14"
+                    assert failed.json()["message"] == expected
+                    diagnostics = (context.artifacts_dir / "gateway.stderr.log").read_text()
+                    assert f"artifact=gateway_identity, stage={stage}, error=" in diagnostics
+                    assert f"request_id={request_id}" in diagnostics
                     assert str(identity_path) not in failed.text
                     assert credential.token not in failed.text
                     if kind == "directory":
@@ -393,9 +402,10 @@ async def test_device_credential_publish_failure_keeps_authorization_until_expli
                     failed = await client.request(method, endpoint, json=payload, headers={"X-Request-ID": request_id})
                     assert failed.status_code == 500, failed.text
                     assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == request_id
-                    assert "artifact=federation_credentials" in failed.json()["message"]
-                    assert "stage=create_temp" in failed.json()["message"]
-                    assert "PermissionError" in failed.json()["message"]
+                    assert failed.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
+                    diagnostics = (context.artifacts_dir / "gateway.stderr.log").read_text()
+                    assert "artifact=federation_credentials, stage=create_temp, error=PermissionError" in diagnostics
+                    assert f"request_id={request_id}" in diagnostics
                     assert str(credential_path.parent) not in failed.text
                     assert original_token not in failed.text
                     assert credential_path.read_bytes() == original
