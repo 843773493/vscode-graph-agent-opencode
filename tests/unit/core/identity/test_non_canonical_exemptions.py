@@ -5,7 +5,7 @@ session/thread 身份」约束为 UUIDv7 位 profile。§7.1 已声明两类**�
 身份**显式豁免、允许继续使用 UUIDv4：
 
 1. Node 服务进程（`BOXTEAM_NODE_BIN`，无 `crypto.randomUUIDv7`）生成的
-   `browser_`/`screenshot_`/`download_`/`page_`/`preset_`、以及浏览器
+   `screenshot_`/`download_`/`page_`/`preset_`、以及浏览器
    （无 `Bun.randomUUIDv7`）生成的 `inline:` 附件 file id；
 2. **运行时非工厂前缀** `runtime_lease_<uuid4>` 与 `target_generation_<uuid4>`
    （§7.1c）：二者经实测**不是** `IdentifierPrefix` 工厂前缀，MUST NOT 被当作
@@ -25,8 +25,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import IdentifierPrefix
-from app.core.identifier import validate_session_id, validate_thread_id
+from app.core.identifier import (
+    IdentifierPrefix,
+    create_uuid_hex,
+    validate_session_id,
+    validate_thread_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +46,6 @@ class Exemption:
 # Node 服务进程（无 crypto.randomUUIDv7）与浏览器（无 Bun.randomUUIDv7）
 # 生成的本地 id（§7.1）。每条含具名载体与 §7.1 声明的「非 canonical」注释锚点。
 _JS_EXEMPTIONS: tuple[Exemption, ...] = (
-    Exemption("node-browser", "browser_", "src/workspace-services/browser/server/browserManager.js", "非 canonical"),
     Exemption("node-browser", "screenshot_", "src/workspace-services/browser/server/browserStateStore.js", "非 canonical"),
     Exemption("node-browser", "download_", "src/workspace-services/browser/server/browserStateStore.js", "非 canonical"),
     Exemption("node-browser", "page_", "src/workspace-services/browser/server/browserSession.js", "非 canonical"),
@@ -138,6 +141,16 @@ def test_canonical_validator_rejects_non_canonical_id(exemption: Exemption) -> N
         validate_session_id(sample)
     with pytest.raises(ValueError):
         validate_thread_id(sample)
+
+
+@pytest.mark.parametrize("prefix", ("term", "browser"))
+def test_canonical_validator_rejects_workspace_resource_id(prefix: str) -> None:
+    """资源 owner 已使用统一 v7 工厂；其身份仍不能充当 Session/Thread。"""
+    resource_id = f"{prefix}_{create_uuid_hex()}"
+    with pytest.raises(ValueError):
+        validate_session_id(resource_id)
+    with pytest.raises(ValueError):
+        validate_thread_id(resource_id)
 
 
 def test_exemption_must_not_expand_to_canonical_ids() -> None:

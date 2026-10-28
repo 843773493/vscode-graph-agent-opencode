@@ -196,3 +196,9 @@
 ### 2026-10-04 存量处置收口证据
 
 此前记录的 `c16b2c17`、`u01-u02-final-review.md` 与 117 passed / 1 passed，验证的是后来由 E04b 删除的 v4 quarantine/import 实现；这些是历史证据，不代表当前入口存在。E04b 的当前验收改为验证迁移入口已删除、旧 JSON-only catalog 明确失败且不创建空 SQLite，并确认 session creation/deletion 隔离语义仍由各自 owner 保持。
+
+## 2026-10-28 当前规格同步复核
+
+- 按当前真实调用方重新核对工厂闭集：移除生成器下线后零引用的 `gen`、`grun` 声明，现为31项；D12逐项登记28项持久载体及3项进程内订阅。新增持久身份与 `req` 的持久任务用法纳入矩阵，不改写旧33项原始审计或任何存量ID。长度合同明确为前缀原样加32位hex，仅 `ses_`、`thr_` 等四字节前缀总长36。
+- Browser稳定身份现由Python资源owner统一分配v7，移除已失效的Node自分配豁免检查；保留其内部页面等豁免，另核v7资源身份仍被Session/Thread校验器拒绝。现有调用方闭集检查在修改前精确检出两项零引用；首次扩大检查86通过、1项旧Browser生成点断言失败，原件保留。
+- 最终 `identity-final-005`：87 passed／3.37秒，Ruff零诊断，OpenSpec严格校验48通过／0失败，实际退出0；运行有进程外硬期限与4GiB数据段保护。准确命令、源码指纹、raw与退出码在 `out/tests/temp/uuidv7-spec-convergence/artifacts/runs/`，机械矩阵与主规格同步收据在同目录上级 `sync-002.json`。本次不重新宣称旧684项创建回归已运行，也不以此代表Gateway、Windows或Web验收。

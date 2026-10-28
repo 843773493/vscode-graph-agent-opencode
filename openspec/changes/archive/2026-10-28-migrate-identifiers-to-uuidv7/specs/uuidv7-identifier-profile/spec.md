@@ -6,11 +6,11 @@
 
 ### Requirement: canonical 标识符的位 profile 必须是 UUIDv7
 
-所有 canonical 标识符（`ses_{32}`、`thr_{32}` 及其它由唯一 id 工厂生成的持久身份）的 32 位 hex payload MUST 满足 **UUIDv7（RFC 9562）** 位 profile：version 位 MUST 为 `7`，variant 位 MUST 属于 `8|9|a|b`；id MUST 保持既有 36-byte ASCII 外形（4 字节前缀 + 32 位小写 hex）。系统 MUST NOT 产出或接受 UUIDv4 位 profile 作为 canonical 身份。
+所有 canonical 标识符（`ses_{32}`、`thr_{32}` 及其它由唯一 id 工厂生成的持久身份）的 32 位 hex payload MUST 满足 **UUIDv7（RFC 9562）** 位 profile：version 位 MUST 为 `7`，variant 位 MUST 属于 `8|9|a|b`；id MUST 保持既有的 `<prefix>_{32 位小写 hex}` 外形，各前缀不得被截断或重命名；只有 `ses_`、`thr_` 等 4 字节前缀的总长为 36 个 ASCII byte。系统 MUST NOT 产出或接受 UUIDv4 位 profile 作为 canonical 身份。
 
 #### Scenario: 工厂产出 v7 位 profile
 - **WHEN** 唯一 id 工厂生成一个 canonical 标识符
-- **THEN** 其 payload 第 13 个 hex MUST 为 `7`、第 17 个 hex MUST 属于 `8|9|a|b`，且总长 MUST 为 36 个 ASCII byte
+- **THEN** 其 payload 第 13 个 hex MUST 为 `7`、第 17 个 hex MUST 属于 `8|9|a|b`，且前缀 MUST 原样保留，总长 MUST 等于前缀 ASCII 字节数加 1 个下划线再加 32 个 hex 字节；`ses_`、`thr_` 总长为 36 个 ASCII byte
 
 #### Scenario: 拒绝非 v7 位 profile
 - **WHEN** 任意 API、Proto、catalog 或 typed ref 提交 payload 第 13 个 hex 不为 `7` 的 canonical 标识符
@@ -56,7 +56,7 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 新建 Session 的 `created_at` 与 `sessions/YYYY/MM/DD/{session_id}` 日期 MUST 由 `session_id` 内嵌的 48 bit Unix 毫秒时间戳按 **UTC** 推导；系统 MUST 能仅凭 id 复核 locator 日期，MUST NOT 以独立墙钟读取或另存的 `created_at` 作为唯一来源。新建 child Thread 的 `created_at` 与 `threads/YYYY/MM/DD/{thread_id}` 日期 MUST 同样由该 child 自身 `thread_id` 内嵌时间戳按 UTC 推导。main-thread ID MUST 自然分配，但无独立物理日期桶，且不得决定 Session `created_at` 或 Session locator 日期。`thread_catalog.kind=main` 行 MUST 沿用 Session `created_at`；它记录同一 Session 创建事实中的主线程指针，不以 main-thread ID 内嵌时间另定创建时间。上述唯一创建时间源合同仅覆盖 Session 与 child Thread，不扩展到所有 canonical ID 的业务时间字段。
 
-日期 MUST 使用 **UTC**（与既有分桶一致：`session_catalog_store.py` 以 `created_at.astimezone(UTC).date()` 生成 locator）；MUST NOT 改为本地时区。
+日期 MUST 使用 **UTC**（与既有分桶一致：`app/core/session_catalog_store/validators.py` 以 `created_at.astimezone(UTC).date()` 生成 locator）；MUST NOT 改为本地时区。
 
 #### Scenario: 分桶日期与 id 内嵌时间戳一致
 - **WHEN** 校验一个 `sessions/YYYY/MM/DD/{session_id}` locator
@@ -135,8 +135,9 @@ canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 �
 
 系统 MUST 显式声明并区分各运行面的 v7 可用性，MUST NOT 伪造统一：
 
-- `src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 的后端进程由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`）；实测 Node 22 无 `crypto.randomUUIDv7`。其另行生成的 id（`term_` / `browser_` / `screenshot_` / `download_` / `page_` / `preset_` 等）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
-- `src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中全部位于 `*.test.ts(x)` 测试文件，生产代码 0 命中；浏览器运行时并不提供 `Bun`）；其生成的附件 file id（`inline:{uuid}:{name}`）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
+- `src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 的后端进程由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/workspace_process.py`）；实测 Node 22 无 `crypto.randomUUIDv7`。其另行生成的 id（`screenshot_` / `download_` / `page_` / `preset_` 等）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
+- `src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（浏览器运行时并不提供 `Bun`，注释或测试中的提及不代表运行时依赖）；其生成的附件 file id（`inline:{uuid}:{name}`）MUST 被声明为**非 canonical 身份**，允许继续使用 v4。
+- Workspace 资源 owner（`app/services/business/workspace_resources/owner.py`）通过统一 `create_uuid_hex()` 分配 `term_`、`browser_` 身份，Node 只接受并使用该身份；两者不属于上述 Node 自行分配 UUIDv4 的豁免，且其资源命名空间仍不得充当 Session/Thread。
 - 上述非 canonical id MUST NOT 被当作 session/thread 身份，MUST NOT 进入 canonical 校验器所在的命名空间。
 
 #### Scenario: 非 canonical id 明确豁免
@@ -151,7 +152,7 @@ canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 �
 
 本 capability 只拥有 id 的**生成位 profile**；MUST NOT 定义或改写 URI 语法、scope 闭集、`scope_id` 语义、`kind` 闭集、拒绝码或 ResourceIdentity。上述内容 MUST 具名引用对应 change，本 capability MUST NOT 复制其定义。
 
-该边界 MUST 有可机械检查的载体（MUST NOT 只作声明）：本 capability 的生成/校验实现（`app/core/identifier.py`、`app/core/session_catalog_store.py` 的 id 校验路径）MUST NOT 导入或引用 URI/寻址构造（`app/services/infrastructure/resource_platform/virtual_resources/`），且 URI grammar/解析实现 MUST NOT 承载 UUID version/variant 位判定。
+该边界 MUST 有可机械检查的载体（MUST NOT 只作声明）：本 capability 的生成/校验实现（`app/core/identifier.py` 的生成、id 校验与 `app/core/session_catalog_store/validators.py` 的调用路径）MUST NOT 导入或引用 URI/寻址构造（`app/services/infrastructure/resource_platform/virtual_resources/`），且 URI grammar/解析实现 MUST NOT 承载 UUID version/variant 位判定。
 
 #### Scenario: 生成位 profile 与寻址身份不可混用
 - **WHEN** 某处需要引用资源寻址或资源身份
@@ -166,7 +167,7 @@ canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 �
 系统 MUST 显式枚举哪些 id 属于 **canonical 身份（受 UUIDv7 位 profile 约束）**、哪些属于**明确豁免（允许继续 UUIDv4）**，MUST NOT 只把该区分留在设计散文中。
 
 - **canonical 身份（MUST 满足 v7 位 profile）**：由唯一 id 工厂产出的 `session_id`（`ses_`）、`thread_id`（`thr_`），以及任何进入 canonical 校验器命名空间、被持久化为目录叶名 / SQLite 主键 / typed ref owner key 的 id。
-- **明确豁免（MAY 继续 UUIDv4，且 MUST 标注为非 canonical）**：`src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 在 **Node** 运行时（`BOXTEAM_NODE_BIN`）生成的 `term_` / `browser_` / `screenshot_` / `download_` / `page_` / `preset_` 等本地 id；`src/clients/web` 在**浏览器**（无 `Bun.*`）生成的 `inline:` 附件 file id。
+- **明确豁免（MAY 继续 UUIDv4，且 MUST 标注为非 canonical）**：`src/workspace-services/browser/server/` 与 `src/workspace-services/terminal/server/` 在 **Node** 运行时（`BOXTEAM_NODE_BIN`）生成的 `screenshot_` / `download_` / `page_` / `preset_` 等本地 id；`src/clients/web` 在**浏览器**（无 `Bun.*`）生成的 `inline:` 附件 file id。
 
 豁免理由 MUST 是可验证的事实：Node 22 无 `crypto.randomUUIDv7`，浏览器无 `Bun.randomUUIDv7`；这些 id 非 session/thread 身份、不进入 canonical 校验器命名空间。
 
@@ -204,7 +205,7 @@ canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 �
 
 ### Requirement: gateway 控制面库必须逐表分类且失效必须显式报告
 
-gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 session 身份的表 MUST 被逐表分类，MUST NOT 预先假定可静默失效。本 change 不执行这些表的存量 ID 重写；`migrate` 分类只记录其受身份变化影响，不能触发隐式导入或重写。任何未来单独授权的数据重写都必须先由其 owner 明确提出并验证处置路径。
+gateway 控制面库（`app/gateway/control/gateway_state/` 等）中承载 session 身份的表 MUST 被逐表分类，MUST NOT 预先假定可静默失效。本 change 不执行这些表的存量 ID 重写；`migrate` 分类只记录其受身份变化影响，不能触发隐式导入或重写。任何未来单独授权的数据重写都必须先由其 owner 明确提出并验证处置路径。
 
 - `migrate`：承载可能受身份重写影响的数据表；本 change 只登记其影响面，不在运行时迁移或隔离。未来若另立重写 change，owner 必须提供显式且经过测试的处置路径。
 - `explicitly_invalidated`：允许失效重建的表，但 MUST 有**用户可见的显式报告**（哪张表、多少行、为何失效）；MUST NOT 静默重建（对齐「绝不默默失败」/「永不返回虚假的默认值」）。
@@ -222,16 +223,16 @@ gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 se
 
 ### Requirement: 身份变更影响面必须按工厂前缀全集枚举
 
-canonical 身份 profile 变更的影响面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，实测为 **33 个前缀**的闭合 `Literal`）× 是否进入持久面的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。本 change 不重写历史 ID；该矩阵用于证明 v4 身份存在哪些持久载体，并约束任何未来另行授权的身份重写。
+canonical 身份 profile 变更的影响面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，当前为 **31 个前缀**的闭合 `Literal`）× 是否进入持久面的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。本 change 不重写历史 ID；该矩阵用于证明 v4 身份存在哪些持久载体，并约束任何未来另行授权的身份重写。
 
-- **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入影响矩阵，并在未来重写设计中逐项处理。已实测持久面至少含 `ses`、`thr`、`op`、`strm`、`msg`、`evt`、`snapshot`、`part`、`goal`、`job`、`lease`、`gen`、`grun`、`gwn`、`team`、`ttask`、`tevt`、`comm`、`attempt`、`tooltest`、`patch`、`dbgcfg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`intr`。
-- **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与持久身份重写」并给出负向证据。已实测非持久面为 `req`、`src`、`bgm`、`bgt`、`chan`、`sub`、`robs`。
+- **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入影响矩阵，并在未来重写设计中逐项处理。当前持久面为 `adm`、`attempt`、`dbgcfg`、`evt`、`goal`、`gwn`、`intr`、`job`、`lease`、`msg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`op`、`part`、`ptask`、`ptrun`、`req`、`ses`、`snapshot`、`strm`、`team`、`tevt`、`text`、`thr`、`turn`、`tooltest`、`ttask`。`req` 既用于请求关联，也作为 `persistent_task_runs.request_id` 持久保存，不得一概归为内存身份。
+- **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与持久身份重写」并给出负向证据。当前仅进程内的前缀为 `chan`、`sub`、`robs`；原始诊断日志不属于业务身份持久面。已下线的生成器与旧消息链路前缀不再列入当前工厂闭集，其原始审计记录保留为历史。
 
 新增工厂前缀时 MUST 在矩阵补一行并判定持久面，MUST NOT 遗留未判定前缀。
 
 #### Scenario: 矩阵行数等于工厂前缀全集
 - **WHEN** 枚举迁移面
-- **THEN** 矩阵 MUST 覆盖 `IdentifierPrefix` 的全部前缀（当前 33 个），MUST NOT 只覆盖 `ses_`/`thr_`
+- **THEN** 矩阵 MUST 覆盖 `IdentifierPrefix` 的全部前缀（当前 31 个），MUST NOT 只覆盖 `ses_`/`thr_`
 
 #### Scenario: 持久面漏项必须被机械检出
 - **WHEN** 某个进入持久面的前缀（例如 `op_` 进 `navigation_mutation_records` 主键、`strm_` 进 `message_streams/*.jsonl` 文件名）未被列入迁移任务

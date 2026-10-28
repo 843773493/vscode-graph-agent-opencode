@@ -9,7 +9,7 @@
 - 分桶由创建时刻独立记账：`session_catalog_store.py` 用 `utc_date = created_at.astimezone(UTC).date()` 与 `locator = f"sessions/{utc_date:%Y/%m/%d}/{allocated_session_id}"` 生成 locator；`validate_storage_relative_locator()` 只校验形态与「日期真实存在」，**不**与 id 内嵌时间做任何比对。`app/core/session_control_store.py` 对 child thread 同样以 `created_at.astimezone(UTC)` 构建 `threads/{utc_date:%Y/%m/%d}/{child_thread_id}`。
 - SQLite 主键：`nodes.node_id TEXT PRIMARY KEY`、`thread_catalog.thread_id TEXT PRIMARY KEY`，均以 id 文本作主键。
 - 依赖：`pyproject.toml` 的 `requires-python = ">=3.11"`，`dependencies` **无任何 uuid 库**；`uv.lock` 中 `uuid-utils 0.16.0` 仅作为 langchain-core/langsmith 的**传递依赖**出现。本机 `uv run python` 实测为 Python 3.12.3，`hasattr(uuid, "uuid7") == False`。发行包运行时（`packaging/runtime/versions.mjs`）与 Docker（`tools/cross-platform-development-targets/docker/Dockerfile`）均固定 Python 3.12。`uuid_utils` wheel 覆盖 cp311–cp314。
-- JS：`Bun.randomUUIDv7` 在 bun 1.3.11 存在；Node 22.17 **无** `crypto.randomUUIDv7`。`src/workspace-services/{browser,terminal}/server/*.js` 用 `import { randomUUID } from "node:crypto"`；`src/clients/web/src/utils/media/mediaAttachments.ts` 用浏览器 `crypto.randomUUID()`。`app/gateway/runtime/process.py` 以 `BOXTEAM_NODE_BIN` 启动辅助服务（Node，非 bun）。
+- JS：`Bun.randomUUIDv7` 在 bun 1.3.11 存在；Node 22.17 **无** `crypto.randomUUIDv7`。`src/workspace-services/{browser,terminal}/server/*.js` 用 `import { randomUUID } from "node:crypto"`；`src/clients/web/src/utils/media/mediaAttachments.ts` 用浏览器 `crypto.randomUUID()`。`app/gateway/runtime/workspace_process.py` 以 `BOXTEAM_NODE_BIN` 启动辅助服务（Node，非 bun）。
 - 规模：`app` 下约 45 个 `.py` 文件含直接 `uuid4`/`UUID(` 调用，`tests` 下约 44 个；`src` 下 8 个 JS/TS 文件含 `randomUUID`。
 - 已发布 spec 零承载：`openspec/specs/**` 对 `UUIDv4`、`bit profile`、`ses_[0-9a-f]`、`payload 第 13 个 hex` 等关键字扫描 0 命中；只有 `scalable-session-navigation` 出现 `sessions/` 字样，但无日期桶与 UTC 推导义务。承载 v4 位 profile 义务的文本只存在于**在途 change 的 delta**（`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md` 与 `specs/rollout-checkpoint-storage/spec.md`、`add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md` 与 `tasks.md`）。
 
@@ -146,13 +146,15 @@
 
 ### D7：JS 服务进程与浏览器前端的 v7 边界
 
-**决定**：`src/workspace-services/{browser,terminal}/server/` 与 `src/clients/web` **不**纳入 v7 强制面；其生成的 id（`term_`/`browser_`/`screenshot_`/`download_`/`page_`/`preset_`/`inline:`）显式声明为**非 canonical 身份**，允许继续使用 v4。
+**决定**：`src/workspace-services/{browser,terminal}/server/` 与 `src/clients/web` **不**纳入 v7 强制面；其自行生成的 id（`screenshot_`/`download_`/`page_`/`preset_`/`inline:`）显式声明为**非 canonical 身份**，允许继续使用 v4。
 
 **理由**：
 
-- 实测这些服务由 **Node** 启动（`BOXTEAM_NODE_BIN`，`app/gateway/runtime/process.py`），Node 22 无 `randomUUIDv7`；`src/clients/web` 是浏览器产物，其**生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中全部是 `*.test.ts(x)` 测试文件（`appErrorBoundary.test.tsx`、`Toolbar.test.tsx`、`themeSurfaces.test.ts` 等），生产代码 0 命中；测试文件因用 `Bun.file`/`Bun.Glob` 等测试 API 而命中，与浏览器运行时无关）——`Bun.randomUUIDv7` 在浏览器不可用。
+- 实测这些服务由 **Node** 启动（`BOXTEAM_NODE_BIN`，`app/gateway/runtime/workspace_process.py`），Node 22 无 `randomUUIDv7`；`src/clients/web` 是浏览器产物，其**生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中全部是 `*.test.ts(x)` 测试文件（`appErrorBoundary.test.tsx`、`Toolbar.test.tsx`、`themeSurfaces.test.ts` 等），生产代码 0 命中；测试文件因用 `Bun.file`/`Bun.Glob` 等测试 API 而命中，与浏览器运行时无关）——`Bun.randomUUIDv7` 在浏览器不可用。
 - 这些 id 并非 session/thread 身份，本就不进入 canonical 校验器命名空间，故继续 v4 不构成双轨。
 - MUST NOT 假装它们已统一；若未来 Node 或浏览器提供原生 v7，可作为独立后续变更再收敛。
+
+**当前资源 owner 边界（2026-10-28）**：稳定 `term_`、`browser_` 身份已由 `app/services/business/workspace_resources/owner.py` 使用统一 `create_uuid_hex()` 分配，Node 接收该身份，不再自行生成。它们不在上述 UUIDv4 豁免中；Node 的 page/screenshot/download/preset 与前端 inline 身份仍按原豁免处理。资源身份即使具有 v7 payload，也不得充当 Session/Thread。
 
 **备选**：为浏览器打包一个 v7 polyfill：否决，会引入额外前端依赖与体积，且这些 id 非 canonical，收益不足。
 
@@ -167,8 +169,7 @@
 
 **理由**：URI/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」；两者不可混为一谈，必须显式声明以避免制造第二套定义。
 
-**待 owner 处理的收口项（本 change 不代改）**：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（写死 `payload` 第 13 个 hex MUST 为 `4`、拒绝「非 v4 bit profile」）、`specs/rollout-checkpoint-storage/spec.md`（同款 v4 断言）与 `add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`、`tasks.md`（同款 `4` 与「非 v4 bit profile」文本）与本 change 冲突，MUST 由其 owner 收口为 v7（列为待处理项，见「待确认问题」）。
-**待 owner 处理的收口项（本 change 不代改）**：四处在途文本仍写死 v4，需由各自 owner 收口为本 change 的 v7 定义，具名清单与 owner 声明见 D11。
+**关联 owner 收口状态（2026-10-28）**：立项时四处 v4 约束已由 itemized/CIL 的现行规格收口为 v7 引用；下方 D11 保留原始定位供历史核查，不再作为未完成项。当前位 profile 仍由本 capability 唯一拥有。
 
 ### D9：未来持久身份重写前的哈希/幂等键审计（owner 裁定）
 
@@ -198,9 +199,9 @@
 
 **为什么**：对齐「绝不默默失败」/「永不返回虚假的默认值」；租约的安全前提必须由实测支撑。
 
-### D11：在途 change 的 v4 文本收口——本 change 只点名与声明 owner
+### D11：立项时在途 change 的 v4 文本收口记录（已完成）
 
-**决定**：本 change MUST NOT 复制或代改那些文本，只在本节点名四处「仍含 v4 表述、需由各自 owner 收口」的位置，并声明：本 change 是 id 生成位 profile 唯一 owner，上述文本兑现时 MUST 引用本 change，MUST NOT 复述取值。
+**原立项决定**：本 change 不复制或代改关联 owner 的定义；下列四处记录当时的 v4 文本定位，现已完成收口。当前约束仍为：本 change 是 id 生成位 profile 唯一 owner，上述文本兑现时 MUST 引用本 change，MUST NOT 复述取值。
 
 四处（文件 + capability）：
 
@@ -213,47 +214,45 @@
 
 ### D12：身份 profile 变更影响面 = 工厂前缀 × 持久面的全集矩阵（A4）
 
-**决定**：身份 profile 变更的影响面 MUST 按「唯一 id 工厂产出的全部前缀 × 是否进入持久面」的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 字面后缀匹配。`IdentifierPrefix`（`app/core/identifier.py`）实测为 33 个前缀的闭合 `Literal`；逐前缀判定见下表。本 change 不重写历史 ID；矩阵用于说明 profile 收紧会影响哪些持久载体，并约束任何未来另行授权的重写。判定口径：进入目录叶名、文件名、SQLite 主键或列、JSONL 或 JSON 字段者记为持久面，只在进程内内存/事件总线中使用者记为非持久面。
+**决定**：身份 profile 变更的影响面 MUST 按「唯一 id 工厂产出的全部前缀 × 是否进入持久面」的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 字面后缀匹配。以下为 2026-10-28 对当前工厂与实际调用方的复核，共 31 个前缀；原始 33 项审计属于当时版本，不以总数相同代替成员核对。本 change 不重写历史 ID；矩阵约束任何未来另行授权的重写。进入目录叶名、文件名、SQLite 主键或列、JSONL 或 JSON 字段者记为持久面；仅进程内订阅者为非持久面。前缀保持原形，固定的是 32 位 hex payload，36-byte 总长仅适用于 `ses_`、`thr_` 等四字节前缀。
 
 | 前缀 | 主要产出点（具名） | 持久面 | 载体证据 |
 |---|---|---|---|
-| `ses` | `session_catalog_store.py`、`session_catalog_resolver.py`（folder 预留）、`session_navigation/queue_store.py` | **是** | 目录叶名 `sessions/YYYY/MM/DD/{session_id}`（`_STORAGE_LOCATOR_PATTERN`）；`nodes.node_id TEXT PRIMARY KEY` |
-| `thr` | `session_catalog_store.py`、`session_control_store.py` | **是** | `thread_catalog.thread_id TEXT PRIMARY KEY`；`threads/YYYY/MM/DD/{thread_id}` 目录叶名 |
-| `op` | `session_navigation/service.py`（6 处） | **是** | `navigation_mutation_records` 的 `operation_id TEXT NOT NULL` 且 `PRIMARY KEY (gateway_id, workspace_id, actor, operation_id)`（`queue_store.py`） |
-| `strm` | `message_stream_store.py` | **是** | 文件名 `message_streams/{turn_stream_id}.jsonl`（`_stream_path`） |
-| `msg` | `message_service.py`、`execution_step/runner.py` | **是** | rollout `messages.message_id TEXT NOT NULL UNIQUE`、`turns.final_message_id`（`rollout_context/storage/schema.py`） |
-| `evt` | `job_event_bus.py`、`message_stream_store.py`、`runtime_service.py` | **是** | message_stream 记录字段 `event_id` 写入 `message_streams/*.jsonl` |
-| `snapshot` | `message_stream_store.py` | **是** | 作为 `event_id` 写入 message_stream JSONL |
-| `part` | `providers/litellm_stream_types.py` | **是** | rollout `item_parts.part_id TEXT NOT NULL`（`schema.py`） |
-| `goal` | `session_goal_service.py` | **是** | `SessionCatalogPathResolver` 下的 `goal.json`（`session_goal_store.py`） |
-| `job` | `job/service.py`、`session_generation/{reporting,message_dispatch}.py` | **是** | `session_control_store.py` 的 `job_id TEXT NOT NULL UNIQUE` |
-| `lease` | `session_control_operation_lease/operation_lease.py` | **是** | `lease_id TEXT PRIMARY KEY`（operation lease 表） |
-| `gen` | `gateway/control/generators.py` | **是** | 生成器定义文件路径 `generators/{generator_id}`（`_definition_path`） |
-| `grun` | `gateway/control/generators.py` | **是** | 运行记录文件 `generation-runs/{generator_id}/{run_id}`（`_run_path`） |
-| `gwn` | `gateway/control/navigation.py` | **是** | Gateway 工作区导航 JSON 持久节点 `node_id`（`atomic_write_json`） |
-| `team` | `team/board_manager.py` | **是** | `.boxteam/teams/{team_id}/team.json`（`team/store.py`，且有 `TEAM_ID_PATTERN = ^team_[0-9a-f]{32}$` 形态校验） |
-| `ttask` | `team/board_manager.py` | **是** | 团队任务写入 team 事件的 JSON 载荷 |
-| `tevt` | `team/board_manager.py` | **是** | 团队事件 JSONL `events.jsonl` 的 `event_id` |
-| `comm` | `session_messaging.py` | **是** | `communication_ledger.py` 的 `communication_id TEXT PRIMARY KEY` |
-| `attempt` | `tool_testing/service.py` | **是** | `gateway_state.py` 的 `attempt_id TEXT NOT NULL`（及 `last_attempt_id`） |
-| `tooltest` | `tool_testing/service.py` | **是** | `tool_testing/store.py` 的 `run.json`（`write_run`） |
-| `patch` | `agents/tools/apply_patch/journal.py` | **是** | 文件名 `{journal_id}.json`（`journal_path`） |
-| `dbgcfg` | `node_debug/configuration/configuration_registry.py` | **是** | 调试方案 manifest 的 `configuration_id` 写入会话 debug manifest |
-| `node-bp` | `node_debug/configuration/configuration_factory.py` | **是** | 断点 `breakpoint_id` 写入调试方案 manifest |
-| `node-debug-action` | `node_debug/session/snapshot.py` | **是** | 调试动作 `action_id` 写入 runtime debug 记录 |
-| `node-debug-proc` | `node_debug/process/launch_claim.py` | **是** | `process_instance_id` 写入 launch claim durable 记录 |
-| `intr` | `session_interrupt_service.py` | **是** | 以自身作 `idempotency_key` / `command_id` 写入受控 command 记录 |
-| `req` | `gateway/control/{catalog_search,scheduler,coordinator}.py` | 否（请求内） | 仅作请求/日志关联 id |
-| `src` | `background_message_bus.py` | 否（内存） | 仅进程内 bus 消息 `source_id` |
-| `bgm` | `background_message_bus.py` | 否（内存） | `self._messages` 内存队列，无落盘 |
-| `bgt` | `background_task_registry.py` | 否（内存） | `self._tasks` 内存注册表 |
-| `chan` | `events/event_channel_service.py` | 否（内存） | 事件订阅 id |
-| `sub` | `job_event_bus.py` | 否（内存） | 订阅句柄 id |
-| `robs` | `resource_platform/observation/resource_observation_channel.py` | 否（内存） | 观测订阅 id |
+| `ses` | `core/session_catalog_store/creation_journal.py`、`session_navigation/queue_store.py` | **是** | `sessions/YYYY/MM/DD/{session_id}` 目录叶名；catalog `nodes.node_id` |
+| `thr` | `core/session_catalog_store/creation_journal.py`、`core/session_control_store/thread_creation_record.py`、`agent_execution_service.py` | **是** | `thread_catalog.thread_id`；child `threads/YYYY/MM/DD/{thread_id}` 目录叶名 |
+| `op` | `session_navigation/service.py` | **是** | `navigation_mutation_records.operation_id`，与 Gateway/Workspace/actor 构成唯一键 |
+| `strm` | `message_stream_store.py` | **是** | `message_streams/{turn_stream_id}.jsonl` 文件名 |
+| `msg` | `message_service.py`、`execution_step/runner.py` | **是** | canonical `item_catalog.item_id`；`turns.final_message_id` |
+| `evt` | `job_event_bus.py`、`message_stream_store.py`、`runtime_service.py`、`tool_call_registry.py` | **是** | message stream JSONL 中的 `event_id` |
+| `snapshot` | `message_stream_store.py`、`log_service.py` | **是** | message stream 快照 `event_id` 写入 JSONL；日志快照用途不消除这一持久载体 |
+| `part` | `agents/providers/litellm_stream_types.py` | **是** | rollout `item_parts.part_id` |
+| `goal` | `session_goal_service.py`、`session_context_fork_service.py` | **是** | Session `goal.json` 中的目标身份 |
+| `job` | `business/job/service.py` | **是** | rollout `executions.job_id` 与受控 job 记录 |
+| `lease` | `core/session_control_operation_lease/operation_lease.py` | **是** | operation lease 表 `lease_id` |
+| `gwn` | `gateway/control/navigation.py` | **是** | Gateway 工作区导航 JSON 的 `node_id` |
+| `team` | `business/team/board_manager.py` | **是** | `.boxteam/teams/{team_id}/team.json`；仅登记既有身份，不推进团队功能 |
+| `ttask` | `business/team/board_manager.py` | **是** | 团队任务事件 JSON 载荷；仅登记既有身份 |
+| `tevt` | `business/team/board_manager.py` | **是** | 团队 `events.jsonl` 的 `event_id`；仅登记既有身份 |
+| `attempt` | `tool_testing/service.py` | **是** | Gateway `attempt_id` 与 `last_attempt_id` |
+| `tooltest` | `tool_testing/service.py` | **是** | `tool_testing/store.py` 保存的 `run.json` |
+| `dbgcfg` | `node_debug/configuration/configuration_registry.py` | **是** | 调试方案 manifest 的 `configuration_id` |
+| `node-bp` | `node_debug/configuration/configuration_factory.py` | **是** | 调试方案 manifest 的 `breakpoint_id` |
+| `node-debug-action` | `node_debug/session/snapshot.py` | **是** | runtime debug 记录的 `action_id` |
+| `node-debug-proc` | `node_debug/process/launch_claim.py` | **是** | launch claim durable 记录的 `process_instance_id` |
+| `intr` | `session_interrupt_service.py`、`runtime/session_orchestrator.py` | **是** | command 的 `idempotency_key` / `command_id` 或内部 `execution_id` |
+| `adm` | `business/job/service.py`、`runtime/session_orchestrator.py` | **是** | rollout `executions.admission_idempotency_key` 与 `runtime_execution_wakeups.admission_idempotency_key` |
+| `ptask` | `infrastructure/persistent_tasks/store.py` | **是** | workspace SQLite `persistent_tasks.task_id` 主键及定义、运行的外键 |
+| `ptrun` | `infrastructure/persistent_tasks/store.py` | **是** | workspace SQLite `persistent_task_runs.run_id` 唯一键 |
+| `text` | `infrastructure/workspace_files/text_journal.py` | **是** | `text_mutations/{journal_id}.json` 文件名与 `journal_id` 正文字段 |
+| `turn` | `business/job/service.py` | **是** | rollout `turn_acceptances.turn_id`、`turn_records.turn_id` 与 `executions.turn_id` |
+| `req` | `gateway/control/catalog_search.py`、`gateway/federation/__init__.py`、`infrastructure/persistent_tasks/store.py` | **是** | Gateway 用作请求关联；持久任务另写 `persistent_task_runs.request_id`，不能整体判为非持久 |
+| `chan` | `events/event_channel_service.py` | 否（内存） | 仅进程内订阅表的 channel key，不写业务存储 |
+| `sub` | `core/job_event_bus.py` | 否（内存） | 仅进程内订阅句柄，不写业务存储 |
+| `robs` | `resource_platform/observation/resource_observation_channel.py` | 否（内存） | 仅进程内观测订阅 key，不写业务存储 |
 
 **判定口径说明（防止再次漏项）**：上表以**工厂前缀**为行，而不是以 `ses_`/`thr_` 等字面为行；新增工厂前缀时 MUST 在此矩阵补一行并判定持久面。持久面命中者 MUST 列入迁移任务；非持久面者 MUST 明确登记为「不参与迁移」且在审计里给出「不落盘」的负向证据。
 
-**已实测的核心漏项**：原 tasks 6.1 只匹配裸 `ses_`/`thr_` 字面，会漏掉 `op_`（进 `navigation_mutation_records` 主键）、`strm_`（进 `message_streams/*.jsonl` 文件名）、`msg_`/`evt_`/`part_`/`snapshot_`/`goal_`/`gen_`/`grun_`/`gwn_`/`team_`/`ttask_`/`tevt_`/`comm_`/`attempt_`/`tooltest_`/`patch_`/`dbgcfg`/`node-*`/`intr` 等持久面。
+**最初审计的历史漏项（载体以当时版本为准）**：原 tasks 6.1 只匹配裸 `ses_`/`thr_` 字面，会漏掉 `op_`（进 `navigation_mutation_records` 主键）、`strm_`（进 `message_streams/*.jsonl` 文件名）、`msg_`/`evt_`/`part_`/`snapshot_`/`goal_`/`gen_`/`grun_`/`gwn_`/`team_`/`ttask_`/`tevt_`/`comm_`/`attempt_`/`tooltest_`/`patch_`/`dbgcfg`/`node-*`/`intr` 等持久面。
 
 **备选**：
 
