@@ -20,6 +20,7 @@ mixin）与连接生命周期方法（``__init__``/``connection``/``close``/
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
@@ -108,6 +109,20 @@ __all__ = [
     "derive_initial_execution_identity",
 ]
 
+logger = logging.getLogger(__name__)
+
+
+def _store_failure(path: object, stage: str, reason: str, error: BaseException | None = None) -> str:
+    detail = f"{reason}: artifact=session_control, stage={stage}"
+    if error is not None:
+        detail += f", error_type={type(error).__name__}"
+        for name in ("errno", "winerror", "sqlite_errorcode", "sqlite_errorname"):
+            value = getattr(error, name, None)
+            if value is not None:
+                detail += f", {name}={value}"
+    logger.error("%s; path=%s", detail, path, exc_info=error)
+    return detail
+
 
 class SessionControlStore(
     CollaborationFanoutMixin,
@@ -128,7 +143,7 @@ class SessionControlStore(
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
     构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
-    全新库0与当前版本17。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    全新库0与当前版本。旧生成数据在任何 journal/WAL 设置前显式拒绝，
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
@@ -136,24 +151,46 @@ class SessionControlStore(
 
     def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):
-            raise TypeError(f"database_path 必须是 Path: {database_path!r}")
-        self.database_path = database_path.expanduser().resolve()
-        validate_sqlite_path_budget(self.database_path)
+            raise TypeError(_store_failure(database_path, "input", "database_path 必须是 Path"))
+        self.database_path = database_path
         self._read_only = read_only
         self._collaboration_notifications: list[int] = []
         self._collaboration_publication: Callable[[CollaborationFanoutRecord], None] | None = None
         self._publication_lock = threading.RLock()
-        if not read_only:
-            native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
-        self._closed = False
-        self._connection = self._connect()
+        self._closed = True
+        stage = "resolve"
         try:
+            self.database_path = database_path.expanduser().resolve()
+            stage = "path_budget"
+            validate_sqlite_path_budget(self.database_path)
             if not read_only:
+                stage = "directory"
+                native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
+            stage = "connect"
+            self._connect()
+            if not read_only:
+                stage = "schema_initialize"
                 self._initialize()
-        except BaseException:
-            self._connection.close()
-            self._closed = True
-            raise
+        except BaseException as error:
+            reported = error
+            if isinstance(error, (OSError, sqlite3.Error)):
+                detail = _store_failure(self.database_path, stage, "session control 原生访问失败", error)
+                if isinstance(error, OSError):
+                    reported = type(error)(error.errno, detail, None, getattr(error, "winerror", None))
+                else:
+                    reported = type(error)(detail)
+                    for name in ("sqlite_errorcode", "sqlite_errorname"):
+                        if hasattr(error, name):
+                            setattr(reported, name, getattr(error, name))
+            elif stage == "resolve" and isinstance(error, RuntimeError):
+                reported = RuntimeError(_store_failure(self.database_path, stage, "session control 路径解析失败", error))
+            try:
+                self.close()
+            except BaseException as close_error:  # noqa: BLE001 - 构造与回收失败均须保留。
+                reported.add_note(_store_failure(self.database_path, "close", "session control 构造失败后的连接关闭失败", close_error))
+            if reported is error:
+                raise
+            raise reported from error
 
     # ------------------------------------------------------------------
     # 连接与 schema
@@ -169,12 +206,12 @@ class SessionControlStore(
         """关闭底层连接；重复 close 是幂等 no-op。"""
         if self._closed:
             return
-        self._closed = True
         self._connection.close()
+        self._closed = True
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RuntimeError(f"session control store 已关闭: {self.database_path}")
+            raise RuntimeError(_store_failure(self.database_path, "access", "session control store 已关闭"))
 
     def bind_collaboration_publication(self, callback: Callable[[CollaborationFanoutRecord], None], publication_lock) -> None:
         """writer 与 Registry capture 共用发布锁；通知只镜像已提交 fanout。"""
@@ -189,8 +226,8 @@ class SessionControlStore(
         本库只持一条共享连接，但同一 session 库可能被多个进程同时打开
         （resolver / worker / 删除流各持一份）；跨进程写竞争超过
         ``SQLITE_BUSY_TIMEOUT_MS`` 时 sqlite3 抛裸 ``OperationalError:
-        database is locked``，该文案不含库路径与等待时长，无法定位。
-        此处统一转成含操作阶段、库路径与等待时长的领域错误。
+        database is locked``。此处公开逻辑位置、原生错误码与等待时长，
+        数据库原生路径和异常原件留在诊断日志。
 
         不变量：不可重入。嵌套调用会在外层事务内再 BEGIN，本方法在
         进入前响亮失败，避免 sqlite3 的 "cannot start a transaction
@@ -200,23 +237,20 @@ class SessionControlStore(
         if self._read_only:
             raise RuntimeError("只读 operation replay 控制库禁止写事务")
         if self._connection.in_transaction:
-            raise RuntimeError(
+            raise RuntimeError(_store_failure(self.database_path, "BEGIN IMMEDIATE",
                 "session control 写事务嵌套：_begin_immediate 不可重入"
-                "（外层事务未结束，内层 BEGIN IMMEDIATE 会破坏事务边界）: "
-                f"path={self.database_path}"
-            )
+                "（外层事务未结束，内层 BEGIN IMMEDIATE 会破坏事务边界）",
+            ))
         try:
             self._connection.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as error:
             waited_ms = int(
                 self._connection.execute("PRAGMA busy_timeout").fetchone()[0]
             )
-            raise RuntimeError(
-                "session control 获取写事务失败：另一个进程持有写锁，"
-                f"等待 {waited_ms}ms 后仍被占用（fail loud）: "
-                f"stage=BEGIN IMMEDIATE, path={self.database_path}, "
-                f"error={error}"
-            ) from error
+            reason = "session control 获取写事务失败"
+            if getattr(error, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                reason += f"：另一个进程持有写锁，等待 {waited_ms}ms 后仍被占用（fail loud）"
+            raise RuntimeError(_store_failure(self.database_path, "BEGIN IMMEDIATE", reason, error)) from error
 
     @contextmanager
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
@@ -266,10 +300,9 @@ class SessionControlStore(
         with self._publication_lock:
             self._ensure_open()
             if self._connection.in_transaction:
-                raise RuntimeError(
-                    "session control 读事务嵌套：read_transaction 不可重入: "
-                    f"path={self.database_path}"
-                )
+                raise RuntimeError(_store_failure(self.database_path, "BEGIN DEFERRED",
+                    "session control 读事务嵌套：read_transaction 不可重入",
+                ))
             self._connection.execute("BEGIN DEFERRED")
             try:
                 yield self._connection
@@ -292,46 +325,42 @@ class SessionControlStore(
                         )
                 raise
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
+    def _connect(self) -> None:
+        self._connection = sqlite3.connect(
             sqlite_file_uri(self.database_path) + ("?mode=ro" if self._read_only else ""),
             uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
             check_same_thread=False,
         )
+        # 连接创建后立即归构造作用域；配置和建表失败统一由其回收。
+        self._closed = False
+        connection = self._connection
         current = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if current not in ((self.SCHEMA_VERSION,) if self._read_only else (0, self.SCHEMA_VERSION)):
-            connection.close()
-            raise RuntimeError(
+            raise RuntimeError(_store_failure(self.database_path, "schema_version",
                 "session control schema 版本不受支持，fail-closed 拒绝打开（旧生成数据不迁移）: "
-                f"path={self.database_path}, user_version={current}, "
-                f"supported={self.SCHEMA_VERSION}"
-            )
+                f"user_version={current}, supported={self.SCHEMA_VERSION}",
+            ))
         if current == 0:
             existing = connection.execute(
                 "SELECT name FROM sqlite_schema ORDER BY name LIMIT 1"
             ).fetchone()
             if existing is not None:
-                connection.close()
-                raise RuntimeError(
+                logger.error("session control 非空 v0 schema object=%r; path=%s", existing[0], self.database_path)
+                raise RuntimeError(_store_failure(self.database_path, "schema_version",
                     "session control schema 版本不受支持，fail-closed 拒绝非空 v0 库（不迁移或修复）: "
-                    f"path={self.database_path}, user_version=0, supported={self.SCHEMA_VERSION}, "
-                    f"existing_schema_object={existing[0]!r}"
-                )
+                    f"user_version=0, supported={self.SCHEMA_VERSION}",
+                ))
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         if self._read_only:
             connection.execute("PRAGMA query_only = ON")
-            return connection
+            return
         journal_mode = str(
             connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         )
         if journal_mode.lower() != "wal":
-            connection.close()
-            raise RuntimeError(
-                "session control 无法启用 WAL: "
-                f"path={self.database_path}, journal_mode={journal_mode}"
-            )
-        return connection
+            logger.error("session control WAL 拒绝: journal_mode=%r; path=%s", journal_mode, self.database_path)
+            raise RuntimeError(_store_failure(self.database_path, "journal_mode", "session control 无法启用 WAL"))

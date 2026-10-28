@@ -775,7 +775,9 @@ def test_old_generated_schema_versions_reject_before_wal_and_keep_bytes(tmp_path
     assert not target.with_name(target.name + "-shm").exists()
 
 
-def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path: Path) -> None:
+def test_current_schema_with_missing_graph_binding_columns_fails_closed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     """版本号正确也不能把受外部改动的 catalog 当作待升级旧库。"""
     target = tmp_path / "session-control.sqlite"
     build_v1_database(target, make_thread_id())
@@ -785,8 +787,11 @@ def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path
         outside.commit()
     finally:
         outside.close()
-    with pytest.raises(RuntimeError, match="GraphBinding 列不完整"):
+    with pytest.raises(RuntimeError, match="GraphBinding 列不完整") as caught:
         SessionControlStore(target)
+    assert str(target) not in str(caught.value)
+    assert "stage=schema_columns" in str(caught.value)
+    assert str(target) in caplog.text
     outside = sqlite3.connect(target)
     try:
         assert {str(row[1]) for row in outside.execute("PRAGMA table_info(thread_catalog)")} == {
@@ -3651,8 +3656,9 @@ def test_communication_ledger_does_not_gate_on_lifecycle_fence(
 
 def test_begin_immediate_lock_contention_raises_domain_error(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """另一连接持写锁时，本库抛含阶段与路径的领域错误。
+    """另一连接持写锁时公开阶段与错误码，原生位置只留诊断。
 
     同一 session 库可能被多个进程同时打开；跨进程写竞争超过
     ``SQLITE_BUSY_TIMEOUT_MS`` 时不得让裸 ``OperationalError: database
@@ -3684,7 +3690,10 @@ def test_begin_immediate_lock_contention_raises_domain_error(
             pass
         message = str(excinfo.value)
         assert "stage=BEGIN IMMEDIATE" in message
-        assert str(store.database_path) in message
+        assert str(store.database_path) not in message
+        assert "artifact=session_control" in message
+        assert "sqlite_errorcode=5" in message and "sqlite_errorname=SQLITE_BUSY" in message
+        assert str(store.database_path) in caplog.text
         # 错误里报告的是实际生效的 busy_timeout（此处被本用例缩短为 50ms）。
         assert "等待 50ms 后仍被占用" in message
         # 底层 sqlite3 异常保留为 cause，便于诊断。

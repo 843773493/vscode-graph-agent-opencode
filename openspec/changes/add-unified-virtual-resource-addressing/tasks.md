@@ -959,3 +959,10 @@
 - 唯一workspace_identity owner覆盖路径解析、读取、目录准备、stat、首次open/flush、JSON/UTF-8格式和绑定冲突；普通异常只报告逻辑artifact、阶段、已校验UUID及原生事实，真实位置和原异常留诊断。保持原生类别、errno/winerror、直接cause及解码坐标；正常缺失不记错误，并发O_EXCL冲突仍读取原文件，读失败不被创建阶段重复包装。成功格式、初始化/绑定顺序、只读CLI及原writer保持，无新缓存、schema或身份来源。
 - 最终相关回归86 passed/1.57秒，含新增38项；完整旧HEAD 2ae0f1489的4702份文件经archive逐字核对，仅叠相同最终新测试，38 failed/1.02秒。覆盖三种入口的损坏文件连续拒绝及修复、六种原生阶段的POSIX/盘符/UNC错误事实、两类绑定冲突、并发读失败和真实Linux符号链接循环。真实Gateway注册/停止/损坏身份/拒绝启动/修复后恢复1 passed/49.98秒；之后只新增resolve的RuntimeError错误出口，合法路径行为未变，复用该业务证据，不称新分支经过Gateway。全部测试有外置期限及4GiB保护。
 - Ruff、两文件Pyright零诊断；新测试首轮object参数转发的5项类型诊断已按真实方法签名修复。扩大回归初轮97 passed/20 setup errors，旧runtime_restore装具仍访问已删除的resolve_backend_workspace_id单数符号；完整旧HEAD独立复现同一setup error，未扩修、未算通过。准确命令、前后指纹、raw/真实退出码与作者AST审查见out/tests/temp/workspace-identity-file-errors/artifacts/verification-001.json；旧测试输出另存后删除纯临时完整源码和tar。未验Web、Windows或全部Gateway冷恢复；全局2.2/7.2与mounting 4.3/8.2保持未勾，团队协作继续TODO。
+
+### 2026-10-28 Session 控制库连接交付与错误位置（2.2／7.2部分收口）
+
+- SQLite连接创建即归同一构造作用域；schema读取、PRAGMA配置或初始化失败统一关闭，删除分支重复close，失败不依赖GC释放真实写锁。目录、版本、非空v0、WAL、GraphBinding列和基础事务错误只公开artifact/阶段/原生事实，位置与原异常留诊断；保持原类别/错误码/cause，关闭失败另保留安全note及原始诊断，不虚报连接已关闭。schema仍为18，无DDL、迁移、第二writer或协作功能改动。
+- 修正新增装具的补丁作用域和SQL前导换行后，原生产14 failed；最终控制库单元及真实服务ASGI入口221 passed，Session创建回归22 passed，非委派child物理回归25 passed，共268项；随后仅格式整理的新测试18 passed与221项重叠，不累计。真实API创建Session后损坏控制库版本，核409/request_id、库字节与全部行不变，修复后同入口到达CSM的skill-not-found。关闭失败双原因、真实锁释放、嵌套事务、拒绝版本只读/可写零改写均覆盖。
+- Ruff/compileall通过；Pyright完整HEAD基线843项、候选811项，按文件/规则/完整消息多重集新增0、减少32，不称类型全绿。严格OpenSpec47/0。整组60秒超时后按文件拆分完成非协作回归；委派专项的DID NOT RAISE在完整HEAD archive亦复现，按用户要求保留TODO。初轮新增测试误用fence返回类型及误判新Session的ContextStore可用性，已按真实合同修正，不放宽身份/状态/期限。
+- 准确命令、前后源码指纹、raw/实际退出码、基线正式输出及作者审查见`out/tests/temp/session-control-connection-owner/artifacts/verification-001.json`；完整临时archive源码副本已删除。不代表独立HTTP/Gateway/Web/Windows或整个控制库业务错误审计完成，2.2/7.2与mounting4.3/8.2保持未勾，团队协作继续TODO。

@@ -23,10 +23,12 @@ session_control_store 约定：KeyError 目标行缺失、RuntimeError 库被外
 from __future__ import annotations
 
 import calendar
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 
 from app.core.identifier import validate_thread_id
 from app.core.session_catalog_store.validators import (
@@ -48,6 +50,7 @@ __all__ = [
 
 
 FENCE_ROW_ID = 1
+logger = logging.getLogger(__name__)
 
 
 def fetch_fence_row(connection: sqlite3.Connection) -> sqlite3.Row | None:
@@ -143,6 +146,9 @@ class ThreadCatalogMixin:
     依赖宿主类提供 database_path、_connection 与 _ensure_open()。
     """
 
+    database_path: Path
+    _connection: sqlite3.Connection
+
     def _require_thread_catalog_graph_binding_columns(self) -> None:
         """当前 catalog 必须完整携带 GraphBinding 列，不从旧数据补写。"""
         columns = {
@@ -159,9 +165,10 @@ class ThreadCatalogMixin:
         }
         present = columns & expected
         if present != expected:
+            logger.error("thread_catalog GraphBinding 列不完整: path=%s present=%s", self.database_path, sorted(present))
             raise RuntimeError(
                 "thread_catalog GraphBinding 列不完整（库被外部改动，fail closed）: "
-                f"path={self.database_path}, present={sorted(present)}"
+                f"artifact=session_control, stage=schema_columns, present={sorted(present)}"
             )
 
     def initialize_main_thread(
