@@ -914,3 +914,9 @@
 - 独立 Gateway 及其真实受管 Backend／Terminal／Browser 的两项 HTTP 验收通过（51.25秒）：各连续两次失败均不泄露路径，响应体／头沿用同一 request_id，除每次健康探测的 checked_at 外注册投影完全不变，原缺失文件／空目录不变，诊断保留路径。相同最终测试配完整旧生产为2 failed／50.50秒，均在400响应包含真实路径处失败。最终候选 tree 为 `6b70d17f28e9d9737681a90f58133429b41538d2`，红绿仅原生产文件不同；作者AST自查核实除日志与拒绝文案外模块一致，无活跃任务进程残留。
 - 相关联邦／SSH／管理协议回归59 passed／1 failed；唯一observer异常对象身份失败在完整旧生产独立复现，未改断言。Ruff唯一TRY004也与旧生产一致，无新增诊断；compileall及严格OpenSpec47／0通过。准确命令、前后源码指纹、raw、实际退出码与进程回收见 `out/tests/temp/remote-key-errors/artifacts/verification-025.json`。首次运行缺个人Provider凭据、候选比较误含逐次更新的checked_at均保留原始失败；仅修测试隔离与时间字段的正确断言，不更改产品状态或放宽身份比较。
 - 本片没有建立真实SSH连接，未执行Pyright、Web或Windows，不代表URI全局验收。2.2／7.2保持未勾，团队与协作继续TODO。
+
+### 2026-10-28 SSH 生效配置的进程错误出口（2.2／7.2 部分收口）
+
+- 原 `ssh -G` 非零退出分支不再把 stdout／stderr 复制到普通错误，改报 Host、effective_config 阶段和原退出码；两条原始输出完整留诊断。原命令、10秒期限、Host／Include解析、有界并行、异常类别与成功路径保持；全仓直接消费者继续复用同一 owner，没有新增读取链或重试。
+- 最终固定候选 `cae9905d9429c49a4c8cf59b0dab6c6108f1e5c1` 的相关测试11 passed／0.45秒；新增六项覆盖列表／选定Host入口、POSIX／Windows盘符／UNC原始错误，核普通异常无路径、两条原始输出仍留日志及原命令只调用一次。相同最终测试配完整旧生产六项均失败。Ruff与compileall通过，作者AST自查核整个模块除非零退出日志／文案外一致；准确命令、前后源码指纹、raw、实际退出码与进程组回收见 `out/tests/temp/ssh-effective-config-errors/artifacts/verification-009.json`。
+- 测试仅替换外部ssh进程边界，不代表真实OpenSSH、Gateway、Windows或完整Web；配置文件读取等其它原生I/O错误仍须另核，2.2／7.2全局门不勾。团队与协作继续TODO。

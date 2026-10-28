@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import shlex
 import subprocess
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _MAX_SSH_CONFIG_RESOLUTION_WORKERS = 8
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +72,15 @@ def _effective_ssh_options(alias: str) -> dict[str, list[str]]:
         check=False,
     )
     if ssh_config_result.returncode != 0:
-        detail = (
-            ssh_config_result.stderr.strip()
-            or ssh_config_result.stdout.strip()
-            or "ssh -G 无输出"
+        logger.error(
+            "SSH 配置解析失败: alias=%s stage=effective_config returncode=%s stdout=%s stderr=%s",
+            alias, ssh_config_result.returncode,
+            ssh_config_result.stdout, ssh_config_result.stderr,
         )
-        raise RuntimeError(f"解析 SSH Host {alias} 失败: {detail}")
+        raise RuntimeError(
+            f"解析 SSH Host {alias} 失败: "
+            f"stage=effective_config, returncode={ssh_config_result.returncode}"
+        )
     options_by_name: dict[str, list[str]] = {}
     for option_line in ssh_config_result.stdout.splitlines():
         option_name, separator, option_value = option_line.partition(" ")

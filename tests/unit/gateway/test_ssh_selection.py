@@ -76,6 +76,41 @@ def test_user_ssh_config_lists_concrete_hosts_and_includes(
         resolve_user_ssh_host("missing", ssh_config_with_includes)
 
 
+@pytest.fixture
+def rejected_ssh_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> tuple[Path, str, Mock]:
+    config = tmp_path / "config"
+    config.write_text("Host dev\n  HostName example.invalid\n  User developer\n", encoding="utf-8")
+    path = str(request.param)
+    detail = f"{path} line 3: Bad configuration option: unknownoption"
+    run = Mock(return_value=subprocess.CompletedProcess(["ssh", "-G", "dev"], 255,
+                                                        f"stdout: {detail}", f"stderr: {detail}"))
+    monkeypatch.setattr("app.gateway.ssh_config.subprocess.run", run)
+    return config, detail, run
+
+
+@pytest.mark.parametrize("rejected_ssh_config", [
+    "/private/ssh-config-location-marker/config", r"C:\Users\ssh-config-location-marker\config",
+    r"\\ssh-config-location-marker\share\config",
+], indirect=True)
+@pytest.mark.parametrize("entry", ["list", "resolve"])
+def test_ssh_config_failure_keeps_raw_process_output_in_diagnostics(
+    rejected_ssh_config: tuple[Path, str, Mock], entry: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    config, detail, run = rejected_ssh_config
+    with pytest.raises(RuntimeError) as raised:
+        if entry == "list":
+            list_user_ssh_hosts(config)
+        else:
+            resolve_user_ssh_host("dev", config)
+    assert str(raised.value) == "解析 SSH Host dev 失败: stage=effective_config, returncode=255"
+    assert "ssh-config-location-marker" not in str(raised.value)
+    assert f"stdout: {detail}" in caplog.text
+    assert f"stderr: {detail}" in caplog.text
+    run.assert_called_once_with(["ssh", "-G", "dev"], capture_output=True, text=True, timeout=10, check=False)
+
+
 def test_windows_ssh_include_keeps_backslashes_and_removes_quotes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
