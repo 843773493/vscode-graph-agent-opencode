@@ -346,3 +346,57 @@ async def test_generation_failure_preserves_state_policy_and_accepted_job(
     expected_calls = 1 if boundary == "before-state" else 2
     assert len(case.requests()) == expected_calls and len(await jobs.list(session_id=session_id)) == expected_calls
     case.write_actual(f"generation-failure-{boundary}-{mount_missing}", {"failed": failed, "current": current, "recovered": recovered})
+
+
+@pytest.mark.parametrize("error_kind", ["not-found", "key", "value"])
+async def test_generator_import_validation_keeps_native_diagnostics_out_of_task_reason(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, error_kind: str,
+) -> None:
+    case = source_case
+    workspace_id = case.client.headers["X-BoxTeam-Workspace-Id"]
+    payload = {
+        "task_id": "gen_history", "source_hash": "a" * 64, "revision": 7, "lifecycle": "paused",
+        "configuration": generation_configuration(workspace_id), "workspace_ids": {},
+        "created_at": "2026-10-26T00:00:00Z", "updated_at": "2026-10-26T01:00:00Z",
+        "runs": [{"run_id": "grun_history", "generator_id": "gen_history", "idempotency_key": "legacy-key",
+                  "status": "failed", "trigger_type": "manual", "scheduled_for": "2026-10-26T01:00:00Z",
+                  "error": "旧历史错误原文，保留导入事实。"}],
+    }
+    locations = ("/private/import-store.sqlite", r"C:\private\import-store.sqlite", r"\\target\private\import-store.sqlite")
+    raw_detail = "原始导入校验失败: " + " | ".join(locations)
+    raw_error = (NotFoundError({"native_location": raw_detail}) if error_kind == "not-found" else
+                 KeyError(raw_detail) if error_kind == "key" else ValueError(raw_detail))
+
+    async def fail_validation(*_args: object, **_kwargs: object) -> None:
+        raise raw_error
+
+    endpoint = ROOT + "/imports/session-generators"
+    with monkeypatch.context() as fault, caplog.at_level(logging.ERROR):
+        fault.setattr(case.container.persistent_task_runtime.generation, "validate_definition", fail_validation)
+        installed = await case.client.post(endpoint, json=payload)
+        assert installed.status_code == 200, installed.text
+        assert installed.headers["X-Request-ID"] == installed.json()["request_id"]
+    current = (await case.client.get(ROOT + "/gen_history")).json()["data"]
+    assert current["revision"] == 7 and current["lifecycle"] == "needs_attention"
+    reason = current["reason"]
+    assert "stage=generator-import-validation" in reason and f"error={type(raw_error).__name__}" in reason
+    assert workspace_id in reason and "gen_history" in reason
+    assert "import-store.sqlite" not in json.dumps([installed.json(), current], ensure_ascii=False)
+    assert any(record.name == "app.core.failures" and record.exc_info is not None
+               and record.exc_info[1] is raw_error for record in caplog.records)
+    assert str(raw_error) in caplog.text
+    with sqlite3.connect((case.workspace / ".boxteam/state/workspace.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT reason FROM persistent_tasks WHERE task_id='gen_history'").fetchone() == (reason,)
+    historical, = (await case.client.get(ROOT + "/gen_history/runs")).json()["data"]["items"]
+    assert historical["phase"] == "failed" and historical["error"] == payload["runs"][0]["error"]
+    assert historical["generation"]["error"] == historical["error"]
+
+    # 修复后沿原管理入口恢复；同一导入重试不能覆盖新revision或历史正文。
+    resumed = await _control(case, current, "resume")
+    assert resumed["lifecycle"] == "active" and resumed["revision"] == 8
+    assert (await case.client.post(endpoint, json=payload)).status_code == 200
+    assert (await case.client.get(ROOT + "/gen_history")).json()["data"] == resumed
+    assert (await case.client.get(ROOT + "/gen_history/runs")).json()["data"]["items"] == [historical]
+    assert case.requests() == []
+    case.write_actual(f"import-validation-{error_kind}", {"failed_import": current, "resumed": resumed, "history": historical})

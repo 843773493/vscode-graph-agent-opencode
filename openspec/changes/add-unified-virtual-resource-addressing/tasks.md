@@ -1144,3 +1144,9 @@
 - 完整红测38 failed/9 passed；修复后新增47项及既有创建/目录65项在组合中全部通过。组合共133 passed/6 failed，六项为原协议测试断言所有logger均无日志，却捕获到导入Gateway后的HTTPX INFO；完整旧HEAD相同组合86 passed/同6 failed，协议单文件27 passed，不改弱原断言或扩修全局日志。新增fixture首轮遗漏remote路径不使用的Controller依赖，已按原Depends覆盖修正，保留原失败记录。
 - 真实独立Gateway及远端HTTP管理拒绝4项通过；新增完整blocker与损坏409用例首次因测试装具错误使用app_target/factory参数未启动Gateway，改为既有asgi_app后1项通过。该轮期间仅生产import排版及这个新测试有改动，前后字节指纹与AST核对证明其余四项owner、装具和生产逻辑不变，未伪称整轮源码指纹稳定。修正后用例单独重跑且指纹稳定，完整原件保留。
 - 最终compileall通过；Ruff7→7、Pyright3→3，以完整旧HEAD的文件/最窄AST owner/规则/完整消息多重集无新增，新增单元文件无静态诊断；初轮新增import排版和错误装具签名均已修复。作者结构自审：无新目录、存储owner、schema、公开字段或兼容链，生产326→328行；新216行测试放既有联邦目录，608行协议集成测试仍为聚焦拆分候选。严格OpenSpec及差异检查通过，证据见out/tests/temp/uri-global-closure/artifacts/verification-025.json；未验完整Web、Windows或真实远端进程删除/恢复，2.2/7.2全局门和延期项继续未勾。
+
+### 2026-10-28 旧生成器导入的新校验失败事实（2.2/7.2部分收口）
+
+- `import_generator`的原NotFoundError/KeyError/ValueError分支改用共享failure_detail；reason保存generator-import-validation阶段、task/workspace身份和原异常类别，原实例与完整正文留诊断。原安装、needs_attention、幂等与退休链不变，不修改旧历史错误或generation正文，不新增例外/存储/兼容链。定义校验的provider不可用类型已核对唯一两个显式构造点，仅含类型/版本说明，未盲改其业务文本。
+- 真实导入API分别注入三类含POSIX/Windows/UNC位置的校验错误，核普通响应/SQLite reason、原诊断实例与完整渲染、request_id、历史正文保全、显式resume及同导入重试不覆盖revision：旧生产3 failed，最终3 passed/19.83秒。既有历史导入与在途生成原canonical准入两回归2 passed/28.94秒，沿用model_stream；该两项的生产与测试源码和最终候选相同，新增测试仅修正日志repr转义断言，没有重复长跑。首次候选两项因预期日志中反斜杠未转义而失败，现核完整str(error)及原实例身份，不降低公开记录或历史断言，原件保留。
+- Ruff、Pyright与compileall触达两文件零诊断，OpenSpec strict通过；原测试声明AST保持，生产245行、新测试沿既有失败事实文件402行，无新目录或事实源。命令、源码指纹、raw/退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-033.json`。此片不代表Web/Gateway、Windows实机、独立进程恢复或URI全局门完成，2.2/7.2仍未勾、整体51/53；团队协作及MCP显式持有继续延期。

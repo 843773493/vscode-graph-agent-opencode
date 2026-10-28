@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import NotFoundError
+from app.core.failures import failure_detail
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.execution_admission import UserExecutionIdentity
@@ -234,7 +235,10 @@ async def import_generator(runtime: PersistentTaskRuntime, request: SessionGener
                 result = await runtime.generation.validate_definition(definition)
                 reason = result.reason
             except (NotFoundError, KeyError, ValueError) as error:
-                reason = f"旧生成器导入后需要处理: {error}"
+                reason = failure_detail(
+                    error, stage="generator-import-validation",
+                    label=f"旧生成器导入后需要处理: task_id={request.task_id}, workspace_id={runtime.store.workspace_id}",
+                )
             install_generator(runtime.store, request, runs, files, reason=reason)
         _retire_files(runtime._workspace_root, request.task_id, files)
         runtime.notify(request.task_id)
