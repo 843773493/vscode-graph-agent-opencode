@@ -1803,7 +1803,9 @@ class RestartRuntimeSourceCase(ModelReplayCase):
 
 
 @pytest.fixture
-async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[RestartRuntimeSourceCase]:
+async def restart_source_case(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[RestartRuntimeSourceCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))
@@ -1813,10 +1815,19 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
     artifacts_dir = context.artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    with ExitStack() as services, model_stream_replay(
-        runtime_root, runtime_root=runtime_root,
-        business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
-    ) as model:
+    async with AsyncExitStack() as services:
+        model = services.enter_context(model_stream_replay(
+            runtime_root, runtime_root=runtime_root,
+            business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
+        ))
+        gateway_id = None
+        if params.get("managed_gateway"):
+            monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
+            gateway_id, _ = await services.enter_async_context(_managed_gateway_skill_source(
+                workspace=workspace, workspace_id=load_or_create_workspace_id(workspace),
+                boxteam_home=context.boxteam_home, port=ports.port(11),
+            ))
+            monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(11)}")
         mount = None
         if params.get("native_services"):
             terminal_port, browser_port = ports.port(40), ports.port(42)
@@ -1838,10 +1849,13 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
         )
         backends = [backend]
         case: RestartRuntimeSourceCase | None = None
+        headers = {"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": backend.workspace_id}
+        if gateway_id is not None:
+            headers["X-BoxTeam-Gateway-Id"] = gateway_id
         try:
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{backend.port}",
-                headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": backend.workspace_id},
+                headers=headers,
                 timeout=30,
             ) as client:
                 case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, mount)
