@@ -45,9 +45,6 @@ class JobExecutorProtocol(Protocol):
     async def run(self, job: JobRuntimeStateProtocol) -> str:
         ...
 
-    async def fail(self, job: JobRuntimeStateProtocol, error: Exception) -> None:
-        ...
-
 
 class JobInputOwnerProtocol(Protocol):
     """入队前冻结准入；只读正文由唯一 canonical input owner 提供。"""

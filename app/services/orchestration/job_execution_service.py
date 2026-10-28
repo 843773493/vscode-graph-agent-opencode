@@ -115,18 +115,3 @@ class JobExecutionService:
             agent_id="job_service",
         )
         return result_text
-
-    async def fail(self, job: JobRuntimeStateProtocol, error: Exception) -> None:
-        transition_job_status(
-            job,
-            JobStatus.failed,
-            error_message=str(error),
-        )
-        await self._bus.publish(
-            job_id=job.job_id,
-            event_type=EventType.JOB_FAILED,
-            payload={"session_id": job.session_id, "error": str(error)},
-            agent_id="job_service",
-        )
-
-        

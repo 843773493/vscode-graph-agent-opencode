@@ -1293,3 +1293,8 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 当前 reader/投影47 passed/9.33秒，真实 SQL23 passed/18.45秒，Web 时间线35 passed；真实 tsc、Ruff及产品测试内 Web build通过。唯一 Web owner 的独立 generated_internal_history focus 为1 passed/469.99秒：经真实任务检查、消息准入、Agent/model_stream与工具执行生成历史，527项 membership 重建524个 response part，三页为256/256/12个 unique record；同时核默认 include、安全展示/私有输入、零 Turn/head notice、dense around、fork相对顺序、live/refresh、stale409与跨owner400。未增加模型/SSE实现或业务测试后门。
 - 首次Web运行在第三个Backend绑定44040时出现EADDRINUSE，尚未执行浏览器业务；保存原始服务日志，随后ss无socket且实际bind成功，才在端口已释放的条件下重跑。未杀未知owner或修改系统端口配置；失败不计通过。准确命令、源码指纹、raw/实际退出码、产品快照、源码合取与已验范围见`out/tests/temp/uri-global-closure/artifacts/verification-012.json`。
 - 据此勾选8.13-S功能项。8.13-S-P与源码扫描TODO、完整default驱动内存TODO、8.13总验收及团队/协作延期项仍未完成；本次focus不代替完整default、Windows或真实外部Provider验收。
+
+### 2026-10-28 7.5-F 无调用 Job 失败出口清理（部分）
+
+- 全仓 Python AST、依赖注入与 Mock spec 消费审计确认 `JobExecutorProtocol.fail` 和 `JobExecutionService.fail` 无调用方；物理删除协议及实现，保留唯一 `run` 消费与原 JobService/task callback 的失败、取消、超时和队列结算。除删除两段方法外，两个模块 AST 完全一致，没有新增转发或失败 writer。
+- 相关四个正式测试模块35 passed/5.07秒；Ruff与compileall通过。相同Pyright版本/命令前后生产零诊断，测试仍是原有一条 `JobEventBusProtocol.events` 属性诊断，逐项一致，不称类型全绿。准确命令、源码指纹、原始输出、AST审计及类型对照保留于 `out/tests/temp/uri-global-closure/artifacts/verification-013.json`。该死代码清理不关闭7.5-F或URI全局出口总门。
