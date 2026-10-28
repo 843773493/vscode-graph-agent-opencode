@@ -1,4 +1,4 @@
-当前实施范围（2026-10-18）：A04 既有生产寻址/来源消费闭包已由 `c6c7b7af` 集成并接受，证据取协作收据 `accepted_A04`；这是源码闭包接受，不把未投影到原任务的验收整项补勾。补充 C1 的 registry setup 仍 UNMET。任务 1.4 的文件 child 语法编码已实现；新增目录根、Skill 包导航/child 文件访问及统一文件工具仍未实施。后续对表复用已接受范围，不按旧“无真实调用”描述重复开发。
+当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
 ## 1. 契约冻结与单一定义点（本 change 是唯一 owner；权威表已下发，据此定稿）
 
@@ -987,3 +987,9 @@
 - fdopen 成功后才交付关闭责任；失败或取消关闭本次 fd，创建和关闭同时失败保留两份 cause。17个原实现故障反例失败、1项成功基线通过；最终相关回归102 passed/2 skipped（既有Windows ACL检查），包括22个身份场景与凭据读写/认证/代理消费者。
 - 独立Gateway真实HTTP的四类身份故障及原入口修复重试1 passed/25.20秒，核原身份、文件、凭据和request_id不变。Ruff、生产/新单测Pyright及compileall通过；strict OpenSpec47/0。新测试首轮Self注解、后续IO返回类型诊断均已修正，原件保留。
 - 准确命令、源码前后指纹、原始输出、真实退出码及归属审查位于`out/tests/temp/gateway-identity-files/artifacts/verification-001.json`，正式HTTP回执在同名测试artifacts中。未验Web、Windows或真实联邦网络，2.2/7.2全局门保持未勾，团队协作继续TODO。
+
+### 2026-10-28 URI 合同复核与 Docker 调用方迁移（2.2/7.2部分收口）
+
+- 核对结构化位置字段、SQL 位置列、原生根绑定、模型运行事实及具名例外；远端 projection 的 root binding 被原注册表拒绝，SSH 选项的 `initial_path` 因此为 null。迁齐两条 Docker 路由验收，以原远端 target ID 精确选择工作区并断言普通响应不含根路径；重启前清除声明改为编辑同一隔离 BOXTEAM_HOME 的 Gateway 配置，不再误写 Workspace 配置。
+- URI/配置/界面偏好/归档合同481项及Gateway注册表/目录/代理114项通过；范围不同，不冒称真实Docker或Web验收。Docker原HEAD实跑在远端Backend初始化失败：发行配置引用的`OPENCODE_ZEN_API_KEY`不可解析，1 failed/174.24秒，未进入业务断言；保留原件及代码TODO，不重复环境不变的长跑。
+- 准确命令、源码前后指纹、原始输出与退出码在`out/tests/temp/uri-global-closure/artifacts/`。本片未修改生产链路；整体审计仍发现模型工具测试将异常正文复制到普通状态和持久结果，须沿原owner处理后补验，2.2/7.2继续未勾。

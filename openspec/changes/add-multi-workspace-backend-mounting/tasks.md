@@ -181,3 +181,7 @@
 - 注册表不再先移除组件后关闭；装配与关闭同时失败时保留原组件和两份原因。服务图取得、catalog 取得与最终关闭共用唯一关闭实现，原关闭未成功前不另开连接或重复装配；成功后才从同一缓存移除。待关闭集合只保存本进程未完成的关闭标记，不保存业务状态或第二份组件。
 - 四个新场景覆盖原生关闭前失败、关闭后回执失败、取得入口重试与最终 shutdown；完整旧生产配同一测试全部失败，均在原服务图重试入口重新装配并再次抛出构造／关闭组合错误。候选相关启动、catalog、身份与关闭回归45 passed／35.39秒；真实双挂载执行、逆序关闭、第二挂载失败回收及非法身份请求三项通过／45.87秒，模型复用 model_stream，HTTP 为 ASGI。故障解除后由产品创建入口生成新 Session，确认新 catalog 与原 owner 不混用且旁系工作区可用。
 - Ruff通过。Pyright两项既存Terminal／Browser传输协议诊断与完整旧生产的完整消息一致（仅模块行号变化），无新增诊断，不称类型全绿。七次受保护运行的源码前后指纹、raw hash、真实退出码及零进程组残留均已核验；固定候选tree `f92bdc9aa59c21ac3305af19182728ed7dbe37ce`、旧生产tree `55ea3a7076494feb072fe16c9b4586932f3d183b`。准确命令与作者AST自查见 `out/tests/temp/mounted-catalog-close-retention/artifacts/verification-001.json`；临时完整源码已删除，正式基线输出保留。本片不代独立审查、Gateway／独立Backend进程、Web、Windows或附件总关闭期限，4.3／8.2整体仍未勾，团队协作继续TODO。
+
+### 2026-10-28 Docker 路由验收的身份与配置 owner
+
+- 两条Docker调用方不再依赖普通响应中的真实根路径，改用既有远端target身份并保留精确目标断言；注册表重启场景从同一隔离BOXTEAM_HOME删除Gateway启动声明。相关114项Gateway回归通过；实际Docker运行在远端默认Provider凭据解析失败，尚未进入业务阶段，不计为完成。原始证据与URI整体审计共用`out/tests/temp/uri-global-closure/artifacts/`，4.3/8.2继续未勾。

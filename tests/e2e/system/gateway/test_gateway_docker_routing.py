@@ -67,6 +67,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     docker_e2e_paths: GatewayTargetE2EPaths,
     gateway_local_token_supplier: Callable[[], str],
 ):
+    # TODO：目标补齐发行配置引用的 Provider 凭据后，复验完整路由与注册表重启链路。
     if os.getenv("BOXTEAM_RUN_DOCKER_GATEWAY_E2E") != "1":
         pytest.skip("设置 BOXTEAM_RUN_DOCKER_GATEWAY_E2E=1 后运行 Docker SSH 跨端 e2e")
     docker_error = docker_daemon_error()
@@ -75,6 +76,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
     port_block = e2e_port_block_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
+    boxteam_home = local_workspace.parent / "boxteam-home"
     gateway_port = port_block.port(21)
     remote_gateway_port = port_block.port(23)
     tunnel_port_range = (port_block.port(30), port_block.port(39))
@@ -112,6 +114,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
+            boxteam_home=boxteam_home,
             default_backend_url=None,
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
@@ -135,6 +138,9 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             list_response = await client.get("/api/gateway/workspaces")
             assert list_response.status_code == 200, list_response.text
             workspace_list = list_response.json()["data"]
+            assert str(local_workspace) not in list_response.text
+            assert remote_workspace_path not in list_response.text
+            assert all("root_path" not in item for item in workspace_list["items"])
             assert len(workspace_list["items"]) >= 2
             assert any(
                 item["connection_kind"] == "local"
@@ -146,7 +152,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 item
                 for item in workspace_list["items"]
                 if item["connection_kind"] == "remote_gateway"
-                and item["root_path"] == remote_workspace_path
+                and item["remote"]["remote_workspace_id"]
+                == build_managed_local_workspace_id(remote_workspace_path)
                 and item["status"] == "ready"
             )
             remote_workspace_id = remote_workspace["workspace_id"]
@@ -168,7 +175,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 if item["source"] == "boxteam"
                 and item["workspace_id"] == remote_workspace_id
             )
-            assert configured_connection["initial_path"] == remote_workspace_path
+            assert configured_connection["initial_path"] is None
+            assert remote_workspace_path not in ssh_connections_response.text
             assert configured_connection["ssh_config_host"] is None
 
             default_workspace_response = await client.get("/api/v1/workspace")
@@ -277,15 +285,16 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
         close_gateway_process(gateway)
         gateway = None
-        config_path = local_workspace / ".boxteam" / "workspace.jsonc"
+        config_path = boxteam_home / "config" / "gateway.jsonc"
         config_payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config_payload["gateway"] = {"workspaces": []}
+        config_payload["workspaces"] = []
         config_path.write_text(
             json.dumps(config_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
+            boxteam_home=boxteam_home,
             default_backend_url=None,
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
@@ -303,6 +312,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             restored_response = await restarted_client.get("/api/gateway/workspaces")
             assert restored_response.status_code == 200, restored_response.text
             restored_list = restored_response.json()["data"]
+            assert remote_workspace_path not in restored_response.text
+            assert all("root_path" not in item for item in restored_list["items"])
             restored_health = await restarted_client.get("/api/gateway/health")
             assert restored_health.status_code == 200, restored_health.text
             assert restored_health.json()["data"]["gateway_id"] == gateway_id

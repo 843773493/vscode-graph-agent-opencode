@@ -16,6 +16,7 @@ import httpx
 import pytest
 import websockets
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.e2e.system.gateway.gateway_docker import (
     docker_daemon_error,
     ensure_gateway_ssh_container,
@@ -570,6 +571,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     e2e_workspace_root_path: str,
     docker_e2e_paths: GatewayTargetE2EPaths,
 ):
+    # TODO：在具备发行配置所需 Provider 凭据的 Docker 目标复验远端资源路由。
     if os.getenv("BOXTEAM_RUN_DOCKER_GATEWAY_E2E") != "1":
         pytest.skip("设置 BOXTEAM_RUN_DOCKER_GATEWAY_E2E=1 后运行 Docker SSH 辅助服务 e2e")
     docker_error = docker_daemon_error()
@@ -648,12 +650,17 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             timeout=60,
         ) as client:
             await acquire_gateway_guest(client)
-            workspace_list = (await client.get("/api/gateway/workspaces")).json()["data"]
+            workspace_response = await client.get("/api/gateway/workspaces")
+            assert workspace_response.status_code == 200, workspace_response.text
+            assert remote_workspace_path not in workspace_response.text
+            workspace_list = workspace_response.json()["data"]
+            assert all("root_path" not in item for item in workspace_list["items"])
             remote_workspace = next(
                 item
                 for item in workspace_list["items"]
                 if item["connection_kind"] == "remote_gateway"
-                and item["root_path"] == remote_workspace_path
+                and item["remote"]["remote_workspace_id"]
+                == build_managed_local_workspace_id(remote_workspace_path)
             )
             assert remote_workspace["status"] == "ready"
             assert remote_workspace["services"]["terminal_manager"]["status"] == "ready"
