@@ -12,7 +12,7 @@
 
 生成器任务 SHALL 分别保存 trigger、placement、execution、context source、created from、naming layout、session strategy 和 policies；跨工作区会话引用 MUST 包含 workspace ID 与 session ID。定义、调度与运行协调 MUST 归属于明确工作区，Gateway 不得保存生成器业务状态。既有不支持的执行环境分离 MUST 继续明确拒绝。
 
-#### Scenario: 从 Gateway 路由到另一工作区创建任务
+#### Scenario: 从 Gateway 控制面挂载到另一工作区
 - **WHEN** 用户在工作区 A 的界面明确选择在工作区 B 创建生成器，将其挂到 B 的会话并读取 B 的上下文
 - **THEN** Gateway 将请求路由到 B，B 持有完整定位器及任务并负责调度，A 不保存另一份定义
 
@@ -28,7 +28,7 @@
 - **WHEN** 用户预览包含生成器名称、年月日、时分秒和会话标题的模板
 - **THEN** 工作区返回规范化名称、导航路径及校验错误，未分配 session ID 时明确物理定位尚未生成，且不创建会话
 
-#### Scenario: 在挂载节点下创建输出
+#### Scenario: 在挂载节点下物理创建输出
 - **WHEN** `new_per_run` 或 `fork_new_and_report_back` 生成器挂载到工作区、会话或会话文件夹并触发
 - **THEN** 输出按预览的导航位置登记，由 catalog 分配并记录稳定物理 locator，导航挂载不会导致物理目录沿父链嵌套
 
