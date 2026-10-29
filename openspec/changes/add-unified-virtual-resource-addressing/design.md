@@ -86,6 +86,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 两项只豁免具名入口及列明字段，不为整个 Browser、Gateway diagnostics DTO、日志摘要、普通业务响应或其它持久记录提供路径许可，不新增 URI kind、解析器、文件操作链路或授权方式。普通文件的相对路径、绝对路径和资源 URI 继续按 D1a 在目标端统一解析并复用同一 owner。终端 cwd 的相对路径规范化合同保持。
 
+联邦诊断查询保留本地目标预检的既有业务拒绝；远端请求与响应校验失败复用`failure_detail`，只公开阶段、异常类别、适用解析坐标与HTTP状态。原拒绝正文附在原异常诊断中，不截断或转成普通响应；原异常作为直接cause保留。原400/502、管理授权、请求ID和固定目标不变，成功响应中的原始日志仍按具名例外完整传递。
+
 目录浏览的本机与联邦入口复用同一失败事实出口：解析和远端请求报告 directory_browse，扫描报告 directory_scan，保留原400/403/404/502及request_id。原始异常及原因链进入诊断，不能将远端拒绝正文或本机原生位置复制到普通响应；日志再次失败仍保留原拒绝。修复后继续按原目标重试并发布原目录URI，不更改原生输入、未注册目录能力或注册表。
 
 Node 调试进程身份的 stat/boot_id 原生读取复用 failure_detail，分别报告 process_stat_read/boot_id_read，保留原异常类别、errno/winerror 与直接 cause。正常 PID 条目消失仍返回已终结，boot_id 缺失仍抛 FileNotFoundError；不改 API 分类、不回落身份来源。冷恢复的结算动作复用原 session_state，在追加前 ensure_loaded，避免未加载的方案选择和历史被 manifest writer 覆盖；不增加状态副本或恢复链。

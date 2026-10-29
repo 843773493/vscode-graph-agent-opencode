@@ -360,6 +360,85 @@ async def test_invalid_envelope_and_explicit_raw_diagnostics_use_separate_respon
 
 
 @pytest.mark.asyncio
+async def test_remote_diagnostics_rejections_do_not_expand_the_raw_log_exception(
+    remote_stub: tuple[TestRunContext, Path, int, int],
+) -> None:
+    context, control, remote_port, gateway_port = remote_stub
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    paths = [str(context.workspace_root / "diagnostics-private-marker"),
+             r"C:\private\diagnostics-private-marker", r"\\remote\private\diagnostics-private-marker"]
+    tail = "\n".join(paths) + "\n" + "x" * 2048 + "diagnostics-original-end"
+    diagnostics = {
+        "gateway_id": REMOTE_GATEWAY_ID, "gateway_name": "原生远端", "connection_kind": "local",
+        "status": "ready", "checked_at": "2026-10-29T00:00:00Z",
+        "logs": [{"log_id": "gateway-stderr", "source": "gateway", "service": "gateway",
+                  "label": "原始日志", "status": "available", "tail": tail}],
+    }
+    receipts = []
+    expected_requests = []
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+            asgi_app=f"{__name__}:create_gateway_app",
+            extra_env={"BOXTEAM_TEST_FEDERATION_PORT": str(remote_port)},
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20,
+        ) as client:
+            params = {"gateway_connection_id": CONNECTION_ID, "workspace_id": PROJECTED_WORKSPACE_ID}
+            denied = await client.get("/api/gateway/diagnostics", params=params, headers={"X-Local-Token": "invalid"})
+            assert denied.status_code == 401, denied.text
+            assert not control.with_suffix(".requests.jsonl").exists()
+            for index, path in enumerate(paths):
+                for failure in ("http-403", "http-503", "validation"):
+                    status = int(failure.removeprefix("http-")) if failure != "validation" else 200
+                    body = {"detail": path + "x" * 2048 + "diagnostics-original-end"} if status != 200 else {
+                        "data": {**diagnostics, "logs": path},
+                    }
+                    control.write_text(json.dumps({"status": status, "body": body}))
+                    request_id = f"req_diagnostics_{index}_{failure}"
+                    response = await client.get(
+                        "/api/gateway/diagnostics", params=params, headers={"X-Request-ID": request_id},
+                    )
+                    assert response.status_code == (502 if status != 200 else 400), response.text
+                    assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+                    assert "diagnostics-private-marker" not in response.text
+                    assert "diagnostics-original-end" not in response.text
+                    expected = "error=HTTPStatusError" if status != 200 else "error=ValidationError"
+                    assert expected in response.json()["detail"]
+                    if status != 200:
+                        assert f"status={status}" in response.json()["detail"]
+                    receipts.append(response.json())
+                    expected_requests.append(request_id)
+
+                    control.write_text(json.dumps({"status": 200, "body": {"data": diagnostics}}))
+                    recovered_id = request_id + "_recovered"
+                    recovered = await client.get(
+                        "/api/gateway/diagnostics", params=params, headers={"X-Request-ID": recovered_id},
+                    )
+                    assert recovered.status_code == 200, recovered.text
+                    assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"] == recovered_id
+                    data = recovered.json()["data"]
+                    assert data["logs"][0]["tail"] == tail
+                    assert data["gateway_connection_id"] == CONNECTION_ID
+                    assert data["selected_workspace_id"] == PROJECTED_WORKSPACE_ID
+                    assert data["connection_kind"] == "remote_gateway"
+                    expected_requests.append(recovered_id)
+                    receipts.append(recovered.json())
+    logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert "diagnostics-original-end" in logs and "diagnostics-private-marker" in logs
+    requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
+    assert [entry["request_id"] for entry in requests] == expected_requests
+    for request_id in expected_requests[::2]:
+        assert request_id in logs
+    (context.artifacts_dir / "diagnostics-error-receipts.json").write_text(
+        json.dumps({"responses": receipts, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+@pytest.mark.asyncio
 async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_response_body(
     remote_stub: tuple[TestRunContext, Path, int, int],
 ) -> None:

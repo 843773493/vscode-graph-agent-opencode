@@ -1168,3 +1168,9 @@
 - 原候选事件改用共享失败事实，执行消息同时迁齐Job、LLM响应/attempt及编排消费者；纯Provider标记、判定和执行消息合同归core，SDK临时失败分类仍归runtime。全仓迁齐导入后删除旧定义，不留转发；原异常实例/cause、候选顺序、用户取消、本地preflight、原生I/O及明确业务说明保持。
 - 使用现有model_stream，经真实Session/Job入口产生流内拒绝，核普通Job、Trace/消息流/LLM日志API、SQLite调用归属、canonical与检查点无诊断位置，随后原入口继续成功且旧记录不变。最终上游合同61项与真实TCP HTTP同步/异步跨协议fallback 4项合计65 passed；其余246项单元复用同源通过结果，产品场景在最终行为组合通过。旧全文断言迁为精确事实及原异常/全文日志断言，原顺序、重试和身份检查保留；装具缺done、SDK重试计数、错误SQL列及errno断言的失败原件均保留，不计为业务通过。
 - Ruff、compileall通过；完整旧HEAD归档4734个blob逐字核对，Pyright83→83，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断。作者结构自查确认纯标记函数AST保持，无新目录、owner、schema或兼容链；准确命令、源码前后指纹、raw/退出码与局限见`out/tests/temp/uri-global-closure/artifacts/verification-036.json`。2.2/7.2仍未勾、整体51/53；不代替完整Web、Windows、同步产品执行、独立进程恢复或独审，团队协作及MCP显式持有继续延期。
+
+### 2026-10-29 联邦诊断失败与原始日志字段的边界（2.2/7.2部分收口）
+
+- 原诊断路由区分本地目标预检与远端响应处理，后者复用`failure_detail`；HTTP拒绝、传输失败及DTO/JSON解码只公布阶段、类别与适用状态/坐标，原异常保留直接cause，完整拒绝正文只留诊断。原400/502、授权、目标与request_id保持，成功响应中的原始日志仍完整传递，无新parser或错误出口。
+- 原生产15项新反例失败、2项预检通过；修复后相关单元47项通过。真实独立Gateway与独立HTTP替身2项通过，核9次HTTP/DTO失败后的原入口恢复、POSIX/Windows/UNC位置不回显、原始长日志字节不截断、未授权请求不访问远端及请求ID逐次一致。它不代表真实SSH、Windows或完整Web验收。
+- 静态诊断与旧HEAD逐项核对、准确命令、源码前后指纹、原始输出、实际退出码和作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-039.json`。不将作者自查计作独审；2.2/7.2全局门仍未勾，团队协作与MCP显式持有继续延期。

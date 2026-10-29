@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
@@ -129,8 +130,15 @@ async def get_gateway_diagnostics(
             ),
             **({"log_id": log_id} if log_id is not None else {}),
         }
+        gateway_url = registry.remote_gateway_url(gateway_connection_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
         remote_data = await request_remote_gateway_management(
-            gateway_url=registry.remote_gateway_url(gateway_connection_id),
+            gateway_url=gateway_url,
             credential=credential,
             method="GET",
             path=f"/api/gateway/federation/diagnostics?{urlencode(params)}",
@@ -144,23 +152,25 @@ async def get_gateway_diagnostics(
                 "selected_workspace_id": workspace_id,
             }
         )
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=400,
+            detail=failure_detail(error, stage="diagnostics_response", label="远程 Gateway 诊断响应无效"),
+        ) from error
     except httpx.HTTPStatusError as error:
+        # 原始拒绝正文只留诊断；它不属于成功回包中具名的原始日志字段。
+        error.add_note(f"远程 Gateway 诊断拒绝正文: {error.response.text}")
         raise HTTPException(
             status_code=502,
-            detail=(
-                "远程 Gateway 拒绝日志诊断请求: "
-                f"status={error.response.status_code}, "
-                f"body={error.response.text[:1000]}"
+            detail=failure_detail(
+                error, stage="diagnostics_request",
+                label=f"远程 Gateway 拒绝日志诊断请求: status={error.response.status_code}",
             ),
         ) from error
     except httpx.RequestError as error:
         raise HTTPException(
             status_code=502,
-            detail=f"无法连接远程 Gateway: {error}",
+            detail=failure_detail(error, stage="diagnostics_request", label="无法连接远程 Gateway"),
         ) from error
     return APIResponse(data=result, request_id=request_id)
 
