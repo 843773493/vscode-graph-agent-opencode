@@ -585,13 +585,13 @@ class JobService:
         try:
             return await operation()
         finally:
-            async with self._dispatch_lock:
-                remaining = self._session_preparations[session_id] - 1
-                if remaining:
-                    self._session_preparations[session_id] = remaining
-                else:
-                    self._session_preparations.pop(session_id, None)
-                self._preparation_changed.set()
+            # 计数与事件只在本事件循环同步更新；归还不能在锁等待中被再次取消。
+            remaining = self._session_preparations[session_id] - 1
+            if remaining:
+                self._session_preparations[session_id] = remaining
+            else:
+                self._session_preparations.pop(session_id, None)
+            self._preparation_changed.set()
 
     async def run_session_delete_operation(
         self,

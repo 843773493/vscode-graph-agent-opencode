@@ -69,3 +69,30 @@ async def test_drain_waits_for_every_session_and_concurrent_window_without_cance
         for event in release.values():
             event.set()
         await asyncio.gather(*preparations, return_exceptions=True)
+
+
+async def test_repeated_preparation_cancel_releases_its_counter_while_dispatch_is_busy(
+    preparation_jobs: JobService,
+) -> None:
+    jobs = preparation_jobs
+    entered = asyncio.Event()
+
+    async def prepare() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    preparing = asyncio.create_task(jobs.run_session_preparation("ses_cancelled", prepare))
+    await asyncio.wait_for(entered.wait(), 1)
+    try:
+        async with jobs._dispatch_lock:
+            jobs.close_admission()
+            preparing.cancel("首次取消原准备")
+            await asyncio.sleep(0)
+            preparing.cancel("再次取消原准备")
+            with pytest.raises(asyncio.CancelledError):
+                await preparing
+            assert jobs._session_preparations == {}
+        await asyncio.wait_for(jobs.drain_preparations(), 1)
+    finally:
+        preparing.cancel()
+        await asyncio.gather(preparing, return_exceptions=True)
