@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -16,6 +17,7 @@ import pytest
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.schemas.internal_v2.message import MessageCreateRequest
 from app.services.business.workspace_resources.owner import ResourceConflict
+from app.services.infrastructure.events.channel_events import ResourceStateEvent
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -145,8 +147,9 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-async def test_workspace_completion_commits_real_stopped_pty_and_releases_due_directory(
+async def _assert_workspace_completion(
     managed_terminal, monkeypatch: pytest.MonkeyPatch,
+    notification_failure: str, caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest,
 ) -> None:
     container, sid, tid, rid, attachment_id, directory, directory_lease = managed_terminal
     owner, store, leases = container.terminal_resource_owner, container.attachment_blob_store, container.external_resource_leases
@@ -163,14 +166,77 @@ async def test_workspace_completion_commits_real_stopped_pty_and_releases_due_di
     assert owner._store.get(rid).status == "running"
     assert leases.get_lease(directory_lease.lease_id).status == "active"
     assert await store.collect_garbage(leases=leases) == ()
-    async with owner.operation(session_id=sid, thread_id=tid, holder_id="request:complete-proof", operation_id="complete-proof") as operation:
-        result = await operation.complete_terminal(rid)
-        assert result["status"] == "terminated" and result["owner_revision"] == 2
-        assert result["retention_scope"] == "workspace" and result["thread_associations"]
-        assert owner._store.get(rid).status == "terminated"
-        assert leases.get_lease(directory_lease.lease_id).status == "settled"
-        original, = leases.leases_for_resource(rid)
-        assert original.status == "active"
+    failure = RuntimeError(f"事件发布失败 {directory / 'lease-event-secret'}；" + "完整诊断" * 80)
+    sink_error = OSError("日志输出失败 /private/ledger-log-secret")
+    channel = container.job_event_bus.event_channel_service.channel("resource.state/external_resource_leases")
+    publish, call_handlers = channel.publish, logging.Logger.callHandlers
+    notifications: list[ResourceStateEvent] = []
+
+    def fail_notification(event: ResourceStateEvent) -> object:
+        if event.resource_id == attachment_id:
+            notifications.append(event)
+            raise failure
+        return publish(event)
+
+    def fail_log(logger: logging.Logger, record: logging.LogRecord) -> None:
+        call_handlers(logger, record)
+        if record.getMessage().startswith("resource.state 事件发布失败:"):
+            raise sink_error
+
+    with monkeypatch.context() as fault, caplog.at_level(logging.ERROR):
+        if notification_failure != "none":
+            fault.setattr(channel, "publish", fail_notification)
+        if notification_failure == "publish-and-log":
+            fault.setattr(logging.Logger, "callHandlers", fail_log)
+        async with owner.operation(session_id=sid, thread_id=tid, holder_id="request:complete-proof", operation_id="complete-proof") as operation:
+            result = await operation.complete_terminal(rid)
+            assert result["status"] == "terminated" and result["owner_revision"] == 2
+            assert result["retention_scope"] == "workspace" and result["thread_associations"]
+            assert owner._store.get(rid).status == "terminated"
+            assert leases.get_lease(directory_lease.lease_id).status == "settled"
+            original, = leases.leases_for_resource(rid)
+            assert original.status == "active"
     assert leases.get_lease(original.lease_id).status == "released"
+    cold = ExternalResourceLeaseLedger(state_path=leases._state_path)
+    assert cold.get_lease(original.lease_id) == leases.get_lease(original.lease_id)
+    assert cold.get_lease(directory_lease.lease_id) == leases.get_lease(directory_lease.lease_id)
+    if notification_failure == "none":
+        assert not notifications and not leases.notification_errors
+    else:
+        assert len(notifications) == len(leases.notification_errors) == 1
+        assert notifications[0].state == "released"
+        detail, = leases.notification_errors
+        assert f"resource_id={attachment_id}, state=released" in detail
+        assert "stage=resource-state-notify, error=RuntimeError" in detail
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert str(failure) in caplog.text
+        if notification_failure == "publish-and-log":
+            assert "diagnostic_sink_error=OSError" in detail
+            assert any(str(sink_error) in note for note in failure.__notes__)
+        else:
+            assert "diagnostic_sink_error" not in detail
+    for text in (*leases.notification_errors, json.dumps(result), leases._state_path.read_text()):
+        assert "lease-event-secret" not in text and "ledger-log-secret" not in text
     assert await store.collect_garbage(leases=leases) == (attachment_id,)
     assert not directory.exists()
+    run = TestRunContext.from_test_file(Path(request.path)).prepare()
+    (run.artifacts_dir / f"completion-{notification_failure}.json").write_text(json.dumps({
+        "resource_id": rid, "os_pid": pid, "completed": result,
+        "directory_lease": directory_lease.lease_id, "notification_errors": leases.notification_errors,
+        "directory_removed": not directory.exists(),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+async def test_workspace_completion_commits_real_stopped_pty_and_releases_due_directory(
+    managed_terminal, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest,
+) -> None:
+    await _assert_workspace_completion(managed_terminal, monkeypatch, "none", caplog, request)
+
+
+@pytest.mark.parametrize("notification_failure", ["publish", "publish-and-log"])
+async def test_completion_notification_failure_keeps_committed_leases_and_directory_gc(
+    managed_terminal, monkeypatch: pytest.MonkeyPatch,
+    notification_failure: str, caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest,
+) -> None:
+    await _assert_workspace_completion(managed_terminal, monkeypatch, notification_failure, caplog, request)

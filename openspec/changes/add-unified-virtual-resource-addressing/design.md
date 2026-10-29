@@ -49,6 +49,8 @@ Gateway与Workspace的active快照解码catch在原恢复标记写入之前复�
 
 Node 调试启动的原生错误在原 catch 内复用 `failure_detail`，统一输出 Session/Thread、node-debug-launch 阶段、异常类别与适用系统错误码。删除局部日志出口；日志次错附到原异常而不打断 failed 状态、start_failed 动作、manifest 与 claim 结算及原进程清理。公开文本的异常类别字段统一为该原语的 `error`，不另存一份错误状态。非原生的明确启动协议拒绝沿原合同保留，冷读及显式同方案重试仍由原 owner 执行。
 
+资源 lease 账本的原生访问和信封拒绝由原 owner 的单一抛错方法复用 `failure_detail`，阶段仍为 read／write／validate，明确字段规则保留，文件位置只附在原异常 notes。所有调用方迁齐后删除旧字符串出口与局部 logger，外部异常保留类别、系统错误码及直接 cause。结算／对账先提交后通知的顺序保持；通知 catch 复用同一原语，原有64条有界错误摘要仅记录资源身份、状态、resource-state-notify 阶段及类别。日志次错不替换原拒绝，也不让已提交的成功被当作业务失败或阻止后续资源通知；不持久化通知摘要、不重试通知、不改变资源终态或回收判定。
+
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
 **备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。

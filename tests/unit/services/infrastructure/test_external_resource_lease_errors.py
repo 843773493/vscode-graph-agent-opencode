@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -12,6 +13,24 @@ import pytest
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+
+
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def ledger_log_failure(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> OSError | None:
+    if not request.param:
+        return None
+    failure = OSError("日志输出失败 /private/ledger-log-secret")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if "artifact=external_resource_leases" in record.getMessage():
+            raise failure
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return failure
 
 
 @pytest.fixture
@@ -32,7 +51,7 @@ def ledger(tmp_path: Path) -> tuple[ExternalResourceLeaseLedger, Path]:
 ])
 def test_bad_envelope_reports_field_without_file_location(
     ledger: tuple[ExternalResourceLeaseLedger, Path], payload: object, reason: str,
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, ledger_log_failure: OSError | None,
 ) -> None:
     owner, path = ledger
     before = path.read_bytes()
@@ -44,6 +63,13 @@ def test_bad_envelope_reports_field_without_file_location(
     assert str(path) not in detail and "private-path" not in detail
     assert reason in detail and "artifact=external_resource_leases" in detail and "stage=validate" in detail
     assert str(path) in caplog.text and path.read_bytes() == damaged
+    assert isinstance(raised.value.__cause__, TypeError)
+    if ledger_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in detail
+        assert any(str(ledger_log_failure) in note for note in raised.value.__cause__.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in detail
+    assert "ledger-log-secret" not in detail
     path.write_bytes(before)
     cold = ExternalResourceLeaseLedger(state_path=path)
     assert cold.get("terminal_original") == owner.get("terminal_original")
@@ -54,6 +80,7 @@ def test_bad_envelope_reports_field_without_file_location(
 def test_native_failure_preserves_original_lease_and_explicit_retry(
     ledger: tuple[ExternalResourceLeaseLedger, Path], stage: str,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ledger_log_failure: OSError | None,
 ) -> None:
     owner, path = ledger
     original_bytes = path.read_bytes()
@@ -86,6 +113,12 @@ def test_native_failure_preserves_original_lease_and_explicit_retry(
     assert error.errno == errno.EACCES and error.__cause__ is native
     assert f"stage={'read' if stage == 'read' else 'write'}" in str(error)
     assert str(path) in caplog.text and "原生拒绝" in caplog.text
+    if ledger_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(error)
+        assert any(str(ledger_log_failure) in note for note in native.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in str(error)
+    assert "ledger-log-secret" not in str(error)
     assert path.read_bytes() == original_bytes and owner.get("terminal_original") == original_record
     assert owner.leases_for_resource("terminal_original") == original_leases
     cold = ExternalResourceLeaseLedger(state_path=path)

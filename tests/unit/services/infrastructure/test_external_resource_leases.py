@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.services.infrastructure.events.channel_events import (
+    ResourceStateEvent,
     ResourceStateEventPublisher,
 )
 from app.services.infrastructure.events.event_channel_service import (
@@ -251,16 +252,26 @@ async def test_reconcile_required_publishes_unavailable_never_released(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", ["/private/lease-event-secret", r"C:\private\lease-event-secret", r"\\server\private\lease-event-secret"])
+@pytest.mark.parametrize("mutation", ["settle", "reconcile"])
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_event_unavailable_keeps_durable_truth_and_records_error(
     tmp_path: Path,
     event_channel_service: EventChannelService,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    private: str, mutation: str, sink_fails: bool,
 ) -> None:
     """事件通道不可用：durable 事实不变，错误显式记录且可从账本读取。"""
 
-    def fail_publish(_event) -> None:
-        raise RuntimeError("event unavailable")
+    original_error = RuntimeError(f"event unavailable {private}；" + "完整诊断" * 80)
+    sink_error = OSError("日志输出失败 /private/ledger-log-secret")
+    original_call_handlers = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original_call_handlers(logger, record)
+        if sink_fails and record.getMessage().startswith("resource.state 事件发布失败:"):
+            raise sink_error
 
     # publisher 构造即 ensure channel；先建 publisher 再 patch 同一 channel。
     publisher = ResourceStateEventPublisher(
@@ -268,6 +279,16 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
         owner_domain="external_resource_leases",
     )
     channel = event_channel_service.channel("resource.state/external_resource_leases")
+    subscription = channel.subscribe(label="healthy-peer")
+    publish = channel.publish
+    attempted: list[ResourceStateEvent] = []
+
+    def fail_publish(event: ResourceStateEvent) -> object:
+        attempted.append(event)
+        if event.resource_id == "terminal_1":
+            raise original_error
+        return publish(event)
+
     monkeypatch.setattr(channel, "publish", fail_publish)
     ledger = ExternalResourceLeaseLedger(
         state_path=tmp_path / "resources.json",
@@ -284,15 +305,45 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
         lease_id="lease_1",
         operation_id="op_1",
     )
+    ledger.register_external(resource_id="browser_1", kind="browser_context", lifetime_scope="workspace")
+    ledger.acquire_operation(resource_id="browser_1", turn_stream_id="stream_2", operation_id="op_2")
     with caplog.at_level(
         logging.ERROR, logger="app.services.infrastructure.external_resource_leases"
     ):
-        settled = ledger.settle("lease_1")
+        monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+        if mutation == "settle":
+            settled = ledger.settle("lease_1")
+            assert settled.status == "settled"
+        else:
+            reconciled = ledger.reconcile({"terminal_1": "stopped", "browser_1": "running"})
+            assert [record.status for record in reconciled] == ["stopped", "recovered"]
     # durable 事实已经落盘，通知失败绝不回滚。
-    assert settled.status == "settled"
-    assert ledger.get_lease("lease_1").status == "settled"
-    assert ledger.notification_errors
-    assert "event unavailable" in ledger.notification_errors[-1]
+    status = "settled" if mutation == "settle" else "reconcile_required"
+    assert ledger.get_lease("lease_1").status == status
+    cold = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    assert cold.get_lease("lease_1") == ledger.get_lease("lease_1")
+    assert cold.get("terminal_1") == ledger.get("terminal_1")
+    assert cold.get("browser_1") == ledger.get("browser_1")
+    assert len(ledger.notification_errors) == 1
+    detail, = ledger.notification_errors
+    assert "resource_id=terminal_1, state=released" in detail
+    assert "stage=resource-state-notify, error=RuntimeError" in detail
+    assert private not in detail and "event unavailable" not in detail and "ledger-log-secret" not in detail
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert str(original_error) in caplog.text
+    if sink_fails:
+        assert "diagnostic_sink_error=OSError" in detail
+        assert any(str(sink_error) in note for note in original_error.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in detail
+    deliveries = subscription.pending()
+    if mutation == "reconcile":
+        assert [event.resource_id for event in attempted] == ["terminal_1", "browser_1"]
+        assert [delivery.event.resource_id for delivery in deliveries] == ["browser_1"]
+        assert [delivery.event.state for delivery in deliveries] == ["unknown"]
+    else:
+        assert [event.resource_id for event in attempted] == ["terminal_1"]
+        assert not deliveries
     assert any(
         "resource.state 事件发布失败" in record.message for record in caplog.records
     )

@@ -345,7 +345,16 @@
       "enabled": true,
       "timeoutMs": 90000,
       "dataLimitKb": 4194304,
-      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/terminal/test_operation_receipts.py"]
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/terminal/test_operation_receipts.py::test_real_operation_fault_keeps_exact_leases_until_verified_management_stop", "tests/integration/workspace_services/terminal/test_operation_receipts.py::test_workspace_completion_commits_real_stopped_pty_and_releases_due_directory"]
+    },
+    {
+      "id": "integration-terminal-lease-notifications",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/terminal/test_operation_receipts.py::test_completion_notification_failure_keeps_committed_leases_and_directory_gc"]
     },
     {
       "id": "integration-resource-thread-admission",

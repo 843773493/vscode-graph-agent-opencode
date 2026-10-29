@@ -10,7 +10,6 @@ owner 恢复与对账。它不猜测工具参数、不保存 cleanup_policy、�
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections import deque
 from collections.abc import Collection, Iterable, Iterator, Mapping
@@ -18,16 +17,16 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Never
 
 from pydantic import ConfigDict, TypeAdapter
 
+from app.core.failures import failure_detail
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
     ResourceStateEventPublisher,
 )
 
-logger = logging.getLogger(__name__)
 _UNSETTLED_LEASE_STATUSES = frozenset({"active", "reconcile_required"})
 
 
@@ -318,9 +317,11 @@ class ExternalResourceLeaseLedger:
         try:
             self._state_events.publish(resource_id=resource_id, state=state)
         except (RuntimeError, ValueError) as error:
-            summary = f"resource_id={resource_id} state={state} error={error}"
+            summary = failure_detail(
+                error, stage="resource-state-notify",
+                label=f"resource.state 事件发布失败: resource_id={resource_id}, state={state}",
+            )
             self._notification_errors.append(summary)
-            logger.exception("resource.state 事件发布失败: %s", summary)
 
     def get(self, resource_id: str) -> ResourceRecord | None:
         record = self._records.get(resource_id)
@@ -403,7 +404,7 @@ class ExternalResourceLeaseLedger:
                 # 只有尚未创建的账本为空；目录或无权读取不能被当成空账本。
                 return
         if not isinstance(raw, dict):
-            raise TypeError(self._failure("validate", "资源状态文件必须是对象"))
+            self._raise_failure("validate", "资源状态文件必须是对象")
         for value in self._load_rows(raw, "records"):
             record = _RESOURCE_RECORD.validate_python(value)
             self._records[record.resource_id] = record
@@ -423,20 +424,21 @@ class ExternalResourceLeaseLedger:
         """
         rows = raw.get(name, [])
         if not isinstance(rows, list):
-            raise TypeError(self._failure("validate", f"资源状态文件 {name} 必须是数组"))
+            self._raise_failure("validate", f"资源状态文件 {name} 必须是数组")
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
-                raise TypeError(self._failure("validate", f"资源状态文件 {name}[{index}] 必须是对象"))
+                self._raise_failure("validate", f"资源状态文件 {name}[{index}] 必须是对象")
         return rows
 
-    def _failure(self, stage: str, reason: str, error: OSError | None = None) -> str:
-        detail = f"{reason}: artifact=external_resource_leases, stage={stage}"
-        if error is not None:
-            detail += f", error_type={type(error).__name__}, errno={error.errno}"
-            if (winerror := getattr(error, "winerror", None)) is not None:
-                detail += f", winerror={winerror}"
-        logger.error("%s; path=%s", detail, self._state_path, exc_info=error)
-        return detail
+    def _raise_failure(self, stage: str, reason: str, error: OSError | None = None) -> Never:
+        original = error if error is not None else TypeError(reason)
+        original.add_note(f"资源账本位置: {self._state_path}")
+        detail = failure_detail(
+            original, stage=stage, label=f"{reason}: artifact=external_resource_leases",
+        )
+        if isinstance(original, OSError):
+            raise type(original)(original.errno, detail, None, getattr(original, "winerror", None)) from original
+        raise TypeError(detail) from original
 
     @contextmanager
     def _io(self, stage: str) -> Iterator[None]:
@@ -444,10 +446,7 @@ class ExternalResourceLeaseLedger:
         try:
             yield
         except OSError as error:
-            detail = self._failure(stage, "资源账本文件访问失败", error)
-            if (winerror := getattr(error, "winerror", None)) is not None:
-                raise type(error)(error.errno, detail, None, winerror) from error
-            raise type(error)(error.errno, detail) from error
+            self._raise_failure(stage, "资源账本文件访问失败", error)
 
     def _commit(
         self, *, records: Iterable[ResourceRecord] = (), leases: Iterable[ResourceLease] = (),

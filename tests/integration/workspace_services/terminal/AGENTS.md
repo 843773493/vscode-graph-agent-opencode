@@ -15,7 +15,7 @@ Linux 僵尸断言只描述 Linux 的回收语义；Windows 用原生 `taskkill 
 
 Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，同session后代忽略SIGTERM；停止返回后独立枚举进程表核对没有仍在执行的成员。测试父进程以subreaper回收自己产生的根与后代，失败收尾只操作本例隔离的进程组，不把该边界测试称为完整PTY或Backend重启验收。
 
-`test_operation_receipts.py`通过正式Session、消息附件上传、Terminal创建及原工具operation生成真实Node/PTY/HTTP状态，仅注入回执版本或核实状态。读、真实命令写入及workspace完成的错误回执保留精确原lease和目录占用；显式管理停止核实后才结清并允许到期GC。独立终态场景暂停steering轮询，由完成查询独占提交真实外部停止事实，仍保留workspace记录与关联。suite `integration-terminal-operation-receipts`固定90秒/4GiB，Linux和Windows均运行；原生PTY以回车提交命令，不替代Gateway/Web、独立Backend重启或完整旧代接管验收。
+`test_operation_receipts.py`通过正式Session、消息附件上传、Terminal创建及原工具operation生成真实Node/PTY/HTTP状态，明确注入回执版本／核实状态或账本通知／日志故障。读、真实命令写入及workspace完成的错误回执保留精确原lease和目录占用；显式管理停止核实后才结清并允许到期GC。独立终态场景暂停steering轮询，由完成查询独占提交真实外部停止事实，仍保留workspace记录与关联；通知或日志故障不改变已提交的结算，核对冷账本和真实目录回收。suite `integration-terminal-operation-receipts`显式选择原7场景，固定90秒/4GiB；`integration-terminal-lease-notifications`选择通知失败及通知／日志双重故障2场景，固定60秒/4GiB，两组复用同一场景实现并串行运行。支持Linux和Windows，实机结论以各平台原始结果为准；原生PTY以回车提交命令，不替代Gateway/Web、独立Backend重启或完整旧代接管验收。
 
 `test_terminal_shutdown_signals.py`经正式HTTP创建、真实Node/PTY及POSIX信号验证在途创建的关闭观察超时、原任务保留、管理查询、精确拒绝回执、迟到就绪的同链关闭与冷Manager恢复；另核致命错误及关闭期间到达的致命错误仍退出1。`terminal_start_barrier.mjs`是显式测试故障边界，仅延迟真实Worker就绪结果的交付并记录原进程身份，不代填Session或恢复状态。正常Manager退出继续保留PTY，fixture沿生产终止入口仅回收自己记录的精确实例。通过`integration-terminal-shutdown-signals`运行，固定90秒/4GiB；不代表Windows SIGBREAK、Gateway/主Web、全部后代独立核实或整个进程退出的总期限。
 
