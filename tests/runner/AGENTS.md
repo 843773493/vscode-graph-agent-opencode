@@ -93,6 +93,8 @@
 - `integration-resource-thread-admission`经正式资源入口和导航worker验证短Session准入、同Session独立资源并行及原holder退出后的删除排空，固定90秒/4GiB；不代表整个工具operation的截止或终止核实。
 - `integration-resource-cold-management`经正式Session/ASGI创建与执行、冷owner和真实Node/Chromium核对恢复取消后的stop/delete，固定60秒/4GiB；原脚本由context关闭后真实结束，不代表Backend硬重启、Gateway/Web或任意脚本强制终止。
 - `integration-context-source-epoch-copy`复用正式fork watchdog，核待消费、已消费和继续执行后的来源版本、epoch transition与封存前缀复制，固定120秒/4GiB；不替代完整上下文或Web验收。
+- `integration-resource-uri-aggregate`复用正式fork watchdog，核真实factory发布的内部聚合在seal、SQLite冷读及存储复制后保持显式null URI、正文和hash，固定60秒/4GiB；来源由factory装具生成，不代替公开fork、Backend进程重启或Web验收。
+- `integration-resource-uri-read`只选择A04资源目录、搜索和模型read场景，经三个真实Gateway、Backend及localhost SSH核对冻结目标、冷目标零物化和无路径投影，固定180秒/4GiB；复用model_stream，不包含延期的send/wait协作场景，不代替真实Provider或Web验收。
 - `integration-context-source-wire`核来源封装经过同步/异步真实HTTP、跨协议fallback、ToolSet切换及冷fork/后继fork时的正文、引用与hash，固定240秒/4GiB并复用正式fork watchdog；外部模型使用现有协议资产，不代表真实Provider或Web验收。
 - POSIX套件在独立进程组中运行，根进程退出后仍回收组内后代；覆盖正常、失败、超时和中断路径。Windows suite 通过 `app/runtime/windows_job.py` 在独立 Job Object 中启动，挂起根进程直到完成绑定，覆盖整个进程树的内存上限，并在根进程退出或监督器关闭时回收后代；Windows开发目标测试也复用这套实现。
 - 首次SIGINT/SIGTERM请求终止套件，保留30秒升级宽限；再次中断立即强杀，原套件强杀期限不重置。POSIX按信号终止进程组；Windows用 `taskkill /T` 终止监督器进程树，并在升级阶段加 `/F`。等待监督器退出后才返回，中断仍为130，超时仍为3及原TIMEOUT回执。

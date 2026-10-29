@@ -1403,3 +1403,10 @@
 - 旧生产的12项反例全部失败；候选原15项与新增12项中26通过、1项既有 watcher 失败，完整旧HEAD归档在同一断言复现，未改弱断言。另补4项明确绑定规则及日志故障测试全部通过，合计该文件30通过、1项既存失败。两项真实后端生命周期／ASGI集成均通过：HTTP创建Session和发送消息形成关键历史，真实文件循环令新Job失败且不调用模型，核普通Job／配置响应、request_id、真实ENOTDIR诊断次错、修复后新执行及sealed assembly原字节。模型复用model_stream与真实SDK；首轮集成2项在准备阶段误读尚不存在的工作区覆盖文件，改为合法最小覆盖后通过，不计首轮为产品验收。
 - Ruff、compileall通过；完整旧HEAD与最终Pyright均只有原watcher的1项可选成员访问诊断，按文件、最窄AST owner、规则、完整消息和表达式一致，无新增。作者结构自查核原读取、正文赋值、快照、监听及其它旧场景保持；原测试只增强规则断言。单测超过400行及既有根目录组织风险保留，无新增源码目录，不代独立审查。
 - 准确命令、源码指纹、原始输出、实际退出码及结构核对见 `out/tests/temp/uri-global-closure/artifacts/verification-093.json`。集成运行期间仅追加上述4项单测，受验生产及集成源码保持；不称全树未变。没有Gateway、真实网络、独立Backend重启、Windows、Web或真实Provider验收，2.2／7.2与延期项继续未勾；前端及相关OpenSpec不实施，其他agent改动／暂存和用户原Debug服务保持。
+
+### 2026-10-29 后端 URI 不变量的组合回归（2.2／7.2验收证据）
+
+- 语法、解析、冻结绑定、activation持久化、未注册目录、文件变更及快捷目录的474项单元通过；文件浏览错误与真实HTTP下载的51项集成通过，保留相对路径／目标端绝对路径／资源URI三输入、原字节、Range、故障归属及显式重试断言。
+- A04通过三个真实Gateway、Backend和localhost SSH验证资源目录、搜索及模型read，核对冻结目标、冷目标零物化、普通投影不含物理根及原request_id。模型复用model_stream；不执行延期的send/wait协作场景，不代表真实Provider、Windows或Web验收。
+- 为既有内部聚合生命周期测试补正式矩阵入口，两个协议场景经原fork watchdog通过，保持factory发布、seal、SQLite冷读、存储复制后的显式null URI、正文与hash。该测试的来源由factory装具生成、目标由存储复制建立，不能代替公开fork或独立Backend进程重启。另登记只选择A04的独立矩阵入口；其pytest命令与本轮已通过命令一致，清单校验通过，没有为入口登记重复运行昂贵场景。
+- 四批共528项通过；仅新增上述两个矩阵条目及目录说明，未修改产品或测试断言。准确命令、指纹、raw、退出码和覆盖映射见 `out/tests/temp/uri-global-closure/artifacts/verification-100.json`。测试串行，保留跨worktree闸门、进程外超时／内存保护；运行期间仅前端文件及本片矩阵发生变化，后端受验源码保持。2.2／7.2总门继续未勾，不以局部证据代替全局闭包；前端及相关OpenSpec等待用户通知，用户原Debug服务与其他agent的修改／暂存保持。
