@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from app.core.failures import failure_detail
+
 logger = logging.getLogger(__name__)
 
 from app.gateway.federation.errors import (
@@ -315,7 +317,7 @@ class FederationChannelSession:
         try:
             await self.transport.close(
                 code=close_code_for(error),
-                reason=f"{error.code}: {error.message}"[:120],
+                reason=error.code,
             )
         except Exception as close_error:
             logger.warning(
@@ -381,7 +383,9 @@ class FederationChannelSession:
         except Exception as error:  # noqa: BLE001 - 传输异常统一为显式 channel 失败
             channel_error = FederationError(
                 FEDERATION_CHANNEL_CLOSED,
-                f"channel 收帧失败: {error}",
+                failure_detail(
+                    error, stage="federation-channel-receive", label="channel 收帧失败"
+                ),
                 detail={"cause_type": type(error).__name__},
             )
             channel_error.__cause__ = error
@@ -454,7 +458,9 @@ class FederationChannelSession:
                 correlation_id=correlation_id,
                 error=FederationError(
                     FEDERATION_MALFORMED_FRAME,
-                    f"联邦方法处理失败: {type(error).__name__}: {error}",
+                    failure_detail(
+                        error, stage="federation-method", label="联邦方法处理失败"
+                    ),
                 ),
             )
         try:
@@ -490,7 +496,11 @@ class FederationChannelSession:
         except Exception as error:  # noqa: BLE001 - 心跳发送错误须保留原始原因
             channel_error = FederationError(
                 FEDERATION_CHANNEL_CLOSED,
-                f"channel 心跳发送失败: {error}",
+                failure_detail(
+                    error,
+                    stage="federation-channel-heartbeat",
+                    label="channel 心跳发送失败",
+                ),
                 detail={"cause_type": type(error).__name__},
             )
             channel_error.__cause__ = error

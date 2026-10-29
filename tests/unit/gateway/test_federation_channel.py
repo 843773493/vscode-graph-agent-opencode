@@ -518,6 +518,107 @@ async def test_channel_status_round_trip_over_real_websocket(tmp_path: Path) -> 
             assert response["payload"]["result"]["gateway_id"] == "gateway_spoke"
 
 
+@pytest.mark.parametrize(
+    "location",
+    [
+        "/private/federation/catalog.sqlite",
+        r"C:\private\federation\catalog.sqlite",
+        r"\\server\private\federation\catalog.sqlite",
+    ],
+    ids=["posix", "drive", "unc"],
+)
+@pytest.mark.asyncio
+async def test_native_handler_failure_and_recovery_over_real_websocket(
+    tmp_path: Path,
+    location: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    workspace_id = "22222222-2222-4222-8222-222222222222"
+    catalog = _Catalog({SOURCE_SESSION: (workspace_id,)})
+    lookup = catalog.local_session_workspaces
+    error = PermissionError(13, "目录读取拒绝" + "诊断" * 100, location)
+    should_fail = True
+
+    async def local_session_workspaces(session_id: str) -> tuple[str, ...]:
+        if should_fail:
+            raise error
+        return await lookup(session_id)
+
+    monkeypatch.setattr(catalog, "local_session_workspaces", local_session_workspaces)
+    main = _SessionMain(
+        {("gateway_spoke", workspace_id, SOURCE_SESSION): TARGET_THREAD}
+    )
+    async with _spoke_with_hub(
+        tmp_path, catalog=catalog, session_main=main, role="spoke"
+    ) as (spoke, hub, root):
+        client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
+        async with client:
+            for correlation_id in ("cor_native_failure", "cor_recovered"):
+                await client.send(
+                    FRAME_REQUEST,
+                    {
+                        "correlation_id": correlation_id,
+                        "method": METHOD_DISCOVERY,
+                        "request": _discovery_request(
+                            signer_root=root,
+                            session_id=SOURCE_SESSION,
+                            nonce=correlation_id,
+                        ),
+                    },
+                )
+                response = await client.recv()
+                if should_fail:
+                    assert response == {
+                        "frame_type": FRAME_RESPONSE,
+                        "payload": {
+                            "correlation_id": correlation_id,
+                            "ok": False,
+                            "error": {
+                                "code": "federation-malformed-frame",
+                                "message": "联邦方法处理失败: stage=federation-method, error=PermissionError, errno=13",
+                                "detail": {},
+                            },
+                        },
+                    }
+                    assert any(
+                        record.exc_info and record.exc_info[1] is error
+                        for record in caplog.records
+                    )
+                    assert str(error) in caplog.text
+                    should_fail = False
+                else:
+                    assert response == {
+                        "frame_type": FRAME_RESPONSE,
+                        "payload": {
+                            "correlation_id": correlation_id,
+                            "ok": True,
+                            "result": {
+                                "gateway_id": "gateway_spoke",
+                                "ambiguity_count": 1,
+                                "matches": [
+                                    {
+                                        "gateway_id": "gateway_spoke",
+                                        "workspace_id": workspace_id,
+                                        "session_id": SOURCE_SESSION,
+                                        "thread_id": TARGET_THREAD,
+                                        "main_thread_id": TARGET_THREAD,
+                                    }
+                                ],
+                            },
+                        },
+                    }
+            # 多字节协议说明仍在本地诊断中，close 帧只承载稳定码。
+            await client.send_raw(
+                json.dumps({"frame_type": "未知帧" * 100, "payload": {}})
+            )
+            with pytest.raises(ConnectionClosed) as closed:
+                await asyncio.wait_for(client.websocket.recv(), timeout=5)
+            assert closed.value.rcvd is not None
+            assert closed.value.rcvd.code == CLOSE_CODE_PROTOCOL_ERROR
+            assert closed.value.rcvd.reason == "federation-malformed-frame"
+
+
 @pytest.mark.asyncio
 async def test_ping_is_answered_with_pong(tmp_path: Path) -> None:
     async with _spoke_with_hub(

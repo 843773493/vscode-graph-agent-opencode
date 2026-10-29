@@ -21,6 +21,11 @@ from app.gateway.federation.errors import (
     FederationError,
 )
 from app.gateway.federation.identity import FederationPeerIdentity
+from app.gateway.federation.protocol import (
+    FRAME_REQUEST,
+    FederationFrame,
+    build_request_frame,
+)
 
 
 class _MemoryTransport:
@@ -162,7 +167,13 @@ async def test_heartbeat_send_failure_preserves_original_cause(
 
         assert reason is not None
         assert reason.code == FEDERATION_CHANNEL_CLOSED
-        assert reason.message == f"channel 心跳发送失败: {send_error}"
+        expected = (
+            "channel 心跳发送失败: stage=federation-channel-heartbeat, "
+            f"error={type(send_error).__name__}"
+        )
+        if isinstance(send_error, OSError):
+            expected += f", errno={send_error.errno}"
+        assert reason.message == expected
         assert reason.detail == {"cause_type": type(send_error).__name__}
         assert reason.__cause__ is send_error
     finally:
@@ -428,3 +439,217 @@ async def test_channel_epoch_handshake_is_exposed() -> None:
     assert session.peer_gateway_id == "gateway_peer"
     assert session.local_role == "spoke"
     assert session.closed is False
+
+
+@pytest.fixture(
+    params=[
+        "/private/channel/通道.sock",
+        r"C:\private\channel\通道.sock",
+        r"\\server\private\channel\通道.sock",
+    ],
+    ids=["posix", "drive", "unc"],
+)
+def native_channel_error(request: pytest.FixtureRequest) -> OSError:
+    return PermissionError(13, "原生传输拒绝" + "诊断" * 80, request.param)
+
+
+@pytest.mark.parametrize("phase", ["receive", "heartbeat"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.asyncio
+async def test_transport_failure_facts_fail_pending_and_drain_tasks(
+    native_channel_error: OSError,
+    phase: str,
+    sink_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = _MemoryTransport()
+    release = asyncio.Event()
+    sent = asyncio.Event()
+    original_send = transport.send_text
+
+    async def receive() -> str | None:
+        await release.wait()
+        raise native_channel_error
+
+    async def send(message: str) -> None:
+        if FederationFrame.decode(message).frame_type == FRAME_REQUEST:
+            await original_send(message)
+            sent.set()
+        else:
+            await release.wait()
+            raise native_channel_error
+
+    if phase == "receive":
+        monkeypatch.setattr(transport, "receive_text", receive)
+    monkeypatch.setattr(transport, "send_text", send)
+    if sink_fails:
+        from app.core import failures
+
+        def fail_sink(*args: object, **kwargs: object) -> None:
+            raise OSError("诊断 sink 故障 /private/log-sink")
+
+        monkeypatch.setattr(failures.logger, "error", fail_sink)
+    session = _session(
+        transport, heartbeat_interval_seconds=0.01, heartbeat_timeout_seconds=30
+    )
+    session.start()
+    pending = asyncio.create_task(
+        session.request(method="federation.status", request={}, timeout=5)
+    )
+    try:
+        await asyncio.wait_for(sent.wait(), timeout=5)
+        release.set()
+        with pytest.raises(FederationError) as caught:
+            await asyncio.wait_for(pending, timeout=5)
+        reason = await asyncio.wait_for(session.wait_closed(), timeout=5)
+        assert reason is caught.value
+        assert reason is not None
+        label = "channel 收帧失败" if phase == "receive" else "channel 心跳发送失败"
+        expected = f"{label}: stage=federation-channel-{phase}, error=PermissionError, errno=13"
+        assert reason.message == expected + (
+            ", diagnostic_sink_error=OSError" if sink_fails else ""
+        )
+        assert reason.detail == {"cause_type": "PermissionError"}
+        assert reason.__cause__ is native_channel_error
+        assert native_channel_error.__traceback__ is not None
+        assert reason.code == FEDERATION_CHANNEL_CLOSED
+        assert transport.closed is not None
+        assert transport.closed == (1011, FEDERATION_CHANNEL_CLOSED)
+        assert len(transport.closed[1].encode()) <= 123
+        assert session._pending == {}
+        if sink_fails:
+            assert any(
+                "/private/log-sink" in note for note in native_channel_error.__notes__
+            )
+        else:
+            assert any(
+                record.exc_info and record.exc_info[1] is native_channel_error
+                for record in caplog.records
+            )
+            assert str(native_channel_error) in caplog.text
+    finally:
+        release.set()
+        await session.close()
+        await session.join()
+        await asyncio.gather(pending, return_exceptions=True)
+    assert all(task.done() for task in session._tasks)
+
+
+@pytest.mark.asyncio
+async def test_handler_failure_sends_facts_then_serves_next_request(
+    native_channel_error: OSError,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handle(
+        self: _Handler,
+        *,
+        method: str,
+        request: dict[str, object],
+        session: FederationChannelSession,
+        deadline_at: float | None,
+    ) -> dict[str, object]:
+        if request.get("fail"):
+            raise native_channel_error
+        return {"echo": method}
+
+    transport = _MemoryTransport()
+    outgoing: asyncio.Queue[str] = asyncio.Queue()
+    monkeypatch.setattr(_Handler, "handle", handle)
+    monkeypatch.setattr(transport, "send_text", outgoing.put)
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    try:
+        requests: list[tuple[str, dict[str, object]]] = [
+            ("cor_failure", {"fail": True}),
+            ("cor_recovered", {}),
+        ]
+        for correlation_id, request in requests:
+            await transport.incoming.put(
+                build_request_frame(
+                    correlation_id=correlation_id,
+                    method="federation.status",
+                    request=request,
+                ).encode()
+            )
+            response = FederationFrame.decode(
+                await asyncio.wait_for(outgoing.get(), timeout=5)
+            )
+            assert response.frame_type == "response"
+            if request:
+                assert response.payload == {
+                    "correlation_id": correlation_id,
+                    "ok": False,
+                    "error": {
+                        "code": "federation-malformed-frame",
+                        "message": "联邦方法处理失败: stage=federation-method, error=PermissionError, errno=13",
+                        "detail": {},
+                    },
+                }
+            else:
+                assert response.payload == {
+                    "correlation_id": correlation_id,
+                    "ok": True,
+                    "result": {"echo": "federation.status"},
+                }
+            assert session.closed is False
+        assert any(
+            record.exc_info and record.exc_info[1] is native_channel_error
+            for record in caplog.records
+        )
+        assert str(native_channel_error) in caplog.text
+    finally:
+        await session.close()
+        await session.join()
+    assert all(task.done() for task in session._tasks)
+
+
+@pytest.mark.asyncio
+async def test_handler_preserves_registered_error_and_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = FederationError(
+        FEDERATION_DEADLINE_EXCEEDED, "操作期限已耗尽", detail={"deadline_at": 123.0}
+    )
+    cancellation = asyncio.CancelledError("取消当前联邦请求")
+    transport = _MemoryTransport()
+    session = _session(transport)
+    frame = build_request_frame(
+        correlation_id="cor_domain", method="federation.status", request={}
+    )
+    failure: BaseException = error
+
+    async def handle(self: _Handler, **kwargs: object) -> dict[str, object]:
+        raise failure
+
+    monkeypatch.setattr(_Handler, "handle", handle)
+    await session._serve_request(frame, "cor_domain")
+    assert FederationFrame.decode(transport.sent[0]).payload == {
+        "correlation_id": "cor_domain",
+        "ok": False,
+        "error": error.to_wire(),
+    }
+    failure = cancellation
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await session._serve_request(frame, "cor_domain")
+    assert caught.value is cancellation
+    assert len(transport.sent) == 1
+    assert session.closed is False
+
+
+@pytest.mark.asyncio
+async def test_close_transmits_code_and_keeps_complete_local_business_error() -> None:
+    transport = _MemoryTransport()
+    session = _session(transport)
+    error = FederationError(
+        FEDERATION_DEADLINE_EXCEEDED,
+        "有意义的完整业务说明" * 100,
+        detail={"deadline_at": 123.0},
+    )
+    await session.close(error)
+    assert await session.wait_closed() is error
+    assert transport.closed is not None
+    assert transport.closed == (1011, FEDERATION_DEADLINE_EXCEEDED)
+    assert len(transport.closed[1].encode()) <= 123
+    await session.join()

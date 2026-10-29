@@ -84,6 +84,21 @@ def test_production_error_constructors_use_registered_owner_codes() -> None:
             "ResourceUriResolveError",
             "detail['code']",
         ),
+        (
+            "app/services/infrastructure/resource_platform/sources/gateway_resource_navigation.py",
+            "ResourceUriResolveError",
+            "detail['code']",
+        ),
+        (
+            "app/services/infrastructure/resource_platform/sources/gateway_resource_navigation.py",
+            "FederationError",
+            "detail['code']",
+        ),
+        (
+            "app/services/infrastructure/workspace_files/gateway_text_mutation.py",
+            "FederationError",
+            "detail['code']",
+        ),
     }
     observed_dynamic_sites = set()
     for path in sorted((root / "app").rglob("*.py")):
