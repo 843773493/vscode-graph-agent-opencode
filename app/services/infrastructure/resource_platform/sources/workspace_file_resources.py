@@ -33,6 +33,8 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
     ObservedSourceHandle,
     ObservedSourceRevision,
     SourceReconciler,
+    is_source_rejection,
+    mark_source_rejection,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
     FILE_WATCH_QUEUE_SIZE,
@@ -168,30 +170,30 @@ class WorkspaceFileResourceRegistry:
         if existing_handle is not None:
             descriptor = existing_handle.descriptor
             if (descriptor.source_id, descriptor.entry_identity) != (source_id, entry_identity):
-                raise ValueError(f"资源 URI identity 绑定冲突: uri={uri}")
+                raise mark_source_rejection(ValueError(f"资源 URI identity 绑定冲突: uri={uri}"))
             existing_path = self._handle_path(existing_handle)
             if path == existing_path or path.absolute() == existing_path:
                 resolved_path = existing_path
                 snapshot = self._snapshots.get(uri)
                 if snapshot is not None and snapshot.revision is not None:
                     if existing_handle.allow_missing != optional:
-                        raise ValueError(f"来源 handle 绑定冲突: source_id={source_id}")
+                        raise mark_source_rejection(ValueError(f"来源 handle 绑定冲突: source_id={source_id}"))
                     return snapshot
             else:
                 resolved_path = path.resolve()
                 if existing_handle.file_path != str(resolved_path):
-                    raise ValueError(f"资源 URI 绑定冲突: uri={uri}")
+                    raise mark_source_rejection(ValueError(f"资源 URI 绑定冲突: uri={uri}"))
         else:
             resolved_path = path.resolve()
 
         if not resolved_path.is_file() and resolved_path.exists():
-            raise RuntimeError(f"工作区资源路径不是文件: uri={uri}")
+            raise mark_source_rejection(RuntimeError(f"工作区资源路径不是文件: uri={uri}"))
         if any(
             registered_uri != uri
             and handle.descriptor.entry_identity == entry_identity
             for registered_uri, handle in tuple(self._file_handles_by_uri.items())
         ):
-            raise ValueError(f"文件来源 entry_identity 冲突: entry_identity={entry_identity}")
+            raise mark_source_rejection(ValueError(f"文件来源 entry_identity 冲突: entry_identity={entry_identity}"))
         allowed_root = self._allowed_root_for(resolved_path, reference=uri)
         handle = ObservedSourceHandle(
             descriptor=ObservedSourceDescriptor(
@@ -306,37 +308,37 @@ class WorkspaceFileResourceRegistry:
             root = handle.root
             reference = f"scope={handle.scope}, scope_id={handle.scope_id}"
             if root.is_symlink():
-                raise RuntimeError(f"Skill 根目录不允许 symlink: {reference}")
+                raise mark_source_rejection(RuntimeError(f"Skill 根目录不允许 symlink: {reference}"))
             # 枚举前复用文件 owner 的域边界；中间段的内部链接可用，越界链接禁止跟随。
             allowed_root = self._allowed_root_for(root, reference=reference)
             if not root.resolve().is_relative_to(allowed_root):
-                raise ValueError(f"Skill 固定根越出已知允许根: {reference}")
+                raise mark_source_rejection(ValueError(f"Skill 固定根越出已知允许根: {reference}"))
             if root.exists() and not root.is_dir():
-                raise RuntimeError(f"Skill 根路径不是目录: {reference}")
+                raise mark_source_rejection(RuntimeError(f"Skill 根路径不是目录: {reference}"))
             if handle.declared_entries is not None:
                 if not root.is_dir():
-                    raise RuntimeError(f"发行包内置 Skill 根目录不存在: {reference}")
+                    raise mark_source_rejection(RuntimeError(f"发行包内置 Skill 根目录不存在: {reference}"))
                 candidates = tuple(root / name for name in handle.declared_entries)
             else:
                 candidates = tuple(sorted(root.iterdir())) if root.is_dir() else ()
             for entry_dir in candidates:
                 entry_reference = f"{reference}, skill={entry_dir.name}"
                 if entry_dir.is_symlink():
-                    raise RuntimeError(f"Skill entry 不允许 symlink: {entry_reference}")
+                    raise mark_source_rejection(RuntimeError(f"Skill entry 不允许 symlink: {entry_reference}"))
                 if not entry_dir.is_dir():
                     if handle.declared_entries is not None:
-                        raise RuntimeError(f"发行包内置 Skill 组目录不存在: {entry_reference}")
+                        raise mark_source_rejection(RuntimeError(f"发行包内置 Skill 组目录不存在: {entry_reference}"))
                     continue
                 entry_watch_roots.append(entry_dir.absolute())
                 path = entry_dir / "SKILL.md"
                 if path.is_symlink():
-                    raise RuntimeError(f"SKILL.md 不允许 symlink: {entry_reference}")
+                    raise mark_source_rejection(RuntimeError(f"SKILL.md 不允许 symlink: {entry_reference}"))
                 if not path.is_file():
                     if handle.declared_entries is not None:
-                        raise RuntimeError(f"发行包内置 Skill 组缺少 SKILL.md: {entry_reference}")
+                        raise mark_source_rejection(RuntimeError(f"发行包内置 Skill 组缺少 SKILL.md: {entry_reference}"))
                     continue
                 if handle.scope_id is None:
-                    raise RuntimeError("gateway scope 的 scope_id 需要真实的 gateway_id，当前来源 owner 尚未绑定")
+                    raise mark_source_rejection(RuntimeError("gateway scope 的 scope_id 需要真实的 gateway_id，当前来源 owner 尚未绑定"))
                 uri = skill_display_uri(
                     scope=handle.scope, scope_id=handle.scope_id, skill_name=entry_dir.name,
                 )
@@ -345,7 +347,7 @@ class WorkspaceFileResourceRegistry:
                 if uri in self._file_handles_by_uri:
                     descriptor = self.source_descriptor_for_uri(uri)
                     if (descriptor.source_id, descriptor.entry_identity) != (source_id, entry_identity):
-                        raise ValueError(f"Skill 文件来源 owner identity 绑定冲突: uri={uri}")
+                        raise mark_source_rejection(ValueError(f"Skill 文件来源 owner identity 绑定冲突: uri={uri}"))
                     self.refresh(uri)
                 else:
                     self.register_file(
@@ -363,10 +365,10 @@ class WorkspaceFileResourceRegistry:
                 label=f"Skill 固定目录读取失败: directory_id={directory_id}, scope={handle.scope}, scope_id={handle.scope_id}",
             )
         except (RuntimeError, ValueError) as failure:
-            # TODO：继续核对原生路径解析异常与受控业务拒绝的边界，不能据此关闭全局路径门。
+            reason = f", reason={failure}" if is_source_rejection(failure) else ""
             error = failure_detail(
                 failure, stage="skill-directory-reconcile",
-                label=f"Skill 固定目录对账失败: directory_id={directory_id}, reason={failure}",
+                label=f"Skill 固定目录对账失败: directory_id={directory_id}{reason}",
             )
         self._skill_entry_watch_roots[directory_id] = tuple(entry_watch_roots)
         if error is None and previous is not None:
@@ -417,7 +419,7 @@ class WorkspaceFileResourceRegistry:
         elif self._gateway_skills_root is not None:
             roots = {self._gateway_skills_root.resolve()}
         else:
-            raise RuntimeError("文件来源 owner 未绑定配置域")
+            raise mark_source_rejection(RuntimeError("文件来源 owner 未绑定配置域"))
         return tuple(
             sorted(
                 roots,
@@ -434,9 +436,9 @@ class WorkspaceFileResourceRegistry:
         for root in self._allowed_root_candidates():
             if resolved_path.is_relative_to(root):
                 return root
-        raise ValueError(
+        raise mark_source_rejection(ValueError(
             f"工作区文件来源必须位于已知允许根内: {reference}"
-        )
+        ))
 
     def _publish_observation(
         self,
@@ -773,7 +775,7 @@ class WorkspaceFileResourceRegistry:
     @staticmethod
     def _handle_path(handle: ObservedSourceHandle) -> Path:
         if handle.file_path is None:
-            raise RuntimeError("文件来源 handle 缺少 file_path")
+            raise mark_source_rejection(RuntimeError("文件来源 handle 缺少 file_path"))
         return Path(handle.file_path)
 
 

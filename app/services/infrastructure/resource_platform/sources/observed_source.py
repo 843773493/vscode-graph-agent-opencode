@@ -20,13 +20,16 @@ import stat as stat_module
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.domain.itemized.hashing import canonical_json_bytes
 
 # 固定阈值:与历史 workspace_file_resources 常量保持一致,调用方不可覆盖。
 MAX_STABLE_READ_BYTES = 512 * 1024
 STABLE_READ_ATTEMPTS = 3
+_SOURCE_REJECTION_ATTRIBUTE = "_boxteam_source_rejection"
+_SourceError = TypeVar("_SourceError", bound=Exception)
 
 _SOURCE_KINDS = frozenset({"file"})
 _REVISION_KINDS = frozenset({"file_byte_hash", "file_absence"})
@@ -52,6 +55,17 @@ class StableSourceReadError(RuntimeError):
             raise ValueError(f"未知 StableSourceReadError reason_code: {reason_code}")
         super().__init__(message)
         self.reason_code = reason_code
+
+
+def mark_source_rejection(error: _SourceError) -> _SourceError:
+    """在拒绝产生处标记公开说明，保留原异常实例、类别和原因链。"""
+    setattr(error, _SOURCE_REJECTION_ATTRIBUTE, True)
+    return error
+
+
+def is_source_rejection(error: BaseException) -> bool:
+    """只接受来源 owner 的显式拒绝或已有闭合协议错误，不按原文猜测。"""
+    return isinstance(error, (StableSourceReadError, ResourceUriGrammarError)) or getattr(error, _SOURCE_REJECTION_ATTRIBUTE, False) is True
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,7 +335,7 @@ class SourceReconciler:
         source_id = handle.descriptor.source_id
         existing = self._handles.get(source_id)
         if existing is not None and existing != handle:
-            raise ValueError(f"来源 handle 绑定冲突: source_id={source_id}")
+            raise mark_source_rejection(ValueError(f"来源 handle 绑定冲突: source_id={source_id}"))
         self._handles[source_id] = handle
 
     def reconcile(self, source_id: str) -> ObservedSourceRevision:
@@ -390,4 +404,6 @@ __all__ = [
     "SourceReconciler",
     "StableSourceReadError",
     "StableSourceReader",
+    "is_source_rejection",
+    "mark_source_rejection",
 ]

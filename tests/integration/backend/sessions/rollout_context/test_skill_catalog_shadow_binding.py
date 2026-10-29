@@ -314,8 +314,10 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
         assert restored_catalog(restarted, sealed) == original_catalog
 
 
+@pytest.mark.parametrize("failure_type", [PermissionError, RuntimeError, ValueError])
 async def test_directory_read_failure_keeps_publication_alive_and_recovers(
     skill_catalog_owner, skill_diagnostic_sink, monkeypatch: pytest.MonkeyPatch, caplog,
+    failure_type: type[PermissionError | RuntimeError | ValueError],
 ):
     _saver, _session, _thread, _accepted, registry, files, _manager = skill_catalog_owner
     root = files.workspace_root / ".boxteam" / "skills"
@@ -324,7 +326,10 @@ async def test_directory_read_failure_keeps_publication_alive_and_recovers(
     assert initial.available
     producer = next(task for task in asyncio.all_tasks() if task.get_name() == "boxteam-skill-catalog:same-name-skill-publication")
     original_iterdir = Path.iterdir
-    failure = PermissionError(errno.EACCES, "固定根枚举失败", str(root))
+    failure = (
+        PermissionError(errno.EACCES, "固定根枚举失败", str(root))
+        if failure_type is PermissionError else failure_type(f"固定根枚举失败: {root}")
+    )
     failed = True
 
     def iterdir(path: Path):
@@ -348,7 +353,9 @@ async def test_directory_read_failure_keeps_publication_alive_and_recovers(
         directory_id = next(key for key, value in files._skill_directories.items() if value.root == root)
         rejected = files.skill_directory_snapshot(directory_id)
         assert not rejected.available and rejected.error is not None
-        assert "PermissionError" in rejected.error and f"errno={errno.EACCES}" in rejected.error
+        assert f"error={failure_type.__name__}" in rejected.error
+        if failure_type is PermissionError:
+            assert f"errno={errno.EACCES}" in rejected.error
         broken_logging, blocked = skill_diagnostic_sink
         for detail in (unavailable.error, rejected.error):
             assert str(root) not in detail and str(blocked) not in detail
