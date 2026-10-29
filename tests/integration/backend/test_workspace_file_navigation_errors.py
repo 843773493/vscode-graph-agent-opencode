@@ -28,6 +28,7 @@ from app.main import workspace_http_exception_handler
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files import filesystem, operations
+from app.services.infrastructure.workspace_files import paths as workspace_paths
 from app.services.infrastructure.workspace_files.filesystem import (
     FileEffectUnverifiedError,
 )
@@ -84,11 +85,40 @@ def file_rows(case):
                 for name in ("owner", "directories", "operations", "events")}
 
 
+@pytest.fixture(params=[False, True], ids=["logging", "broken-logging"])
+def native_control_sink(file_case, request: pytest.FixtureRequest):
+    if not request.param:
+        yield None
+        return
+    blocked = file_case.root / "blocked-native-control-log"
+    blocked.write_bytes(b"keep obstruction")
+    errors: list[BaseException] = []
+
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.exc_info and record.exc_info[1] is not None:
+                errors.append(record.exc_info[1])
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    handler = FailingHandler(level=logging.ERROR)
+    loggers = (logging.getLogger(workspace_paths.__name__), failures.logger)
+    for logger in loggers:
+        logger.addHandler(handler)
+    try:
+        yield SimpleNamespace(blocked=blocked, errors=errors)
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        assert blocked.read_bytes() == b"keep obstruction"
+
+
 @pytest.mark.parametrize("operation", ["bind", "resolve"])
-@pytest.mark.parametrize("invalid", ["data", "json", "extra_key"])
+@pytest.mark.parametrize("invalid", ["data", "json", "extra_key", "code", "null_data", "request_id"])
 async def test_native_control_invalid_reply_preserves_files_and_allows_original_request_retry(
     file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    operation: str, invalid: str,
+    operation: str, invalid: str, native_control_sink,
 ):
     case = file_case
     external = case.root.parent / ("private-native-root-" + uuid4().hex)
@@ -102,15 +132,21 @@ async def test_native_control_invalid_reply_preserves_files_and_allows_original_
 
     def respond(request):
         requests.append(request)
-        data = {"uri": uri}
+        data: dict[str, object] = {"uri": uri}
         if request.method == "GET":
             data["native_root"] = str(external)
-        payload = {"data": data, "request_id": request.headers["X-Request-ID"]}
+        payload: dict[str, object] = {"data": data, "request_id": request.headers["X-Request-ID"], "message": str(external)}
         if broken:
             if invalid == "data":
                 data["uri" if operation == "bind" else "native_root"] = {"private-native-root": str(external)}
             elif invalid == "extra_key":
                 data[str(external)] = str(external)
+            elif invalid == "code":
+                payload["code"] = 9
+            elif invalid == "null_data":
+                payload["data"] = None
+            elif invalid == "request_id":
+                payload["request_id"] = "req-other"
         content = ("invalid-json " + str(external)).encode() if broken and invalid == "json" else json.dumps(payload).encode()
         return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]}, content=content)
 
@@ -134,13 +170,21 @@ async def test_native_control_invalid_reply_preserves_files_and_allows_original_
     failure = failed.json()
     assert failure["request_id"] == failed.headers["X-Request-ID"] == request_id
     assert "private-native-root" not in failed.text and str(case.root) not in failed.text
-    assert f"operation={operation}" in failure["detail"] and "stage=response" in failure["detail"]
-    assert "error_count=1" in failure["detail"]
+    stage = "response" if invalid in {"data", "json", "extra_key"} else "envelope"
+    assert f"operation={operation}" in failure["detail"] and f"stage={stage}" in failure["detail"]
+    if stage == "response":
+        assert "error_count=1" in failure["detail"]
     assert file_rows(case) == before and not scanned
     assert seed.read_bytes() == b"external original\n"
     assert (case.directory / "seed.txt").read_bytes() == b"original\n"
     assert len(requests) == 1 and requests[0].method == ("POST" if operation == "bind" else "GET")
-    assert str(external) in caplog.text
+    if native_control_sink is None:
+        assert str(external) in caplog.text
+    else:
+        assert "diagnostic_sink_error=NotADirectoryError" in failure["detail"]
+        assert len(native_control_sink.errors) == 1
+        assert any(str(external) in note for note in native_control_sink.errors[0].__notes__)
+        assert any(str(native_control_sink.blocked) in note for note in native_control_sink.errors[0].__notes__)
     broken = False
     continued = await case.client.get("/api/v1/workspace/files", params=params, headers={"X-Request-ID": request_id})
     assert continued.status_code == 200, continued.text
@@ -151,7 +195,7 @@ async def test_native_control_invalid_reply_preserves_files_and_allows_original_
     assert "private-native-root" not in continued.text and str(case.root) not in continued.text
     assert seed.read_bytes() == b"external original\n"
     assert requests[0].url == requests[1].url and requests[0].content == requests[1].content
-    (case.artifacts / f"native-control-{operation}-{invalid}.json").write_text(json.dumps({
+    (case.artifacts / f"native-control-{operation}-{invalid}-{'broken-logging' if native_control_sink else 'logging'}.json").write_text(json.dumps({
         "failure": failure, "continued": body,
     }, ensure_ascii=False, indent=2) + "\n")
 

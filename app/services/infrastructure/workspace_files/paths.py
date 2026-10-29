@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -14,6 +13,7 @@ from pydantic import ValidationError
 from app.core import resource_uri
 from app.core.atomic_fs import native_io_path
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.core.path_utils import (
     is_resource_uri_input,
     resolve_native_file_path,
@@ -33,7 +33,6 @@ from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files.filesystem import file_access
 
-logger = logging.getLogger(__name__)
 _NativeReply = TypeVar("_NativeReply", NativeDirectoryBindingDTO, NativeDirectoryResolveDTO)
 
 
@@ -82,14 +81,15 @@ class GatewayNativeDirectoryClient:
             rules = sorted({item["type"] for item in error.errors(
                 include_url=False, include_context=False, include_input=False,
             )})
-            detail = (f"原生目录控制链回包校验失败: operation={operation}, stage=response, "
+            detail = (f"原生目录控制链回包校验失败: operation={operation}, "
                       f"error_count={error.error_count()}, rules={','.join(rules)}")
-            logger.exception("%s；原始响应=%r", detail, response.content)
-            raise ValueError(detail) from error
+            error.add_note(f"原始响应={response.content!r}")
+            raise ValueError(failure_detail(error, stage="response", label=detail)) from error
         if result.code != 0 or result.data is None or result.request_id != received:
-            detail = f"原生目录控制链回执无效: operation={operation}, stage=envelope"
-            logger.error("%s；原始响应=%r", detail, response.content)
-            raise ValueError(detail)
+            invalid = ValueError("原生目录控制链回执无效")
+            invalid.add_note(f"原始响应={response.content!r}")
+            raise ValueError(failure_detail(invalid, stage="envelope",
+                             label=f"原生目录控制链回执无效: operation={operation}")) from invalid
         return result.data
 
     def bind(self, root: Path) -> str:

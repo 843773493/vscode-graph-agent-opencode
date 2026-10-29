@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import threading
@@ -20,6 +21,7 @@ from pydantic import ValidationError
 import app.services.infrastructure.workspace_service as workspace_service_module
 from app.api import workspace as workspace_api
 from app.api.deps import get_workspace_service, verify_local_token
+from app.core import failures
 from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
@@ -38,6 +40,7 @@ from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+from app.services.infrastructure.workspace_files import paths as workspace_paths
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
 )
@@ -141,7 +144,7 @@ def test_native_reply_validation_keeps_raw_input_in_diagnostics_and_allows_retry
     assert "error_count=1" in detail and f"rules={rule}" in detail
     assert isinstance(failure.value.__cause__, ValidationError)
     assert any(record.exc_info and record.exc_info[1] is failure.value.__cause__
-               and reply.content in record.args for record in caplog.records)
+               and repr(reply.content) in logging.Formatter().format(record) for record in caplog.records)
     assert len(reply.requests) == 1
     reply.content = json.dumps({"data": data, "request_id": "req-native-protocol"}).encode()
     assert invoke() == (reply.uri if operation == "bind" else root)
@@ -150,6 +153,70 @@ def test_native_reply_validation_keeps_raw_input_in_diagnostics_and_allows_retry
     assert reply.requests[0].url == reply.requests[1].url
     assert reply.requests[0].content == reply.requests[1].content
     assert all(request.headers["X-Local-Token"] == "local-token" for request in reply.requests)
+
+
+@pytest.fixture
+def broken_native_diagnostics(tmp_path: Path):
+    blocked = tmp_path / "blocked-native-control-log"
+    blocked.write_bytes(b"keep obstruction")
+    errors: list[BaseException] = []
+
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.exc_info and record.exc_info[1] is not None:
+                errors.append(record.exc_info[1])
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    handler = FailingHandler(level=logging.ERROR)
+    loggers = (logging.getLogger(workspace_paths.__name__), failures.logger)
+    for logger in loggers:
+        logger.addHandler(handler)
+    try:
+        yield SimpleNamespace(blocked=blocked, errors=errors)
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        assert blocked.read_bytes() == b"keep obstruction"
+
+
+@pytest.mark.parametrize("operation", ["bind", "resolve"])
+@pytest.mark.parametrize("stage", ["response", "envelope"])
+@pytest.mark.parametrize("private", ["/private-native-root/secret", r"C:\private-native-root\secret", r"\\host\private-native-root\secret"])
+def test_native_control_diagnostic_failure_keeps_original_rejection_and_cause(
+    native_reply, broken_native_diagnostics, operation, stage, private,
+):
+    reply, sink = native_reply, broken_native_diagnostics
+    root = Path("/private-native-root")
+    data = {"uri": reply.uri}
+    if operation == "resolve":
+        data["native_root"] = str(root)
+    payload: dict[str, object] = {"data": dict(data), "request_id": "req-native-protocol", "message": private}
+    if stage == "response":
+        payload["message"] = [private]
+    else:
+        payload["code"] = 9
+    reply.content = json.dumps(payload).encode()
+
+    def invoke():
+        return reply.client.bind(root) if operation == "bind" else reply.client.resolve(parse_resource_uri(reply.uri))
+
+    with pytest.raises(ValueError) as failure:
+        invoke()
+    assert f"stage={stage}" in str(failure.value) and f"operation={operation}" in str(failure.value)
+    assert "diagnostic_sink_error=NotADirectoryError" in str(failure.value)
+    assert "private-native-root" not in str(failure.value) and str(sink.blocked) not in str(failure.value)
+    cause = failure.value.__cause__
+    assert type(cause) is (ValidationError if stage == "response" else ValueError)
+    assert sink.errors == [cause] and cause is not None
+    assert any(repr(reply.content) in note for note in cause.__notes__)
+    assert any(str(sink.blocked) in note for note in cause.__notes__)
+    assert len(reply.requests) == 1
+    reply.content = json.dumps({"data": data, "request_id": "req-native-protocol"}).encode()
+    assert invoke() == (reply.uri if operation == "bind" else root)
+    assert len(reply.requests) == 2 and reply.requests[0].url == reply.requests[1].url
+    assert reply.requests[0].content == reply.requests[1].content
 
 
 @pytest.mark.parametrize("url", [

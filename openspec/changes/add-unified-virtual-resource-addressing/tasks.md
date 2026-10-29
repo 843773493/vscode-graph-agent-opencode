@@ -1349,3 +1349,10 @@
 - 旧生产29项单元反例及5项ASGI HTTP场景均复现日志次错覆盖主错，404／结构化回执变500。修复后定向58项、调用方104项单测及全文件19项集成通过；覆盖读取、发布前失败、发布后未知效果、删除、下载准备、延迟传输与文本预检，核原件、临时文件、SQLite不变、原请求ID及同入口显式重试。日志sink由本机真实ENOTDIR触发，文件I/O故障是明确注入；不冒充Windows、真实网络、完整模型执行或进程重启验收。
 - Ruff、compileall与strict通过；完整HEAD归档Pyright2→2，按文件／最窄AST owner／规则／完整消息及表达式逐项一致，无新增，不称类型全绿。作者结构自查确认生产只改两个错误出口、净减5行，既有集成场景AST保持，原单测在保留断言基础上同时覆盖正常／故障日志；未新增目录或源码文件，集成文件553行仍共用同一文件owner装具，不代独立审查。
 - 准确命令、源码指纹、原始输出、退出码与结构证据见 `out/tests/temp/uri-global-closure/artifacts/verification-086.json`。单元首轮通过后只补一行空行以通过Ruff，不改变AST；后续集成及回归消费最终源码，不重复无影响检查。重型验证串行且有进程外超时／内存保护；2.2／7.2及用户延期项继续未勾。前端及其OpenSpec保持暂停，其他agent独有改动与原Debug进程保持。
+
+### 2026-10-29 原生目录控制链拒绝与日志次错（2.2／7.2部分收口）
+
+- `GatewayNativeDirectoryClient._request` 的 schema／envelope 两处拒绝复用原 `failure_detail`，移除局部 logger；原始回包附到原异常诊断，普通错误只保留操作、阶段、校验规则／数量与异常类别，并补充日志失败类别。原 loopback、认证、request_id、owner、绝对根和校验顺序保持，不缓存损坏绑定、扫描目录或新增解析链。
+- 旧实现12项单元反例失败，ASGI控制链12项失败／12项通过，确证日志次错覆盖原回包拒绝。最终81项原生目录单测及37项文件HTTP集成通过，覆盖两操作、三种schema错误、非零状态／空data／错误request_id、正常／故障日志、原文件及SQLite不变、零目录扫描和同请求重试。POSIX／盘符／UNC文字仅证明诊断边界，不代Windows实机；HTTP为ASGI，回包由明确MockTransport注入，日志sink为本机真实ENOTDIR。
+- Ruff、compileall及strict通过；完整HEAD归档Pyright6→5，剩余按文件、最窄AST owner、规则、完整消息与表达式逐项一致，无新增。减少的一项来自本次损坏回包工厂改用明确的 `dict[str, object]`；不称类型全绿。原日志断言从私有record.args转为同一异常record的完整格式化正文，保留原始回包精确关联；最终补强后重跑81项单测与静态，产品及集成源码未变，复用37项结果。
+- 作者结构自查确认生产只改原 `_request`，其它生产方法及除本片两场景外的既有测试AST保持。单测725行、集成597行仍共用原native文件owner与装具，未新增源码文件或目录；不代独立审查。首次审计把嵌套 `respond` 误按外层测试命名断言，修正审计后复用已有类型／测试原件；手工行数已按实际统计校准，初稿保留。准确命令、前后指纹、raw／退出码、静态比较与适用范围见 `out/tests/temp/uri-global-closure/artifacts/verification-087.json`。测试串行且有进程外超时／内存保护，未新增真实网络、Backend重启、模型／fork或Web验收；2.2／7.2及用户延期项继续未勾。前端、其他agent独有改动及原Debug进程保持。

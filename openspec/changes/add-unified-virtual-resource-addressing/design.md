@@ -91,6 +91,8 @@ Gateway 用户 profile 的文件预览与目录展开引用同样只保存文件
 
 Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定，不执行 enumerate/read/write。首次请求与后台恢复都必须能按 URI 从原生控制面取得绑定；不能只依赖一次请求注入的缓存，也不能把根复制到业务库。实际执行继续复用 WorkspaceService/WorkspaceFileOperations；执行路由是服务归属，不改变资源归属。缺绑定明确失败，不回退当前工作区。实现同批迁齐所有直接/间接消费者后下线旧路径链，不留下 URI wrapper 与旧绝对路径两套执行。
 
+原生目录控制链的 schema 与回执校验失败复用 `failure_detail`，原始回包附在原异常诊断中，普通错误只公开 bind／resolve、response／envelope 阶段、异常类别和原校验规则／数量。日志故障只补充其类别，不能替换原拒绝或开始扫描、发布目录观察。原 loopback、认证、request_id、owner 与绝对根校验保持；修正回包后沿原请求重试，不缓存损坏绑定或增加另一根解析链。
+
 ### D1c：原始诊断日志与 Browser 本地页面 URL 的具名例外
 
 2026-10-23 用户明确裁定，唯一寻址 owner 登记以下两项例外，消费者只引用对应 requirement：
