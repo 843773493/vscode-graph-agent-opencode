@@ -1318,3 +1318,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 新增测试曾误期待推理无分隔串接；原 mapping 与实际请求均证明既有合同使用换行分隔，正文为块数组，现严格按该 wire 合同逐字段断言。失败原件保留，没有为通过更改生产投影规则。所有运行串行，保留进程外超时、单进程4GiB数据段与整组6GiB/4核额度保护；这不是跨 agent 全局并发闸门。
 - Ruff/compileall与 OpenSpec strict 通过。Pyright 在完整 HEAD archive 与最终七文件上均有22条既有诊断，按相对文件、最窄 AST owner、原表达式、规则及完整消息逐项一致，零新增，不称类型全绿。准确命令、3477项源码前后指纹、raw/真实退出码、AST变更清单、规模与依赖自查见 `out/tests/temp/uri-global-closure/artifacts/verification-079.json` 及 `independent-blocks-*` 原件。
 - 本切片使用真实应用与 model_stream 的异步 ASGI 回放；冷 Saver 重建不等于 OS 强杀重启，不新增真实 Provider 网络、Web、fork 或团队专项证据。作者自查不称独立审查，其他52个文件未纳入本次修改或提交；7.5组合总门及整体111/119仍保持未完成。
+
+### 2026-10-29 7.5-C/E 独立同文块的两代 fork 与硬重启补验（部分）
+
+- 复用既有 model_stream、真实 Backend 进程、Terminal/Browser 装具和固定60秒 fork watchdog；关键状态经消息、前缀 fork、完整复制及导航删除入口生成。源会话追加的后缀不进入目标；两代目标保留原 Turn/part identity、顺序、正文、空白和封存 assembly 的原 owner/hash/snapshot，均不自动恢复历史执行。
+- 删除源和中间会话并核实物理目录消失后，真实 SIGKILL 后端并启动新 PID；目标 JSONL 字节不变，冷 Saver 的 assistant identity/有序正文与来源一致。目标首次续聊保留两段同文推理和两段同文正文，新 ModelCall 只归属目标；以实际 wire 重建封存请求并验证 hash，旧 canonical 字节前缀不变，模型请求总数严格为3。
+- 正式 `integration-provider-content-history` 矩阵套件为3 passed/133.14秒，包含原两项执行/冷读回归及新组合场景。套件保护300秒/4GiB单进程数据段，本次整个运行组另限6GiB/零swap/4核CPU；每次 fork 的60秒预算未变，不宣称已实现跨agent全局并发控制。3477项源码前后指纹一致，Ruff、compileall及该测试文件真实Pyright均退出0、零类型诊断。
+- 首轮为2 passed/1 failed，失败发生在直连Backend的删除请求缺少受信导航actor；按现有同类装具显式提供身份头后重跑通过，未改产品鉴权或业务期限。该场景不验证Gateway业务代理/鉴权、跨Gateway复制、真实Provider、Web或Windows，不代替团队延期项与7.5组合总门；作者结构自查不称独立审查。准确命令、原始输出、源码指纹、正式产品产物和失败归因见 `out/tests/temp/uri-global-closure/artifacts/verification-081.json` 及 `content-fork-*` 原件。
