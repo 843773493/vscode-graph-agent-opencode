@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, cast
 
 import pytest
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.channels import DeltaChannel
+from langgraph.checkpoint.serde.types import _DeltaSnapshot
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.schemas.internal_v2.message import MessageCreateRequest
+from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.message import (
+    MessageCreateRequest,
+    MessageRunRequest,
+    RunOptions,
+)
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.business.job.service import JobService
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
 )
@@ -34,8 +44,16 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
     fork_gateway_request_context,
     production_fork_container,
 )
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    RuntimeCase,
+    runner_case,
+    runtime_case,
+)
 
-__all__ = ["fork_context", "fork_gateway_request_context", "production_fork_container", "start_model_call"]
+__all__ = [
+    "fork_context", "fork_gateway_request_context", "production_fork_container",
+    "runner_case", "runtime_case", "start_model_call",
+]
 
 
 def _append(state, writes):
@@ -133,3 +151,82 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
                 # 真实图的调度通道已经消费，版本仍在也不能被误判为Delta依赖。
                 assert connection.execute("SELECT 1 FROM checkpoint_channels WHERE value_state='absent' "
                                           "AND channel_version IS NOT NULL AND channel_name LIKE 'branch:%' LIMIT 1").fetchone()
+
+
+@pytest.mark.parametrize("anchor_mode", ["inclusive", "before"])
+async def test_product_graph_history_selector_is_read_only_and_preserves_execution_head(
+    runtime_case: RuntimeCase, anchor_mode: str,
+) -> None:
+    case = runtime_case
+    container = case.runner.container
+    jobs = container.job_service
+    assert isinstance(jobs, JobService)
+    session = await container.session_service.create(SessionCreateRequest(title="真实图历史只读入口"))
+    accepted = []
+    first_messages = None
+    for content in ("历史第一轮", "历史第二轮"):
+        result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+            message=MessageCreateRequest(content=content), run=RunOptions(),
+        ))
+        accepted.append(result)
+        task = jobs._jobs[result.job_id].task
+        assert task is not None
+        await asyncio.wait_for(asyncio.shield(task), 20)
+        assert (await jobs.get(result.job_id)).status == JobStatus.completed
+        graph = case.compiled[-1][1]
+        assert isinstance(graph, CompiledStateGraph)
+        config = cast(RunnableConfig, build_checkpoint_config(result.thread_id))
+        owner = MutationIntentOwner(session.session_id, result.thread_id)
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            state = await graph.aget_state(config)
+        if first_messages is None:
+            first_messages = [(message.id, message.type, message.content) for message in state.values["messages"]]
+    assert accepted[0].thread_id == accepted[1].thread_id
+    assert [message.content for message in state.values["messages"] if isinstance(message, HumanMessage)] == [
+        "历史第一轮", "历史第二轮",
+    ]
+    saver = case.runner.saver
+    storage = saver._storage.storage
+    rollout = storage.root(session.session_id, thread_id=owner.thread_id)
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        history_config = saver.history_replay(config, turn_id=accepted[0].turn_id, anchor_mode=anchor_mode)
+        assert "configurable" in history_config
+        with storage._connect(owner.thread_id, session_id=session.session_id, read_only=True) as connection:
+            frozen = tuple(connection.iterdump())
+        frozen_jsonl = (rollout / "rollout.jsonl").read_bytes()
+        cold = RolloutCheckpointSaver(storage.sessions_dir)
+        expected = first_messages if anchor_mode == "inclusive" else []
+        selected = cold.get_tuple(history_config)
+        assert selected is not None
+        snapshot = selected.checkpoint["channel_values"]["messages"]
+        assert isinstance(snapshot, _DeltaSnapshot)
+        assert [(message.id, message.type, message.content) for message in snapshot.value] == expected
+        sync = graph.get_state(history_config)
+        asynchronous = await graph.aget_state(history_config)
+        for historical in (sync, asynchronous):
+            assert [(message.id, message.type, message.content) for message in historical.values["messages"]] == expected
+            assert "configurable" in historical.config
+            assert historical.config["configurable"]["history_view_id"] == history_config["configurable"]["history_view_id"]
+        replacement = {"messages": [HumanMessage(id="history-write-must-not-exist", content="禁止写入历史")]}
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            graph.update_state(history_config, replacement, as_node="model")
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            await graph.aupdate_state(history_config, replacement, as_node="model")
+        with storage._connect(owner.thread_id, session_id=session.session_id, read_only=True) as connection:
+            assert tuple(connection.iterdump()) == frozen
+        assert (rollout / "rollout.jsonl").read_bytes() == frozen_jsonl
+    assert len(case.model_requests) == 2
+    successor = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+        message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(),
+    ))
+    task = jobs._jobs[successor.job_id].task
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), 20)
+    assert (await jobs.get(successor.job_id)).status == JobStatus.completed
+    assert len(case.model_requests) == 3
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        continued = await graph.aget_state(config)
+    assert [message.content for message in continued.values["messages"] if isinstance(message, HumanMessage)] == [
+        "历史第一轮", "历史第二轮", "历史查看后的第三轮",
+    ]
+    assert successor.turn_id not in {item.turn_id for item in accepted}
