@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, ToolException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.agents.model_tool_schema import (
     CallBoundStructuredTool,
@@ -17,6 +18,7 @@ from app.agents.model_tool_schema import (
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
+from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.mcp.extension_catalog import (
@@ -73,9 +75,20 @@ def _validate_target_arguments(
     try:
         return validate_model_tool_arguments(target_tool, normalized_arguments)
     except (TypeError, ValueError, JsonSchemaValidationError) as error:
-        raise ToolException(
-            f"扩展工具 {target_tool.name} 参数校验失败: {error}"
-    ) from error
+        detail = failure_detail(
+            error, stage="extension-tool-arguments", label=f"扩展工具 {target_tool.name} 参数校验失败",
+        )
+        # 顶层参数名只按标识符表达；嵌套键和非标识符可能本身就是原生路径。
+        violations: list[tuple[Sequence[str | int], str | None]] = []
+        if isinstance(error, ValidationError):
+            violations = [(item["loc"], item["type"]) for item in error.errors(
+                include_input=False, include_context=False, include_url=False,
+            )]
+        elif isinstance(error, JsonSchemaValidationError):
+            violations = [(list(error.absolute_path), error.validator if isinstance(error.validator, str) else None)]
+        issues = [{"parameter": path[0] if path and isinstance(path[0], str) and path[0].isidentifier() else None,
+                   "depth": len(path), "rule": rule} for path, rule in violations]
+        raise ToolException(f"{detail}, issues={json.dumps(issues, ensure_ascii=False)}") from error
 
 
 # E4 第三段 typed resolve 端口：返回当前 model-call 封存的扩展目录 binding ref。

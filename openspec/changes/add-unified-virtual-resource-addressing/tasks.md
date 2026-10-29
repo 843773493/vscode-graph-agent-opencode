@@ -1283,3 +1283,10 @@
 - 原fan-out错误汇总复用`failure_detail`，未知异常只公开工作区身份、阶段、类别和适用错误码，完整诊断不再截断复制到`partial_errors`；已登记的可恢复访问拒绝保留完整业务说明，字符预算仍由原响应owner控制。并发、排序、健康结果、revision和cursor保持，无新writer、schema或查询链。
 - 真实独立Gateway和下游HTTP替身在旧实现复现Pydantic校验原文中的路径外泄；最终查询单测21项、真实Gateway集成2项通过，核POSIX／盘符／UNC文本、两工作区请求ID与目标身份、精确数量及字符预算、原日志诊断和同入口恢复。新增单测还核日志sink失败不妨碍健康结果、已登记拒绝不被500字符截断；未准备执行或恢复状态，不把查询装具当执行验收。
 - Ruff、compileall与strict通过；完整HEAD归档Pyright19→19，逐文件／owner／规则／完整消息／表达式一致，生产与新增测试零诊断。首轮Ruff指出新异步stub的同步文件open，改为FastAPI解析body后在线程池执行的普通路由并复验集成，不改产品异步链。准确命令、指纹、raw、退出码及作者结构审查见`out/tests/temp/uri-global-closure/artifacts/verification-068.json`；未验Web、Windows、真实Provider或独审，不勾全局门或延期项。
+
+
+### 2026-10-29 扩展工具参数校验的诊断边界（2.2／7.2部分收口）
+
+- 固定信封在原参数校验 catch 复用 `failure_detail`，公开目标工具名、阶段、异常类别、顶层标识符参数名、错误深度和规则；原输入、嵌套字典键、非标识符键与完整异常只留诊断及 cause。未知顶层字段仍能明确纠错，日志 sink 失败不替换原拒绝，不新增校验器或执行链。
+- 最终40项单测及19项真实 SDK／stdio／Gateway 集成通过。覆盖两类 schema、POSIX／盘符／UNC 输入值与动态键、目标零执行、调用配对、纠正后成功和日志故障；真实 Session／Job 由产品入口生成三次拒绝及一次成功，核唯一 MCP 执行回执、canonical 失败正文和五份 assembly 的 owner、规范化请求及 request_hash。模型复用既有 model_stream。
+- Ruff、compileall、三文件 Pyright 零诊断及 strict 全量51／0通过。中间收紧曾丢失未知字段提示，旧断言发现后修正产品输出，未放宽原测试；类型检查发现的两个新增问题亦已消除。命令、指纹、原始输出、失败归因与结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-069.json`。未做 Web 功能、Windows、真实 Provider 或独立审查，不据此勾全局门；本地 debug 启动验证属于独立服务交付。

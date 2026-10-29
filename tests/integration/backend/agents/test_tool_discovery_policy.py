@@ -345,3 +345,69 @@ async def test_upstream_authorization_uses_published_remote_manager_without_reco
                 for assembly, record in zip(assemblies, records, strict=True):
                     assert assembly.request_hash_preimage == normalize_wire_request(record)
                     assembly.validate_hashes()
+
+
+async def test_invalid_extension_arguments_keep_diagnostics_out_of_canonical_results(
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan,
+):
+    native_paths = ["/private/extensions/input.json", r"C:\private\extensions\input.json",
+                    r"\\host\private\extensions\input.json"]
+    async with oauth_endpoint_factory() as secure, http_schema_endpoint_factory("arguments") as endpoint:
+        endpoint.definitions.write_text(json.dumps({"probe": {
+            "type": "object", "properties": {"count": {"type": "integer"}},
+            "required": ["count"], "additionalProperties": False,
+        }}))
+        async with product_case(secure, endpoint) as (client, replay, case):
+            session = await create_session(client, "扩展工具校验失败只发布参数坐标和规则")
+            response = await client.get(f"/api/v1/sessions/{session}/main-thread")
+            assert response.status_code == 200, response.text
+            thread = response.json()["data"]["thread_id"]
+            operations = [("invoke_extension_tool", {
+                "tool_name": "mcp__schema__probe", "arguments": {"count": value},
+            }) for value in [*native_paths, 2]]
+            calls = discovery_plan(replay, session, thread, operations, key="extension-argument-errors")
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+                "message": {"content": "核对工具参数类型，纠正参数后继续原工具调用。"},
+                "run": {"mode": "single_agent", "agent_id": "default"},
+            })
+            assert response.status_code == 200, response.text
+            job_id = response.json()["data"]["job_id"]
+            await wait_for_job_done(client, job_id, max_attempts=120)
+            response = await client.get(f"/api/v1/jobs/{job_id}")
+            assert response.status_code == 200 and response.json()["data"]["status"] == "completed", response.text
+            records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in calls]
+            results = [message for message in records[-1]["messages"] if message["role"] == "tool"]
+            assert [(message["name"], message["tool_call_id"]) for message in results] == [
+                ("invoke_extension_tool", f"debug-e2e-call-{index}") for index in range(4)
+            ]
+            for message in results[:3]:
+                assert all(value in message["content"] for value in (
+                    "mcp__schema__probe", "参数校验失败", "stage=extension-tool-arguments", '"count"', '"type"',
+                ))
+                assert "private" not in message["content"] and "input.json" not in message["content"]
+            assert json.loads(results[-1]["content"][0]["text"]) == {"name": "probe", "arguments": {"count": 2}}
+            assert [json.loads(line) for line in endpoint.receipts.read_text().splitlines()] == [
+                {"name": "probe", "arguments": {"count": 2}},
+            ]
+            assert secure.exchanges == 0
+            resolver = get_session_path_resolver(case.mount.workspace_root / ".boxteam/sessions")
+            with RolloutCheckpointSaver(resolver.sessions_root) as saver:
+                items = saver._storage.storage.read_items(session, thread)
+                attempts = [item for item in items if item.semantic_kind == "tool_result"
+                            and item.projection_identity is not None
+                            and item.projection_identity.projection_message_id is None]
+                assert len(attempts) == 4
+                for item, message, outcome in zip(attempts, results, ["failure"] * 3 + ["success"], strict=True):
+                    assert isinstance(item.payload, dict)
+                    assert item.payload["tool_outcome"] == outcome
+                    if outcome == "failure":
+                        assert "private" not in json.dumps(item.payload)
+                        assert item.payload["content"] == message["content"]
+                assemblies = saver.list_context_assemblies(session, thread)
+                assert len(assemblies) == len(records) == 5
+                for assembly, record in zip(assemblies, records, strict=True):
+                    assert (assembly.session_id, assembly.thread_id) == (session, thread)
+                    assert assembly.request_hash_preimage == normalize_wire_request(record)
+                    assembly.validate_hashes()
+            diagnostics = "\n".join(path.read_text() for path in (case.mount.workspace_root / ".boxteam/logs").rglob("*.log"))
+            assert "extension-tool-arguments" in diagnostics and "input.json" in diagnostics
