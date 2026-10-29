@@ -1,4 +1,4 @@
-"""外部运行回执校验与领域记录的纯投影；不执行外部操作或持久写入。"""
+"""外部运行回执校验、失败说明与领域记录投影；不执行资源操作或持久写入。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ from datetime import datetime, timedelta
 from pathlib import PureWindowsPath
 from urllib.error import URLError
 
+from app.abstractions.browser_resources import BrowserRequestError
+from app.abstractions.terminal.resources import TerminalRequestError
 from app.abstractions.workspace_resources import ResourceKind, ResourceSnapshot
+from app.core.failures import (
+    failure_detail,
+    mark_public_failure,
+    public_failure_message,
+)
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 from app.services.business.workspace_resources.records import OwnedResourceRecord
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -41,19 +48,19 @@ def resource_target_facts(snapshot: ResourceSnapshot) -> ResourceTargetFacts:
 
 def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
     if runtime.get("workspace_id") != workspace_id:
-        raise ValueError("Node 运行时 工作区身份与 外部资源 owner 冲突")
+        raise mark_public_failure(ValueError("Node 运行时 工作区身份与 外部资源 owner 冲突"))
     if any(key in runtime for key in ("cwd", "workspace_root", "session_id", "source_thread", "retention_scope", "thread_associations", "attach_url")):
-        raise ValueError("Node 运行时 回执包含禁止上浮的真实路径")
+        raise mark_public_failure(ValueError("Node 运行时 回执包含禁止上浮的真实路径"))
     relative = runtime.get("cwd_relative")
     if relative is not None and (
         not isinstance(relative, str) or PureWindowsPath(relative).anchor
     ):
         # Windows anchor 同时识别盘符、根路径和 UNC；也覆盖 POSIX 的斜杠根，不依赖中继平台。
         logger.error("Node 运行时 工作目录拒绝: cwd_relative=%r", relative)
-        raise ValueError("Node 运行时 工作目录不是工作区内相对目录")
+        raise mark_public_failure(ValueError("Node 运行时 工作目录不是工作区内相对目录"))
     revision = runtime.get("transport_owner_revision")
     if type(revision) is not int or revision < 1:
-        raise ValueError("Node 运行时 回执缺少有效传输版本")
+        raise mark_public_failure(ValueError("Node 运行时 回执缺少有效传输版本"))
 
 
 def index_resources(
@@ -67,7 +74,7 @@ def index_resources(
             reason = "duplicate_identity" if rid in result else "unregistered_identity"
             # 外部身份可能夹带原生路径；原值只进诊断，普通错误发布可核验的拒绝事实。
             logger.error("Node 运行清单身份拒绝: kind=%s reason=%s index=%s identity=%r", kind, reason, index, rid)
-            raise RuntimeError(f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index={index}")
+            raise mark_public_failure(RuntimeError(f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index={index}"))
         result[rid] = item
     return result
 
@@ -82,7 +89,7 @@ def observe_resource(
         return
     validate_runtime(runtime, record.workspace_id)
     if runtime.get(f"{kind}_id") != record.resource_id:
-        raise ValueError(f"Node 运行时 身份与 外部资源 owner 冲突: {record.resource_id}")
+        raise mark_public_failure(ValueError(f"Node 运行时 身份与 外部资源 owner 冲突: {record.resource_id}"))
     was_creating = record.status == "creating" and record.reconciliation_status != "unknown"
     record.status = str(runtime["status"])
     recovery = str(runtime.get("reconciliation_status", "unknown"))
@@ -98,19 +105,32 @@ def lease_status(record: OwnedResourceRecord) -> str:
     return "stopped" if record.status in STOPPED_STATUSES else "running"
 
 
-def public_error(error: BaseException) -> str:
-    if isinstance(error, OSError):
+def public_error(
+    error: BaseException, *, stage: str = "resource_operation_unknown",
+    label: str = "外部资源操作结果未核实",
+) -> str:
+    """API 与持久记录共用来源已核定的说明，未知异常只发布诊断事实。"""
+    diagnostic = failure_detail(error, stage=stage, label=label)
+    if (message := public_failure_message(error)) is not None:
+        return message
+    if isinstance(error, (BrowserRequestError, TerminalRequestError)):
+        # 两个具名协议类型自行构造说明；Browser 保留已登记的本地页面 URL 例外。
+        message = f"{type(error).__name__}: {error}"
+    elif isinstance(error, OSError):
         # 原生异常的正文及 filename 都可能携带路径，只发布系统错误事实，原异常由调用方记录。
         native = error.reason if isinstance(error, URLError) and isinstance(error.reason, OSError) else error
         details = [f"errno={native.errno}"]
         winerror = getattr(native, "winerror", None)
         if winerror is not None:
             details.append(f"winerror={winerror}")
-        return (
+        message = (
             f"{type(error).__name__}: 操作回执不可核实 ({', '.join(details)})；"
             "请查看工作区外部资源服务日志中的详细错误"
         )
-    return f"{type(error).__name__}: {error}"
+    else:
+        message = diagnostic
+    mark_public_failure(error, message)
+    return message
 
 
 def resource_projection(

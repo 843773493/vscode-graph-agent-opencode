@@ -114,7 +114,7 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
         assert any(
             record.exc_info is not None and record.exc_info[1].__cause__ is cause
             for record in caplog.records
-            if record.name == "app.services.business.workspace_resources.owner"
+            if record.name == "app.core.failures"
         )
     terminal_owner_bundle.restart()
     observed = terminal_resource_api_client.get(f"/api/v1/resources/{rid}")

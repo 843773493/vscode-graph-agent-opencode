@@ -7,6 +7,7 @@ import logging
 from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
 from app.abstractions.terminal.resources import TerminalRequestError
+from app.core.failures import mark_public_failure
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
@@ -212,10 +213,10 @@ class TerminalManagerClient:
         logger.error("终端传输响应协议错误: stage=%s response=%r", stage, response, exc_info=cause)
         message = f"终端管理器响应协议错误: stage={stage}；请查看工作区终端服务日志"
         if isinstance(cause, ValueError):
-            return ValueError(message)
+            return mark_public_failure(ValueError(message))
         if isinstance(cause, OverflowError):
-            return OverflowError(message)
-        return TypeError(message)
+            return mark_public_failure(OverflowError(message))
+        return mark_public_failure(TypeError(message))
 
     async def _json_request(
         self,

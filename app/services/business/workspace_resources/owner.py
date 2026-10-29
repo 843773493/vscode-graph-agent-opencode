@@ -21,7 +21,6 @@ from app.abstractions.workspace_resources import (
     ResourceTransportGrantRejected,
     RetentionScope,
 )
-from app.core.failures import failure_detail
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -31,6 +30,7 @@ from app.services.business.workspace_resources.facts import (
     index_resources,
     lease_status,
     observe_resource,
+    public_error,
     resource_projection,
     resource_target_facts,
 )
@@ -390,7 +390,7 @@ class WorkspaceResourceOwner:
                 receipt = record.fork_attachments.get(creation_key) or ForkAttachReceipt(
                     creation_key, thread, expected_revision, "rejected",
                 )
-                receipt.error = failure_detail(
+                receipt.error = public_error(
                     error, stage="fork_live_attach",
                     label=(f"fork attach 未完成: workspace_id={self.workspace_id} kind={self.kind} "
                            f"resource_id={resource_id} creation_key={creation_key}"
@@ -1002,7 +1002,7 @@ class WorkspaceResourceOwner:
         # 丢弃未发布草稿，失败的关联、scope、版本与终态不能混入 unknown 回执。
         record = self._require_owned_resource_record(record.resource_id)
         record.reconciliation_status = "unknown"
-        record.error = failure_detail(
+        record.error = public_error(
             error, stage="resource_operation_unknown",
             label=(f"外部资源操作结果未核实: workspace_id={self.workspace_id} kind={self.kind} "
                    f"resource_id={record.resource_id}"

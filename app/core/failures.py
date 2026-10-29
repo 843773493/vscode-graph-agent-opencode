@@ -9,7 +9,20 @@ from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 _PROVIDER_FAILURE_ATTRIBUTE = "_boxteam_provider_failure"
+_PUBLIC_FAILURE_ATTRIBUTE = "_boxteam_public_failure"
 _ProviderError = TypeVar("_ProviderError", bound=Exception)
+_PublicError = TypeVar("_PublicError", bound=BaseException)
+
+
+def mark_public_failure(error: _PublicError, message: str | None = None) -> _PublicError:
+    """由错误来源登记已核定的公开说明，保持原异常实例、类别和 cause。"""
+    setattr(error, _PUBLIC_FAILURE_ATTRIBUTE, message if message is not None else f"{type(error).__name__}: {error}")
+    return error
+
+
+def public_failure_message(error: BaseException) -> str | None:
+    """只读取显式登记的说明，不根据异常类别或正文猜测是否可公开。"""
+    return getattr(error, _PUBLIC_FAILURE_ATTRIBUTE, None)
 
 
 def mark_provider_failure(error: _ProviderError) -> _ProviderError:

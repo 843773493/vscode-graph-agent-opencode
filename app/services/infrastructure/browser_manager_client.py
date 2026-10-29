@@ -8,6 +8,7 @@ from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
 from app.abstractions.browser_resources import BrowserAction, BrowserRequestError
 from app.abstractions.workspace_resources import ResourceTransportGrantRejected
+from app.core.failures import mark_public_failure
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
 from app.services.infrastructure.config_service import ConfigService
@@ -183,10 +184,10 @@ class BrowserManagerClient:
         logger.error("Browser 传输响应协议错误: stage=%s response=%r", stage, response, exc_info=cause)
         message = f"浏览器管理器响应协议错误: stage={stage}；请查看工作区浏览器服务日志"
         if isinstance(cause, ValueError):
-            return ValueError(message)
+            return mark_public_failure(ValueError(message))
         if isinstance(cause, OverflowError):
-            return OverflowError(message)
-        return TypeError(message)
+            return mark_public_failure(OverflowError(message))
+        return mark_public_failure(TypeError(message))
 
     async def _json_request(
         self,
@@ -257,9 +258,10 @@ class BrowserManagerClient:
                     status=exc.response.status_code,
                     payload=error_payload,
                 ) from exc
-            raise RuntimeError(
+            error = RuntimeError(
                 f"浏览器管理器请求失败: method={method}, status={exc.response.status_code}；请查看工作区浏览器服务日志"
-            ) from exc
+            )
+            raise mark_public_failure(error) from exc
         except RequestError as exc:
             raise ConnectionError("浏览器管理器传输失败；请查看工作区浏览器服务日志") from exc
         try:

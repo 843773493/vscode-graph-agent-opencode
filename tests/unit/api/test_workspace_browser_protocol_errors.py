@@ -106,7 +106,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
         assert type(cause) is cause_type
         assert any(
             record.exc_info is not None and record.exc_info[1].__cause__ is cause
-            for record in caplog.records if record.name == "app.services.business.workspace_resources.owner"
+            for record in caplog.records if record.name == "app.core.failures"
         )
     browser_owner_bundle.restart()
     observed = browser_resource_api_client.get(f"/api/v1/resources/{rid}")

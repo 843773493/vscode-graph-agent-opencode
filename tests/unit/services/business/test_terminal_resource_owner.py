@@ -239,8 +239,8 @@ async def test_unknown_delete_retains_discoverable_record_and_no_false_success(
     assert result["reconciliation_status"] == "unknown"
     assert result["status"] != "deleted"
     assert result["error"] == (
-        f"外部资源操作结果未核实: workspace_id={terminal_owner.owner.workspace_id} kind=terminal "
-        f"resource_id={rid}: stage=resource_operation_unknown, error=ConnectionError, errno=None"
+        "ConnectionError: 操作回执不可核实 (errno=None)；"
+        "请查看工作区外部资源服务日志中的详细错误"
     )
     assert "删除请求发送后丢失回执" in caplog.text
     assert any(record.exc_info and record.exc_info[1] is raised.value for record in caplog.records)

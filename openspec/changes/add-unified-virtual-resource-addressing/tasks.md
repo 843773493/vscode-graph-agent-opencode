@@ -1420,6 +1420,13 @@
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
 
 
+### 2026-10-29 资源错误的 API 消费者闭包修正（2.2／7.2部分收口）
+
+- 105片遗漏了API消费者验收；补验原151项得到98 failed／53 passed，证实通用摘要丢失既有协议阶段、Browser超时恢复说明及API／冷记录一致性。现在资源owner与API复用原唯一`public_error`，由协议错误来源显式登记已核定说明，保留原异常实例、类别与cause；原生I/O沿既有系统错误事实格式，未登记异常只取`failure_detail`摘要。登记仅随原异常流转，不新增持久账本、异常包装、正文路径扫描或双套错误实现；Browser具名URL例外保持。
+- 原151项及新增18项API测试全部通过；新增用真实资源创建／动作入口覆盖POSIX、盘符、UNC、扩展UNC未知ValueError／KeyError及真实ENOTDIR日志故障，核HTTP状态、原原因、冷记录一致、精确unknown租约与零重复派发。另254项owner／恢复／fork／共享失败单测、49项传输客户端／列表期限单测及正式matrix下原8项fork诊断集成通过，共480 passed。首次候选尚有24项既有运行目录拒绝说明丢失；在说明来源登记后通过，未放宽原业务断言。两个旧API测试只迁日志归属，原生I/O单测恢复原公开说明并保持原异常身份断言。
+- Ruff／compileall与本change strict通过。完整旧HEAD归档和当前Pyright各109项诊断，按文件、最窄AST owner、规则、完整消息及表达式逐项一致，无新增，新测试零诊断，不称类型全绿。作者结构核验：无新源码目录，既有owner／fork大文件和core／infra／API目录数量风险不扩修；新增134行API测试单独按失败合同组织，不代独审。
+- 命令、源码指纹、raw、实际退出码与类型对照见`out/tests/temp/uri-global-closure/artifacts/verification-106.json`。测试批次串行，使用进程外超时、内存与CPU限制，正式fork保留跨worktree集成闸门；传输替身和ASGI不代真实PTY／Chromium、独立进程重启、Windows或Web。原105来源意图／释放链及原22场景整批长尾证据沿用，不重复长跑。2.2／7.2总门继续未勾，前端及其OpenSpec仍待用户明确通知，其他agent改动／暂存与原Debug服务保持。
+
 ### 2026-10-29 已发布 fork 的资源结算诊断（2.2／7.2部分收口）
 
 - 共享资源 owner 的 unknown／fork attach，以及 fork 发布后的投影失败，三个原错误出口统一复用 `failure_detail`。普通回执与持久记录保留身份、阶段、异常类别及适用错误码，完整原错和日志次错留诊断；版本／关联／lease 的 `ResourceConflict` 业务说明保留。原租约保护、关联提交、revision 与同key恢复链保持；API formatter 仍有四个活跃路由消费者，本片不删除它或宣称资源API全部闭包。
