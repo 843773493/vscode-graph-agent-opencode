@@ -1420,6 +1420,12 @@
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
 
 
+### 2026-10-29 Browser 单项治理错误（2.2／7.2部分收口）
+
+- 原治理轮次错误已公布摘要，但单项snapshot／freeze／discard仍把异常正文写入普通健康投影及保护原因。现由原`errorRecord`统一发布browser/action/reason、阶段、异常类别及原错误码；原异常、cause和堆栈直接进入统一诊断，删除轮末重复日志。错误顺序、单项继续、计数、五秒／配额退避和原状态来源保持；不新增错误账本、过滤器或调度链，也不扩大Browser页面URL例外。
+- 原生产配新增9项测试全部失败，原件直接显示三种路径原文。最终95项资源治理／策略／运行时／检查点单测通过，覆盖完整runCycle中snapshot／freeze／discard失败与健康资源推进、原状态、错误码、精确退避和完整原cause；原真实Node HTTP治理诊断3项回归通过，共98 passed。新增分支使用显式manager边界替身，原HTTP三项只替换内核读取，不把两者称为新增单项失败的真实HTTP／Chromium验收。一个旧测试仅迁未知异常的公开说明，原错误计数、到期清理和归属断言保持。
+- Node语法、diff和本change strict通过；TypeScript AST审查仅`errorRecord`与原`runCycle`日志段改变，其余原方法保持，无新源码目录／owner／依赖，323行产品文件未膨胀；既有472行调度测试仍职责集中，新81行失败合同测试单列。作者自查不代独审。命令、源码指纹、raw、退出码及产物索引见`out/tests/temp/uri-global-closure/artifacts/verification-107.json`；静态审查脚本首次相对导入根错误已改为显式cwd，不影响产品或受验逻辑。测试串行，正式HTTP保留跨worktree闸门及进程外超时／内存／CPU保护。2.2／7.2总门继续未勾，前端、其它agent改动／暂存和原Debug服务保持。
+
 ### 2026-10-29 资源错误的 API 消费者闭包修正（2.2／7.2部分收口）
 
 - 105片遗漏了API消费者验收；补验原151项得到98 failed／53 passed，证实通用摘要丢失既有协议阶段、Browser超时恢复说明及API／冷记录一致性。现在资源owner与API复用原唯一`public_error`，由协议错误来源显式登记已核定说明，保留原异常实例、类别与cause；原生I/O沿既有系统错误事实格式，未登记异常只取`failure_detail`摘要。登记仅随原异常流转，不新增持久账本、异常包装、正文路径扫描或双套错误实现；Browser具名URL例外保持。

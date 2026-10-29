@@ -410,7 +410,8 @@ describe("浏览器资源调度器", () => {
     expect(expired.last_cycle.snapshot_failure_count).toBe(1);
     expect(expired.last_actions).toEqual([]);
     expect(expired.recent_action_errors.at(-1)).toMatchObject({
-      browser_id: session.id, action: "snapshot", message: "到期后快照读取失败",
+      browser_id: session.id, action: "snapshot",
+      message: "浏览器资源调度失败: browser_id=browser_expired_snapshot, action=snapshot, reason=policy_snapshot, stage=resource_snapshot, error=Error, code=browser_resource_action_failed",
     });
   });
 

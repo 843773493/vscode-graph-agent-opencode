@@ -23,12 +23,17 @@ export const DEFAULT_RESOURCE_BATCH_POLICY = Object.freeze({
 const RECENT_ACTION_ERROR_LIMIT = 20;
 
 function errorRecord(error, decision, occurredAtUnixMs) {
+  const code = error?.code || "browser_resource_action_failed";
+  const stage = `resource_${decision.action}`;
+  logger.error("[browser-resource-governor] 单项资源调度失败", {
+    browser_id: decision.browserId, action: decision.action, reason: decision.reason, stage,
+  }, error);
   return {
     browser_id: decision.browserId,
     action: decision.action,
     reason: decision.reason,
-    error_code: error?.code || "browser_resource_action_failed",
-    message: error instanceof Error ? error.message : String(error),
+    error_code: code,
+    message: `浏览器资源调度失败: browser_id=${decision.browserId}, action=${decision.action}, reason=${decision.reason}, stage=${stage}, error=${error instanceof Error ? error.name : typeof error}, code=${code}`,
     occurred_at: new Date(occurredAtUnixMs).toISOString(),
   };
 }
@@ -282,11 +287,6 @@ export class BrowserResourceGovernor {
       this.actionRetryAfterUnixMs.set(error.browser_id, this.now() + backoffMs);
     }
     if (cycleErrors.length > 0) {
-      for (const error of cycleErrors) {
-        logger.error(
-          `[browser-resource-governor] 单项资源调度失败: browser_id=${error.browser_id} action=${error.action} error=${error.message}`,
-        );
-      }
       this.state.recent_action_errors = [
         ...this.state.recent_action_errors,
         ...cycleErrors,
