@@ -1180,3 +1180,9 @@
 - 首次同步与后台刷新复用`failure_detail`，工作区错误只保存目标、原同步请求ID、阶段、异常类别及适用HTTP/系统错误码；后台任务沿用创建前冻结的原ID，原异常只留诊断。unavailable/stale/available、旧快照、健康目标、排序与限制保持，成功同步清除该目标错误，缓存schema及唯一writer不变。
 - 原实现21项新反例失败，修复后全文件33项通过，覆盖POSIX/盘符/UNC原生错误、HTTP/传输/校验/缓存失败、原异常身份、请求归属、旧正文不变及恢复；保留HTTP状态码后22项受影响用例通过（为前组子集，不相加）。原真实Gateway/Backend及独立HTTP替身聚合、落盘和重启离线回归1项通过；最终改动只追加HTTPStatusError的status事实，按精确SHA重构核对复用此前产品和未受影响用例，不重复原63秒产品运行。
 - Ruff3→3、Pyright9→9，按文件/最窄AST owner/规则/完整消息无新增；compileall、严格OpenSpec通过。准确命令、源码前后指纹、原始输出、实际退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-040.json`。原同步/存储/查询方法与产品测试保持，唯一旧预期变更是不可用错误的公开事实文案；未放宽状态或归属断言。不代表真实SSH/Windows、Web或原生磁盘故障的HTTP验收，2.2/7.2及独审总门继续未勾，延期项保持TODO。
+
+### 2026-10-29 辅助服务 WebSocket 关闭原因与原始诊断（2.2/7.2部分收口）
+
+- Terminal/Browser的访问、路由及上游失败复用`failure_detail`，完整原异常留诊断，关闭原因使用固定阶段说明，删除原异常截取；保留1008/1011分类与原路由引用、取消、握手和中继链，不新增错误数据帧或重试。固定说明满足123字节上限，不把Browser页面URL例外扩大到连接错误。
+- 旧生产15项新反例失败；最终48项通过，覆盖两种服务、POSIX/盘符/UNC、五类故障阶段、原异常实例与全文诊断、实际凭据/目标拒绝不连接上游、取消身份与引用释放，复用原HTTP/身份代理回归。首轮6项因故障替身未撤销导致计数读取再次失败，后轮2项为新增测试插入位置错误，修正测试后完整复验，不改业务断言。
+- Ruff、compileall、严格OpenSpec及差异检查通过；Pyright2→2按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断。准确命令、前后指纹、raw/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-041.json`。本轮为真实ASGI状态机及连接故障替身，未验证真实网络、完整Web、SSH/Windows或独立审查；无新目录、存储owner、schema或兼容链，2.2/7.2仍未勾，团队协作和MCP显式持有继续延期。

@@ -15,6 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.core.workspace_identity import validate_workspace_id
@@ -341,14 +342,13 @@ async def _proxy_auxiliary_websocket(
                 raise PermissionError("bounded federation 禁止代理嵌套远程辅助服务")
         elif websocket.query_params.get("token") != get_gateway_local_token():
             raise PermissionError("invalid local token")
-    except HTTPException as error:
-        await websocket.close(code=1008, reason=str(error.detail)[:120])
-        return
-    except (LookupError, PermissionError, ValueError) as error:
-        await websocket.close(code=1008, reason=str(error)[:120])
+    except (HTTPException, LookupError, PermissionError, ValueError) as error:
+        failure_detail(error, stage="auxiliary-websocket-access", label="辅助服务访问失败")
+        await websocket.close(code=1008, reason="auxiliary_websocket_access_failed")
         return
     except RuntimeError as error:
-        await websocket.close(code=1011, reason=str(error)[:120])
+        failure_detail(error, stage="auxiliary-websocket-access", label="辅助服务访问失败")
+        await websocket.close(code=1011, reason="auxiliary_websocket_access_failed")
         return
     registry.acquire_route_reference(workspace_id, streaming=True)
     route_reference_released = False
@@ -364,7 +364,8 @@ async def _proxy_auxiliary_websocket(
         try:
             service_url = registry.resolve_service_url(workspace_id, service)
         except (LookupError, ValueError) as error:
-            await websocket.close(code=1008, reason=str(error)[:120])
+            failure_detail(error, stage="auxiliary-websocket-route", label="辅助服务路由失败")
+            await websocket.close(code=1008, reason="auxiliary_websocket_route_failed")
             return
         await websocket.accept()
         target_url = _websocket_target(service_url, socket_path)
@@ -407,7 +408,9 @@ async def _proxy_auxiliary_websocket(
     except (ConnectionClosed, WebSocketDisconnect):
         return
     except Exception as error:  # noqa: BLE001 - 把上游失败显式发送给 WebSocket 调用方。
-        await websocket.close(code=1011, reason=str(error)[:120])
+        # 关闭帧上限是123字节；固定阶段说明不截断原错，也不复制本机位置。
+        failure_detail(error, stage="auxiliary-websocket-upstream", label="辅助服务连接失败")
+        await websocket.close(code=1011, reason="auxiliary_websocket_upstream_failed")
     finally:
         release_route_reference()
 
