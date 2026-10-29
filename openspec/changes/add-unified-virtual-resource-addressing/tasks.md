@@ -1420,6 +1420,13 @@
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
 
 
+### 2026-10-29 已发布 fork 的来源释放诊断（2.2／7.2部分收口）
+
+- 来源释放在 target 已发布后遇到连接失败，原日志写入 ENOTDIR 会打断公开回执，恢复 worker 也可能因此退出。原 `record_pending` 现直接复用 `failure_detail`，形成阶段、类别及适用错误码摘要后由原 catalog 写入pending；日志次错只记录类别，完整原因附在原异常。原SQL、publication／capture身份、取消传播、Trace恢复和释放协议保持，删除局部错误码／日志重复实现。
+- 来源由产品消息入口与真实Agent执行生成，复用 `model_stream`。旧生产正常日志2项通过、故障日志2项在首次连接错误的日志阶段失败；修复后4项集成及54项fork服务单测全部通过。覆盖已发布回执、独立catalog冷读、同一取消实例、实际生产周期协程失败后继续释放、原key唯一capture与零新增模型调用；不以首次连接错误反例冒称独立取消反例。新矩阵固定120秒／4GiB，保留原60秒fork watchdog和跨worktree闸门，两批测试串行。
+- Ruff／compileall通过；首轮只发现新测试import排序，整理后测试逻辑AST保持。Pyright仍34项，上一片已验同字节生产基线的原件与当前按文件、最窄AST owner、规则、完整消息及表达式逐项一致，新测试零诊断，不称类型全绿。作者AST核验确认产品只改原嵌套 `record_pending` 正文，其余方法及既有测试保持；既有1208行服务与business根组织风险保留，无新源码目录，不代独审。
+- 命令、raw、指纹、退出码及静态对照见 `out/tests/temp/uri-global-closure/artifacts/verification-104.json`。运行中登记的受验源码保持；进程内传输和单独运行的生产周期协程不代真实网络、完整WorkspaceLifespan启动、独立Backend重启、Windows或Web验收。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及原Debug服务保持。
+
 ### 2026-10-29 远端 fork 来源意图的日志次错（2.2／7.2部分收口）
 
 - 真实 ENOTDIR 日志写入故障会替换远端 source intent 的 Pydantic 校验拒绝。原 catch 现复用 `failure_detail`，保留 operation／Gateway／Workspace、协议分类、阶段及原异常 cause，完整输入和日志次错只留诊断；不新增异常、账本、协议或恢复链。

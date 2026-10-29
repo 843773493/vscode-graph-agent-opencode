@@ -15,6 +15,7 @@
 
 ## 规范
 
+- `integration-fork-export-diagnostics`通过产品消息／Agent生成来源及公开fork验证已发布目标、释放pending、原取消、冷catalog与周期恢复，固定120秒/4GiB并保留原60秒fork watchdog；传输为进程内替身，不代真实网络、Backend重启或Web验收。
 - `integration-fork-source-intent-errors`通过产品消息与真实Agent生成来源，验证远端intent字段拒绝、真实日志写入次错、零目标副作用及原key重试，固定180秒/4GiB并保留原fork watchdog；传输为进程内替身，不代真实HTTP、Gateway/Web或Backend重启验收。
 - `integration-skill-catalog-publication`经真实文件watcher、目录owner、catalog派生及SQLite封存装具验证来源失败/日志次错后的继续发布与同名覆盖历史绑定，固定60秒/4GiB；Gateway来源是显式替身，不代产品执行、HTTP、独立Backend重启或Web验收。
 - `integration-terminal-operation-receipts`显式选择原7场景，保留90秒/4GiB；`integration-terminal-lease-notifications`单独选择真实PTY完成后的通知／日志故障2场景，固定60秒/4GiB。两批复用同一正式工作区和场景实现，必须串行运行；不以扩大截止或减少断言处理总量增长，超时仍如实记为TIMEOUT。
