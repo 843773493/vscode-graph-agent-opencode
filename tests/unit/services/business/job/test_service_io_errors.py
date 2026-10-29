@@ -16,13 +16,17 @@ from tests.support.job_thread_fixture import job_fixture_thread_id
 from tests.unit.services.business.job.ports import enqueue_job
 
 
-@pytest.fixture(params=["missing", "rename", "strerror"])
+@pytest.fixture(params=["missing", "rename", "strerror", "text_only", "text_only_subclass"])
 def native_error(request: pytest.FixtureRequest) -> OSError:
     if request.param == "missing":
         return FileNotFoundError(errno.ENOENT, "missing", "/private/job-source")
     if request.param == "rename":
         return OSError(errno.EXDEV, "cross device", r"C:\private\job-source", None,
                        r"D:\private\job-target")
+    if request.param == "text_only":
+        return OSError("I/O failed at /private/job-source")
+    if request.param == "text_only_subclass":
+        return PermissionError(r"I/O failed at C:\private\job-source")
     return OSError(errno.EIO, "I/O failed at /private/job-source")
 
 

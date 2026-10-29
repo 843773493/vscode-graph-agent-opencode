@@ -27,8 +27,12 @@ def execution_failure_message(error: BaseException) -> str:
     """执行记录保留已知业务说明，原生 I/O 与上游异常不复制诊断正文。"""
     if is_provider_failure(error):
         return failure_detail(error, stage="execution-provider", label="模型执行失败")
+    # 无原生字段的 TimeoutError 保留既有业务期限说明，其它 I/O 不发布异常原文。
     if isinstance(error, OSError) and (
-        error.errno is not None or error.filename is not None or error.filename2 is not None
+        not isinstance(error, TimeoutError)
+        or error.errno is not None
+        or error.filename is not None
+        or error.filename2 is not None
     ):
         return f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
     return str(error)

@@ -19,9 +19,17 @@ def test_local_business_failure_keeps_its_message(error: BaseException) -> None:
     assert execution_failure_message(error) == str(error)
 
 
-def test_system_io_failure_keeps_native_facts_without_filename() -> None:
-    error = OSError(5, "本机读取失败", "/private/execution.sqlite")
-    assert execution_failure_message(error) == "执行系统 I/O 失败: error=OSError, errno=5"
+@pytest.mark.parametrize("error", [
+    OSError(5, "本机读取失败", "/private/execution.sqlite"),
+    OSError("本机读取失败: /private/execution.sqlite"),
+    PermissionError(r"本机读取失败: C:\private\execution.sqlite"),
+    ConnectionError(r"本机连接失败: \\server\private\execution.sqlite"),
+    TimeoutError(110, "本机读取超时", "/private/execution.sqlite"),
+])
+def test_system_io_failure_keeps_native_facts_without_filename(error: OSError) -> None:
+    assert execution_failure_message(error) == (
+        f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
+    )
 
 
 def test_provider_failure_keeps_instance_and_full_diagnostics(caplog: pytest.LogCaptureFixture) -> None:

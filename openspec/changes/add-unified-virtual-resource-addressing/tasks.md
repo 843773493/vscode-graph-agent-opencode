@@ -1304,3 +1304,9 @@
 - 两个真实 Node HTTP 反例均确证旧实现回显路径。最终44项共享解析／日志单测与2项真实服务集成通过，核12次非法正文（POSIX／盘符／UNC）、零资源创建、原始日志及正常请求恢复；真实 PTY 和本地 file: 页面创建／删除保持，用户正文和 URL 原样保留。新测试首轮误把 Bun 文案当成 Node、预期资源删除后不留墓碑及 Browser 保留初始标题，按源码和原输出修正测试，未改变产品行为。
 - 验收前置发现当前362个集成测试文件超过350容量，旧端口测试1失败／7通过；单独提交 `87153bb55` 将容量调至400，原8项边界测试及Ruff／compileall通过，100端口块、Integration/E2E隔离与65535上限保持。容量不是并发数；当前fixture没有跨agent全局并发闸门，Linux数据段限制也不是整树总内存上限，本轮重型验证串行，不声称该缺口已解决。
 - Ruff、compileall、Node语法、共享源码严格JS类型检查、新Python测试Pyright零诊断及strict全量51／0通过。首次JS类型检查缺少根目录Node声明，改用已安装的Web Node类型根后通过，未改依赖或环境。结构自查确认触达目录均不超过20源码；两backend分别减少10行，Browser原994行大型路由和Terminal521行的后续组织风险保留。原结构收据误写目录超过20已由原计数纠正，原件保留；这不是独立审查。证据 `out/tests/temp/uri-global-closure/artifacts/verification-072.json`；未新增Python owner、Gateway/Web、重启、Windows或真实Provider验收，2.2／7.2及延期项继续未勾。Debug服务与其他agent的独有改动保持。
+
+### 2026-10-29 无原生字段的执行 I/O 异常（2.2／7.2部分收口）
+
+- 原执行失败出口不再把缺少errno／filename字段的普通OSError及其非TimeoutError子类当作业务说明，Job、执行事件、消息流和LLM记录继续共用同一公开失败事实；原异常实例、原因链与完整诊断保持。无原生字段的TimeoutError沿既有业务期限说明合同，有原生字段时仍公布I/O类别与错误码，不新增异常包装、文本扫描、schema或第二失败链。
+- 原实现8个反例失败／12项通过，其中真实Session／消息执行把目录读取失败重新构造为纯文本OSError，确认Job回显原生位置。修复后定向20项及调用方138项通过，保留原生失败分支全部断言，核对冷消息流、SQLite正文、LLM日志、队列终态、原异常cause、同thread后继执行和旧canonical前缀不变；模型仍复用原装具，HTTP为ASGI，不冒充真实Provider、独立进程重启或Gateway／Web验收。
+- Ruff、compileall和strict通过；四文件Pyright保留4项既有诊断，完整HEAD归档按文件、最窄AST owner、规则、完整消息与原表达式确认无新增，不称类型全绿。作者结构自查确认原顶层符号集合不变，无新owner或目录；命令、源码指纹、raw、实际退出码及局限见 `out/tests/temp/uri-global-closure/artifacts/verification-076.json`。重型验证串行，Linux测试进程组另有6GiB、禁用swap、4核与512任务限制；跨agent／worktree全局并发闸门尚未实现，不能把这项缺口报为完成。2.2／7.2总门与用户延期项保持未勾，运行中的Debug服务保持。

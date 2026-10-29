@@ -31,10 +31,12 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 )
 
 
+@pytest.mark.parametrize("text_only", [False, True], ids=["native", "text_only"])
 async def test_native_io_failure_converges_without_publishing_file_locations(
     runtime_case: RuntimeCase,
     cold_message_stream_client: httpx.AsyncClient,
     caplog: pytest.LogCaptureFixture,
+    text_only: bool,
 ) -> None:
     case = runtime_case
     container = case.runner.container
@@ -46,6 +48,10 @@ async def test_native_io_failure_converges_without_publishing_file_locations(
         try:
             location.read_bytes()
         except OSError as error:
+            if text_only:
+                wrapped = OSError(str(error))
+                errors.append(wrapped)
+                raise wrapped from error
             errors.append(error)
             raise
         raise AssertionError("读取目录必须失败")
@@ -58,7 +64,16 @@ async def test_native_io_failure_converges_without_publishing_file_locations(
     job = container.job_service._jobs[accepted.job_id]
     await asyncio.wait_for(asyncio.shield(job.task), 20)
     assert job.status == JobStatus.failed, job.error_message
-    assert len(errors) == 1 and isinstance(errors[0], IsADirectoryError)
+    assert len(errors) == 1
+    error, = errors
+    if text_only:
+        assert type(error) is OSError
+        assert error.errno is error.filename is error.filename2 is None
+        assert isinstance(error.__cause__, IsADirectoryError)
+        assert error.__cause__.filename == str(location)
+    else:
+        assert isinstance(error, IsADirectoryError)
+        assert error.filename == str(location)
     events = await container.job_event_bus.list_events(job.job_id, limit=1000)
     failures = [event.payload.model_dump(mode="json") for event in events
                 if event.type in {EventType.ERROR, EventType.JOB_FAILED}]
@@ -77,7 +92,7 @@ async def test_native_io_failure_converges_without_publishing_file_locations(
     assert frozen["stream_status"] == "failed"
     assert frozen["failure"]["code"] == "execution_error"
     assert model_failure["payload"]["error_code"] == "execution_error"
-    expected = f"执行系统 I/O 失败: error=IsADirectoryError, errno={errors[0].errno}"
+    expected = f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
     assert (await container.job_service.get(job.job_id)).error_message == expected
     assert {failure["error"] for failure in failures} == {expected}
     assert frozen["failure"]["message"] == model_failure["payload"]["message"] == expected
