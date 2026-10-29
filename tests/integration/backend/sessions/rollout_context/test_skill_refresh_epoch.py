@@ -58,20 +58,33 @@ def test_named_selection_follows_checkpoint_and_does_not_revive_old_source(epoch
     b = SkillCatalogBinding("switch", "b:activation", "b", "boxteam://workspace/test/resources/skills/b/SKILL.md", "b:1", "选择B\n")
     catalogs = {entry.entry_identity: SkillCatalogActivationSnapshot("catalog:" + entry.entry_identity, {"switch": entry}) for entry in (a, b)}
     snapshots = []
+    selected_states = []
     for index, entry in enumerate((a, b, a)):
         receipt = case.manager.load_skill("switch", activation_snapshot=catalogs[entry.entry_identity])
         assert receipt.queued
         snapshots.append(case.snapshot(case.prepare("choice-" + str(index))))
+        selected, = (state for state in case.saver.load_context_source_control_states(case.owner)
+                     if state.source_id == "skill:" + entry.entry_identity)
+        assert selected.selection_sequence == selected.latest_visible_selection_sequence == index + 1
+        selected_states.append(selected)
         case.checkpoint("choice-checkpoint-" + str(index))
     before = tuple(canonical_json_bytes(snapshot.to_dict()) for snapshot in snapshots)
     if boundary == "rewind":
         case.rewind("choice-checkpoint-1")
         expected, excluded = b, a
+        expected_state = selected_states[1]
     else:
         case.checkpoint("choice-compaction", compaction=True, messages=[case.user, AIMessage(content="摘要", id="choice-summary")])
         expected, excluded = a, b
+        expected_state = selected_states[2]
     case.restart()
+    restored, = (state for state in case.saver.load_context_source_control_states(case.owner)
+                 if state.source_id == expected_state.source_id)
+    assert restored.durable_fields() == expected_state.durable_fields()
     rebuilt = case.snapshot(case.prepare("choice-rebuilt-" + boundary))
+    sealed, = (state for state in case.saver.load_context_source_control_states(case.owner)
+               if state.source_id == expected_state.source_id)
+    assert sealed.durable_fields() == expected_state.durable_fields()
     blocks = [block for frame in rebuilt.seal_binding.prefix.state.frames if frame.source_protocol is not None
               for block in json.loads(frame.content)["sources"] if block["name"] == "switch"]
     assert [(block["source_identity"], block["body"]) for block in blocks] == [("skill:" + expected.entry_identity, expected.body)]

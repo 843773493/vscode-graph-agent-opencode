@@ -15,6 +15,7 @@
 
 ## 规范
 
+- `integration-skill-selection-recovery`经真实Skill文件发布/工具调用、Saver准入与封存，验证模式切换、A→B→A选择、checkpoint/rewind/compaction、冷Saver及24→25→26维护迁移的原字节和hash，固定60秒/4GiB；冻结来源装具不代表完整Agent、Backend进程重启、Gateway/Web或Windows实机。
 - `integration-context-source-seal`经真实Saver准入、Skill激活与SQLite/JSONL封存验证来源更新保留已接受及已封存选择次序、幂等冷读，以及原assembly提交/失败回滚/CAS/epoch合同，固定60秒/4GiB；关键输入由Saver装具生成，不代完整Agent、Backend进程重启、Gateway/Web或Windows验收。
 - `integration-execution-input-commit`经Saver准入、真实SQLite/JSONL及冷Saver核对内部输入在提交前/后失败或取消时的正文、准入和队列原子性，以及原身份重试不重复写入；复跑既有队列投影/显式迁移及checkpoint提交窗口，固定60秒/4GiB，不代表完整消息执行、Backend进程重启、Gateway/Web或Windows实机。
 - `integration-rollout-snapshot-release`经真实SQLite/JSONL与Saver准入验证快照建立、取消及关闭失败后的连接／文件锁释放，并复跑原硬退出恢复与独立reader合同，固定60秒/4GiB；不代表完整消息执行、Gateway/Web或Windows实机验收。
