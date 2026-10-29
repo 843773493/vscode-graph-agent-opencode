@@ -426,3 +426,5 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Ruff/compileall、矩阵CLI列表与OpenSpec strict 51/0通过；生产Pyright 8→8，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称类型全绿。命令、源码指纹、raw/退出码与作者AST自查见`out/tests/temp/uri-global-closure/artifacts/verification-046.json`；纯临时归档源码删除，正式输出另行保全。未验证Gateway/Web、Windows、独立Backend重启、真实等待30秒、任意线程终止或整个shutdown硬期限；5.2/5.4仍未勾、整体21/23，团队协作与MCP显式持有继续TODO。
 
 - 2026-10-29 接续迁齐上述 source-point 测试：按 itemized「Fork item 定位与前缀捕获保持一致」，前缀接受早于或晚于当前值的观察 revision，响应仍逐字段等于真实 view/锚点/附件投影；完整复制继续拒绝 revision 冲突。未改生产逻辑或附件身份断言。定向1项及原完整附件/关闭组合81项通过，Ruff与差异检查通过；离线 doctor/diagnose 的原 URI/只读/失败合同另验27项通过。命令、源码指纹、raw及退出码见`out/tests/temp/uri-global-closure/artifacts/verification-047.json`。本片修正旧合同测试，不代替5.2/5.4的剩余验收。
+
+- 2026-10-29 Browser脚本错误出口回归补充5.2／5.4反例证据：真实`await new Promise(() => undefined)`在工具超时后仍由原队列持有，本地file页面验收的detach在owner版本排空处返回408，另一工具超时测试在context已关闭后的原执行排空处返回408。当前与完整HEAD归档串行执行均复现，不能把页面reset／后续工具可用当作原脚本已停止，也不能删弱清理断言以计通过。准确命令、源码指纹、两版原始输出和已核实的失败阶段见`out/tests/temp/uri-global-closure/artifacts/verification-064.json`；保留现有TODO，不在URI模块加载修复中扩展终止机制。

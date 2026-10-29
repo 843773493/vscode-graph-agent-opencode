@@ -1264,3 +1264,9 @@
 - Browser／Terminal attach 静态服务原来直接把文件读取异常正文返回HTTP，真实缺失文件会带出安装目录。原失败出口现在使用已有运行日志owner记录完整异常，普通404只发布阶段、异常类别和系统错误码；静态寻址、文件读取、工作区身份及成功响应保持，不新增管理例外或第二条资源读取链。
 - 旧生产在两个服务×IPv4／IPv6的4项场景全部复现。修复后相关36项通过；其中4项实际启动Node静态服务，逐次核对本地页面资源、生成协议模块和依赖模块缺失的404与该次完整诊断，并在同一进程继续读取正常首页。健康、配置、权威工作区身份、监听地址和进程释放沿原装具核验；本片未启动PTY／Chromium或完整Gateway交互，不作为Windows实机验收。
 - Ruff、JS语法检查、compileall、Web真实类型检查及构建通过。完整HEAD归档Pyright2→2，按最窄AST owner／规则／完整消息确认未增加诊断，原两项为未改动函数的Gateway／Backend联合类型，不扩修。严格OpenSpec与源码指纹、准确命令、raw、退出码及作者结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-063.json`；2.2／7.2全局门保持未勾，延期项保持TODO。
+
+### 2026-10-29 Browser脚本的Node模块加载诊断边界（2.2／7.2 部分收口）
+
+- ESM／CommonJS真实缺失模块会把宿主模块位置复制到脚本失败HTTP和操作记录；这两类原生错误没有errno/syscall。原执行owner在队列结算前按Node保留错误码识别并复用已有失败出口，原cause／code／status与完整日志保持，业务code、普通脚本Error、语法错误、字符串throw及工具超时不改变。无新读取链、文本脱敏、存储字段或页面URL例外。
+- 旧生产两项真实模块加载均复现泄漏。最终三类原生失败经真实Node／Chromium、HTTP客户端和工作区资源API核对失败回执、持久last_operation、verified状态、lease释放、原文件不变、业务脚本错误及同页重试；加锁拒绝和状态发布回归共5项通过，相关Node单测131项通过。扩大回归的两个原未结束脚本场景在清理时返回408，完整HEAD归档串行复现同样失败，分别为owner版本排空和context关闭后原执行仍未结束；保留原断言及5.2／5.4未完成项，不计通过或扩修。首次基线因与候选并行占用同套端口而止于setup，原件保留，不作业务结论。
+- Ruff、Node语法、compileall与strict通过；完整归档Pyright155→148，按最窄AST owner／规则／完整消息无新增，7项减少来自新增的真实payload类型断言。本片未改Web依赖，复用063的Web类型检查与构建，不代完整Gateway／主Web、Windows或独立Backend恢复。准确命令、源码指纹、raw、退出码与作者自查见 `out/tests/temp/uri-global-closure/artifacts/verification-064.json`；2.2／7.2仍未勾。

@@ -2692,10 +2692,12 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("native_failure", ["filesystem", "esm-loader", "commonjs-loader"])
 async def test_script_native_failure_keeps_paths_out_of_http_and_operation_records(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
     browser_manager_artifacts: Path,
+    native_failure: str,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2712,6 +2714,18 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
     blocker.write_bytes(b"keep-original-file")
     native_path = str(blocker / "screenshot.png")
     payload = {"code": f"await page.screenshot({{path: {json.dumps(native_path)}}});"}
+    if native_failure == "esm-loader":
+        missing_module = root / "missing-script-module.mjs"
+        native_path = str(missing_module)
+        payload = {"code": f"await import({json.dumps(missing_module.as_uri())});"}
+    elif native_failure == "commonjs-loader":
+        missing_module = root / "missing-script-module.cjs"
+        native_path = str(missing_module)
+        payload = {"code": (
+            "const {createRequire} = await import('node:module');"
+            f"createRequire({json.dumps((root / 'script-entry.cjs').as_uri())})"
+            f"({json.dumps(str(missing_module))});"
+        )}
     transport = BrowserManagerClient(
         workspace_id=container.workspace_id,
         backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
@@ -2733,6 +2747,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
             assert failure.status == 500
             assert isinstance(failure.code, str) and failure.code
             receipt = failure.payload
+            assert isinstance(receipt, dict)
             assert receipt["code"] == failure.code
             assert receipt["operation_outcome"] == "failed"
             assert f"browser_id={browser_id}" in receipt["error"]

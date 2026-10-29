@@ -2745,8 +2745,12 @@ export class BrowserSession extends EventEmitter {
           },
         );
       } catch (cause) {
-        // 原生系统错误携带 syscall/errno 与文件位置；普通脚本及超时错误仍遵循各自合同。
-        if (typeof cause?.errno !== "number" || typeof cause?.syscall !== "string") throw cause;
+        // Node模块加载等原生错误没有errno/syscall，仍会在正文暴露宿主位置。
+        // 按Node保留错误码识别，不检查正文；用户业务code、脚本语法和工具超时沿原合同。
+        const nodeCode = cause?.code;
+        const nodeFailure = typeof nodeCode === "string"
+          && (nodeCode.startsWith("ERR_") || nodeCode === "MODULE_NOT_FOUND");
+        if (!nodeFailure && (typeof cause?.errno !== "number" || typeof cause?.syscall !== "string")) throw cause;
         throw browserRuntimeFailure({ browserId: this.id, pageId: execution.pageId, stage: "run_code", cause });
       }
     });
