@@ -408,7 +408,10 @@ test("Worker诊断和原停止信号同时失败时保留全部原因", { skip: 
     assert.equal(error.cause, diagnosticFailure);
     assert.deepEqual(diagnosticFailure.errors, [original, diagnosticError]);
     assert.equal(diagnosticFailure.cause, original);
-    assert.equal(secondary, cleanupError);
+    assert(secondary.message.startsWith("终端进程操作失败:"));
+    assert.equal(secondary.code, "EPERM");
+    assert.deepEqual(secondary.cause.errors, [cleanupError, diagnosticError]);
+    assert.equal(secondary.cause.cause, cleanupError);
     return true;
   });
   assert.equal(signals.mock.callCount(), 1);

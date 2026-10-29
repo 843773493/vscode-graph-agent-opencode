@@ -71,6 +71,123 @@ test("Darwin sess 指针作为不透明 session 身份解析和筛选", () => {
   );
 });
 
+function observeNativeFailure(scenario, failSink = false) {
+  const source = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    import { promisify } from "node:util";
+    const [moduleUrl, scenario, failSink] = JSON.parse(process.argv[1]);
+    const platform = scenario.startsWith("posix-") || scenario === "missing-posix" ? "darwin"
+      : scenario.startsWith("taskkill-") || scenario === "windows-stat" ? "win32" : "linux";
+    Object.defineProperty(process, "platform", { value: platform });
+    const pid = 32109, privatePath = "/private/process-diagnostic";
+    const code = scenario === "signal" ? "EPERM" : scenario === "taskkill-exit" ? 5
+      : scenario === "taskkill-timeout" ? null : scenario === "taskkill-spawn" ? "ENOENT"
+      : scenario === "missing-stat" || scenario === "missing-posix" || scenario === "missing-probe" ? "ESRCH"
+      : scenario === "denied-probe" ? "EPERM" : "EACCES";
+    const primary = Object.assign(new Error("原生操作失败: " + privatePath), {
+      code, signal: scenario === "taskkill-timeout" ? "SIGTERM" : null,
+      killed: scenario === "taskkill-timeout", stderr: privatePath,
+    });
+    const diagnostic = Object.assign(new Error("日志失败: /private/diagnostic-sink"), { code: "ENOTDIR" });
+    const logs = [], signals = [];
+    process.stderr.write = chunk => {
+      logs.push(String(chunk));
+      if (failSink) throw diagnostic;
+      return true;
+    };
+    const read = fs.readFile;
+    fs.readFile = async (file, ...args) => {
+      if (typeof file !== "string" || !file.startsWith("/proc/")) return await read(file, ...args);
+      const currentPid = Number(file.split("/")[2]);
+      if (currentPid === pid && ["read", "missing-stat"].includes(scenario)) throw primary;
+      if (currentPid === pid && scenario === "parse") return privatePath;
+      const sid = currentPid === process.pid ? 40001 : pid;
+      return currentPid + " (test) " + ["S", "1", sid, sid, ...Array(15).fill("0"), "1000"].join(" ");
+    };
+    fs.readdir = async directory => {
+      assert.equal(directory, "/proc");
+      if (scenario === "scan") throw primary;
+      return [{ name: String(pid), isDirectory: () => true }];
+    };
+    process.kill = (target, signal) => {
+      if (signal === 0) {
+        if (["probe", "missing-probe", "denied-probe", "missing-posix"].includes(scenario)) throw primary;
+        return true;
+      }
+      signals.push([target, signal]);
+      assert.equal(scenario, "signal", "不得向宿主发送任何真实信号");
+      throw primary;
+    };
+    childProcess.execFile = (command, args, options, callback) => {
+      if (command === "taskkill" || scenario === "posix-read" || scenario === "missing-posix"
+          || (scenario === "posix-scan" && args[0] === "-ax")) {
+        callback(primary, "", primary.stderr);
+      } else {
+        assert.equal(command, "ps");
+        const requested = Number(args.at(-1));
+        const sid = requested === process.pid ? 40001 : pid;
+        callback(null, requested + " 1 " + sid + " " + sid + " Mon Jul 20 12:34:56 2026", "");
+      }
+    };
+    const exec = childProcess.execFile;
+    exec[promisify.custom] = (...args) => new Promise((resolve, reject) => {
+      exec(...args, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr }));
+    });
+    syncBuiltinESMExports();
+    const { readProcessStat, processExists, terminateTerminalProcessTree } = await import(moduleUrl);
+    let failure, result;
+    try {
+      result = ["read", "parse", "posix-read", "missing-stat", "missing-posix", "windows-stat"].includes(scenario)
+        ? await readProcessStat(pid)
+        : ["probe", "missing-probe", "denied-probe"].includes(scenario) ? processExists(pid)
+        : await terminateTerminalProcessTree({ pid });
+    } catch (error) { failure = error; }
+    if (scenario.startsWith("missing-") || scenario === "windows-stat" || scenario === "denied-probe") {
+      assert.equal(failure, undefined);
+      assert.equal(result, scenario === "missing-probe" ? false : scenario === "denied-probe" ? true : null);
+      assert.deepEqual(logs, []);
+    } else {
+      assert(failure);
+      assert.match(failure.message, /^终端进程操作失败:/);
+      assert(!failure.message.includes("/private/"));
+      assert.equal(failure.code, scenario === "parse" ? undefined : primary.code);
+      if (failSink) {
+        assert(failure.cause instanceof AggregateError);
+        assert.deepEqual(failure.cause.errors, [scenario === "parse" ? failure.cause.errors[0] : primary, diagnostic]);
+        assert.equal(failure.cause.cause, failure.cause.errors[0]);
+      } else if (scenario !== "parse") assert.equal(failure.cause, primary);
+      if (scenario === "parse") assert(failure.cause.cause?.message.includes(privatePath) || failure.cause.message.includes(privatePath));
+      assert.equal(logs.length, 1);
+      assert(logs[0].includes(privatePath));
+    }
+    console.log(JSON.stringify({ signals, result, failed: Boolean(failure) }));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", source,
+    JSON.stringify([new URL("./terminalProcessLifecycle.js", import.meta.url).href, scenario, failSink])],
+  { encoding: "utf8", timeout: 5000 }));
+}
+
+for (const scenario of ["read", "parse", "scan", "signal", "probe", "posix-read", "posix-scan", "taskkill-spawn", "taskkill-exit", "taskkill-timeout"]) {
+  for (const failSink of [false, true]) {
+    test(`原生${scenario}失败保留原因且日志${failSink ? "失败" : "正常"}不公开位置`, () => {
+      const observed = observeNativeFailure(scenario, failSink);
+      assert.equal(observed.failed, true);
+      assert.deepEqual(observed.signals, scenario === "signal" ? [[32109, "SIGTERM"]] : []);
+    });
+  }
+}
+
+for (const scenario of ["missing-stat", "missing-posix", "missing-probe", "denied-probe", "windows-stat"]) {
+  test(`原生${scenario}保持原缺失和存在性语义，不写失败日志`, () => {
+    const observed = observeNativeFailure(scenario);
+    assert.equal(observed.failed, false);
+    assert.deepEqual(observed.signals, []);
+  });
+}
+
 function observeForkDuringTermination(signal, explicitIdentity) {
   // 独立进程只替换 OS 边界；虚拟 PID 不会向宿主发送真实信号。
   const source = `

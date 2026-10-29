@@ -13,6 +13,8 @@ function observeWindowsTermination(scenario) {
     import { syncBuiltinESMExports } from "node:module";
     const [moduleUrl, scenario] = JSON.parse(process.argv[1]);
     Object.defineProperty(process, "platform", { value: "win32" });
+    const diagnostics = [];
+    process.stderr.write = chunk => { diagnostics.push(String(chunk)); return true; };
     const pid = scenario === "invalid" ? 0 : 32109;
     const launchError = new Error("taskkill不存在");
     launchError.code = "ENOENT";
@@ -110,7 +112,7 @@ function observeWindowsTermination(scenario) {
         original_timeout_cause: error.cause === timeoutError,
       };
     }
-    console.log(JSON.stringify({ ...observation, taskkillCalls, existenceChecks, peerRespondedWhilePending }));
+    console.log(JSON.stringify({ ...observation, diagnostics, taskkillCalls, existenceChecks, peerRespondedWhilePending }));
   `;
   const stdout = execFileSync(process.execPath, [
     "--input-type=module", "--eval", source, JSON.stringify([lifecycleModule, scenario]),
@@ -137,11 +139,12 @@ test("Windows taskkill无法启动时保留原始异常", () => {
   assert.equal(observed.result, undefined);
 });
 
-test("Windows taskkill拒绝且进程仍存活时明确报告退出码与stderr", () => {
+test("Windows taskkill拒绝且进程仍存活时公开退出码并诊断原stderr", () => {
   const observed = observeWindowsTermination("tool-error");
   assert.match(observed.error, /taskkill/);
   assert.match(observed.error, /5/);
-  assert.match(observed.error, /Access is denied/);
+  assert(!observed.error.includes("Access is denied"));
+  assert.match(observed.diagnostics.join("\n"), /Access is denied/);
   assert.equal(observed.original_tool_cause, true);
   assert.equal(observed.result, undefined);
 });
@@ -149,15 +152,17 @@ test("Windows taskkill拒绝且进程仍存活时明确报告退出码与stderr"
 test("Windows taskkill被信号结束时不伪报目标不存在", () => {
   const observed = observeWindowsTermination("signal-error");
   assert.match(observed.error, /SIGTERM/);
-  assert.match(observed.error, /工具被终止/);
+  assert(!observed.error.includes("工具被终止"));
+  assert.match(observed.diagnostics.join("\n"), /工具被终止/);
   assert.equal(observed.original_signal_cause, true);
   assert.equal(observed.result, undefined);
 });
 
-test("Windows taskkill超时保留原始原因、信号和stderr", () => {
+test("Windows taskkill超时公开信号并保留原始原因及诊断stderr", () => {
   const observed = observeWindowsTermination("timeout-error");
   assert.match(observed.error, /SIGTERM/);
-  assert.match(observed.error, /工具未在期限内返回/);
+  assert(!observed.error.includes("工具未在期限内返回"));
+  assert.match(observed.diagnostics.join("\n"), /工具未在期限内返回/);
   assert.equal(observed.original_timeout_cause, true);
   assert.equal(observed.result, undefined);
 });

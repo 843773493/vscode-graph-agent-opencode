@@ -1507,3 +1507,9 @@
 - 首轮原生产的2项网络检查均失败，分别暴露新测试过早读取异步状态，以及错误地禁止用户命令参数中的原生路径；两者不计产品缺陷。改为等待原保存并保留用户原输入，忽略SIGHUP以排除Worker挂断替代停止证明，再由只读事件观察器冻结原致命处理器开始前的文件。最终原生产1 passed／1 failed，明确看到致命处理前仍为running；修复后2项真实HTTP/Node/PTY通过，pytest9.56秒。父子均忽略SIGTERM和SIGHUP，独立核对三份原进程身份及停止、原退出记录、原始诊断和冷Manager读取，不代填产品状态。
 - 106项Node／原调用方回归全部通过；交付审查新增停止信号与日志双错的定向1项也通过，合计107项，所有信号在系统调用前拒绝，不向OS发信号。原6项启动HTTP/PTY场景补验全部通过（pytest35.24秒）。退出回调单测覆盖保存等待、正常／失败日志、存储再次失败及广播失败的完整原因身份与顺序，不以替身停止证明替代真实进程验收。
 - Node语法、Ruff／compileall、单文件Pyright零诊断、diff及本change strict通过。作者AST核对仅退出注册回调和Worker错误分支改变，原启动、输出回调、正常退出尾段、停止调用身份及旧Node场景保持；产品净增21行至862行，既有大文件风险保留，未增产品文件／目录／依赖，不代独审。准确命令、指纹、raw、退出码与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-114.json`。测试串行、原集成锁与进程外4GiB／两CPU保护保持；未知停止接管、其余事件／生命周期、readProcessStat、Gateway/Web、Python业务owner及Windows未由本片验收。2.2／7.2总门继续未勾，前端及其OpenSpec、其他agent独有改动／暂存和原Debug服务保持。
+
+### 2026-10-29 Terminal原生进程失败出口（2.2／7.2部分收口）
+
+- 原生stat/ps读取、session扫描、存在性探测、信号和taskkill共用一个私有错误出口；普通错误只含阶段、PID/系统会话、类别、原错误码与信号，原生正文和stderr只留诊断/cause。日志次错保留有序AggregateError；ENOENT/ESRCH、EPERM存在性、taskkill自行退出及原身份/停止算法保持，无第二进程执行链。Windows三项旧stderr公开断言迁为公开码/信号、完整诊断和直接cause核对；原Worker/停止/日志多错测试迁齐新增的原生错误层，仍逐份核原异常身份与顺序。
+- 原生产的8项真实HTTP反例均复现路径外泄。首轮还暴露新测试client先关闭导致清理回调失败，已修正关闭顺序并添加精确实例兜底；限定八份原记录核原生身份后确认均已不执行，最初查错输出目录的空结果不算清理证明。修正装具后的原生产仍8 failed，最终同8项全部通过，pytest23.80秒；真实PTY身份、unknown落盘、普通响应和原管理重试均由产品生成，不代填状态。Node最终162 passed/12.63秒；首轮其中Darwin替身未保留execFile的promisify返回结构导致2项失败，修正替身后通过，原件保留。
+- 原退出/无Worker管理HTTP回归6 passed/31.27秒；原生进程树回归5 passed/13.61秒，Windows1项因平台skip，不称实机通过。静态检查、作者AST/调用方核对及命令、源码指纹、raw/实际退出码见`out/tests/temp/uri-global-closure/artifacts/verification-116.json`。各批串行、原集成锁、60秒matrix与进程外4GiB/两CPU保护保持；本片不代Gateway/Web、Python lease、Backend重启、Windows/Darwin实机或全部URI不变量，2.2/7.2继续未勾，前端与延期项、他人暂存和原Debug服务保持。

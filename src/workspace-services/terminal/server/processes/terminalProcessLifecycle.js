@@ -1,10 +1,24 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
+import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
 
 const TERMINATION_GRACE_MS = 1500;
 const PROCESS_SCAN_BATCH_SIZE = 64;
 const execFileAsync = promisify(execFile);
+const logger = createRuntimeLogger("terminal", "terminal.processLifecycle");
+
+function processOperationError(stage, primary, { pid = null, processSessionId = null, signal = primary.signal ?? "none" } = {}) {
+  const code = primary.code ?? "none";
+  const message = `终端进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}`;
+  let cause = primary;
+  try {
+    logger.error(`[terminal-process] ${message}`, primary);
+  } catch (diagnosticError) {
+    cause = new AggregateError([primary, diagnosticError], "终端进程操作与诊断输出均失败", { cause: primary });
+  }
+  return Object.assign(new Error(message, { cause }), { code: primary.code });
+}
 
 /**
  * 操作系统进程身份快照；与业务会话、终端资源的创建时间分开。
@@ -103,7 +117,7 @@ async function readPosixProcessStat(pid) {
     if (!processExists(pid)) {
       return null;
     }
-    throw error;
+    throw processOperationError("read-stat", error, { pid });
   }
 }
 
@@ -124,7 +138,7 @@ export async function readProcessStat(pid) {
     if (error?.code === "ENOENT" || error?.code === "ESRCH") {
       return null;
     }
-    throw error;
+    throw processOperationError("read-stat", error, { pid });
   }
 }
 
@@ -142,7 +156,7 @@ export function processExists(pid) {
     if (error?.code === "EPERM") {
       return true;
     }
-    throw error;
+    throw processOperationError("probe", error, { pid });
   }
 }
 
@@ -154,7 +168,7 @@ function signalProcess(pid, signal) {
     if (error?.code === "ESRCH") {
       return false;
     }
-    throw error;
+    throw processOperationError("signal", error, { pid, signal });
   }
 }
 
@@ -167,15 +181,10 @@ async function requestWindowsProcessTreeTermination(pid) {
     });
   } catch (error) {
     if (typeof error.code === "string") {
-      throw new Error(`无法执行taskkill: pid=${pid}, error=${error.message}`, {
-        cause: error,
-      });
+      throw processOperationError("taskkill", error, { pid });
     }
     if (error.killed || processExists(pid)) {
-      throw new Error(
-        `taskkill终止未核实: pid=${pid}, exit=${error.code}, signal=${error.signal ?? "none"}, stderr=${error.stderr.trim()}`,
-        { cause: error },
-      );
+      throw processOperationError("taskkill", error, { pid });
     }
   }
 }
@@ -195,14 +204,21 @@ async function processIdsInOsSession(processSessionId) {
   if (process.platform !== "linux") {
     // TODO: 平台兼容：保持与单进程元数据查询相同的 Darwin sess / POSIX sid 语义。
     const sessionField = process.platform === "darwin" ? "sess=" : "sid=";
-    const { stdout } = await execFileAsync(
-      "ps",
-      ["-ax", "-o", "pid=", "-o", sessionField],
-      { encoding: "utf8" },
-    );
+    let stdout;
+    try {
+      ({ stdout } = await execFileAsync("ps", ["-ax", "-o", "pid=", "-o", sessionField], { encoding: "utf8" }));
+    } catch (error) {
+      throw processOperationError("scan-session", error, { processSessionId });
+    }
     return parsePosixSessionProcesses(stdout, processSessionId);
   }
-  const entries = (await readdir("/proc", { withFileTypes: true }))
+  let entries;
+  try {
+    entries = await readdir("/proc", { withFileTypes: true });
+  } catch (error) {
+    throw processOperationError("scan-session", error, { processSessionId });
+  }
+  entries = entries
     .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
     .map((entry) => Number(entry.name))
     .filter((pid) => pid !== process.pid);

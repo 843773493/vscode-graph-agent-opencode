@@ -22,6 +22,8 @@ Windows通过`taskkill /T /F /PID`请求进程树终止，复用原异步`execFi
 
 Windows和POSIX共用的退出宽限等待按`performance.now()`的单调毫秒计时，轮询间隔不超过剩余预算；系统校时前跳或回拨不改变宽限长度。期限只限制轮询等待，不取消正在执行的进程状态查询，也不代表整个终端关闭入口的硬期限。
 
+原生身份读取、session扫描、存在性探测、信号与taskkill的失败统一由私有`processOperationError`构造公开阶段、PID/系统会话、类别、错误码与信号；原生错误正文及taskkill stderr只进入同一诊断和cause。writer次错按顺序聚合原错与日志错误，不能替换主拒绝。保留原ENOENT/ESRCH、EPERM存在性及taskkill目标自行退出的判定，不以错误正文猜测进程已消失，也不增加另一套停止实现。
+
 `IsolatedPtyProcess.workerProcess`是隔离Node句柄，`workerState`只表示该宿主的生命周期；`pid`保留node-pty的PTY执行根含义，`workerPid`才取Node句柄的PID。`ptyOutputHandlers`消费PTY正文，`exitObservationHandlers`接收首次退出观察；观察可能来自PTY消息或worker异常，退出码/信号属于对应来源。`workerShutdownExpected`只表示安排过宿主退出，`exitObservationEmitted`只做交付去重，二者都不能证明进程树已回收。
 
 `shutdown()`只有观察到worker的`exit`事件才成功：先给关闭IPC三秒宽限，再发SIGKILL并等待最多三秒确认。未确认或发送失败须明确拒绝，并释放本次监听和定时器；该确认只涉及隔离worker，不替代PTY进程树的独立核验。
