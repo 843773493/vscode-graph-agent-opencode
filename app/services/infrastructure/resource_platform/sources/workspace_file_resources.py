@@ -11,11 +11,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from app.core.failures import failure_detail
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_resource_uri, skill_display_uri
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
@@ -40,8 +40,6 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
-
-logger = logging.getLogger(__name__)
 
 MAX_WORKSPACE_RESOURCE_BYTES = MAX_STABLE_READ_BYTES
 
@@ -360,14 +358,16 @@ class WorkspaceFileResourceRegistry:
                     entry_dir.name, path, uri, source_id, entry_identity,
                 ))
         except OSError as failure:
-            error = (
-                f"Skill 固定目录读取失败: scope={handle.scope}, scope_id={handle.scope_id}, "
-                f"error={type(failure).__name__}, errno={failure.errno}"
+            error = failure_detail(
+                failure, stage="skill-directory-read",
+                label=f"Skill 固定目录读取失败: directory_id={directory_id}, scope={handle.scope}, scope_id={handle.scope_id}",
             )
-            logger.exception("Skill 固定目录读取失败: directory_id=%s", directory_id)
         except (RuntimeError, ValueError) as failure:
-            error = str(failure)
-            logger.error("Skill 固定目录对账失败: directory_id=%s error=%s", directory_id, error)
+            # TODO：继续核对原生路径解析异常与受控业务拒绝的边界，不能据此关闭全局路径门。
+            error = failure_detail(
+                failure, stage="skill-directory-reconcile",
+                label=f"Skill 固定目录对账失败: directory_id={directory_id}, reason={failure}",
+            )
         self._skill_entry_watch_roots[directory_id] = tuple(entry_watch_roots)
         if error is None and previous is not None:
             current_uris = {entry.uri for entry in entries}
@@ -556,7 +556,6 @@ class WorkspaceFileResourceRegistry:
                     self.reconcile()
                 else:
                     if batch.error is not None:
-                        logger.error("工作区文件来源监听失败: %s", batch.error)
                         self._watch_unavailable = True
                         for uri, previous in tuple(self._snapshots.items()):
                             current = replace(previous, available=False, error=batch.error)

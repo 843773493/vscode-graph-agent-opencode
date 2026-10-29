@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -19,6 +18,7 @@ from app.agents.workspace_agents import (
 )
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
+from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_workspace_root
 from app.core.trace_middleware import get_current_gateway_id
@@ -392,7 +392,10 @@ def start_workspace_skill_catalog_publication(
             agents_file_uris=catalog.agents_file_uris,
         )
         if not catalog.catalog_snapshot.available:
-            logging.getLogger(__name__).error("Skill catalog 刷新失败: %s", batch.diagnostic or catalog.catalog_snapshot.error)
+            failure_detail(
+                _SkillSourceError(batch.diagnostic or catalog.catalog_snapshot.error),
+                stage="skill-catalog-publish", label="Skill catalog 刷新失败",
+            )
 
     async def consume() -> None:
         while not closed and lifetime_scope.state == "open":

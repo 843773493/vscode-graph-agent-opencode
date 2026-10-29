@@ -396,9 +396,10 @@ async def test_symlink_replacement_publishes_unavailable_without_reading_target(
         read_contents.append(content)
         return content
 
-    monkeypatch.setattr(reader, "_read_all", record_read)
     await registry.start()
     try:
+        # 启动对账会合法读取原文件；这里只观察替换后的读取，禁止跟随 symlink。
+        monkeypatch.setattr(reader, "_read_all", record_read)
         source.unlink()
         source.symlink_to(target)
         for _ in range(100):

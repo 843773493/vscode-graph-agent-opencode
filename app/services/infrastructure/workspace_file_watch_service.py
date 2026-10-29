@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import logging
 import os
-import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -14,13 +12,12 @@ from typing import Literal
 from watchfiles import Change, awatch
 from watchfiles.filters import DefaultFilter
 
+from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryRevisionDTO,
     WorkspaceFileListDTO,
 )
-
-logger = logging.getLogger(__name__)
 
 FILE_WATCH_DEBOUNCE_MS = 200
 FILE_WATCH_STEP_MS = 50
@@ -252,8 +249,6 @@ class WorkspaceFileWatchService:
         recursive: bool,
         change_filter: WorkspaceFileChangeFilter | None,
     ) -> None:
-        started = time.monotonic()
-        logger.info("开始共享文件监听: recursive=%s filtered=%s", recursive, change_filter is not None)
         try:
             first_iteration = True
             async for raw_changes in awatch(
@@ -270,10 +265,6 @@ class WorkspaceFileWatchService:
                 if first_iteration:
                     ready.set()
                     first_iteration = False
-                    logger.info(
-                        "共享文件监听首次 yield ready: elapsed=%.3fs",
-                        time.monotonic() - started,
-                    )
                 changes = tuple(
                     WorkspaceFileChange(
                         kind=self._change_kind(change),
@@ -293,15 +284,15 @@ class WorkspaceFileWatchService:
                     )
         except asyncio.CancelledError:
             raise
-        except Exception as error:
-            logger.exception("共享文件监听失败")
+        except Exception as error:  # noqa: BLE001 — 底层监听失败必须沿原订阅公布。
             self._publish(
                 subscribers,
-                WorkspaceFileChangeBatch(error=f"文件监听失败: {type(error).__name__}, errno={getattr(error, 'errno', None)}"),
+                WorkspaceFileChangeBatch(error=failure_detail(
+                    error, stage="workspace-file-watch", label="文件监听失败",
+                )),
             )
         finally:
             ready.set()
-            logger.info("停止共享文件监听")
 
     @staticmethod
     def _watcher_key(

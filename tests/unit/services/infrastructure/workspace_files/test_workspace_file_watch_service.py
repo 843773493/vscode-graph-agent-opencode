@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
@@ -20,6 +22,71 @@ _WorkspaceWatchStarter = Callable[
     [],
     Awaitable[asyncio.Task[WorkspaceFileChangeBatch]],
 ]
+
+
+@pytest.fixture(params=[False, True], ids=["logging", "logging-unavailable"])
+def watch_diagnostic_sink(request, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog):
+    blocked = tmp_path / "blocked-log-parent"
+    blocked.write_text("不是目录", encoding="utf-8")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if request.param and record.name in {watch_module.__name__, "app.core.failures"}:
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return bool(request.param), blocked
+
+
+@pytest.mark.asyncio
+async def test_watch_failure_publishes_original_error_and_releases_subscribers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, watch_diagnostic_sink,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    failure = PermissionError(errno.EACCES, "原监听拒绝", str(root))
+    release_failure = asyncio.Event()
+    stream_closed = asyncio.Event()
+
+    async def failing_watch(_root: Path, **_options):
+        try:
+            yield set()
+            await release_failure.wait()
+            raise failure
+        finally:
+            stream_closed.set()
+
+    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    service = WorkspaceFileWatchService(workspace_root=root)
+    stream = service.subscribe_roots((root,))
+    next_batch = asyncio.create_task(anext(stream))
+    try:
+        await asyncio.wait_for(service.wait_until_ready((root,)), timeout=2)
+        release_failure.set()
+        batch = await asyncio.wait_for(next_batch, timeout=2)
+        assert batch.changes == () and not batch.overflow
+        assert batch.error is not None
+        assert "PermissionError" in batch.error and f"errno={errno.EACCES}" in batch.error
+        assert str(root) not in batch.error
+        broken_logging, blocked = watch_diagnostic_sink
+        assert str(blocked) not in batch.error
+        if broken_logging:
+            assert "diagnostic_sink_error=NotADirectoryError" in batch.error
+            assert str(blocked) in "\n".join(failure.__notes__)
+        errors = [record.exc_info[1] for record in caplog.records if record.exc_info]
+        assert errors == [failure]
+        assert stream_closed.is_set()
+        await stream.aclose()
+        assert service._watchers == {}
+    finally:
+        release_failure.set()
+        next_batch.cancel()
+        await asyncio.gather(next_batch, return_exceptions=True)
+        await stream.aclose()
+        await service.shutdown()
 
 
 def test_watch_roots_deduplicate_nested_shortcuts(tmp_path: Path) -> None:

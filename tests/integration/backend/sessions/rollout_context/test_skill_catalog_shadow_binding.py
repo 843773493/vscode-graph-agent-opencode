@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
+import logging
 import shutil
 from contextlib import nullcontext
 from dataclasses import replace
@@ -60,6 +62,27 @@ from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
 GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
 GATEWAY_BODY = "Gateway shared 原始正文\n"
 WORKSPACE_BODY = "Workspace shared 高优先级正文\n"
+
+
+@pytest.fixture(params=[False, True], ids=["logging", "logging-unavailable"])
+def skill_diagnostic_sink(request, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog):
+    blocked = tmp_path / "blocked-log-parent"
+    blocked.write_text("不是目录", encoding="utf-8")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if request.param and record.name in {
+            "app.core.failures", "app.agents.skill_catalog",
+            "app.services.infrastructure.workspace_file_watch_service",
+            "app.services.infrastructure.resource_platform.sources.workspace_file_resources",
+        }:
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return bool(request.param), blocked
 
 
 def _write_shared_skill(root: Path, description: str, body: str) -> None:
@@ -289,3 +312,63 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
         assert current_receipt["tracked"] is False
         assert current_receipt["source_rebound"] is True
         assert restored_catalog(restarted, sealed) == original_catalog
+
+
+async def test_directory_read_failure_keeps_publication_alive_and_recovers(
+    skill_catalog_owner, skill_diagnostic_sink, monkeypatch: pytest.MonkeyPatch, caplog,
+):
+    _saver, _session, _thread, _accepted, registry, files, _manager = skill_catalog_owner
+    root = files.workspace_root / ".boxteam" / "skills"
+    catalog_id = "skill-entry:workspace:catalog:catalog"
+    initial = registry.snapshot(catalog_id)
+    assert initial.available
+    producer = next(task for task in asyncio.all_tasks() if task.get_name() == "boxteam-skill-catalog:same-name-skill-publication")
+    original_iterdir = Path.iterdir
+    failure = PermissionError(errno.EACCES, "固定根枚举失败", str(root))
+    failed = True
+
+    def iterdir(path: Path):
+        if path == root and failed:
+            raise failure
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    try:
+        # 由真实文件变更驱动 watcher、目录接受和 catalog 发布，不手工拼装不可用状态。
+        (root / "changed.txt").write_text("触发目录对账\n", encoding="utf-8")
+        async with asyncio.timeout(5):
+            while registry.snapshot(catalog_id).available:
+                files.check_running()
+                await asyncio.sleep(0.01)
+        unavailable = registry.snapshot(catalog_id)
+        assert not unavailable.available and unavailable.payload is None
+        assert unavailable.retained_revision == initial.revision
+        assert not producer.done()
+        files.check_running()
+        directory_id = next(key for key, value in files._skill_directories.items() if value.root == root)
+        rejected = files.skill_directory_snapshot(directory_id)
+        assert not rejected.available and rejected.error is not None
+        assert "PermissionError" in rejected.error and f"errno={errno.EACCES}" in rejected.error
+        broken_logging, blocked = skill_diagnostic_sink
+        for detail in (unavailable.error, rejected.error):
+            assert str(root) not in detail and str(blocked) not in detail
+        if broken_logging:
+            assert "diagnostic_sink_error=NotADirectoryError" in rejected.error
+            assert str(blocked) in "\n".join(failure.__notes__)
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+
+        failed = False
+        _write_shared_skill(root, "Workspace 同入口恢复", WORKSPACE_BODY)
+        async with asyncio.timeout(5):
+            while not registry.snapshot(catalog_id).available:
+                files.check_running()
+                assert not producer.done()
+                await asyncio.sleep(0.01)
+        recovered = registry.snapshot(catalog_id)
+        assert recovered.revision != initial.revision and recovered.error is None
+        assert recovered.payload["entries"][0]["entry_identity"] == "skill-entry:workspace:shared"
+        assert registry.snapshot("skill-entry:workspace:shared:activation").payload == {"body": WORKSPACE_BODY}
+        assert registry.snapshot(f"skill-entry:gateway:{GATEWAY_ID}:shared:activation").payload == {"body": GATEWAY_BODY}
+        assert not producer.done()
+    finally:
+        failed = False
