@@ -306,12 +306,14 @@ class ContextSourceVersionsStorageMixin:
              row[13] if row[6] == "tracked" or row[2] in visible else 0)
             for row in states
         ]
-        # AGENTS 是自动装配的工作区来源，首次 prepare 才登记；回到输入前仍保留
-        # 其跟踪声明，但清空后来的观察与 applied。显式激活来源仍冻结为不跟踪，
-        # 不删除审计 identity、不带入后来正文，也不由 register 偷偷恢复 tracking。
+        # AGENTS 与自动 instruction 可能在输入 checkpoint 后首次 prepare 才登记。
+        # 回到登记前只保留其原跟踪声明，清空后来的观察与 applied；显式停止的
+        # 来源仍不跟踪。Skill 等显式激活来源冻结为不跟踪，不从当前正文恢复。
         connection.execute(
             "UPDATE context_source_control_states SET tracking_status = "
-            "CASE WHEN source_kind='workspace_agents' THEN tracking_status ELSE 'untracked' END, "
+            "CASE WHEN source_kind IN ('workspace_agents','csm_protocol','agent_instructions',"
+            "'runtime_identity','team_coordination_policy','todo-list','skill_catalog_metadata',"
+            "'filesystem-rules','compact-tool-usage') THEN tracking_status ELSE 'untracked' END, "
             "latest_visible_committed_revision = NULL, latest_revision = NULL, "
             "selection_sequence = 0, latest_visible_selection_sequence = 0, "
             "state_revision = state_revision + 1, updated_at = ? "

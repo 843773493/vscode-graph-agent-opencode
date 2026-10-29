@@ -21,7 +21,10 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 
-from app.agents.skill_runtime import WorkspaceSkillsMiddleware
+from app.agents.skill_runtime import (
+    WorkspaceSkillsMiddleware,
+    install_frozen_skill_catalog,
+)
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
@@ -480,14 +483,23 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_re
     assert canonical_json_bytes(case.snapshot(second).to_dict()) == second_bytes
 
 
-@pytest.mark.parametrize(("source_kind", "tracking", "expected"), (
-    ("workspace_agents", "tracked", "tracked"),
-    ("workspace_agents", "untracked", "untracked"),
-    ("skill", "tracked", "untracked"),
+@pytest.mark.parametrize("tracking", ("tracked", "untracked"))
+@pytest.mark.parametrize(("source_kind", "automatic"), (
+    ("workspace_agents", True),
+    ("csm_protocol", True),
+    ("agent_instructions", True),
+    ("runtime_identity", True),
+    ("team_coordination_policy", True),
+    ("todo-list", True),
+    ("skill_catalog_metadata", True),
+    ("filesystem-rules", True),
+    ("compact-tool-usage", True),
+    ("skill", False),
+    ("workspace_rules", False),
 ))
-def test_rewind_before_registration_preserves_only_automatic_agents_tracking(
-    epoch_case: EpochCase, source_kind: str,
-    tracking: ContextSourceTrackingStatus, expected: ContextSourceTrackingStatus,
+def test_rewind_before_registration_preserves_only_automatic_source_tracking(
+    epoch_case: EpochCase, source_kind: str, automatic: bool,
+    tracking: ContextSourceTrackingStatus,
 ) -> None:
     case = epoch_case
     descriptor = ContextSourceDescriptor(
@@ -511,10 +523,62 @@ def test_rewind_before_registration_preserves_only_automatic_agents_tracking(
     case.rewind("checkpoint-first")
     state = next(state for state in case.saver.load_context_source_control_states(case.owner)
                  if state.source_id == descriptor.source_id)
-    assert state.tracking_status == expected
+    assert state.tracking_status == (tracking if automatic else "untracked")
     assert state.latest_revision is state.latest_visible_committed_revision is None
     assert state.selection_sequence == state.latest_visible_selection_sequence == 0
     assert canonical_json_bytes(case.snapshot(case.first).to_dict()) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ("rewind", "arewind"))
+@pytest.mark.parametrize("restart", (False, True), ids=("resident", "cold"))
+@pytest.mark.parametrize("epoch_case", (False,), indirect=True)
+async def test_frozen_catalog_can_prepare_after_rewind_before_its_registration(
+    epoch_case: EpochCase, restart: bool, entrypoint: str,
+) -> None:
+    case = epoch_case
+    binding = SkillCatalogBinding(
+        "catalog-only", "resource:catalog-only", "entry:catalog-only",
+        "boxteam://workspace/test/skills/catalog-only/SKILL.md", "body:1",
+        "目录说明不应激活此正文", description="回退前的目录说明",
+    )
+    install_frozen_skill_catalog(case.manager, SkillCatalogActivationSnapshot(
+        "catalog:1", {binding.name: binding},
+    ), include_instructions=True)
+    prepared = case.prepare("late-catalog")
+    original = canonical_json_bytes(case.snapshot(prepared).to_dict())
+    assert case.connection.execute(
+        "SELECT count(*) FROM checkpoint_context_source_states WHERE checkpoint_id=? AND source_id=?",
+        ("checkpoint-first", "instruction:skill-catalog"),
+    ).fetchone() == (0,)
+
+    if entrypoint == "arewind":
+        with case.scope():
+            case.config = await case.saver.arewind(case.config, checkpoint_id="checkpoint-first")
+    else:
+        case.rewind("checkpoint-first")
+    if restart:
+        case.restart()
+    current = replace(binding, description="本次冻结的目录说明")
+    install_frozen_skill_catalog(case.manager, SkillCatalogActivationSnapshot(
+        "catalog:2", {current.name: current},
+    ), include_instructions=True)
+    rebuilt = case.snapshot(case.prepare("regenerated-catalog"))
+    assert rebuilt.seal_binding is not None
+    root = rebuilt.seal_binding.root
+    assert rebuilt.seal_binding.prefix.state.epoch.reason == EpochReason.REWIND
+    assert root is not None
+    (catalog,) = tuple(block for block in parse_source_blocks(
+        root.content, expected_version=root.source_protocol,
+    ) if block.source_identity == "instruction:skill-catalog")
+    assert catalog.source_tracking_at_seal == "tracked"
+    assert isinstance(catalog.body, str)
+    assert "本次冻结的目录说明" in catalog.body
+    assert "回退前的目录说明" not in catalog.body
+    assert "目录说明不应激活此正文" not in catalog.body
+    assert canonical_json_bytes(case.snapshot(prepared).to_dict()) == original
+    assert case.pending_rows()[0][3:] == ("consumed", rebuilt.assembly_id)
+    assert case.manager.prepare_pending() is None
 
 
 def test_rebuild_rejects_state_header_mismatch_without_committing(epoch_case, monkeypatch):

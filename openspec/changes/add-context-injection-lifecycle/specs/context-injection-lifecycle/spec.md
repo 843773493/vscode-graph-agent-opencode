@@ -845,6 +845,11 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 - **WHEN** rewind 目标 checkpoint 仍包含 tracked registration，但其最新已注入 revision 不在重建后的 active view
 - **THEN** 下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，并将恢复事实、首个rewind epoch assembly与transition消费原子提交；`root_eligible`可进入新root，`tail_only`按来源分组合同投影为user消息；snapshot不可用时保留rewind view/pending transition但不追加item或dispatch，且不读取文件、网络或其它provider
 
+#### Scenario: 回到自动来源首次登记之前
+
+- **WHEN** AGENTS 或自动 instruction 来源首次在 input checkpoint 之后的 preparation 登记，而 rewind 目标控制快照尚无该来源；自动 instruction 包括 Agent 基础说明、运行时身份、CSM 协议、Skill catalog metadata 及已启用工具的团队、Todo、Filesystem、compact 规则
+- **THEN** 原 owner 仅保留该自动来源已有的 tracking 声明，清空后来观察、applied revision 与选择序号；下一次 preparation 从所属 owner 的本次冻结发布版本重新装配。已有 untracked 声明不得自动激活；Skill 正文等显式激活来源仍按目标历史边界停用，不因 root 资格、source ID 前缀或重复 register 恢复。旧 canonical item、assembly 与 request hash 保持不变
+
 #### Scenario: untrack 状态参与 rewind
 
 - **WHEN** rewind 目标 checkpoint 位于一次 untrack 之前或之后

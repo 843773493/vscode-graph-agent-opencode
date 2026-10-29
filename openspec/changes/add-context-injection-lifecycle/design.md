@@ -539,6 +539,8 @@ rewind先从目标checkpoint恢复checkpoint-versioned CSM registration，重建
 - tracked registration 若仍有效且当前 revision 不在 active view，CSM 从冻结的Registry activation snapshot追加published完整 revision；
 - untracked registration 不检查、不恢复。
 
+初始 input checkpoint 可能早于自动 AGENTS 与 instruction producer 的首次登记。对目标控制快照中不存在的来源，原恢复 owner 只为这些具名自动来源保留已有 tracking 声明，并清空后来 observed/applied revision 与选择序号；显式 untracked 保持停止，Skill 正文等显式激活来源仍冻结为不跟踪。自动来源范围沿第 9 节的 producer 清单，不从 source ID 前缀、locator 或 root 资格推断；下一次 preparation 复用原 producer 的冻结发布合同，不放宽 register 的未跟踪拒绝、不复用后来正文，也不修改旧 sealed assembly。
+
 rewind可以在不继续执行时只提交view和pending transition；下一次真正model-call preparation从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，并在同一transaction提交恢复事实、seal首个`rewind` epoch assembly及消费transition。snapshot不可用或seal失败时保留rewind view与pending transition，但不追加半成品source、不应用新epoch、不dispatch；该路径不得读文件、网络或其它provider。合法新epoch中，只有owner声明`root_eligible`且仍在目标active view有效的source完整状态可合并进新root；`tail_only`的tracked完整恢复使用`wire_role=user`，消息分组遵循 4.1。恢复事实/lineage必须持久化且旧sealed assembly不变，不能把旧delta再次选入新plan造成重复。
 
 compaction提交summary/active view时登记`PendingPrefixEpochTransition(reason=compaction)`。下一次model-call preparation可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision，把原base+delta链物化为该完整revision，并在同一transaction推进source overlay epoch、seal首个compaction epoch assembly和消费transition。snapshot不可用或seal失败不回滚已提交的compaction view，但不产生半应用epoch或Provider request，也不回退读源。实际新epoch只将`root_eligible`的完整有效状态合并到唯一顶层system root；`tail_only`仍位于用户消息之后并使用`wire_role=user`，消息分组遵循 4.1。新plan只选择物化后的有效状态一次，旧base/delta/detail保持不可变，直到retention/GC确认没有sealed assembly依赖。
