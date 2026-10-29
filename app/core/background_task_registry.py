@@ -15,6 +15,7 @@ from app.core.background_task_contracts import (
     BackgroundTaskHandler,
     BackgroundTaskStatus,
 )
+from app.core.failures import failure_detail
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     OperationHolderGate,
@@ -103,7 +104,7 @@ class BackgroundTaskRegistry:
             del self._running_tasks[key]
         if not task.cancelled() and (error := task.exception()) is not None:
             asyncio.get_running_loop().call_exception_handler({
-                "message": "后台任务执行失败，详细错误已持久化", "exception": error, "task": task,
+                "message": "后台任务执行失败，详细原因见诊断", "exception": error, "task": task,
             })
 
     async def _run(self, original: BackgroundTaskHandle) -> None:
@@ -157,7 +158,11 @@ class BackgroundTaskRegistry:
                 handle = self._finish(handle, "reconcile_required" if handle.external_effect_pending else "cancelled", "Session 删除已关闭后台回调准入")
         except Exception as error:
             if acquired:
-                handle = self._finish(handle, "reconcile_required" if handle.external_effect_pending else "failed", f"{type(error).__name__}: {error}")
+                detail = failure_detail(
+                    error, stage="background-task-execution",
+                    label=f"后台任务失败 session_id={handle.session_id}, thread_id={handle.thread_id}, task_id={handle.task_id}",
+                )
+                handle = self._finish(handle, "reconcile_required" if handle.external_effect_pending else "failed", detail)
             raise
 
     def _assert_generation(self, handle: BackgroundTaskHandle) -> None:

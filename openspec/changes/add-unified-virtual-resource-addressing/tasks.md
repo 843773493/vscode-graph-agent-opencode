@@ -1251,3 +1251,9 @@
 - 依据上一片完整HEAD复现与原生产合同，迁齐`test_federation`两项过时预期：提交后的精确GatewayRuntimeConsumerApplyError须保原original_error／直接cause、无待恢复补偿及remote-projection／registry-batch两个结算；revision、已提交snapshot、SQLite、路由及runtime未关闭等原断言保持。健康投影核精确公开失败事实，并核原始异常／actual UUID仍在诊断及完整DTO不含私钥路径；状态、身份与远端连接字段原断言保持。生产代码未修改。
 - 同一八文件回归221 passed／8.81秒；Ruff／compileall通过，完整HEAD归档Pyright8→7按最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST确认只改原两项测试及必要import，原27个顶层符号集合保持；1712行旧聚合测试与根单测46文件的结构债务保留既有职责下沉方向，不为本片添加包装或目录。原始命令、指纹、输出、退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-057.json`。
 - 多工作区design D9将“16f时生命周期未实施”明确为历史基线，指向已完成第10节及仍未勾的4.3／8.2总验收。此片不代新真实网络／Web／Windows／完整生命周期或独审，2.2／7.2总门仍未勾；团队协作和MCP显式持有继续延期。
+
+### 2026-10-29 后台任务失败说明的持久化与资源响应（2.2／7.2 部分收口）
+
+- registry 的原异常失败写口复用 `failure_detail`，控制库与普通资源响应只保留 Session／Thread／任务身份、执行阶段、原异常类别和适用错误码；原异常实例与全文留诊断，日志 sink 失败也不阻止原结算。原 failed／reconcile_required、checkpoint、外部效果标志、lease、fencing 与裸 raise 保持，无新 owner、存储或恢复链；完成观察提示不再声称原始错误已持久化。
+- 旧实现经真实 Session 创建与 registry 执行，确证原生位置进入 SQLite 的 status_note。最终新增12项、相关回归49项通过，覆盖 POSIX／盘符／UNC位置文本、I/O／运行时／SQLite异常、两种副作用分类、sink故障、同进程冷开不重放、未知效果保留与显式对账、真实资源 API 序列化及跨工作区404。Session／Thread／任务关键状态由产品入口生成，handler和未创建资源的Terminal／Browser清单是明确外部替身；HTTP为ASGI，同进程冷开不冒充独立后端重启，三类位置文本不代三平台真实文件故障。
+- Ruff、Pyright（0诊断）、compileall与strict通过。首次候选12项止于未启动的辅助服务连接错误，补齐清单替身后通过；额外真实MCP授权回归在120秒整组及60秒单项保护下未完成，保留原始输出，未定位归因，不计通过或扩大本片修复。作者AST检查、指纹、准确命令及实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-061.json`。未新验完整Gateway／Web、Windows、独立Backend重启或独审；2.2／7.2总门及用户延期项保持未完成。
