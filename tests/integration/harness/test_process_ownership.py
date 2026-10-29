@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from io import StringIO
 from pathlib import Path
 from typing import Literal, TextIO
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import pytest
@@ -195,7 +196,7 @@ def test_auxiliary_frontend_serves_explicit_loopback_host(
     )["workspace_id"]
     host, port = frontend_loopback_address
     # 使用真实静态入口与完整fixture工作区；不启动Browser/Terminal业务后端。
-    process, _logs = spawn_logged_process(
+    process, logs = spawn_logged_process(
         [node, str(root / "src/workspace-services" / resource / "client/server.js"),
          "--host", host, "--port", str(port), "--backend-url", "auto",
          "--workspace-root", str(workspace), "--workspace-id", workspace_id,
@@ -219,6 +220,27 @@ def test_auxiliary_frontend_serves_explicit_loopback_host(
     with urlopen(f"{base_url}/", timeout=1) as response:
         assert response.status == 200
         assert b"<html" in response.read()
+    for missing in (
+        "/missing-attach-resource.js",
+        "/protocol/generated/missing-attach-resource.js",
+        "/@bufbuild/protobuf/missing-attach-resource.js",
+    ):
+        log_offset = logs[1].stat().st_size
+        with pytest.raises(HTTPError) as failed:
+            urlopen(f"{base_url}{missing}", timeout=1)
+        with failed.value as response:
+            assert response.code == 404
+            body = response.read().decode("utf-8")
+        assert body == "静态资源请求失败: stage=static_asset, error=Error, code=ENOENT"
+        assert str(root) not in body and str(workspace) not in body
+        with logs[1].open("rb") as diagnostic_log:
+            diagnostic_log.seek(log_offset)
+            diagnostics = diagnostic_log.read().decode("utf-8")
+        assert "ENOENT" in diagnostics and str(root) in diagnostics
+        assert "missing-attach-resource.js" in diagnostics
+        with urlopen(f"{base_url}/", timeout=1) as response:
+            assert response.status == 200
+            assert b"<html" in response.read()
     assert process.poll() is None
 
 

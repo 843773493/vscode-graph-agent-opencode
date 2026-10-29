@@ -1258,3 +1258,9 @@
 - 旧实现经真实 Session 创建与 registry 执行，确证原生位置进入 SQLite 的 status_note。最终新增12项、相关回归49项通过，覆盖 POSIX／盘符／UNC位置文本、I/O／运行时／SQLite异常、两种副作用分类、sink故障、同进程冷开不重放、未知效果保留与显式对账、真实资源 API 序列化及跨工作区404。Session／Thread／任务关键状态由产品入口生成，handler和未创建资源的Terminal／Browser清单是明确外部替身；HTTP为ASGI，同进程冷开不冒充独立后端重启，三类位置文本不代三平台真实文件故障。
 - Ruff、Pyright（0诊断）、compileall与strict通过。首次候选12项止于未启动的辅助服务连接错误，补齐清单替身后通过；额外真实MCP授权回归在120秒整组及60秒单项保护下未完成，保留原始输出，未定位归因，不计通过或扩大本片修复。作者AST检查、指纹、准确命令及实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-061.json`。未新验完整Gateway／Web、Windows、独立Backend重启或独审；2.2／7.2总门及用户延期项保持未完成。
 - 同日后续按原正式矩阵600秒预算补齐MCP调用方：等待／硬重启恢复6项、准入／原300秒期限4项均通过，未改产品或测试源码；前述短预算exit124原件保持，不能与通过结果混记。准确命令、源码指纹、raw、退出码及适用范围见 `out/tests/temp/uri-global-closure/artifacts/verification-062.json`；仅补本片真实调用方回归，不代全局路径门、Web／Windows或独审。
+
+### 2026-10-29 attach 静态资源失败响应的安装位置边界（2.2／7.2 部分收口）
+
+- Browser／Terminal attach 静态服务原来直接把文件读取异常正文返回HTTP，真实缺失文件会带出安装目录。原失败出口现在使用已有运行日志owner记录完整异常，普通404只发布阶段、异常类别和系统错误码；静态寻址、文件读取、工作区身份及成功响应保持，不新增管理例外或第二条资源读取链。
+- 旧生产在两个服务×IPv4／IPv6的4项场景全部复现。修复后相关36项通过；其中4项实际启动Node静态服务，逐次核对本地页面资源、生成协议模块和依赖模块缺失的404与该次完整诊断，并在同一进程继续读取正常首页。健康、配置、权威工作区身份、监听地址和进程释放沿原装具核验；本片未启动PTY／Chromium或完整Gateway交互，不作为Windows实机验收。
+- Ruff、JS语法检查、compileall、Web真实类型检查及构建通过。完整HEAD归档Pyright2→2，按最窄AST owner／规则／完整消息确认未增加诊断，原两项为未改动函数的Gateway／Backend联合类型，不扩修。严格OpenSpec与源码指纹、准确命令、raw、退出码及作者结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-063.json`；2.2／7.2全局门保持未勾，延期项保持TODO。

@@ -3,7 +3,10 @@ import path from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "../server/workspaceIdentity.js";
+
+const logger = createRuntimeLogger("terminal", "terminal.frontend");
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8013;
@@ -208,11 +211,10 @@ async function main() {
       response.writeHead(200, { "content-type": contentType(filePath) });
       response.end(body);
     } catch (error) {
-      send(
-        response,
-        404,
-        error instanceof Error ? error.message : String(error),
-      );
+      // 安装目录只留在原始服务诊断中，普通资源响应发布可核验的失败事实。
+      logger.error("[terminal-frontend] 静态资源请求失败", error);
+      send(response, 404,
+        `静态资源请求失败: stage=static_asset, error=${error?.name || "unknown"}, code=${error?.code || "unknown"}`);
     }
   });
 
