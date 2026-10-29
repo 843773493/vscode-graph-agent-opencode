@@ -10,11 +10,81 @@ from app.domain.itemized.hashing import (
     payload_content_length,
     sha256_jcs,
 )
-from app.domain.itemized.identity.refs import ref_identity
+from app.domain.itemized.identity.refs import ContextRef, ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
+from app.services.mapping.itemized.carrier_dedup import (
+    superseded_canonical_message_item_ids,
+)
+
+
+def committed_context_refs(
+    items: tuple[CanonicalItemRecord, ...],
+    *,
+    session_id: str,
+    thread_id: str,
+) -> tuple[ContextRef, ...]:
+    """将 Saver 已提交的有序 item 投影为 canonical refs，不读取存储。"""
+    replaced = superseded_canonical_message_item_ids(items)
+    selected = tuple(item for item in items if item.item_id not in replaced)
+    by_message_id: dict[str, CanonicalItemRecord] = {}
+    for item in selected:
+        identity = item.projection_identity
+        message_id = identity.projection_message_id if identity is not None else None
+        if message_id is None:
+            continue
+        if message_id in by_message_id:
+            raise RuntimeError(f"canonical message selection 版本歧义: {message_id}")
+        by_message_id[message_id] = item
+    superseded_message_ids: set[str] = set()
+    for item in selected:
+        superseded = next(
+            (
+                relation.target_id
+                for relation in item.provenance_relations
+                if relation.relation == "replaces"
+                and relation.target_kind == "projection_message"
+            ),
+            None,
+        )
+        if superseded is None:
+            continue
+        if not isinstance(superseded, str) or not superseded:
+            raise RuntimeError(
+                f"canonical item typed replaces relation 非法: {item.item_id}"
+            )
+        previous = by_message_id.get(superseded)
+        if previous is None:
+            continue
+        if previous.turn_id != item.turn_id:
+            raise RuntimeError(
+                "canonical assistant supersedes 跨 Turn: "
+                f"{previous.item_id}->{item.item_id}"
+            )
+        if previous.item_sequence >= item.item_sequence:
+            raise RuntimeError(
+                "canonical assistant supersedes 顺序非法: "
+                f"{previous.item_id}->{item.item_id}"
+            )
+        if superseded in superseded_message_ids:
+            raise RuntimeError(f"canonical assistant 被多个消息替代: {superseded}")
+        superseded_message_ids.add(superseded)
+    return tuple(
+        ContextRef.canonical_item(
+            item,
+            session_id=session_id,
+            thread_id=thread_id,
+        )
+        for item in selected
+        if (
+            item.projection_identity.projection_message_id
+            if item.projection_identity is not None
+            else None
+        )
+        not in superseded_message_ids
+    )
 
 
 def validate_projection_selection(
@@ -93,6 +163,7 @@ def resolve_selected_request_body(
 
 
 __all__ = [
+    "committed_context_refs",
     "resolve_selected_item",
     "resolve_selected_request_body",
     "validate_projection_selection",

@@ -22,7 +22,6 @@ from app.core.execution_admission_context import current_execution_admission
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import ControlOutcome
-from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
@@ -43,10 +42,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-from app.services.mapping.itemized.carrier_dedup import (
-    superseded_canonical_message_item_ids,
-    superseded_item_ids,
-)
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 if TYPE_CHECKING:
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -413,74 +409,6 @@ class RolloutCheckpointQueriesMixin:
         ).fetchall()
         # backing locator 可以保留镜像，但不能把不属于可见 membership 的声明补入执行 selection。
         return list(dict.fromkeys(sequence for item_id, sequence in rows if item_id in selected))
-
-    def committed_context_refs(
-        self,
-        snapshot: RolloutReadSnapshot,
-        *,
-        items: tuple[CanonicalItemRecord, ...],
-    ) -> tuple[ContextRef, ...]:
-        """从已提交 item 生成 Saver-owned canonical refs。"""
-        replaced = superseded_canonical_message_item_ids(items)
-        selected = tuple(item for item in items if item.item_id not in replaced)
-        by_message_id: dict[str, CanonicalItemRecord] = {}
-        for item in selected:
-            identity = item.projection_identity
-            message_id = identity.projection_message_id if identity is not None else None
-            if message_id is None:
-                continue
-            if message_id in by_message_id:
-                raise RuntimeError(f"canonical message selection 版本歧义: {message_id}")
-            by_message_id[message_id] = item
-        superseded_message_ids: set[str] = set()
-        for item in selected:
-            superseded = next(
-                (
-                    relation.target_id
-                    for relation in item.provenance_relations
-                    if relation.relation == "replaces"
-                    and relation.target_kind == "projection_message"
-                ),
-                None,
-            )
-            if superseded is None:
-                continue
-            if not isinstance(superseded, str) or not superseded:
-                raise RuntimeError(
-                    f"canonical item typed replaces relation 非法: {item.item_id}"
-                )
-            previous = by_message_id.get(superseded)
-            if previous is None:
-                continue
-            if previous.turn_id != item.turn_id:
-                raise RuntimeError(
-                    "canonical assistant supersedes 跨 Turn: "
-                    f"{previous.item_id}->{item.item_id}"
-                )
-            if previous.item_sequence >= item.item_sequence:
-                raise RuntimeError(
-                    "canonical assistant supersedes 顺序非法: "
-                    f"{previous.item_id}->{item.item_id}"
-                )
-            if superseded in superseded_message_ids:
-                raise RuntimeError(f"canonical assistant 被多个消息替代: {superseded}")
-            superseded_message_ids.add(superseded)
-        session_id = snapshot.session_id
-        thread_id = snapshot.thread_id
-        return tuple(
-            ContextRef.canonical_item(
-                item,
-                session_id=session_id,
-                thread_id=thread_id,
-            )
-            for item in selected
-            if (
-                item.projection_identity.projection_message_id
-                if item.projection_identity is not None
-                else None
-            )
-            not in superseded_message_ids
-        )
 
     def list_checkpoints(
         self,

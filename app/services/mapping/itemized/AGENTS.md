@@ -4,7 +4,7 @@
 
 ```text
 itemized/
-├── selection.py                 校验选择并解析选中的canonical item/request正文
+├── selection.py                 已提交item到canonical ref、选择校验与选中正文解析
 ├── projection.py                生成可审计的projection evidence
 ├── history.py                   从selection plan投影历史item
 ├── prefix_frames.py             投影canonical前缀与封存前缀

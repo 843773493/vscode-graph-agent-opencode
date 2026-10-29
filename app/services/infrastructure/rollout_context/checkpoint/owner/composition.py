@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
+from app.services.mapping.itemized.selection import committed_context_refs
 
 
 def _manifest_string(value: object, *, field: str) -> str:
@@ -188,9 +189,8 @@ class ContextPlanCompositionMixin:
         excluded_item_ids = superseded_item_ids(committed_items)
         committed_refs = tuple(
             ref
-            for ref in self._storage.checkpoints.committed_context_refs(
-                snapshot,
-                items=committed_items,
+            for ref in committed_context_refs(
+                committed_items, session_id=session_id, thread_id=thread_id,
             )
             if ref.ref_id not in excluded_item_ids
         )
