@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from app.services.business.browser_resources.operations import BrowserOperations
+from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources import recovery
 from app.services.business.workspace_resources.owner import ResourceConflict
 from tests.support.resource_owners.browser import (
@@ -42,7 +45,7 @@ def deadlines(monkeypatch: pytest.MonkeyPatch) -> list[asyncio.Timeout]:
     return contexts
 
 
-@pytest.mark.parametrize("phase", ["listing", "prepare_lock", "resource_lock"])
+@pytest.mark.parametrize("phase", ["listing", "concurrent_listing", "resource_lock"])
 async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_waiter(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, deadlines: list[asyncio.Timeout],
     monkeypatch: pytest.MonkeyPatch, phase: str,
@@ -63,10 +66,11 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
 
     monkeypatch.setattr(bundle.transport, "list_resources", blocked_listing)
     before = owner._store.get(rid)
+    assert before is not None
     ledger = (bundle.root / ".boxteam/resources.json").read_bytes()
     first = None
     lock = owner._resource_lock(rid)
-    if phase == "prepare_lock":
+    if phase == "concurrent_listing":
         first = asyncio.create_task(owner.get_resource(rid))
         await asyncio.wait_for(entered.wait(), 2)
     elif phase == "resource_lock":
@@ -83,11 +87,12 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
         deadlines[-1].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(TimeoutError, match="冷恢复等待超过 30 秒"):
             await asyncio.wait_for(waiting, 2)
-        assert calls == 1
+        assert calls == (2 if phase == "concurrent_listing" else 1)
         if phase == "resource_lock":
             assert lock.locked()
             assert owner._recovery._pending == {rid: before.owner_revision + 1}
-            assert owner._store.get(rid).reconciliation_status == "verified"
+            stored = owner._store.get(rid)
+            assert stored is not None and stored.reconciliation_status == "verified"
         else:
             assert owner._store.get(rid) == before
             assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
@@ -129,9 +134,9 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
         ) as operation:
             with pytest.raises(ConnectionError):
                 if isinstance(bundle, TerminalOwnerFixture):
-                    await operation.write_terminal(terminal_id=rid, data="pending")
+                    await cast(TerminalOperations, operation).write_terminal(terminal_id=rid, data="pending")
                 else:
-                    await operation.perform(rid, "read")
+                    await cast(BrowserOperations, operation).perform(rid, "read")
     original_lease, = bundle.leases.leases_for_resource(rid)
     assert original_lease.status == "reconcile_required"
     owner = bundle.restart()
@@ -171,8 +176,9 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
         with pytest.raises(TimeoutError, match="未确认外部操作停止"):
             await asyncio.wait_for(waiting, 2)
         assert owner._recovery._pending == {rid: 2}
-        assert owner._store.get(rid).reconciliation_status == "unknown"
-        assert owner._store.get(healthy).reconciliation_status == "verified"
+        waiting_record, healthy_record = owner._store.get(rid), owner._store.get(healthy)
+        assert waiting_record is not None and waiting_record.reconciliation_status == "unknown"
+        assert healthy_record is not None and healthy_record.reconciliation_status == "verified"
         assert bundle.leases.leases_for_resource(rid)[0].lease_id == original_lease.lease_id
         assert bundle.leases.leases_for_resource(rid)[0].status == "reconcile_required"
         assert all(not lock.locked() for lock in owner._resource_locks.values())
@@ -186,7 +192,8 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
     await owner.recover()
     assert owner._recovery._pending == {}
     assert revisions == [(rid, 2), (healthy, 2), (rid, 2)]
-    assert owner._store.get(rid).reconciliation_status == "unknown"
+    waiting_record = owner._store.get(rid)
+    assert waiting_record is not None and waiting_record.reconciliation_status == "unknown"
     assert bundle.leases.leases_for_resource(rid)[0].lease_id == original_lease.lease_id
     assert bundle.leases.leases_for_resource(rid)[0].status == "reconcile_required"
     assert (await owner.get_resource(healthy))["owner_revision"] == 2
@@ -210,6 +217,72 @@ async def test_transport_timeout_is_preserved_without_becoming_a_budget_expiry(
     assert caught.value is failure
     if deadlines:
         assert not deadlines[-1].expired()
+
+
+@pytest.mark.parametrize("outcome", ["receipt", "cancel", "error"])
+async def test_slow_initial_listing_does_not_block_peer_or_replace_its_frozen_versions(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    resources = [await bundle.create() for _ in range(2)]
+    rid, peer = (str(resource["resource_id"]) for resource in resources)
+    owner = bundle.restart()
+    entered, release = asyncio.Event(), asyncio.Event()
+    listing, sync = bundle.transport.list_resources, bundle.transport.sync_owner_revision
+    revisions: list[tuple[str, int]] = []
+    failure = ConnectionError("首次清单回执丢失")
+
+    async def receiving() -> list[dict[str, object]]:
+        snapshot = await listing()
+        task = asyncio.current_task()
+        assert task is not None
+        if task.get_name() == "slow-cold-listing":
+            entered.set()
+            await release.wait()
+            if outcome == "error":
+                raise failure
+        return snapshot
+
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+        revisions.append((resource_id, revision))
+        await sync(resource_id, revision, for_stop=for_stop)
+
+    monkeypatch.setattr(bundle.transport, "list_resources", receiving)
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", syncing)
+    reading = asyncio.create_task(owner.get_resource(rid), name="slow-cold-listing")
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        healthy = await asyncio.wait_for(owner.get_resource(peer), 1)
+        assert not reading.done()
+        assert healthy["resource_id"] == peer
+        assert healthy["owner_revision"] == 2
+        assert healthy["reconciliation_status"] == "verified"
+        assert owner._recovery._pending == {rid: 2}
+        peer_record = owner._store.get(peer)
+        if outcome == "cancel":
+            reading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reading
+        else:
+            release.set()
+            if outcome == "error":
+                with pytest.raises(ConnectionError) as caught:
+                    await reading
+                assert caught.value is failure
+            else:
+                result = await reading
+                assert result["owner_revision"] == 2
+        assert owner._store.get(peer) == peer_record
+        assert (await owner.get_resource(rid))["owner_revision"] == 2
+        assert revisions == [(peer, 2), (rid, 2)]
+        assert owner._recovery._pending == {}
+        assert bundle.transport.creates == 2 and not bundle.transport.deleted
+        assert not bundle.leases.leases_for_resource(rid)
+        assert not bundle.leases.leases_for_resource(peer)
+    finally:
+        release.set()
+        reading.cancel()
+        await asyncio.gather(reading, return_exceptions=True)
 
 
 @pytest.mark.parametrize("action", ["stop", "delete"])
