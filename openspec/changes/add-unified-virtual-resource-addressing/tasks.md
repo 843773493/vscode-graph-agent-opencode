@@ -1500,3 +1500,10 @@
 - 原生产下新增7项Node反例全部失败；真实HTTP6场景2 passed／4 failed，其中3项确认原生日志位置进入普通回执，另一项是新测试误认为初始化不会写空状态文件。源码确认Manager.init原本就会persist，改为核拒绝前后原字节不变，未改产品初始化或放宽资源断言。修复后98项Node／原调用方回归及6项真实HTTP/PTY全部通过，后者pytest35.42秒。
 - 真实入口核两种停止结果×两种日志、原PTY父子及worker身份、unknown与原记录、正式failed回执及原管理kill重试；cwd场景核相对／绝对缺失、普通文件、NUL的精确not_created回执、零PTY与原状态字节，故障解除后同一intent创建并停止真实PTY。关键状态由产品入口生成，故障边界仅就绪交付／信号和原日志writer的真实ENOTDIR；不手填资源状态。
 - Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过。作者AST核对原成功路径、停止执行、其它方法和旧Node场景保持；只新增一个文件私有诊断函数，产品净增9行至841行，既有大文件组织风险保留，无新源码文件／目录／依赖，不代独审。准确命令、源码指纹、raw、退出码及结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-113.json`。正式集成保留原60秒矩阵、跨worktree锁及进程外4GiB／两CPU保护；异步退出回调、readProcessStat、未交付PID的native阻塞、Gateway/Web、Python业务owner、Backend重启和Windows未由本片验收。2.2／7.2总门继续未勾，前端及其OpenSpec继续等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
+
+### 2026-10-29 Terminal 退出结算与诊断次错（2.2／7.2部分收口）
+
+- 原Worker诊断在停止进程树之前写入，writer次错会跳过停止；原退出失败回调的日志再次失败又会中断广播及保存。现复用原私有诊断函数并迁齐正名为`recordTerminalFailure`，原进程树停止仍先尝试，日志故障在广播和保存结算后进入既有致命处理器，保留退出码1。停止、广播、存储及各诊断再次失败均保留原异常和顺序；日志正常继续原后台处理合同，不新增错误队列、writer或恢复链。
+- 首轮原生产的2项网络检查均失败，分别暴露新测试过早读取异步状态，以及错误地禁止用户命令参数中的原生路径；两者不计产品缺陷。改为等待原保存并保留用户原输入，忽略SIGHUP以排除Worker挂断替代停止证明，再由只读事件观察器冻结原致命处理器开始前的文件。最终原生产1 passed／1 failed，明确看到致命处理前仍为running；修复后2项真实HTTP/Node/PTY通过，pytest9.56秒。父子均忽略SIGTERM和SIGHUP，独立核对三份原进程身份及停止、原退出记录、原始诊断和冷Manager读取，不代填产品状态。
+- 106项Node／原调用方回归全部通过；交付审查新增停止信号与日志双错的定向1项也通过，合计107项，所有信号在系统调用前拒绝，不向OS发信号。原6项启动HTTP/PTY场景补验全部通过（pytest35.24秒）。退出回调单测覆盖保存等待、正常／失败日志、存储再次失败及广播失败的完整原因身份与顺序，不以替身停止证明替代真实进程验收。
+- Node语法、Ruff／compileall、单文件Pyright零诊断、diff及本change strict通过。作者AST核对仅退出注册回调和Worker错误分支改变，原启动、输出回调、正常退出尾段、停止调用身份及旧Node场景保持；产品净增21行至862行，既有大文件风险保留，未增产品文件／目录／依赖，不代独审。准确命令、指纹、raw、退出码与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-114.json`。测试串行、原集成锁与进程外4GiB／两CPU保护保持；未知停止接管、其余事件／生命周期、readProcessStat、Gateway/Web、Python业务owner及Windows未由本片验收。2.2／7.2总门继续未勾，前端及其OpenSpec、其他agent独有改动／暂存和原Debug服务保持。

@@ -18,7 +18,7 @@ import {
 
 const logger = createRuntimeLogger("terminal", "terminal.terminalSession");
 
-function recordStartupFailure(error, ...diagnostics) {
+function recordTerminalFailure(error, ...diagnostics) {
   try {
     logger.error(...diagnostics);
   } catch (diagnosticError) {
@@ -42,14 +42,14 @@ export async function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   try {
     directoryStat = await stat(resolved);
   } catch (error) {
-    const cause = recordStartupFailure(error, "[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
+    const cause = recordTerminalFailure(error, "[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
     const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
       ? "终端工作目录不存在或不是目录"
       : "终端工作目录检查失败";
     throw new Error(message, { cause });
   }
   if (!directoryStat.isDirectory()) {
-    throw recordStartupFailure(new Error("终端工作目录不存在或不是目录"),
+    throw recordTerminalFailure(new Error("终端工作目录不存在或不是目录"),
       "[terminal-session] 终端工作目录不是目录", { cwd: resolved });
   }
   return resolved;
@@ -231,21 +231,21 @@ export class TerminalSession {
       this.touch();
       void this.manager.persist();
     });
-    isolatedPty.onExit((event) => {
-      void this.handlePtyExit(event).catch((error) => {
-        this.status = "exited";
-        this.endedAt = nowIso();
-        this.ptyProcess = null;
-        this.releaseReason = "pty_exit_cleanup_failed";
-        if (this.lastCommandStatus === "running") {
-          this.lastCommandStatus = "exited";
-          this.lastCommandCompletedAt = this.endedAt;
-        }
-        this.touch();
-        logger.error(
-          `[terminal-session] PTY 退出清理失败: terminal_id=${this.id}`,
-          error,
-        );
+    isolatedPty.onExit((event) => this.handlePtyExit(event).catch(async (error) => {
+      this.status = "exited";
+      this.endedAt = nowIso();
+      this.ptyProcess = null;
+      this.releaseReason = "pty_exit_cleanup_failed";
+      if (this.lastCommandStatus === "running") {
+        this.lastCommandStatus = "exited";
+        this.lastCommandCompletedAt = this.endedAt;
+      }
+      this.touch();
+      const failure = recordTerminalFailure(error,
+        `[terminal-session] PTY 退出清理失败: terminal_id=${this.id}`,
+        error,
+      );
+      try {
         this.broadcast({
           type: "exit",
           terminalId: this.id,
@@ -254,14 +254,24 @@ export class TerminalSession {
           error: this.releaseReason,
           timestamp: this.endedAt,
         });
-        void this.manager.persist().catch((persistError) => {
-          logger.error(
-            `[terminal-session] PTY 退出失败状态持久化失败: terminal_id=${this.id}`,
-            persistError,
-          );
-        });
-      });
-    });
+      } catch (broadcastError) {
+        throw new AggregateError([failure, broadcastError],
+          `终端退出失败状态广播失败: terminal_id=${this.id}`, { cause: error });
+      }
+      try {
+        await this.manager.persist();
+      } catch (persistError) {
+        const persistFailure = recordTerminalFailure(persistError,
+          `[terminal-session] PTY 退出失败状态持久化失败: terminal_id=${this.id}`,
+          persistError,
+        );
+        if (failure !== error || persistFailure !== persistError) {
+          throw new AggregateError([failure, persistFailure],
+            `终端退出状态持久化及诊断失败: terminal_id=${this.id}`, { cause: error });
+        }
+      }
+      if (failure !== error) throw failure;
+    }));
     let ready;
     let resolvedCwd = null;
     try {
@@ -281,7 +291,7 @@ export class TerminalSession {
         },
       });
     } catch (error) {
-      const cause = recordStartupFailure(error,
+      const cause = recordTerminalFailure(error,
         `[terminal-session] 终端 PTY 启动失败: terminal_id=${this.id}`,
         { cwd: resolvedCwd ?? this.cwd, command: this.command },
         error,
@@ -327,8 +337,10 @@ export class TerminalSession {
     this.endedAt = nowIso();
     if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
       this.markReconciliationStatus("unknown");
+      let diagnosticFailure = null;
       if (error) {
-        logger.error(`[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
+        const failure = recordTerminalFailure(error, `[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
+        if (failure !== error) diagnosticFailure = failure;
       }
       this.releaseReason = error
         ? "pty_worker_error"
@@ -336,17 +348,26 @@ export class TerminalSession {
           ? "pty_worker_exit"
           : `pty_cleanup_${cleanupResult}`;
       if (wasRunning && this.osPid) {
-        const managerCleanupResult = await terminateTerminalProcessTree({
-          pid: this.osPid,
-          processSessionId: this.processSessionId,
-          processStartTime: this.processStartTime,
-        });
-        if (managerCleanupResult === "still_running") {
-          throw new Error(
-            `PTY Worker 退出后进程树仍在运行: terminal_id=${this.id}, pid=${this.osPid}`,
-          );
+        try {
+          const managerCleanupResult = await terminateTerminalProcessTree({
+            pid: this.osPid,
+            processSessionId: this.processSessionId,
+            processStartTime: this.processStartTime,
+          });
+          if (managerCleanupResult === "still_running") {
+            throw new Error(
+              `PTY Worker 退出后进程树仍在运行: terminal_id=${this.id}, pid=${this.osPid}`,
+            );
+          }
+        } catch (cleanupError) {
+          if (diagnosticFailure) {
+            throw new AggregateError([diagnosticFailure, cleanupError],
+              `终端退出清理及诊断失败: terminal_id=${this.id}`, { cause: diagnosticFailure });
+          }
+          throw cleanupError;
         }
       }
+      if (diagnosticFailure) throw diagnosticFailure;
     }
     this.ptyProcess = null;
     if (this.lastCommandStatus === "running") {
@@ -659,7 +680,7 @@ export class TerminalSession {
       }
     } catch (cleanupError) {
       const failure = new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
-      throw recordStartupFailure(failure, `[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
+      throw recordTerminalFailure(failure, `[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
     }
     if (stopped && this.status !== "terminated") {
       this.status = "terminated";

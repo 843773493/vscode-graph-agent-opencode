@@ -318,6 +318,145 @@ test("退出清理失败只广播阶段，原始异常只留在诊断", async (t
   }
 });
 
+test("Worker诊断次错保留原原因与未知身份，交由原退出回调结算", async (t) => {
+  const session = completedSession(t);
+  const original = new Error(`EIO: ${session.cwd}/private-worker`);
+  const diagnosticError = new Error(`日志失败: ${session.cwd}/private-log`);
+  const worker = {};
+  session.ptyProcess = worker;
+  t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  await assert.rejects(session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
+    assert(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [original, diagnosticError]);
+    assert.equal(error.cause, original);
+    return true;
+  });
+  assert.equal(session.status, "exited");
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(session.releaseReason, "pty_worker_error");
+  assert.equal(session.ptyProcess, worker);
+});
+
+test("Worker诊断和原停止信号同时失败时保留全部原因", { skip: process.platform !== "linux" }, async (t) => {
+  const session = completedSession(t, { os_pid: process.pid });
+  const original = new Error("原Worker失败");
+  const diagnosticError = new Error("原Worker诊断失败");
+  const cleanupError = Object.assign(new Error("原停止信号失败"), { code: "EPERM" });
+  t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  // 当前进程只提供真实可读身份；所有信号均在系统调用前拒绝，不向OS发送任何信号。
+  const signals = t.mock.method(process, "kill", () => { throw cleanupError; });
+  await assert.rejects(session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
+    assert.equal(error.message, `终端退出清理及诊断失败: terminal_id=${session.id}`);
+    const [diagnosticFailure, secondary] = error.errors;
+    assert.equal(error.cause, diagnosticFailure);
+    assert.deepEqual(diagnosticFailure.errors, [original, diagnosticError]);
+    assert.equal(diagnosticFailure.cause, original);
+    assert.equal(secondary, cleanupError);
+    return true;
+  });
+  assert.equal(signals.mock.callCount(), 1);
+  assert.deepEqual(signals.mock.calls[0].arguments, [process.pid, "SIGTERM"]);
+  assert.equal(session.reconciliationStatus, "unknown");
+});
+
+async function startedExitCallback(t, session) {
+  let onExit;
+  t.mock.method(IsolatedPtyProcess.prototype, "onExit", (handler) => { onExit = handler; });
+  t.mock.method(IsolatedPtyProcess.prototype, "start", async () => ({ pid: null }));
+  t.after(() => session.dispose());
+  await session.start();
+  assert.equal(typeof onExit, "function");
+  return onExit;
+}
+
+for (const [failPrimaryLog, failPersist, failPersistLog] of [
+  [false, false, false], [true, false, false], [false, true, false],
+  [true, true, false], [false, true, true], [true, true, true],
+]) {
+  test(`退出失败结算等待发布：日志${failPrimaryLog}／存储${failPersist}／存储诊断${failPersistLog}`, async (t) => {
+    const session = completedSession(t, { last_command_status: "running" });
+    const original = new Error(`原退出失败: ${session.cwd}/private-worker`);
+    const persistError = new Error(`原存储失败: ${session.cwd}/private-state`);
+    const primaryLogError = new Error(`原退出诊断失败: ${session.cwd}/private-log`);
+    const persistLogError = new Error(`原存储诊断失败: ${session.cwd}/private-log`);
+    const onExit = await startedExitCallback(t, session);
+    t.mock.method(session, "handlePtyExit", async () => { throw original; });
+    const diagnostics = t.mock.method(process.stderr, "write", (chunk) => {
+      if (chunk.includes("退出清理失败") && failPrimaryLog) throw primaryLogError;
+      if (chunk.includes("退出失败状态持久化失败") && failPersistLog) throw persistLogError;
+    });
+    const events = [];
+    t.mock.method(session, "broadcast", (event) => events.push(event));
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    session.manager.persist = async () => {
+      entered.resolve();
+      await release.promise;
+      if (failPersist) throw persistError;
+    };
+    let finished = false;
+    const pending = Promise.allSettled([onExit({ exitCode: -1, signal: 0, workerExit: true })])
+      .then((results) => { finished = true; return results[0]; });
+    try {
+      await entered.promise;
+      assert.equal(finished, false, "状态发布完成前不能提前结算退出失败");
+      assert.equal(session.status, "exited");
+      assert.equal(session.lastCommandStatus, "exited");
+      assert.equal(session.ptyProcess, null);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].error, "pty_exit_cleanup_failed");
+      assert.equal(events[0].exitCode, -1);
+      assert.equal(JSON.stringify(events).includes(session.cwd), false);
+    } finally {
+      release.resolve();
+    }
+    const result = await pending;
+    assert.equal(diagnostics.mock.callCount(), failPersist ? 2 : 1);
+    assert(diagnostics.mock.calls[0].arguments[0].includes(inspect(original)));
+    if (!failPrimaryLog && !failPersistLog) {
+      assert.equal(result.status, "fulfilled", "原错误已有完整诊断，保持原后台处理合同");
+    } else {
+      assert.equal(result.status, "rejected");
+      const failure = result.reason;
+      assert(failure instanceof AggregateError);
+      assert.equal(failure.cause, original);
+      if (!failPersist) {
+        assert.deepEqual(failure.errors, [original, primaryLogError]);
+      } else {
+        const [primary, secondary] = failure.errors;
+        if (failPrimaryLog) {
+          assert.deepEqual(primary.errors, [original, primaryLogError]);
+          assert.equal(primary.cause, original);
+        } else assert.equal(primary, original);
+        if (failPersistLog) {
+          assert.deepEqual(secondary.errors, [persistError, persistLogError]);
+          assert.equal(secondary.cause, persistError);
+        } else assert.equal(secondary, persistError);
+      }
+    }
+  });
+}
+
+test("退出广播再次失败仍保留原退出及日志异常", async (t) => {
+  const session = completedSession(t);
+  const original = new Error("原退出失败");
+  const diagnosticError = new Error("原退出诊断失败");
+  const broadcastError = new Error("原退出广播失败");
+  const onExit = await startedExitCallback(t, session);
+  t.mock.method(session, "handlePtyExit", async () => { throw original; });
+  t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  t.mock.method(session, "broadcast", () => { throw broadcastError; });
+  await assert.rejects(onExit({ exitCode: -1, signal: 0, workerExit: true }), (error) => {
+    assert(error instanceof AggregateError);
+    assert.equal(error.cause, original);
+    const [primary, secondary] = error.errors;
+    assert.deepEqual(primary.errors, [original, diagnosticError]);
+    assert.equal(primary.cause, original);
+    assert.equal(secondary, broadcastError);
+    return true;
+  });
+});
+
 test("只有返回给模型的后台 execution 可以 claim steering", (t) => {
   const session = completedSession(t);
   const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandOutputBaselineSequence };
