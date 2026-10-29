@@ -1356,3 +1356,10 @@
 - 旧实现12项单元反例失败，ASGI控制链12项失败／12项通过，确证日志次错覆盖原回包拒绝。最终81项原生目录单测及37项文件HTTP集成通过，覆盖两操作、三种schema错误、非零状态／空data／错误request_id、正常／故障日志、原文件及SQLite不变、零目录扫描和同请求重试。POSIX／盘符／UNC文字仅证明诊断边界，不代Windows实机；HTTP为ASGI，回包由明确MockTransport注入，日志sink为本机真实ENOTDIR。
 - Ruff、compileall及strict通过；完整HEAD归档Pyright6→5，剩余按文件、最窄AST owner、规则、完整消息与表达式逐项一致，无新增。减少的一项来自本次损坏回包工厂改用明确的 `dict[str, object]`；不称类型全绿。原日志断言从私有record.args转为同一异常record的完整格式化正文，保留原始回包精确关联；最终补强后重跑81项单测与静态，产品及集成源码未变，复用37项结果。
 - 作者结构自查确认生产只改原 `_request`，其它生产方法及除本片两场景外的既有测试AST保持。单测725行、集成597行仍共用原native文件owner与装具，未新增源码文件或目录；不代独立审查。首次审计把嵌套 `respond` 误按外层测试命名断言，修正审计后复用已有类型／测试原件；手工行数已按实际统计校准，初稿保留。准确命令、前后指纹、raw／退出码、静态比较与适用范围见 `out/tests/temp/uri-global-closure/artifacts/verification-087.json`。测试串行且有进程外超时／内存保护，未新增真实网络、Backend重启、模型／fork或Web验收；2.2／7.2及用户延期项继续未勾。前端、其他agent独有改动及原Debug进程保持。
+
+### 2026-10-29 Node 调试启动失败与日志次错（2.2／7.2部分收口）
+
+- 原启动 catch 的 `logger.exception` 在日志故障时覆盖原生启动错误，跳过 failed／start_failed、manifest、claim 与进程清理。该分支改为复用 `failure_detail` 并删除局部 logger；公开 Session/Thread、启动阶段、异常类别及适用错误码，原异常保留为直接 cause，日志次错附在原异常 notes。非原生的明确协议拒绝与原结算／清理顺序保持；文本中的类别字段统一为共享出口的 `error`，不保留重复字段或第二错误链。
+- 旧生产在新增反例中3项单元、3项真实Node／ASGI HTTP失败，后者由原409变为日志故障500。最终40项启动／claim／阶段屏障／租约单元与18项HTTP集成通过，覆盖已创建Node退出核实、持久动作／claim、冷服务读取、同方案显式重试及原真实Gateway／Backend重启场景。单元通过后只补一行空行以通过Ruff，AST不变，最终集成消费最终源码。
+- Ruff、compileall与本change严格校验通过；完整旧HEAD归档与当前Pyright均7项，按文件、最窄AST owner、规则、完整消息及表达式逐项一致，无新增，不称类型全绿。作者结构自查确认只改原launch错误分支，其余方法、启动try正文及原结算AST保持；未增加源码文件或目录。原集成agents目录41个直接Python文件、错误场景文件781行的组织风险保留，不扩大本片重构。
+- 命令、源码指纹、原始输出、退出码、基线与结构证据见 `out/tests/temp/uri-global-closure/artifacts/verification-088.json`。测试串行并有进程外超时／内存保护；HTTP期间另一agent仅修改两份workbench源码，Python指纹保持。新增故障场景不代真实网络／Windows、模型、fork或Web验收，2.2／7.2及用户延期项继续未勾；前端、其他agent独有改动及原Debug服务保持。另核实子树删除abort_reason的专用业务拒绝仅由稳定身份、state／revision构造，保留原纠错信息，未凭异常字符串候选机械改写。

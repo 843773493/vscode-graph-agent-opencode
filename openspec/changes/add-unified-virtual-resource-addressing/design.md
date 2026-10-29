@@ -47,6 +47,8 @@ Gateway与Workspace的active快照解码catch在原恢复标记写入之前复�
 
 共享runtime wakeup在原派发catch内复用同一`failure_detail`，last_error保留Session/Thread、Job/execution/admission、dispatch generation和失败阶段，不复制异常正文。原异常在冻结的request/Gateway上下文内记录后原样重抛，finally恢复调用者上下文；原SQLite事务与generation CAS保持。恢复只消费原持久准入，回执写入失败不删除已接受的Job或创建第二份执行，终态重派只形成原Job回执。
 
+Node 调试启动的原生错误在原 catch 内复用 `failure_detail`，统一输出 Session/Thread、node-debug-launch 阶段、异常类别与适用系统错误码。删除局部日志出口；日志次错附到原异常而不打断 failed 状态、start_failed 动作、manifest 与 claim 结算及原进程清理。公开文本的异常类别字段统一为该原语的 `error`，不另存一份错误状态。非原生的明确启动协议拒绝沿原合同保留，冷读及显式同方案重试仍由原 owner 执行。
+
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
 **备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。

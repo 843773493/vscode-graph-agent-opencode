@@ -81,6 +81,7 @@ def native_launch_error(request: pytest.FixtureRequest) -> PermissionError:
 async def test_native_launch_error_keeps_cause_and_cold_history_without_native_path(
     debug_launch_context: DebugLaunchContext, native_launch_error: PermissionError,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    launch_log_failure: OSError | None,
 ) -> None:
     fixture = debug_launch_context
     attempts = []
@@ -104,6 +105,12 @@ async def test_native_launch_error_keeps_cause_and_cold_history_without_native_p
     assert len(attempts) == 1 and attempts[0][0][0] == "unit-node"
     assert Path(attempts[0][1]["cwd"]) == fixture.workspace.workspace_root
     assert any(record.exc_info and record.exc_info[1] is native_launch_error for record in caplog.records)
+    if launch_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in message
+        assert any(str(launch_log_failure) in note for note in native_launch_error.__notes__)
+        assert "launch-log-secret" not in message
+    else:
+        assert "diagnostic_sink_error" not in message
 
     state = await fixture.service.get_state(fixture.session_id, fixture.thread_id)
     assert state.status == "failed" and state.pid is None and state.error_message == message
@@ -125,6 +132,24 @@ async def test_native_launch_error_keeps_cause_and_cold_history_without_native_p
         assert "native-launch-secret" not in restored.model_dump_json()
     finally:
         await cold.close()
+
+
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def launch_log_failure(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> OSError | None:
+    if not request.param:
+        return None
+    failure = OSError("日志输出失败 /private/launch-log-secret")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if record.getMessage().startswith("启动 Node Inspector 失败:"):
+            raise failure
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return failure
 
 
 @pytest.mark.asyncio

@@ -454,9 +454,13 @@ async def test_handshake_receive_failure_keeps_native_cause_private_and_persists
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(process_identity.sys.platform != "linux", reason="真实 /proc 读取边界只在 Linux 验证")
-@pytest.mark.parametrize("failure", ["stat_format", "stat_fields", "empty_boot_id", "stat_permission", "missing_boot_id", "boot_id_permission"])
+@pytest.mark.parametrize(("failure", "sink_fails"), [
+    ("stat_format", False), ("stat_fields", False), ("empty_boot_id", False),
+    ("stat_permission", False), ("missing_boot_id", False), ("boot_id_permission", False),
+    ("stat_permission", True), ("missing_boot_id", True), ("boot_id_permission", True),
+])
 async def test_process_identity_rejection_keeps_failed_start_private_and_retries(
-    debug_receive_client: DebugReceiveClient, failure: str,
+    debug_receive_client: DebugReceiveClient, failure: str, sink_fails: bool,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     client, store, owner, root, reopen = debug_receive_client
@@ -464,6 +468,16 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     observed: list[Path] = []
     private = str(root / "identity-secret")
     native_error = OSError(errno.ENOENT if failure == "missing_boot_id" else errno.EACCES, "身份读取失败", private)
+    sink_error = OSError("日志输出失败 /private/launch-log-secret")
+    original_call_handlers = logging.Logger.callHandlers
+    sink_errors: list[BaseException] = []
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original_call_handlers(logger, record)
+        if sink_fails and record.getMessage().startswith("启动 Node Inspector 失败:"):
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            sink_errors.append(record.exc_info[1])
+            raise sink_error
 
     def read_identity(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
         raw = original_read(path, encoding=encoding, errors=errors)
@@ -491,6 +505,7 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     try:
         with monkeypatch.context() as patch, caplog.at_level(logging.ERROR, logger=process_identity.__name__):
             patch.setattr(Path, "read_text", read_identity)
+            patch.setattr(logging.Logger, "callHandlers", call_handlers)
             failed = await client.post("/api/v1/debug/node/start", json=payload)
     finally:
         process_identity._read_linux_boot_id.cache_clear()
@@ -501,12 +516,20 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     if failure in {"stat_permission", "missing_boot_id", "boot_id_permission"}:
         assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)
         assert str(native_error) in caplog.text
-        assert f"error_type={type(native_error).__name__}" in failed.text and f"errno={native_error.errno}" in failed.text
+        assert f"error={type(native_error).__name__}" in failed.text and f"errno={native_error.errno}" in failed.text
     else:
         assert "source=linux_proc_stat" in failed.text
         assert str(observed[0]) in caplog.text
     if failure in {"stat_format", "stat_fields"}:
         assert private in caplog.text
+    if sink_fails:
+        assert len(sink_errors) == 1
+        assert sink_errors[0].__cause__ is native_error
+        assert any(str(sink_error) in note for note in sink_errors[0].__notes__)
+        assert "diagnostic_sink_error=OSError" in failed.text
+    else:
+        assert not sink_errors and "diagnostic_sink_error" not in failed.text
+    assert "launch-log-secret" not in failed.text
 
     state = await client.get("/api/v1/debug/node", params=owner)
     assert state.status_code == 200, state.text
@@ -522,6 +545,7 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     assert [action.model_dump(mode="json") for action in manifest.actions] == data["actions"]
     for text in (state.text, manifest_bytes.decode()):
         assert str(observed[0]) not in text and "identity-secret" not in text
+        assert "launch-log-secret" not in text
     claim = store.read_launch_claim(**owner)
     assert claim is not None and claim.phase == "settled" and claim.pid is None
 
@@ -532,6 +556,7 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     assert restored["status"] == "idle" and restored["pid"] is None
     assert restored["actions"] == data["actions"] and restored["active_configuration_id"] == configuration_id
     assert str(observed[0]) not in cold.text and "identity-secret" not in cold.text
+    assert "launch-log-secret" not in cold.text
 
     retried = await client.post("/api/v1/debug/node/start", json=payload)
     assert retried.status_code == 200, retried.text
@@ -542,7 +567,8 @@ async def test_process_identity_rejection_keeps_failed_start_private_and_retries
     assert stopped.json()["data"]["status"] == "exited"
     assert [action for action in stopped.json()["data"]["actions"] if action["action"] == "start_failed"] == failures
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
-    (context.artifacts_dir / f"identity-{failure}.json").write_text(json.dumps({
+    log_mode = "log-failed" if sink_fails else "log-ok"
+    (context.artifacts_dir / f"identity-{failure}-{log_mode}.json").write_text(json.dumps({
         "failed": failed.json(), "live": state.json(), "manifest": manifest.model_dump(mode="json"),
         "cold": cold.json(), "retried": retried.json(), "stopped": stopped.json(),
     }, ensure_ascii=False, indent=2) + "\n")
