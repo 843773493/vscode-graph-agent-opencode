@@ -1,8 +1,23 @@
 {
   // 客户端 E2E 当前只实现纯 Web。其他客户端保留 disabled TODO，不能被报告为通过。
-  // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
+  // suite 默认带数据段内存上限与外部超时；POSIX 上限按进程生效，不限制多个运行组的总占用。
   "schemaVersion": 1,
   "suites": [
+    {
+      "id": "integration-itemized-legacy-migration",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 240000,
+      "dataLimitKb": 4194304,
+      "command": [
+        "uv", "run", "--no-sync", "pytest", "-q",
+        "tests/integration/backend/sessions/test_itemized_migration.py",
+        "tests/integration/backend/sessions/test_itemized_migration_integrity.py",
+        "tests/integration/backend/sessions/test_itemized_migration_semantics.py",
+        "tests/integration/backend/sessions/test_itemized_migration_failure_audit.py"
+      ]
+    },
     {"id":"integration-service-json-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/test_http_json_errors.py"]},
     {"id":"integration-browser-governor-diagnostics","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/browser/test_browser_governor_diagnostics.py"]},
     {"id":"integration-chatgpt-auth-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/test_chatgpt_auth_errors.py"]},
