@@ -48,3 +48,69 @@ for (const hasMore of [true, false]) {
     expect(urls.some((url) => url.includes("cursor="))).toBe(false);
   });
 }
+
+for (const currentWorkspace of ["active", "other", "implicit"] as const) {
+  test(`完整列表刷新按会话owner收敛：${currentWorkspace}`, async () => {
+    const workspaceId = `gw_owner_${currentWorkspace}`;
+    const otherWorkspaceId = `${workspaceId}_other`;
+    const original = sessions[20]!;
+    const replacement = sessions[0]!;
+    const otherSession: Session = {
+      ...original,
+      session_id: "ses_other_owner",
+      workspace_id: "backend-other-workspace",
+      title: "另一工作区的当前会话",
+    };
+    let respond: ((response: Response) => void) | undefined;
+    let notifyRequestStarted: () => void = () => {};
+    const requestStarted = new Promise<void>((resolve) => { notifyRequestStarted = resolve; });
+    const requests: string[] = [];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = new URL(url, "http://workspace").pathname;
+      if (path === "/api/v1/sessions") {
+        requests.push(url);
+        return await new Promise<Response>((resolve) => {
+          respond = resolve;
+          notifyRequestStarted();
+        });
+      }
+      const data = path === "/api/gateway/auth/local-credential" ? { token: "owner-test-token" }
+        : path === "/api/gateway/users/current" ? { kind: "guest", user_id: null }
+          : undefined;
+      if (data === undefined) throw new Error(`未声明请求: ${url}`);
+      return Response.json({ code: 0, message: "ok", data, request_id: "owner-request" });
+    }, { preconnect: originalFetch.preconnect });
+    let state = createSessionHookState({
+      workspaceId, currentSession: original, sessions: [original],
+      sessionsByWorkspace: new Map([[workspaceId, [original]], [otherWorkspaceId, [otherSession]]]),
+    });
+    const otherKey = sessionScopeKey(otherWorkspaceId, otherSession.session_id);
+    const otherAttachments = { count: 1, names: ["另一工作区.txt"], latestAt: null };
+    state.sessionAttachmentSummaries.set(otherKey, otherAttachments);
+    const refresh = refreshWorkspaceSessionList(49_752, {
+      workspace_id: workspaceId, backend_workspace_id: "backend-workspace", connection_kind: "local",
+    }, (update) => { state = typeof update === "function" ? update(state) : update; });
+    // 请求在途时切换查看对象，回执只能收敛其精确工作区的会话。
+    await requestStarted;
+    expect(respond).toBeDefined();
+    if (currentWorkspace === "other") {
+      state = { ...state, currentSession: otherSession, currentSessionWorkspaceId: otherWorkspaceId };
+    } else if (currentWorkspace === "active") {
+      state = { ...state, activeGatewayWorkspaceId: otherWorkspaceId, sessions: [otherSession] };
+    } else {
+      state = { ...state, currentSessionWorkspaceId: null };
+    }
+    respond!(Response.json({ code: 0, message: "ok", request_id: "owner-request",
+      data: { items: [replacement], next_cursor: null, has_more: false } }));
+    await refresh;
+    expect(requests).toHaveLength(1);
+    expect(state.currentSession).toEqual(currentWorkspace === "other" ? otherSession : replacement);
+    expect(state.currentSessionWorkspaceId).toBe(currentWorkspace === "other" ? otherWorkspaceId : workspaceId);
+    expect(state.sessionsByWorkspace.get(workspaceId)).toEqual([replacement]);
+    expect(state.sessionsByWorkspace.get(otherWorkspaceId)).toEqual([otherSession]);
+    expect(state.sessions).toEqual(currentWorkspace === "active" ? [otherSession] : [replacement]);
+    expect(state.activeGatewayWorkspaceId).toBe(currentWorkspace === "active" ? otherWorkspaceId : workspaceId);
+    expect(state.sessionAttachmentSummaries.get(otherKey)).toEqual(otherAttachments);
+  });
+}

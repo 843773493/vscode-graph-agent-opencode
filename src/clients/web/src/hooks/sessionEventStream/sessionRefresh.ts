@@ -77,8 +77,7 @@ export async function refreshWorkspaceSessionList(
       previous.sessionsByWorkspace.get(workspaceId) ?? [];
     const sessions = mergeSessionListPage(previousWorkspaceSessions, snapshot.sessions, snapshot.complete);
     const currentSessionIsInWorkspace =
-      previous.activeGatewayWorkspaceId === workspaceId
-      || previous.currentSessionWorkspaceId === workspaceId;
+      (previous.currentSessionWorkspaceId ?? previous.activeGatewayWorkspaceId) === workspaceId;
     const currentSessionId = previous.currentSession?.session_id;
     const currentSessionRemoved = Boolean(
       currentSessionIsInWorkspace
