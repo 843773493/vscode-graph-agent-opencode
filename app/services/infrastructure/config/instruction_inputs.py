@@ -7,11 +7,14 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
+from app.core.failures import failure_detail
 from app.core.resource_uri import file_uri_root, parse_resource_uri
 from app.services.infrastructure.resource_platform.sources.observed_source import (
     ObservedSourceDescriptor,
     ObservedSourceHandle,
     StableSourceReader,
+    is_source_rejection,
+    mark_source_rejection,
 )
 from configs.runtime import validate_config_payload
 
@@ -72,11 +75,11 @@ class InstructionFileInputs:
     def _path(self, uri: str, *, refresh: bool = False) -> tuple[Path, Path]:
         if refresh or uri not in self._paths:
             if self._resolve_file is None:
-                raise RuntimeError("提示词文件来源没有绑定目标文件 owner")
+                raise mark_source_rejection(RuntimeError("提示词文件来源没有绑定目标文件 owner"))
             path, canonical = self._resolve_file(uri)
             root, _ = self._resolve_file(file_uri_root(uri))
             if canonical != uri:
-                raise ValueError("提示词文件 owner 返回了不同资源 URI")
+                raise mark_source_rejection(ValueError("提示词文件 owner 返回了不同资源 URI"))
             self._paths[uri] = path, root
         return self._paths[uri]
 
@@ -122,10 +125,14 @@ class InstructionFileInputs:
                         properties["runtime_identity"]["properties"],
                     )["description"]
                 )
-                validate_config_payload(
-                    {"text": contents[uri]},
-                    schema={"properties": {"text": text_schema}},
-                )
+                try:
+                    validate_config_payload(
+                        {"text": contents[uri]},
+                        schema={"properties": {"text": text_schema}},
+                    )
+                except ValueError as error:
+                    # 唯一校验入口已将正文分离，只登记其原规则说明。
+                    raise mark_source_rejection(error)
             except Exception as error:
                 # 只记录 readiness 并原样抛出；不伪造空正文或退回 inline。
                 self._failures[uri] = error
@@ -158,9 +165,12 @@ class InstructionFileInputs:
             uri = _file_uri(values.get(file_key))
             if agent == agent_id and uri is not None and uri in self._failures:
                 error = self._failures[uri]
-                raise RuntimeError(
-                    f"instruction-source-unavailable: uri={uri}; {error}"
-                ) from error
+                reason = f"; reason={error}" if is_source_rejection(error) else ""
+                detail = failure_detail(
+                    error, stage="instruction-source-readiness",
+                    label=f"instruction-source-unavailable: uri={uri}{reason}",
+                )
+                raise RuntimeError(detail) from error
 
     def diagnostics(self, config: Mapping[str, object]) -> list[dict[str, object]]:
         return [

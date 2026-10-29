@@ -1392,3 +1392,10 @@
 - 旧生产反例16项单元失败，跨模块4失败／2通过；初稿进一步被4项底层handle冲突／越界反例否定后，将判定归入同一来源合同，保持原纠错规则。最终定向224项中223通过、1项架构检查失败；完整旧HEAD归档复现相同的配置模块域外reader引用，未放宽检查或在本片扩修。最终7项集成全部通过，覆盖真实文件变化、不可用、保留revision、producer存活与同入口恢复，原封存冷读场景保持；Gateway来源仍为明确替身，不冒充HTTP、独立Backend重启、模型／fork、Web或Windows验收。
 - Ruff、compileall与strict通过；完整旧HEAD归档与当前Pyright均4项，按文件、最窄AST owner、规则、完整消息和表达式逐项一致，无新增，不称全绿。作者结构自查确认19处原异常构造、读取、快照／通知尾段及其余生产逻辑AST保持；测试仅扩故障类别，原断言与其它场景保持。来源409行、registry787行及集成目录59个直接Python文件的既有组织风险保留，未新增源码目录，不代独立审查。
 - 准确命令、源码指纹、原始输出、退出码、类型及结构核对见 `out/tests/temp/uri-global-closure/artifacts/verification-092.json`；最终源码与相关测试／静态输入逐文件一致。测试串行且有进程外超时／内存保护；2.2／7.2和用户延期项继续未勾。前端及其OpenSpec未实施，其他agent独有改动／暂存及原Debug服务保持。
+
+### 2026-10-29 提示词文件 readiness 失败出口（2.2／7.2部分收口）
+
+- 真实文件在 resolver 返回后替换为自循环 symlink，底层 Path.resolve 的 RuntimeError 含本机位置；原 readiness 会直接将原文复制到新执行错误。R01／R02 现复用既有来源拒绝合同和 failure_detail，只公开选中 URI、准入阶段、类别及适用次错类别。两个具名绑定拒绝在原构造处登记，唯一配置校验入口的正文规则保留；未登记 RuntimeError／ValueError 即使含相同业务前缀也不发布原文。原异常实例、参数、cause、冻结配置及同入口恢复保持，不新增 helper、账本、schema 或读取链。
+- 旧生产的12项反例全部失败；候选原15项与新增12项中26通过、1项既有 watcher 失败，完整旧HEAD归档在同一断言复现，未改弱断言。另补4项明确绑定规则及日志故障测试全部通过，合计该文件30通过、1项既存失败。两项真实后端生命周期／ASGI集成均通过：HTTP创建Session和发送消息形成关键历史，真实文件循环令新Job失败且不调用模型，核普通Job／配置响应、request_id、真实ENOTDIR诊断次错、修复后新执行及sealed assembly原字节。模型复用model_stream与真实SDK；首轮集成2项在准备阶段误读尚不存在的工作区覆盖文件，改为合法最小覆盖后通过，不计首轮为产品验收。
+- Ruff、compileall通过；完整旧HEAD与最终Pyright均只有原watcher的1项可选成员访问诊断，按文件、最窄AST owner、规则、完整消息和表达式一致，无新增。作者结构自查核原读取、正文赋值、快照、监听及其它旧场景保持；原测试只增强规则断言。单测超过400行及既有根目录组织风险保留，无新增源码目录，不代独立审查。
+- 准确命令、源码指纹、原始输出、实际退出码及结构核对见 `out/tests/temp/uri-global-closure/artifacts/verification-093.json`。集成运行期间仅追加上述4项单测，受验生产及集成源码保持；不称全树未变。没有Gateway、真实网络、独立Backend重启、Windows、Web或真实Provider验收，2.2／7.2与延期项继续未勾；前端及相关OpenSpec不实施，其他agent改动／暂存和用户原Debug服务保持。

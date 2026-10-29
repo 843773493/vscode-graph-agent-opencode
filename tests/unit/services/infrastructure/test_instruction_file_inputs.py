@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,8 +122,13 @@ async def test_failed_file_is_explicit_preserves_frozen_body_and_recovers(
     assert (
         case.config.get_agent_runtime_config("default")["system_prompt"] == "已发布正文"
     )
-    with pytest.raises(RuntimeError, match="instruction-source-unavailable"):
+    with pytest.raises(RuntimeError, match="instruction-source-unavailable") as unavailable:
         case.config.require_instruction_sources_available("default")
+    if failure in {"empty", "oversize"}:
+        rule = "minLength" if failure == "empty" else "maxLength"
+        assert f"rule={rule}" in str(unavailable.value)
+    elif failure in {"missing", "invalid_utf8", "directory"}:
+        assert str(unavailable.value.__cause__) in str(unavailable.value)
     public = await case.config.get()
     diagnostic = next(
         item
@@ -280,5 +286,133 @@ async def test_failed_candidate_watch_rebind_does_not_replace_the_original_error
         with pytest.raises(RuntimeError, match="来源文件不存在"):
             await case.config.reload()
         assert case.config.get_snapshot().to_dict() == before.to_dict()
+    finally:
+        await case.config.close()
+
+
+@pytest.fixture(params=[False, True], ids=["logging", "logging-unavailable"])
+def instruction_diagnostic_sink(request, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog):
+    blocked = tmp_path / "blocked-log-parent"
+    blocked.write_text("不是目录", encoding="utf-8")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if request.param and record.name == "app.core.failures":
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return bool(request.param), blocked
+
+
+@pytest.mark.parametrize("producer", ["R01", "R02"])
+@pytest.mark.parametrize("fault", ["native-loop", "runtime", "value"])
+async def test_readiness_keeps_native_source_diagnostics_out_of_public_errors(
+    file_case: FileCase, monkeypatch: pytest.MonkeyPatch, caplog,
+    instruction_diagnostic_sink, producer: str, fault: str,
+) -> None:
+    case = file_case
+    directory = case.workspace / "prompts"
+    directory.mkdir()
+    path = directory / "prompt.txt"
+    path.write_text("已发布的原文件正文", encoding="utf-8")
+    case.select(path, producer)
+    before = case.config.get_snapshot()
+    key = "system_prompt" if producer == "R01" else "runtime_identity_description"
+    inputs = case.config._instruction_inputs
+    resolve = inputs._resolve_file
+    assert resolve is not None
+    uri = case.paths.reference(path)
+    saved = case.workspace / "original-prompts"
+    failure = None if fault == "native-loop" else (
+        RuntimeError if fault == "runtime" else ValueError
+    )(f"instruction-source-unavailable: {path}; C:\\private\\prompt.txt; \\\\server\\share\\prompt.txt")
+
+    def replace_after_resolution(value: str):
+        if value == uri and failure is not None:
+            raise failure
+        result = resolve(value)
+        if value == uri:
+            directory.rename(saved)
+            directory.symlink_to(directory.name, target_is_directory=True)
+        return result
+
+    try:
+        with monkeypatch.context() as source_fault:
+            source_fault.setattr(inputs, "_resolve_file", replace_after_resolution)
+            with pytest.raises((RuntimeError, ValueError)) as load_error:
+                await case.config.reload()
+        original = load_error.value
+        if failure is not None:
+            assert original is failure
+        else:
+            assert type(original) is RuntimeError and str(path) in str(original)
+        original_args = original.args
+        with pytest.raises(RuntimeError, match="instruction-source-unavailable") as unavailable:
+            case.config.require_instruction_sources_available("default")
+        detail = str(unavailable.value)
+        assert str(case.workspace) not in detail and "C:\\private" not in detail
+        assert "\\\\server\\share" not in detail and "reason=" not in detail
+        assert uri in detail and f"error={type(original).__name__}" in detail
+        assert "stage=instruction-source-readiness" in detail
+        assert unavailable.value.__cause__ is original and original.args == original_args
+        assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+        broken_logging, blocked = instruction_diagnostic_sink
+        assert str(blocked) not in detail
+        if broken_logging:
+            assert "diagnostic_sink_error=NotADirectoryError" in detail
+            assert str(blocked) in "\n".join(original.__notes__)
+        assert case.config.get_snapshot().to_dict() == before.to_dict()
+        assert case.config.get_agent_runtime_config("default")[key] == "已发布的原文件正文"
+        if fault == "native-loop":
+            directory.unlink()
+            saved.rename(directory)
+        path.write_text("由原入口恢复的文件正文", encoding="utf-8")
+        assert await case.config.reload()
+        case.config.require_instruction_sources_available("default")
+        assert case.config.get_agent_runtime_config("default")[key] == "由原入口恢复的文件正文"
+    finally:
+        if directory.is_symlink():
+            directory.unlink()
+            saved.rename(directory)
+        await case.config.close()
+
+
+@pytest.mark.parametrize(("fault", "reason", "error_type"), [
+    ("missing", "提示词文件来源没有绑定目标文件 owner", RuntimeError),
+    ("different", "提示词文件 owner 返回了不同资源 URI", ValueError),
+])
+async def test_readiness_preserves_explicit_source_binding_rules(
+    file_case: FileCase, monkeypatch: pytest.MonkeyPatch,
+    instruction_diagnostic_sink, fault: str, reason: str,
+    error_type: type[RuntimeError | ValueError],
+) -> None:
+    case = file_case
+    source = case.workspace / "prompt.txt"
+    source.write_text("已发布的绑定正文", encoding="utf-8")
+    case.select(source)
+    before = case.config.get_snapshot()
+    inputs = case.config._instruction_inputs
+    resolve = inputs._resolve_file
+    assert resolve is not None
+
+    def different(value: str):
+        path, _uri = resolve(value)
+        return path, case.paths.reference(case.workspace / "another.txt")
+
+    try:
+        with monkeypatch.context() as source_fault:
+            source_fault.setattr(inputs, "_resolve_file", None if fault == "missing" else different)
+            with pytest.raises(error_type) as load_error:
+                await case.config.reload()
+        assert type(load_error.value) is error_type and str(load_error.value) == reason
+        with pytest.raises(RuntimeError) as unavailable:
+            case.config.require_instruction_sources_available("default")
+        assert reason in str(unavailable.value) and unavailable.value.__cause__ is load_error.value
+        assert case.config.get_snapshot().to_dict() == before.to_dict()
+        assert not await case.config.reload()
+        case.config.require_instruction_sources_available("default")
     finally:
         await case.config.close()
