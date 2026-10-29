@@ -9,7 +9,7 @@ from app.agents.providers._format_check import (
     check_chunks,
     check_chunks_are_aimessage_chunks,
     check_content_blocks_are_standard,
-    check_final_content_preserves_visible_text,
+    check_final_content_preserves_provider_content,
     check_history_messages_accepted,
     check_no_private_stream_markers,
     check_stream_merges_without_private_marker_noise,
@@ -123,16 +123,39 @@ def test_final_content_keeps_equal_text_parts_separated_by_reasoning(text: str) 
         _chunk([{"type": "reasoning_content", "reasoning_content": "中间分析", "id": "part_reasoning", "index": 1}]),
         _chunk([{"type": "text", "text": text, "id": "part_last", "index": 2}]),
     ]
-    assert check_final_content_preserves_visible_text(chunks).passed
+    assert check_final_content_preserves_provider_content(chunks).passed
 
 
 def test_final_content_reports_invalid_carrier_instead_of_aborting_checks() -> None:
     chunks = [_chunk([{"type": "reasoning_content", "reasoning_content": 12}])]
-    result = check_final_content_preserves_visible_text(chunks)
+    result = check_final_content_preserves_provider_content(chunks)
     assert not result.passed
     assert "最终内容规范化失败" in result.detail
     assert "reasoning_content" in result.detail
     assert any(not result.passed for result in check_chunks(chunks))
+
+
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+@pytest.mark.parametrize("lose_identity", [False, True])
+def test_final_content_checks_native_thinking_identity(
+    monkeypatch: pytest.MonkeyPatch, block_type: str, lose_identity: bool,
+) -> None:
+    from app.agents.providers import _format_check
+
+    block = {
+        "type": block_type, "id": "part_runtime", "index": 0,
+        "extras": {"provider_part_id": "native-thinking-identity"},
+        **({"thinking": "分析"} if block_type == "thinking" else {"data": "sealed"}),
+    }
+    if lose_identity:
+        # 故意模拟旧清理器丢失原生身份，检查器必须拒绝而不能自证通过。
+        monkeypatch.setattr(_format_check, "canonicalize_ai_message", lambda message: AIMessage(content=[{
+            key: value for key, value in block.items() if key not in {"id", "index", "extras"}
+        }]))
+    result = check_final_content_preserves_provider_content([_chunk([block])])
+    assert result.passed is not lose_identity
+    if lose_identity:
+        assert "原生 thinking block 身份/顺序" in result.detail
 
 
 def test_chunk_merge_rejects_private_marker_noise():

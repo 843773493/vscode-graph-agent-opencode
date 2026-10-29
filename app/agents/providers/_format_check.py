@@ -25,7 +25,7 @@ __all__ = [
     "check_chunks",
     "check_chunks_are_aimessage_chunks",
     "check_content_blocks_are_standard",
-    "check_final_content_preserves_visible_text",
+    "check_final_content_preserves_provider_content",
     "check_history_messages_accepted",
     "check_no_private_stream_markers",
     "check_stream_merges_without_private_marker_noise",
@@ -104,7 +104,7 @@ def _chunk_message(chunk: Any) -> AIMessageChunk | None:
     return None
 
 
-def _message_content_blocks(message: AIMessageChunk) -> list[dict[str, Any]]:
+def _message_content_blocks(message: BaseMessage) -> list[dict[str, Any]]:
     content = message.content
     if isinstance(content, str):
         if not content:
@@ -303,7 +303,7 @@ def check_tool_call_chunks_have_required_fields(
     )
 
 
-def check_final_content_preserves_visible_text(
+def check_final_content_preserves_provider_content(
     chunks: Sequence[ChatGenerationChunk],
 ) -> FormatCheckItem:
     merged: AIMessageChunk | None = None
@@ -320,11 +320,29 @@ def check_final_content_preserves_visible_text(
         else:
             if normalized.text != merged.text:
                 detail = "最终内容与已合并流的可见文本不一致"
+            source_ids = []
+            for block in _message_content_blocks(merged):
+                if block.get("type") not in {"thinking", "redacted_thinking"}:
+                    continue
+                extras = block.get("extras")
+                native_id = extras.get("provider_part_id") if isinstance(extras, dict) else None
+                source_ids.append((block["type"], native_id if isinstance(native_id, str) else None))
+            if source_ids:
+                final_ids = [
+                    (block["type"], block.get("id"))
+                    for block in _message_content_blocks(normalized)
+                    if block.get("type") in {"thinking", "redacted_thinking"}
+                ]
+                if len(final_ids) != len(source_ids) or any(
+                    actual_type != source_type or (native_id is not None and actual_id != native_id)
+                    for (source_type, native_id), (actual_type, actual_id) in zip(source_ids, final_ids, strict=False)
+                ):
+                    detail = "最终内容丢失或改变了原生 thinking block 身份/顺序"
     return FormatCheckItem(
-        name="最终内容规范化必须保留全部可见文本",
+        name="最终内容规范化必须保留可见文本和原生推理身份",
         passed=not detail,
         detail=detail,
-        remediation="按独立part保留有序正文，不能按正文相等删除内容块。",
+        remediation="按独立part保留有序正文；stream_normalization 必须恢复 thinking/redacted_thinking 的原生 provider_part_id。",
     )
 
 
@@ -432,7 +450,7 @@ ALL_CHECKS: list[Callable[[Sequence[ChatGenerationChunk]], FormatCheckItem]] = [
     check_no_private_stream_markers,
     check_content_blocks_are_standard,
     check_stream_merges_without_private_marker_noise,
-    check_final_content_preserves_visible_text,
+    check_final_content_preserves_provider_content,
     check_tool_call_chunks_have_required_fields,
     check_tool_call_arguments_complete,
 ]

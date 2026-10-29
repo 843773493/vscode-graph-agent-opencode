@@ -81,7 +81,9 @@ def _normalize_stream_block_fields(block: dict[str, Any]) -> None:
         block.pop("id", None)
     if generated_id or provider_part_id is not None:
         block.pop("index", None)
-    if isinstance(provider_part_id, str) and block.get("type") == "reasoning":
+    if isinstance(provider_part_id, str) and block.get("type") in {
+        "reasoning", "thinking", "redacted_thinking",
+    }:
         block["id"] = provider_part_id
 
 

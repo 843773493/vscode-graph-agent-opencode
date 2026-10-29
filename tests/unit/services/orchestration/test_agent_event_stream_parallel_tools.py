@@ -5,7 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
-from langgraph.types import Command
+from langgraph.types import Command, Durability
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -84,11 +84,11 @@ class FakeAgent:
 
     async def astream_events(
         self,
-        input_payload: dict[str, Any],
+        input_payload: dict[str, Any] | Command | None,
         *,
         config: dict[str, Any],
         version: str,
-        durability: str,
+        durability: Durability,
     ) -> AsyncIterator[dict[str, Any]]:
         assert durability == "sync"
         del input_payload, version
@@ -125,6 +125,9 @@ class FakeAgent:
                 if not callback.done():
                     callback.cancel()
             await asyncio.gather(*callbacks, return_exceptions=True)
+
+    async def aget_state(self, config: dict[str, Any]) -> NoReturn:
+        raise AssertionError(f"本测试不应读取图检查点: {config}")
 
 
 class GraphFakeAgent(FakeAgent):
@@ -169,11 +172,11 @@ class ResolvingConfigAgent(FakeAgent):
 
     async def astream_events(
         self,
-        input_payload: dict[str, Any],
+        input_payload: dict[str, Any] | Command | None,
         *,
         config: dict[str, Any],
         version: str,
-        durability: str,
+        durability: Durability,
     ) -> AsyncIterator[dict[str, Any]]:
         assert durability == "sync"
         del input_payload, version
@@ -315,7 +318,7 @@ class SlowlyStreamingModelAgent:
 
 
 class FakeSessionChangesService:
-    async def record_tool_file_edit(self, **kwargs: Any) -> object:
+    async def record_tool_file_edit(self, **kwargs: Any) -> NoReturn:
         raise AssertionError(f"本测试不应记录文件修改: {kwargs}")
 
 
@@ -2611,6 +2614,46 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
     assert result.latest_model_content_blocks[0]["extras"] == {
         "response_item": response_item
     }
+
+
+@pytest.mark.asyncio
+async def test_native_thinking_deltas_preserve_signature_and_provider_fields(
+    workspace_root: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    blocks = [
+        {"type": "thinking", "id": "part_thinking", "index": 0,
+         "thinking": "先", "signature": "sig-",
+         "provider_extension": {"trace_group": "native-source"},
+         "extras": {"provider_part_id": "native-thinking"}},
+        {"type": "thinking", "id": "part_thinking", "index": 0,
+         "thinking": "后", "signature": "tail",
+         "provider_extension": {"late_field": True}},
+        {"type": "redacted_thinking", "id": "part_redacted", "index": 1,
+         "data": "sealed-data", "provider_extension": {"trace_group": "redacted"},
+         "extras": {"provider_part_id": "native-redacted"}},
+        {"type": "text", "id": "part_answer", "index": 2, "text": "完成"},
+    ]
+    events = [
+        {"event": "on_chat_model_stream", "name": "BoxteamLiteLLMChatModel",
+         "data": {"chunk": AIMessageChunk(content=[block])}, "metadata": {}}
+        for block in blocks
+    ]
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events), input_payload={"messages": []}, config={},
+        session_id="ses_native_thinking", thread_id="thr_stream",
+        job_id="job_native_thinking", turn_id="job_native_thinking", agent_id="default",
+        custom_tool_skill_sources={}, publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=session_changes_service, workspace_root=workspace_root,
+    )
+    assert result.final_text == "完成"
+    assert result.latest_model_content_blocks == (
+        {**blocks[0], "thinking": "先后", "signature": "sig-tail",
+         "provider_extension": {"trace_group": "native-source", "late_field": True}},
+        blocks[2], blocks[3],
+    )
+    assert blocks[0]["signature"] == "sig-"
+    assert blocks[0]["provider_extension"] == {"trace_group": "native-source"}
 
 
 @pytest.mark.asyncio

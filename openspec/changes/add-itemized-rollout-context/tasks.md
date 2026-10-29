@@ -1325,3 +1325,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 删除源和中间会话并核实物理目录消失后，真实 SIGKILL 后端并启动新 PID；目标 JSONL 字节不变，冷 Saver 的 assistant identity/有序正文与来源一致。目标首次续聊保留两段同文推理和两段同文正文，新 ModelCall 只归属目标；以实际 wire 重建封存请求并验证 hash，旧 canonical 字节前缀不变，模型请求总数严格为3。
 - 正式 `integration-provider-content-history` 矩阵套件为3 passed/133.14秒，包含原两项执行/冷读回归及新组合场景。套件保护300秒/4GiB单进程数据段，本次整个运行组另限6GiB/零swap/4核CPU；每次 fork 的60秒预算未变，不宣称已实现跨agent全局并发控制。3477项源码前后指纹一致，Ruff、compileall及该测试文件真实Pyright均退出0、零类型诊断。
 - 首轮为2 passed/1 failed，失败发生在直连Backend的删除请求缺少受信导航actor；按现有同类装具显式提供身份头后重跑通过，未改产品鉴权或业务期限。该场景不验证Gateway业务代理/鉴权、跨Gateway复制、真实Provider、Web或Windows，不代替团队延期项与7.5组合总门；作者结构自查不称独立审查。准确命令、原始输出、源码指纹、正式产品产物和失败归因见 `out/tests/temp/uri-global-closure/artifacts/verification-081.json` 及 `content-fork-*` 原件。
+
+### 2026-10-29 7.5-E 原生推理身份与扩展字段保真（部分）
+
+- 修复流式清理器只恢复 reasoning 原生 ID、遗漏 thinking/redacted_thinking 的缺陷。产品入口再现事件累计层按固定字段重建 block，丢失签名和未知扩展；现在唯一 mapper 传递完整 provider 字段，删除旧 extras/reasoning_items/redacted_thinking_data 三个拆分属性及全部消费者。正文继续按片段一次拼接，签名和扩展增量复用 LangChain 合并合同，reasoning item 按 ID 更新、redacted data 与运行态 extras 的原合并语义保留；不新增 canonical writer、恢复链或 schema。
+- 原生产两个原生 ID 反例均失败；ID 修复后的首轮产品套件为1 failed/3 passed，冷恢复中仍缺 signature/provider_extension。最终定向回归270 passed/17.06秒，包含对齐完整接口后的事件测试替身。新增断言覆盖签名分片、未知嵌套扩展、redacted 块的 text 扩展字段、原生身份和输入不变，不放宽原有身份或顺序断言。
+- 最终正式 `integration-provider-content-history` 套件4 passed/162.65秒：通过真实消息/Job入口和 SDK transport 回放产生关键状态，冷 Saver 完整恢复 thinking/redacted 原生字段；历史 API 不返回密文，后续真实执行保持旧 JSONL 字节前缀并核对封存请求 hash。原三项产品用例对应的函数 AST 未改，独立同文块及两代 fork/来源删除/真实 SIGKILL 重启继续通过；交付前补齐 redacted text 扩展字段后按最终源码重新跑过完整四项产品套件。
+- TODO（未实现，不计通过）：诊断进一步确认 LiteLLM 1.100 的 OpenAI 兼容流过滤器未把独立 thinking_blocks 后续帧计为非空，导致仅签名及独立 redacted 帧在到达本项目 adapter 前丢失。原始失败、Provider/事件双端观测和上游源码 hash 保留；最终产品场景明确只验证 SDK 能交付的首帧完整块，分片累计单测不冒充 SDK 产品验收。测试源码已登记上游修复后的补验 TODO，未增加 SDK monkey patch 或第二协议解析器。
+- Ruff/compileall及 OpenSpec strict 通过；九文件真实 Pyright 对完整 HEAD archive 基线为91条诊断，当前32条均按相对文件、AST owner、原表达式、规则和完整消息逐项匹配，零新增、消除59条，不称类型全绿。测试替身补齐显式拒绝的 aget_state 和协议输入类型，抛错方法返回 NoReturn，业务断言及失败行为不变。
+- 各运行串行，进程外硬超时、单进程4GiB数据段及整组6GiB/零swap/4核额度均保留，3477项源码前后指纹一致；这不是跨agent全局并发闸门。其他52个工作区文件与共享暂存区保持原样，前端实施按用户要求暂停，既有 debug 服务持续运行。准确命令、源码/输出 hash、实际退出码、正式产物、作者结构自查和未验范围见 `out/tests/temp/uri-global-closure/artifacts/verification-082.json`。本切片不新增真实Provider网络、同步入口、Web或Windows证据，不关闭7.5组合门、团队延期项或其它全局验收。

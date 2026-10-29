@@ -127,6 +127,65 @@ async def test_equal_reasoning_blocks_survive_product_execution_and_cold_history
     case.write_actual("independent-equal-content", {"content": assistant.content, "request": request, "canonical_prefix": frozen})
 
 
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_native_thinking_identity_survives_product_execution_and_cold_history(
+    source_case: RuntimeSourceCase,
+) -> None:
+    case = source_case
+    session, thread, _ = await _target(case)
+    original: list[dict[str, object]] = [
+        {"type": "thinking", "id": "native-thinking-1", "thinking": "原始推理",
+         "signature": "native-signature", "provider_extension": {"trace_group": "native-source"}},
+        {"type": "redacted_thinking", "id": "native-redacted-2", "data": "native-sealed-data",
+         "text": "opaque-provider-metadata",
+         "provider_extension": {"trace_group": "native-source"}},
+    ]
+    config = commentjson.loads((case.workspace / ".boxteam/workspace.jsonc").read_text())
+    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    cassette = build_cassette(
+        asset_id="native-thinking-identity", model="e2e-stub-model", url=endpoint + "/chat/completions",
+        frames=chat_completion_frames(
+            response_id="chatcmpl-native-thinking-identity", model="e2e-stub-model",
+            deltas=[
+                # TODO: LiteLLM 1.100 的 OpenAI 流过滤器丢弃独立的 thinking_blocks
+                # 后续帧（含仅签名和 redacted 帧）。上游修复后补齐这类 SDK 产品验收；
+                # 当前验证首帧完整块，签名分片累计由事件消费单测覆盖。
+                {"role": "assistant", "thinking_blocks": original},
+                {"content": "保留原始推理身份"},
+            ],
+            finish_reason="stop",
+        ),
+    )
+    interaction, = cast(list[dict[str, object]], cassette.raw["interactions"])
+    call, = case.control.plan_model_calls(session, thread, [interaction])
+    case.planned_calls[call] = {"session_id": session, "thread_id": thread, "model_call_id": call}
+    accepted = await _send(case, session, "保留 provider 原生推理块。")
+    assert isinstance(accepted["job_id"], str)
+    await _job(case, accepted["job_id"])
+    assistant = _cold_assistant(case, session, thread)
+    assert assistant.content == [*original, {"type": "text", "text": "保留原始推理身份"}]
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    rollout = resolver.resolve_thread_node(session, thread) / "rollout"
+    frozen = (rollout / "rollout.jsonl").read_bytes()
+    response = await case.client.post(f"/api/v1/sessions/{session}/history", json={
+        "direction": "head", "turns": 10, "include": ["user", "assistant_text", "reasoning_detail", "final_response"],
+    })
+    assert response.status_code == 200, response.text
+    assert "native-sealed-data" not in response.text
+    followup, = await case.plan(session, [{"content": "后续调用完成"}])
+    continued = await _send(case, session, "继续并保持历史原件。")
+    assert isinstance(continued["job_id"], str)
+    await _job(case, continued["job_id"])
+    assert (rollout / "rollout.jsonl").read_bytes().startswith(frozen)
+    wire = [json.loads(path.read_text()) for path in sorted(case.model.artifacts.glob("*.json"))]
+    _verify_frozen_history(rollout / "index.sqlite", wire)
+    assert len(case.requests()) == 2
+    case.write_actual("native-thinking-identity", {
+        "original": original, "restored": assistant.content, "safe_history": response.json(),
+        "followup_request": case.request(followup),
+    })
+
+
 @pytest.mark.parametrize("restart_source_case", [{"managed_gateway": True, "native_services": True}], indirect=True)
 async def test_equal_blocks_survive_fork_source_deletion_and_backend_hard_restart(
     restart_source_case: RestartRuntimeSourceCase,

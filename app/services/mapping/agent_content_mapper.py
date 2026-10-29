@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Literal
+
+STREAM_TEXT_FIELD_BY_BLOCK_TYPE = {
+    "text": "text",
+    "reasoning_content": "reasoning_content",
+    "thinking": "thinking",
+    "reasoning": "reasoning",
+    "refusal": "refusal",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,9 +28,8 @@ class AgentStreamContentPart:
         "refusal",
     ]
     text: str
-    extras: dict[str, Any] | None = None
-    reasoning_items: object | None = None
-    redacted_thinking_data: object | None = None
+    # 除身份和已提取文本外的完整 provider 字段；不承担业务状态判定。
+    provider_fields: dict[str, object]
 
 
 def extract_reasoning_summary(summary: Any) -> str:
@@ -192,21 +200,14 @@ def extract_agent_stream_content_parts(content: Any) -> list[AgentStreamContentP
                 kind=kind,
                 block_type=block_type,
                 text=text,
-                extras=(
-                    dict(block["extras"])
-                    if isinstance(block.get("extras"), dict)
-                    else None
-                ),
-                reasoning_items=(
-                    block.get("reasoning_items")
-                    if block_type == "reasoning_items"
-                    else None
-                ),
-                redacted_thinking_data=(
-                    block.get("data")
-                    if block_type == "redacted_thinking"
-                    else None
-                ),
+                provider_fields={
+                    key: copy.deepcopy(value)
+                    for key, value in block.items()
+                    if key not in {
+                        "type", "id", "index",
+                        STREAM_TEXT_FIELD_BY_BLOCK_TYPE.get(block_type),
+                    }
+                },
             )
         )
     return result

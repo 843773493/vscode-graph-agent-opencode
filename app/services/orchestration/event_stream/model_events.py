@@ -6,15 +6,14 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from app.schemas.event import ModelTokenUsagePayload
-from app.services.mapping.agent_content_mapper import AgentStreamContentPart
+from langchain_core.utils._merge import merge_dicts
 
-_TEXT_FIELD_BY_BLOCK_TYPE = {
-    "reasoning_content": "reasoning_content",
-    "thinking": "thinking",
-    "reasoning": "reasoning",
-    "refusal": "refusal",
-}
+from app.schemas.event import ModelTokenUsagePayload
+from app.services.mapping.agent_content_mapper import (
+    STREAM_TEXT_FIELD_BY_BLOCK_TYPE,
+    AgentStreamContentPart,
+)
+
 _TEXT_CHUNKS_KEY = "_stream_text_chunks"
 
 
@@ -85,29 +84,19 @@ def merge_model_content_part(
 ) -> None:
     """把规范化 model block/delta 合并到本次请求的有序内存视图。"""
     existing = parts_by_id.get(part.part_id)
-    text_key = _TEXT_FIELD_BY_BLOCK_TYPE.get(part.block_type, "text")
+    text_key = STREAM_TEXT_FIELD_BY_BLOCK_TYPE.get(part.block_type, "text")
     if existing is None:
-        part_ids_in_order.append(part.part_id)
-        initial: dict[str, object] = {
+        initial = copy.deepcopy(part.provider_fields)
+        initial.update({
             "type": part.block_type,
             "id": part.part_id,
             "index": part.index,
-        }
-        if part.block_type == "reasoning_items":
-            items = part.reasoning_items
-            initial["reasoning_items"] = (
-                copy.deepcopy(items) if isinstance(items, list) else []
-            )
-        elif part.block_type == "redacted_thinking":
-            data = part.redacted_thinking_data
-            if isinstance(data, str):
-                initial["data"] = data
-        else:
+        })
+        if part.block_type not in {"reasoning_items", "redacted_thinking"}:
             initial[text_key] = part.text
             initial[_TEXT_CHUNKS_KEY] = [part.text]
+        part_ids_in_order.append(part.part_id)
         parts_by_id[part.part_id] = initial
-        if part.extras:
-            parts_by_id[part.part_id]["extras"] = dict(part.extras)
         return
     if existing.get("type") != part.block_type or existing.get("index") != part.index:
         raise RuntimeError(
@@ -116,7 +105,7 @@ def merge_model_content_part(
         )
     if part.block_type == "reasoning_items":
         current_items = existing.get("reasoning_items")
-        incoming_items = part.reasoning_items
+        incoming_items = part.provider_fields.get("reasoning_items")
         if not isinstance(current_items, list) or not isinstance(incoming_items, list):
             raise TypeError(f"模型流 part 缺少 reasoning_items: part_id={part.part_id}")
         current_item_indexes: dict[str, int] = {}
@@ -137,7 +126,7 @@ def merge_model_content_part(
             elif incoming not in current_items:
                 current_items.append(copy.deepcopy(incoming))
     elif part.block_type == "redacted_thinking":
-        data = part.redacted_thinking_data
+        data = part.provider_fields.get("data")
         if isinstance(data, str):
             existing["data"] = data
     else:
@@ -145,12 +134,19 @@ def merge_model_content_part(
         if not isinstance(text_chunks, list):
             raise TypeError(f"模型流 part 缺少 {_TEXT_CHUNKS_KEY}: part_id={part.part_id}")
         text_chunks.append(part.text)
-    if part.extras:
+    provider_fields = copy.deepcopy(part.provider_fields)
+    provider_fields.pop("reasoning_items", None)
+    if part.block_type == "redacted_thinking":
+        provider_fields.pop("data", None)
+    extras = provider_fields.pop("extras", None)
+    # 正文仍按片段一次拼接；其余字段沿用 LangChain 的签名/扩展增量合并合同。
+    existing.update(merge_dicts(existing, provider_fields))
+    if isinstance(extras, dict):
         existing_extras = existing.get("extras")
         merged_extras = (
             dict(existing_extras) if isinstance(existing_extras, dict) else {}
         )
-        merged_extras.update(part.extras)
+        merged_extras.update(extras)
         existing["extras"] = merged_extras
 
 
@@ -168,7 +164,7 @@ def materialize_model_content_parts(
         if text_chunks is not None:
             block_type = part.get("type")
             text_key = (
-                _TEXT_FIELD_BY_BLOCK_TYPE.get(block_type, "text")
+                STREAM_TEXT_FIELD_BY_BLOCK_TYPE.get(block_type, "text")
                 if isinstance(block_type, str)
                 else "text"
             )

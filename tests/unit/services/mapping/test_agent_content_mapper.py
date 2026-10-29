@@ -106,7 +106,31 @@ def test_extract_agent_stream_parts_preserves_response_item_extras():
         ]
     )
 
-    assert parts[0].extras == {"response_item": response_item}
+    assert parts[0].provider_fields == {"extras": {"response_item": response_item}}
+
+
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+def test_extract_agent_stream_parts_preserves_native_provider_fields(block_type: str) -> None:
+    extension = {"trace_group": "native-source"}
+    block = {
+        "type": block_type, "id": "part_native", "index": 0,
+        "signature": "native-signature", "provider_extension": extension,
+        **({"thinking": "分析"} if block_type == "thinking" else {
+            "data": "sealed", "text": "opaque-provider-metadata",
+        }),
+    }
+    part, = extract_agent_stream_content_parts([block])
+    assert part.provider_fields == {
+        "signature": "native-signature", "provider_extension": extension,
+        **({} if block_type == "thinking" else {
+            "data": "sealed", "text": "opaque-provider-metadata",
+        }),
+    }
+    extension["trace_group"] = "changed-after-extraction"
+    assert part.provider_fields["provider_extension"] == {"trace_group": "native-source"}
+    assert (part.part_id, part.index, part.text) == (
+        "part_native", 0, "分析" if block_type == "thinking" else "",
+    )
 
 
 def test_extract_agent_stream_parts_accepts_all_canonical_reasoning_carriers():

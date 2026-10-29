@@ -374,6 +374,28 @@ def test_stream_thinking_block_stays_a_direct_litellm_block():
     ]
 
 
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+def test_stream_finalization_preserves_native_thinking_identity(block_type: str) -> None:
+    from langchain_core.messages import message_chunk_to_message
+
+    from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+    from app.agents.providers.litellm_stream_types import _StreamPartState
+
+    original = {
+        "type": block_type, "id": "native-thinking-identity",
+        "provider_extension": {"trace_group": "native-source"},
+        **({"thinking": "原始推理", "signature": "original-signature"} if block_type == "thinking" else {"data": "sealed-native-data"}),
+    }
+    model = BoxteamLiteLLMChatModel(model="openai/test-model", api_key="test-key")
+    chunk, = model._delta_to_message_chunks({"thinking_blocks": [original]}, part_state=_StreamPartState())
+    message = message_chunk_to_message(chunk)
+    assert isinstance(message, AIMessage)
+    canonical = canonicalize_ai_message(message)
+    assert canonical.content == [original]
+    assert canonical.content[0] is not original
+    assert original["id"] == "native-thinking-identity"
+
+
 def test_checkpoint_roundtrip_preserves_direct_content_and_tool_contract():
     assistant = AIMessage(
         content=_content(),
