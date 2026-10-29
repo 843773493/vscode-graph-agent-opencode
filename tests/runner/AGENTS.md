@@ -29,6 +29,7 @@
 - `integration-browser-websocket-input-errors`经真实Node WebSocket/HTTP及Chromium验证输入拒绝、零资源副作用和同连接授权恢复，固定90秒/4GiB；不代表Gateway/Web、Python业务owner或Backend重启。
 - `integration-terminal-websocket-input-errors`经真实Node WebSocket/HTTP和PTY验证JSON/schema/type拒绝、附加前零资源及同连接原生shell写文件，固定60秒/4GiB；不代表Gateway/Web、Python业务owner、Backend重启或Windows实机。
 - `integration-browser-runtime-diagnostics`经真实Node/HTTP与Chromium验证原生启动失败、日志目录失败下的创建归属和后续页面恢复；仅替换原launch参数和writer边界，固定60秒/4GiB，不代Gateway/Web、Python业务owner、Backend重启或Windows实机。
+- `integration-browser-storage-diagnostics`经真实Node/HTTP/Chromium截图、原生目录冲突及日志writer次错核对原操作、冷记录和同入口PNG重试，固定60秒/4GiB；不代其它存储出口网络验收、Gateway/Web、Python业务owner或Backend重启。
 
 - `integration-fork-capture-receipts` 使用真实 B→A→C Gateway/SSH 和 model_stream，从用户消息入口生成来源，核冻结坐标、双端 journal、公开回执及来源离线后目标进程重启、幂等重试和新输入。固定240秒/4GiB及原60秒fork预算；小负载合同验收不替代完整附件/Goal负载的期限与恢复验收。
 

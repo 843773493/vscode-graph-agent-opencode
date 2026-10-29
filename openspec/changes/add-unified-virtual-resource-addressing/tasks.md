@@ -1479,3 +1479,10 @@
 - 原生产的直接出口单测6 failed／1 passed，真实Node/HTTP创建2场景中1 failed／1 passed，原件显示ENOTDIR日志位置进入普通回执。修复后9项Node单测、163项原运行时池／动作／关闭消费者及2项真实Node/HTTP/Chromium场景全部通过。网络验收核原失败资源身份、revision、冷磁盘记录与公开查询一致、诊断尝试一次及故障解除后的新本地页面；同步／异步恢复双故障由真实Node timer/Promise单测证明，不称真实Chromium HTTP超时故障验收。
 - 首次修复后网络运行因原42960端口占用产生2项setup error，业务未执行；未终止未知进程或更换端口。随后ss及既有端口检查器确认42960/42961均已空闲，沿原allocator和suite补验2 passed／5.47秒。Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过；作者AST核验仅两个原出口改变，其余方法与exports保持，139行产品文件无新增目录，不代独审。
 - 命令、指纹、原始输出、退出码、红测及端口证据见 `out/tests/temp/uri-global-closure/artifacts/verification-110.json`。测试串行，正式集成保留跨worktree锁和外部超时、4GiB／两CPU保护；本片不代表Gateway/Web、Python业务owner、Backend重启、Windows实机或其它存储／资源owner的日志故障闭包。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及用户原Debug服务保持。
+
+### 2026-10-29 Browser 状态存储的诊断次错（2.2／7.2部分收口）
+
+- StateStore检查点读／写／删／扫描、恢复记录读／写、截图及下载八个原错误出口复用本文件唯一私有诊断函数。日志正常仍返回原cause，日志次错以有序AggregateError保留原cause和writer异常；既有发布／清理双错原样作为内层原因保留。原公开说明、主错误码、文件发布／清理顺序、配额索引及队列结算保持，不增加日志回退、存储重试、协议或业务状态。
+- 旧生产的18项新增单测8 passed／10 failed：真实fs冲突且日志正常的八项通过，八项日志次错及两项发布／清理／诊断三错失败。旧生产真实Node/HTTP/Chromium截图2场景1 passed／1 failed，原件显示ENOTDIR日志位置进入普通回执。修复后36项Node检查、66项原存储／Manager／关闭消费者及2项截图网络验收全部通过；Node其中9项复跑上一片运行时出口，消费者命令中的两个不存在文件过滤项未被Bun发现，实际仅运行三文件66项，不将它们计作覆盖。原测试与断言保持，新增检查核原冲突字节、旧发布正文、精确配额、临时文件归属及下一次显式操作。
+- 截图关键资源和操作由产品HTTP生成，真实Chromium捕获后在fs目录冲突失败；仅日志writer显式制造真实ENOTDIR，观察记录不充当日志回退。核原资源／页面身份、授权revision、失败操作和冷记录一致；故障解除后原入口下一revision成功，正式下载入口返回精确PNG签名字节和长度，磁盘只有一份成功截图。其它七个出口的日志次错由存储单测证明，不称全部出口网络或恢复验收。
+- Node语法、Ruff／compileall、单文件Pyright零诊断、diff及本change strict通过。作者AST核验只改八个原catch的诊断和cause接线，其余十二个原函数／方法保持；新增私有函数一处，产品净增10行至478行，无新源码目录或依赖，不代独审。准确命令、指纹、raw和实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-111.json`。各批串行，正式集成保留跨worktree锁及外部超时、4GiB／两CPU保护；不代Gateway/Web、Python业务owner、Backend重启或Windows实机。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及原Debug服务保持。

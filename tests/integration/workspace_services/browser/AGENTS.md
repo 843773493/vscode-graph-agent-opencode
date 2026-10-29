@@ -40,6 +40,8 @@ browser/
 
 `test_browser_runtime_diagnostics.py`与`browser_runtime_diagnostic_failure.mjs`仅在原Chromium启动参数及日志writer边界注入故障，通过真实Node/HTTP核对原生启动失败、日志目录访问失败、原创建回执、只读磁盘记录及故障解除后的真实页面；观察writer尝试不充当产品日志回退。suite `integration-browser-runtime-diagnostics`固定60秒/4GiB，不代Gateway/Web、Python业务owner、Backend重启、Windows实机或全部运行时收尾验收。
 
+`test_browser_storage_diagnostics.py`通过真实Node/HTTP/Chromium截图、原生目录冲突及日志writer的真实ENOTDIR次错，核对原失败操作、公开查询、冷磁盘记录和显式重试后的PNG字节；关键资源状态由正式创建／截图入口生成，故障文件仅制造fs边界冲突。suite `integration-browser-storage-diagnostics`固定60秒/4GiB；不代其它存储出口的网络验收、Gateway/Web、Python业务owner、Backend重启或Windows实机。
+
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
 ## 可修改内容
