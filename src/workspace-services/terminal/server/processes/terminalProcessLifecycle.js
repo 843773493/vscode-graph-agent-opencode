@@ -8,14 +8,13 @@ const PROCESS_SCAN_BATCH_SIZE = 64;
 const execFileAsync = promisify(execFile);
 const logger = createRuntimeLogger("terminal", "terminal.processLifecycle");
 
-function processOperationError(stage, primary, { pid = null, processSessionId = null, signal = primary.signal ?? "none" } = {}) {
+function processOperationError(stage, primary, { pid = null, processSessionId = null, signal = primary.signal ?? "none" } = {}, cause = primary) {
   const code = primary.code ?? "none";
   const message = `终端进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}`;
-  let cause = primary;
   try {
-    logger.error(`[terminal-process] ${message}`, primary);
+    logger.error(`[terminal-process] ${message}`, cause);
   } catch (diagnosticError) {
-    cause = new AggregateError([primary, diagnosticError], "终端进程操作与诊断输出均失败", { cause: primary });
+    cause = new AggregateError([cause, diagnosticError], "终端进程操作与诊断输出均失败", { cause });
   }
   return Object.assign(new Error(message, { cause }), { code: primary.code });
 }
@@ -114,7 +113,15 @@ async function readPosixProcessStat(pid) {
       numericSession: process.platform !== "darwin",
     });
   } catch (error) {
-    if (!processExists(pid)) {
+    let exists;
+    try {
+      exists = processExists(pid);
+    } catch (probeError) {
+      throw processOperationError("read-stat", error, { pid }, new AggregateError(
+        [error, probeError], "终端进程身份读取与存在性核实均失败", { cause: error },
+      ));
+    }
+    if (!exists) {
       return null;
     }
     throw processOperationError("read-stat", error, { pid });
@@ -183,7 +190,15 @@ async function requestWindowsProcessTreeTermination(pid) {
     if (typeof error.code === "string") {
       throw processOperationError("taskkill", error, { pid });
     }
-    if (error.killed || processExists(pid)) {
+    let exists;
+    try {
+      exists = error.killed || processExists(pid);
+    } catch (probeError) {
+      throw processOperationError("taskkill", error, { pid }, new AggregateError(
+        [error, probeError], "终端进程树终止与存在性核实均失败", { cause: error },
+      ));
+    }
+    if (exists) {
       throw processOperationError("taskkill", error, { pid });
     }
   }

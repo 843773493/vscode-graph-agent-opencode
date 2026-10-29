@@ -38,6 +38,7 @@ def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPa
         preload.write_text("""
 import fs from "node:fs";
 import nativeFs from "node:fs/promises";
+import childProcess from "node:child_process";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 
@@ -48,6 +49,23 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
   const fault = () => fs.existsSync(marker) ? JSON.parse(fs.readFileSync(marker, "utf8")) : null;
   const privatePath = path.join(control, "private-process", "stat");
   const failure = code => Object.assign(new Error(`${code}: 原生进程访问失败 '${privatePath}'`), { code, path: privatePath });
+  const nativePlatform = process.platform;
+  Object.defineProperty(process, "platform", { get: () => {
+    const stage = fault()?.stage;
+    return stage === "posix-probe" ? "darwin" : stage === "taskkill-probe" ? "win32" : nativePlatform;
+  } });
+  // 资源始终由真实Linux PTY创建；只在组合错误场景模拟目标平台的原生查询边界。
+  let taskkillFailed = false;
+  const exec = childProcess.execFile;
+  childProcess.execFile = (command, args, options, callback) => {
+    const stage = fault()?.stage;
+    if (stage === "posix-probe" && command === "ps") return callback(failure("EACCES"), "", privatePath);
+    if (stage === "taskkill-probe" && command === "taskkill") {
+      taskkillFailed = true;
+      return callback(Object.assign(failure(5), { signal: null, stderr: privatePath }), "", privatePath);
+    }
+    return exec(command, args, options, callback);
+  };
   const read = nativeFs.readFile;
   nativeFs.readFile = async (file, ...args) => {
     const current = fault();
@@ -65,6 +83,9 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
   const kill = process.kill.bind(process);
   process.kill = (pid, signal) => {
     const current = fault();
+    if (pid === current?.pid && signal === 0 && (current.stage === "posix-probe" || (current.stage === "taskkill-probe" && taskkillFailed))) {
+      throw Object.assign(new Error(`EIO: 存在性探测失败 '${privatePath}/probe'`), { code: "EIO" });
+    }
     if (current?.stage === "signal" && pid === current.pid && signal === "SIGTERM") throw failure("EPERM");
     return kill(pid, signal);
   };
@@ -97,7 +118,7 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
                             observed.kill()
 
 
-@pytest.mark.parametrize("stage", ["read", "parse", "scan", "signal"])
+@pytest.mark.parametrize("stage", ["read", "parse", "scan", "signal", "posix-probe", "taskkill-probe"])
 @pytest.mark.parametrize("fail_sink", [False, True], ids=["healthy-log", "failed-log"])
 async def test_native_process_failure_keeps_unknown_identity_and_management_retry(
     terminal_service: TerminalService, stage: str, fail_sink: bool,
@@ -124,7 +145,8 @@ async def test_native_process_failure_keeps_unknown_identity_and_management_retr
         error = failed.json()["error"]
         assert error.startswith("终端进程操作失败:"), failed.text
         assert (f"process_session_id={original['process_session_id']}" if stage == "scan" else f"pid={original['os_pid']}") in error
-        assert ("code=EPERM" if stage == "signal" else "code=EACCES" if stage != "parse" else "type=Error") in error
+        expected_code = "code=EPERM" if stage == "signal" else "code=5" if stage == "taskkill-probe" else "code=EACCES" if stage != "parse" else "type=Error"
+        assert expected_code in error
         current_response = await client.get(f"/api/terminals/{terminal_id}")
         assert current_response.status_code == 200, current_response.text
         current = current_response.json()["data"]
@@ -136,8 +158,11 @@ async def test_native_process_failure_keeps_unknown_identity_and_management_retr
         persisted = json.loads(state_file.read_text())["terminals"][0]
         assert all(current[key] == value for key, value in persisted.items())
         attempts = [json.loads(line)["chunk"] for line in (control / "attempts.jsonl").read_text().splitlines()]
-        assert len(attempts) == 1
-        assert str(control / "private-process/stat") in attempts[0]
+        assert len(attempts) == (2 if stage.endswith("-probe") else 1)
+        assert str(control / "private-process/stat") in attempts[-1]
+        if stage.endswith("-probe"):
+            assert "EIO" in attempts[-1] and "probe" in attempts[-1]
+            assert ("code: 5" if stage == "taskkill-probe" else "EACCES") in attempts[-1]
         for payload in (failed.json(), current, persisted):
             serialized = json.dumps(payload)
             for private in (control / "private-process/stat", control / "log-parent"):

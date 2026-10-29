@@ -31,6 +31,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_terminal_process_diagnostics.py`经正式HTTP创建真实PTY，在原生stat读取/解析、session扫描或SIGTERM出口注入失败，并分别制造原日志writer的真实ENOTDIR；核普通响应、unknown持久记录、原进程身份仍存活及解除故障后同入口停止。fixture先执行HTTP资源清理再关闭client，并以冻结创建时间的psutil实例兜底回收。suite `integration-terminal-process-diagnostics`固定60秒/4GiB；原真实Linux/Windows进程树测试另由`integration-terminal-process-release`同样固定60秒/4GiB选择，平台skip不能计作原生通过。不代Python lease、Gateway/Web、Backend重启或其它平台实机。
 
+同文件的ps/taskkill与探测双错场景始终由真实Linux PTY创建资源，只在故障窗口显式替换平台选择、原生查询和存在性探测，故障解除后恢复Linux原停止链。核主错误码、两份原诊断、unknown/原身份及同入口停止；不能把这种HTTP/PTY组合证据称为Windows或Darwin实机验收。
+
 
 ## 可修改内容
 

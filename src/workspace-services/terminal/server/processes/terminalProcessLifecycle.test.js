@@ -83,7 +83,7 @@ function observeNativeFailure(scenario, failSink = false) {
       : scenario.startsWith("taskkill-") || scenario === "windows-stat" ? "win32" : "linux";
     Object.defineProperty(process, "platform", { value: platform });
     const pid = 32109, privatePath = "/private/process-diagnostic";
-    const code = scenario === "signal" ? "EPERM" : scenario === "taskkill-exit" ? 5
+    const code = scenario === "signal" ? "EPERM" : ["taskkill-exit", "taskkill-probe-after"].includes(scenario) ? 5
       : scenario === "taskkill-timeout" ? null : scenario === "taskkill-spawn" ? "ENOENT"
       : scenario === "missing-stat" || scenario === "missing-posix" || scenario === "missing-probe" ? "ESRCH"
       : scenario === "denied-probe" ? "EPERM" : "EACCES";
@@ -92,7 +92,9 @@ function observeNativeFailure(scenario, failSink = false) {
       killed: scenario === "taskkill-timeout", stderr: privatePath,
     });
     const diagnostic = Object.assign(new Error("日志失败: /private/diagnostic-sink"), { code: "ENOTDIR" });
+    const probeFailure = Object.assign(new Error("探测失败: /private/process-probe"), { code: "EIO" });
     const logs = [], signals = [];
+    let taskkillCalls = 0;
     process.stderr.write = chunk => {
       logs.push(String(chunk));
       if (failSink) throw diagnostic;
@@ -114,6 +116,7 @@ function observeNativeFailure(scenario, failSink = false) {
     };
     process.kill = (target, signal) => {
       if (signal === 0) {
+        if (scenario === "posix-probe-after" || (scenario === "taskkill-probe-after" && taskkillCalls > 0)) throw probeFailure;
         if (["probe", "missing-probe", "denied-probe", "missing-posix"].includes(scenario)) throw primary;
         return true;
       }
@@ -122,7 +125,8 @@ function observeNativeFailure(scenario, failSink = false) {
       throw primary;
     };
     childProcess.execFile = (command, args, options, callback) => {
-      if (command === "taskkill" || scenario === "posix-read" || scenario === "missing-posix"
+      if (command === "taskkill") taskkillCalls++;
+      if (command === "taskkill" || scenario === "posix-read" || scenario === "posix-probe-after" || scenario === "missing-posix"
           || (scenario === "posix-scan" && args[0] === "-ax")) {
         callback(primary, "", primary.stderr);
       } else {
@@ -140,7 +144,7 @@ function observeNativeFailure(scenario, failSink = false) {
     const { readProcessStat, processExists, terminateTerminalProcessTree } = await import(moduleUrl);
     let failure, result;
     try {
-      result = ["read", "parse", "posix-read", "missing-stat", "missing-posix", "windows-stat"].includes(scenario)
+      result = ["read", "parse", "posix-read", "posix-probe-after", "missing-stat", "missing-posix", "windows-stat"].includes(scenario)
         ? await readProcessStat(pid)
         : ["probe", "missing-probe", "denied-probe"].includes(scenario) ? processExists(pid)
         : await terminateTerminalProcessTree({ pid });
@@ -154,14 +158,29 @@ function observeNativeFailure(scenario, failSink = false) {
       assert.match(failure.message, /^终端进程操作失败:/);
       assert(!failure.message.includes("/private/"));
       assert.equal(failure.code, scenario === "parse" ? undefined : primary.code);
-      if (failSink) {
+      if (scenario.endsWith("probe-after")) {
+        const combined = failSink ? failure.cause.errors[0] : failure.cause;
+        assert(combined instanceof AggregateError);
+        assert.equal(combined.cause, primary);
+        assert.equal(combined.errors.length, 2);
+        assert.equal(combined.errors[0], primary);
+        const probe = combined.errors[1];
+        assert.equal(probe.code, "EIO");
+        assert(!probe.message.includes("/private/"));
+        if (failSink) {
+          assert.deepEqual(failure.cause.errors, [combined, diagnostic]);
+          assert.equal(failure.cause.cause, combined);
+          assert.deepEqual(probe.cause.errors, [probeFailure, diagnostic]);
+          assert.equal(probe.cause.cause, probeFailure);
+        } else assert.equal(probe.cause, probeFailure);
+      } else if (failSink) {
         assert(failure.cause instanceof AggregateError);
         assert.deepEqual(failure.cause.errors, [scenario === "parse" ? failure.cause.errors[0] : primary, diagnostic]);
         assert.equal(failure.cause.cause, failure.cause.errors[0]);
       } else if (scenario !== "parse") assert.equal(failure.cause, primary);
       if (scenario === "parse") assert(failure.cause.cause?.message.includes(privatePath) || failure.cause.message.includes(privatePath));
-      assert.equal(logs.length, 1);
-      assert(logs[0].includes(privatePath));
+      assert.equal(logs.length, scenario.endsWith("probe-after") ? 2 : 1);
+      assert(logs.at(-1).includes(privatePath));
     }
     console.log(JSON.stringify({ signals, result, failed: Boolean(failure) }));
   `;
@@ -170,7 +189,7 @@ function observeNativeFailure(scenario, failSink = false) {
   { encoding: "utf8", timeout: 5000 }));
 }
 
-for (const scenario of ["read", "parse", "scan", "signal", "probe", "posix-read", "posix-scan", "taskkill-spawn", "taskkill-exit", "taskkill-timeout"]) {
+for (const scenario of ["read", "parse", "scan", "signal", "probe", "posix-read", "posix-scan", "taskkill-spawn", "taskkill-exit", "taskkill-timeout", "posix-probe-after", "taskkill-probe-after"]) {
   for (const failSink of [false, true]) {
     test(`原生${scenario}失败保留原因且日志${failSink ? "失败" : "正常"}不公开位置`, () => {
       const observed = observeNativeFailure(scenario, failSink);
