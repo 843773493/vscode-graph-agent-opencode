@@ -17,7 +17,6 @@ import {
 } from "../../packages/launcher/src/detached-process.mjs";
 import {
   resolveServiceLogPath,
-  SERVICE_LOG_CAPTURED_ENV,
 } from "../../packages/launcher/src/logging/service-log.mjs";
 import { requestGatewayHandoff } from "../../packages/launcher/src/gateway/supervisor.mjs";
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
@@ -449,7 +448,6 @@ async function main() {
     BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
-    ...(detachedReadyFile === null ? {} : { [SERVICE_LOG_CAPTURED_ENV]: "1" }),
   };
   process.stdout.write(
     `[dev] profile=source-development port_offset=${String(portOffset)} ` +

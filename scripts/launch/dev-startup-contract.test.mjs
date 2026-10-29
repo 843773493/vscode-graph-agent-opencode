@@ -12,6 +12,32 @@ const main = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && 
 const pending = main?.body.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : [])
   .find((node) => node.name.getText(parsed) === "pendingGatewayRestart");
 if (!pending?.initializer) throw new Error("dev.mjs 缺少 main pending 配置判定");
+const mainEnvironment = main?.body.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : [])
+  .find((node) => node.name.getText(parsed) === "environment");
+if (!mainEnvironment?.initializer) throw new Error("dev.mjs 缺少 main 服务环境");
+
+describe("开发服务日志捕获的归属", () => {
+  for (const readyFile of [null, "development-ready.json"]) {
+    for (const captured of [false, true]) {
+      test(`ready=${String(readyFile)} captured=${String(captured)} 时仅继承真实外层捕获`, () => {
+        const sink = JSON.stringify({ role: "launcher", owner_id: "fixture-owner" });
+        const environment = captured
+          ? { BOXTEAM_SERVICE_LOG_CAPTURED: "1", BOXTEAM_RUNTIME_LOG_SINK: sink }
+          : {};
+        // 执行真实环境组装表达式；ready文件只表示生命周期就绪，不证明stdio已被捕获。
+        const forwarded = vm.runInNewContext(`(${mainEnvironment.initializer.getText(parsed)})`, {
+          process: { env: environment, execPath: "fixture-bun" }, path,
+          runtimeManifest: "fixture-manifest", boxteamHome: "fixture-home", projectRoot: process.cwd(),
+          pythonBin: "fixture-python", nodeBin: "fixture-node", defaultWorkspaceRoot: "fixture-workspace",
+          portOffset: 0, ports: {}, listenHost: "127.0.0.1", host: "127.0.0.1",
+          detachedReadyFile: readyFile, SERVICE_LOG_CAPTURED_ENV: "BOXTEAM_SERVICE_LOG_CAPTURED",
+        });
+        expect(forwarded.BOXTEAM_SERVICE_LOG_CAPTURED).toBe(environment.BOXTEAM_SERVICE_LOG_CAPTURED);
+        expect(forwarded.BOXTEAM_RUNTIME_LOG_SINK).toBe(environment.BOXTEAM_RUNTIME_LOG_SINK);
+      });
+    }
+  }
+});
 
 describe("开发 launcher 的 pending 配置准入", () => {
   for (const candidate of [undefined, "", "  ", "candidate-v1"]) {
