@@ -3,6 +3,7 @@
   // suite 默认带数据段内存上限与外部超时；POSIX 上限按进程生效，不限制多个运行组的总占用。
   "schemaVersion": 1,
   "suites": [
+    {"id":"integration-execution-input-commit","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/rollout_context/test_execution_input_transaction.py","tests/integration/backend/sessions/test_execution_queue_store.py","tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py::test_sqlite_commit_window_is_retryable_without_duplicate_jsonl"]},
     {"id":"integration-rollout-snapshot-release","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/rollout_context/test_read_snapshot_release.py","tests/integration/backend/sessions/rollout_context/test_schema4_crash_reader.py","tests/unit/services/infrastructure/rollout_context/storage/test_connection_release.py"]},
     {"id":"integration-fork-live-diagnostics","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/fork/test_live_resource_diagnostics.py"]},
     {"id":"integration-fork-export-diagnostics","layer":"integration","client":null,"enabled":true,"timeoutMs":120000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/fork/test_export_release_diagnostics.py"]},

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -64,31 +63,14 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
     def _execution_input_transaction(
         self, session_id: str, thread_id: str, checkpoint_ns: str = "",
     ) -> Iterator[sqlite3.Connection]:
-        """执行输入事务共用同一 SQLite connection 与 JSONL 回滚边界。"""
+        """执行输入只使用连接持有的 SQLite/JSONL 提交与回滚边界。"""
         with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
             self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            jsonl_path = self._storage.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id)
-            original_size = jsonl_path.stat().st_size
             with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
                 self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
-                try:
-                    yield connection
-                    self._storage._commit_connection(connection)
-                except BaseException as error:
-                    cleanup_error: BaseException | None = None
-                    try:
-                        connection.rollback()
-                        if jsonl_path.stat().st_size > original_size:
-                            with jsonl_path.open("r+b") as stream:
-                                stream.truncate(original_size)
-                                stream.flush()
-                                os.fsync(stream.fileno())
-                    except BaseException as rollback_error:  # noqa: BLE001
-                        cleanup_error = rollback_error
-                    if cleanup_error is not None:
-                        raise error from cleanup_error
-                    raise
+                yield connection
+                self._storage._commit_connection(connection)
 
 
     def _admit_internal_execution_transaction(
