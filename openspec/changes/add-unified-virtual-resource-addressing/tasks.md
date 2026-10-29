@@ -1486,3 +1486,10 @@
 - 旧生产的18项新增单测8 passed／10 failed：真实fs冲突且日志正常的八项通过，八项日志次错及两项发布／清理／诊断三错失败。旧生产真实Node/HTTP/Chromium截图2场景1 passed／1 failed，原件显示ENOTDIR日志位置进入普通回执。修复后36项Node检查、66项原存储／Manager／关闭消费者及2项截图网络验收全部通过；Node其中9项复跑上一片运行时出口，消费者命令中的两个不存在文件过滤项未被Bun发现，实际仅运行三文件66项，不将它们计作覆盖。原测试与断言保持，新增检查核原冲突字节、旧发布正文、精确配额、临时文件归属及下一次显式操作。
 - 截图关键资源和操作由产品HTTP生成，真实Chromium捕获后在fs目录冲突失败；仅日志writer显式制造真实ENOTDIR，观察记录不充当日志回退。核原资源／页面身份、授权revision、失败操作和冷记录一致；故障解除后原入口下一revision成功，正式下载入口返回精确PNG签名字节和长度，磁盘只有一份成功截图。其它七个出口的日志次错由存储单测证明，不称全部出口网络或恢复验收。
 - Node语法、Ruff／compileall、单文件Pyright零诊断、diff及本change strict通过。作者AST核验只改八个原catch的诊断和cause接线，其余十二个原函数／方法保持；新增私有函数一处，产品净增10行至478行，无新源码目录或依赖，不代独审。准确命令、指纹、raw和实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-111.json`。各批串行，正式集成保留跨worktree锁及外部超时、4GiB／两CPU保护；不代Gateway/Web、Python业务owner、Backend重启或Windows实机。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及原Debug服务保持。
+
+### 2026-10-29 Terminal 状态存储的诊断次错（2.2／7.2部分收口）
+
+- 原唯一`operationError`在日志writer失败时会替换原存储失败，真实resize错误回执因此包含ENOTDIR日志位置。现只在该方法内保留原cause和日志次错的有序AggregateError；正常日志仍保直接cause，发布／清理双错作为内层原因整体保留。主码与公开阶段、读写／清理顺序、Manager在途保存和同尺寸脏状态重试保持，不增加helper、协议、日志回退或业务状态。
+- 旧生产新增7项单测全部失败；真实Node/HTTP/PTY的两种日志场景1 passed／1 failed，失败原件明确为日志位置回显。修复后19项存储单测、58项Manager／Session消费者及最终2项真实PTY场景通过，共79项。首次消费者误用Bun，44 passed／14 failed均停在`node:test` mock不支持；原件14条同类错误已核对，改用Node后58项全部通过，未改产品或原断言。
+- 关键PTY、记录与尺寸来自正式创建／resize；故障只将原文件移动保全并以空目录制造真实发布冲突，以及在原诊断writer制造ENOTDIR。核原文件字节、临时文件清理、主进程／worker及SID／启动身份、已应用尺寸；恢复原文件后同尺寸入口仍提交新记录且只有一个原资源。正式删除后独立核两个原进程已不执行；交付自查将成功产物写入移至上述退出断言之后，受影响两项再验2 passed／7.57秒，其余产品与原测试不变，不为此重跑已通过存储／消费者。
+- Node语法、Ruff／compileall、单文件Pyright零诊断、diff和本change strict通过。作者AST核验只改`operationError`，constructor/read/write保持，原测试逐字保留；104行产品文件净增5行，无新增源码文件／目录／依赖，不代独审。命令、源码指纹、raw、退出码与最终复用边界见 `out/tests/temp/uri-global-closure/artifacts/verification-112.json`。各批串行、正式集成保留跨worktree锁及外部超时、4GiB／两CPU保护；本场景不代表创建失败窗口、Gateway/Web、Python业务owner、Backend重启或Windows实机。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与用户原Debug服务保持。

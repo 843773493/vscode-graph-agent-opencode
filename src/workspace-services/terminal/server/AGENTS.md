@@ -72,6 +72,8 @@ StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`s
 
 StateStore按实际读写阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause；只有读取正文的ENOENT表示尚无记录。在临时写入或发布失败后清理本次临时文件，正式状态继续保留旧字节。清理也失败时，用`AggregateError`按发生顺序保留两份原异常，并将写入异常作为`cause`，不能覆盖主失败或伪报发布成功。这里只结束本次文件操作，Manager释放在途保存后仍允许下一次显式请求，不自动重试或恢复临时正文。
 
+唯一`operationError`同时处理诊断writer次错：正常日志保持直接cause，日志失败时把原cause和诊断异常按顺序放入AggregateError；已有发布／清理双错仍作为内层cause整体保留，公开主错误码及阶段保持。真实PTY/HTTP验收通过原resize制造发布冲突，核原进程身份、故障解除后的同尺寸保存和真实资源回收；不将此证据扩大到创建失败或Backend重启。
+
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 
 `/health`的`terminal_count`直接读取Manager当前资源Map的大小，含仍保留的非运行记录，与列表条目数量同义；它不是活跃PTY进程数。健康计数不生成、排序终端展示快照，也不读取或过滤输出buffer。

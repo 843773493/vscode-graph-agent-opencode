@@ -88,9 +88,14 @@ export class TerminalStateStore {
 
   operationError(operation, stage, primary, cause = primary) {
     const code = primary.code || (operation === "读取" ? "terminal_records_read_failed" : "terminal_records_write_failed");
-    logger.withContext({ workspace_id: this.workspaceId }).error(`[terminal-state-store] ${operation}终端状态失败`, {
-      workspaceId: this.workspaceId, filePath: this.stateFile, stage,
-    }, cause);
+    try {
+      logger.withContext({ workspace_id: this.workspaceId }).error(`[terminal-state-store] ${operation}终端状态失败`, {
+        workspaceId: this.workspaceId, filePath: this.stateFile, stage,
+      }, cause);
+    } catch (diagnosticError) {
+      // 保留原存储/清理失败，日志次错不能替换公开阶段或打断Manager结算。
+      cause = new AggregateError([cause, diagnosticError], "终端状态操作与诊断输出均失败", { cause });
+    }
     return Object.assign(new Error(
       `${operation}终端状态失败: workspace_id=${this.workspaceId}, artifact=terminal_records, stage=${stage}, code=${code}`,
       { cause },

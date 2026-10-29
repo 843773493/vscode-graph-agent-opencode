@@ -23,6 +23,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_websocket_input_errors.py`通过真实Node WebSocket/HTTP及PTY验证三类原生路径的JSON/schema/type拒绝、附加前零资源、原授权顺序，以及同连接真实shell写文件、PID保持与detach。`integration-terminal-websocket-input-errors`固定60秒/4GiB；不代表Gateway/Web、Python业务owner、进程重启、Windows实机或其它Terminal运行时错误验收。
 
+`test_terminal_storage_diagnostics.py`经正式HTTP创建真实PTY，移动原状态文件并以目录制造发布冲突，只在原诊断writer制造真实ENOTDIR。核对公开错误、原文件字节、进程身份、已应用尺寸和故障解除后的同尺寸落盘，原删除入口后独立核实PTY/worker退出；故障恢复只归还原文件，不代填状态。suite `integration-terminal-storage-diagnostics`固定60秒/4GiB，不代创建失败窗口、Gateway/Web、Python业务owner、Backend重启或Windows实机。
+
 
 ## 可修改内容
 

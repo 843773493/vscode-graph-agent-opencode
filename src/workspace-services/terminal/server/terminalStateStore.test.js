@@ -171,3 +171,96 @@ test("编码失败保留已发布状态且不把序列化异常正文公开", as
   assert.deepEqual(await readFile(store.stateFile), originalBytes);
   assert.deepEqual(await readdir(store.stateDir), ["terminals.json"]);
 });
+
+for (const mode of ["read-directory", "read-parse", "read-schema", "write-directory", "write-encoding", "write-publish"]) {
+  test(`${mode}与诊断次错同时发生仍保留原阶段并可显式重试`, async (t) => {
+    const store = await createStore(t);
+    await store.write(snapshot("原始版本"));
+    const originalBytes = await readFile(store.stateFile);
+    let value = snapshot("待发布版本");
+    if (mode === "read-directory") {
+      await rm(store.stateFile);
+      await mkdir(store.stateFile);
+    } else if (mode === "read-parse") {
+      await writeFile(store.stateFile, `{"private": ${store.stateFile}`);
+    } else if (mode === "read-schema") {
+      await writeFile(store.stateFile, JSON.stringify({ schema_version: store.stateFile }));
+    } else if (mode === "write-directory") {
+      await rm(store.stateDir, { recursive: true });
+      await writeFile(store.stateDir, "保留冲突字节");
+    } else if (mode === "write-encoding") {
+      const circular = {};
+      circular[store.stateFile] = circular;
+      value = { ...value, terminals: [circular] };
+    } else {
+      await rm(store.stateFile);
+      await mkdir(store.stateFile);
+    }
+    const sinkError = Object.assign(new Error(String.raw`ENOTDIR: \\host\share\diagnostic.log`), { code: "ENOTDIR" });
+    const attempts = [];
+    t.mock.method(process.stderr, "write", text => { attempts.push(text); throw sinkError; });
+    const writing = mode.startsWith("write-");
+    const stage = {
+      "read-directory": "正文读取", "read-parse": "正文解析", "read-schema": "记录核验",
+      "write-directory": "目录创建", "write-encoding": "正文编码", "write-publish": "文件发布",
+    }[mode];
+    await assert.rejects(writing ? store.write(value) : store.readRecords(), error => {
+      assert(error.cause instanceof AggregateError);
+      const primary = error.cause.errors[0];
+      assert(primary instanceof Error);
+      assert.deepEqual(error.cause.errors, [primary, sinkError]);
+      assert.equal(error.cause.cause, primary);
+      assert.equal(error.code, primary.code || (writing ? "terminal_records_write_failed" : "terminal_records_read_failed"));
+      assert.equal(error.message, `${writing ? "写入" : "读取"}终端状态失败: workspace_id=${store.workspaceId}, artifact=terminal_records, stage=${stage}, code=${error.code}`);
+      assert.equal(attempts.length, 1);
+      assert(attempts[0].includes(inspect(primary)) && attempts[0].includes(store.stateFile));
+      return true;
+    });
+    if (mode === "write-directory") {
+      assert.equal(await readFile(store.stateDir, "utf8"), "保留冲突字节");
+      await rm(store.stateDir);
+      await mkdir(store.stateDir);
+    } else if (["read-directory", "write-publish"].includes(mode)) {
+      assert.deepEqual(await readdir(store.stateFile), []);
+      await rm(store.stateFile, { recursive: true });
+    } else if (mode === "write-encoding") assert.deepEqual(await readFile(store.stateFile), originalBytes);
+    t.mock.restoreAll();
+    await writeFile(store.stateFile, originalBytes);
+    assert.deepEqual(await store.readRecords(), snapshot("原始版本").terminals);
+    await store.write(snapshot("显式重试"));
+    assert.deepEqual(await store.readRecords(), snapshot("显式重试").terminals);
+    assert.deepEqual(await readdir(store.stateDir), ["terminals.json"]);
+  });
+}
+
+test("发布、清理和诊断三错不覆盖主码、旧正文或原始异常顺序", async (t) => {
+  const store = await createStore(t);
+  await store.write(snapshot("原始版本"));
+  const originalBytes = await readFile(store.stateFile);
+  const writeError = Object.assign(new Error("/private/terminal-publish"), { code: "EXDEV" });
+  const cleanupError = Object.assign(new Error(String.raw`C:\private\terminal-cleanup`), { code: "EPERM" });
+  const sinkError = new Error(String.raw`\\host\share\terminal-diagnostic`);
+  t.mock.method(fs, "rename", async () => { throw writeError; });
+  t.mock.method(fs, "rm", async () => { throw cleanupError; });
+  t.mock.method(process.stderr, "write", () => { throw sinkError; });
+  syncBuiltinESMExports();
+  await assert.rejects(store.write(snapshot("不能发布")), error => {
+    assert.equal(error.code, "EXDEV");
+    assert(error.cause instanceof AggregateError);
+    const [storageFailure, diagnosticFailure] = error.cause.errors;
+    assert(storageFailure instanceof AggregateError);
+    assert.deepEqual(storageFailure.errors, [writeError, cleanupError]);
+    assert.equal(storageFailure.cause, writeError);
+    assert.equal(error.cause.cause, storageFailure);
+    assert.equal(diagnosticFailure, sinkError);
+    for (const original of [writeError, cleanupError, sinkError]) assert(!error.message.includes(original.message));
+    return true;
+  });
+  assert.deepEqual(await readFile(store.stateFile), originalBytes);
+  assert.equal((await readdir(store.stateDir)).filter(name => name.endsWith(".tmp")).length, 1);
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  await store.write(snapshot("显式重试"));
+  assert.deepEqual(await store.readRecords(), snapshot("显式重试").terminals);
+  assert.deepEqual(await readdir(store.stateDir), ["terminals.json"]);
+});
