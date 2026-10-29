@@ -1,5 +1,9 @@
 当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作设计待调整，暂停继续扩展该部分实现与专项验收。4.7/4.9/6.8 及总验收中涉及团队、成员、委派与会话协作通信的剩余内容保留 TODO 和未完成状态，待新设计确定后重新规划；通用来源注入、执行恢复、fork、资源和 URI 链路继续推进。已有证据保留，不能据此将延期部分勾选完成。
 
+2026-10-29 7.1配置发布reader审计：9.5现行设计已明确由配置owner在候选构建时复用StableSourceReader，旧目录白名单却将其一概拒绝；092／093原件中的域外引用失败据此判定为审计范围滞后，不搬迁正文owner或增加转发层。静态检查只放行InstructionFileInputs.load的AST子树，配置accessor、diagnostics、readiness、CSM、工具和模型准备继续禁止直接使用reader。全仓旧测试名无其它调用方，已同步更名，其余旧测试和生产代码保持。
+
+完整候选tree归档中20项来源合同与1项冷active快照测试全部通过；两个隔离变异分别在readiness／diagnostics加入reader，均被同一检查拒绝。Ruff／compileall及本change、URI change的strict通过，Pyright完整旧HEAD／候选均6项既有诊断，按文件、最窄AST owner、规则、完整消息和表达式一致，无新增。所有执行串行且有外部超时／内存保护，准确命令、指纹、raw、实际退出码、候选tree及作者AST核对见 `out/tests/temp/uri-global-closure/artifacts/verification-094.json`。本片不改变发布／恢复实现，不替代产品集成或总体门；7.1及团队／协作延期项仍未勾。前端和相关OpenSpec未实施，其他agent改动／暂存及原Debug保持。
+
 2026-10-27 规划更新（仅改 OpenSpec，未授权本轮实施）：task 默认 empty，安全默认范围模式改名 last_completed_turn_fork，保留 internal/空来源行为；view_prefix_fork 开放 item-only 精确 Thread 全分支最新有效 view 定位、显式 view 和 inclusive/before。task 调用落盘后，在原 owner 一致快照/保护下定位、冻结和 capture；原始 selector 与实际冻结结果分离，重试/启动恢复不重选 latest，协议或正文失败不回退。消费主 change 两项具名 requirement，实施与验收唯一跟踪 `add-itemized-rollout-context/tasks.md` 第 14 节，不重复建立 checklist；第 13 节及旧名称/前缀拒绝测试仅为历史基线。旧冻结凭证 TODO 被本设计取代，其余 4.7/4.9/6.8 团队/协作 TODO 保持未完成，Goal 重构仍归 `add-workspace-persistent-tasks`，业务机制保持。
 
 本轮增量（2026-10-25登记，2026-10-26进入可实施状态）：第 9 节跟踪 CSM 模型可见协议、消息分组、显式刷新与模式转换、来源能力组合和四层 SkillCatalog 等新增要求，按实际实现与验收证据更新完成状态。第 1–8 节的已勾选任务及收据仅证明各自历史基线，不覆盖本轮增量；其中旧逐来源消息、三来源目录与重复加载的基线按第 9 节迁移，不保留并行实现。团队／协作专项继续暂缓，不阻塞边界明确的独立切片。

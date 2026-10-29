@@ -191,6 +191,8 @@ instruction 注册使用不可变 `InstructionUpdateBinding(owner, publication_r
 
 文件通过原 `WorkspaceFilePaths` owner 解析 Workspace／同目标 Gateway 的 files URI，再复用 `StableSourceReader` 稳定读取、UTF-8／普通文件／symlink／大小检查；正文长度沿用原 schema，不另设一套限制。读取发生在配置候选构建和已有 ConfigFileWatcher 的后台对账中；发布的 ConfigSnapshot 保存冻结有效正文与 selector，冷 active snapshot 恢复不读取当前文件。URI解析所需连接参数使用本次候选的临时 pinned view，临时 view 不发布、不形成第二 active 快照。
 
+reader 的静态归属审计按此发布边界判定：除既有来源 owner 外，只允许 `InstructionFileInputs.load` 的候选正文构建使用共享 reader／handle；不豁免整个配置文件。配置 accessor、diagnostics、readiness、CSM、工具和模型准备仍不得直接使用 reader，冷恢复继续消费已发布正文；不能为满足旧目录白名单另包一层 reader 或重复维护快照。
+
 同一配置监听器重绑精确文件依赖，订阅开始及重绑窗口主动对账；缺少父目录时只监听最近存在的祖先和下一待创建目录，逐层恢复，不扫描未知目录。读取／正文校验失败明确拒绝候选并保留旧 active，诊断报告失败与来源 URI；无 inline 回退。新 execution 冻结前检查 owner 已记录的内存 readiness，已冻结 execution、同 Turn retry和 sealed replay只恢复原冻结事实。配置 accessor、工具及模型 preparation 不读提示词文件。R01／R02仍按 `next_job` 发布新 runtime generation，不声称在旧 execution 的任意 model call 内即时切换。
 
 9.1 的封存合同由原 itemized owner 版本化：`SourceObservation.requested_mode` 使用闭集 `snapshot|tracked|untrack`，仅表示请求；`AppendedItemRef.source_tracking_at_seal` 使用 `tracked|untracked|None`，其中 canonical 引用只允许 `None`（不适用），source 引用必须明确为 `tracked|untracked`。不提供旧属性别名或双写。新 `ContextSealBinding` 显式保存 `format_version=2`；既有无标签封存唯一对应版本 1，由同一严格 codec 按整份版本读取，并在历史重编码及 fork 复制时保留原字段与字节。禁止混合版本字段、未知显式版本及按局部字段猜测格式。运行态一律使用新引用；新的 preparation preimage 标记 `context-seal-preparation:v2`，既有 seal input hash 不重算。Provider frame 的字节范围不含引用 metadata，因此原 frame、stable prefix、request hash 和历史 owner 保持不变；新 seal 在原链路写新版，不改 SQLite schema 或旧 sealed 原件。

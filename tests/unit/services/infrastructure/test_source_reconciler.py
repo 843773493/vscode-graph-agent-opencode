@@ -283,8 +283,8 @@ def test_notify_fires_only_on_observed_change(tmp_path: Path) -> None:
     assert len(notified) == 2
 
 
-def test_reader_and_reconciler_are_not_imported_outside_sources() -> None:
-    """CSM/middleware/skill_load/model-call preparation 不得直接调用 reader。"""
+def test_reader_and_reconciler_are_only_used_by_publication_owners() -> None:
+    """来源及配置发布 owner 可读文件，CSM/工具/模型准备不得直接读取。"""
     allowed = {
         "app/services/infrastructure/resource_platform/sources/observed_source.py",
         "app/services/infrastructure/resource_platform/sources/workspace_file_resources.py",
@@ -305,7 +305,15 @@ def test_reader_and_reconciler_are_not_imported_outside_sources() -> None:
         if not any(name in source for name in forbidden_names):
             continue
         tree = ast.parse(source, filename=rel)
+        publication_nodes: set[ast.AST] = set()
+        if rel == "app/services/infrastructure/config/instruction_inputs.py":
+            # 只放行候选构建，不把配置 accessor、readiness 或恢复变成读取入口。
+            owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "InstructionFileInputs")
+            publication_body = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "load")
+            publication_nodes = set(ast.walk(publication_body))
         for node in ast.walk(tree):
+            if node in publication_nodes:
+                continue
             if isinstance(node, ast.Name) and node.id in forbidden_names:
                 violations.append(f"{rel}:{node.lineno}:{node.id}")
             if isinstance(node, ast.Attribute) and node.attr in forbidden_names:
