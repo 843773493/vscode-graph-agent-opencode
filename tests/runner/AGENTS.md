@@ -15,6 +15,7 @@
 
 ## 规范
 
+- `integration-context-source-seal`经真实Saver准入、Skill激活与SQLite/JSONL封存验证来源更新保留已接受及已封存选择次序、幂等冷读，以及原assembly提交/失败回滚/CAS/epoch合同，固定60秒/4GiB；关键输入由Saver装具生成，不代完整Agent、Backend进程重启、Gateway/Web或Windows验收。
 - `integration-execution-input-commit`经Saver准入、真实SQLite/JSONL及冷Saver核对内部输入在提交前/后失败或取消时的正文、准入和队列原子性，以及原身份重试不重复写入；复跑既有队列投影/显式迁移及checkpoint提交窗口，固定60秒/4GiB，不代表完整消息执行、Backend进程重启、Gateway/Web或Windows实机。
 - `integration-rollout-snapshot-release`经真实SQLite/JSONL与Saver准入验证快照建立、取消及关闭失败后的连接／文件锁释放，并复跑原硬退出恢复与独立reader合同，固定60秒/4GiB；不代表完整消息执行、Gateway/Web或Windows实机验收。
 - `integration-fork-live-diagnostics`通过产品执行历史、ASGI公开fork和真实文件循环／日志故障核对unknown租约、已提交关联及同key恢复，固定180秒/4GiB并保留原fork watchdog；外设传输为替身，不代表真实PTY/Chromium、Gateway/Web或Backend重启。

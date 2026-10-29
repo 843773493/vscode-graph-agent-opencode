@@ -186,16 +186,22 @@ def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(
 
 
 @pytest.mark.parametrize("decision_kind", ["base", "delta", "rebuild"])
+@pytest.mark.parametrize("sealed", [False, True], ids=["pending", "sealed"])
 def test_ordinary_lifecycle_intent_keeps_visible_revision_until_real_seal(
-    source_seal_case, tmp_path, decision_kind,
+    source_seal_case, tmp_path, decision_kind, sealed,
 ):
     manager = source_seal_case.manager()
     _activate(manager, "src_a", "a", "已封存正文")
-    source_seal_case.seal(manager)
+    if sealed:
+        source_seal_case.seal(manager)
     saver, owner = source_seal_case.saver, source_seal_case.owner
     (before_state,) = saver.load_context_source_control_states(owner)
     prior_visible_revision = before_state.latest_visible_committed_revision
-    assert prior_visible_revision == before_state.latest_revision
+    assert prior_visible_revision == (before_state.latest_revision if sealed else None)
+    assert before_state.selection_sequence > 0
+    assert before_state.latest_visible_selection_sequence == (
+        before_state.selection_sequence if sealed else 0
+    )
 
     prior_items = saver._storage.storage.read_items(owner.session_id, owner.thread_id)
     prior_last_sequence = max(
@@ -210,17 +216,20 @@ def test_ordinary_lifecycle_intent_keeps_visible_revision_until_real_seal(
         revision=f"ordinary-{decision_kind}-revision",
         requested_mode="tracked",
         from_revision=(
-            prior_visible_revision if decision_kind == "delta" else None
+            before_state.latest_revision if decision_kind == "delta" else None
         ),
         content=content,
     )
     decision = build_source_lifecycle_decision(
         observation, decision_kind=decision_kind,
     )
+    assert decision.revision is not None
 
     saver.consume_mutation_intent(decision)
     (after_state,) = saver.load_context_source_control_states(owner)
     assert after_state.latest_visible_committed_revision == prior_visible_revision
+    assert after_state.selection_sequence == before_state.selection_sequence
+    assert after_state.latest_visible_selection_sequence == before_state.latest_visible_selection_sequence
     assert after_state.latest_revision == decision.revision
     assert after_state.tracking_status == "tracked"
     assert after_state.state_revision == before_state.state_revision + 1

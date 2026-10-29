@@ -676,7 +676,7 @@ class ContextSourceControlStorageMixin:
                 if decision.revision is not None
                 else (stored.latest_revision if stored is not None else None)
             )
-            # 普通 lifecycle intent 只记录最新观察版本；可见版本由真实 assembly seal 推进。
+            # 普通 lifecycle intent 保留已有选择次序；可见版本与可见次序只由 assembly seal 推进。
             latest_visible = (
                 stored.latest_visible_committed_revision
                 if stored is not None
@@ -700,6 +700,8 @@ class ContextSourceControlStorageMixin:
                 latest_visible_committed_revision=latest_visible,
                 latest_revision=latest_revision,
                 state_revision=stored.state_revision if stored is not None else 0,
+                selection_sequence=stored.selection_sequence if stored is not None else 0,
+                latest_visible_selection_sequence=stored.latest_visible_selection_sequence if stored is not None else 0,
             )
             self._write_context_source_control_transaction(connection, state, stored)
         return commit_ids
