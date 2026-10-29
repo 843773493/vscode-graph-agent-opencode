@@ -170,3 +170,68 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
     diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is failure]
     assert len(diagnostics) == 1 and "proxy-serialized-failure" in diagnostics[0].getMessage()
     assert native_path in caplog.text
+
+
+@pytest.mark.parametrize("backend_identity", [
+    "/private/backend-identity-marker/workspace", r"C:\private\backend-identity-marker\workspace",
+    r"\\server\backend-identity-marker\workspace", "",
+    "ABCDEF00-0000-4000-8000-000000000001",
+])
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_backend_identity_header_rejects_before_target_lookup_and_recovers(
+    registry: GatewayWorkspaceRegistry, monkeypatch: pytest.MonkeyPatch,
+    backend_identity: str, canonical: bool,
+) -> None:
+    backend_id = "00000000-0000-4000-8000-000000000001"
+    path = f"/api/v1/workspaces/{backend_id}/workspace" if canonical else "/api/v1/workspace"
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.exception_handler(HTTPException)(gateway_http_exception_handler)
+    app.include_router(workspace_router)
+    app.state.registry = registry
+    app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
+    app.dependency_overrides[verify_user_access_for_proxy] = lambda: None
+    lookups: list[str | None] = []
+    forwarded: list[httpx.Request] = []
+    original_resolve = registry.resolve
+
+    def resolve(workspace_id: str | None = None) -> WorkspaceTarget:
+        lookups.append(workspace_id)
+        return original_resolve(workspace_id)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        forwarded.append(request)
+        return httpx.Response(200, json={"request_id": request.headers["X-Request-ID"], "data": {"ok": True}})
+
+    monkeypatch.setattr(registry, "resolve", resolve)
+    original_targets = registry.targets()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as transport:
+        app.state.http_client = app.state.streaming_http_client = transport
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway.test", trust_env=False) as client:
+            headers = {"X-Request-ID": "backend-header-rejected", "X-BoxTeam-Workspace-Id": "diagnostic-target",
+                       "X-BoxTeam-Backend-Workspace-Id": backend_identity}
+            rejected = await client.get(path, headers=headers)
+            assert rejected.status_code == 400, rejected.text
+            assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == headers["X-Request-ID"]
+            assert "backend-identity-marker" not in rejected.text
+            expected = "必须使用标准 UUID 文本" if backend_identity.startswith("ABCDEF") else "必须是标准 UUID"
+            assert expected in rejected.json()["detail"]
+            assert lookups == [] and forwarded == []
+            assert registry.targets() == original_targets
+            assert registry.route_reference_counts("diagnostic-target") == (0, 0)
+
+            headers["X-BoxTeam-Backend-Workspace-Id"] = "00000000-0000-4000-8000-000000000002"
+            conflict = await client.get(path, headers=headers)
+            assert conflict.status_code == 400 and "不一致" in conflict.json()["detail"]
+            assert forwarded == []
+            headers["X-BoxTeam-Backend-Workspace-Id"] = backend_id
+            headers["X-Request-ID"] = "backend-header-recovered"
+            recovered = await client.get(path, headers=headers)
+            assert recovered.status_code == 200 and recovered.json()["data"] == {"ok": True}
+            assert recovered.headers["X-Request-ID"] == recovered.json()["request_id"] == headers["X-Request-ID"]
+
+    assert len(forwarded) == 1
+    assert forwarded[0].headers["X-BoxTeam-Workspace-Id"] == backend_id
+    assert "X-BoxTeam-Backend-Workspace-Id" not in forwarded[0].headers
+    assert registry.targets() == original_targets
+    assert registry.route_reference_counts("diagnostic-target") == (0, 0)

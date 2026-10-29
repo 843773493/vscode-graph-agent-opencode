@@ -15,6 +15,7 @@ from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_gateway_root
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
@@ -373,6 +374,12 @@ async def _proxy_workspace_request(
     request_body: bytes | None = None,
     navigation_deadline_at: float | None = None,
 ) -> Response:
+    requested_backend_workspace_id = request.headers.get(BACKEND_WORKSPACE_ID_HEADER)
+    if requested_backend_workspace_id is not None:
+        try:
+            validate_workspace_id(requested_backend_workspace_id)
+        except RuntimeError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     registry = _registry(request)
     if path.startswith("workspaces/"):
         backend_workspace_id = path.split("/", 2)[1]
@@ -392,9 +399,6 @@ async def _proxy_workspace_request(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    requested_backend_workspace_id = request.headers.get(
-        BACKEND_WORKSPACE_ID_HEADER
-    )
     if requested_backend_workspace_id is not None and (
         target.connection_kind != "local"
         or requested_backend_workspace_id != target.backend_workspace_id

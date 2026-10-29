@@ -1224,3 +1224,9 @@
 - 原源码对账catch复用failure_detail，动作保存Session/Thread、应用断点身份、阶段及原异常类别/错误码，真实位置及完整原实例留诊断；日志sink失败仍结算。AST核对除动作message和循环变量正名外，原对账、失效标记、持久化和命令顺序相同，无新重试或恢复链。
 - 旧生产6项反例失败；最终断点/源码/表达式单元40项通过，真实Node产品1项通过，核真实方案/启动、第二行精确暂停、外部源码变化、原发送异常、动作/manifest、request_id、同PID继续/停止与冷读，重复读取不重放清理。首轮定向命令误用不存在的文件名，未执行测试；首轮产品测试的第一行断点与启动暂停重叠，改用第二行并保留严格running/PID断言后通过。原失败输出均保留。
 - Ruff/compileall及全量strict51/0通过；当前Pyright3项均与上轮同指纹基线、规则/完整消息和不变函数AST一致，生产和新增代码无诊断，不称类型全绿。准确命令、源码指纹、raw/退出码与作者自查见`out/tests/temp/uri-global-closure/artifacts/verification-049.json`。未验完整Gateway/Web、Windows、独立Backend重启或独审；2.2/7.2总门和用户延期项保持未完成。
+
+### 2026-10-29 普通代理身份冲突错误的路径边界（2.2／7.2 部分收口）
+
+- 普通工作区代理先用现有UUID校验器验证可选Backend身份头，再查目标和比较身份；非法POSIX／盘符／UNC路径仅留原校验器诊断，不回显到普通400。原合法UUID冲突、缺省和成功转发合同保持，不新增脱敏层或身份链。
+- 旧生产10个反例失败，最终代理相关209项通过；真实Gateway与独立双mount Backend核12次拒绝、两条正确身份恢复、同PID及随后两工作区真实Session／Job／history与SQLite隔离通过。模型使用已有model_stream回放；未补Web、Windows或真实Provider。首次产品补验的新断言误含动态时间戳，已按实际DTO改核UUID／PID并保留失败原件。
+- compileall通过，Ruff7→7、Pyright12→12按owner／规则／完整消息无新增；作者AST与结构核对无新owner、目录、存储或兼容层。准确命令、源码指纹、raw和退出码见`out/tests/temp/uri-global-closure/artifacts/verification-054.json`。此片只关闭身份头回显，2.2／7.2与多工作区4.3／8.2总门继续未勾，团队协作与MCP显式持有仍延期。

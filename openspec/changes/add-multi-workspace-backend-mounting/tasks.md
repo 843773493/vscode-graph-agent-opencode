@@ -192,3 +192,9 @@
 - 真实生产投影默认使用相同namespace，原SQLite去重键遗漏connection，导致两个Gateway导出同remote_workspace_id时误拒绝。唯一writer的remote_projection身份键现包含已有connection_id；其它owner原有去重保持，不改持久字段、SQL、事务、schema或历史记录，不新增命名空间回填/双读。
 - 新测试从人工注册和配置批量入口经原发现协议/DTO产生投影，修改前2 failed，修改后完整场景通过：不同backend UUID和路由保持独立，同连接重复仍拒绝且revision/注册表不变；一个远端刷新不改另一个，关闭writer后冷重开保留全部原身份，再从原重连入口恢复两条路由。扩大六文件回归238 passed/1 failed（12.81秒）；唯一提交观察者异常原对象断言，在完整旧提交`e265172f8`的git archive中单独复现同一失败，未修改断言，不称全绿。
 - Ruff8项与旧HEAD输出逐字一致；Pyright生产13→13，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，compileall通过。作者按架构技能核对：生产796行沿用唯一registry owner，仅新增键字段；测试置于既有federation目录（12个直接Python文件），无新目录、DDL或职责。SSH/HTTP分别为替身与MockTransport，不冒称真实网络或独立产品验收。命令、原始输出、源码指纹、实际退出码、旧提交归因及结构证据见`out/tests/temp/uri-global-closure/artifacts/verification-019.json`；临时旧源码已删除，baseline运行输出保留。URI与多工作区全局门仍未勾，团队/协作和MCP显式持有继续延期。
+
+### 2026-10-29 普通代理的 Backend 身份头拒绝（4.3／8.2 部分收口）
+
+- `X-BoxTeam-Backend-Workspace-Id` 在目标查找前由现有唯一 UUID 校验器验证，非法原生路径不再进入冲突错误正文；合法 UUID 冲突仍为400，缺省、正确身份、上游注入和头部剥离行为保持。无新身份解析器、DTO、存储或代理链。
+- 新增10个单元反例在旧生产全部失败；最终代理相关209项通过。真实 Gateway／独立 managed Backend 双mount用例通过，核两目标、两种路径入口共12次非法输入的400及头体request_id、正确身份恢复与同PID，两工作区随后从产品入口完成Session／消息／Job并核SQLite隔离。模型沿用model_stream回放，未冒充真实Provider或Web。首轮新增恢复断言误比较每次读取都会变化的runtime时间戳，按实际DTO改核UUID／PID后重验；原失败保留。
+- compileall通过；Ruff7→7、Pyright12→12，按文件／最窄AST owner／规则／完整消息无新增，不称静态全绿。作者AST核对除身份头前移和校验外代理函数主体不变，未增目录、owner或兼容链；815行集成文件保留同一共享生命周期fixture，结构审查原件与准确命令、指纹、raw、退出码见`out/tests/temp/uri-global-closure/artifacts/verification-054.json`。旧146路径清单当前命中166路径，差集及6个新增生产路径增审见同目录`multi-workspace-inventory-20261029.json`；未声称全差集复核完成。4.3／8.2继续未勾，团队协作与MCP显式持有保持延期。

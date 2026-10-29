@@ -453,6 +453,23 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
     ids = (primary, secondary)
     healths = [await case.data("GET", "/api/v1/workspace", headers={"X-BoxTeam-Workspace-Id": identity}) for identity in ids]
     assert len({item["workspace_id"] for item in healths}) == 2
+    for identity, health in zip(ids, healths, strict=True):
+        for path in ("/api/v1/workspace", f"/api/v1/workspaces/{health['workspace_id']}/workspace"):
+            for invalid in ("/private/backend-header-marker/workspace", r"C:\private\backend-header-marker\workspace",
+                            r"\\server\backend-header-marker\workspace"):
+                response = await case.client.get(path, headers={
+                    "X-Request-ID": "shared-backend-header-rejected", "X-BoxTeam-Workspace-Id": identity,
+                    "X-BoxTeam-Backend-Workspace-Id": invalid,
+                })
+                assert response.status_code == 400, response.text
+                assert response.headers["X-Request-ID"] == response.json()["request_id"] == "shared-backend-header-rejected"
+                assert response.json()["detail"] == "Workspace 后端工作区 ID 必须是标准 UUID"
+                assert "backend-header-marker" not in response.text
+        recovered = await case.data("GET", "/api/v1/workspace", headers={
+            "X-BoxTeam-Workspace-Id": identity, "X-BoxTeam-Backend-Workspace-Id": health["workspace_id"],
+        })
+        assert recovered["workspace_id"] == health["workspace_id"]
+        assert recovered["runtime"]["pid"] == health["runtime"]["pid"]
     await case.data("POST", f"/api/gateway/workspaces/{secondary}/activate")
     for index, (root, health) in enumerate(zip(case.roots, healths, strict=True)):
         probe = root / "uri-mount-probe.txt"
