@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.embeddings import EmbeddingComputerProtocol
 from app.agents.custom_tools import CustomToolFactoryContext
+from app.core.failures import failure_detail
 from app.runtime.embeddings import LiteLLMEmbeddingComputer
 
 _MAX_DOWNLOAD_BYTES = 2_000_000
@@ -385,7 +386,9 @@ async def _fetch_page(
                 "content_truncated": output_truncated or download_truncated,
             }
     except httpx.HTTPError as error:
-        raise RuntimeError(f"抓取网页失败: url={validated_url}, error={error}") from error
+        raise RuntimeError(failure_detail(
+            error, stage="web-fetch", label=f"抓取网页失败: url={validated_url}",
+        )) from error
 
 
 def create_web_search_tool(context: CustomToolFactoryContext) -> BaseTool:
@@ -424,7 +427,9 @@ def create_web_search_tool(context: CustomToolFactoryContext) -> BaseTool:
                 normalized_query,
             )
         except Exception as error:
-            raise RuntimeError(f"DuckDuckGo 搜索失败: query={normalized_query!r}, error={error}") from error
+            raise RuntimeError(failure_detail(
+                error, stage="web-search", label=f"DuckDuckGo 搜索失败: query={normalized_query!r}",
+            )) from error
         if not isinstance(raw_results, list):
             raise TypeError(f"DuckDuckGo 返回了非列表结果: {type(raw_results).__name__}")
         results = []

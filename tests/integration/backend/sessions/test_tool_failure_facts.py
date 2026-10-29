@@ -7,11 +7,13 @@ import logging
 from collections.abc import Callable, Mapping
 from functools import wraps
 
+import httpx
 import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.serde.types import ERROR
 
 from app.agents import agent_factory
+from app.agents.tools import web as web_tools
 from tests.integration.backend.sessions.test_persistent_tasks import _target
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
@@ -144,3 +146,93 @@ async def test_unhandled_tool_failure_keeps_native_diagnostics_out_of_durable_er
                and record.exc_info[1] is raw_error for record in caplog.records)
     assert str(raw_error) in caplog.text
     case.write_actual("tool-execution", {"job": job, "canonical": result.payload, "checkpoint_errors": errors, "calls": calls})
+
+
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+@pytest.mark.parametrize("tool_name", ["web_search", "fetch_webpage"])
+async def test_web_dependency_failure_keeps_native_diagnostics_out_of_execution_records(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, tool_name: str,
+) -> None:
+    case = source_case
+    session_id, thread_id, _ = await _target(case)
+    location = case.workspace / "private-web-dependency-location"
+    location.mkdir()
+    try:
+        location.read_bytes()
+    except OSError as error:
+        native = error
+    else:
+        raise AssertionError("读取目录必须产生原生错误")
+    url = "https://web-failure.invalid/document"
+    dependency_error = httpx.ConnectError(str(native), request=httpx.Request("GET", url)) if tool_name == "fetch_webpage" else native
+    failing = True
+    observed: list[str] = []
+
+    def search(_self: object, query: str) -> list[dict[str, str]]:
+        observed.append(query)
+        if failing:
+            raise dependency_error
+        return [{"title": "恢复后的搜索结果", "link": url, "snippet": "外部依赖恢复"}]
+
+    handle = httpx.AsyncHTTPTransport.handle_async_request
+
+    async def fetch(transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        if str(request.url) == url:
+            observed.append(str(request.url))
+            if failing:
+                raise dependency_error from native
+            return httpx.Response(200, request=request, headers={"content-type": "text/plain"}, text="外部依赖恢复")
+        return await handle(transport, request)
+
+    monkeypatch.setattr(web_tools.DuckDuckGoSearchResults, "invoke", search)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fetch)
+    arguments = {"query": "Python documentation"} if tool_name == "web_search" else {"urls": [url]}
+    reply = _tool_reply("invoke_extension_tool", {"tool_name": tool_name, "arguments": arguments}, "web-dependency")
+    calls = await case.plan(session_id, [reply])
+    with caplog.at_level(logging.ERROR):
+        accepted = await _send(case, session_id, "验证网页工具依赖失败，保留明确的恢复依据。")
+        job_id = accepted["job_id"]
+        assert isinstance(job_id, str)
+        job = await _job(case, job_id, expected="failed")
+    assert observed == ["Python documentation" if tool_name == "web_search" else url]
+    assert case.call_count(session_id, thread_id) == 1
+    items = case.container.checkpointer._storage.storage.read_items(session_id, thread_id)
+    result, = [item for item in items if item.semantic_kind == "tool_result"]
+    assert isinstance(result.payload, Mapping)
+    assert result.payload["tool_call_id"] == calls[0] + ":tool-call:web-dependency"
+    assert result.payload["name"] == "invoke_extension_tool"
+    assert result.payload["tool_outcome"] == "unknown" and result.payload["execution_confirmed"] is False
+    root = f"/api/v1/sessions/{session_id}/turns/{accepted['turn_id']}/message-stream"
+    snapshot = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    assert snapshot.status_code == 200, snapshot.text
+    frozen_stream = snapshot.json()["data"]
+    assert frozen_stream["stream_status"] == "failed"
+    logs = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    traces = await case.client.get(f"/api/v1/sessions/{session_id}/traces", params={"thread_id": thread_id})
+    for response in (snapshot, logs, traces):
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    public = json.dumps([job, result.payload, frozen_stream, logs.json(), traces.json(), case.requests()], ensure_ascii=False)
+    assert location.name not in public and str(location) not in public
+    checkpoints = list(case.container.checkpointer.list(None))
+    assert location.name not in repr(checkpoints)
+    storage = case.container.checkpointer._storage.storage
+    with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
+        assert location.name not in "\n".join(connection.iterdump())
+    assert any(record.name == "app.core.failures" and record.exc_info and record.exc_info[1] is dependency_error for record in caplog.records)
+    assert str(location) in caplog.text
+    original_items = case.sql(session_id, thread_id, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence")
+
+    # 只恢复外部依赖；原会话再次调用同一工具，旧失败和canonical身份保持。
+    failing = False
+    await case.plan(session_id, [reply, {"content": "工具依赖已恢复。"}])
+    successor = await _send(case, session_id, "使用恢复后的网页工具。")
+    successor_job = successor["job_id"]
+    assert isinstance(successor_job, str)
+    await _job(case, successor_job)
+    assert len(observed) == 2 and case.call_count(session_id, thread_id) == 3
+    original = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    assert original.status_code == 200 and original.json()["data"] == frozen_stream
+    assert case.sql(session_id, thread_id, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence")[:len(original_items)] == original_items
+    case.write_actual(tool_name + "-dependency-failure", {"job": job, "tool_result": result.payload, "message_stream": frozen_stream})

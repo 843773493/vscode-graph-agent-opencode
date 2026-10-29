@@ -1310,3 +1310,9 @@
 - 原执行失败出口不再把缺少errno／filename字段的普通OSError及其非TimeoutError子类当作业务说明，Job、执行事件、消息流和LLM记录继续共用同一公开失败事实；原异常实例、原因链与完整诊断保持。无原生字段的TimeoutError沿既有业务期限说明合同，有原生字段时仍公布I/O类别与错误码，不新增异常包装、文本扫描、schema或第二失败链。
 - 原实现8个反例失败／12项通过，其中真实Session／消息执行把目录读取失败重新构造为纯文本OSError，确认Job回显原生位置。修复后定向20项及调用方138项通过，保留原生失败分支全部断言，核对冷消息流、SQLite正文、LLM日志、队列终态、原异常cause、同thread后继执行和旧canonical前缀不变；模型仍复用原装具，HTTP为ASGI，不冒充真实Provider、独立进程重启或Gateway／Web验收。
 - Ruff、compileall和strict通过；四文件Pyright保留4项既有诊断，完整HEAD归档按文件、最窄AST owner、规则、完整消息与原表达式确认无新增，不称类型全绿。作者结构自查确认原顶层符号集合不变，无新owner或目录；命令、源码指纹、raw、实际退出码及局限见 `out/tests/temp/uri-global-closure/artifacts/verification-076.json`。重型验证串行，Linux测试进程组另有6GiB、禁用swap、4核与512任务限制；跨agent／worktree全局并发闸门尚未实现，不能把这项缺口报为完成。2.2／7.2总门与用户延期项保持未勾，运行中的Debug服务保持。
+
+### 2026-10-29 Web工具依赖失败的公开记录（2.2／7.2部分收口）
+
+- 搜索与网页抓取的原依赖异常出口复用 `failure_detail`，公开说明保留查询／URL、阶段、原异常类别及适用错误码，完整原错留诊断和直接cause。原RuntimeError、捕获范围、超时／取消及成功链保持；生产AST除两处错误构造及import外完全相同，无新解析器、错误链或持久化。
+- 旧生产6项工具反例及2项真实Session／消息执行反例均在路径外泄断言失败；修复后完整工具单测12项、执行集成4项通过。核canonical工具配对与unknown状态、Job、消息流、LLM日志、trace、请求、checkpoint及SQLite不复制原生位置，原诊断保全；只恢复外部依赖后，同会话再次执行成功，原失败snapshot和canonical身份／hash前缀不变。关键状态由原产品入口生成，模型复用现有model_stream；HTTP为ASGI、网络依赖为明确替身，不计作真实Provider、Web、独立进程重启或Windows实机验收。
+- Ruff、compileall与strict通过；完整HEAD归档的Pyright两项既有诊断按最窄AST owner、原表达式、规则和完整消息逐项一致，零新增；既有测试定义AST保持。准确命令、源码指纹、原始输出、实际退出码和局限见 `out/tests/temp/uri-global-closure/artifacts/verification-078.json`。重型检查串行，测试进程整组6GiB／禁用swap／4核／512任务限制已实测生效；跨agent／worktree全局并发闸门仍未实现。2.2／7.2总门及用户延期项保持未勾，Debug服务保留。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from unittest.mock import MagicMock
 
@@ -247,3 +248,42 @@ async def test_fetch_webpage_query_requires_embedding_configuration() -> None:
                 "query": "semantic query",
             }
         )
+
+
+@pytest.mark.parametrize("tool_name", ["web_search", "fetch_webpage"])
+@pytest.mark.parametrize("location", ["/private/web-library-cache", r"C:\private\web-library-cache", r"\\target\private\web-library-cache"])
+async def test_web_dependency_failure_preserves_cause_without_publishing_native_locations(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tool_name: str, location: str,
+) -> None:
+    native = PermissionError(13, "外部库无法读取本机文件: " + location, location)
+    url = "https://web-failure.invalid/document"
+    dependency_error = httpx.ConnectError(str(native), request=httpx.Request("GET", url)) if tool_name == "fetch_webpage" else native
+    observed: list[str] = []
+
+    def search(_self: object, query: str) -> list[dict[str, str]]:
+        observed.append(query)
+        raise dependency_error
+
+    handle = httpx.AsyncHTTPTransport.handle_async_request
+
+    async def fetch(transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        if str(request.url) == url:
+            observed.append(str(request.url))
+            raise dependency_error from native
+        return await handle(transport, request)
+
+    monkeypatch.setattr(web_tools.DuckDuckGoSearchResults, "invoke", search)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fetch)
+    context = MagicMock()
+    context.tool_options = {}
+    tool = web_tools.create_web_search_tool(context) if tool_name == "web_search" else web_tools.create_fetch_webpage_tool(context)
+    arguments = {"query": "  Python documentation  "} if tool_name == "web_search" else {"urls": [url]}
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as caught:
+        await tool.ainvoke(arguments)
+    assert caught.value.__cause__ is dependency_error
+    assert location not in str(caught.value) and "web-library-cache" not in str(caught.value)
+    assert f"error={type(dependency_error).__name__}" in str(caught.value)
+    assert ("Python documentation" if tool_name == "web_search" else url) in str(caught.value)
+    assert observed == ["Python documentation" if tool_name == "web_search" else url]
+    assert any(record.exc_info and record.exc_info[1] is dependency_error for record in caplog.records)
+    assert location in caplog.text
