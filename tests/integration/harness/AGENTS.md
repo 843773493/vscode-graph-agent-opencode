@@ -10,6 +10,7 @@ harness/
 ├── test_gateway_launcher_control_endpoint.py 原生控制端点的监听、身份与清理
 ├── test_gateway_readiness.py                 Gateway 就绪探针的认证与 HTTP 拒绝
 ├── test_inprocess_model_replay.py            同一事件循环的 owner 重建与真实 SDK client 隔离
+├── test_integration_gate.py                  两个真实worktree、pytest排队、强杀与xdist名额
 ├── test_manual_browser_fixture_lifetime.py   手动连接装具的 Chromium/context/page 逆序释放
 ├── test_matrix_process_cleanup.py            矩阵退出、中断、宽限到期与隔离进程组回收
 ├── test_native_command_guard.py              共用原生命令监督器的标准流、期限、内存与后代回收

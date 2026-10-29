@@ -19,6 +19,8 @@ from tests.support.session_catalog_owner import (
 )
 from tests.support.workspaces import render_test_workspace_config
 
+pytest_plugins = ["tests.harness.python.integration_gate"]
+
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)
 
@@ -213,7 +215,7 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def runtime_manifest_path() -> Iterator[Path]:
+def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
     """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。
 
     路径 MUST NOT 落在 pytest 的 basetemp（``/tmp/pytest-of-<$USER>/pytest-<N>``）：

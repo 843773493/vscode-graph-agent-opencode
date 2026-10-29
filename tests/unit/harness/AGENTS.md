@@ -12,6 +12,7 @@ harness/
 │   ├── test_navigation_fixture_lifetime.py 导航下游的进程与日志
 │   └── test_http_readiness.py          HTTP 就绪预算、身份与退出诊断
 ├── test_run_context.py                测试运行上下文
+├── test_integration_gate.py           闸门根位置、原生锁失败与异常释放
 ├── test_output_paths.py               正式输出镜像路径与显式项目根
 ├── test_e2e_control_files.py           控制事件与模型回放文件的UTF-8读写
 ├── test_fixture_stage_observer.py      fixture计时JSONL的初始化与摘要失败释放

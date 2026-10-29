@@ -33,6 +33,7 @@ tests/
 
 ## 规范
 
+- 根 `conftest.py` 自动加载集成/E2E session 闸门；同一 Git 仓库的 worktree 共用主工作树 `out/tests/harness/python/integration_gate/runtime/session.lock`，一次只运行一个 pytest 集成/E2E进程，xdist worker 也各自占名额。无 `.git` 的源码归档使用显式项目根。名额在 session 装具清理后释放；等待最多600秒，矩阵外部期限仍包括排队时间。锁文件是稳定控制位置，不能删除或按测试产物清理。单测、非pytest命令、不同clone和旧源码不会自动受此闸门限制，外部超时与内存保护仍须保留。
 - 只要关键链路使用 stub、fake、mock、固定响应、替代服务、模拟宿主或替代运行面，测试就属于 Integration。
 - E2E 必须经过真实客户端运行面、真实 Gateway、真实 Workspace 后端及场景所需真实外部依赖。
 - 正式产物路径镜像测试文件路径写入 `out/tests/`；临时诊断写入 `out/tests/temp/`。

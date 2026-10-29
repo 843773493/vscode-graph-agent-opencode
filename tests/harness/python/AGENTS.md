@@ -7,6 +7,7 @@
 ```text
 python/
 ├── run_context.py         测试运行上下文及登记资源的生命周期
+├── integration_gate.py    集成/E2E session跨worktree独占运行名额
 ├── browser_manager.py     Browser 后端、attach 前端的启动与清理
 ├── terminal_backend.py    Terminal 后端的启动及启动失败清理
 ├── terminal_frontend.py   Terminal attach 前端的启动与清理
