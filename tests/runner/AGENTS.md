@@ -15,6 +15,7 @@
 
 ## 规范
 
+- `integration-rollout-snapshot-release`经真实SQLite/JSONL与Saver准入验证快照建立、取消及关闭失败后的连接／文件锁释放，并复跑原硬退出恢复与独立reader合同，固定60秒/4GiB；不代表完整消息执行、Gateway/Web或Windows实机验收。
 - `integration-fork-live-diagnostics`通过产品执行历史、ASGI公开fork和真实文件循环／日志故障核对unknown租约、已提交关联及同key恢复，固定180秒/4GiB并保留原fork watchdog；外设传输为替身，不代表真实PTY/Chromium、Gateway/Web或Backend重启。
 - `integration-fork-export-diagnostics`通过产品消息／Agent生成来源及公开fork验证已发布目标、释放pending、原取消、冷catalog与周期恢复，固定120秒/4GiB并保留原60秒fork watchdog；传输为进程内替身，不代真实网络、Backend重启或Web验收。
 - `integration-fork-source-intent-errors`通过产品消息与真实Agent生成来源，验证远端intent字段拒绝、真实日志写入次错、零目标副作用及原key重试，固定180秒/4GiB并保留原fork watchdog；传输为进程内替身，不代真实HTTP、Gateway/Web或Backend重启验收。

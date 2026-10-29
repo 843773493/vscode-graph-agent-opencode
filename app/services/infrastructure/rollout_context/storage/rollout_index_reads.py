@@ -8,7 +8,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
@@ -70,99 +70,95 @@ class RolloutIndexMixin:
         jsonl_path = root / "rollout.jsonl"
         index_path = root / "index.sqlite"
         file_lock = self.read_lock(session_id, thread_id, checkpoint_ns or "")
-        file_lock.acquire()
-        connection: sqlite3.Connection | None = None
-        try:
-            if (
-                not root.is_dir() or root.is_symlink()
-                or not jsonl_path.is_file() or jsonl_path.is_symlink()
-                or not index_path.is_file() or index_path.is_symlink()
-            ):
-                raise RuntimeError(
-                    "recovery_required: rollout 权威文件缺失或路径非法；禁止读取时重建: "
-                    f"session_id={session_id}, thread_id={thread_id}"
+        with ExitStack() as cleanup:
+            file_lock.acquire()
+            cleanup.callback(file_lock.release)
+            try:
+                if (
+                    not root.is_dir() or root.is_symlink()
+                    or not jsonl_path.is_file() or jsonl_path.is_symlink()
+                    or not index_path.is_file() or index_path.is_symlink()
+                ):
+                    raise RuntimeError(
+                        "recovery_required: rollout 权威文件缺失或路径非法；禁止读取时重建: "
+                        f"session_id={session_id}, thread_id={thread_id}"
+                    )
+                connection = self._host._connect(
+                    thread_id,
+                    checkpoint_ns or "",
+                    session_id=session_id,
+                    read_only=True,
                 )
-            connection = self._host._connect(
-                thread_id,
-                checkpoint_ns or "",
-                session_id=session_id,
-                read_only=True,
-            )
-            connection.execute("BEGIN")
-            self._host._require_v2_runtime(connection)
-            self._validate_schema_state(connection)
-            self._host._validate_reasoning_projection_connection(connection)
-            database_state = connection.execute(
-                "SELECT database_state FROM database_meta WHERE singleton_id = 1"
-            ).fetchone()
-            if database_state is None or (
-                strict_text(database_state[0], field="database_meta.database_state")
-                == "migrating"
-            ):
-                raise RuntimeError(
-                    "rollout 正在进行 legacy migration，暂不可建立业务 context snapshot"
-                )
-            actual_owner = current_scope(connection)
-            expected_owner = (session_id, thread_id)
-            if actual_owner != expected_owner:
-                raise ValueError(
-                    "source-mismatch: 读取方与目标 rollout catalog owner 不一致; "
-                    f"expected={expected_owner!r}, actual={actual_owner!r}"
-                )
-            self._validate_v2_commit_offsets(
-                connection, jsonl_path, validate_jsonl_items=validate_integrity
-            )
-            committed_row = connection.execute(
-                "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
-            ).fetchone()
-            if committed_row is None:
-                raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
-            committed_offset = strict_non_negative_int(
-                committed_row[0],
-                field="database_meta.committed_jsonl_offset",
-            )
-            if jsonl_path.stat().st_size < committed_offset:
-                raise RuntimeError("recovery_required: rollout.jsonl 小于 SQLite 已提交偏移")
-            integrity = (
-                connection.execute("PRAGMA integrity_check").fetchone()[0]
-                if validate_integrity
-                else "ok"
-            )
-            if integrity != "ok":
-                raise RuntimeError(
-                    "recovery_required: rollout SQLite integrity_check 失败: "
-                    f"session_id={session_id}, thread_id={thread_id}: {integrity}"
-                )
-            if checkpoint_ns is None:
-                namespace = connection.execute(
-                    "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns LIMIT 1"
+                cleanup.callback(connection.close)
+                connection.execute("BEGIN")
+                self._host._require_v2_runtime(connection)
+                self._validate_schema_state(connection)
+                self._host._validate_reasoning_projection_connection(connection)
+                database_state = connection.execute(
+                    "SELECT database_state FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
-                if namespace is None:
-                    raise RuntimeError("rollout 缺少已发布的 checkpoint namespace 状态")
-                checkpoint_ns = strict_text(namespace[0], field="checkpoint_namespace_state.checkpoint_ns", allow_empty=True)
-            manifest = self._manifest_from_connection(connection, checkpoint_ns)
-        except sqlite3.DatabaseError as error:
-            if connection is not None:
-                connection.close()
-            file_lock.release()
-            raise RuntimeError(
-                "recovery_required: rollout SQLite 无法读取；"
-                "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
-                f"session_id={session_id}, thread_id={thread_id}"
-            ) from error
-        except Exception:
-            if connection is not None:
-                connection.close()
-            file_lock.release()
-            raise
-        return RolloutReadSnapshot(
-            session_id,
-            thread_id,
-            checkpoint_ns,
-            manifest,
-            connection,
-            file_lock,
-        )
+                if database_state is None or (
+                    strict_text(database_state[0], field="database_meta.database_state")
+                    == "migrating"
+                ):
+                    raise RuntimeError(
+                        "rollout 正在进行 legacy migration，暂不可建立业务 context snapshot"
+                    )
+                actual_owner = current_scope(connection)
+                expected_owner = (session_id, thread_id)
+                if actual_owner != expected_owner:
+                    raise ValueError(
+                        "source-mismatch: 读取方与目标 rollout catalog owner 不一致; "
+                        f"expected={expected_owner!r}, actual={actual_owner!r}"
+                    )
+                self._validate_v2_commit_offsets(
+                    connection, jsonl_path, validate_jsonl_items=validate_integrity
+                )
+                committed_row = connection.execute(
+                    "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
+                ).fetchone()
+                if committed_row is None:
+                    raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
+                committed_offset = strict_non_negative_int(
+                    committed_row[0],
+                    field="database_meta.committed_jsonl_offset",
+                )
+                if jsonl_path.stat().st_size < committed_offset:
+                    raise RuntimeError("recovery_required: rollout.jsonl 小于 SQLite 已提交偏移")
+                integrity = (
+                    connection.execute("PRAGMA integrity_check").fetchone()[0]
+                    if validate_integrity
+                    else "ok"
+                )
+                if integrity != "ok":
+                    raise RuntimeError(
+                        "recovery_required: rollout SQLite integrity_check 失败: "
+                        f"session_id={session_id}, thread_id={thread_id}: {integrity}"
+                    )
+                if checkpoint_ns is None:
+                    namespace = connection.execute(
+                        "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns LIMIT 1"
+                    ).fetchone()
+                    if namespace is None:
+                        raise RuntimeError("rollout 缺少已发布的 checkpoint namespace 状态")
+                    checkpoint_ns = strict_text(namespace[0], field="checkpoint_namespace_state.checkpoint_ns", allow_empty=True)
+                manifest = self._manifest_from_connection(connection, checkpoint_ns)
+            except sqlite3.DatabaseError as error:
+                raise RuntimeError(
+                    "recovery_required: rollout SQLite 无法读取；"
+                    "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
+                    f"session_id={session_id}, thread_id={thread_id}"
+                ) from error
+            snapshot = RolloutReadSnapshot(
+                session_id,
+                thread_id,
+                checkpoint_ns,
+                manifest,
+                connection,
+                file_lock,
+            )
+            cleanup.pop_all()
+            return snapshot
 
     def validate_index(
         self, session_id: str, thread_id: str, checkpoint_ns: str = ""

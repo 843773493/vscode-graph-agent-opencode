@@ -14,7 +14,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol, Self
@@ -634,14 +634,16 @@ class _RolloutSQLiteConnection(sqlite3.Connection):
         try:
             result = super().__exit__(*args)
         finally:
-            if (
-                error is not None
-                and guard is not None
-                and not guard.commit_attempted
-                and had_transaction
-            ):
-                truncate_uncommitted_tail(guard)
-            self.close()
+            try:
+                if (
+                    error is not None
+                    and guard is not None
+                    and not guard.commit_attempted
+                    and had_transaction
+                ):
+                    truncate_uncommitted_tail(guard)
+            finally:
+                self.close()
         return result
 
 
@@ -671,11 +673,11 @@ class RolloutReadSnapshot:
         if self._closed:
             return
         self._closed = True
-        try:
+        # 逆序释放；任一步失败仍执行其余释放，并保留完整异常链。
+        with ExitStack() as cleanup:
+            cleanup.callback(self.file_lock.release)
+            cleanup.callback(self.connection.close)
             self.connection.rollback()
-        finally:
-            self.connection.close()
-            self.file_lock.release()
 
     def __enter__(self) -> Self:
         if self._closed:

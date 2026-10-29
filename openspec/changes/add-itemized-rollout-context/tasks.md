@@ -1334,3 +1334,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - TODO（未实现，不计通过）：诊断进一步确认 LiteLLM 1.100 的 OpenAI 兼容流过滤器未把独立 thinking_blocks 后续帧计为非空，导致仅签名及独立 redacted 帧在到达本项目 adapter 前丢失。原始失败、Provider/事件双端观测和上游源码 hash 保留；最终产品场景明确只验证 SDK 能交付的首帧完整块，分片累计单测不冒充 SDK 产品验收。测试源码已登记上游修复后的补验 TODO，未增加 SDK monkey patch 或第二协议解析器。
 - Ruff/compileall及 OpenSpec strict 通过；九文件真实 Pyright 对完整 HEAD archive 基线为91条诊断，当前32条均按相对文件、AST owner、原表达式、规则和完整消息逐项匹配，零新增、消除59条，不称类型全绿。测试替身补齐显式拒绝的 aget_state 和协议输入类型，抛错方法返回 NoReturn，业务断言及失败行为不变。
 - 各运行串行，进程外硬超时、单进程4GiB数据段及整组6GiB/零swap/4核额度均保留，3477项源码前后指纹一致；这不是跨agent全局并发闸门。其他52个工作区文件与共享暂存区保持原样，前端实施按用户要求暂停，既有 debug 服务持续运行。准确命令、源码/输出 hash、实际退出码、正式产物、作者结构自查和未验范围见 `out/tests/temp/uri-global-closure/artifacts/verification-082.json`。本切片不新增真实Provider网络、同步入口、Web或Windows证据，不关闭7.5组合门、团队延期项或其它全局验收。
+
+### 2026-10-29 7.5-A 读取快照与事务失败后的资源释放（部分）
+
+- 原生产反例复现：快照关闭或建立失败时，连接关闭异常会跳过文件锁释放，4项真实并发writer探测超时；取消建立另有1项遗留连接，JSONL尾部回滚失败另有1项未关闭SQLite连接。原始失败均保留，不把清理失败记为成功。
+- 沿现有owner统一释放顺序：快照建立用标准库ExitStack管理失败清理，成功后将原连接／锁交给原snapshot；snapshot关闭仍按rollback→close→释放原锁执行，任一步失败继续后续释放并保留异常链。原SQLite事务出口用finally保证尾部回滚失败仍关闭连接。删除原建立失败的重复清理分支，不新增owner、重试、账本、schema或恢复链；两份生产文件合计净减2行。
+- 连接／锁定向回归38 passed/0.84秒；最终正式`integration-rollout-snapshot-release`为16 passed/19.66秒，包含最终源码的8项新增释放场景与原8项独立reader／硬退出恢复场景。核同一原连接实际关闭、另线程真实独占锁与BEGIN IMMEDIATE可用、已提交canonical字节及冷读身份不变；尾部回滚失败的单测明确保留未清尾部，不以helper证明完整执行或进程恢复。
+- Ruff／compileall／strict通过，新增两份测试真实Pyright零诊断。首轮静态的嵌套with及测试原生方法类型问题已修正，最终源码集中复验；原失败输出不覆盖。作者AST审查确认仅3个生命周期方法变化、公开签名／SQL操作／错误文本不变，依赖只增加标准库ExitStack；原255文件静态清单不冒称当前独立审查。
+- 各运行串行，正式matrix保留跨worktree集成闸门、60秒／4GiB及进程组回收，另有外部85秒／整组4GiB／零swap／2核CPU保护。3531项源码前后指纹一致，原Debug PID未重启；其他工作区及共享暂存内容不纳入本次提交，前端和延期协作保持原边界。准确命令、raw、退出码、指纹与作者审查见`out/tests/temp/uri-global-closure/artifacts/verification-118.json`。本切片不代替公开消息执行、Gateway/Web、Windows实机或7.5组合总门，7.5继续未勾。
