@@ -1420,6 +1420,13 @@
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
 
 
+### 2026-10-29 已发布 fork 的资源结算诊断（2.2／7.2部分收口）
+
+- 共享资源 owner 的 unknown／fork attach，以及 fork 发布后的投影失败，三个原错误出口统一复用 `failure_detail`。普通回执与持久记录保留身份、阶段、异常类别及适用错误码，完整原错和日志次错留诊断；版本／关联／lease 的 `ResourceConflict` 业务说明保留。原租约保护、关联提交、revision 与同key恢复链保持；API formatter 仍有四个活跃路由消费者，本片不删除它或宣称资源API全部闭包。
+- 原生产八项反例中，正常日志四项泄漏原生位置，故障日志四项将已发布目标回执变为500。最终新增八项、共享装具迁移后的来源意图六项／来源释放四项集成，以及246项相关单测通过。来源由产品消息／Agent／`model_stream`生成，核冷记录、unknown精确租约、已提交关联及零重复派发。初轮候选四项失败是新测试误读既有“未提交时省略revision”合同，修正后同时核API省略与持久未提交；原业务断言保持，单测增加原异常身份核验。
+- 原22场景live fork回归在240秒整批超时，保留20个成功call标记，不称整批通过。产物定位剩余两个child HTTP场景，正式matrix下仅补验这两项，2 passed／35.18秒，版本冲突说明及幂等关联断言未放宽；第一次误走直接pytest被watchdog在setup拒绝的原件也保留。TODO：依据此次240秒／20个成功标记的测量，后续处理整批成本或套件分组；不把总时长误称单次fork超时，不改变原60秒watchdog或扩大原suite期限。
+- Ruff／compileall与本change strict通过；Pyright的105项既有诊断与完整旧HEAD按文件、最窄AST owner、规则、完整消息和表达式逐项相同，无新增。作者AST核对只有三个原方法及必要import变化，原两集成测试除fixture迁移外保持；既有大文件组织风险不扩修，无新源码目录，不代独审。准确命令、raw、指纹、实际退出码及限制见 `out/tests/temp/uri-global-closure/artifacts/verification-105.json`。各批集成串行，保留跨worktree闸门及进程外保护；POSIX／外设传输替身不代Windows、真实PTY/Chromium、Gateway/Web或独立Backend重启。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存和原Debug服务保持。
+
 ### 2026-10-29 已发布 fork 的来源释放诊断（2.2／7.2部分收口）
 
 - 来源释放在 target 已发布后遇到连接失败，原日志写入 ENOTDIR 会打断公开回执，恢复 worker 也可能因此退出。原 `record_pending` 现直接复用 `failure_detail`，形成阶段、类别及适用错误码摘要后由原 catalog 写入pending；日志次错只记录类别，完整原因附在原异常。原SQL、publication／capture身份、取消传播、Trace恢复和释放协议保持，删除局部错误码／日志重复实现。

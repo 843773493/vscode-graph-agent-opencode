@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from app.container import AppContainer
-from app.core import failures
 from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import (
     reset_current_gateway_id,
@@ -24,7 +21,6 @@ from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
-from app.services.business import session_context_fork_service
 from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
@@ -52,37 +48,6 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 )
 
 
-@pytest.fixture(params=[False, True], ids=["logging", "broken-logging"])
-def source_intent_sink(
-    production_fork_container: AppContainer, request: pytest.FixtureRequest,
-) -> Iterator[tuple[Path, list[BaseException]] | None]:
-    if not request.param:
-        yield None
-        return
-    blocked = production_fork_container.workspace_root / "blocked-source-intent-log"
-    blocked.write_bytes(b"keep obstruction")
-    errors: list[BaseException] = []
-
-    class FailingHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            if record.exc_info and record.exc_info[1] is not None:
-                errors.append(record.exc_info[1])
-            with (blocked / "service.log").open("a", encoding="utf-8"):
-                pass
-
-    handler = FailingHandler(level=logging.ERROR)
-    loggers = (session_context_fork_service.logger, failures.logger)
-    for logger in loggers:
-        logger.addHandler(handler)
-    try:
-        yield blocked, errors
-    finally:
-        for logger in loggers:
-            logger.removeHandler(handler)
-        handler.close()
-        assert blocked.read_bytes() == b"keep obstruction"
-
-
 @pytest.mark.parametrize("native_path", [
     "/private/fork/source.json", r"C:\private\fork\source.json", r"\\source\private\fork\source.json",
 ])
@@ -90,7 +55,7 @@ async def test_invalid_source_intent_preserves_diagnostics_and_retries_original_
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
     fork_execution_source: SessionDTO,
-    source_intent_sink: tuple[Path, list[BaseException]] | None,
+    fork_diagnostic_sink: tuple[Path, list[BaseException]] | None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     native_path: str,
@@ -142,10 +107,10 @@ async def test_invalid_source_intent_preserves_diagnostics_and_retries_original_
                 f"workspace_id={session.workspace_id}", "stage=source_intent_validation",
                 "error=ValidationError",
             ))
-            if source_intent_sink is None:
+            if fork_diagnostic_sink is None:
                 assert any(record.exc_info and record.exc_info[1] is caught.value.__cause__ for record in caplog.records)
             else:
-                blocked, errors = source_intent_sink
+                blocked, errors = fork_diagnostic_sink
                 assert errors == [caught.value.__cause__]
                 assert "diagnostic_sink_error=NotADirectoryError" in str(caught.value)
                 notes = "\n".join(caught.value.__cause__.__notes__)

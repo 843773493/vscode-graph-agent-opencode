@@ -233,15 +233,17 @@ async def test_unknown_delete_retains_discoverable_record_and_no_false_success(
     rid = str(resource["resource_id"])
     await terminal_owner.command(rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
     terminal_owner.transport.fail_delete = True
-    with pytest.raises(ConnectionError, match="丢失回执"):
+    with pytest.raises(ConnectionError, match="丢失回执") as raised:
         await terminal_owner.command(rid, action="delete", expected_revision=2)
     result = (await terminal_owner.owner.list_resources())[0]
     assert result["reconciliation_status"] == "unknown"
     assert result["status"] != "deleted"
     assert result["error"] == (
-        "ConnectionError: 操作回执不可核实 (errno=None)；请查看工作区外部资源服务日志中的详细错误"
+        f"外部资源操作结果未核实: workspace_id={terminal_owner.owner.workspace_id} kind=terminal "
+        f"resource_id={rid}: stage=resource_operation_unknown, error=ConnectionError, errno=None"
     )
     assert "删除请求发送后丢失回执" in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is raised.value for record in caplog.records)
     pending, = terminal_owner.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
     assert (pending.turn_stream_id, pending.operation_id) == ("request:owner-command", "owner-command")

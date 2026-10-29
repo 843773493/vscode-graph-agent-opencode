@@ -31,9 +31,6 @@ from app.services.infrastructure.rollout_context.fork.source_capture import (
     capture_directory,
 )
 from app.workspace_lifecycle import _retry_pending_fork_exports_periodically
-from tests.integration.backend.sessions.fork.test_source_intent_validation import (
-    source_intent_sink as source_intent_sink,  # noqa: PLC0414 - 复用真实故障日志装具
-)
 from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_message as fork_execution_message,  # noqa: PLC0414
 )
@@ -62,7 +59,7 @@ async def test_published_export_preserves_pending_cancellation_and_periodic_retr
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
     fork_execution_source: SessionDTO,
-    source_intent_sink: tuple[Path, list[BaseException]] | None,
+    fork_diagnostic_sink: tuple[Path, list[BaseException]] | None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     inprocess_model_replay,
@@ -159,10 +156,10 @@ async def test_published_export_preserves_pending_cancellation_and_periodic_retr
             with cold.read_transaction() as connection:
                 assert "private" not in "\n".join(connection.iterdump())
         errors = [first_error, retry_error, worker_error]
-        if source_intent_sink is None:
+        if fork_diagnostic_sink is None:
             assert all(any(record.exc_info and record.exc_info[1] is error for record in caplog.records) for error in errors)
         else:
-            blocked, logged = source_intent_sink
+            blocked, logged = fork_diagnostic_sink
             assert logged == errors
             assert "diagnostic_sink_error=NotADirectoryError" in (result.export_release.error or "")
             assert "diagnostic_sink_error=NotADirectoryError" in detail

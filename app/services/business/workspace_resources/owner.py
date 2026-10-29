@@ -21,6 +21,7 @@ from app.abstractions.workspace_resources import (
     ResourceTransportGrantRejected,
     RetentionScope,
 )
+from app.core.failures import failure_detail
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -30,7 +31,6 @@ from app.services.business.workspace_resources.facts import (
     index_resources,
     lease_status,
     observe_resource,
-    public_error,
     resource_projection,
     resource_target_facts,
 )
@@ -384,16 +384,20 @@ class WorkspaceResourceOwner:
                     record, "attach", expected_revision, thread, f"fork:{creation_key}",
                     self._fork_attach_operation_id(resource_id, creation_key), fork_attachment=receipt,
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — 原异常进入统一诊断，已派发回执仍由原 owner 结算。
                 # 已派发的失败保持 dispatching/unknown；绝不因存活快照自动重发。
                 record = self._require_owned_resource_record(resource_id)
                 receipt = record.fork_attachments.get(creation_key) or ForkAttachReceipt(
                     creation_key, thread, expected_revision, "rejected",
                 )
-                receipt.error = public_error(error)
+                receipt.error = failure_detail(
+                    error, stage="fork_live_attach",
+                    label=(f"fork attach 未完成: workspace_id={self.workspace_id} kind={self.kind} "
+                           f"resource_id={resource_id} creation_key={creation_key}"
+                           + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
+                )
                 record.fork_attachments[creation_key] = receipt
                 self._store.save(record)
-                logger.exception("fork attach 未完成: resource_id=%s creation_key=%s", resource_id, creation_key)
                 snapshot = resource_projection(record, None, self.kind)
             return snapshot, replace(receipt)
 
@@ -998,12 +1002,12 @@ class WorkspaceResourceOwner:
         # 丢弃未发布草稿，失败的关联、scope、版本与终态不能混入 unknown 回执。
         record = self._require_owned_resource_record(record.resource_id)
         record.reconciliation_status = "unknown"
-        logger.error(
-            "外部资源 操作结果未核实: resource_id=%s",
-            record.resource_id,
-            exc_info=(type(error), error, error.__traceback__),
+        record.error = failure_detail(
+            error, stage="resource_operation_unknown",
+            label=(f"外部资源操作结果未核实: workspace_id={self.workspace_id} kind={self.kind} "
+                   f"resource_id={record.resource_id}"
+                   + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
         )
-        record.error = public_error(error)
         record.updated_at = self._now()
         # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
         self._leases.update_external_state(

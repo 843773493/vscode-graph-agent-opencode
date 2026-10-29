@@ -83,10 +83,12 @@ from app.services.business.session_context_resource import (
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
 from app.services.business.workspace_resources.facts import (
-    public_error,
     resource_target_facts,
 )
-from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
+from app.services.business.workspace_resources.owner import (
+    ResourceConflict,
+    WorkspaceResourceOwner,
+)
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
@@ -197,15 +199,19 @@ class SessionContextForkService:
                     result.reason = "原 attach 已提交；当前 owner 已解除目标关联，不自动重新关联"
                 else:
                     result.reason = current.error or receipt.error or "原 owner 尚未核实本次资源关联"
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — 已发布目标逐项结算，原异常由统一出口保留。
                 # 目标已经发布；逐项暴露失败，不把现存目标伪报为回滚或重建。
-                logger.exception("fork 已发布目标的 live 资源结算失败: key=%s kind=%s", key, reference.kind)
+                result.reason = failure_detail(
+                    error, stage="fork_live_settlement",
+                    label=(f"fork 已发布目标的 live 资源结算失败: key={key} kind={reference.kind} "
+                           f"resource_id={reference.resource_id} session_id={session_id} thread_id={thread_id}"
+                           + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
+                )
                 receipt = owner.fork_attach_receipt(
                     reference.resource_id, creation_key=key, expected_revision=reference.expected_revision, thread=target,
                 )
                 result.operation_state = receipt.state if receipt is not None else "not_dispatched"
                 result.committed_revision = receipt.committed_revision if receipt is not None else None
-                result.reason = public_error(error)
             results.append(result)
             await observe_phase(key, f"fork.live.after_attach.{reference.kind}")
         return results
