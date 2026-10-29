@@ -15,6 +15,15 @@ import pytest
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 
+from app.schemas.internal_v2.communication import ContextQueryRequest
+from app.schemas.internal_v2.session_context import SessionContextSearchRequest
+from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
+    session_resource_identity,
+    session_resource_uri,
+    workspace_session_inventory_identity,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -48,6 +57,28 @@ async def stub_config() -> object:
 @resource_stub_app.get("/api/v1/session-catalog/export")
 async def stub_catalog() -> object:
     return {"data": {"revision": "resource-query-empty", "items": []}}
+
+
+@resource_stub_app.post("/api/v1/context/search")
+def stub_context_search(request: Request, query: dict[str, object]) -> JSONResponse:
+    control = json.loads(Path(os.environ["BOXTEAM_TEST_CATALOG_CONTROL"]).read_text())
+    owner = request.headers["X-BoxTeam-Workspace-Id"]
+    request_id = request.headers["X-Request-ID"]
+    with Path(control["requests_path"]).open("a") as output:
+        output.write(json.dumps({"workspace_id": owner, "request_id": request_id}) + "\n")
+    result = {
+        **{key: query[key] for key in ("resource_identity", "uri", "scope", "query", "match_mode")},
+        "revision": "query-fixture-1", "total_matches": 1,
+        "matches": [{
+            "resource_identity": str(session_resource_identity(owner, SESSION_A)),
+            "uri": session_resource_uri(owner, SESSION_A), "scope": "workspace",
+            "preview": "context-query-marker", "source": "effective_context", "revision": "history-fixture-1",
+            "record_index": 0, "match_start": 0, "match_end": 20,
+        }],
+    }
+    if owner == os.environ["BOXTEAM_TEST_CATALOG_OWNER"] and control["mode"] == "validation":
+        result["total_matches"] = control["native_path"]
+    return JSONResponse({"request_id": request_id, "data": result}, headers={"X-Request-ID": request_id})
 
 
 @resource_stub_app.get("/api/v1/resources")
@@ -160,3 +191,79 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
         assert "catalog-marker" in logs and "Traceback" in logs
         assert "catalog-validation-1" in logs
         (context.artifacts_dir / "catalog-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_context_search_validation_errors_keep_healthy_results_and_recover(
+    catalog_upstream: tuple[TestRunContext, Path, str, int, int],
+) -> None:
+    context, control, failed_owner, upstream_port, gateway_port = catalog_upstream
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    sibling = context.workspace_root / "search-sibling"
+    sibling.mkdir()
+    sibling_owner = workspace_backend_id_for_root(sibling)
+    evidence = []
+    with ExitStack() as lifetime:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{upstream_port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+        )
+        lifetime.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
+            await acquire_gateway_guest(client)
+            health = await client.get("/api/gateway/health")
+            health.raise_for_status()
+            gateway_id = health.json()["data"]["gateway_id"]
+            added = await client.post("/api/gateway/workspaces/local", json={
+                "root_path": str(sibling), "name": "健康搜索工作区", "backend_url": f"http://127.0.0.1:{upstream_port}",
+            })
+            assert added.status_code == 200, added.text
+            assert {item["backend_workspace_id"] for item in added.json()["data"]["items"]} == {failed_owner, sibling_owner}
+            search = SessionContextSearchRequest(
+                resource_identity=gateway_session_inventory_identity(gateway_id),
+                uri=gateway_session_inventory_uri(gateway_id), scope="gateway", query="context-query-marker",
+            )
+            query = ContextQueryRequest.model_validate({
+                "source_gateway_id": gateway_id,
+                "resource_target": {"gateway_id": gateway_id, "resource_identity": str(search.resource_identity),
+                                    "uri": search.uri, "scope": search.scope},
+                "search": search.model_dump(mode="json"),
+            })
+            payload = {"operation": "read", "resource_target": query.resource_target.to_payload(), "body": query.model_dump(mode="json")}
+            state = json.loads(control.read_text())
+            for index, native_path in enumerate(("/private/context-marker/state.sqlite", r"C:\private\context-marker\state.sqlite", r"\\server\context-marker\state.sqlite")):
+                state.update(mode="validation", native_path=native_path)
+                control.write_text(json.dumps(state))
+                request_id = f"context-validation-{index}"
+                failed = await client.post("/api/gateway/federation/relay", json=payload, headers={"X-Request-ID": request_id})
+                assert failed.status_code == 200, failed.text
+                body = failed.json()
+                assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
+                assert "context-marker" not in failed.text
+                result = body["data"]
+                assert result["returned_chars"] == len(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+                assert result["total_matches"] == 1
+                match, = result["matches"]
+                assert match["resource_identity"] == str(session_resource_identity(sibling_owner, SESSION_A))
+                assert match["uri"] == session_resource_uri(sibling_owner, SESSION_A)
+                error, = result["partial_errors"]
+                assert error["error"] == f"工作区上下文搜索失败: stage=gateway-context-search:{failed_owner}, error=ValidationError"
+                assert error["resource_identity"] == str(workspace_session_inventory_identity(failed_owner))
+                observed = [json.loads(line) for line in Path(state["requests_path"]).read_text().splitlines()]
+                assert {row["workspace_id"] for row in observed if row["request_id"] == request_id} == {failed_owner, sibling_owner}
+                evidence.append(body)
+            state["mode"] = "ready"
+            control.write_text(json.dumps(state))
+            recovered = await client.post("/api/gateway/federation/relay", json=payload)
+            assert recovered.status_code == 200, recovered.text
+            restored = recovered.json()["data"]
+            assert restored["partial_errors"] == [] and restored["total_matches"] == 2
+            assert {match["uri"] for match in restored["matches"]} == {
+                session_resource_uri(owner, SESSION_A) for owner in (failed_owner, sibling_owner)
+            }
+            assert restored["revision"] != evidence[-1]["data"]["revision"]
+            evidence.append(recovered.json())
+        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+        assert "context-marker" in logs and "ValidationError" in logs and "Traceback" in logs
+        assert all(f"context-validation-{index}" in logs for index in range(3))
+        (context.artifacts_dir / "context-search-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

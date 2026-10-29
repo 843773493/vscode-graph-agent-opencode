@@ -1277,3 +1277,9 @@
 - 原`SessionService._create`在未发布分支不再把`RuntimeError`正文写入`abort_reason`，复用已有`failure_detail`保存工作区/Session、发布阶段及原异常类别；原异常完整进入诊断并按原实例继续抛出。沿同一创建/隔离/中止owner收尾，已发布事实不abort，无新writer、schema、异常正文扫描或兼容分支。fork的显式固定中止原因与core具名原生I/O出口保持原链。
 - 新场景从真实Session创建入口生成冻结意图与目录，在真实rename后或真实catalog发布后注入回执失败。原实现3项未发布反例确证POSIX/盘符/UNC文本落入SQLite，另3项已发布状态通过；候选完整创建错误文件28 passed/44.54秒，相邻core/业务/catalog启动回归88 passed/35.32秒。核原异常实例、冻结身份/GraphBinding、目录原件逐字保全、abort与可见性、同owner修复后新创建及catalog关闭/冷读；既有HTTP状态、request_id和原始诊断断言保留，仅按新持久说明合同迁齐两处预期。位置文本覆盖不冒充三平台真实原生失败，HTTP为ASGI。
 - Ruff/compileall与strict通过；完整HEAD归档Pyright20→20，逐文件/最窄AST owner/规则/完整消息/出错表达式一致，新增函数零诊断，不称类型全绿。作者结构审查仅原_create和一个原测试文件新增场景；903行SessionService与父目录超过20源码的既有组织债务不在本片扩大，未新增目录或职责owner。首次比较脚本仅接受单行span而中止，修正为实际多行span后复用原类型raw，不重复检查。准确命令、3469源码前后指纹、raw/实际退出码、类型与结构审查见`out/tests/temp/uri-global-closure/artifacts/verification-067.json`。未验独立Backend重启、Gateway/Web、Windows、真实Provider或独审；2.2/7.2与多工作区4.3/8.2总门继续未勾，用户延期项保持TODO。
+
+### 2026-10-29 Gateway上下文搜索部分失败的诊断边界（2.2／7.2部分收口）
+
+- 原fan-out错误汇总复用`failure_detail`，未知异常只公开工作区身份、阶段、类别和适用错误码，完整诊断不再截断复制到`partial_errors`；已登记的可恢复访问拒绝保留完整业务说明，字符预算仍由原响应owner控制。并发、排序、健康结果、revision和cursor保持，无新writer、schema或查询链。
+- 真实独立Gateway和下游HTTP替身在旧实现复现Pydantic校验原文中的路径外泄；最终查询单测21项、真实Gateway集成2项通过，核POSIX／盘符／UNC文本、两工作区请求ID与目标身份、精确数量及字符预算、原日志诊断和同入口恢复。新增单测还核日志sink失败不妨碍健康结果、已登记拒绝不被500字符截断；未准备执行或恢复状态，不把查询装具当执行验收。
+- Ruff、compileall与strict通过；完整HEAD归档Pyright19→19，逐文件／owner／规则／完整消息／表达式一致，生产与新增测试零诊断。首轮Ruff指出新异步stub的同步文件open，改为FastAPI解析body后在线程池执行的普通路由并复验集成，不改产品异步链。准确命令、指纹、raw、退出码及作者结构审查见`out/tests/temp/uri-global-closure/artifacts/verification-068.json`；未验Web、Windows、真实Provider或独审，不勾全局门或延期项。

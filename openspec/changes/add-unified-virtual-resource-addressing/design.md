@@ -102,6 +102,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 会话目录搜索的首次同步与后台刷新同样只将失败事实放入工作区错误状态：沿原`failure_detail`保留目标工作区、该次同步请求ID、阶段、类别及适用HTTP/系统错误码，原异常留诊断。后台同步在创建任务前冻结原请求ID供请求与失败结算共用，不补造第二个ID；无快照仍为unavailable，有旧快照仍为stale，失败不覆盖旧快照或影响健康工作区，后续成功同步清除原错误。缓存schema与查询/排序/限制及原刷新准入保持。
 
+Gateway上下文搜索的fan-out汇总同样在原部分失败出口使用`failure_detail`处理未登记异常，删除异常正文的500字符截断；下游DTO校验输入只留诊断。`WorkspaceSessionContextAccessError`继续表示已登记、可由模型修正的访问拒绝，保留完整业务说明，统一由原响应预算决定是否收录条目。并发上限、资源身份核验、健康结果、排序、revision与cursor计算保持，不增加另一查询或错误存储链。
+
 目录浏览的本机与联邦入口复用同一失败事实出口：解析和远端请求报告 directory_browse，扫描报告 directory_scan，保留原400/403/404/502及request_id。原始异常及原因链进入诊断，不能将远端拒绝正文或本机原生位置复制到普通响应；日志再次失败仍保留原拒绝。修复后继续按原目标重试并发布原目录URI，不更改原生输入、未注册目录能力或注册表。
 
 Node 调试进程身份的 stat/boot_id 原生读取复用 failure_detail，分别报告 process_stat_read/boot_id_read，保留原异常类别、errno/winerror 与直接 cause。正常 PID 条目消失仍返回已终结，boot_id 缺失仍抛 FileNotFoundError；不改 API 分类、不回落身份来源。冷恢复的结算动作复用原 session_state，在追加前 ensure_loaded，避免未加载的方案选择和历史被 manifest writer 覆盖；不增加状态副本或恢复链。

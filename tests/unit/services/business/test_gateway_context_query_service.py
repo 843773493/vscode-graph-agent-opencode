@@ -491,6 +491,51 @@ async def test_gateway_search_partial_errors_obey_total_character_budget() -> No
 
 
 @pytest.mark.asyncio
+async def test_gateway_search_diagnostic_failure_keeps_healthy_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failed, healthy = _workspace_id(1), _workspace_id(2)
+    transport = _FakeTransport([failed, healthy])
+    original = PermissionError(13, "原生读取拒绝", "/private/context-diagnostic/state.sqlite")
+    transport.search_errors[failed] = original
+    transport.search_results[healthy] = _workspace_search_result(
+        healthy, query="marker", total_matches=1,
+        matches=[_session_match(_backend_workspace_id(2), "ses_healthy")],
+    )
+
+    def fail_diagnostic(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("诊断 sink 故障 /private/diagnostic-sink.log")
+
+    monkeypatch.setattr("app.core.failures.logger.error", fail_diagnostic)
+    result = await GatewayContextQueryService(transport=transport).search_gateway_context(
+        _gateway_search_request(query="marker")
+    )
+    assert result.total_matches == 1
+    assert [match.uri for match in result.matches] == [session_resource_uri(_backend_workspace_id(2), "ses_healthy")]
+    error, = result.partial_errors
+    assert error.resource_identity == workspace_session_inventory_identity(_backend_workspace_id(1))
+    assert "error=PermissionError, errno=13, diagnostic_sink_error=RuntimeError" in error.error
+    assert "/private/" not in result.model_dump_json()
+    assert "诊断 sink 故障 /private/diagnostic-sink.log" in "\n".join(original.__notes__)
+    assert set(transport.visited) == {failed, healthy}
+
+
+@pytest.mark.asyncio
+async def test_gateway_search_keeps_complete_registered_access_rejection() -> None:
+    workspace_id = _workspace_id(1)
+    transport = _FakeTransport([workspace_id])
+    explanation = "已登记的访问拒绝：" + "请核对目标权限。" * 100
+    transport.search_errors[workspace_id] = WorkspaceSessionContextAccessError(explanation)
+    result = await GatewayContextQueryService(transport=transport).search_gateway_context(
+        _gateway_search_request(query="marker", max_chars=10_000)
+    )
+    error, = result.partial_errors
+    assert error.error == f"WorkspaceSessionContextAccessError: {explanation}"
+    assert result.returned_chars == len(result.model_dump_json())
+    assert result.omitted_partial_error_count == 0
+
+
+@pytest.mark.asyncio
 async def test_gateway_search_propagates_workspace_truncation() -> None:
     workspace_id = _workspace_id(1)
     backend_workspace_id = _backend_workspace_id(1)

@@ -8,6 +8,7 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
     WorkspaceSessionContextTransportProtocol,
 )
+from app.core.failures import failure_detail
 from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
@@ -37,7 +38,6 @@ from app.services.business.session_context_resource import (
 
 _SEARCH_CONCURRENCY = 8
 _PER_WORKSPACE_MATCH_LIMIT = 200
-_ERROR_CHARS = 500
 
 
 class GatewayContextQueryService:
@@ -211,10 +211,19 @@ class GatewayContextQueryService:
                 backend_workspace_id
             )
             if isinstance(response, BaseException):
+                # 已登记的访问拒绝保留业务说明；未知错误正文只进入诊断，不靠截断隐藏。
+                detail = (
+                    f"{type(response).__name__}: {response}"
+                    if isinstance(response, WorkspaceSessionContextAccessError)
+                    else failure_detail(
+                        response, stage=f"gateway-context-search:{backend_workspace_id}",
+                        label="工作区上下文搜索失败",
+                    )
+                )
                 errors.append(
                     SessionContextPartialErrorDTO(
                         resource_identity=resource_identity,
-                        error=f"{type(response).__name__}: {response}"[:_ERROR_CHARS],
+                        error=detail,
                     )
                 )
                 continue
