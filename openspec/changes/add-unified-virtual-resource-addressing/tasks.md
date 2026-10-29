@@ -1418,3 +1418,11 @@
 - 旧生产三种调试输入和两种日志状态的5项反例全部失败；最终85项路径／调试单测、原37项文件HTTP回归、新2项补丁HTTP及36项Gateway单测通过，共160 passed、1项Windows专用跳过。新增HTTP首次在重试字节断言失败，因测试补丁缺少显式末尾空行；修正输入后保留原精确字节断言，并验证同请求显式重试、失败零发布及原文件不变。未重复运行函数AST及生产逻辑均保持的37项回归。
 - Ruff、compileall通过；完整旧HEAD归档与最终Pyright均3项，按文件、最窄AST owner、规则、完整消息和表达式逐项一致，无新增，不称类型全绿。作者AST自查确认既有方法除四处原生解析调用外保持，全部旧测试与断言保持；无新源码文件／目录。路径owner477行、集成测试638行及core既有49个直接Python文件的组织风险保留，不扩修，不代独审。
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
+
+
+### 2026-10-29 内部聚合资源的公开 fork 与进程重启（7.2聚合生命周期子门）
+
+- 在既有三真实Gateway／Backend／localhost SSH场景内增强断言，不新建模型协议、业务writer或测试链路。消息入口与原Agent执行生成关键历史；封存的原规范化请求与model_stream实际请求一致，逐个重算assembly hash，Skill与MCP聚合binding及SQLite均保留显式null URI。
+- 正式矩阵的完整复制与前缀fork分别1 passed／131.16秒和1 passed／145.07秒。公开fork后逐字核对原assembly、activation及全部binding正文；来源Session由产品导航入口删除并核实物理settlement，来源Backend关闭、目标Backend硬重启后仍完整一致，冷幂等回执不增加模型调用；目标经消息入口续写后原封存结果不变。保留前缀上界及后续历史排除断言，不手填执行、capture或恢复状态。
+- 原20条断言全部保留，新增聚合与删除断言；Ruff／compileall通过。完整旧HEAD归档与当前Pyright均14项，按文件、最窄AST owner、规则、完整消息和表达式逐项一致，无新增，不称类型全绿。仅增强原178行测试，无新文件／目录，无产品实现修改；作者结构自查不代独审。
+- 准确命令、原始输出、源码指纹、实际退出码、正式场景产物和比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-102.json`。两套矩阵串行，复用既有240秒／4GiB限制、fork外置watchdog和跨worktree闸门；第二轮期间仅其他agent前端文件变化，后端受验源码保持。结合100的两种Provider factory发布／封存与本次产品验收，补齐内部聚合null的公开fork及独立进程重启证据；不代真实Provider、Responses进程或同步SDK、Windows及Web验收。2.2／7.2整体门继续未勾，前端及其OpenSpec仍待用户通知，其他agent独有修改／暂存和原Debug保持。
