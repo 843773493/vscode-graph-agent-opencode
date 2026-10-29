@@ -707,22 +707,78 @@ async def test_hello_gateway_id_mismatch_is_closed_with_1008(tmp_path: Path) -> 
         assert "federation-unknown-peer" in error.value.rcvd.reason
 
 
+@pytest.mark.parametrize(
+    "raw, diagnostic",
+    [("not-json", "帧不是合法 JSON")]
+    + [
+        (
+            json.dumps({"frame_type": location + "未知帧" * 100, "payload": {}}),
+            location + "未知帧" * 100,
+        )
+        for location in [
+            "/private/hello/frame",
+            r"C:\private\hello\frame",
+            r"\\server\private\hello\frame",
+        ]
+    ],
+    ids=["invalid-json", "posix", "drive", "unc"],
+)
 @pytest.mark.asyncio
-async def test_malformed_first_frame_is_closed_with_reason(tmp_path: Path) -> None:
+async def test_malformed_first_frame_is_closed_with_reason(
+    tmp_path: Path,
+    raw: str,
+    diagnostic: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async with _spoke_with_hub(
         tmp_path, catalog=_Catalog({}), session_main=_SessionMain({}), role="spoke"
     ) as (spoke, hub, _root):
+        token = _issue(spoke, hub=hub)
+        credential_path = spoke.root / "credentials" / "federation.json"
+        credential_bytes = credential_path.read_bytes()
         websocket = await connect(
             spoke.ws_url,
-            additional_headers={"X-BoxTeam-Federation-Token": _issue(spoke, hub=hub)},
+            additional_headers={"X-BoxTeam-Federation-Token": token},
         )
-        await websocket.send("not-json")
+        await websocket.send(raw)
         with pytest.raises(ConnectionClosed) as error:
             await asyncio.wait_for(websocket.recv(), timeout=5)
         assert error.value.rcvd is not None
         assert int(error.value.rcvd.code) == CLOSE_CODE_POLICY_VIOLATION
-        assert "federation-malformed-frame" in error.value.rcvd.reason
-        assert "JSON" in error.value.rcvd.reason
+        assert error.value.rcvd.reason == "federation-malformed-frame"
+        assert len(error.value.rcvd.reason.encode()) <= 123
+        assert (
+            repr(diagnostic) in caplog.text
+            if raw != "not-json"
+            else diagnostic in caplog.text
+        )
+        assert spoke.service._local_channels == {}
+        assert spoke.control.active_channels() == ()
+        assert credential_path.read_bytes() == credential_bytes
+        assert spoke.credential_store.verify(token).peer_gateway_id == hub.gateway_id
+        client = await _open_raw(gateway=spoke, hub=hub, token=token)
+        async with client:
+            await client.send(
+                FRAME_REQUEST,
+                {
+                    "correlation_id": "cor_after_rejection",
+                    "method": METHOD_STATUS,
+                    "request": {},
+                },
+            )
+            response = await client.recv()
+            assert response == {
+                "frame_type": FRAME_RESPONSE,
+                "payload": {
+                    "correlation_id": "cor_after_rejection",
+                    "ok": True,
+                    "result": {
+                        "gateway_id": "gateway_spoke",
+                        "channel_epoch": 1,
+                        "policy_revision": spoke.service.policy_store.snapshot.revision,
+                    },
+                },
+            }
 
 
 @pytest.mark.asyncio

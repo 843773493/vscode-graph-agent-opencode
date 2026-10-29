@@ -1198,3 +1198,9 @@
 - channel收帧、心跳发送与未知方法处理在原catch内复用`failure_detail`，公开阶段、类别和适用系统错误码，原实例及全文只留诊断；code/detail/cause、correlation、业务拒绝、取消、in-flight结算与任务回收保持。关闭帧只发送登记码，物理删除原全文截取，本地仍保留完整失败对象，不增加错误帧、重试、owner或schema。
 - 旧生产16项新反例失败；channel/transport/真实TCP-WebSocket及两类清理回归85项通过，另一组合engine/远端导航82项通过，各组重叠不相加。两组唯一失败均为原错误码审计漏登：全仓核对后补登记已存在的导航resolver/联邦及文本写入联邦三个精确动态点，不放宽未知码或跨owner断言；该审计全文件最终13项通过。新增真实网络覆盖原认证/grant/RPC、失败后同channel成功与多字节协议拒绝关闭；原生故障覆盖POSIX/盘符/UNC、sink再次失败、原异常身份及全文诊断。
 - Ruff、compileall通过；Pyright14→14按文件/最窄AST owner/规则/完整消息无新增。AST作者自查确认生产四处仅替换message/close reason，其余方法及原测试函数保持，唯一旧预期改为公开失败事实。命令、前后指纹、raw/退出码、修正过程与局限见`out/tests/temp/uri-global-closure/artifacts/verification-043.json`。真实网络为最小联邦装配，非完整Gateway/Web/SSH/Windows产品或真实OS故障验收；握手与请求发送另核，全局门及独审继续未勾，延期项保持TODO。
+
+### 2026-10-29 联邦鉴权与 hello 握手的关闭帧（2.2/7.2部分收口）
+
+- 服务端握手拒绝移除完整message截取，close reason只传登记码；原1008、凭据验证、身份/hello校验、登记与回收保持。详细说明仍由原本地日志输出，不新增错误帧、重试、错误码或认证链。
+- 扩展既有真实TCP/WebSocket畸形首帧用例：旧生产4项失败，3项确证多字节说明导致`control frame too long`及异常断线。修改后联邦路由/传输/拨号清理/凭据读取共54 passed/5.97秒；新增断言改为完整成功响应以清除3条测试类型诊断后，受影响4项再验通过，为前组子集不相加。覆盖完整本地诊断、关闭码/字节上限、零channel登记、凭据字节不变及同凭据经原握手恢复RPC；三类位置是首帧字面量，未声称三平台文件故障验收。
+- Ruff、compileall与严格OpenSpec51/51通过；Pyright14→14按文件/最窄AST owner/规则/完整消息无新增。作者AST自查确认endpoint除说明与reason参数外完整保持，其余旧测试函数/类保持；原件、指纹、命令/退出码及适用限制见`out/tests/temp/uri-global-closure/artifacts/verification-044.json`。本片为最小联邦路由装配，不替代完整Gateway/Web/SSH/Windows及独立审查；2.2/7.2仍未勾，团队协作与MCP显式持有保持延期。

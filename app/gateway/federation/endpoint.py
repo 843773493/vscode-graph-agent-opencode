@@ -5,7 +5,7 @@
 ``peer_gateway_id``；绑定失败立即以显式 close code 拒绝，不做匿名降级。
 
 WebSocket 必须先 ``accept`` 才能发送 close 帧，因此本模块先接受连接，随后在
-任何鉴权/握手失败时用 1008 关闭并给出可诊断 reason。
+任何鉴权/握手失败时用 1008 关闭，reason 只传稳定错误码。
 """
 
 from __future__ import annotations
@@ -80,9 +80,7 @@ async def serve_federation_channel(
         logger.warning(
             "联邦 channel 握手失败: code=%s, reason=%s", error.code, error.message
         )
-        await transport.close(
-            code=1008, reason=f"{error.code}: {error.message}"[:120]
-        )
+        await transport.close(code=1008, reason=error.code)
         return
     try:
         await server.on_channel_ready(session)

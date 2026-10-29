@@ -90,7 +90,9 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 辅助服务WebSocket的访问、路由及上游失败也复用`failure_detail`保留完整诊断，关闭原因只使用固定阶段说明；不再截取原异常，避免原生位置外泄和多字节说明超过123字节。沿用1008/1011分类、既有鉴权与目标检查、取消和路由引用回收，不增加错误数据帧或重试链。
 
-已建立的联邦channel在收帧、心跳发送和未知方法处理异常处复用`failure_detail`，分别报告federation-channel-receive、federation-channel-heartbeat与federation-method阶段；原异常全文只留诊断，传输失败继续保留直接cause与cause_type。方法失败沿原错误码和correlation回包，既有FederationError及取消语义保持，后续请求仍可在原channel执行。channel关闭帧只发送已登记的稳定错误码，不截取完整说明；本地失败对象、原关闭分类与in-flight结算及任务回收保持。握手接入由其原边界另行核验，不因本片取得原生诊断输出许可。
+已建立的联邦channel在收帧、心跳发送和未知方法处理异常处复用`failure_detail`，分别报告federation-channel-receive、federation-channel-heartbeat与federation-method阶段；原异常全文只留诊断，传输失败继续保留直接cause与cause_type。方法失败沿原错误码和correlation回包，既有FederationError及取消语义保持，后续请求仍可在原channel执行。channel关闭帧只发送已登记的稳定错误码，不截取完整说明；本地失败对象、原关闭分类与in-flight结算及任务回收保持。
+
+服务端鉴权/hello握手的拒绝沿同一规则只把稳定码发送为close reason，保留原1008分类和完整本地诊断，不把首帧原值或错误说明截取进关闭帧。失败不登记channel、不撤销或改写原凭据；修正请求后仍通过原鉴权、身份和hello链建立新连接，不以放宽验证恢复。
 
 联邦诊断查询保留本地目标预检的既有业务拒绝；远端请求与响应校验失败复用`failure_detail`，只公开阶段、异常类别、适用解析坐标与HTTP状态。原拒绝正文附在原异常诊断中，不截断或转成普通响应；原异常作为直接cause保留。原400/502、管理授权、请求ID和固定目标不变，成功响应中的原始日志仍按具名例外完整传递。
 
