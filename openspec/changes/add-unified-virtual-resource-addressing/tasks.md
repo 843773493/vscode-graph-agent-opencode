@@ -1493,3 +1493,10 @@
 - 旧生产新增7项单测全部失败；真实Node/HTTP/PTY的两种日志场景1 passed／1 failed，失败原件明确为日志位置回显。修复后19项存储单测、58项Manager／Session消费者及最终2项真实PTY场景通过，共79项。首次消费者误用Bun，44 passed／14 failed均停在`node:test` mock不支持；原件14条同类错误已核对，改用Node后58项全部通过，未改产品或原断言。
 - 关键PTY、记录与尺寸来自正式创建／resize；故障只将原文件移动保全并以空目录制造真实发布冲突，以及在原诊断writer制造ENOTDIR。核原文件字节、临时文件清理、主进程／worker及SID／启动身份、已应用尺寸；恢复原文件后同尺寸入口仍提交新记录且只有一个原资源。正式删除后独立核两个原进程已不执行；交付自查将成功产物写入移至上述退出断言之后，受影响两项再验2 passed／7.57秒，其余产品与原测试不变，不为此重跑已通过存储／消费者。
 - Node语法、Ruff／compileall、单文件Pyright零诊断、diff和本change strict通过。作者AST核验只改`operationError`，constructor/read/write保持，原测试逐字保留；104行产品文件净增5行，无新增源码文件／目录／依赖，不代独审。命令、源码指纹、raw、退出码与最终复用边界见 `out/tests/temp/uri-global-closure/artifacts/verification-112.json`。各批串行、正式集成保留跨worktree锁及外部超时、4GiB／两CPU保护；本场景不代表创建失败窗口、Gateway/Web、Python业务owner、Backend重启或Windows实机。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与用户原Debug服务保持。
+
+### 2026-10-29 Terminal 启动链路的诊断次错（2.2／7.2部分收口）
+
+- cwd检查、PTY启动及启动失败清理的四个原诊断出口统一为文件私有函数，日志正常保留原异常；writer次错用有序AggregateError保留主错误和诊断错误，启动／清理双错作为内层原因整体保留。原公开说明、普通文件cwd无cause的正常行为、unknown落盘、停止证明、worker句柄和创建回执顺序保持；不另建日志回退、恢复或PTY执行链。
+- 原生产下新增7项Node反例全部失败；真实HTTP6场景2 passed／4 failed，其中3项确认原生日志位置进入普通回执，另一项是新测试误认为初始化不会写空状态文件。源码确认Manager.init原本就会persist，改为核拒绝前后原字节不变，未改产品初始化或放宽资源断言。修复后98项Node／原调用方回归及6项真实HTTP/PTY全部通过，后者pytest35.42秒。
+- 真实入口核两种停止结果×两种日志、原PTY父子及worker身份、unknown与原记录、正式failed回执及原管理kill重试；cwd场景核相对／绝对缺失、普通文件、NUL的精确not_created回执、零PTY与原状态字节，故障解除后同一intent创建并停止真实PTY。关键状态由产品入口生成，故障边界仅就绪交付／信号和原日志writer的真实ENOTDIR；不手填资源状态。
+- Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过。作者AST核对原成功路径、停止执行、其它方法和旧Node场景保持；只新增一个文件私有诊断函数，产品净增9行至841行，既有大文件组织风险保留，无新源码文件／目录／依赖，不代独审。准确命令、源码指纹、raw、退出码及结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-113.json`。正式集成保留原60秒矩阵、跨worktree锁及进程外4GiB／两CPU保护；异步退出回调、readProcessStat、未交付PID的native阻塞、Gateway/Web、Python业务owner、Backend重启和Windows未由本片验收。2.2／7.2总门继续未勾，前端及其OpenSpec继续等待用户通知，其他agent独有改动／暂存与原Debug服务保持。

@@ -18,6 +18,15 @@ import {
 
 const logger = createRuntimeLogger("terminal", "terminal.terminalSession");
 
+function recordStartupFailure(error, ...diagnostics) {
+  try {
+    logger.error(...diagnostics);
+  } catch (diagnosticError) {
+    return new AggregateError([error, diagnosticError], error.message, { cause: error });
+  }
+  return error;
+}
+
 export function nowIso() {
   return new Date().toISOString();
 }
@@ -33,15 +42,15 @@ export async function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   try {
     directoryStat = await stat(resolved);
   } catch (error) {
-    logger.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
+    const cause = recordStartupFailure(error, "[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
     const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
       ? "终端工作目录不存在或不是目录"
       : "终端工作目录检查失败";
-    throw new Error(message, { cause: error });
+    throw new Error(message, { cause });
   }
   if (!directoryStat.isDirectory()) {
-    logger.error("[terminal-session] 终端工作目录不是目录", { cwd: resolved });
-    throw new Error("终端工作目录不存在或不是目录");
+    throw recordStartupFailure(new Error("终端工作目录不存在或不是目录"),
+      "[terminal-session] 终端工作目录不是目录", { cwd: resolved });
   }
   return resolved;
 }
@@ -272,14 +281,14 @@ export class TerminalSession {
         },
       });
     } catch (error) {
-      logger.error(
+      const cause = recordStartupFailure(error,
         `[terminal-session] 终端 PTY 启动失败: terminal_id=${this.id}`,
         { cwd: resolvedCwd ?? this.cwd, command: this.command },
         error,
       );
       throw new Error(
         `终端 PTY 启动失败: terminal_id=${this.id}`,
-        { cause: error },
+        { cause },
       );
     }
     this.status = "running";
@@ -649,8 +658,8 @@ export class TerminalSession {
         await this.dispose();
       }
     } catch (cleanupError) {
-      logger.error(`[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
-      throw new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
+      const failure = new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
+      throw recordStartupFailure(failure, `[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
     }
     if (stopped && this.status !== "terminated") {
       this.status = "terminated";

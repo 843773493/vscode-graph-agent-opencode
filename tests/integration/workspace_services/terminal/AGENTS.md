@@ -19,7 +19,7 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_terminal_shutdown_signals.py`经正式HTTP创建、真实Node/PTY及POSIX信号验证在途创建的关闭观察超时、原任务保留、管理查询、精确拒绝回执、迟到就绪的同链关闭与冷Manager恢复；另核致命错误及关闭期间到达的致命错误仍退出1。`terminal_start_barrier.mjs`是显式测试故障边界，仅延迟真实Worker就绪结果的交付并记录原进程身份，不代填Session或恢复状态。正常Manager退出继续保留PTY，fixture沿生产终止入口仅回收自己记录的精确实例。通过`integration-terminal-shutdown-signals`运行，固定90秒/4GiB；不代表Windows SIGBREAK、Gateway/主Web、全部后代独立核实或整个进程退出的总期限。
 
-`test_terminal_startup_cleanup.py`通过正式HTTP创建真实PTY父子进程，仅在原worker就绪消息交付前注入失败；父子均忽略SIGTERM，要求原owner核实强杀及worker退出后才签创建失败回执。首次停止故障保持created/unknown、原进程与句柄，原HTTP管理kill重试后才核实终态；独立/proc观察、原持久记录和peer资源共同验收。`terminal_startup_failure.mjs`只提供显式IPC/信号故障边界，不代填资源或进程终态。suite `integration-terminal-startup-cleanup`固定60秒/4GiB，仅证明Linux该窗口，不代表未交付PID的native阻塞、Gateway/Web或Windows。
+`test_terminal_startup_cleanup.py`通过正式HTTP创建真实PTY父子进程，仅在原worker就绪消息交付前注入失败；父子均忽略SIGTERM，要求原owner核实强杀及worker退出后才签创建失败回执。首次停止故障保持created/unknown、原进程与句柄，原HTTP管理kill重试后才核实终态；独立/proc观察、原持久记录和peer资源共同验收。正常日志与原writer真实ENOTDIR均覆盖上述两种停止结果；另核四类cwd拒绝保留not_created回执、零PTY及原状态字节，故障解除后沿同一intent创建和停止真实PTY。`terminal_startup_failure.mjs`只提供显式IPC/信号及日志writer故障边界，不代填资源或进程终态。suite `integration-terminal-startup-cleanup`固定60秒/4GiB，仅证明Linux该窗口，不代表未交付PID的native阻塞、Gateway/Web或Windows。
 
 `test_websocket_input_errors.py`通过真实Node WebSocket/HTTP及PTY验证三类原生路径的JSON/schema/type拒绝、附加前零资源、原授权顺序，以及同连接真实shell写文件、PID保持与detach。`integration-terminal-websocket-input-errors`固定60秒/4GiB；不代表Gateway/Web、Python业务owner、进程重启、Windows实机或其它Terminal运行时错误验收。
 

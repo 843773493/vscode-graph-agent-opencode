@@ -2,10 +2,10 @@ import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import path from "node:path";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
-import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
+import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalSession/workspace", randomUUID());
@@ -64,6 +64,131 @@ test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动
   } finally {
     await session.dispose();
   }
+});
+
+for (const cwdKind of ["relative-missing", "absolute-missing", "file", "nul"]) {
+  test(`启动诊断次错不覆盖${cwdKind}工作目录拒绝`, async (t) => {
+    const root = createTerminalSessionTestWorkspace(t);
+    const file = path.join(root, "not-a-directory.txt");
+    writeFileSync(file, "原件不变");
+    const cwd = cwdKind === "relative-missing" ? "missing"
+      : cwdKind === "absolute-missing" ? path.join(root, "absolute-missing")
+        : cwdKind === "file" ? file : "bad\0directory";
+    const message = cwdKind === "nul" ? "终端工作目录检查失败" : "终端工作目录不存在或不是目录";
+    const diagnosticError = new Error(`日志写入失败: ${root}/private-log`);
+    const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+    await assert.rejects(resolveTerminalCwd(root, cwd), (error) => {
+      assert.equal(error.message, message);
+      const aggregate = cwdKind === "file" ? error : error.cause;
+      assert(aggregate instanceof AggregateError);
+      const [original, secondary] = aggregate.errors;
+      assert.equal(aggregate.errors.length, 2);
+      assert.equal(aggregate.cause, original);
+      assert.equal(secondary, diagnosticError);
+      if (cwdKind === "file") {
+        assert.equal(original.message, message);
+        assert.equal(original.cause, undefined, "不得形成自引用cause");
+      } else {
+        assert.equal(original.code, cwdKind === "nul" ? "ERR_INVALID_ARG_VALUE" : "ENOENT");
+        assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(original)));
+      }
+      assert(diagnostic.mock.calls[0].arguments[0].includes(inspect({ cwd: path.resolve(root, cwd) })));
+      return true;
+    });
+    assert.equal(diagnostic.mock.callCount(), 1);
+    t.mock.restoreAll();
+    assert.equal(await resolveTerminalCwd(root, "."), root);
+  });
+}
+
+test("启动诊断次错保留原PTY异常和原Worker句柄", async (t) => {
+  const session = completedSession(t, { status: "created" });
+  const original = new Error(`spawn ${session.cwd}/private-shell EACCES`);
+  const diagnosticError = new Error(`日志写入失败: ${session.cwd}/private-log`);
+  const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw original; });
+  try {
+    await assert.rejects(session.start(), (error) => {
+      assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
+      assert(error.cause instanceof AggregateError);
+      assert.deepEqual(error.cause.errors, [original, diagnosticError]);
+      assert.equal(error.cause.cause, original);
+      return true;
+    });
+    assert(session.ptyProcess instanceof IsolatedPtyProcess);
+    assert.equal(session.status, "created");
+    assert.equal(session.osPid, null);
+    assert.equal(diagnostic.mock.callCount(), 1);
+    assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(original)));
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("启动诊断次错逐层保留cwd及PTY阶段原因", async (t) => {
+  const session = completedSession(t, { status: "created", cwd_relative: "missing" });
+  const diagnosticError = new Error(`日志写入失败: ${session.cwd}/private-log`);
+  const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  const start = t.mock.method(IsolatedPtyProcess.prototype, "start", async () => assert.fail("cwd拒绝不能启动PTY"));
+  try {
+    await assert.rejects(session.start(), (error) => {
+      assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
+      const [cwdError, ptyDiagnostic] = error.cause.errors;
+      assert.equal(error.cause.cause, cwdError);
+      assert.equal(ptyDiagnostic, diagnosticError);
+      assert.equal(cwdError.message, "终端工作目录不存在或不是目录");
+      const [original, cwdDiagnostic] = cwdError.cause.errors;
+      assert.equal(cwdError.cause.cause, original);
+      assert.equal(original.code, "ENOENT");
+      assert.equal(cwdDiagnostic, diagnosticError);
+      return true;
+    });
+    assert.equal(start.mock.callCount(), 0);
+    assert.equal(diagnostic.mock.callCount(), 2);
+    assert.equal(session.status, "created");
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("启动诊断次错保留启动清理三错、未知身份和显式重试", async (t) => {
+  const session = completedSession(t, { status: "created" });
+  const original = new Error("原启动失败");
+  const cleanupError = new Error("原Worker未确认退出");
+  const diagnosticError = new Error(`日志写入失败: ${session.cwd}/private-log`);
+  const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
+  const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() { throw cleanupError; } };
+  session.ptyProcess = worker;
+  const states = [];
+  session.manager.persist = async () => { states.push(session.toRecord()); };
+  await assert.rejects(session.failStartup(original), (error) => {
+    assert.equal(error.message, `终端启动失败且清理未完成: terminal_id=${session.id}`);
+    assert(error instanceof AggregateError);
+    const [failure, secondary] = error.errors;
+    assert.equal(error.cause, failure);
+    assert.equal(secondary, diagnosticError);
+    assert.deepEqual(failure.errors, [original, cleanupError]);
+    assert.equal(failure.cause, original);
+    return true;
+  });
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.status, "created");
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(session.osPid, 42002);
+  assert.equal(states.length, 1);
+  assert.equal(original.creationReceipt, undefined);
+  assert.equal(diagnostic.mock.callCount(), 1);
+  assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(cleanupError)));
+  worker.shutdown = async () => {};
+  await assert.rejects(session.failStartup(original), (error) => error === original);
+  assert.equal(states.length, 3);
+  assert.equal(session.ptyProcess, null);
+  assert.equal(session.status, "terminated");
+  assert.equal(session.reconciliationStatus, "verified");
+  assert.deepEqual(original.creationReceipt, {
+    resource_id: session.id, workspace_id: session.workspaceId, owner_revision: 1,
+    outcome: "failed", resource: session.snapshot(),
+  });
 });
 
 test("Worker 错误不进入持久状态，仍保留 unknown 与原始诊断", async (t) => {

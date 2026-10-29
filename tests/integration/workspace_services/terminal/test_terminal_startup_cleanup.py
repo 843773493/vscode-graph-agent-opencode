@@ -56,6 +56,7 @@ def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPa
         )
         control = run.artifacts_dir / "control"
         control.mkdir(parents=True)
+        (control / "log-parent").write_text("诊断writer的原生目录冲突", encoding="utf-8")
         with monkeypatch.context() as env:
             env.setenv("NODE_OPTIONS", f"--import={(Path.cwd() / 'tests/integration/workspace_services/terminal/terminal_startup_failure.mjs').as_uri()}")
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
@@ -112,10 +113,15 @@ while True:
 
 
 @pytest.mark.parametrize("mode", ["stop-succeeds", "stop-fails"])
-async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(terminal_service: TerminalService, mode: str) -> None:
+@pytest.mark.parametrize("fail_sink", [False, True], ids=["healthy-log", "failed-log"])
+async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(
+    terminal_service: TerminalService, mode: str, fail_sink: bool,
+) -> None:
     service = terminal_service
     terminal_id, peer_id = [f"term_{uuid4().hex}" for _ in range(2)]
     (service.control / "mode").write_text(mode)
+    if fail_sink:
+        (service.control / "fail-sink").touch()
     headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
     payload = {"workspace_id": service.workspace_id, "owner_revision": 7, "command": sys.executable}
     state_file = service.root / ".boxteam/terminal-manager/terminals.json"
@@ -135,6 +141,15 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(term
             assert worker["pid"] != root["pid"]
             failed = await creation
             assert failed.status_code == 500, failed.text
+            assert failed.json()["error"] == (
+                f"终端启动失败且清理未完成: terminal_id={terminal_id}" if mode == "stop-fails"
+                else f"终端 PTY 启动失败: terminal_id={terminal_id}"
+            )
+            diagnostics = [json.loads(line)["chunk"] for line in (service.control / "diagnostics.jsonl").read_text().splitlines()]
+            assert len(diagnostics) == (2 if mode == "stop-fails" else 1)
+            assert "测试屏障：原生创建后、就绪交付前失败" in diagnostics[0]
+            if mode == "stop-fails":
+                assert "测试屏障拒绝首次PTY停止" in diagnostics[1]
             current = await client.get(f"/api/terminals/{terminal_id}")
             assert current.status_code == 200, current.text
             snapshot = current.json()["data"]
@@ -176,9 +191,59 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(term
             records = json.loads(state_file.read_text(encoding="utf-8"))["terminals"]
             record = next(record for record in records if record["terminal_id"] == terminal_id)
             assert all(record[key] == snapshot[key] for key in record)
+            (service.control / "fail-sink").unlink(missing_ok=True)
             assert (await client.post(f"/api/terminals/{peer_id}/kill", json={})).status_code == 200
-            service.run.write_result("passed", {"mode": mode, "observed": observed, "scope": "Linux真实PTY/HTTP及持久记录；不代表Gateway/Web、Windows或未交付PID的native阻塞"})
+            assert not is_executing({"pid": peer_snapshot["os_pid"], "processStartTime": peer_snapshot["process_start_time"]})
+            service.run.write_result("passed", {"mode": mode, "fail_sink": fail_sink, "observed": observed, "scope": "Linux真实PTY/HTTP及持久记录；不代表Gateway/Web、Windows或未交付PID的native阻塞"})
         finally:
             if not creation.done():
                 creation.cancel()
                 await asyncio.gather(creation, return_exceptions=True)
+
+
+@pytest.mark.parametrize("fail_sink", [False, True], ids=["healthy-log", "failed-log"])
+async def test_cwd_rejection_keeps_not_created_receipt_and_same_target_retry(
+    terminal_service: TerminalService, fail_sink: bool,
+) -> None:
+    service = terminal_service
+    headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    file = service.root / "not-a-directory.txt"
+    file.write_text("不能因诊断故障改写原件", encoding="utf-8")
+    state_file = service.root / ".boxteam/terminal-manager/terminals.json"
+    original_state = state_file.read_bytes()
+    if fail_sink:
+        (service.control / "fail-sink").touch()
+    terminal_id = f"term_{uuid4().hex}"
+    async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15, trust_env=False) as client:
+        for cwd in ["missing", str(service.root / "absolute-missing"), str(file), "bad\0directory"]:
+            response = await client.post("/api/terminals", json={
+                "terminal_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
+                "cwd": cwd, "command": sys.executable, "args": ["-c", "import time; time.sleep(120)"],
+            })
+            assert response.status_code == 500, response.text
+            assert response.json() == {
+                "error": "终端工作目录检查失败" if "\0" in cwd else "终端工作目录不存在或不是目录",
+                "creation_receipt": {
+                    "resource_id": terminal_id, "workspace_id": service.workspace_id,
+                    "owner_revision": 7, "outcome": "not_created",
+                },
+            }
+        assert (await client.get("/api/terminals")).json()["data"] == []
+        assert not (service.control / "starts.jsonl").exists(), "cwd拒绝不能启动真实PTY"
+        assert state_file.read_bytes() == original_state
+        assert file.read_text(encoding="utf-8") == "不能因诊断故障改写原件"
+        diagnostics = [json.loads(line)["chunk"] for line in (service.control / "diagnostics.jsonl").read_text().splitlines()]
+        assert len(diagnostics) == 4
+        assert all(str(service.root) in chunk for chunk in diagnostics)
+        (service.control / "fail-sink").unlink(missing_ok=True)
+        response = await client.post("/api/terminals", json={
+            "terminal_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
+            "cwd": str(service.root), "command": sys.executable, "args": ["-c", "import time; time.sleep(120)"],
+        })
+        assert response.status_code == 200, response.text
+        snapshot = response.json()["data"]
+        stopped = await client.post(f"/api/terminals/{terminal_id}/kill", json={})
+        assert stopped.status_code == 200, stopped.text
+        assert not is_executing({"pid": snapshot["os_pid"], "processStartTime": snapshot["process_start_time"]})
+        assert process_identity(snapshot["pty_worker_pid"]) is None
+        service.run.write_result("passed", {"fail_sink": fail_sink, "terminal_id": terminal_id, "scope": "原HTTP/cwd/Manager准入、真实PTY重试和停止；不代表Gateway/Web或Windows"})

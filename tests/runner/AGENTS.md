@@ -79,7 +79,7 @@
 - 矩阵显式声明层级、客户端、运行面、命令和真实前置条件。
 - `integration-shutdown-message-preparation`以真实双挂载、Session/消息HTTP与上传/canonical提交核对准备窗口和关闭竞争，固定120秒/4GiB；复用model_stream，不替代Gateway/Web、Windows或独立进程重启验收。
 - `unit-workspace-services` 递归发现 Browser、Terminal 的服务端、attach 页面纯逻辑及协议 JS 单测；它不启动实际辅助服务，不能代替真实进程 Integration 验收。
-- `integration-terminal-startup-cleanup`经真实HTTP创建、PTY父子进程及显式就绪交付故障验证停止证明与原管理入口重试，固定60秒/4GiB；独立核原进程树、worker及持久记录，不代表Windows、Gateway/Web或未交付PID的原生阻塞。
+- `integration-terminal-startup-cleanup`经真实HTTP创建、PTY父子进程及显式就绪交付故障验证停止证明与原管理入口重试，正常／失败日志均核原进程树、worker及持久记录；另核cwd拒绝的原intent、零PTY及同入口恢复。固定60秒/4GiB，不代表Windows、Gateway/Web或未交付PID的原生阻塞。
 - `run-workspace-services.mjs` 按静态导入的测试框架分组：`node:test` 交给Node原生测试器，`bun:test` 交给Bun。两组都执行并汇总失败，未知或混用框架在启动前拒绝；各进程沿用矩阵的超时与内存保护。测试器的编码等运行时语义须与被测行为匹配，不能用Bun的Node兼容行为代替Node服务端证据。
 - `integration-browser-element-references` 使用真实Chromium验证辅助Browser服务的DOM引用与动作，固定60秒/4GiB；不代表Gateway或主Web产品链路验收。
 - `integration-terminal-shutdown-signals`通过真实HTTP/PTY及POSIX信号核对在途创建与关闭重试，显式就绪交付屏障保留原Worker结果，固定90秒/4GiB；不代表Windows、Gateway/主Web或整个shutdown总期限。

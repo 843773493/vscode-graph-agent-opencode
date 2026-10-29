@@ -1,11 +1,25 @@
 // 只在真实Worker就绪IPC交付前注入错误，不代填PTY、Session、进程身份或终态。
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 const projectRoot = process.env.BOXTEAM_TEST_PROJECT_ROOT;
 const controlRoot = process.env.BOXTEAM_TEST_TERMINAL_CONTROL;
+// 原诊断writer制造真实ENOTDIR；观察日志尝试，不接管状态写入或资源结算。
+if (path.basename(process.argv[1] || "") === "backend.js") {
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...args) => {
+    if (typeof chunk === "string" && chunk.includes("[terminal-session]")) {
+      appendFileSync(path.join(controlRoot, "diagnostics.jsonl"), `${JSON.stringify({ chunk })}\n`);
+      if (existsSync(path.join(controlRoot, "fail-sink"))) {
+        appendFileSync(path.join(controlRoot, "log-parent/diagnostic.log"), chunk);
+      }
+    }
+    return write(chunk, ...args);
+  };
+}
 const moduleUrl = relative => pathToFileURL(path.join(projectRoot, relative)).href;
 const { IsolatedPtyProcess } = await import(moduleUrl("src/workspace-services/terminal/server/processes/isolatedPtyProcess.js"));
 const { readProcessStat } = await import(moduleUrl("src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js"));
