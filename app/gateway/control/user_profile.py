@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import shutil
 import tempfile
@@ -10,12 +9,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.core.failures import failure_detail
 from app.core.file_permissions import restrict_private_path_access
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
 from app.schemas.gateway.ui_settings import WebUISettingsDTO
 
-logger = logging.getLogger(__name__)
 _PROFILE_VERSION = 1
 _PROFILE_GITIGNORE = """# 由 BoxTeam 管理；个人主题和 profile.jsonc 可以提交到用户自己的 Git 仓库。
 *.sqlite
@@ -140,15 +139,14 @@ class UserProfileStore:
         except OSError as error:
             raise _profile_io_error(user_id, "read", error) from error
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            logger.exception("用户 profile 解码失败: user_id=%s", user_id)
             position = (
                 f"line={error.lineno}, column={error.colno}"
                 if isinstance(error, json.JSONDecodeError)
                 else f"encoding={error.encoding}, start={error.start}, end={error.end}"
             )
-            raise ValueError(
-                f"用户 profile 解码失败: user_id={user_id}, error_type={type(error).__name__}, {position}"
-            ) from error
+            message = f"用户 profile 解码失败: user_id={user_id}, error_type={type(error).__name__}, {position}"
+            message = failure_detail(error, stage="user-profile-decode", label=message)
+            raise ValueError(message) from error
         if not isinstance(payload, dict):
             raise ValueError(f"用户 profile 必须是 JSON 对象: user_id={user_id}")
         if payload.get("config_version") != _PROFILE_VERSION:
@@ -236,8 +234,8 @@ def _profile_io_error(user_id: str, operation: str, error: OSError) -> OSError:
         f"用户 profile 存储失败: user_id={user_id}, operation={operation}, "
         f"error_type={type(error).__name__}, errno={error.errno}"
     )
-    logger.exception(message)
-    return type(error)(message)
+    # 公开说明沿用profile合同；统一诊断出口将日志次错附到原异常。
+    return type(error)(failure_detail(error, stage=f"user-profile-{operation}", label=message))
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

@@ -373,4 +373,6 @@ fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁�
 
 Terminal 与 Browser 的 HTTP 正文读取统一到共享的 `serverJsonRequest.mjs`，删除两个 backend 中重复的流读取／JSON 解析实现；每个服务注入原工作区 logger，原业务路由与日志管理路由继续消费同一 reader。解析失败保持 SyntaxError、原 HTTP 500 和直接 cause，公开 request_json 阶段及类别；引擎生成的原始片段只进原服务诊断。日志失败时按顺序保留解析和 sink 两份原因，读取流自身异常仍保持原身份。空正文、UTF-8 解码、合法 JSON 和正常资源操作均不变，不引入正文脱敏、输入回退、另一资源 writer 或异常文本分类器。
 
+Gateway profile 的原生存储与 JSON/UTF-8 解码失败复用 `failure_detail` 的统一诊断出口，公开说明沿用 profile owner 的用户、操作、原异常类别及坐标合同。日志次错原文附到原异常，普通说明补充日志失败类别，不能替换主失败或把 sink 的文件位置送到普通 HTTP。原账户回滚/删除顺序、原子文件写入、主题资源目录与损坏原件保持，不增加日志回退或新 profile owner。
+
 旧生成器显式导入沿原`import_generator`校验分支记录新失败事实：reason只包含阶段、task/workspace身份与异常类别，完整原错由共享诊断出口保留。安装事务、needs_attention与修复后显式恢复保持原链；同一导入幂等重试不覆盖新revision，旧运行的历史error和generation正文不被新校验结果改写。此处不增加管理例外，也不将受支持provider/版本的明确不可用说明误当作原生异常正文。

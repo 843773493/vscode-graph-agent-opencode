@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core import failures
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfig
@@ -87,7 +88,7 @@ def test_profile_io_errors_preserve_cause_and_route_behavior(
     monkeypatch.setattr(Path, "read_text", read)
     monkeypatch.setattr(profile_module.os, "replace", replace)
     monkeypatch.setattr(profile_module.shutil, "rmtree", rmtree)
-    with caplog.at_level(logging.ERROR, logger=profile_module.__name__):
+    with caplog.at_level(logging.ERROR, logger=failures.logger.name):
         if operation == "initialize":
             response = client.post("/api/gateway/users", json={"user_id": "another-user", "display_name": "新用户"})
             assert response.status_code == 500, response.text
@@ -113,7 +114,7 @@ def test_profile_io_errors_preserve_cause_and_route_behavior(
     assert "profile-secret" not in response.text and str(path.parent) not in response.text
     assert path.read_bytes() == original
     assert not list(path.parent.glob(".profile.jsonc.*")), "写失败应回收临时文件"
-    record, = [record for record in caplog.records if record.name == profile_module.__name__]
+    record, = [record for record in caplog.records if record.name == failures.logger.name]
     assert record.exc_info is not None and record.exc_info[1] is raw_error
     assert raw_error.filename in caplog.text
 
@@ -193,3 +194,65 @@ def test_owner_io_projection_keeps_exception_category_and_raw_cause(profile_http
     assert caught.value.filename is None
     assert native_failure.filename not in str(caught.value)
     assert json.loads(path.read_bytes())["display_name"] == "配置用户"
+
+
+@pytest.mark.parametrize("failure_kind", ["io", "json", "utf8"])
+def test_profile_log_sink_failure_preserves_primary_rejection_and_bytes(
+    profile_http_context: tuple[TestClient, UserProfileStore, UserAccessService],
+    native_failure: PermissionError, failure_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, profiles, _ = profile_http_context
+    path = profiles.user_path("profile-user") / "profile.jsonc"
+    original = path.read_bytes()
+    if failure_kind == "json":
+        path.write_bytes(b'{"private":"/private/profile-secret",}')
+    elif failure_kind == "utf8":
+        path.write_bytes(b'\xff/private/profile-secret')
+    broken = path.read_bytes()
+    real_read = Path.read_text
+
+    def read(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if failure_kind == "io" and target == path:
+            raise native_failure
+        return real_read(target, encoding=encoding, errors=errors)
+
+    raw_errors: list[BaseException] = []
+    sink_path = f"{native_failure.filename}-diagnostic-sink"
+    sink_error = NotADirectoryError(errno.ENOTDIR, "日志文件父目录不可用", sink_path)
+
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            raw_errors.append(record.exc_info[1])
+            raise sink_error
+
+    handler = FailingHandler()
+    loggers = (logging.getLogger(profile_module.__name__), failures.logger)
+    monkeypatch.setattr(Path, "read_text", read)
+    for logger in loggers:
+        logger.addHandler(handler)
+    try:
+        response = client.get("/api/gateway/ui-settings")
+        assert response.status_code == 409, response.text
+        expected = {"io": "PermissionError", "json": "JSONDecodeError", "utf8": "UnicodeDecodeError"}[failure_kind]
+        assert f"error_type={expected}" in response.json()["detail"]
+        assert "diagnostic_sink_error=NotADirectoryError" in response.json()["detail"]
+        assert response.headers["X-Request-ID"] == "profile-error-request"
+        assert "profile-secret" not in response.text and sink_path not in response.text
+        assert str(path.parent) not in response.text
+        assert path.read_bytes() == broken
+        primary, = raw_errors
+        assert type(primary).__name__ == expected
+        if failure_kind == "io":
+            assert primary is native_failure
+        assert any(f"NotADirectoryError: {sink_error}" in note for note in primary.__notes__)
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        monkeypatch.undo()
+    path.write_bytes(original)
+    recovered = client.get("/api/gateway/ui-settings")
+    assert recovered.status_code == 200, recovered.text
+    assert path.read_bytes() == original

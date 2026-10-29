@@ -1324,3 +1324,9 @@
 - 旧生产的真实Node反例在普通状态中复现含绝对源码位置的堆栈。最终Node单测331项、三文件集成16项通过；新增场景由真实配置／启动／继续入口生成状态，核退出码7、PID消失、诊断原文及归属、claim结清、manifest与冷服务读取、源码快照保真及原方案修复后重试。握手单测另核端口冲突立即失败、异常退出和超时的持久动作。新测试首次把源码快照里的用户错误文字误判为stderr外泄，按原始输出改为检查诊断正文并增加源码保真断言；临时新测试文件已合回既有接收错误文件，未复制装具。
 - Ruff、compileall与strict全量通过；完整HEAD归档Pyright19→19，按文件、最窄AST owner、规则、完整消息及原表达式逐项一致，零新增，不称类型全绿。作者结构自查确认生产减少20行，无新owner或目录；531行启动编排、1685行既有claim测试及41源码文件的既有集成目录仍有组织风险，本片不扩大重构，不将作者自查称独审。
 - 准确命令、源码指纹、原始输出、实际退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-080.json`。新增stderr场景使用真实Node和ASGI HTTP，冷服务读取不冒充独立Backend重启；组合回归保留已有Gateway／后端重启场景，不代Web、Windows、真实Provider或完整fork验收。重型验证串行并采用6GiB／禁用swap／4核／512任务限制；跨agent／worktree全局并发闸门尚未实现。2.2／7.2总门和用户延期项继续未勾，Debug服务及其他agent独有改动保持。
+
+### 2026-10-29 Gateway profile 与诊断日志双重故障（2.2／7.2部分收口）
+
+- 原 profile I/O 与 JSON／UTF-8 解码出口改用已有 `failure_detail`，删除直接日志出口；保留原用户、操作、异常类别、错误码／解析坐标、HTTP 分类和原因链。日志次错原文附到原异常，普通说明明确标记日志失败类别，不回显 sink 位置；原子写入、账户回滚／删除顺序及损坏原件不变，无新增 writer 或日志回退。
+- 旧生产的9项单测和1项真实Gateway反例均复现次错覆盖主错及日志位置外泄。最终147项单测、正式矩阵2项集成通过；经真实用户／租约／profile入口生成状态，核对初始化、缺件、JSON、UTF-8、主题目录和删除六次本机OS日志写入失败、原账户副作用、原件及故障解除后同入口恢复。POSIX、Windows盘符和UNC文字另由单测覆盖，不代表Windows实机；不启动用户Debug、Backend、Web或真实Provider。
+- compileall与strict全量52／0通过；Ruff 5项与Pyright 9项既有诊断，在完整HEAD归档中按相对文件、最窄AST owner、规则、完整消息及出错表达式逐项一致，零新增，不称静态全绿。作者结构自查确认原顶层符号不变，其余生产方法及原集成场景AST保持，未新增目录或profile owner。准确命令、源码指纹、原始输出、实际退出码与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-083.json`。测试有进程外期限／内存保护并串行运行；上一边界 `0fe53e077` 已加入同仓库worktree共享的pytest集成／E2E fixture闸门，非pytest及旧源码不受其约束。2.2／7.2总门及用户延期项继续未勾；前端暂停，Debug保持。
