@@ -116,7 +116,15 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
         registry.upsert(target, runtime=WorkspaceRuntime(service_urls={"workspace_api": URL}))
         item, = await registry.list_dtos()
         assert item.status == "offline"
-        assert item.services["workspace_api"].error == expected
+        assert item.backend_workspace_id == UUID
+        assert item.services["workspace_api"].status == "offline"
+        assert item.services["workspace_api"].error == (
+            "工作区健康检查失败: workspace_id=workspace-test: stage=workspace_health, error=RuntimeError"
+        )
+        record, = [record for record in caplog.records if record.name == "app.core.failures"]
+        assert record.exc_info is not None
+        assert type(record.exc_info[1]) is RuntimeError
+        assert str(record.exc_info[1]) == expected
         assert "private-health-marker" not in item.model_dump_json()
     else:
         with pytest.raises(RuntimeError) as failure:

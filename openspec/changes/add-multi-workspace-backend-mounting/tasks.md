@@ -224,3 +224,9 @@
 
 - 原146路径的既有搜索闭包当前命中167：保留123、新增44、移出23，逐路径保存当前SHA、命中行／AST owner及寻址职责分类；移出项区分实际删除、模块转包及仍存在但已无该依赖，精确Python import未发现悬空。当前Backend getter只读显式workspace_context；Gateway／客户端活动选择、按target独立Node进程和测试启动环境分别登记，不将它们误判为Backend缺省根。
 - 与最近真实双mount核心验收054的完整生产指纹比较，仅crud／diagnostics／remote三个文件变化，恰为055／056已核AST的十个raise替换；mount、服务图与执行上下文未变，复用原Session／Job／history／SQLite隔离证据及057的221项回归，不重复无变化测试。原始清单、命令、指纹与限定结论见`out/tests/temp/uri-global-closure/artifacts/verification-058.json`。发现的旧注释定位和两个已显式mount测试的冗余env准备只作维护项登记，本轮未修改。此为作者按既有搜索口径的静态分类，不代所有间接语义、当前Windows重验、独审或8.2完整生命周期／受保护范围核验；4.3／8.2仍未勾，延期项保持TODO。
+
+### 2026-10-29 健康身份拒绝矩阵的公开失败合同迁齐（8.2 部分收口）
+
+- 既有健康响应矩阵的list分支改核精确公开失败事实，继续核offline、Backend UUID及完整DTO不含路径；同时核诊断中的原RuntimeError和完整原错误。其它四种入口、参数矩阵与原身份拒绝／零后续请求断言保持，生产代码未修改。
+- 八文件回归381 passed／4 failed；四项均为旧健康文案预期，在完整HEAD归档中以相同生产／测试指纹复现。迁齐后健康矩阵全文件58 passed／0.82秒，其余七文件的327项通过可按未变源码复用，不重复计数。首轮命令误指已改名文件，收集前exit4、零测试，原件保留。
+- Ruff通过；两修改测试文件Pyright6→5，按文件／最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST核对健康文件只改原一函数，11个其它顶层符号不变，目录17个直接Python文件，无新目录或生产链路。准确命令、指纹、raw、退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-059.json`；本片不代新真实网络／Web／Windows或总验收，4.3／8.2仍未勾，延期项保持TODO。
