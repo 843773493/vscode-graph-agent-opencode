@@ -316,6 +316,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 工作区文件worker已排空，原文件存储关闭仍等待另一线程持有的SQLite事务锁
 - **THEN** 原Workspace任务通过既有同步I/O原语在线程中执行同一关闭调用，不阻塞事件循环；其它挂载与进程级诊断可继续。Backend观察到期仍保留原步骤、catalog、locator和维护锁，后续调用复用原owner，事务结束后才继续依赖关闭，不重复派发。MCP/AnyIO scope继续在原任务关闭，等待超时不构成原线程已经停止或整个shutdown完成的证明
 
+#### Scenario: 附件catalog关闭等待原连接或线程池
+
+- **WHEN** 工作区前序writer已排空，附件catalog的物理关闭仍在线程池排队，或等待原SQLite连接结束读取
+- **THEN** 原Workspace关闭任务在线程中执行同一个关闭入口，排队前同步撤销附件准入；新访问在等待连接锁前拒绝，并保留锁内复核。Backend观察到期或取消不取消原执行、不提前遗忘连接或归还维护锁，独立挂载和进程级诊断可继续。原关闭完成后同一任务继续依赖关闭，失败沿原入口重试未关闭连接；已有目录、locator与canonical保持，不把观察结束当作物理关闭或原生线程终止证明
+
 #### Scenario: 文件worker停止仍有准备或原生写入在途
 
 - **WHEN** 工作区文件owner停止时，已有请求正在准备持久受理、等待受理锁，或原worker仍在线程中发布文件

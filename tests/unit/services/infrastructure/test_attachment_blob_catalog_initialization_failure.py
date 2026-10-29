@@ -115,3 +115,46 @@ def test_initialization_failure_with_close_failure_isolates_catalog(
     assert catalog._connections == {}
     with AttachmentMaintenanceLock(catalog.database_path.parent, exclusive=True):
         pass
+
+
+@pytest.mark.parametrize("entry", ["access", "connection", "query"])
+def test_closed_admission_rejects_new_access_before_waiting_on_connection_guard(
+    catalog: AttachmentBlobCatalog, entry: str,
+) -> None:
+    connection = catalog.connection
+    entered, release, settled = threading.Event(), threading.Event(), threading.Event()
+
+    def hold_guard() -> None:
+        with catalog._connection_guard:
+            entered.set()
+            release.wait(3)
+        settled.set()
+
+    holder = threading.Thread(target=hold_guard, name="attachment-catalog-closing")
+    holder.start()
+    try:
+        assert entered.wait(2)
+        catalog.close_admission()
+        with pytest.raises(RuntimeError, match="附件目录 catalog 已关闭"):
+            if entry == "access":
+                catalog.acquire_access()
+            elif entry == "connection":
+                _ = catalog.connection
+            else:
+                catalog.get_directory("att_" + "a" * 32)
+        assert not settled.is_set(), "已撤销准入的请求不得等待原关闭持有的锁"
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+        with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+            catalog.database_path.parent, exclusive=True,
+        ):
+            pytest.fail("撤销准入不等于原连接已经关闭")
+    finally:
+        release.set()
+        holder.join(3)
+        assert not holder.is_alive()
+    catalog.close()
+    assert catalog._connections == {}
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+    with AttachmentMaintenanceLock(catalog.database_path.parent, exclusive=True):
+        pass

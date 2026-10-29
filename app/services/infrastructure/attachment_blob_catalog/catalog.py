@@ -61,14 +61,20 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
         return self._connected()
 
     def acquire_access(self) -> None:
+        if self._closed:
+            raise RuntimeError("附件目录 catalog 已关闭")
         with self._connection_guard:
             if self._closed:
                 raise RuntimeError("附件目录 catalog 已关闭")
             self._access.acquire()
 
+    def close_admission(self) -> None:
+        """同步撤销准入；原关闭在线程池排队或等待连接时也不再接纳访问。"""
+        self._closed = True
+
     def close(self) -> None:
+        self.close_admission()
         with self._connection_guard:
-            self._closed = True
             for thread_id, connection in tuple(self._connections.items()):
                 connection.close()
                 del self._connections[thread_id]
@@ -76,6 +82,8 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
 
     def _connected(self) -> sqlite3.Connection:
         # 每个真实执行线程使用独立连接，避免 worker 和事件循环共享同一事务。
+        if self._closed:
+            raise RuntimeError("附件目录 catalog 已关闭")
         with self._connection_guard:
             self.acquire_access()
             thread_id = threading.get_ident()

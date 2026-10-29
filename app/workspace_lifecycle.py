@@ -134,7 +134,8 @@ class WorkspaceLifespan:
             ("context_transport.close", container.workspace_session_context_transport.aclose),
             ("workspace_service.close", partial(run_sync_shielded, container.workspace_service.close)),
             ("workspace_source.close", container.workspace_source_owner.close),
-            ("attachments.close", container.attachment_blob_store.close),
+            ("attachments.close_admission", container.attachment_blob_store.close_admission),
+            ("attachments.close", partial(run_sync_shielded, container.attachment_blob_store.close)),
         ])
 
     @property

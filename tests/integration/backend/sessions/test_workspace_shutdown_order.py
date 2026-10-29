@@ -203,7 +203,11 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
         assert backend is not None and not backend.closed
         assert main.app.state.workspace_container_registry is backend.registry
         assert history.read_bytes() == canonical
-        if phase != "catalog":
+        if phase == "attachments":
+            with pytest.raises(RuntimeError, match="已关闭"):
+                failed.attachment_blob_store._catalog.get_directory(attachment_id)
+            assert backend.registry.get(failed.workspace_id) is failed
+        elif phase != "catalog":
             assert failed.attachment_blob_store._catalog.get_directory(attachment_id).attachment_id == attachment_id
             assert backend.registry.get(failed.workspace_id) is failed
         for container in case.containers:

@@ -96,6 +96,9 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
         self._directory_operations = OperationHolderGate(self._sessions_root, namespace="attachment_directory")
 
+    def close_admission(self) -> None:
+        self._catalog.close_admission()
+
     def close(self) -> None:
         self._catalog.close()
 

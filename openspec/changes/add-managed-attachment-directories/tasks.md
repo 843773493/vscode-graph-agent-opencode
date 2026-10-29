@@ -418,3 +418,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 有效反例1项确认：其它Job持调度锁时，原准备的finally等待该锁，再次取消后任务结束但计数仍为1，后续删除/关闭永久等待。归还现只在所属事件循环同步更新原计数和事件，移除该异步锁等待；登记与排空检查仍在原锁内，没有新清理task、shield层或账本，也不提前结束原线程writer的受保护收尾。
 - 最终Job/Backend单元128 passed/43.04秒，真实准备关闭产品6 passed/51.19秒，原任务体前取消writer回归2 passed/23.79秒；Ruff、compileall、OpenSpec strict 51/0通过。生产AST只移除finally的锁等待，其余语句与所有旧测试函数AST逐字语义保持；Pyright复用与当前HEAD五文件SHA吻合的上轮完整证据，旧12/当前12、无新增，新测试零诊断，不称类型全绿。
 - 命令、前后源码指纹、raw/实际退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-038.json`，原反例保留。仅验证原asyncio调用归还，不代表Gateway/Web、Windows、独立进程取消、同步阻塞可抢占或任意线程终止；5.2/5.4仍未勾、整体21/23，旧8秒准备长尾与团队协作/MCP显式持有继续TODO。
+
+### 2026-10-29 附件catalog关闭的同步等待（5.4部分收口）
+
+- 物理关闭复用`run_sync_shielded`及原Workspace任务，排队前同步撤销准入，新访问在连接锁前拒绝且锁内复核；原连接关闭、失败重试与维护锁归还仍为同一链。观察到期或取消保留原执行及依赖，迟到完成才继续收尾，无新账本、schema或兼容入口。
+- 真实Session/消息HTTP与model_stream生成附件和canonical；连接读取/关闭的真实SQLite锁竞争、线程池排队分别覆盖超时与取消，4 passed/71.94秒，核同owner、peer关闭、诊断request_id、维护锁、原件及新catalog冷读。相关单元17 passed/5.07秒，扩大附件/关闭回归80 passed、1 failed/74.71秒；失败的source-point revision断言在完整原HEAD归档原样复现，未改断言。4739个归档blob逐字核对，同一最终新测试在旧生产关闭阶段失败。首次产品装具的已关闭catalog冷读、线程池误阻peer及Ruff失败均保留原件，修正后取得上述结果。
+- Ruff/compileall、矩阵CLI列表与OpenSpec strict 51/0通过；生产Pyright 8→8，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称类型全绿。命令、源码指纹、raw/退出码与作者AST自查见`out/tests/temp/uri-global-closure/artifacts/verification-046.json`；纯临时归档源码删除，正式输出另行保全。未验证Gateway/Web、Windows、独立Backend重启、真实等待30秒、任意线程终止或整个shutdown硬期限；5.2/5.4仍未勾、整体21/23，团队协作与MCP显式持有继续TODO。
