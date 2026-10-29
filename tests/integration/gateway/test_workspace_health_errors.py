@@ -219,6 +219,7 @@ async def test_unknown_target_and_diagnostic_selectors_keep_registry_and_allow_r
                     ("PUT", "/api/gateway/workspaces/order", {}, {}, {"workspace_ids": [target_id, native]}, 400),
                     ("GET", "/api/gateway/diagnostics", {}, {"workspace_id": native}, None, 404),
                     ("GET", "/api/gateway/diagnostics", {}, {"log_id": native}, None, 404),
+                    ("GET", "/api/gateway/diagnostics", {}, {"gateway_connection_id": native}, None, 404),
                     ("GET", "/api/gateway/federation/diagnostics", {}, {"remote_workspace_id": native}, None, 404),
                     ("GET", "/api/gateway/federation/diagnostics", {}, {"log_id": native}, None, 404),
                 ]

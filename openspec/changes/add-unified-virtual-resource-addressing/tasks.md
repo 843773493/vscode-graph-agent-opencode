@@ -1237,3 +1237,10 @@
 - registry CRUD六个未知目标／父级／排序失败和diagnostics两个选择失败沿原owner使用现有failure_detail。原生路径保留在直接cause和原始日志，普通错误仅含阶段、类别等失败事实；未扩大日志例外，未改变普通文件的相对／绝对／URI输入或未知目标错误类别、HTTP状态与写入顺序。
 - 旧生产34项反例失败；最终相关167项通过，cause非空断言细化后28项子集通过。真实Gateway／独立health_stub核三类路径×七入口共21次400／404、头体request_id、SQLite逐行不变与后续合法操作；不是实际Backend执行或Web验收。首次端口占用setup失败保留，不计业务反例。
 - Ruff／compileall通过，Pyright34→34逐AST owner／规则／完整消息无新增，新测试零诊断。作者AST与结构检查、源码指纹、准确命令、raw及实际退出码见`out/tests/temp/uri-global-closure/artifacts/verification-055.json`；未验完整Gateway／Backend恢复、Web、Windows或独审，2.2／7.2总门继续未勾，延期项保持TODO。
+
+
+### 2026-10-29 远端连接查询的普通失败事实（2.2／7.2 部分收口）
+
+- 原registry的未知远端连接与未连接URL两个LookupError出口复用唯一failure_detail，原异常类别、cause、诊断与查询顺序保持；无新owner、解析器、持久化或兼容链。六个POSIX／盘符／UNC反例在旧生产全部失败，候选通过，核完整SQLite快照／revision／激活态不变及合法连接随后可附加runtime并查询原URL。
+- 扩大八文件回归219 passed／2 failed；两项分别是旧提交后观察者异常身份、旧健康错误文案断言，已在完整HEAD归档逐项复现，四个相关生产／测试文件指纹相同，本片未修改其预期。真实Gateway／独立health_stub扩为三类路径×八入口共24次拒绝，状态／request_id／SQLite不变及合法操作恢复通过。首轮止于setup：BadStatusLine及服务bind错误，ss观察到38600端口同源同目标TIME-WAIT；确认无监听／连接后重验通过，未杀未知进程或改环境。
+- Ruff／compileall通过；完整归档Pyright25→25按文件／最窄AST owner／规则／完整消息无新增。作者AST自查确认仅两处raise和import变动，原测试AST在扣除唯一新增HTTP tuple后保持；第一次审计脚本误将扩展场景按未变AST断言中止，最终复用已完成类型raw修正，未重跑类型。准确命令、前后指纹、raw、退出码及限制见`out/tests/temp/uri-global-closure/artifacts/verification-056.json`。2.2／7.2总门仍未勾；未代替真实Backend执行、Web、Windows、完整生命周期或独审，团队协作与MCP显式持有继续延期。

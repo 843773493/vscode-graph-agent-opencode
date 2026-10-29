@@ -8,7 +8,9 @@ import pytest
 
 from app.core import failures
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 @pytest.fixture
@@ -89,3 +91,44 @@ def test_lookup_failure_survives_diagnostic_sink_failure(
     assert "/private/lookup-marker/workspace" in caught.value.__cause__.args[0]
     assert any("sink-marker" in note for note in caught.value.__cause__.__notes__)
     assert state.load_workspace_registry() == original
+
+
+@pytest.mark.parametrize("native_path", [
+    "/private/remote-lookup-marker/connection", r"C:\private\remote-lookup-marker\connection",
+    r"\\server\private\remote-lookup-marker\connection",
+], ids=["posix", "drive", "unc"])
+@pytest.mark.parametrize("operation", ["connection", "url"])
+def test_remote_lookup_preserves_committed_state_and_can_resolve_known_connection(
+    registry_case: tuple[GatewayWorkspaceRegistry, GatewayStateStore], native_path: str,
+    operation: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry, state = registry_case
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_known", name="已登记远端", host="remote.test", port=22,
+        username="developer", private_key_path=None, ssh_config_host=None,
+        remote_gateway_port=8014, remote_gateway_id="gateway_known", protocol_version=1,
+        source_owner="manual",
+    )
+    registry.upsert_remote_gateway(connection)
+    original = state.load_workspace_registry()
+    revision, active = registry.registry_revision, registry.active_workspace_id
+    lookup = registry.remote_gateway_connection if operation == "connection" else registry.remote_gateway_url
+    with pytest.raises(LookupError) as caught:
+        lookup(native_path)
+    assert type(caught.value) is LookupError
+    assert "remote-lookup-marker" not in str(caught.value)
+    assert "stage=gateway-remote-" in str(caught.value)
+    cause = caught.value.__cause__
+    assert cause is not None and type(cause) is LookupError
+    assert native_path in cause.args[0]
+    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
+    assert state.load_workspace_registry() == original
+    assert (registry.registry_revision, registry.active_workspace_id) == (revision, active)
+    assert registry.remote_gateway_connection(connection.connection_id) is connection
+    with pytest.raises(LookupError, match="远程 Gateway 隧道尚未连接"):
+        registry.remote_gateway_url(connection.connection_id)
+    assert state.load_workspace_registry() == original
+    runtime = WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test:8014"})
+    registry.upsert_remote_gateway(connection, runtime=runtime)
+    assert registry.remote_gateway_connection(connection.connection_id) is connection
+    assert registry.remote_gateway_url(connection.connection_id) == runtime.service_urls["workspace_api"]

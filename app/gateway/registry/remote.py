@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
@@ -60,12 +61,14 @@ class RegistryRemoteMixin:
     ) -> RemoteGatewayConnection:
         connection = self._remote_gateway_connections.get(connection_id)
         if connection is None:
-            raise LookupError(f"未知远程 Gateway 连接: {connection_id}")
+            error = LookupError(f"未知远程 Gateway 连接: {connection_id}")
+            raise LookupError(failure_detail(error, stage="gateway-remote-connection", label="未知远程 Gateway 连接")) from error
         return connection
     def remote_gateway_url(self, connection_id: str) -> str:
         runtime = self._remote_gateway_runtimes.get(connection_id)
         if runtime is None:
-            raise LookupError(f"远程 Gateway 隧道尚未连接: {connection_id}")
+            error = LookupError(f"远程 Gateway 隧道尚未连接: {connection_id}")
+            raise LookupError(failure_detail(error, stage="gateway-remote-url", label="远程 Gateway 隧道尚未连接")) from error
         return runtime.service_urls["workspace_api"]
     def remote_gateway_connections(self) -> tuple[RemoteGatewayConnection, ...]:
         return tuple(self._remote_gateway_connections.values())

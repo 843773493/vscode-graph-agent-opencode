@@ -205,3 +205,10 @@
 - registry 六个未知目标／父级／排序出口及 diagnostics 两个未知选择出口复用现有 failure_detail，保留原异常类别、直接 cause、原始诊断和 HTTP 状态；原始输入不再回显到普通错误。原判断与写入顺序、日志正文例外不变，无新解析器、owner、存储或兼容链。
 - 旧生产34项路径反例失败；最终七文件167项通过，新增单测增加cause非空断言后28项子集重验通过，不相加。真实独立Gateway与独立健康协议替身完成三类路径×七入口共21次请求，核400／404、头体request_id、三张SQLite表逐行不变及后续合法修改与ready状态；下游是health_stub，不代替真实Backend执行验收。首次真实运行因端口占用止于setup，零业务验收，原件保留且未杀未知进程。
 - Ruff／compileall通过，Pyright34→34按文件／最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST自查确认仅八个raise替换及import改变，既有测试函数／类保持；结构计数、准确命令、前后指纹、raw及退出码见`out/tests/temp/uri-global-closure/artifacts/verification-055.json`。未验Web、Windows或完整生命周期闭包，不代独立审查；4.3／8.2继续未勾，团队协作与MCP显式持有仍延期。
+
+
+### 2026-10-29 远端连接查询的普通失败事实（4.3／8.2 部分收口）
+
+- 原registry的未知远端连接与未连接URL两个LookupError出口复用唯一failure_detail，原异常类别、cause、诊断与查询顺序保持；无新owner、解析器、持久化或兼容链。六个POSIX／盘符／UNC反例在旧生产全部失败，候选通过，核完整SQLite快照／revision／激活态不变及合法连接随后可附加runtime并查询原URL。
+- 扩大八文件回归219 passed／2 failed；两项分别是旧提交后观察者异常身份、旧健康错误文案断言，已在完整HEAD归档逐项复现，四个相关生产／测试文件指纹相同，本片未修改其预期。真实Gateway／独立health_stub扩为三类路径×八入口共24次拒绝，状态／request_id／SQLite不变及合法操作恢复通过。首轮止于setup：BadStatusLine及服务bind错误，ss观察到38600端口同源同目标TIME-WAIT；确认无监听／连接后重验通过，未杀未知进程或改环境。
+- Ruff／compileall通过；完整归档Pyright25→25按文件／最窄AST owner／规则／完整消息无新增。作者AST自查确认仅两处raise和import变动，原测试AST在扣除唯一新增HTTP tuple后保持；第一次审计脚本误将扩展场景按未变AST断言中止，最终复用已完成类型raw修正，未重跑类型。准确命令、前后指纹、raw、退出码及限制见`out/tests/temp/uri-global-closure/artifacts/verification-056.json`。4.3／8.2总门仍未勾；未代替真实Backend执行、Web、Windows、完整生命周期或独审，团队协作与MCP显式持有继续延期。
