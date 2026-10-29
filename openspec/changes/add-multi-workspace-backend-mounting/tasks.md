@@ -236,3 +236,10 @@
 - 新增真实Gateway／独立managed Backend双mount验收：从产品入口各自创建Session和完成首轮Job，再由非默认成员提交完整generation／成员集合安全重启。核新generation与新PID、两mount仍共享一个Backend、Backend UUID与main thread不变，重启后原历史逐项相等；各自继续执行后，实际模型请求的完整历史前缀（含CSM来源消息）逐项保持，新增assistant正文块与user消息精确有序，跨工作区读取另一Session仍404。新历史页核本次快照binding及revision前进，原Turn／Job／正文／顺序保持。
 - 最终新增场景1 passed／128.49秒；被抽取公共执行断言的原核心场景已在上一轮通过，最终差异仅在新增场景与独立健康测试内，复用原核心结果，不重复运行。模型仅使用既有model_stream精确回放，真实网络覆盖Gateway与Backend，不冒称真实Provider、Web或Windows验收。
 - 首轮新增断言漏算CSM来源消息和assistant正文块；第二轮误把续轮后的新页快照revision当作不可变Turn字段。两轮原件保留，均依据协议、DTO及现行历史快照规范修正；没有过滤历史或放宽Turn／Job／thread身份和顺序。Ruff通过，Pyright基线与剩余诊断见059；作者AST核对只新增一个业务场景与原fixture内的公共执行断言，原方法及其它场景保持。895行文件继续归同一共享Backend生命周期owner，无新目录或生产实现；不按行数机械增加跨文件fixture依赖。准确命令、源码指纹、raw、实际退出码、两工作区历史原件及局限见`out/tests/temp/uri-global-closure/artifacts/verification-060.json`。4.3／8.2总门仍未勾，延期项保持TODO。
+
+### 2026-10-29 显式挂载与旧进程根的反向验收（8.2 部分收口）
+
+- 原双挂载装具将 `WORKSPACE_ROOT` 明确指向不存在的未挂载目录；同一真实 lifespan 的请求、模型编译/执行、状态隔离、启动失败和关闭仍使用各自 UUID/root/catalog，退出后检查该目录从未被创建。catalog 启动身份测试移除已无消费者的同值环境准备，不新增解析或兼容实现。
+- 将原关键词清单向路径 helper 的 AST 依赖扩展：15 个工作区 helper、23 个生产消费者，补核 catalog 构造/委派与按 `(workspace_id, session_id, thread_id)` 分区的 interrupt state。旧正则转义正确；不将关键词清单当全部间接调用证明。Gateway 五类生命周期入口、唯一 Backend 启动调用、成员句柄拒绝及 registry 按 owner 恢复/关闭也已按当前源码复核。
+- 三文件组合运行 25 passed、4 failed、12 setup errors，exit1。四项 Goal 关闭场景在原 `ready.wait()` 8秒屏障超时，与代码已有模型进入前性能 TODO 对应，未放宽期限或算作通过；附件12项在固定旧产品 catalog10 与当前11的版本检查处拒绝，尚未进入拟删除的环境准备，该文件修改撤回并留待独立切片核迁移顺序。保留完整失败原件，不把组合说成全绿。
+- Ruff通过；准确命令、3469源码前后指纹、raw/真实退出码、扩展调用清单及证据复用限制见 `out/tests/temp/uri-global-closure/artifacts/verification-065.json`。真实整组重启060之后的Backend生产变化仅为061已验的后台错误出口，原mount/服务图/生命周期未变；本片无生产、Web或受保护模板改动，不重跑已验Web/Windows或真实Provider。4.3/8.2继续未勾，团队与MCP显式持有保持延期。

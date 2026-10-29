@@ -53,7 +53,6 @@ def startup_container(
     (context.workspace_root / ".boxteam/workspace.jsonc").write_text(
         json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8",
     )
-    monkeypatch.setenv("WORKSPACE_ROOT", str(context.workspace_root))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
     return _build_owned_container(context.workspace_root, monkeypatch, request)
 

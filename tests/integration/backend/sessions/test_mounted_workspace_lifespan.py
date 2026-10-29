@@ -93,6 +93,9 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
         roots[load_or_create_workspace_id(root)] = root
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
+    # 旧进程根刻意指向未挂载目录，任何隐式回退都会破坏隔离或在此留下数据。
+    unmounted_root = context.workspace_root / "unmounted-process-default"
+    monkeypatch.setenv("WORKSPACE_ROOT", str(unmounted_root))
     monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{"workspace_id": identity, "workspace_root": str(root), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None} for identity, root in roots.items()]))
     monkeypatch.setattr(main, "_model_stream_controller", None)
     case = MountedCase(roots)
@@ -152,6 +155,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     # 只观察真实编译绑定；模型请求沿共用 model_stream 和实际 SDK 流转。
     monkeypatch.setattr(agent_factory, "build_model_from_provider", model_runtime)
     yield case
+    assert not unmounted_root.exists(), "Backend 不得使用未挂载的进程默认根"
 
 
 def assert_closed(case: MountedCase, *, retried_jobs: str | None = None):
