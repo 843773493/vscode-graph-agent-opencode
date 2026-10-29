@@ -73,7 +73,7 @@ Windows 长路径复用 `native_io_path`，只在既有目录扫描、元数据�
 
 文件树的未注册目录浏览、编辑与快捷目录必须保留。迁移前由本寻址 owner 补齐这类目录的规范引用，不让消费方私建 URI 模板；目录选择本身不等于工作区注册，不得借用当前 workspace_id 冒充归属。接口/快捷方式持久化的真实路径清理必须与该能力同批迁齐，验收浏览→编辑→保存快捷目录→重开全链路，核工作区注册表没有新增或变更；不能将「先注册再访问」作为替代方案。
 
-原 `_absolute_to_workspace_relative()` 曾经用 `path.lstrip("/")` 将外部绝对路径改投工作区，且混用了 DeepAgents 虚拟根；该转换及其直接、间接调用方已随 `d7f7b94d` 删除，用户输入由统一文件 owner 在目标平台解析。聊天 Markdown 只提取展示坐标并在 URL 编码前封装原目标，不解析工作区根、不解码原生路径；只有普通相对简写的真实 404 才保留既有唯一文件名查找，显式绝对路径或 URI 失败绝不改投同名文件，打开引用以内容 owner 返回的 URI 为准。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；Linux 跨 Gateway 验收见 `4af8b758`，Windows 实机仍须核目标端内容及 source/relay 不变，不能只测字符串 helper。
+原 `_absolute_to_workspace_relative()` 曾经用 `path.lstrip("/")` 将外部绝对路径改投工作区，且混用了 DeepAgents 虚拟根；该转换及其直接、间接调用方已随 `d7f7b94d` 删除，用户输入由统一文件 owner 在目标平台解析。聊天 Markdown 只提取展示坐标并在 URL 编码前封装原目标，不解析工作区根、不解码原生路径；只有普通相对简写的真实 404 才保留既有唯一文件名查找，显式绝对路径或 URI 失败绝不改投同名文件，打开引用以内容 owner 返回的 URI 为准。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；Linux 跨 Gateway 验收见 `4af8b758`，Windows 盘符与跨系统文件 API 见归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 的 `native-windows-federation-007`，已核目标端原字节及 source/relay 不变。该历史固定候选不代当前 HEAD 或模型工具验收；UNC 共享仍待实机验证，不能只测字符串 helper。
 
 ### D1b：未注册目录使用 Gateway files 根，控制面绑定与文件执行分离
 

@@ -1337,3 +1337,8 @@
 - 旧生产三个真实文件owner／SQLite／ASGI入口反例均停在 `running/none`，worker退出回调再次失败。最终该文件14项及文件操作／恢复／原生staging单元49项通过。关键受理和后继均由HTTP生成；拒绝正常结算且独立后继继续，原ID重试不重放，未知效果保留原staging、后继及原因链，worker重启仍明确拒绝且不改写外部替换文件；日志sink通过本机OS真实ENOTDIR制造。未将worker重启称作独立Backend进程恢复。
 - Ruff、compileall及strict全量52／0通过；完整HEAD静态基线Pyright10→8，剩余诊断按相对文件、最窄AST owner、规则、完整消息及原表达式逐项一致，移除的两条均为本次退出回调的重复exception读取类型诊断，新场景零诊断，不称类型全绿。原生产仅两个方法及import改变，所有原集成场景AST保持；作者结构自查记录612／449行和目录直接源码13／6，无新目录，未代替独审。注册100秒／4GiB矩阵入口并核CLI清单，命令与已通过定向运行一致，不重复长跑。
 - 准确命令、前后指纹、原始输出、实际退出码和局限见 `out/tests/temp/uri-global-closure/artifacts/verification-084.json`；单元回归期间仅matrix登记及另一agent的workbench构建脚本变化，相关Python指纹保持，因此未重复回归。所有测试有进程外保护且串行运行。2.2／7.2总门及用户延期项继续未勾；前端实现暂停，并行前端改动原样保留，Debug服务保持。
+
+### 2026-10-29 Windows 历史验收状态校准
+
+- 修正 proposal／design 中 Windows 文件 API 尚未验收的陈旧描述：归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 已记录 `native-windows-federation-007` 实机通过。复核原 exit 0、前后指纹相同及保留候选中六份输入的 hash，确认真实三输入同对象、盘符及外部路径读写、目标字节、source/relay 不变和停止后 GET／PUT 502、启动后原 URI 重开；HTTP 原件共23条。
+- 此为历史固定候选的文件 API／真实联邦网络证据，不是当前 HEAD、模型工具或 UNC 共享验收。UNC 继续未验证；2.2／7.2 总门及整体51／53保持。本轮 `hyf-win` 状态查询成功，远端 Web／Gateway 未运行，未执行同步、启动或重启；本地 Debug 保持。核账收据见 `out/tests/temp/uri-global-closure/artifacts/verification-085.json`。
