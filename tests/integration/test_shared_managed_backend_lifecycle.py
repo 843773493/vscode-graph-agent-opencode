@@ -95,6 +95,26 @@ class SharedBackendCase:
         assert artifact["request"]["stream"] is True
         return artifact["request"]
 
+    async def complete_turn(self, workspace_id: str, session_id: str, message: str, answer: str) -> str:
+        headers = {"X-BoxTeam-Workspace-Id": workspace_id}
+        call = await self.plan(workspace_id, session_id, answer)
+        accepted = await self.data("POST", f"/api/v1/sessions/{session_id}/messages", headers=headers, json={
+            "message": {"content": message}, "run": {"mode": "single_agent", "agent_id": "default"},
+        })
+        async with asyncio.timeout(60):
+            while True:
+                job = await self.data("GET", f"/api/v1/jobs/{accepted['job_id']}", headers=headers)
+                if job["status"] in {"completed", "failed", "interrupted", "cancelled"}:
+                    assert job["status"] == "completed", job
+                    assert job["session_id"] == session_id
+                    break
+                await asyncio.sleep(0.1)
+        wire = self.request(call)
+        messages = wire["messages"]
+        assert isinstance(messages, list)
+        assert any(item["role"] == "user" and item["content"] == message for item in messages)
+        return call
+
 
 @pytest.fixture
 async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[SharedBackendCase]:
@@ -491,20 +511,7 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
         backend_healths.append(response.json())
         session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": f"mount-{index}"})
         sessions.append(session["session_id"])
-        call = await case.plan(identity, sessions[-1], f"mount-{index} 已完成")
-        accepted = await case.data("POST", f"/api/v1/sessions/{sessions[-1]}/messages", headers=headers, json={
-            "message": {"content": f"回复 mount-{index}"}, "run": {"mode": "single_agent", "agent_id": "default"},
-        })
-        async with asyncio.timeout(60):
-            while True:
-                job = await case.data("GET", f"/api/v1/jobs/{accepted['job_id']}", headers=headers)
-                if job["status"] in {"completed", "failed", "interrupted", "cancelled"}:
-                    assert job["status"] == "completed", job
-                    assert job["session_id"] == sessions[-1]
-                    break
-                await asyncio.sleep(0.1)
-        wire = case.request(call)
-        assert any(message["role"] == "user" and message["content"] == f"回复 mount-{index}" for message in wire["messages"])
+        await case.complete_turn(identity, sessions[-1], f"回复 mount-{index}", f"mount-{index} 已完成")
         history = await case.data("POST", f"/api/v1/sessions/{sessions[-1]}/history", headers=headers, json={"direction": "tail"})
         assert history["items"][-1]["final_response"] == f"mount-{index} 已完成"
     assert len({item["process_id"] for item in backend_healths}) == 1
@@ -527,6 +534,79 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
     (case.context.artifacts_dir / "shared-owner-core.json").write_text(json.dumps({
         "members": ids, "health": backend_healths, "sessions": sessions,
         "managed_backends": metadata["managed_backends"],
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_real_group_restart_restores_each_mount_history_and_execution(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    ids = (primary, secondary)
+    histories = []
+    requests = []
+    sessions = []
+    threads = []
+    healths = []
+    for index, identity in enumerate(ids):
+        headers = {"X-BoxTeam-Workspace-Id": identity}
+        session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": f"restart-mount-{index}"})
+        session_id = session["session_id"]
+        sessions.append(session_id)
+        threads.append(await case.data("GET", f"/api/v1/sessions/{session_id}/main-thread", headers=headers))
+        healths.append(await case.data("GET", "/api/v1/workspace", headers=headers))
+        call = await case.complete_turn(identity, session_id, f"记住 restart-mount-{index}", f"restart-mount-{index} 已记录")
+        requests.append(case.request(call))
+        histories.append(await case.data("POST", f"/api/v1/sessions/{session_id}/history", headers=headers, json={"direction": "tail"}))
+
+    restarted = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/restart-safe", json={
+        "expected_backend_generation": joined["backend_generation"], "expected_workspace_ids": list(ids),
+    })
+    assert restarted["status"] == "restarted"
+    assert set(restarted["affected_workspace_ids"]) == set(ids)
+    assert restarted["backend_generation"] != joined["backend_generation"]
+    assert all(item["status"] == "ready" for item in restarted["workspaces"]["items"])
+    restored_healths = []
+    for index, identity in enumerate(ids):
+        headers = {"X-BoxTeam-Workspace-Id": identity}
+        session_id = sessions[index]
+        restored_health = await case.data("GET", "/api/v1/workspace", headers=headers)
+        restored_healths.append(restored_health)
+        assert restored_health["workspace_id"] == healths[index]["workspace_id"]
+        assert restored_health["runtime"]["pid"] != healths[index]["runtime"]["pid"]
+        assert await case.data("GET", f"/api/v1/sessions/{session_id}/main-thread", headers=headers) == threads[index]
+        history = await case.data("POST", f"/api/v1/sessions/{session_id}/history", headers=headers, json={"direction": "tail"})
+        assert history["items"] == histories[index]["items"]
+        call = await case.complete_turn(identity, session_id, f"继续 restart-mount-{index}", f"restart-mount-{index} 已恢复")
+        wire = case.request(call)
+        messages = wire["messages"]
+        assert isinstance(messages, list)
+        # 原始请求前缀包含 CSM 来源消息；重启不能丢失、重排或重新生成该历史输入。
+        prefix = requests[index]["messages"]
+        assert isinstance(prefix, list)
+        assert messages[:len(prefix)] == prefix
+        assert messages[len(prefix):] == [
+            {"role": "assistant", "content": [{"text": f"restart-mount-{index} 已记录", "type": "text"}]},
+            {"role": "user", "content": f"继续 restart-mount-{index}"},
+        ]
+        history = await case.data("POST", f"/api/v1/sessions/{session_id}/history", headers=headers, json={"direction": "tail"})
+        (case.context.artifacts_dir / f"history-restart-mount-{index}.json").write_text(json.dumps({
+            "before": histories[index], "continued": history,
+        }, ensure_ascii=False, indent=2) + "\n")
+        # 续轮后新页绑定本次读取快照；Turn、Job、消息正文及其顺序仍须逐项保持。
+        assert history["thread_id"] == histories[index]["thread_id"]
+        assert history["source_view_revision"] > histories[index]["source_view_revision"]
+        assert history["items"][:-1] == [item | {
+            "source_view_id": history["source_view_id"], "source_view_revision": history["source_view_revision"],
+        } for item in histories[index]["items"]]
+        assert history["items"][-1]["source_view_id"] == history["source_view_id"]
+        assert history["items"][-1]["source_view_revision"] == history["source_view_revision"]
+        assert history["items"][-1]["final_response"] == f"restart-mount-{index} 已恢复"
+        wrong = await case.client.get(f"/api/v1/sessions/{session_id}", headers={"X-BoxTeam-Workspace-Id": ids[1 - index]})
+        assert wrong.status_code == 404
+    assert len({item["runtime"]["pid"] for item in restored_healths}) == 1
+    (case.context.artifacts_dir / "shared-owner-history-restart.json").write_text(json.dumps({
+        "members": ids, "sessions": sessions, "threads": threads, "before": healths,
+        "after": restored_healths, "restart": restarted,
     }, ensure_ascii=False, indent=2) + "\n")
 
 

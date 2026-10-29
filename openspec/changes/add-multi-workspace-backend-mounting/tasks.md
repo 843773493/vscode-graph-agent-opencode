@@ -230,3 +230,9 @@
 - 既有健康响应矩阵的list分支改核精确公开失败事实，继续核offline、Backend UUID及完整DTO不含路径；同时核诊断中的原RuntimeError和完整原错误。其它四种入口、参数矩阵与原身份拒绝／零后续请求断言保持，生产代码未修改。
 - 八文件回归381 passed／4 failed；四项均为旧健康文案预期，在完整HEAD归档中以相同生产／测试指纹复现。迁齐后健康矩阵全文件58 passed／0.82秒，其余七文件的327项通过可按未变源码复用，不重复计数。首轮命令误指已改名文件，收集前exit4、零测试，原件保留。
 - Ruff通过；两修改测试文件Pyright6→5，按文件／最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST核对健康文件只改原一函数，11个其它顶层符号不变，目录17个直接Python文件，无新目录或生产链路。准确命令、指纹、raw、退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-059.json`；本片不代新真实网络／Web／Windows或总验收，4.3／8.2仍未勾，延期项保持TODO。
+
+### 2026-10-29 真实整组重启后的历史与执行闭包（8.2 部分收口）
+
+- 新增真实Gateway／独立managed Backend双mount验收：从产品入口各自创建Session和完成首轮Job，再由非默认成员提交完整generation／成员集合安全重启。核新generation与新PID、两mount仍共享一个Backend、Backend UUID与main thread不变，重启后原历史逐项相等；各自继续执行后，实际模型请求的完整历史前缀（含CSM来源消息）逐项保持，新增assistant正文块与user消息精确有序，跨工作区读取另一Session仍404。新历史页核本次快照binding及revision前进，原Turn／Job／正文／顺序保持。
+- 最终新增场景1 passed／128.49秒；被抽取公共执行断言的原核心场景已在上一轮通过，最终差异仅在新增场景与独立健康测试内，复用原核心结果，不重复运行。模型仅使用既有model_stream精确回放，真实网络覆盖Gateway与Backend，不冒称真实Provider、Web或Windows验收。
+- 首轮新增断言漏算CSM来源消息和assistant正文块；第二轮误把续轮后的新页快照revision当作不可变Turn字段。两轮原件保留，均依据协议、DTO及现行历史快照规范修正；没有过滤历史或放宽Turn／Job／thread身份和顺序。Ruff通过，Pyright基线与剩余诊断见059；作者AST核对只新增一个业务场景与原fixture内的公共执行断言，原方法及其它场景保持。895行文件继续归同一共享Backend生命周期owner，无新目录或生产实现；不按行数机械增加跨文件fixture依赖。准确命令、源码指纹、raw、实际退出码、两工作区历史原件及局限见`out/tests/temp/uri-global-closure/artifacts/verification-060.json`。4.3／8.2总门仍未勾，延期项保持TODO。
