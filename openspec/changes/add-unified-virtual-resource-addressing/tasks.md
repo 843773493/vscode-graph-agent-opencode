@@ -1290,3 +1290,10 @@
 - 固定信封在原参数校验 catch 复用 `failure_detail`，公开目标工具名、阶段、异常类别、顶层标识符参数名、错误深度和规则；原输入、嵌套字典键、非标识符键与完整异常只留诊断及 cause。未知顶层字段仍能明确纠错，日志 sink 失败不替换原拒绝，不新增校验器或执行链。
 - 最终40项单测及19项真实 SDK／stdio／Gateway 集成通过。覆盖两类 schema、POSIX／盘符／UNC 输入值与动态键、目标零执行、调用配对、纠正后成功和日志故障；真实 Session／Job 由产品入口生成三次拒绝及一次成功，核唯一 MCP 执行回执、canonical 失败正文和五份 assembly 的 owner、规范化请求及 request_hash。模型复用既有 model_stream。
 - Ruff、compileall、三文件 Pyright 零诊断及 strict 全量51／0通过。中间收紧曾丢失未知字段提示，旧断言发现后修正产品输出，未放宽原测试；类型检查发现的两个新增问题亦已消除。命令、指纹、原始输出、失败归因与结构自查见 `out/tests/temp/uri-global-closure/artifacts/verification-069.json`。未做 Web 功能、Windows、真实 Provider 或独立审查，不据此勾全局门；本地 debug 启动验证属于独立服务交付。
+
+
+### 2026-10-29 Gateway主题语义校验的诊断边界（2.2／7.2部分收口）
+
+- 原 token 和背景语义校验共用原 validation owner 的错误出口，保留字段与原规则，未知键／原值只留诊断及 cause；目录和设置读取、设置更新复用原解析链，不修改配置字段、schema、快照、profile 或资源存储 owner。
+- 旧实现四个定向反例和真实独立 Gateway 均在原生路径外泄断言失败。最终111项主题／图片单测及2项真实 Gateway 集成通过；新增场景从用户创建／访问入口取得 profile，再对查询展示配置注入八类损坏，覆盖 POSIX／盘符／UNC、三个原入口、72次精确409与 request_id、原文件字节不变、逐次修正后原目录完全恢复和最终真实设置更新。单测核原始诊断、直接 cause 和日志 sink 失败不替换拒绝；未用装具生成执行／fork／恢复状态。
+- Ruff、compileall与 strict 全量51／0通过；四文件 Pyright 为8项既有诊断（resolver 1、旧集成测试7），完整 HEAD archive 按文件、AST owner、规则、完整消息与原表达式逐项核对一致，新增代码零诊断。中间基线入口定位错误及按行号比较导致的假差异均保留原件，未放宽旧测试或改动其函数。命令、指纹、raw、结构自查与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-070.json`；本片不代配置文件 I/O、Web、Windows或独审验收，2.2／7.2继续未勾。运行中的 Debug 服务保持，其他 agent 的聊天 UI／E2E改动不纳入本提交。

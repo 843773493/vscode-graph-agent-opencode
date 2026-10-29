@@ -9,6 +9,7 @@ from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
 from app.gateway.theme.immersive import IMMERSIVE_TOKENS
 from app.gateway.theme.models import ThemeDefinition
 from app.gateway.theme.validation import (
+    reject_theme_value,
     validate_background_display_tokens,
     validate_token,
 )
@@ -81,7 +82,7 @@ def _background(
         resolve_ui_asset(asset_id, gateway_root=gateway_root)
         url = f"/api/gateway/ui-assets/{asset_id}"
     else:
-        raise ValueError(f"不支持的主题背景类型: {kind}")
+        reject_theme_value(rule="不支持的主题背景类型", field="background.type", value=kind)
     display_tokens = {
         "--bt-background-position": str(background_data.get("position", "center")),
         "--bt-background-size": str(background_data.get("size", "cover")),
@@ -93,7 +94,7 @@ def _background(
     validate_background_display_tokens(display_tokens)
     appearance = str(background_data.get("appearance", "immersive"))
     if appearance not in {"immersive", "theme"}:
-        raise ValueError(f"不支持的背景外观: {appearance}")
+        reject_theme_value(rule="不支持的背景外观", field="background.appearance", value=appearance)
     return url, display_tokens, appearance
 
 

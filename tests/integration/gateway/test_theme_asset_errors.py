@@ -112,3 +112,62 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
         assert str(manifest) in logs and "file:///private/theme-secret.png" in logs
         (context.artifacts_dir / "theme-asset-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_theme_semantic_errors_keep_profile_and_recover_through_gateway(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    workspace = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=workspace)
+    ports = integration_port_block_for_file(Path(request.node.fspath))
+    evidence = []
+    with ExitStack() as processes:
+        gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir)
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
+            created = await client.post("/api/gateway/users", json={"user_id": "theme-rules", "display_name": "主题规则"})
+            assert created.status_code == 200, created.text
+            acquired = await client.post("/api/gateway/users/theme-rules/access", json={"client_label": "theme-rules-test"})
+            assert acquired.status_code == 200, acquired.text
+            profile = context.boxteam_home / "state/gateway/users/theme-rules/profile.jsonc"
+            original = profile.read_bytes()
+            baseline = await client.get("/api/gateway/themes")
+            assert baseline.status_code == 200, baseline.text
+            for native_path in ("/private/theme-secret", r"C:\private\theme-secret", r"\\host\private\theme-secret"):
+                for kind, fields in {
+                    "unknown-token": {"tokens": {native_path: "red"}},
+                    "color": {"tokens": {"--bt-accent": native_path}},
+                    "length": {"tokens": {"--bt-radius-large": native_path}},
+                    "repeat": {"tokens": {"--bt-background-repeat": native_path}},
+                    "layout": {"tokens": {"--bt-background-size": native_path + "?invalid"}},
+                    "filter": {"tokens": {"--bt-surface-backdrop-filter": native_path}},
+                    "background-type": {"background": {"type": native_path}},
+                    "background-appearance": {"background": {"type": "remote", "url": "https://example.test/background.png", "appearance": native_path}},
+                }.items():
+                    damaged = json.loads(original)
+                    damaged["custom_themes"] = [{"id": "custom", "label": "自定义", "extends": "warm", **fields}]
+                    content = json.dumps(damaged).encode()
+                    profile.write_bytes(content)
+                    for method, route, options in [
+                        ("GET", "/api/gateway/themes", {}),
+                        ("GET", "/api/gateway/ui-settings", {}),
+                        ("PUT", "/api/gateway/ui-settings", {"json": {"theme": {"theme_id": "blue"}}}),
+                    ]:
+                        response = await client.request(method, route, **options)
+                        assert response.status_code == 409, response.text
+                        assert response.json()["request_id"] == response.headers["X-Request-ID"]
+                        assert "theme-secret" not in response.text and str(profile) not in response.text
+                        assert "stage=theme-validate" in response.json()["detail"]
+                        assert profile.read_bytes() == content
+                        evidence.append({"kind": kind, "method": method, "route": route, "response": response.json()})
+                    profile.write_bytes(original)
+                    reopened = await client.get("/api/gateway/themes")
+                    assert reopened.status_code == 200 and reopened.json()["data"] == baseline.json()["data"]
+            switched = await client.put("/api/gateway/ui-settings", json={"theme": {"theme_id": "blue"}})
+            assert switched.status_code == 200, switched.text
+            assert switched.json()["data"]["theme"]["theme_id"] == "blue"
+            assert (await client.get("/api/gateway/themes")).json()["data"]["current_theme_id"] == "blue"
+        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+        assert "theme-secret" in logs and "theme-validate" in logs
+        (context.artifacts_dir / "theme-validation-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

@@ -1,5 +1,7 @@
 import re
+from typing import NoReturn
 
+from app.core.failures import failure_detail
 from app.gateway.theme.builtins import WARM_TOKENS
 
 CSS_FORBIDDEN = re.compile(r"[;{}]|url\s*\(", re.IGNORECASE)
@@ -53,21 +55,30 @@ _LENGTH_TOKENS = {
 }
 
 
+def reject_theme_value(*, rule: str, field: str, value: object) -> NoReturn:
+    """字段和规则作为公开事实，未经校验的原值只进入诊断。"""
+    error = ValueError(f"{rule}: field={field}, value={value!r}")
+    raise ValueError(failure_detail(
+        error, stage="theme-validate", label=f"{rule}: field={field}",
+    )) from error
+
+
 def validate_token(name: str, value: str) -> None:
     if name not in WARM_TOKENS:
-        raise ValueError(f"未知主题 token: {name}")
+        reject_theme_value(rule="未知主题 token", field="tokens", value={name: value})
+    field = f"tokens.{name}"
     if not value.strip():
-        raise ValueError(f"主题 token 不允许为空: {name}")
+        reject_theme_value(rule="主题 token 不允许为空", field=field, value=value)
     if CSS_FORBIDDEN.search(value):
-        raise ValueError(f"主题 token 包含不允许的 CSS 内容: {name}")
+        reject_theme_value(rule="主题 token 包含不允许的 CSS 内容", field=field, value=value)
     normalized = value.strip()
     if name in _COLOR_TOKENS and not _COLOR_VALUE.fullmatch(normalized):
-        raise ValueError(f"主题颜色 token 值无效: {name}={value!r}")
+        reject_theme_value(rule="主题颜色 token 值无效", field=field, value=value)
     if name in _LENGTH_TOKENS and not _LENGTH_VALUE.fullmatch(normalized):
-        raise ValueError(f"主题尺寸 token 值无效: {name}={value!r}")
+        reject_theme_value(rule="主题尺寸 token 值无效", field=field, value=value)
     if name == "--bt-background-image" and normalized != "none":
-        raise ValueError(
-            "--bt-background-image 只能为 none；图片必须使用 background 字段"
+        reject_theme_value(
+            rule="--bt-background-image 只能为 none；图片必须使用 background 字段", field=field, value=value,
         )
     if name == "--bt-background-repeat" and normalized not in {
         "no-repeat",
@@ -77,11 +88,11 @@ def validate_token(name: str, value: str) -> None:
         "space",
         "round",
     }:
-        raise ValueError(f"主题背景重复 token 值无效: {value!r}")
+        reject_theme_value(rule="主题背景重复 token 值无效", field=field, value=value)
     if name in {"--bt-background-position", "--bt-background-size"} and not (
         _POSITION_SIZE_VALUE.fullmatch(normalized)
     ):
-        raise ValueError(f"主题背景布局 token 值无效: {name}={value!r}")
+        reject_theme_value(rule="主题背景布局 token 值无效", field=field, value=value)
     if name == "--bt-surface-backdrop-filter" and not (
         normalized == "none"
         or re.fullmatch(
@@ -89,10 +100,10 @@ def validate_token(name: str, value: str) -> None:
             normalized,
         )
     ):
-        raise ValueError(f"主题表面滤镜 token 值无效: {value!r}")
+        reject_theme_value(rule="主题表面滤镜 token 值无效", field=field, value=value)
 
 
 def validate_background_display_tokens(tokens: dict[str, str]) -> None:
     for name, value in tokens.items():
         if not value.strip() or CSS_FORBIDDEN.search(value):
-            raise ValueError(f"背景展示参数包含不允许的 CSS 内容: {name}")
+            reject_theme_value(rule="背景展示参数包含不允许的 CSS 内容", field="background.display", value={name: value})
