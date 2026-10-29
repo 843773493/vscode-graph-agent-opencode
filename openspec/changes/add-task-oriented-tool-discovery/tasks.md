@@ -399,3 +399,9 @@
 - 逐点核对模型发送前的原execution有界资格、精确connection_ref／schema和操作身份、canonical结果后结算及原Owner的退役排空。现有完整HITL／硬重启证据按上方各具名范围复用；本次正式发现矩阵232 passed／1 setup error，错误为固定测试输出中残留catalog v10、当前要求v11。后续原fixture重建后观察为v11，归档前置检查因此拒绝移动，未删改测试目录或生产迁移；同一GC用例由正式matrix定向补验1 passed／232 deselected。第一次定向误用直接pytest，缺正式fork watchdog、未进入业务，原件保留；不将整套原退出1改称退出0。
 - 当前多工作区同名Server真实调用／watcher替换矩阵1 passed／3 deselected、71.17秒，核旧封存目标、新执行、兄弟归属和六份请求hash；未将ASGI业务入口称为Gateway代理。近期SDK确认错误与取消清理沿各原收据复用。Ruff、注释模块Pyright零诊断、compileall、strict OpenSpec48/48及差异检查通过；未变的Web／真实Provider／审批长场景不重复运行。命令、前后指纹、raw、退出码及复用限定见`out/tests/temp/uri-global-closure/artifacts/verification-005.json`。
 - 独立核心门4.2／4.6与逐切片验证／保护／证据9.1–9.3关闭，当前49/53；9.4–9.6最终审查、同步／归档尚未完成，10.1保持延期未勾。团队／协作TODO不变。
+
+### 2026-10-29 当前后台失败合同下的授权等待复验
+
+- 沿仓库原600秒矩阵预算运行 `integration-mcp-connection-wait` 与 `integration-mcp-wait-admission`，分别6 passed／489.48秒和4 passed／539.14秒，均exit0。独立Gateway／Backend、本地OAuth／MCP协议服务及Terminal／Browser辅助服务配合既有model_stream，核授权后无新用户Turn的内部执行、两处投递崩溃恢复、child重启编译、单等待取消隔离、用户输入先行、Session删除fence、先授权后登记及原300秒期限不续期；逐请求preimage／hash、执行归属、去重、工具参数和凭据不进入模型的原断言保持。
+- 原61号收据的120秒整组和60秒单项仍为exit124、未完成，不改写为通过。已有持久状态显示授权及投递已完成、内部执行已开始；按正式预算复验全部通过，本轮没有产品或测试源码修改，也未放宽期限或断言。真实300秒期限场景记录邮箱提交至结算294.70秒，连接仍ready、投递为deadline_exceeded；不把整个矩阵耗时称为单次操作耗时或已完成性能优化。
+- 命令、HEAD／源码指纹、进程外保护、原始输出、退出码和正式期限产物见 `out/tests/temp/uri-global-closure/artifacts/verification-062.json`。未新验Web、Windows或真实外部Provider，10.1显式跨execution持有仍延期未实现；当前52/53，本轮不归档、不扩展团队／协作功能。
