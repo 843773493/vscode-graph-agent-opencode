@@ -1,6 +1,7 @@
 """Inspector 真实帧解析保留源码目标，输出规范资源引用。"""
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 
@@ -179,3 +180,212 @@ async def test_paused_event_does_not_block_loop_during_gateway_binding(
             await runtime.inspector.variable_hydration_task
     assert runtime.status == "paused"
     assert runtime.call_stack[0].url.startswith(bindings.uri + "/")
+
+
+class HydrationSocket:
+    def __init__(self, runtime: NodeDebugRuntime) -> None:
+        self.runtime = runtime
+        self.error: BaseException | None = None
+        self.entered = asyncio.Event()
+        self.release: asyncio.Event | None = None
+        self.methods: list[str] = []
+
+    async def send(self, message: str) -> None:
+        payload = json.loads(message)
+        self.methods.append(payload["method"])
+        self.entered.set()
+        if self.release is not None:
+            await self.release.wait()
+        if self.error is not None:
+            error, self.error = self.error, None
+            raise error
+        self.runtime.inspector.pending_commands[payload["id"]].set_result(
+            {
+                "result": {
+                    "result": [
+                        {"name": "local", "value": {"type": "number", "value": 42}}
+                    ]
+                },
+            }
+        )
+
+
+@pytest.fixture
+def hydration_socket(runtime: NodeDebugRuntime) -> HydrationSocket:
+    socket = HydrationSocket(runtime)
+    runtime.inspector.socket = socket  # type: ignore[assignment]
+    return socket
+
+
+@pytest.fixture
+def paused_event(runtime: NodeDebugRuntime) -> dict[str, object]:
+    call_frames = frames(runtime.script_path.as_uri())
+    call_frames[0]["scopeChain"] = [
+        {"type": "local", "object": {"objectId": "object-1"}}
+    ]
+    return {"callFrames": call_frames, "reason": "other"}
+
+
+@pytest.fixture(
+    params=[
+        "/private/variables-secret",
+        r"C:\private\variables-secret",
+        r"\\server\private\variables-secret",
+    ],
+    ids=["posix", "drive", "unc"],
+)
+def hydration_error(request: pytest.FixtureRequest) -> PermissionError:
+    return PermissionError(13, "变量读取故障" + "完整诊断" * 80, request.param)
+
+
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.asyncio
+async def test_variable_failure_keeps_facts_and_next_pause_recovers(
+    inspector: NodeDebugInspector,
+    runtime: NodeDebugRuntime,
+    hydration_socket: HydrationSocket,
+    paused_event: dict[str, object],
+    hydration_error: PermissionError,
+    sink_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hydration_socket.error = hydration_error
+    runtime.logpoint_error_message = "已有的日志点说明"
+    if sink_fails:
+        from app.core import failures
+
+        def fail_sink(*args: object, **kwargs: object) -> None:
+            raise OSError("日志 sink 故障 /private/variables-log")
+
+        monkeypatch.setattr(failures.logger, "error", fail_sink)
+    await inspector._handle_event(runtime, "Debugger.paused", paused_event)
+    task = runtime.inspector.variable_hydration_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=2)
+    expected = (
+        f"读取局部变量失败: session_id={runtime.session_id}, thread_id={runtime.thread_id}: "
+        "stage=node-debug-variables, error=PermissionError, errno=13"
+    )
+    assert runtime.error_message == expected + (
+        ", diagnostic_sink_error=OSError" if sink_fails else ""
+    )
+    assert (
+        runtime.status == "paused" and runtime.call_stack[0].call_frame_id == "frame-1"
+    )
+    assert runtime.call_stack[0].variables == []
+    assert hydration_socket.methods == ["Runtime.getProperties"]
+    assert runtime.inspector.pending_commands == {}
+    if sink_fails:
+        assert any(
+            "/private/variables-log" in note for note in hydration_error.__notes__
+        )
+    else:
+        assert any(
+            record.exc_info and record.exc_info[1] is hydration_error
+            for record in caplog.records
+        )
+        assert str(hydration_error) in caplog.text
+    await inspector._handle_event(runtime, "Debugger.paused", paused_event)
+    task = runtime.inspector.variable_hydration_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=2)
+    assert [
+        (item.name, item.value, item.scope) for item in runtime.call_stack[0].variables
+    ] == [("local", "42", "local")]
+    assert runtime.error_message == "已有的日志点说明"
+    assert hydration_socket.methods == [
+        "Runtime.getProperties",
+        "Runtime.getProperties",
+    ]
+    assert runtime.inspector.pending_commands == {}
+
+
+@pytest.mark.parametrize("changed", ["running", "frame"])
+@pytest.mark.asyncio
+async def test_late_variable_failure_keeps_current_state_and_diagnostic(
+    inspector: NodeDebugInspector,
+    runtime: NodeDebugRuntime,
+    hydration_socket: HydrationSocket,
+    paused_event: dict[str, object],
+    changed: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    original = RuntimeError("失效的变量响应 /private/late-variables-secret")
+    hydration_socket.error = original
+    hydration_socket.release = asyncio.Event()
+    await inspector._handle_event(runtime, "Debugger.paused", paused_event)
+    task = runtime.inspector.variable_hydration_task
+    assert task is not None
+    try:
+        await asyncio.wait_for(hydration_socket.entered.wait(), timeout=2)
+        runtime.error_message = "当前暂停的错误"
+        if changed == "running":
+            runtime.status = "running"
+        else:
+            runtime.call_stack[0] = runtime.call_stack[0].model_copy(
+                update={"call_frame_id": "frame-2"}
+            )
+        hydration_socket.release.set()
+        await asyncio.wait_for(task, timeout=2)
+        assert runtime.error_message == "当前暂停的错误"
+        assert runtime.status == ("running" if changed == "running" else "paused")
+        assert runtime.call_stack[0].call_frame_id == (
+            "frame-1" if changed == "running" else "frame-2"
+        )
+        assert any(
+            record.exc_info and record.exc_info[1] is original
+            for record in caplog.records
+        )
+        assert str(original) in caplog.text
+        assert runtime.inspector.pending_commands == {}
+    finally:
+        hydration_socket.release.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Cannot find context with specified id", "Could not find object with given id"],
+)
+@pytest.mark.asyncio
+async def test_expired_variable_context_preserves_existing_semantics(
+    inspector: NodeDebugInspector,
+    runtime: NodeDebugRuntime,
+    hydration_socket: HydrationSocket,
+    paused_event: dict[str, object],
+    message: str,
+) -> None:
+    hydration_socket.error = RuntimeError(message)
+    runtime.logpoint_error_message = "已有的日志点说明"
+    await inspector._handle_event(runtime, "Debugger.paused", paused_event)
+    task = runtime.inspector.variable_hydration_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=2)
+    assert runtime.error_message == (
+        "已有的日志点说明"
+        if message.startswith("Cannot")
+        else "读取局部变量失败：暂停期间 Inspector 变量对象已经失效"
+    )
+    assert runtime.status == "paused" and runtime.call_stack[0].variables == []
+    assert runtime.inspector.pending_commands == {}
+
+
+@pytest.mark.asyncio
+async def test_variable_fetch_preserves_original_cancellation(
+    inspector: NodeDebugInspector,
+    runtime: NodeDebugRuntime,
+    hydration_socket: HydrationSocket,
+    paused_event: dict[str, object],
+) -> None:
+    cancellation = asyncio.CancelledError("取消变量读取")
+    hydration_socket.error = cancellation
+    runtime.logpoint_error_message = "已有的日志点说明"
+    await inspector._handle_event(runtime, "Debugger.paused", paused_event)
+    task = runtime.inspector.variable_hydration_task
+    assert task is not None
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await asyncio.wait_for(task, timeout=2)
+    assert caught.value is cancellation
+    assert runtime.error_message == "已有的日志点说明"
+    assert runtime.inspector.pending_commands == {}

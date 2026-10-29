@@ -342,3 +342,139 @@ async def test_cold_identity_io_failure_preserves_product_claim_and_retries(
         "started": started.json(), "failed": failed.json(), "retried": retried.json(),
         "claim": claim.model_dump(mode="json"), "settled": settled.model_dump(mode="json"),
     }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_variable_receive_failure_is_private_and_next_product_pause_recovers(
+    debug_receive_client: DebugReceiveClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    native_error = PermissionError(
+        errno.EACCES, "变量命令发送故障", str(root / "variables-secret")
+    )
+    original_connect = websockets.connect
+    armed = False
+    failed_sends: list[dict[str, object]] = []
+
+    class VariableSocket:
+        def __init__(self, socket: ClientConnection) -> None:
+            self.socket = socket
+
+        async def send(self, message: str) -> None:
+            payload = json.loads(message)
+            if (
+                armed
+                and not failed_sends
+                and payload.get("method") == "Runtime.getProperties"
+            ):
+                failed_sends.append(payload)
+                raise native_error
+            await self.socket.send(message)
+
+        async def close(self) -> None:
+            await self.socket.close()
+
+        def __aiter__(self) -> AsyncIterator[str | bytes]:
+            return self.socket.__aiter__()
+
+    async def connect(uri: str, *, ping_interval: float | None) -> VariableSocket:
+        return VariableSocket(await original_connect(uri, ping_interval=ping_interval))
+
+    configured = await client.post(
+        "/api/v1/debug/node/configurations",
+        json={
+            **owner,
+            "name": "变量读取失败后原进程恢复",
+            "script_path": "entry.mjs",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    with monkeypatch.context() as patch:
+        patch.setattr(websockets, "connect", connect)
+        started = await client.post(
+            "/api/v1/debug/node/start",
+            json={
+                **owner,
+                "configuration_id": configuration_id,
+                "path": "entry.mjs",
+            },
+        )
+        assert started.status_code == 200, started.text
+        assert started.json()["data"]["status"] == "running"
+        pid = started.json()["data"]["pid"]
+        armed = True
+        paused = await client.post(
+            "/api/v1/debug/node/action", json={**owner, "action": "pause"}
+        )
+        assert paused.status_code == 200, paused.text
+        assert len(failed_sends) == 1
+        state = paused.json()["data"]
+        assert state["status"] == "paused" and state["pid"] == pid
+        expected = (
+            f"读取局部变量失败: session_id={owner['session_id']}, thread_id={owner['thread_id']}: "
+            "stage=node-debug-variables, error=PermissionError, errno=13"
+        )
+        assert state["error_message"] == expected
+        assert state["call_stack"] and state["call_stack"][0]["variables"] == []
+        assert paused.json()["request_id"] == paused.headers["X-Request-ID"]
+        assert any(
+            record.exc_info and record.exc_info[1] is native_error
+            for record in caplog.records
+        )
+        assert str(native_error) in caplog.text
+        live = await client.get("/api/v1/debug/node", params=owner)
+        assert live.status_code == 200, live.text
+        assert live.json()["data"]["error_message"] == expected
+        manifest_bytes, manifest = store.read_manifest_payload(**owner)
+        assert manifest_bytes is not None and manifest is not None
+        assert manifest.actions[-1].action == "pause"
+        for text in (paused.text, live.text, manifest_bytes.decode()):
+            assert "variables-secret" not in text
+
+        continued = await client.post(
+            "/api/v1/debug/node/action", json={**owner, "action": "continue"}
+        )
+        assert continued.status_code == 200, continued.text
+        assert continued.json()["data"]["status"] == "running"
+        retried = await client.post(
+            "/api/v1/debug/node/action", json={**owner, "action": "pause"}
+        )
+        assert retried.status_code == 200, retried.text
+        restored = retried.json()["data"]
+        assert restored["pid"] == pid and restored["status"] == "paused"
+        assert restored["error_message"] is None
+        assert restored["call_stack"] and restored["call_stack"][0]["variables"]
+        assert len(failed_sends) == 1
+        stopped = await client.post(
+            "/api/v1/debug/node/action", json={**owner, "action": "stop"}
+        )
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["data"]["status"] == "exited"
+        assert probe_process_identity(pid) is None
+    await reopen(True)
+    cold = await client.get("/api/v1/debug/node", params=owner)
+    assert cold.status_code == 200, cold.text
+    assert cold.json()["data"]["active_configuration_id"] == configuration_id
+    assert cold.json()["data"]["actions"] == stopped.json()["data"]["actions"]
+    assert "variables-secret" not in cold.text
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "variable-read-errors.json").write_text(
+        json.dumps(
+            {
+                "started": started.json(),
+                "paused": paused.json(),
+                "live": live.json(),
+                "manifest": manifest.model_dump(mode="json"),
+                "continued": continued.json(),
+                "retried": retried.json(),
+                "stopped": stopped.json(),
+                "cold": cold.json(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )

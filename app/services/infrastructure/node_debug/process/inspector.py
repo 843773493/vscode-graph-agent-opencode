@@ -11,6 +11,7 @@ from urllib.request import url2pathname
 
 from websockets.exceptions import ConnectionClosed
 
+from app.core.failures import failure_detail
 from app.schemas.internal_v2.node_debug import (
     NodeDebugAction,
     NodeDebugStackFrameDTO,
@@ -289,13 +290,21 @@ class NodeDebugInspector:
         except Exception as error:  # noqa: BLE001 - 变量读取故障必须暴露在调试状态
             if "Cannot find context with specified id" in str(error):
                 return
+            message = failure_detail(
+                error,
+                stage="node-debug-variables",
+                label=(
+                    f"读取局部变量失败: session_id={runtime.session_id}, "
+                    f"thread_id={runtime.thread_id}"
+                ),
+            )
             async with runtime.state_lock:
                 if (
                     runtime.status == "paused"
                     and runtime.call_stack
                     and runtime.call_stack[0].call_frame_id == frame.call_frame_id
                 ):
-                    runtime.error_message = f"读取局部变量失败: {error}"
+                    runtime.error_message = message
 
     async def _hydrate_frame_variables(
         self,

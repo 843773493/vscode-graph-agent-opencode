@@ -102,6 +102,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 Node 调试进程身份的 stat/boot_id 原生读取复用 failure_detail，分别报告 process_stat_read/boot_id_read，保留原异常类别、errno/winerror 与直接 cause。正常 PID 条目消失仍返回已终结，boot_id 缺失仍抛 FileNotFoundError；不改 API 分类、不回落身份来源。冷恢复的结算动作复用原 session_state，在追加前 ensure_loaded，避免未加载的方案选择和历史被 manifest writer 覆盖；不增加状态副本或恢复链。
 
+Node Inspector暂停后的局部变量读取，在原失败catch复用`failure_detail`记录Session/Thread、node-debug-variables阶段及异常类别和适用系统错误码，完整原实例留诊断；日志sink故障不阻止原状态结算。原状态锁与暂停/frame身份检查继续阻止迟到结果改写新状态，失效上下文、过期变量对象、取消及日志点说明保持既有处理。失败不重启进程或重发调试命令；后续显式继续/暂停沿同一进程与原命令链重新读取，不另存错误正文或建立恢复链。
+
 远端托管清单与删除同样复用failure_detail，分别报告workspace_list和workspace_remove，不再从HTTP响应任意提取detail或截断正文。删除409只经既有GatewayRuntimeStateResultDTO读取blocked业务回执，保留完整组及blocker身份；无效JSON、信封、DTO或非blocked状态留诊断，普通响应保持远端409和原HTTP失败事实。拒绝不继续刷新投影或端口对账，成功重试仍沿原owner执行；旧正文helper在最后两个消费者迁齐后物理删除。
 
 验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。
