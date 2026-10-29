@@ -14,6 +14,7 @@ from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
 
+import anyio
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -26,7 +27,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
-from app.services.infrastructure.workspace_files import operations
+from app.services.infrastructure.workspace_files import filesystem, operations
 from app.services.infrastructure.workspace_files.filesystem import (
     FileEffectUnverifiedError,
 )
@@ -447,3 +448,106 @@ async def test_operation_log_failure_preserves_settlement_effect_and_fifo(
         if worker is not None and worker.done() and (error := worker.exception()) is not None:
             with pytest.raises(type(error)):
                 await owner.stop()
+
+
+@pytest.mark.parametrize("stage", ["read", "save", "download", "transfer", "text"])
+async def test_file_access_log_failure_preserves_original_result_and_retry(
+    file_case, monkeypatch: pytest.MonkeyPatch, stage: str,
+):
+    case = file_case
+    target = case.directory / ("new.txt" if stage == "text" else "seed.txt")
+    uri = case.listing["path"] + "/" + target.name
+    blocked_log = case.root / "blocked-file-access-log"
+    blocked_log.write_bytes(b"keep obstruction")
+    original = FileNotFoundError(errno.ENOENT, f"private-strerror: {target}", str(target))
+    errors: list[BaseException] = []
+
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            errors.append(record.exc_info[1])
+            with (blocked_log / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    method, endpoint, payload = "GET", "/api/v1/workspace/files/content", None
+    if stage == "save":
+        current = await case.client.get(endpoint, params={"path": uri})
+        assert current.status_code == 200, current.text
+        method, payload = "PUT", {"content": "saved\n", "expected_revision": current.json()["data"]["revision"]}
+    elif stage in {"download", "transfer"}:
+        endpoint = "/api/v1/workspace/files/download"
+    elif stage == "text":
+        method, endpoint = "POST", "/api/v1/resources/text-mutations"
+        payload = {"create": {"target": uri, "content": "created\n", "expected_version": "absent"}}
+
+    async def request():
+        return await case.client.request(method, endpoint, params={"path": uri}, json=payload,
+                                         headers={"X-Request-ID": "req-file-access-" + stage})
+
+    operation = {"read": Path.open, "download": Path.stat, "text": Path.resolve}.get(stage)
+
+    def fail_path(path: Path, *args, **kwargs):
+        if path == target:
+            raise original
+        assert operation is not None
+        return operation(path, *args, **kwargs)
+
+    replace = os.replace
+
+    def fail_replace(source, destination):
+        if Path(destination) == target:
+            raise original
+        return replace(source, destination)
+
+    open_file = anyio.open_file
+
+    async def fail_transfer(path, *args, **kwargs):
+        if Path(path) == target:
+            raise original
+        return await open_file(path, *args, **kwargs)
+
+    before = file_rows(case)
+    handler = FailingHandler(level=logging.ERROR)
+    loggers = (logging.getLogger(filesystem.__name__), failures.logger)
+    try:
+        for logger in loggers:
+            logger.addHandler(handler)
+        with monkeypatch.context() as patch:
+            if stage in {"read", "download", "text"}:
+                patch.setattr(Path, {"read": "open", "download": "stat", "text": "resolve"}[stage], fail_path)
+            elif stage == "save":
+                patch.setattr(os, "replace", fail_replace)
+            else:
+                patch.setattr(anyio, "open_file", fail_transfer)
+            failed = await request()
+        assert failed.status_code == (200 if stage == "text" else 500 if stage == "transfer" else 404), failed.text
+        body = failed.json()
+        assert body["request_id"] == failed.headers["X-Request-ID"] == "req-file-access-" + stage
+        assert "FileNotFoundError" in failed.text and "diagnostic_sink_error=NotADirectoryError" in failed.text
+        assert str(case.root) not in failed.text and "private-strerror" not in failed.text
+        if stage == "text":
+            receipt = body["data"]["receipt"]
+            assert (receipt["status"], receipt["effect"], receipt["error_type"]) == ("error", "not_executed", "FileNotFoundError")
+            assert not receipt["journal_id"] and not receipt["files"] and not target.exists()
+        assert original in errors and any(str(blocked_log) in note for note in original.__notes__)
+        assert file_rows(case) == before
+        assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+        assert not list(case.directory.glob(".seed.txt.*.tmp"))
+        continued = await request()
+        assert continued.status_code == 200, continued.text
+        assert continued.headers["X-Request-ID"] == "req-file-access-" + stage
+        if stage in {"download", "transfer"}:
+            assert continued.content == b"original\n"
+        elif stage == "text":
+            assert continued.json()["data"]["receipt"]["status"] == "success"
+            assert target.read_bytes() == b"created\n"
+        else:
+            assert continued.json()["data"]["content"] == ("saved\n" if stage == "save" else "original\n")
+        (case.artifacts / f"file-access-log-{stage}.json").write_text(json.dumps({
+            "failure": body, "retry_status": continued.status_code, "errors": [type(error).__name__ for error in errors],
+        }, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        assert blocked_log.read_bytes() == b"keep obstruction"

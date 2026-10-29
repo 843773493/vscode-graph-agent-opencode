@@ -1342,3 +1342,10 @@
 
 - 修正 proposal／design 中 Windows 文件 API 尚未验收的陈旧描述：归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 已记录 `native-windows-federation-007` 实机通过。复核原 exit 0、前后指纹相同及保留候选中六份输入的 hash，确认真实三输入同对象、盘符及外部路径读写、目标字节、source/relay 不变和停止后 GET／PUT 502、启动后原 URI 重开；HTTP 原件共23条。
 - 此为历史固定候选的文件 API／真实联邦网络证据，不是当前 HEAD、模型工具或 UNC 共享验收。UNC 继续未验证；2.2／7.2 总门及整体51／53保持。本轮 `hyf-win` 状态查询成功，远端 Web／Gateway 未运行，未执行同步、启动或重启；本地 Debug 保持。核账收据见 `out/tests/temp/uri-global-closure/artifacts/verification-085.json`。
+
+### 2026-10-29 普通文件 I/O 主错误与日志次错（2.2／7.2部分收口）
+
+- 原 `file_access` 与原生错误格式化复用现有 `failure_detail`，移除两处直接日志调用及局部 logger；类别、errno／适用 winerror、URI、阶段与直接 cause 保持，日志次错附到原异常且只公开其类别。文件执行、发布前后效果、临时文件清理、HTTP 分类与结构化文本回执沿原链，不增加文件或诊断 writer。
+- 旧生产29项单元反例及5项ASGI HTTP场景均复现日志次错覆盖主错，404／结构化回执变500。修复后定向58项、调用方104项单测及全文件19项集成通过；覆盖读取、发布前失败、发布后未知效果、删除、下载准备、延迟传输与文本预检，核原件、临时文件、SQLite不变、原请求ID及同入口显式重试。日志sink由本机真实ENOTDIR触发，文件I/O故障是明确注入；不冒充Windows、真实网络、完整模型执行或进程重启验收。
+- Ruff、compileall与strict通过；完整HEAD归档Pyright2→2，按文件／最窄AST owner／规则／完整消息及表达式逐项一致，无新增，不称类型全绿。作者结构自查确认生产只改两个错误出口、净减5行，既有集成场景AST保持，原单测在保留断言基础上同时覆盖正常／故障日志；未新增目录或源码文件，集成文件553行仍共用同一文件owner装具，不代独立审查。
+- 准确命令、源码指纹、原始输出、退出码与结构证据见 `out/tests/temp/uri-global-closure/artifacts/verification-086.json`。单元首轮通过后只补一行空行以通过Ruff，不改变AST；后续集成及回归消费最终源码，不重复无影响检查。重型验证串行且有进程外超时／内存保护；2.2／7.2及用户延期项继续未勾。前端及其OpenSpec保持暂停，其他agent独有改动与原Debug进程保持。

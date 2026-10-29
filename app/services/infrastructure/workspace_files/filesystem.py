@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import shutil
 from collections.abc import Callable, Iterator
@@ -13,19 +12,17 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
+from app.core.failures import failure_detail
 from app.services.infrastructure.workspace_files.runtime import (
     rename_entry_exclusive,
 )
 from app.services.infrastructure.workspace_files.store import canonical_json, digest
 
-logger = logging.getLogger(__name__)
-
 
 def file_access_error_detail(error: BaseException) -> str:
     """原生文件名与系统原文只进入诊断，业务错误保留既有 URI 消息。"""
     if isinstance(error, OSError) and (error.filename is not None or error.filename2 is not None):
-        logger.error("目标文件系统访问失败", exc_info=(type(error), error, error.__traceback__))
-        return f"{type(error).__name__}: errno={error.errno}"
+        return failure_detail(error, stage="file-access", label="目标文件系统访问失败")
     return str(error)
 
 
@@ -45,11 +42,9 @@ def file_access(reference: str | None, stage: str) -> Iterator[None]:
     try:
         yield
     except OSError as error:
-        logger.exception("文件访问失败: uri=%s stage=%s", reference, stage)
         raise type(error)(
             error.errno,
-            f"文件访问失败: uri={reference}, stage={stage}, error={type(error).__name__}, "
-            f"errno={error.errno}, winerror={getattr(error, 'winerror', None)}",
+            failure_detail(error, stage=stage, label=f"文件访问失败: uri={reference}"),
         ) from error
 
 

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import errno
+import logging
 from pathlib import Path
 
 import pytest
 
+from app.core import failures
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import resource_display_uri
-from app.services.infrastructure.workspace_files import text_publication
+from app.services.infrastructure.workspace_files import filesystem, text_publication
 
 
 @pytest.fixture
@@ -21,9 +23,35 @@ def source(tmp_path: Path) -> tuple[Path, str]:
     return target, uri
 
 
+@pytest.fixture(params=[False, True], ids=["logging", "broken-logging"])
+def diagnostic_sink(source, request: pytest.FixtureRequest):
+    if not request.param:
+        yield None
+        return
+    blocked = source[0].parent / "blocked-diagnostic-log"
+    blocked.write_bytes(b"keep obstruction")
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            with (blocked / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    handler = FailingHandler(level=logging.ERROR)
+    loggers = (logging.getLogger(filesystem.__name__), failures.logger)
+    for logger in loggers:
+        logger.addHandler(handler)
+    try:
+        yield blocked
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        assert blocked.read_bytes() == b"keep obstruction"
+
+
 @pytest.mark.parametrize("number", [errno.EACCES, errno.EIO, errno.ELOOP, errno.ENOENT])
 @pytest.mark.parametrize("stage", ["stat_before", "open", "read", "stat_after"])
-def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, number, stage):
+def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, number, stage, diagnostic_sink):
     target, uri = source
     original = OSError(number, f"原始系统消息含路径 {target}", str(target))
     lstat, open_file = Path.lstat, Path.open
@@ -68,11 +96,14 @@ def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, nu
     assert str(target.parent) not in str(error)
     assert original.filename == str(target)
     assert target.read_bytes() == b"original\r\n"
+    if diagnostic_sink is not None:
+        assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+        assert any(str(diagnostic_sink) in note for note in original.__notes__)
 
 
 @pytest.mark.parametrize("stage", ["mkdir", "temporary", "fsync", "replace", "delete"])
 @pytest.mark.parametrize("number", [errno.EACCES, errno.EIO])
-def test_publication_failures_leave_original_and_remove_temporary(source, monkeypatch, stage, number):
+def test_publication_failures_leave_original_and_remove_temporary(source, monkeypatch, stage, number, diagnostic_sink):
     target, uri = source
     before = text_publication.read_file_preimage(target, reference=uri)
     original = OSError(number, f"原生系统消息含路径 {target.parent}", str(target), None, str(target.with_suffix(".tmp")))
@@ -112,9 +143,12 @@ def test_publication_failures_leave_original_and_remove_temporary(source, monkey
     assert original.filename == str(target) and original.filename2 == str(target.with_suffix(".tmp"))
     assert target.read_bytes() == before.content
     assert list(target.parent.glob(".notes.txt.*.tmp")) == []
+    if diagnostic_sink is not None:
+        assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+        assert any(str(diagnostic_sink) in note for note in original.__notes__)
 
 
-def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch):
+def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch, diagnostic_sink):
     target, uri = source
     before = text_publication.read_file_preimage(target, reference=uri)
     replace = text_publication.os.replace
@@ -143,3 +177,18 @@ def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch):
     assert isinstance(error.__cause__, OSError) and error.__cause__.__cause__ is original
     assert target.read_bytes() == b"published"
     assert list(target.parent.glob(".notes.txt.*.tmp")) == []
+    if diagnostic_sink is not None:
+        assert any(str(diagnostic_sink) in note for note in original.__notes__)
+
+
+@pytest.mark.parametrize("filename_field", ["first", "second"])
+def test_raw_file_error_keeps_public_facts_when_diagnostics_fail(source, diagnostic_sink, filename_field):
+    target, _ = source
+    original = PermissionError(errno.EACCES, f"private-strerror: {target}")
+    setattr(original, "filename" if filename_field == "first" else "filename2", str(target))
+    detail = filesystem.file_access_error_detail(original)
+    assert "PermissionError" in detail and f"errno={errno.EACCES}" in detail
+    assert str(target.parent) not in detail and "private-strerror" not in detail
+    if diagnostic_sink is not None:
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
+        assert any(str(diagnostic_sink) in note for note in original.__notes__)
