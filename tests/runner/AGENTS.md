@@ -15,6 +15,7 @@
 
 ## 规范
 
+- `integration-workspace-file-navigation-errors`经真实文件owner、SQLite与ASGI路由验证原生访问及控制面回复错误、上传碰撞、文本预检和operation／日志双重故障；核原结算、未知效果、FIFO与worker重启，固定100秒/4GiB，不代表独立Backend、Gateway/Web或Windows实机。
 - `integration-gateway-profile-errors`经真实Gateway用户入口生成账户/profile并制造原生目录与日志写入双重故障，核原HTTP分类、request_id、账户副作用、原件保全与同入口恢复；固定90秒/4GiB，不启动Backend、Web或真实Provider。
 - `integration-test-gate` 经两个隔离Git worktree中的真实pytest进程验证集成/E2E在服务装具前排队、清理后交接、强杀释放和xdist串行；固定90秒/4GiB，不启动用户开发服务。普通pytest集成/E2E也自动加载相同闸门；排队占用原suite外部期限，不能把超时算通过。
 - `integration-service-json-errors` 经真实辅助服务 HTTP 验证 JSON 解析失败的诊断边界及同入口正常请求，固定90秒；Linux按每进程4GiB数据段保护，不代表整树总内存预算，也不代表 Python owner、Gateway／Web 或 Backend 重启验收。

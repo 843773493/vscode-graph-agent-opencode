@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import logging
 import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,11 +21,15 @@ from fastapi import FastAPI, HTTPException
 from app.api import resources as resources_api
 from app.api import workspace as workspace_api
 from app.api.deps import get_text_mutations, get_workspace_service, verify_local_token
+from app.core import failures
 from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files import operations
+from app.services.infrastructure.workspace_files.filesystem import (
+    FileEffectUnverifiedError,
+)
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
 )
@@ -297,3 +303,147 @@ async def test_text_preflight_uses_shared_error_and_creates_nothing_until_retry(
     (case.artifacts / "text-preflight.json").write_text(json.dumps({
         "failure": body, "saved": saved.json(),
     }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.parametrize("failure_kind", ["denied", "conflict", "unverified"])
+async def test_operation_log_failure_preserves_settlement_effect_and_fifo(
+    file_case, monkeypatch: pytest.MonkeyPatch, failure_kind: str,
+):
+    case = file_case
+    owner = case.service.file_operations
+    blocked_log = case.root / "blocked-operation-log"
+    blocked_log.write_bytes(b"original log obstruction")
+    later_directory = case.root / ("later-" + uuid4().hex)
+    later_directory.mkdir()
+    listed = await case.client.get("/api/v1/workspace/files", params={"path": str(later_directory)})
+    assert listed.status_code == 200, listed.text
+    later_snapshot = listed.json()["data"]
+    entered, release = Event(), Event()
+    execute, publish = owner._execute, operations.publish_step
+    errors: list[BaseException] = []
+    publication_targets: list[Path] = []
+
+    class FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            errors.append(record.exc_info[1])
+            with (blocked_log / "service.log").open("a", encoding="utf-8"):
+                pass
+
+    def blocked(record: operations.FileOperationRecord) -> None:
+        entered.set()
+        if not release.wait(10):
+            raise AssertionError("文件 operation 执行屏障未释放")
+        execute(record)
+
+    def fail_publish(stage: Path, target: Path, kind: str) -> None:
+        publication_targets.append(target)
+        if target.name != "broken.txt":
+            publish(stage, target, kind)
+        elif failure_kind == "denied":
+            raise PermissionError(errno.EACCES, "原文件发布失败", str(target))
+        elif failure_kind == "conflict":
+            target.write_bytes(b"external replacement")
+            publish(stage, target, kind)
+        else:
+            publish(stage, target, kind)
+            target.unlink()
+            target.write_bytes(b"external replacement")
+            raise OSError(errno.EIO, "原发布后效果待核实", str(target))
+
+    async def enqueue(snapshot: dict, name: str) -> tuple[dict, dict]:
+        payload = {"name": name, "kind": "file", "intent": {
+            "client_operation_id": "op_" + uuid4().hex, "client_sequence": 1,
+            "directory_key": snapshot["directory_key"],
+            "expected_directory_revision": snapshot["directory_revision"],
+        }}
+        response = await case.client.post("/api/v1/workspace/files/entries", params={"path": snapshot["path"]},
+                                          json=payload, headers={"X-Request-ID": "req-operation-accept"})
+        assert response.status_code == 202, response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-operation-accept"
+        return response.json()["data"], payload
+
+    async def wait(operation_id: str) -> dict:
+        async with asyncio.timeout(10):
+            while True:
+                response = await case.client.get("/api/v1/workspace/files/operations", params={
+                    "operation_id": operation_id, "expected_workspace_id": case.service.workspace_id,
+                }, headers={"X-Request-ID": "req-operation-query"})
+                assert response.status_code == 200, response.text
+                assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-operation-query"
+                assert str(case.root) not in response.text
+                data = response.json()["data"]
+                if data["operations"][0]["state"] in {"committed", "rejected"} or data["worker_state"] == "failed":
+                    return data
+                await asyncio.sleep(0.01)
+
+    handler = FailingHandler(level=logging.ERROR)
+    loggers = (operations.logger, failures.logger)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(owner, "_execute", blocked)
+            patch.setattr(operations, "publish_step", fail_publish)
+            for logger in loggers:
+                logger.addHandler(handler)
+            accepted, payload = await enqueue(case.listing, "broken.txt")
+            assert await asyncio.to_thread(entered.wait, 5)
+            successor, _ = await enqueue(later_snapshot, "later.txt")
+            release.set()
+            status = await wait(accepted["operation_id"])
+        receipt = status["operations"][0]
+        expected = ("running", "unverified", "reconcile_required") if failure_kind == "unverified" else (
+            "rejected", "none", "file_operation_conflict" if failure_kind == "conflict" else "file_operation_failed",
+        )
+        assert (receipt["state"], receipt["effect"], receipt["error_code"]) == expected
+        assert "diagnostic_sink_error=NotADirectoryError" in receipt["error_detail"]
+        assert errors and all(any(str(blocked_log) in note for note in error.__notes__) for error in errors)
+        assert blocked_log.read_bytes() == b"original log obstruction"
+        assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+        assert str(case.root) not in json.dumps(file_rows(case), ensure_ascii=False)
+        target = case.directory / "broken.txt"
+        assert target.exists() == (failure_kind != "denied")
+        if target.exists():
+            assert target.read_bytes() == b"external replacement"
+        if failure_kind == "unverified":
+            assert status["worker_state"] == "failed"
+            assert "FileEffectUnverifiedError" in status["worker_error"]
+            assert "diagnostic_sink_error=NotADirectoryError" in status["worker_error"]
+            frozen = owner.store.get(accepted["operation_id"], "local")
+            assert frozen.steps[0]["state"] == "publishing" and owner._stage_root(frozen, 0).is_dir()
+            assert owner.store.cleanup_pending() == ()
+            assert owner.store.get(successor["operation_id"], "local").state == "queued"
+            assert not (later_directory / "later.txt").exists()
+            with pytest.raises(FileEffectUnverifiedError) as stopped:
+                await owner.stop()
+            assert stopped.value.__cause__ is errors[0]
+            # 原数据库驱动 worker 重启；日志仍失败也必须及时公开拒绝，不能盲重放。
+            with pytest.raises(RuntimeError, match="worker 不可用"):
+                async with asyncio.timeout(5):
+                    await owner.start()
+            restarted = await wait(accepted["operation_id"])
+            assert restarted["worker_state"] == "failed"
+            assert restarted["operations"][0]["effect"] == "unverified"
+            assert owner.store.get(successor["operation_id"], "local").state == "queued"
+            assert not (later_directory / "later.txt").exists()
+            assert target.read_bytes() == b"external replacement"
+            with pytest.raises(FileEffectUnverifiedError):
+                await owner.stop()
+        else:
+            assert status["worker_state"] == "running" and status["worker_error"] is None
+            assert (await wait(successor["operation_id"]))["operations"][0]["state"] == "committed"
+            assert (later_directory / "later.txt").read_bytes() == b""
+            replay = await case.client.post("/api/v1/workspace/files/entries", params={"path": case.listing["path"]}, json=payload)
+            assert replay.status_code == 202 and replay.json()["data"] == receipt
+        assert publication_targets.count(target) == 1
+        (case.artifacts / f"operation-log-{failure_kind}.json").write_text(json.dumps({
+            "accepted": accepted, "status": status, "errors": [type(error).__name__ for error in errors],
+        }, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        release.set()
+        for logger in loggers:
+            logger.removeHandler(handler)
+        handler.close()
+        worker = owner._worker
+        if worker is not None and worker.done() and (error := worker.exception()) is not None:
+            with pytest.raises(type(error)):
+                await owner.stop()

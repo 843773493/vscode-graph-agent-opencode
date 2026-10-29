@@ -1330,3 +1330,10 @@
 - 原 profile I/O 与 JSON／UTF-8 解码出口改用已有 `failure_detail`，删除直接日志出口；保留原用户、操作、异常类别、错误码／解析坐标、HTTP 分类和原因链。日志次错原文附到原异常，普通说明明确标记日志失败类别，不回显 sink 位置；原子写入、账户回滚／删除顺序及损坏原件不变，无新增 writer 或日志回退。
 - 旧生产的9项单测和1项真实Gateway反例均复现次错覆盖主错及日志位置外泄。最终147项单测、正式矩阵2项集成通过；经真实用户／租约／profile入口生成状态，核对初始化、缺件、JSON、UTF-8、主题目录和删除六次本机OS日志写入失败、原账户副作用、原件及故障解除后同入口恢复。POSIX、Windows盘符和UNC文字另由单测覆盖，不代表Windows实机；不启动用户Debug、Backend、Web或真实Provider。
 - compileall与strict全量52／0通过；Ruff 5项与Pyright 9项既有诊断，在完整HEAD归档中按相对文件、最窄AST owner、规则、完整消息及出错表达式逐项一致，零新增，不称静态全绿。作者结构自查确认原顶层符号不变，其余生产方法及原集成场景AST保持，未新增目录或profile owner。准确命令、源码指纹、原始输出、实际退出码与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-083.json`。测试有进程外期限／内存保护并串行运行；上一边界 `0fe53e077` 已加入同仓库worktree共享的pytest集成／E2E fixture闸门，非pytest及旧源码不受其约束。2.2／7.2总门及用户延期项继续未勾；前端暂停，Debug保持。
+
+### 2026-10-29 文件 operation 结算与退出的日志次错（2.2／7.2部分收口）
+
+- 原执行错误与worker退出两处出口复用 `failure_detail`；保留原operation、目标URI、错误码和效果语义，日志次错附到原异常且只公布其类别。删除直接日志调用，避免结算前被日志错误中断；发布、CAS、事务、FIFO及未知效果恢复链保持，无新writer或日志回退。
+- 旧生产三个真实文件owner／SQLite／ASGI入口反例均停在 `running/none`，worker退出回调再次失败。最终该文件14项及文件操作／恢复／原生staging单元49项通过。关键受理和后继均由HTTP生成；拒绝正常结算且独立后继继续，原ID重试不重放，未知效果保留原staging、后继及原因链，worker重启仍明确拒绝且不改写外部替换文件；日志sink通过本机OS真实ENOTDIR制造。未将worker重启称作独立Backend进程恢复。
+- Ruff、compileall及strict全量52／0通过；完整HEAD静态基线Pyright10→8，剩余诊断按相对文件、最窄AST owner、规则、完整消息及原表达式逐项一致，移除的两条均为本次退出回调的重复exception读取类型诊断，新场景零诊断，不称类型全绿。原生产仅两个方法及import改变，所有原集成场景AST保持；作者结构自查记录612／449行和目录直接源码13／6，无新目录，未代替独审。注册100秒／4GiB矩阵入口并核CLI清单，命令与已通过定向运行一致，不重复长跑。
+- 准确命令、前后指纹、原始输出、实际退出码和局限见 `out/tests/temp/uri-global-closure/artifacts/verification-084.json`；单元回归期间仅matrix登记及另一agent的workbench构建脚本变化，相关Python指纹保持，因此未重复回归。所有测试有进程外保护且串行运行。2.2／7.2总门及用户延期项继续未勾；前端实现暂停，并行前端改动原样保留，Debug服务保持。

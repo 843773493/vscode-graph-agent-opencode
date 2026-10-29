@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.core.path_utils import is_resource_uri_input, safe_join
 from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -91,11 +92,11 @@ class WorkspaceFileOperations:
     def _observe_exit(self, task: asyncio.Task[None]) -> None:
         if task.cancelled():
             self.worker_state, self.worker_error = "failed", "文件 operation worker 被意外取消"
-        elif task.exception() is not None:
-            error = task.exception()
-            self.worker_state, self.worker_error = "failed", f"{type(error).__name__}: workspace_id={self.workspace_id}"
-            logger.error("文件 operation worker 失败: workspace_id=%s", self.workspace_id,
-                         exc_info=(type(error), error, error.__traceback__))
+        elif (error := task.exception()) is not None:
+            self.worker_state, self.worker_error = "failed", failure_detail(
+                error, stage="workspace-file-worker",
+                label=f"{type(error).__name__}: workspace_id={self.workspace_id}",
+            )
         self._ready.set()
 
     def require_ready(self) -> None:
@@ -564,11 +565,9 @@ class WorkspaceFileOperations:
 
     @staticmethod
     def _error_detail(record: FileOperationRecord, error: BaseException) -> str:
-        logger.error("文件 operation 执行失败: operation_id=%s target=%s", record.operation_id,
-                     record.payload["target"], exc_info=(type(error), error, error.__traceback__))
-        if isinstance(error, WorkspaceFileOperationConflictError):
-            return str(error)
-        return f"{type(error).__name__}: operation_id={record.operation_id}, target={record.payload['target']}, errno={getattr(error, 'errno', None)}"
+        message = (str(error) if isinstance(error, WorkspaceFileOperationConflictError) else
+                   f"{type(error).__name__}: operation_id={record.operation_id}, target={record.payload['target']}, errno={getattr(error, 'errno', None)}")
+        return failure_detail(error, stage="workspace-file-operation", label=message)
 
     @staticmethod
     def _result_items(record: FileOperationRecord, steps: list[dict], *, unverified: bool = False) -> list[dict]:
