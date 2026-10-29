@@ -121,6 +121,7 @@ StateStore的`checkpointOperationTail`串行管理检查点读取、写入、删
 - 产品诊断统一使用 `src/shared/serverRuntimeLogging.mjs`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
 - 导航先识别显式协议，再由同一白名单校验；不支持的协议明确拒绝，不补成另一个 HTTP(S) 目标。只有裸主机地址补缺省协议，主机后的数字端口与协议段分开识别。
 - 失败时返回明确 HTTP 错误或 WebSocket error 消息。
+- `browserRuntimeFailure`及`BrowserToolTimeoutError.recordRecoveryFailure`的日志次错只补入原cause，按发生顺序保留两份原异常，不替换原阶段、错误码、创建回执或可重试超时；同步timer及异步恢复catch都必须继续结算原失败。`browserRuntimeErrors.test.js`验证这两个出口，不把它当作全部状态存储和生命周期的日志故障闭包。
 - `transport/browserFrameFlow.js` 的所有新帧先替换唯一待发帧，再由同一发送入口检查 ACK 和 socket 积压；socket 恢复后新帧不能留下稍后重放的旧待发帧。
 - detach 只断开客户端，不关闭浏览器；close/delete 才关闭页面。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

@@ -38,6 +38,8 @@ browser/
 
 `test_browser_websocket_input_errors.py`经真实Node WebSocket/HTTP验证非法JSON及九类未知字段的POSIX、盘符和UNC输入只进入诊断、零Browser/context副作用；同连接继续以真实授权附加/分离正式HTTP创建的本地文件页面。suite `integration-browser-websocket-input-errors`固定90秒/4GiB；不代表Gateway/主Web、Python业务owner、进程重启或其他WebSocket运行时失败验收。
 
+`test_browser_runtime_diagnostics.py`与`browser_runtime_diagnostic_failure.mjs`仅在原Chromium启动参数及日志writer边界注入故障，通过真实Node/HTTP核对原生启动失败、日志目录访问失败、原创建回执、只读磁盘记录及故障解除后的真实页面；观察writer尝试不充当产品日志回退。suite `integration-browser-runtime-diagnostics`固定60秒/4GiB，不代Gateway/Web、Python业务owner、Backend重启、Windows实机或全部运行时收尾验收。
+
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
 ## 可修改内容

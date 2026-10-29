@@ -1472,3 +1472,10 @@
 - 原共享协议只保留对象到schema的唯一投影，原始文本解析迁至服务端`terminalInput.js`并复用共享JSON解析器；旧raw parser物理删除、调用方和原单测同批迁齐。原非有限数转null、负零转零及UTF-8输入保持，已解析对象不再序列化/解析。JSON解析、schema字段错误与原已附加后未知type拒绝只公开静态身份／阶段／类别，完整原错留cause及原workspaceLogger，日志次错按顺序保留；一次性grant、授权前后顺序、队列、输入、PID及detach保持。
 - 原生产的真实Node/HTTP/WebSocket测试1 failed，保存24条不合规回执；其余零资源、原授权顺序和同连接shell写文件断言已执行。修复后116项Bun单测及34项Node输出回归通过（其中16项为交叉复跑）；交付审查发现日志缺少workspace身份后改用原logger，31项受影响单测及真实PTY网络场景补验通过，24条新诊断逐行核对真实workspace_id。共享解析依赖的原Browser WebSocket1项和双服务HTTP2项也通过。初轮12项新断言误把原诊断当JSON转义，改为核对原值；另3项因误用Bun运行原Node测试失败，未改原测试或产品输出，改回Node后通过，失败原件保留。
 - Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过。作者AST逐项核对原schema投影、编码、数值reviver、HTTP reader及backend其它方法保持，仅原消息入口注入logger和未知type拒绝变化；新服务端文件43行，未增源码目录或依赖，不代独审。准确命令、原始输出、源码指纹、实际退出码、正式场景产物及复用范围见 `out/tests/temp/uri-global-closure/artifacts/verification-109.json`。测试批次串行，保留跨worktree闸门、外部超时、4GiB/两CPU保护；不代表Gateway/Web、Python业务owner、进程重启、Windows实机或其它Terminal运行时错误。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及原Debug保持。
+
+### 2026-10-29 Browser 运行时诊断次错（2.2／7.2部分收口）
+
+- 原运行时失败及页面超时恢复的日志writer次错会替换原异常，甚至打断同步timer的超时结算。两个原出口现保留原公开说明、code/status、retryable及recovery；日志失败只将原错与诊断次错按顺序保留在cause。正常日志仍保留直接cause；原withTimeout实现、创建回执与资源状态链保持，无新helper、协议或依赖。
+- 原生产的直接出口单测6 failed／1 passed，真实Node/HTTP创建2场景中1 failed／1 passed，原件显示ENOTDIR日志位置进入普通回执。修复后9项Node单测、163项原运行时池／动作／关闭消费者及2项真实Node/HTTP/Chromium场景全部通过。网络验收核原失败资源身份、revision、冷磁盘记录与公开查询一致、诊断尝试一次及故障解除后的新本地页面；同步／异步恢复双故障由真实Node timer/Promise单测证明，不称真实Chromium HTTP超时故障验收。
+- 首次修复后网络运行因原42960端口占用产生2项setup error，业务未执行；未终止未知进程或更换端口。随后ss及既有端口检查器确认42960/42961均已空闲，沿原allocator和suite补验2 passed／5.47秒。Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过；作者AST核验仅两个原出口改变，其余方法与exports保持，139行产品文件无新增目录，不代独审。
+- 命令、指纹、原始输出、退出码、红测及端口证据见 `out/tests/temp/uri-global-closure/artifacts/verification-110.json`。测试串行，正式集成保留跨worktree锁和外部超时、4GiB／两CPU保护；本片不代表Gateway/Web、Python业务owner、Backend重启、Windows实机或其它存储／资源owner的日志故障闭包。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及用户原Debug服务保持。

@@ -28,7 +28,11 @@ export function browserRuntimeFailure({ browserId, pageId = null, stage, cause }
   );
   error.code = cause?.code;
   error.statusCode = cause?.statusCode;
-  logger.error("[browser-runtime] 资源生命周期操作失败", { browser_id: browserId, page_id: pageId, stage }, cause);
+  try {
+    logger.error("[browser-runtime] 资源生命周期操作失败", { browser_id: browserId, page_id: pageId, stage }, cause);
+  } catch (diagnosticError) {
+    error.cause = new AggregateError([cause, diagnosticError], "浏览器运行时操作与诊断输出均失败", { cause });
+  }
   return error;
 }
 
@@ -47,7 +51,12 @@ export class BrowserToolTimeoutError extends Error {
     this.recovery_error = "浏览器页面重置失败: stage=reset_page";
     this.message = `${this.message}；${this.recovery_error}`;
     this.cause = cause;
-    logger.error("[browser-runtime] 页面超时恢复失败", { timeout_ms: this.timeout_ms }, cause);
+    try {
+      logger.error("[browser-runtime] 页面超时恢复失败", { timeout_ms: this.timeout_ms }, cause);
+    } catch (diagnosticError) {
+      // 原超时必须继续结算；诊断次错不能令timer或后台恢复catch再抛一次。
+      this.cause = new AggregateError([cause, diagnosticError], "浏览器页面恢复与诊断输出均失败", { cause });
+    }
   }
 }
 
