@@ -43,11 +43,6 @@ def content_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-def append_unique(blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
-    if block not in blocks:
-        blocks.append(copy.deepcopy(block))
-
-
 def reasoning_content_block(text: str) -> dict[str, Any]:
     return {"type": "reasoning_content", "reasoning_content": text}
 
@@ -112,7 +107,6 @@ def build_ai_message_content(
 
 __all__ = [
     "MISSING",
-    "append_unique",
     "as_block",
     "build_ai_message_content",
     "content_blocks",

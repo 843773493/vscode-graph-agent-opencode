@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.agents.providers.output_normalization import (
-    append_unique,
     as_block,
     content_blocks,
     reasoning_content_block,
@@ -54,10 +53,10 @@ def append_stream_block(blocks: list[dict[str, Any]], block: dict[str, Any]) -> 
                             previous_items.append(copy.deepcopy(item))
                             previous_item_indexes[item_id] = item_position
                         continue
-                    if item not in previous_items:
-                        previous_items.append(copy.deepcopy(item))
+                    previous_items.append(copy.deepcopy(item))
                 return
-    append_unique(blocks, block)
+    # 没有命中相邻 carrier 合并规则的独立 part 必须保留，即使正文相同。
+    blocks.append(copy.deepcopy(block))
 
 
 def _is_generated_part_id(value: Any) -> bool:
@@ -101,7 +100,7 @@ def stream_content_blocks(content: Any) -> list[dict[str, Any]]:
                 append_stream_block(blocks, reasoning_items_block([response_item]))
                 continue
             if thinking_block is not None:
-                append_unique(blocks, thinking_block)
+                blocks.append(thinking_block)
                 continue
         block.pop("extras", None)
         if block_type == "reasoning" and isinstance(block.get("reasoning"), str):

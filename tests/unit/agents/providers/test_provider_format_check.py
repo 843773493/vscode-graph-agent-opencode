@@ -9,6 +9,7 @@ from app.agents.providers._format_check import (
     check_chunks,
     check_chunks_are_aimessage_chunks,
     check_content_blocks_are_standard,
+    check_final_content_preserves_visible_text,
     check_history_messages_accepted,
     check_no_private_stream_markers,
     check_stream_merges_without_private_marker_noise,
@@ -113,6 +114,25 @@ def test_chunk_merge_has_no_private_marker_noise():
     ]
 
     assert check_stream_merges_without_private_marker_noise(chunks).passed
+
+
+@pytest.mark.parametrize("text", ["重复正文", "正文"])
+def test_final_content_keeps_equal_text_parts_separated_by_reasoning(text: str) -> None:
+    chunks = [
+        _chunk([{"type": "text", "text": text, "id": "part_first", "index": 0}]),
+        _chunk([{"type": "reasoning_content", "reasoning_content": "中间分析", "id": "part_reasoning", "index": 1}]),
+        _chunk([{"type": "text", "text": text, "id": "part_last", "index": 2}]),
+    ]
+    assert check_final_content_preserves_visible_text(chunks).passed
+
+
+def test_final_content_reports_invalid_carrier_instead_of_aborting_checks() -> None:
+    chunks = [_chunk([{"type": "reasoning_content", "reasoning_content": 12}])]
+    result = check_final_content_preserves_visible_text(chunks)
+    assert not result.passed
+    assert "最终内容规范化失败" in result.detail
+    assert "reasoning_content" in result.detail
+    assert any(not result.passed for result in check_chunks(chunks))
 
 
 def test_chunk_merge_rejects_private_marker_noise():

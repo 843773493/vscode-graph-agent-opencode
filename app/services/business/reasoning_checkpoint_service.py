@@ -48,8 +48,7 @@ def _build_assistant_content(
         )
 
     content = [dict(block) for block in canonical_content if isinstance(block, Mapping)]
-    text_block_index = -1
-    for index, block in enumerate(content):
+    for block in content:
         block_type = block.get("type")
         if block_type not in {
             "reasoning",
@@ -64,15 +63,9 @@ def _build_assistant_content(
             raise ValueError(
                 f"最终 assistant content 含未知 block type: {block_type!r}"
             )
-        if block_type in {"text", "output_text"}:
-            text_block_index = index
-
-    if final_text:
-        if text_block_index < 0:
-            raise ValueError("最终 assistant 文本缺少对应的 text content block")
-        text_block = content[text_block_index]
-        text_block["type"] = "text"
-        text_block["text"] = final_text
+    if final_text and not any(block.get("type") in {"text", "output_text"} for block in content):
+        raise ValueError("最终 assistant 文本缺少对应的 text content block")
+    # final_text 是整段回答的展示投影，不能覆盖有序正文中的最后一个 part。
     return content
 
 

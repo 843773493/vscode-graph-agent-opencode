@@ -176,6 +176,34 @@ def test_canonicalizer_keeps_ordered_carrier_content_before_persistence():
     ]
 
 
+@pytest.mark.parametrize("block", [
+    {"type": "text", "text": "相同正文"},
+    {"type": "thinking", "thinking": "相同推理", "signature": "同一签名"},
+    {"type": "redacted_thinking", "data": "同一密文"},
+    {"type": "reasoning_content", "reasoning_content": "相同推理"},
+])
+def test_canonicalizer_preserves_independent_equal_blocks(block: dict[str, object]) -> None:
+    middle: dict[str, object] = {"type": "text", "text": "中间内容"} if block["type"] != "text" else {
+        "type": "reasoning_content", "reasoning_content": "中间推理",
+    }
+    content: list[str | dict[str, object]] = [block, middle, dict(block)]
+    message = AIMessage(content=content)
+    canonical = canonicalize_ai_message(message)
+    assert canonical.content == content
+    assert message.content == content
+    assert canonical.content[0] is not message.content[0]
+
+
+@pytest.mark.parametrize("provider_id", [None, "reasoning-1"])
+def test_canonicalizer_merges_reasoning_items_only_by_provider_identity(provider_id: str | None) -> None:
+    item: dict[str, object] = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "同文摘要"}]}
+    if provider_id is not None:
+        item["id"] = provider_id
+    content: list[str | dict[str, object]] = [{"type": "reasoning_items", "reasoning_items": [item]} for _ in range(2)]
+    canonical = canonicalize_ai_message(AIMessage(content=content))
+    assert canonical.content == [{"type": "reasoning_items", "reasoning_items": [item] if provider_id else [item, item]}]
+
+
 def test_build_content_does_not_duplicate_carrier_already_present_in_content():
     content = build_ai_message_content(
         [

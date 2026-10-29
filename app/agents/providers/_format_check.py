@@ -9,6 +9,8 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
 
+from app.agents.providers.response_normalization import canonicalize_ai_message
+
 __all__ = [
     "ALL_CHECKS",
     "FixtureStreamBuilder",
@@ -23,6 +25,7 @@ __all__ = [
     "check_chunks",
     "check_chunks_are_aimessage_chunks",
     "check_content_blocks_are_standard",
+    "check_final_content_preserves_visible_text",
     "check_history_messages_accepted",
     "check_no_private_stream_markers",
     "check_stream_merges_without_private_marker_noise",
@@ -300,6 +303,31 @@ def check_tool_call_chunks_have_required_fields(
     )
 
 
+def check_final_content_preserves_visible_text(
+    chunks: Sequence[ChatGenerationChunk],
+) -> FormatCheckItem:
+    merged: AIMessageChunk | None = None
+    for chunk in chunks:
+        message = _chunk_message(chunk)
+        if message is not None:
+            merged = message if merged is None else merged + message
+    detail = ""
+    if merged is not None:
+        try:
+            normalized = canonicalize_ai_message(merged)
+        except (TypeError, ValueError) as error:
+            detail = f"最终内容规范化失败: {error}"
+        else:
+            if normalized.text != merged.text:
+                detail = "最终内容与已合并流的可见文本不一致"
+    return FormatCheckItem(
+        name="最终内容规范化必须保留全部可见文本",
+        passed=not detail,
+        detail=detail,
+        remediation="按独立part保留有序正文，不能按正文相等删除内容块。",
+    )
+
+
 def check_tool_call_arguments_complete(chunks: Sequence[ChatGenerationChunk]) -> FormatCheckItem:
     merged: AIMessageChunk | None = None
     for chunk in chunks:
@@ -404,6 +432,7 @@ ALL_CHECKS: list[Callable[[Sequence[ChatGenerationChunk]], FormatCheckItem]] = [
     check_no_private_stream_markers,
     check_content_blocks_are_standard,
     check_stream_merges_without_private_marker_noise,
+    check_final_content_preserves_visible_text,
     check_tool_call_chunks_have_required_fields,
     check_tool_call_arguments_complete,
 ]

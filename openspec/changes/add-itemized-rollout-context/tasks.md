@@ -1309,3 +1309,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 全仓 Python AST、依赖注入与 Mock spec 消费审计确认 `JobExecutorProtocol.fail` 和 `JobExecutionService.fail` 无调用方；物理删除协议及实现，保留唯一 `run` 消费与原 JobService/task callback 的失败、取消、超时和队列结算。除删除两段方法外，两个模块 AST 完全一致，没有新增转发或失败 writer。
 - 相关四个正式测试模块35 passed/5.07秒；Ruff与compileall通过。相同Pyright版本/命令前后生产零诊断，测试仍是原有一条 `JobEventBusProtocol.events` 属性诊断，逐项一致，不称类型全绿。准确命令、源码指纹、原始输出、AST审计及类型对照保留于 `out/tests/temp/uri-global-closure/artifacts/verification-013.json`。该死代码清理不关闭7.5-F或URI全局出口总门。
+
+### 2026-10-29 7.5-E 独立同文内容块与最终正文收敛（部分）
+
+- 真实反例确认 Provider canonicalizer 按正文相等误删独立 text/thinking/redacted/reasoning 块；全仓迁齐唯一消费者后删除 `append_unique`。相邻 carrier 仍沿原规则合并，Responses reasoning item 只按 provider ID 更新，无 ID 的同文 item 保留。格式自检新增可见文本保真检查，非法 carrier 明确报告失败，不中止整组诊断。
+- 产品入口进一步复现最终检查点把完整回答覆盖到最后一个 text part，形成重复前缀；现由原 owner 保留有序块正文，`final_text` 继续作为展示投影及原缺失正文校验输入。没有新增恢复链、canonical writer 或模型协议实现。
+- 原生产的四类独立同文单测4 failed，真实执行冷读1 failed；修复 Provider 后的中间产品反例仍在精确正文处失败，观察为 `['中间文本','中间文本最终文本']`。最终单元回归322 passed/2 skipped/16.78秒，覆盖整个 Provider 目录、reasoning checkpoint 与 Turn response parts；两个跳过项是需显式 live-model 环境的 prompt-cache 验收。最终产品两例2 passed/60.29秒，经消息准入、模型执行、冷 Saver 与下一轮实际请求，核推理/正文顺序、相同正文、首尾空白以及旧 canonical ID/hash 前缀不变。
+- 新增测试曾误期待推理无分隔串接；原 mapping 与实际请求均证明既有合同使用换行分隔，正文为块数组，现严格按该 wire 合同逐字段断言。失败原件保留，没有为通过更改生产投影规则。所有运行串行，保留进程外超时、单进程4GiB数据段与整组6GiB/4核额度保护；这不是跨 agent 全局并发闸门。
+- Ruff/compileall与 OpenSpec strict 通过。Pyright 在完整 HEAD archive 与最终七文件上均有22条既有诊断，按相对文件、最窄 AST owner、原表达式、规则及完整消息逐项一致，零新增，不称类型全绿。准确命令、3477项源码前后指纹、raw/真实退出码、AST变更清单、规模与依赖自查见 `out/tests/temp/uri-global-closure/artifacts/verification-079.json` 及 `independent-blocks-*` 原件。
+- 本切片使用真实应用与 model_stream 的异步 ASGI 回放；冷 Saver 重建不等于 OS 强杀重启，不新增真实 Provider 网络、Web、fork 或团队专项证据。作者自查不称独立审查，其他52个文件未纳入本次修改或提交；7.5组合总门及整体111/119仍保持未完成。
