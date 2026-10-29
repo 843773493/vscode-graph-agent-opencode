@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory
+from app.core.failures import failure_detail
 from app.core.sqlite_state import sqlite_file_uri, utc_now_text
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
@@ -235,7 +236,11 @@ class LegacyRolloutImporter:
                         "rollback": "installed_v2_preserved"
                         if installed
                         else "uninstalled_staging_quarantined",
-                        "error": str(error),
+                        "error": failure_detail(
+                            error,
+                            stage=f"legacy-rollout-import:{migration_id}",
+                            label="历史迁移失败",
+                        ),
                     }
                 )
                 write_audit(audit, record)
