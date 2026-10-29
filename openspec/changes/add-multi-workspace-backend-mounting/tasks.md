@@ -219,3 +219,8 @@
 - 依据上一片完整HEAD复现与原生产合同，迁齐`test_federation`两项过时预期：提交后的精确GatewayRuntimeConsumerApplyError须保原original_error／直接cause、无待恢复补偿及remote-projection／registry-batch两个结算；revision、已提交snapshot、SQLite、路由及runtime未关闭等原断言保持。健康投影核精确公开失败事实，并核原始异常／actual UUID仍在诊断及完整DTO不含私钥路径；状态、身份与远端连接字段原断言保持。生产代码未修改。
 - 同一八文件回归221 passed／8.81秒；Ruff／compileall通过，完整HEAD归档Pyright8→7按最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST确认只改原两项测试及必要import，原27个顶层符号集合保持；1712行旧聚合测试与根单测46文件的结构债务保留既有职责下沉方向，不为本片添加包装或目录。原始命令、指纹、输出、退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-057.json`。
 - 多工作区design D9将“16f时生命周期未实施”明确为历史基线，指向已完成第10节及仍未勾的4.3／8.2总验收。此片不代新真实网络／Web／Windows／完整生命周期或独审，8.2总门仍未勾；团队协作和MCP显式持有继续延期。
+
+### 2026-10-29 挂载调用方清单差集的当前对账（8.2 部分收口）
+
+- 原146路径的既有搜索闭包当前命中167：保留123、新增44、移出23，逐路径保存当前SHA、命中行／AST owner及寻址职责分类；移出项区分实际删除、模块转包及仍存在但已无该依赖，精确Python import未发现悬空。当前Backend getter只读显式workspace_context；Gateway／客户端活动选择、按target独立Node进程和测试启动环境分别登记，不将它们误判为Backend缺省根。
+- 与最近真实双mount核心验收054的完整生产指纹比较，仅crud／diagnostics／remote三个文件变化，恰为055／056已核AST的十个raise替换；mount、服务图与执行上下文未变，复用原Session／Job／history／SQLite隔离证据及057的221项回归，不重复无变化测试。原始清单、命令、指纹与限定结论见`out/tests/temp/uri-global-closure/artifacts/verification-058.json`。发现的旧注释定位和两个已显式mount测试的冗余env准备只作维护项登记，本轮未修改。此为作者按既有搜索口径的静态分类，不代所有间接语义、当前Windows重验、独审或8.2完整生命周期／受保护范围核验；4.3／8.2仍未勾，延期项保持TODO。
