@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.exceptions import NotFoundError
+from app.core.failures import failure_detail
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
@@ -631,7 +632,10 @@ class SessionService:
         except RuntimeError as error:
             current = self._path_resolver.catalog_store.get_creation_record(idempotency_key)
             if current.state != "published":
-                await self._creation_service.abort_prepared(record, str(error))
+                await self._creation_service.abort_prepared(record, failure_detail(
+                    error, stage=f"session-create-publish:{self._workspace_id}:{record.session_id}",
+                    label="会话创建发布失败",
+                ))
             raise
         session = await self.get(result.session_id)
         self._notify_changed("create", result.session_id)

@@ -1270,3 +1270,10 @@
 - ESM／CommonJS真实缺失模块会把宿主模块位置复制到脚本失败HTTP和操作记录；这两类原生错误没有errno/syscall。原执行owner在队列结算前按Node保留错误码识别并复用已有失败出口，原cause／code／status与完整日志保持，业务code、普通脚本Error、语法错误、字符串throw及工具超时不改变。无新读取链、文本脱敏、存储字段或页面URL例外。
 - 旧生产两项真实模块加载均复现泄漏。最终三类原生失败经真实Node／Chromium、HTTP客户端和工作区资源API核对失败回执、持久last_operation、verified状态、lease释放、原文件不变、业务脚本错误及同页重试；加锁拒绝和状态发布回归共5项通过，相关Node单测131项通过。扩大回归的两个原未结束脚本场景在清理时返回408，完整HEAD归档串行复现同样失败，分别为owner版本排空和context关闭后原执行仍未结束；保留原断言及5.2／5.4未完成项，不计通过或扩修。首次基线因与候选并行占用同套端口而止于setup，原件保留，不作业务结论。
 - Ruff、Node语法、compileall与strict通过；完整归档Pyright155→148，按最窄AST owner／规则／完整消息无新增，7项减少来自新增的真实payload类型断言。本片未改Web依赖，复用063的Web类型检查与构建，不代完整Gateway／主Web、Windows或独立Backend恢复。准确命令、源码指纹、raw、退出码与作者自查见 `out/tests/temp/uri-global-closure/artifacts/verification-064.json`；2.2／7.2仍未勾。
+
+
+### 2026-10-29 Session普通创建发布失败的持久说明（2.2／7.2部分收口）
+
+- 原`SessionService._create`在未发布分支不再把`RuntimeError`正文写入`abort_reason`，复用已有`failure_detail`保存工作区/Session、发布阶段及原异常类别；原异常完整进入诊断并按原实例继续抛出。沿同一创建/隔离/中止owner收尾，已发布事实不abort，无新writer、schema、异常正文扫描或兼容分支。fork的显式固定中止原因与core具名原生I/O出口保持原链。
+- 新场景从真实Session创建入口生成冻结意图与目录，在真实rename后或真实catalog发布后注入回执失败。原实现3项未发布反例确证POSIX/盘符/UNC文本落入SQLite，另3项已发布状态通过；候选完整创建错误文件28 passed/44.54秒，相邻core/业务/catalog启动回归88 passed/35.32秒。核原异常实例、冻结身份/GraphBinding、目录原件逐字保全、abort与可见性、同owner修复后新创建及catalog关闭/冷读；既有HTTP状态、request_id和原始诊断断言保留，仅按新持久说明合同迁齐两处预期。位置文本覆盖不冒充三平台真实原生失败，HTTP为ASGI。
+- Ruff/compileall与strict通过；完整HEAD归档Pyright20→20，逐文件/最窄AST owner/规则/完整消息/出错表达式一致，新增函数零诊断，不称类型全绿。作者结构审查仅原_create和一个原测试文件新增场景；903行SessionService与父目录超过20源码的既有组织债务不在本片扩大，未新增目录或职责owner。首次比较脚本仅接受单行span而中止，修正为实际多行span后复用原类型raw，不重复检查。准确命令、3469源码前后指纹、raw/实际退出码、类型与结构审查见`out/tests/temp/uri-global-closure/artifacts/verification-067.json`。未验独立Backend重启、Gateway/Web、Windows、真实Provider或独审；2.2/7.2与多工作区4.3/8.2总门继续未勾，用户延期项保持TODO。

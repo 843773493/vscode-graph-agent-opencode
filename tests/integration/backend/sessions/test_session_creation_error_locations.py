@@ -6,6 +6,7 @@ import errno
 import logging
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,7 @@ from app.api.sessions import router
 from app.container import AppContainer
 from app.core import session_creation, sqlite_state
 from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_catalog_store.contracts import SessionCreationRecord
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.integration.backend.sessions.test_catalog_startup_identity import (
@@ -84,7 +86,12 @@ async def test_creation_failure_keeps_native_location_in_diagnostics_only(
     assert locator not in detail and str(container.workspace_root) not in detail
     assert record.session_id in detail and "errno=13" in detail
     assert record.state == ("aborted" if stage == "rename" else "preparing")
-    assert record.abort_reason == (detail if stage == "rename" else None)
+    if stage == "rename":
+        assert record.abort_reason == (
+            f"会话创建发布失败: stage=session-create-publish:{container.workspace_id}:{record.session_id}, error=RuntimeError"
+        )
+    else:
+        assert record.abort_reason is None
     assert caught.value.__cause__ is original_error
     assert any(log.exc_info and log.exc_info[1] is original_error for log in caplog.records)
     assert str(original_error) in caplog.text
@@ -207,7 +214,9 @@ async def test_create_http_error_and_explicit_retry(
         assert not records
     else:
         assert len(records) == 1 and records[0][0] == "aborted"
-        assert any(record.exc_info and record.exc_info[1] and records[0][1] in str(record.exc_info[1]) for record in caplog.records)
+        assert records[0][1].startswith("会话创建发布失败: stage=session-create-publish:")
+        assert any(record.name == "app.core.failures" and record.getMessage().startswith(records[0][1])
+                   and record.exc_info and isinstance(record.exc_info[1], RuntimeError) for record in caplog.records)
     retried = await creation_client.post("/api/v1/sessions", json={"title": "HTTP修复重试"},
                                         headers={"X-Request-ID": "creation-retry-request"})
     assert retried.status_code == 200, retried.text
@@ -246,3 +255,69 @@ async def test_create_http_real_sqlite_budget_rejects_before_publish_and_retries
     assert retried.headers["X-Request-ID"] == retried.json()["request_id"] == "sqlite-budget-retry"
     session_id = retried.json()["data"]["session_id"]
     assert catalog.get_node(session_id).state == "active"
+
+
+@pytest.mark.parametrize("locator", ["/private/publish/state.sqlite", r"C:\private\publish.sqlite", r"\\server\private\publish.sqlite"])
+@pytest.mark.parametrize("published", [False, True])
+async def test_publication_failure_record_keeps_original_identity_and_visibility(
+    startup_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, locator: str, published: bool,
+) -> None:
+    container = startup_container
+    service = container.session_service
+    creation = container.session_catalog.creation_service
+    catalog = service.path_resolver.catalog_store
+    publish = creation.publish_prepared
+    original_error = RuntimeError(f"发布回执失败：{locator}")
+    prepared: list[SessionCreationRecord] = []
+    files: dict[str, bytes] = {}
+
+    async def fail_receipt(record: SessionCreationRecord):
+        prepared.append(record)
+        if published:
+            await publish(record)
+        else:
+            creation._rename_staging_to_target(record, creation.read_prepared_session_metadata(record))
+        directory = catalog.sessions_root / record.storage_relative_locator.removeprefix("sessions/")
+        files.update({str(path.relative_to(directory)): path.read_bytes() for path in directory.rglob("*") if path.is_file()})
+        raise original_error
+
+    with monkeypatch.context() as fault, caplog.at_level(logging.ERROR):
+        fault.setattr(creation, "publish_prepared", fail_receipt)
+        with pytest.raises(RuntimeError) as caught:
+            await service.create(SessionCreateRequest(title="发布失败的冻结创建意图"))
+    assert caught.value is original_error
+    initial, = prepared
+    record = catalog.get_creation_record(initial.session_creation_idempotency_key)
+    assert replace(record, state=initial.state, abort_reason=initial.abort_reason,
+                   record_updated_at=initial.record_updated_at) == initial
+    assert record.state == ("published" if published else "aborted")
+    if published:
+        assert record.abort_reason is None
+        assert (await service.get(record.session_id)).thread_id == record.main_thread_id
+    else:
+        assert record.abort_reason is not None
+        assert locator not in record.abort_reason and str(container.workspace_root) not in record.abort_reason
+        assert record.session_id in record.abort_reason and "error=RuntimeError" in record.abort_reason
+        assert any(log.exc_info and log.exc_info[1] is original_error for log in caplog.records)
+        assert str(original_error) in caplog.text
+        with pytest.raises(KeyError):
+            catalog.get_node(record.session_id)
+    original_location = catalog.sessions_root / record.storage_relative_locator.removeprefix("sessions/")
+    quarantine = catalog.sessions_root.parent / "orphaned/session-creation" / record.session_id
+    assert original_location.exists() is published
+    assert quarantine.exists() is not published
+    directory = original_location if published else quarantine
+    assert {str(path.relative_to(directory)): path.read_bytes() for path in directory.rglob("*") if path.is_file()} == files
+    retried = await service.create(SessionCreateRequest(title="发布故障修复后创建"))
+    assert retried.session_id != record.session_id
+    container.workspace_activity_service.store.close()
+    container.session_catalog.close()
+    with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as reopened:
+        assert reopened.get_creation_record(record.session_creation_idempotency_key) == record
+        assert reopened.get_node(retried.session_id).state == "active"
+        if published:
+            assert reopened.get_node(record.session_id).main_thread_id == record.main_thread_id
+        else:
+            with pytest.raises(KeyError):
+                reopened.get_node(record.session_id)
