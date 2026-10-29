@@ -9,12 +9,22 @@ import subprocess
 import sys
 import tarfile
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from app.core.path_utils import build_session_catalog_components, catalog_provider_scope
+from app.core.session_catalog_store.upgrade_v10 import convert_catalog_v10
+from app.core.session_control_store import SessionControlStore
+from app.core.workspace_identity import read_workspace_id
+from app.services.infrastructure.rollout_context.storage.schema import (
+    SKILL_SELECTION_MIGRATION_SQL,
+    VIEW_CREATION_MIGRATION_SQL,
+)
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
 
@@ -34,6 +44,42 @@ class BackupCase:
     message_id: str
     canonical_items: tuple[tuple[object, ...], ...]
     evidence: dict[str, object]
+
+
+def _upgrade_metadata(workspace: Path) -> None:
+    """只在测试副本运行既有元数据升级，旧产品及冻结历史保持原样。"""
+    catalog_path = workspace / ".boxteam/navigation/session-catalog.sqlite"
+    converted = catalog_path.with_name("converted.sqlite")
+    before = catalog_path.read_bytes()
+    convert_catalog_v10(catalog_path, converted)
+    assert catalog_path.read_bytes() == before
+    converted.replace(catalog_path)
+    sessions = workspace / ".boxteam/sessions"
+    with (
+        closing(build_session_catalog_components(sessions, read_workspace_id(workspace))) as catalog,
+        catalog_provider_scope(catalog),
+    ):
+        storage = RolloutContextStore(sessions).storage
+        for node in catalog.resolver.list_nodes():
+            if node.kind != "session":
+                continue
+            session_path = catalog.resolver.resolve_session_node(node.node_id)
+            with closing(SessionControlStore(session_path / "session-control.sqlite", read_only=True)) as control:
+                thread_ids = [catalog.resolver.main_thread_id(node.node_id), *(row.thread_id for row in control.list_child_thread_rows())]
+            for thread_id in thread_ids:
+                index = storage.index_path(node.node_id, thread_id=thread_id)
+                if not index.exists():
+                    continue
+                canonical = index.with_name("rollout.jsonl")
+                original = canonical.read_bytes()
+                for version, name, sql in (
+                    (25, "skill_selection_024_025", SKILL_SELECTION_MIGRATION_SQL),
+                    (26, "view_creation_025_026", VIEW_CREATION_MIGRATION_SQL),
+                ):
+                    storage.migrate_schema(thread_id, session_id=node.node_id, to_version=version,
+                                           migration_name=name, migration_sql=sql)
+                storage.initialize(node.node_id, thread_id=thread_id)
+                assert canonical.read_bytes() == original
 
 
 @pytest.fixture(scope="session")
@@ -100,6 +146,7 @@ def legacy_case_factory(
             workspace_root=context.workspace_root, template_root=source,
             template_items=tuple(path.name for path in source.iterdir()),
         )
+        _upgrade_metadata(workspace)
         return BackupCase(
             workspace=workspace, output=tmp_path / "snapshot", index_path=workspace / metadata["index"],
             original=workspace / metadata["original"], session_id=metadata["session_id"],

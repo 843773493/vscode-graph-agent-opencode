@@ -131,7 +131,6 @@ async def test_installed_catalog_starts_product_owner_preserves_history_and_acce
     offline = retired.with_name(retired.name + ".offline")
     retired.rename(offline)
     try:
-        monkeypatch.setenv("WORKSPACE_ROOT", str(case.workspace))
         container = _build_owned_container(case.workspace, monkeypatch, request)
         store = container.attachment_blob_store
         assert store._catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4

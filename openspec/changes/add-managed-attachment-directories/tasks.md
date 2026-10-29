@@ -428,3 +428,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 2026-10-29 接续迁齐上述 source-point 测试：按 itemized「Fork item 定位与前缀捕获保持一致」，前缀接受早于或晚于当前值的观察 revision，响应仍逐字段等于真实 view/锚点/附件投影；完整复制继续拒绝 revision 冲突。未改生产逻辑或附件身份断言。定向1项及原完整附件/关闭组合81项通过，Ruff与差异检查通过；离线 doctor/diagnose 的原 URI/只读/失败合同另验27项通过。命令、源码指纹、raw及退出码见`out/tests/temp/uri-global-closure/artifacts/verification-047.json`。本片修正旧合同测试，不代替5.2/5.4的剩余验收。
 
 - 2026-10-29 Browser脚本错误出口回归补充5.2／5.4反例证据：真实`await new Promise(() => undefined)`在工具超时后仍由原队列持有，本地file页面验收的detach在owner版本排空处返回408，另一工具超时测试在context已关闭后的原执行排空处返回408。当前与完整HEAD归档串行执行均复现，不能把页面reset／后续工具可用当作原脚本已停止，也不能删弱清理断言以计通过。准确命令、源码指纹、两版原始输出和已核实的失败阶段见`out/tests/temp/uri-global-closure/artifacts/verification-064.json`；保留现有TODO，不在URI模块加载修复中扩展终止机制。
+
+
+### 2026-10-29 固定旧产品输入与当前元数据版本衔接
+
+- 固定旧产品仍完整归档自 `cb90835523b9ff6d91e3f8dfaf3491855d55191d`，由真实产品入口生成附件、执行和两代 fork。只在各测试工作区副本中调用既有 catalog v10→11 离线转换和 rollout 24→25→26 的登记 SQL 升级；Session/Thread 从权威 catalog/control owner 取得，不扫描重建身份。原始旧库及生成工作区保留，转换原库字节与副本 canonical JSONL 升级前后逐字校验；不改生产 preflight、schema 或迁移支持范围。
+- 原四文件直接 pytest 回归 86 passed、1 failed：失败发生于旧产品 fork 输入生成的 watchdog 启动前置条件，尚未进入当前迁移。改用现有正式 `integration-attachment-offline-migration` matrix 套件，87 passed/275.43秒、exit0，未改 watchdog、期限、身份/hash 或 fork 断言。已安装 catalog 的产品 owner 启动、历史读取和新上传也通过，移除该场景已无消费者的 `WORKSPACE_ROOT` 准备。
+- Ruff/compileall通过；现有 Pyright 1.1.414 与完整 HEAD 归档基线均9项诊断，按文件、最窄 AST owner、规则、完整消息及出错表达式完全一致，新升级函数无诊断，不称类型全绿。首次 uvx 下载超时未进入类型分析，保留原件且不重试。作者结构自查仅新增167行 fixture 内的一个元数据升级 helper，无新目录或生产实现；同目录旧聚合测试的组织债务不在此扩展。命令、源码指纹、raw、真实退出码、基线比较和限制见 `out/tests/temp/uri-global-closure/artifacts/verification-066.json`。本片无 Web/Windows/真实 Provider 新验收，不勾5.2/5.4或多工作区4.3/8.2。

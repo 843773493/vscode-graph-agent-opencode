@@ -243,3 +243,5 @@
 - 将原关键词清单向路径 helper 的 AST 依赖扩展：15 个工作区 helper、23 个生产消费者，补核 catalog 构造/委派与按 `(workspace_id, session_id, thread_id)` 分区的 interrupt state。旧正则转义正确；不将关键词清单当全部间接调用证明。Gateway 五类生命周期入口、唯一 Backend 启动调用、成员句柄拒绝及 registry 按 owner 恢复/关闭也已按当前源码复核。
 - 三文件组合运行 25 passed、4 failed、12 setup errors，exit1。四项 Goal 关闭场景在原 `ready.wait()` 8秒屏障超时，与代码已有模型进入前性能 TODO 对应，未放宽期限或算作通过；附件12项在固定旧产品 catalog10 与当前11的版本检查处拒绝，尚未进入拟删除的环境准备，该文件修改撤回并留待独立切片核迁移顺序。保留完整失败原件，不把组合说成全绿。
 - Ruff通过；准确命令、3469源码前后指纹、raw/真实退出码、扩展调用清单及证据复用限制见 `out/tests/temp/uri-global-closure/artifacts/verification-065.json`。真实整组重启060之后的Backend生产变化仅为061已验的后台错误出口，原mount/服务图/生命周期未变；本片无生产、Web或受保护模板改动，不重跑已验Web/Windows或真实Provider。4.3/8.2继续未勾，团队与MCP显式持有保持延期。
+
+- 2026-10-29 后续独立切片已解决上述附件12项 setup 版本衔接：固定旧产品原件保留，测试副本先沿现有 owner 升级 catalog10→11、rollout24→26，再做原附件迁移；删除原拟移除的无效 `WORKSPACE_ROOT` 准备。正式四文件 matrix 87 passed/275.43秒、exit0，详见 `verification-066.json` 与附件 change 同日记录。该通过只补附件回归，不补 Goal 的8秒 ready 屏障或4.3/8.2总门。
