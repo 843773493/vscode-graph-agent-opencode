@@ -8,12 +8,14 @@ relocation 兜底文案，不依赖真实 Inspector 进程。
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.core import failures
 from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint.source_reconciliation import (
     NodeDebugSourceReconciliation,
@@ -61,6 +63,7 @@ class RecordingCommand:
     def __init__(self, *, failing_methods: set[str] | None = None) -> None:
         self.calls: list[CommandCall] = []
         self.failing_methods: set[str] = failing_methods or set()
+        self.failure: Exception | None = None
 
     async def __call__(
         self,
@@ -70,6 +73,8 @@ class RecordingCommand:
     ) -> dict[str, object]:
         self.calls.append(CommandCall(runtime, method, params))
         if method in self.failing_methods:
+            if self.failure is not None:
+                raise self.failure
             raise RuntimeError(f'{method} 调用失败')
         return {}
 
@@ -275,6 +280,11 @@ def _runtime(
     return runtime
 
 
+@pytest.mark.parametrize("location", [
+    "/private/breakpoint-cleanup-secret", r"C:\private\breakpoint-cleanup-secret",
+    r"\\server\private\breakpoint-cleanup-secret",
+], ids=["posix", "drive", "unc"])
+@pytest.mark.parametrize("sink_fails", [False, True])
 async def test_breakpoint_invalidation_failure_degrades_without_blocking(
     workspace_root: Path,
     entry_source: Path,
@@ -282,6 +292,8 @@ async def test_breakpoint_invalidation_failure_degrades_without_blocking(
     session_state: RecordingSessionState,
     command: RecordingCommand,
     appender: RecordingActionAppender,
+    location: str, sink_fails: bool, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Inspector 清理失败时降级为 error 动作，且不阻断后续持久化。"""
     # 断点锚定的摘要与磁盘不一致，触发 pending_update 失效。
@@ -294,17 +306,35 @@ async def test_breakpoint_invalidation_failure_degrades_without_blocking(
         socket=object(),
     )
     command.failing_methods.add("Debugger.removeBreakpoint")
+    original = PermissionError(13, "清理原生断点失败；" + "完整诊断" * 80, location)
+    command.failure = original
+    if sink_fails:
+        def failed_sink(*args: object, **kwargs: object) -> None:
+            raise OSError("日志sink失败 /private/breakpoint-log-secret")
 
-    await reconciler.reconcile(_SESSION_ID, _THREAD_ID, runtime)
+        monkeypatch.setattr(failures.logger, "error", failed_sink)
+
+    with caplog.at_level(logging.ERROR):
+        await reconciler.reconcile(_SESSION_ID, _THREAD_ID, runtime)
 
     assert command.methods == ["Debugger.removeBreakpoint"]
     assert command.calls[0].params == {"breakpointId": "inspector-bp-1"}
     failure = appender.find("breakpoint_invalidation_failed")
     assert failure.actor == "system"
     assert failure.result == "error"
-    assert failure.message == (
-        "清理失效 Inspector 断点失败: Debugger.removeBreakpoint 调用失败"
+    expected = (
+        f"清理失效 Inspector 断点失败: session_id={_SESSION_ID}, thread_id={_THREAD_ID}, "
+        f"breakpoint_id={stale.breakpoint_id}: stage=node-debug-breakpoint-invalidation, "
+        "error=PermissionError, errno=13"
     )
+    assert failure.message == expected + (", diagnostic_sink_error=OSError" if sink_fails else "")
+    assert "breakpoint-cleanup-secret" not in failure.message
+    assert "breakpoint-log-secret" not in failure.message
+    if sink_fails:
+        assert any("breakpoint-log-secret" in note for note in original.__notes__)
+    else:
+        assert str(original) in caplog.text
+        assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
     # 失效清理失败不能阻断后续流程：断点对账动作与持久化都照常进行。
     assert "breakpoint_reconciled" in appender.actions()
     assert (
@@ -314,6 +344,9 @@ async def test_breakpoint_invalidation_failure_degrades_without_blocking(
     assert session_state.persist_calls == [
         PersistCall(_SESSION_ID, _THREAD_ID, runtime)
     ]
+    await reconciler.reconcile(_SESSION_ID, _THREAD_ID, runtime)
+    assert command.methods == ["Debugger.removeBreakpoint"]
+    assert appender.actions().count("breakpoint_invalidation_failed") == 1
 
 
 async def test_invalidated_breakpoint_without_inspector_id_is_not_removed(

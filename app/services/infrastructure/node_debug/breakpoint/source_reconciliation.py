@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.failures import failure_detail
 from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     reconcile_breakpoint,
@@ -120,7 +121,7 @@ class NodeDebugSourceReconciliation:
                         actor="system",
                     )
             if invalidated_inspector_ids and runtime.inspector.socket is not None:
-                for _breakpoint_id, inspector_id in invalidated_inspector_ids:
+                for breakpoint_id, inspector_id in invalidated_inspector_ids:
                     try:
                         await self._command(
                             runtime,
@@ -131,7 +132,13 @@ class NodeDebugSourceReconciliation:
                         self._append_action(
                             runtime,
                             "breakpoint_invalidation_failed",
-                            f"清理失效 Inspector 断点失败: {error}",
+                            failure_detail(
+                                error, stage="node-debug-breakpoint-invalidation",
+                                label=(
+                                    f"清理失效 Inspector 断点失败: session_id={session_id}, "
+                                    f"thread_id={thread_id}, breakpoint_id={breakpoint_id}"
+                                ),
+                            ),
                             actor="system",
                             result="error",
                         )

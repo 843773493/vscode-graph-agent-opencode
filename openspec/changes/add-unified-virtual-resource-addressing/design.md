@@ -106,6 +106,8 @@ Node Inspector暂停后的局部变量读取，在原失败catch复用`failure_d
 
 Inspector连接、远端命令拒绝及无效result在同一协议owner复用`failure_detail`，分别报告node-debug-connect、node-debug-command和node-debug-result；公开原Session/Thread、命令及整数协议错误码，原始说明和result只留诊断与cause。命令拒绝沿RuntimeError子类携带失效上下文/过期对象分类，原变量链只消费该分类，删除对公开错误文字的匹配。启动与断点消费者复用同一公开事实；原发送异常、超时、取消及pending回收顺序保持，不增加重试、连接缓存或另一启动链。
 
+源码对账的失效断点清理在原catch复用`failure_detail`，记录Session/Thread、应用breakpoint_id及node-debug-breakpoint-invalidation阶段；原发送异常及完整说明只留诊断，Inspector内部可能含文件URL的breakpointId不公开。原失效标记、关联移除顺序、requires_restart及持久化保持；日志sink失败不阻断结算，重复读取不重放命令，不以动作记录声称远端断点已删除。
+
 远端托管清单与删除同样复用failure_detail，分别报告workspace_list和workspace_remove，不再从HTTP响应任意提取detail或截断正文。删除409只经既有GatewayRuntimeStateResultDTO读取blocked业务回执，保留完整组及blocker身份；无效JSON、信封、DTO或非blocked状态留诊断，普通响应保持远端409和原HTTP失败事实。拒绝不继续刷新投影或端口对账，成功重试仍沿原owner执行；旧正文helper在最后两个消费者迁齐后物理删除。
 
 验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。

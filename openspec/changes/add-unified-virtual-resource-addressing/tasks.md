@@ -1216,3 +1216,9 @@
 - 原协议owner在连接失败、远端命令拒绝和非对象result处复用failure_detail；公开Session/Thread、阶段、命令及整数协议错误码，原始说明只留诊断与直接cause。失效上下文/过期对象由同一响应owner分类，变量链删除错误正文匹配；发送异常、命令超时、取消及pending回收保持。无新存储、重试或连接链。
 - 旧生产9项反例失败；最终Node Debug单元326项、真实Node新启动/冷读/同配置恢复3项及既有真实Node回归10项通过。后两组经真实方案/启动HTTP形成状态并核进程终结、动作/manifest、claim及request_id，同进程冷服务重建不冒充独立后端重启。初候选4项诊断转义断言和1项测试连接签名类型错误均已修复，原失败保留。
 - Ruff/compileall和全量strict51/0通过。Pyright当前5项：4项与原三文件同指纹基线逐owner/规则/完整消息一致，另1项为HEAD中AST不变的winerror赋值；新增代码零诊断，不称类型全绿。作者AST自查确认只改Inspector四个方法并添加协议错误分类。命令、源码指纹、raw、退出码及类型核对见`out/tests/temp/uri-global-closure/artifacts/verification-048.json`。未验完整Gateway/Web、Windows、独立Backend重启或独审，亦不代表所有Node/Inspector错误出口均已收口；2.2/7.2继续未勾，团队协作与MCP显式持有仍延期。
+
+### 2026-10-29 失效断点清理的动作历史（2.2/7.2部分收口）
+
+- 原源码对账catch复用failure_detail，动作保存Session/Thread、应用断点身份、阶段及原异常类别/错误码，真实位置及完整原实例留诊断；日志sink失败仍结算。AST核对除动作message和循环变量正名外，原对账、失效标记、持久化和命令顺序相同，无新重试或恢复链。
+- 旧生产6项反例失败；最终断点/源码/表达式单元40项通过，真实Node产品1项通过，核真实方案/启动、第二行精确暂停、外部源码变化、原发送异常、动作/manifest、request_id、同PID继续/停止与冷读，重复读取不重放清理。首轮定向命令误用不存在的文件名，未执行测试；首轮产品测试的第一行断点与启动暂停重叠，改用第二行并保留严格running/PID断言后通过。原失败输出均保留。
+- Ruff/compileall及全量strict51/0通过；当前Pyright3项均与上轮同指纹基线、规则/完整消息和不变函数AST一致，生产和新增代码无诊断，不称类型全绿。准确命令、源码指纹、raw/退出码与作者自查见`out/tests/temp/uri-global-closure/artifacts/verification-049.json`。未验完整Gateway/Web、Windows、独立Backend重启或独审；2.2/7.2总门和用户延期项保持未完成。

@@ -149,6 +149,97 @@ async def test_launch_inspector_boundary_keeps_durable_failure_private_and_retri
     }, ensure_ascii=False, indent=2) + "\n")
 
 
+async def test_source_invalidation_failure_keeps_original_process_and_safe_cold_actions(
+    debug_receive_client: DebugReceiveClient, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    source = root / "entry.mjs"
+    source.write_text("const value = 42;\nsetInterval(() => {}, 1000);\n", encoding="utf-8")
+    raw = PermissionError(13, "断点移除发送失败；" + "完整诊断" * 80, str(root / "breakpoint-cleanup-secret"))
+    original_connect = websockets.connect
+    removals: list[str] = []
+
+    class RemoveFailingSocket:
+        def __init__(self, socket: ClientConnection) -> None:
+            self.socket = socket
+
+        async def send(self, message: str) -> None:
+            payload = json.loads(message)
+            if payload["method"] == "Debugger.removeBreakpoint":
+                removals.append(payload["params"]["breakpointId"])
+                raise raw
+            await self.socket.send(message)
+
+        async def close(self) -> None:
+            await self.socket.close()
+
+        def __aiter__(self) -> AsyncIterator[str | bytes]:
+            return self.socket.__aiter__()
+
+    async def connect(uri: str, *, ping_interval: float | None) -> RemoveFailingSocket:
+        return RemoveFailingSocket(await original_connect(uri, ping_interval=ping_interval))
+
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "源码失效清理", "script_path": "entry.mjs",
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    with monkeypatch.context() as patch, caplog.at_level(logging.ERROR):
+        patch.setattr(websockets, "connect", connect)
+        started = await client.post("/api/v1/debug/node/start", json={
+            **owner, "configuration_id": configuration_id, "path": "entry.mjs",
+            "breakpoints": [{"path": "entry.mjs", "line": 2}],
+        })
+        assert started.status_code == 200, started.text
+        before = started.json()["data"]
+        assert before["status"] == "paused" and isinstance(before["pid"], int)
+        assert before["call_stack"][0]["line"] == 2
+        breakpoint_id = before["breakpoints"][0]["breakpoint_id"]
+        source.write_text("const value = 43;\nsetInterval(() => {}, 1000);\n", encoding="utf-8")
+        changed = await client.get("/api/v1/debug/node", params=owner)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["request_id"] == changed.headers["X-Request-ID"]
+    data = changed.json()["data"]
+    assert data["status"] == "paused" and data["pid"] == before["pid"]
+    assert data["requires_restart"] is True and data["source_changed_paths"] == ["entry.mjs"]
+    assert data["breakpoints"][0]["breakpoint_id"] == breakpoint_id
+    assert data["breakpoints"][0]["relocation_status"] == "pending_update"
+    failures = [a for a in data["actions"] if a["action"] == "breakpoint_invalidation_failed"]
+    assert len(failures) == len(removals) == 1
+    assert failures[0]["actor"] == "system" and failures[0]["result"] == "error"
+    assert "stage=node-debug-breakpoint-invalidation, error=PermissionError, errno=13" in failures[0]["message"]
+    assert owner["session_id"] in failures[0]["message"] and owner["thread_id"] in failures[0]["message"]
+    assert breakpoint_id in failures[0]["message"]
+    assert "breakpoint-cleanup-secret" not in changed.text
+    assert str(raw) in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is raw for record in caplog.records)
+    assert probe_process_identity(data["pid"]) is not None
+    manifest_bytes, manifest = store.read_manifest_payload(**owner)
+    assert manifest_bytes is not None and manifest is not None
+    assert "breakpoint-cleanup-secret" not in manifest_bytes.decode()
+    assert [a.model_dump(mode="json") for a in manifest.actions] == data["actions"]
+    again = await client.get("/api/v1/debug/node", params=owner)
+    assert again.status_code == 200, again.text
+    assert again.json()["data"]["actions"] == data["actions"] and len(removals) == 1
+    continued = await client.post("/api/v1/debug/node/action", json={**owner, "action": "continue"})
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["data"]["status"] == "running" and continued.json()["data"]["pid"] == before["pid"]
+    stopped = await client.post("/api/v1/debug/node/action", json={**owner, "action": "stop"})
+    assert stopped.status_code == 200 and stopped.json()["data"]["status"] == "exited", stopped.text
+    await reopen(True)
+    cold = await client.get("/api/v1/debug/node", params=owner)
+    assert cold.status_code == 200, cold.text
+    assert cold.json()["data"]["active_configuration_id"] == configuration_id
+    assert [a for a in cold.json()["data"]["actions"] if a["action"] == "breakpoint_invalidation_failed"] == failures
+    assert "breakpoint-cleanup-secret" not in cold.text and len(removals) == 1
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "breakpoint-invalidation.json").write_text(json.dumps({
+        "started": started.json(), "changed": changed.json(), "continued": continued.json(),
+        "stopped": stopped.json(), "cold": cold.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
 @pytest.fixture
 async def debug_receive_client(integration_workspace_root_path: str) -> AsyncIterator[DebugReceiveClient]:
     root = Path(integration_workspace_root_path)
