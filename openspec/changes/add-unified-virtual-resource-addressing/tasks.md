@@ -1410,3 +1410,11 @@
 - A04通过三个真实Gateway、Backend和localhost SSH验证资源目录、搜索及模型read，核对冻结目标、冷目标零物化、普通投影不含物理根及原request_id。模型复用model_stream；不执行延期的send/wait协作场景，不代表真实Provider、Windows或Web验收。
 - 为既有内部聚合生命周期测试补正式矩阵入口，两个协议场景经原fork watchdog通过，保持factory发布、seal、SQLite冷读、存储复制后的显式null URI、正文与hash。该测试的来源由factory装具生成、目标由存储复制建立，不能代替公开fork或独立Backend进程重启。另登记只选择A04的独立矩阵入口；其pytest命令与本轮已通过命令一致，清单校验通过，没有为入口登记重复运行昂贵场景。
 - 四批共528项通过；仅新增上述两个矩阵条目及目录说明，未修改产品或测试断言。准确命令、指纹、raw、退出码和覆盖映射见 `out/tests/temp/uri-global-closure/artifacts/verification-100.json`。测试串行，保留跨worktree闸门、进程外超时／内存保护；运行期间仅前端文件及本片矩阵发生变化，后端受验源码保持。2.2／7.2总门继续未勾，不以局部证据代替全局闭包；前端及相关OpenSpec等待用户通知，用户原Debug服务与其他agent的修改／暂存保持。
+
+
+### 2026-10-29 原生文件解析循环错误（2.2／7.2部分收口）
+
+- 真实循环 symlink 证实 `Path.resolve` 的 RuntimeError 会经调试参数解析与文本补丁回执公开本机位置。原两项路径原语的四处原生解析共用同一私有入口，在实际调用点复用 `failure_detail`；保留异常类别、直接 cause、完整原始诊断及日志次错，不改路径选择、越界拒绝或普通文件三输入能力。
+- 旧生产三种调试输入和两种日志状态的5项反例全部失败；最终85项路径／调试单测、原37项文件HTTP回归、新2项补丁HTTP及36项Gateway单测通过，共160 passed、1项Windows专用跳过。新增HTTP首次在重试字节断言失败，因测试补丁缺少显式末尾空行；修正输入后保留原精确字节断言，并验证同请求显式重试、失败零发布及原文件不变。未重复运行函数AST及生产逻辑均保持的37项回归。
+- Ruff、compileall通过；完整旧HEAD归档与最终Pyright均3项，按文件、最窄AST owner、规则、完整消息和表达式逐项一致，无新增，不称类型全绿。作者AST自查确认既有方法除四处原生解析调用外保持，全部旧测试与断言保持；无新源码文件／目录。路径owner477行、集成测试638行及core既有49个直接Python文件的组织风险保留，不扩修，不代独审。
+- 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。

@@ -10,6 +10,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Protocol
 
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_creation import SessionCreationService
@@ -400,6 +401,16 @@ def initialize_directories(workspace_id: str, workspace_root: Path) -> None:
     ).initialize()
 
 
+def _resolve_native_path(path: Path) -> Path:
+    """Path.resolve 的 RuntimeError 只发布阶段和类别，原生位置留在诊断。"""
+    try:
+        return path.resolve()
+    except RuntimeError as error:
+        raise RuntimeError(failure_detail(
+            error, stage="native-path-resolution", label="文件路径解析失败",
+        )) from error
+
+
 def resolve_native_file_path(
     base_path: Path, value: str, *, allow_absolute_outside: bool = False,
 ) -> Path:
@@ -408,15 +419,15 @@ def resolve_native_file_path(
         raise ValueError("文件路径不能包含 NUL 字符")
     if os.name != "nt" and PureWindowsPath(value).drive:
         raise ValueError("Windows 盘符或 UNC 路径必须交给 Windows 目标解释")
-    resolved_base = base_path.resolve()
+    resolved_base = _resolve_native_path(base_path)
     requested_path = Path(value).expanduser()
     if requested_path.drive and not requested_path.is_absolute():
         raise ValueError("Windows 盘符路径必须提供绝对根，不能依赖目标进程的盘符当前目录")
-    resolved_path = (
+    resolved_path = _resolve_native_path(
         requested_path
         if requested_path.is_absolute()
         else resolved_base / requested_path
-    ).resolve()
+    )
     if not resolved_path.is_relative_to(resolved_base) and not (
         requested_path.is_absolute() and allow_absolute_outside
     ):
@@ -438,8 +449,8 @@ def safe_join(base_path: Path, *paths: str) -> Path:
     Raises:
         ForbiddenError: If path traversal is detected
     """
-    base = base_path.resolve()
-    joined = base.joinpath(*paths).resolve()
+    base = _resolve_native_path(base_path)
+    joined = _resolve_native_path(base.joinpath(*paths))
 
     # 确保生成的路径仍然在基础目录范围内
     if not joined.is_relative_to(base):

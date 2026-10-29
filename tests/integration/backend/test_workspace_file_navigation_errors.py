@@ -85,6 +85,47 @@ def file_rows(case):
                 for name in ("owner", "directories", "operations", "events")}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="真实符号链接循环在 POSIX 目标验收")
+async def test_patch_resolution_failure_preserves_receipt_and_allows_explicit_retry(
+    file_case, native_control_sink, caplog: pytest.LogCaptureFixture,
+):
+    case = file_case
+    loop = case.directory / "loop"
+    loop.symlink_to(loop.name, target_is_directory=True)
+    before = file_rows(case)
+    payload = {"patch": {
+        "target": case.listing["path"],
+        "input": "*** Begin Patch\n*** Add File: loop/new.txt\n+created\n+\n*** End Patch",
+        "expected_versions": {"loop/new.txt": "absent"}, "explanation": "验证原目标恢复",
+    }}
+    failed = await case.client.post("/api/v1/resources/text-mutations", json=payload,
+                                   headers={"X-Request-ID": "req-patch-loop"})
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == "req-patch-loop"
+    receipt = failed.json()["data"]["receipt"]
+    assert (receipt["status"], receipt["effect"], receipt["code"], receipt["owner"]) == (
+        "error", "not_executed", "execution_failed", "resource_file_operations",
+    )
+    assert receipt["error_type"] in {"RuntimeError", "OSError"}
+    assert str(case.root) not in failed.text
+    assert not receipt["journal_id"] and not receipt["files"]
+    assert file_rows(case) == before and loop.is_symlink()
+    assert str(loop) in caplog.text or native_control_sink is not None
+    if native_control_sink is not None:
+        assert native_control_sink.errors
+        assert str(loop) in str(native_control_sink.errors[0])
+        assert "diagnostic_sink_error=" in receipt["error"]
+        assert any(str(native_control_sink.blocked) in note for note in native_control_sink.errors[0].__notes__)
+    loop.unlink()
+    saved = await case.client.post("/api/v1/resources/text-mutations", json=payload)
+    assert saved.status_code == 200, saved.text
+    result = saved.json()["data"]["receipt"]
+    assert (result["status"], result["effect"]) == ("success", "completed")
+    assert result["files"][0]["path"] == case.listing["path"] + "/loop/new.txt"
+    assert (loop / "new.txt").read_bytes() == b"created\n"
+    assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+
+
 @pytest.fixture(params=[False, True], ids=["logging", "broken-logging"])
 def native_control_sink(file_case, request: pytest.FixtureRequest):
     if not request.param:

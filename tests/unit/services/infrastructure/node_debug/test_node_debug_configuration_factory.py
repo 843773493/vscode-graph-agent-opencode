@@ -49,6 +49,30 @@ def test_script_and_working_directory_share_native_and_uri_targets(tmp_path: Pat
         assert factory.resolve_working_directory(value) == source_root
 
 
+@pytest.mark.skipif(os.name == "nt", reason="真实符号链接循环在 POSIX 目标验收")
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+def test_script_resolution_failure_keeps_native_location_in_diagnostics(
+    tmp_path: Path, input_kind: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    factory = _factory(tmp_path)
+    source = tmp_path / "workspace" / "loop.mjs"
+    uri = factory.resolve_workspace_path(str(source))[1]
+    source.symlink_to(source.name)
+    value = {"relative": source.name, "absolute": str(source), "uri": uri}[input_kind]
+
+    with pytest.raises((RuntimeError, OSError)) as caught:
+        factory.resolve_script_path(value)
+
+    assert str(source) not in str(caught.value)
+    assert "error=" + type(caught.value).__name__ in str(caught.value)
+    assert caught.value.__cause__ is not None
+    assert str(source) in str(caught.value.__cause__)
+    assert any(record.exc_info and record.exc_info[1] is caught.value.__cause__ for record in caplog.records)
+    source.unlink()
+    source.write_text("export {};\n", encoding="utf-8")
+    assert factory.resolve_script_path(value) == (source, source.name)
+
+
 def test_absolute_script_outside_workspace_is_not_redirected(tmp_path: Path) -> None:
     factory = _factory(tmp_path)
     source = tmp_path / "outside.mjs"
