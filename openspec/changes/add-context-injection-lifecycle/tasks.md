@@ -1,5 +1,7 @@
 当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作设计待调整，暂停继续扩展该部分实现与专项验收。4.7/4.9/6.8 及总验收中涉及团队、成员、委派与会话协作通信的剩余内容保留 TODO 和未完成状态，待新设计确定后重新规划；通用来源注入、执行恢复、fork、资源和 URI 链路继续推进。已有证据保留，不能据此将延期部分勾选完成。
 
+2026-10-29 9.5监听重绑验收修正：原候选先发布正文／generation，旧scope排空后在reload的finally重绑；测试仅等正文可见便断言旧监听已移除，093完整旧HEAD已复现该竞态。现沿原6秒观察期限等待实际重绑，保留旧路径移除和旧文件变更不推进revision的原断言，未改变生产发布顺序或放宽业务期限。该文件31项全部通过，完整候选tree独立复验监听场景通过；隔离变异令旧路径永久残留时，同一测试在重绑等待处明确失败。Ruff／compileall／Pyright零诊断及两change strict通过，源码指纹、准确命令、raw／退出码和作者AST核对见 `out/tests/temp/uri-global-closure/artifacts/verification-095.json`。只有验收同步调整，不替代产品集成、前端或全change门；其它旧场景及生产AST保持，原Debug与他人暂存保持。
+
 2026-10-29 7.1配置发布reader审计：9.5现行设计已明确由配置owner在候选构建时复用StableSourceReader，旧目录白名单却将其一概拒绝；092／093原件中的域外引用失败据此判定为审计范围滞后，不搬迁正文owner或增加转发层。静态检查只放行InstructionFileInputs.load的AST子树，配置accessor、diagnostics、readiness、CSM、工具和模型准备继续禁止直接使用reader。全仓旧测试名无其它调用方，已同步更名，其余旧测试和生产代码保持。
 
 完整候选tree归档中20项来源合同与1项冷active快照测试全部通过；两个隔离变异分别在readiness／diagnostics加入reader，均被同一检查拒绝。Ruff／compileall及本change、URI change的strict通过，Pyright完整旧HEAD／候选均6项既有诊断，按文件、最窄AST owner、规则、完整消息和表达式一致，无新增。所有执行串行且有外部超时／内存保护，准确命令、指纹、raw、实际退出码、候选tree及作者AST核对见 `out/tests/temp/uri-global-closure/artifacts/verification-094.json`。本片不改变发布／恢复实现，不替代产品集成或总体门；7.1及团队／协作延期项仍未勾。前端和相关OpenSpec未实施，其他agent改动／暂存及原Debug保持。

@@ -206,6 +206,8 @@ async def test_watcher_rebinds_file_selection_and_recovers_missing_parent(
     config.get_snapshot()
     first.write_text("订阅窗口中的更新", encoding="utf-8")
     await config.start_watching()
+    watcher = config._watcher
+    assert watcher is not None
     try:
         assert config.get_agent_runtime_config("default")["system_prompt"] == "订阅窗口中的更新"
         first.write_text("后台更新", encoding="utf-8")
@@ -225,7 +227,9 @@ async def test_watcher_rebinds_file_selection_and_recovers_missing_parent(
                 config.get_agent_runtime_config("default")["system_prompt"] == "第二份"
             )
         )
-        assert first.resolve() not in config._watcher._candidate_paths
+        # 快照先发布，旧 generation 排空后才重绑；不能将正文可见当作重绑完成。
+        await _wait_for(lambda: first.resolve() not in watcher._candidate_paths)
+        assert first.resolve() not in watcher._candidate_paths
         revision = config.get_revision()
         first.write_text("旧文件不再生效", encoding="utf-8")
         await asyncio.sleep(0.35)

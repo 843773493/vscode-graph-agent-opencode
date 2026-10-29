@@ -1,5 +1,7 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-29 提示词文件旧watcher失败已按实际发布／重绑顺序修正测试等待，保留原断言及期限；31项全部通过，真实旧路径残留变异仍被拒绝。095原件见 `out/tests/temp/uri-global-closure/artifacts/verification-095.json` 与CIL同日9.5收据，生产实现未变；093／094失败原件保留，不改写历史结果，不据此勾选2.2／7.2。
+
 2026-10-29 来源reader审计更正：092／093中旧检查拒绝配置发布owner，与CIL 9.5已批准的候选构建合同不一致；现只允许InstructionFileInputs.load，readiness／diagnostics两项越域变异仍被拒绝。21项合同通过，生产代码和读取／发布／恢复边界不变，准确证据及6项既有类型诊断对比见 `out/tests/temp/uri-global-closure/artifacts/verification-094.json` 与CIL 7.1同日收据。此项更正不消除093的独立watcher失败，也不代替2.2／7.2总体门。
 
 2026-10-28 会话生成动作失败落盘切片（2.2/7.2部分收口）：原advance_generation的catch复用failure_detail，只保存任务/运行/工作区身份、generation-action阶段及原异常类别；不改generation state、mount_missing=pause/fail的原结算策略或已接受执行。原生产四类反例4 failed；最终通过真实Session/任务入口生成状态，内置accepted-before-record屏障固定完整Job接受后才注入结果读取故障，四场景4 passed/90.40秒，核SQL/API、原异常身份、原Job/task及准入hash、显式恢复/新运行、幂等触发与原失败字节不变。模型复用model_stream，未手填执行、generation或恢复状态；旧三个测试声明AST保持。
