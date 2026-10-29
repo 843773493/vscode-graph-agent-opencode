@@ -1297,3 +1297,10 @@
 - 原 token 和背景语义校验共用原 validation owner 的错误出口，保留字段与原规则，未知键／原值只留诊断及 cause；目录和设置读取、设置更新复用原解析链，不修改配置字段、schema、快照、profile 或资源存储 owner。
 - 旧实现四个定向反例和真实独立 Gateway 均在原生路径外泄断言失败。最终111项主题／图片单测及2项真实 Gateway 集成通过；新增场景从用户创建／访问入口取得 profile，再对查询展示配置注入八类损坏，覆盖 POSIX／盘符／UNC、三个原入口、72次精确409与 request_id、原文件字节不变、逐次修正后原目录完全恢复和最终真实设置更新。单测核原始诊断、直接 cause 和日志 sink 失败不替换拒绝；未用装具生成执行／fork／恢复状态。
 - Ruff、compileall与 strict 全量51／0通过；四文件 Pyright 为8项既有诊断（resolver 1、旧集成测试7），完整 HEAD archive 按文件、AST owner、规则、完整消息与原表达式逐项核对一致，新增代码零诊断。中间基线入口定位错误及按行号比较导致的假差异均保留原件，未放宽旧测试或改动其函数。命令、指纹、raw、结构自查与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-070.json`；本片不代配置文件 I/O、Web、Windows或独审验收，2.2／7.2继续未勾。运行中的 Debug 服务保持，其他 agent 的聊天 UI／E2E改动不纳入本提交。
+
+### 2026-10-29 辅助服务 HTTP JSON 解析的诊断边界（2.2／7.2部分收口）
+
+- Terminal／Browser 共用 `serverJsonRequest.mjs`，删除两个 backend 的重复读取／解析实现；业务与日志管理入口消费原工作区 logger 绑定的同一 reader。原 SyntaxError 及 HTTP 500 保持，普通响应只公开 request_json 阶段和类别；原始异常留诊断及 cause，日志失败保留两份原因，流读取异常不改身份。无正文脱敏、重试、资源 writer 或输入合同变化。
+- 两个真实 Node HTTP 反例均确证旧实现回显路径。最终44项共享解析／日志单测与2项真实服务集成通过，核12次非法正文（POSIX／盘符／UNC）、零资源创建、原始日志及正常请求恢复；真实 PTY 和本地 file: 页面创建／删除保持，用户正文和 URL 原样保留。新测试首轮误把 Bun 文案当成 Node、预期资源删除后不留墓碑及 Browser 保留初始标题，按源码和原输出修正测试，未改变产品行为。
+- 验收前置发现当前362个集成测试文件超过350容量，旧端口测试1失败／7通过；单独提交 `87153bb55` 将容量调至400，原8项边界测试及Ruff／compileall通过，100端口块、Integration/E2E隔离与65535上限保持。容量不是并发数；当前fixture没有跨agent全局并发闸门，Linux数据段限制也不是整树总内存上限，本轮重型验证串行，不声称该缺口已解决。
+- Ruff、compileall、Node语法、共享源码严格JS类型检查、新Python测试Pyright零诊断及strict全量51／0通过。首次JS类型检查缺少根目录Node声明，改用已安装的Web Node类型根后通过，未改依赖或环境。结构自查确认触达目录均不超过20源码；两backend分别减少10行，Browser原994行大型路由和Terminal521行的后续组织风险保留。原结构收据误写目录超过20已由原计数纠正，原件保留；这不是独立审查。证据 `out/tests/temp/uri-global-closure/artifacts/verification-072.json`；未新增Python owner、Gateway/Web、重启、Windows或真实Provider验收，2.2／7.2及延期项继续未勾。Debug服务与其他agent的独有改动保持。

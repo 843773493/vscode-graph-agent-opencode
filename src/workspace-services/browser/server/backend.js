@@ -1,5 +1,6 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
+import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
 
 import http from "node:http";
 import { randomUUID } from "node:crypto";
@@ -48,18 +49,6 @@ function sendJson(response, status, data) {
     "access-control-allow-headers": "content-type,x-boxteam-workspace-id",
   });
   response.end(body);
-}
-
-async function readJson(request) {
-  const chunks = [];
-  for await (const chunk of request) {
-    chunks.push(chunk);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) {
-    return {};
-  }
-  return JSON.parse(raw);
 }
 
 function normalizePathname(request) {
@@ -239,6 +228,7 @@ async function main() {
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
   const workspaceId = validateWorkspaceId(args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID);
   const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
+  const readJson = createJsonRequestReader(workspaceLogger);
   const manager = new BrowserManager({ workspaceRoot, workspaceId });
   await manager.init();
   manager.startResourceGovernor({

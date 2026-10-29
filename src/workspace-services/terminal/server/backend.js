@@ -1,5 +1,6 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
+import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
 
 import http from "node:http";
 import path from "node:path";
@@ -42,18 +43,6 @@ function sendJson(response, status, data) {
     "content-length": Buffer.byteLength(body),
   });
   response.end(body);
-}
-
-async function readJson(request) {
-  const chunks = [];
-  for await (const chunk of request) {
-    chunks.push(chunk);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) {
-    return {};
-  }
-  return JSON.parse(raw);
 }
 
 function notFound(response) {
@@ -176,6 +165,7 @@ async function main() {
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
   const workspaceId = resolveRequiredWorkspaceId(args);
   const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
+  const readJson = createJsonRequestReader(workspaceLogger);
   const manager = new TerminalManager({
     workspaceRoot,
     workspaceId,
