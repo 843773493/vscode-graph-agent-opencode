@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
@@ -42,6 +44,83 @@ from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 DebugReceiveClient = tuple[
     httpx.AsyncClient, NodeDebugSessionStore, dict[str, str], Path, Callable[[bool], Awaitable[None]],
 ]
+
+
+async def test_native_stderr_stack_stays_in_diagnostics_after_exit_and_cold_read(
+    debug_receive_client: DebugReceiveClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    script = root / "native-stderr-secret.mjs"
+    script.write_text(
+        "Error.stackTraceLimit = 1;\n"
+        "const failure = new Error('native-stderr-failure');\n"
+        "setTimeout(() => {\n"
+        "  process.stderr.write(failure.stack + '\\n');\n"
+        "  process.exit(7);\n"
+        "}, 100);\n",
+        encoding="utf-8",
+    )
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "真实 stderr 失败后重试", "script_path": script.name,
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    payload = {**owner, "configuration_id": configuration_id, "path": script.name}
+    with caplog.at_level(logging.INFO):
+        started = await client.post("/api/v1/debug/node/start", json={
+            **payload, "breakpoints": [{"path": script.name, "line": 2}],
+        })
+        assert started.status_code == 200, started.text
+        before = started.json()["data"]
+        assert before["status"] == "paused" and isinstance(before["pid"], int)
+        assert before["call_stack"][0]["line"] == 2
+        continued = await client.post("/api/v1/debug/node/action", json={**owner, "action": "continue"})
+        assert continued.status_code == 200, continued.text
+        deadline = time.monotonic() + 5
+        while True:
+            failed = await client.get("/api/v1/debug/node", params=owner)
+            assert failed.status_code == 200, failed.text
+            data = failed.json()["data"]
+            if data["status"] == "failed":
+                break
+            assert time.monotonic() < deadline, failed.text
+            await asyncio.sleep(0.02)
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "stderr-before-assertion.json").write_text(json.dumps({
+        "started": started.json(), "continued": continued.json(), "failed": failed.json(),
+        "diagnostics": caplog.text,
+    }, ensure_ascii=False, indent=2) + "\n")
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    assert data["pid"] == before["pid"] and probe_process_identity(data["pid"]) is None
+    assert data["error_message"] == "Node 调试进程退出，退出码: 7"
+    assert data["breakpoints"][0]["source_line"] == "const failure = new Error('native-stderr-failure');"
+    assert str(root) not in failed.text
+    assert "Error: native-stderr-failure" not in failed.text
+    assert f"{script}:2:" in caplog.text and "Error: native-stderr-failure" in caplog.text
+    assert owner["session_id"] in caplog.text and owner["thread_id"] in caplog.text
+    manifest_bytes, manifest = store.read_manifest_payload(**owner)
+    assert manifest_bytes is not None and manifest is not None
+    assert str(root) not in manifest_bytes.decode() and "Error: native-stderr-failure" not in manifest_bytes.decode()
+    claim = store.read_launch_claim(**owner)
+    assert claim is not None and claim.phase == "settled" and claim.pid == before["pid"]
+    await reopen(True)
+    cold = await client.get("/api/v1/debug/node", params=owner)
+    assert cold.status_code == 200, cold.text
+    restored = cold.json()["data"]
+    assert restored["status"] == "idle" and restored["pid"] is None
+    assert restored["active_configuration_id"] == configuration_id
+    assert restored["actions"] == data["actions"]
+    assert restored["breakpoints"][0]["source_line"] == data["breakpoints"][0]["source_line"]
+    assert str(root) not in cold.text and "Error: native-stderr-failure" not in cold.text
+    script.write_text("const value = 43;\nsetInterval(() => {}, 1000);\n", encoding="utf-8")
+    retried = await client.post("/api/v1/debug/node/start", json=payload)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["data"]["active_configuration_id"] == configuration_id
+    stopped = await client.post("/api/v1/debug/node/action", json={**owner, "action": "stop"})
+    assert stopped.status_code == 200 and stopped.json()["data"]["status"] == "exited", stopped.text
+    (context.artifacts_dir / "stderr-recovered.json").write_text(json.dumps({
+        "cold": cold.json(), "retried": retried.json(), "stopped": stopped.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.parametrize("phase", ["connect", "response", "result"])

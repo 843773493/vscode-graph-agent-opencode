@@ -1539,8 +1539,9 @@ async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
     tmp_path: Path,
     session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """端口被占用：不得白等满超时，必须立刻抛出并带上 stderr 原因。"""
+    """端口被占用必须立即失败；原始 stderr 只留服务诊断。"""
     resolver, _parent_dir, _child_dir = session_tree
     service, _store, _workspace_root = _make_service(
         tmp_path,
@@ -1550,7 +1551,7 @@ async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
     )
     child = _sleeper_child()
     diagnostics = (
-        "Starting inspector on 127.0.0.1:9229 failed: address already in use"
+        f"Starting inspector on 127.0.0.1:9229 failed: address already in use {_workspace_root}/inspector-secret"
     )
 
     async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
@@ -1561,7 +1562,7 @@ async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     try:
         started = time.monotonic()
-        with pytest.raises(RuntimeError, match='address already in use'):
+        with pytest.raises(RuntimeError, match='Node Inspector 启动失败'):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
                 thread_id=_PARENT_MAIN_THREAD_ID,
@@ -1576,7 +1577,10 @@ async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
         )
         assert failed.status == "failed"
         assert failed.actions[-1].action == "start_failed"
-        assert "address already in use" in (failed.error_message or "")
+        assert "Node Inspector 启动失败" in (failed.error_message or "")
+        assert "inspector-secret" not in (failed.error_message or "")
+        assert diagnostics in caplog.text
+        assert all("inspector-secret" not in action.message for action in failed.actions)
     finally:
         await service.close()
         if child.poll() is None:
@@ -1589,16 +1593,18 @@ async def test_handshake_reports_exit_code_and_stderr_when_process_dies(
     tmp_path: Path,
     session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """启动脚本立即/异常退出：必须响亮失败并记录退出码与 stderr 尾行。"""
+    """启动脚本异常退出公开退出码，原始堆栈不得进入状态与持久动作。"""
     resolver, _parent_dir, _child_dir = session_tree
     service, store, _workspace_root = _make_service(tmp_path, resolver)
     child = _sleeper_child()
+    private = f"at {_workspace_root}/handshake-secret.mjs:1:1"
 
     async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
         return _HandshakeFailingProcess(
             child,
-            stderr_lines=['Error: boom', '    at entry.mjs:1:1'],
+            stderr_lines=['Error: boom', private],
             exit_code=7,
         )
 
@@ -1619,7 +1625,14 @@ async def test_handshake_reports_exit_code_and_stderr_when_process_dies(
         assert failed.actions[-1].action == "start_failed"
         assert failed.error_message is not None
         assert "退出码: 7" in failed.error_message
-        assert "Error: boom" in failed.error_message
+        assert "Error: boom" not in failed.error_message and "handshake-secret" not in failed.error_message
+        assert "Error: boom" in caplog.text and private in caplog.text
+        manifest_bytes, manifest = store.read_manifest_payload(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
+        assert manifest_bytes is not None and manifest is not None
+        assert "handshake-secret" not in manifest_bytes.decode()
+        assert [action.model_dump(mode="json") for action in manifest.actions] == [
+            action.model_dump(mode="json") for action in failed.actions
+        ]
         # 失败终态的登记必须当场结清，不得为下次启动留下永久阻断。
         persisted = store.read_launch_claim(
             _PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID
@@ -1638,16 +1651,18 @@ async def test_handshake_timeout_message_is_never_empty(
     tmp_path: Path,
     session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """无诊断的超时必须给出超时值，绝不返回空消息。"""
+    """握手超时公开期限，原始诊断不进入失败动作。"""
     resolver, _parent_dir, _child_dir = session_tree
     service, _store, _workspace_root = _make_service(
         tmp_path, resolver, command_timeout_seconds=0.3
     )
     child = _sleeper_child()
+    private = f"at {tmp_path}/timeout-secret.mjs:1:1"
 
     async def fake_exec(*args: object, **kwargs: object) -> _HandshakeFailingProcess:
-        return _HandshakeFailingProcess(child, stderr_lines=[], exit_code=None)
+        return _HandshakeFailingProcess(child, stderr_lines=[private], exit_code=None)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     try:
@@ -1659,6 +1674,10 @@ async def test_handshake_timeout_message_is_never_empty(
                 args=[],
                 breakpoints=[],
             )
+        failed = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
+        assert failed.status == "failed" and "0.3 秒" in (failed.error_message or "")
+        assert private in caplog.text and "timeout-secret" not in (failed.error_message or "")
+        assert all("timeout-secret" not in action.message for action in failed.actions)
     finally:
         await service.close()
         if child.poll() is None:

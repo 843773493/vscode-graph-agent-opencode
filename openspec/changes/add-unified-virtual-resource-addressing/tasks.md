@@ -1316,3 +1316,11 @@
 - 搜索与网页抓取的原依赖异常出口复用 `failure_detail`，公开说明保留查询／URL、阶段、原异常类别及适用错误码，完整原错留诊断和直接cause。原RuntimeError、捕获范围、超时／取消及成功链保持；生产AST除两处错误构造及import外完全相同，无新解析器、错误链或持久化。
 - 旧生产6项工具反例及2项真实Session／消息执行反例均在路径外泄断言失败；修复后完整工具单测12项、执行集成4项通过。核canonical工具配对与unknown状态、Job、消息流、LLM日志、trace、请求、checkpoint及SQLite不复制原生位置，原诊断保全；只恢复外部依赖后，同会话再次执行成功，原失败snapshot和canonical身份／hash前缀不变。关键状态由原产品入口生成，模型复用现有model_stream；HTTP为ASGI、网络依赖为明确替身，不计作真实Provider、Web、独立进程重启或Windows实机验收。
 - Ruff、compileall与strict通过；完整HEAD归档的Pyright两项既有诊断按最窄AST owner、原表达式、规则和完整消息逐项一致，零新增；既有测试定义AST保持。准确命令、源码指纹、原始输出、实际退出码和局限见 `out/tests/temp/uri-global-closure/artifacts/verification-078.json`。重型检查串行，测试进程整组6GiB／禁用swap／4核／512任务限制已实测生效；跨agent／worktree全局并发闸门仍未实现。2.2／7.2总门及用户延期项保持未勾，Debug服务保留。
+
+
+### 2026-10-29 Node stderr 的普通状态与持久动作边界（2.2／7.2部分收口）
+
+- 原stderr读取入口逐行写入带Session/Thread、方案与PID的服务诊断，删除诊断尾行拼接、内存正文缓冲及Inspector原因正文副本；启动、观察、状态与manifest继续共用原失败事实。公开退出码、握手期限、失败唤醒和claim结算保持，不扫描或改写路径、stdout、日志点或用户源码。
+- 旧生产的真实Node反例在普通状态中复现含绝对源码位置的堆栈。最终Node单测331项、三文件集成16项通过；新增场景由真实配置／启动／继续入口生成状态，核退出码7、PID消失、诊断原文及归属、claim结清、manifest与冷服务读取、源码快照保真及原方案修复后重试。握手单测另核端口冲突立即失败、异常退出和超时的持久动作。新测试首次把源码快照里的用户错误文字误判为stderr外泄，按原始输出改为检查诊断正文并增加源码保真断言；临时新测试文件已合回既有接收错误文件，未复制装具。
+- Ruff、compileall与strict全量通过；完整HEAD归档Pyright19→19，按文件、最窄AST owner、规则、完整消息及原表达式逐项一致，零新增，不称类型全绿。作者结构自查确认生产减少20行，无新owner或目录；531行启动编排、1685行既有claim测试及41源码文件的既有集成目录仍有组织风险，本片不扩大重构，不将作者自查称独审。
+- 准确命令、源码指纹、原始输出、实际退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-080.json`。新增stderr场景使用真实Node和ASGI HTTP，冷服务读取不冒充独立Backend重启；组合回归保留已有Gateway／后端重启场景，不代Web、Windows、真实Provider或完整fork验收。重型验证串行并采用6GiB／禁用swap／4核／512任务限制；跨agent／worktree全局并发闸门尚未实现。2.2／7.2总门和用户延期项继续未勾，Debug服务及其他agent独有改动保持。

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
@@ -21,17 +22,16 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugStopSnapshotClearer,
 )
 
-#: Inspector 在 stdout 上打印的就绪地址前缀。
+logger = logging.getLogger(__name__)
+
+#: Inspector 打印的就绪地址前缀。
 INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
 
-#: Node 在端口被占用等情况下打印的 Inspector 启动失败原因。
-INSPECTOR_FAILURE_PATTERN = re.compile(r"Starting inspector on \S+ failed: (?P<reason>.+)")
+#: Node 在端口被占用等情况下打印的 Inspector 启动失败信号。
+INSPECTOR_FAILURE_PATTERN = re.compile(r"Starting inspector on \S+ failed: .+")
 
 #: 单个运行时保留的输出行上限。
 MAX_OUTPUT_LINES = 100
-
-#: 单个运行时保留的 stderr 诊断行上限。
-MAX_STDERR_LINES = 50
 
 
 class NodeDebugRuntimeObserver:
@@ -44,14 +44,12 @@ class NodeDebugRuntimeObserver:
         clear_stop_snapshot: NodeDebugStopSnapshotClearer,
         append_action: NodeDebugActionAppender,
         max_output_lines: int = MAX_OUTPUT_LINES,
-        max_stderr_lines: int = MAX_STDERR_LINES,
         max_line_bytes: int = MAX_NODE_DEBUG_LINE_BYTES,
     ) -> None:
         self._mark_claim_phase = mark_claim_phase
         self._clear_stop_snapshot = clear_stop_snapshot
         self._append_action = append_action
         self._max_output_lines = max_output_lines
-        self._max_stderr_lines = max_stderr_lines
         self._max_line_bytes = max_line_bytes
 
     async def read_stream(
@@ -86,14 +84,14 @@ class NodeDebugRuntimeObserver:
                 runtime.inspector.inspector_ready.set()
                 continue
             if stream_name == "stderr" and text:
-                # stderr 是进程诊断的唯一来源：Inspector 启动失败与脚本崩溃堆栈都在这里，
-                # 归集为有界缓冲并唤醒握手失败分支，绝不整行丢弃。
-                failure = INSPECTOR_FAILURE_PATTERN.search(text)
-                if failure is not None:
-                    runtime.inspector.inspector_failure_reason = failure.group("reason")
+                # 原始诊断只进入服务日志；状态与持久动作不复制可能含真实路径的堆栈。
+                if INSPECTOR_FAILURE_PATTERN.search(text) is not None:
                     runtime.inspector.inspector_failed.set()
-                runtime.stderr_lines.append(text)
-                del runtime.stderr_lines[:-self._max_stderr_lines]
+                logger.warning(
+                    "Node stderr: session_id=%s, thread_id=%s, configuration_id=%s, pid=%s；%s",
+                    runtime.session_id, runtime.thread_id, runtime.configuration_id,
+                    process.pid, text,
+                )
                 continue
             if stream_name == "stdout" and text:
                 logpoint_error = parse_logpoint_error(text)
@@ -139,28 +137,19 @@ class NodeDebugRuntimeObserver:
     def terminal_error_message(
         runtime: NodeDebugRuntime, return_code: int
     ) -> str | None:
-        """失败退出必须带上退出码与 stderr 尾行，绝不留空消息。"""
+        """失败退出公开退出码，原始 stderr 已由读取入口写入诊断。"""
         if runtime.logpoint_error_message is not None:
             return runtime.logpoint_error_message
         if return_code == 0:
             return None
-        message = f"Node 调试进程退出，退出码: {return_code}"
-        return NodeDebugRuntimeObserver._with_stderr_tail(runtime, message)
+        return f"Node 调试进程退出，退出码: {return_code}"
 
     @staticmethod
     def handshake_timeout_message(
-        runtime: NodeDebugRuntime, timeout_seconds: float
+        timeout_seconds: float,
     ) -> str:
-        """握手超时必须带超时值与 stderr 尾行，绝不返回空消息。"""
-        return NodeDebugRuntimeObserver._with_stderr_tail(
-            runtime, f"等待 Node Inspector 就绪超时（{timeout_seconds:g} 秒）"
-        )
-
-    @staticmethod
-    def _with_stderr_tail(runtime: NodeDebugRuntime, message: str) -> str:
-        """附加 stderr 尾行；没有诊断时原样返回消息。"""
-        tail = " / ".join(runtime.stderr_lines[-3:])
-        return f"{message}；stderr: {tail}" if tail else message
+        """握手超时必须带超时值，不将原始诊断复制进公开消息。"""
+        return f"等待 Node Inspector 就绪超时（{timeout_seconds:g} 秒）"
 
     @staticmethod
     def paused_at_breakpoint(runtime: NodeDebugRuntime) -> bool:
@@ -186,6 +175,5 @@ __all__ = [
     "INSPECTOR_FAILURE_PATTERN",
     "INSPECTOR_URL_PATTERN",
     "MAX_OUTPUT_LINES",
-    "MAX_STDERR_LINES",
     "NodeDebugRuntimeObserver",
 ]

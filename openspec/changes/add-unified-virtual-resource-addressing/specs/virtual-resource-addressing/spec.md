@@ -54,6 +54,11 @@
 - **WHEN** Terminal 或 Browser 的原 HTTP JSON 读取入口拒绝非法正文，原生解析异常包含请求中的真实路径片段
 - **THEN** 两个服务共用同一读取实现，只在原服务诊断及 cause 中保留原解析异常；普通失败响应只公布解析阶段和异常类别，保持原 HTTP 状态码，不复制或截断请求正文。失败不创建资源，下一次正常请求仍沿原入口执行；空正文、合法 JSON、分块 UTF-8、普通用户正文及已登记的 Browser 本地页面 URL 语义保持。诊断输出再次失败不能覆盖原解析失败或伪报请求成功
 
+#### Scenario: Node 进程 stderr 不复制到普通失败记录
+
+- **WHEN** Node 调试进程失败退出、Inspector 启动失败或握手超时，原始 stderr 包含源码位置或堆栈
+- **THEN** 原始 stderr 按行保留在带 Session/Thread、方案和 PID 归属的服务诊断中，普通响应、动作及 manifest 只保留退出码、握手期限或 Inspector 启动失败事实，不复制诊断尾行或从正文猜测路径。既有失败唤醒、claim 结算、冷读及同方案修复后重试保持；stdout、日志点和断点源码快照不因诊断分离而改写用户正文
+
 #### Scenario: 配置候选记录不重复保存存储位置
 
 - **WHEN** Workspace 或 Gateway 创建、重放、冷读 pending 配置候选，或升级包含候选记录的旧状态库

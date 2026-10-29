@@ -118,7 +118,7 @@ class NodeDebugLaunchTerminalErrorMessage(Protocol):
 
 class NodeDebugLaunchHandshakeTimeoutMessage(Protocol):
     def __call__(
-        self, runtime: NodeDebugRuntime, timeout_seconds: float
+        self, timeout_seconds: float
     ) -> str: ...
 
 
@@ -226,17 +226,14 @@ class NodeDebugLaunchOrchestrator:
                 context.terminal_error_message(runtime, return_code)
                 or f"Node 调试进程在握手期间退出，退出码: {return_code}"
             )
-        if runtime.inspector.inspector_failure_reason is not None:
-            raise RuntimeError(
-                "Node Inspector 启动失败: "
-                f"{runtime.inspector.inspector_failure_reason}"
-            )
+        if runtime.inspector.inspector_failed.is_set():
+            raise RuntimeError("Node Inspector 启动失败，原始诊断见服务日志")
         raise RuntimeError(
-            context.handshake_timeout_message(runtime, runtime.command_timeout_seconds)
+            context.handshake_timeout_message(runtime.command_timeout_seconds)
         )
 
     async def _drain_stream_tasks(self, runtime: NodeDebugRuntime) -> None:
-        """让仍在读取 stdout/stderr 的任务把已缓冲的诊断行落进 runtime。"""
+        """等待 stdout 归集及 stderr 原始诊断完成。"""
         tasks = (runtime.stdout_task, runtime.stderr_task)
         pending = [task for task in tasks if task is not None]
         if pending:
@@ -471,7 +468,7 @@ class NodeDebugLaunchOrchestrator:
             process = runtime.process
             return_code = process.returncode if process is not None else None
             if return_code is not None and return_code != 0:
-                # 握手期间进程已失败退出：响亮失败并带上 stderr 诊断，绝不谎报 start 成功。
+                # 握手期间进程已失败退出：公开退出码，原始 stderr 保留在诊断中。
                 await self._drain_stream_tasks(runtime)
                 raise RuntimeError(
                     context.terminal_error_message(runtime, return_code)
