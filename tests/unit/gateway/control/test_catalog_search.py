@@ -9,6 +9,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.gateway.control import catalog_search
 from app.gateway.control.catalog_search import (
     GatewaySessionCatalogSearchService,
     _CatalogSnapshot,
@@ -356,7 +357,8 @@ async def test_catalog_search_reports_unconnected_workspace_without_malformed_ur
     assert result.items == []
     assert result.workspaces[0].status == "unavailable"
     assert result.workspaces[0].error == (
-        f"RuntimeError: 工作区后端尚未连接: {target.workspace_id}"
+        f"会话目录同步失败: workspace_id={target.workspace_id}, request_id=req_catalog_test: "
+        "stage=session_catalog_sync, error=RuntimeError"
     )
 
 
@@ -470,3 +472,101 @@ async def test_catalog_caches_are_retained_for_live_workspaces(tmp_path: Path) -
     assert service._workspace_errors["ws_live"] == (
         f"工作区后端尚未连接: {live.workspace_id}"
     )
+
+
+@pytest.mark.parametrize("native_path", [
+    "/private/catalog-search-marker", r"C:\private\catalog-search-marker", r"\\host\private\catalog-search-marker",
+], ids=["posix", "drive", "unc"])
+@pytest.mark.parametrize("entry, failure", [
+    ("initial", "http"), ("initial", "transport"), ("initial", "validation"),
+    ("refresh", "http"), ("refresh", "transport"), ("refresh", "validation"), ("refresh", "cache"),
+])
+async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_native_details(
+    catalog_service: GatewaySessionCatalogSearchService, catalog_snapshot: _CatalogSnapshot,
+    native_path: str, entry: str, failure: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    target = replace(_offline_target(), backend_url="http://failed.test")
+    healthy = replace(target, workspace_id="healthy", backend_url="http://healthy.test")
+    for item in (target, healthy):
+        catalog_service._registry.upsert(item)
+    calls: list[httpx.Request] = []
+    failed = False
+    native_error = httpx.ReadError("目录传输失败: " + native_path)
+    cache_error = PermissionError(13, "拒绝写入目录缓存", native_path)
+    nodes = [node.model_dump(mode="json") for node in catalog_snapshot.nodes_by_id.values()]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.host == "failed.test" and failed:
+            if failure == "transport":
+                raise native_error
+            if failure == "http":
+                return httpx.Response(503, extensions={"reason_phrase": native_path.encode()})
+            if failure == "validation":
+                return httpx.Response(200, json={"data": {"revision": "bad", "items": [
+                    {**nodes[0], "node_revision": native_path},
+                ]}})
+        return httpx.Response(200, json={"data": {"revision": catalog_snapshot.revision, "items": nodes}})
+
+    original_write = catalog_search.atomic_write_json
+
+    def write(path: Path, payload: dict[str, object]) -> None:
+        if failed and failure == "cache" and path == catalog_service._cache_path(target.workspace_id):
+            raise cache_error
+        original_write(path, payload)
+
+    monkeypatch.setattr(catalog_search, "atomic_write_json", write)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        catalog_service._http_client = client
+        if entry == "refresh":
+            await catalog_service._sync_all()
+        else:
+            await catalog_service._sync_workspace(healthy, request_id="req_healthy_seed")
+        path = catalog_service._cache_path(target.workspace_id)
+        previous_bytes = path.read_bytes() if path.exists() else None
+        previous_snapshot = catalog_service._snapshots.get(target.workspace_id)
+        calls.clear()
+        failed = True
+        if entry == "refresh":
+            await catalog_service._sync_all()
+        result = await catalog_service.search("needle", limit_per_workspace=10, request_id="req_catalog_failure")
+        statuses = {status.workspace_id: status for status in result.workspaces}
+        status = statuses[target.workspace_id]
+        assert status.status == ("stale" if entry == "refresh" else "unavailable")
+        assert statuses[healthy.workspace_id].status == "available"
+        assert "catalog-search-marker" not in result.model_dump_json()
+        assert status.error is not None and "stage=session_catalog_sync" in status.error
+        assert target.workspace_id in status.error
+        assert catalog_service._workspace_errors[target.workspace_id] == status.error
+        diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+        assert diagnostic.exc_info is not None
+        original = diagnostic.exc_info[1]
+        assert original is not None
+        failed_request, = [request for request in calls if request.url.host == "failed.test"]
+        assert failed_request.headers["X-Request-ID"] in diagnostic.getMessage()
+        assert all(request.headers["X-BoxTeam-Workspace-Id"] == target.backend_workspace_id for request in calls)
+        if failure == "transport":
+            assert original is native_error
+        elif failure == "cache":
+            assert original is cache_error
+            assert "errno=13" in status.error
+        elif failure == "validation":
+            assert isinstance(original, ValidationError) and original.errors()[0]["input"] == native_path
+        else:
+            assert isinstance(original, httpx.HTTPStatusError) and original.response.status_code == 503
+            assert "status=503" in status.error
+        if failure != "validation":
+            assert "catalog-search-marker" in caplog.text
+        assert (path.read_bytes() if path.exists() else None) == previous_bytes
+        assert catalog_service._snapshots.get(target.workspace_id) is previous_snapshot
+        assert {item.workspace_id for item in result.items} == (
+            {healthy.workspace_id, target.workspace_id} if entry == "refresh" else {healthy.workspace_id}
+        )
+
+        failed = False
+        await catalog_service._sync_all()
+        recovered = await catalog_service.search("needle", limit_per_workspace=10, request_id="req_catalog_recovered")
+        assert all(status.status == "available" and status.error is None for status in recovered.workspaces)
+        assert {item.workspace_id for item in recovered.items} == {healthy.workspace_id, target.workspace_id}
+        assert catalog_service._workspace_errors == {}

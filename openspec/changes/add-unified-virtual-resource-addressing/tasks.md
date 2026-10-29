@@ -1174,3 +1174,9 @@
 - 原诊断路由区分本地目标预检与远端响应处理，后者复用`failure_detail`；HTTP拒绝、传输失败及DTO/JSON解码只公布阶段、类别与适用状态/坐标，原异常保留直接cause，完整拒绝正文只留诊断。原400/502、授权、目标与request_id保持，成功响应中的原始日志仍完整传递，无新parser或错误出口。
 - 原生产15项新反例失败、2项预检通过；修复后相关单元47项通过。真实独立Gateway与独立HTTP替身2项通过，核9次HTTP/DTO失败后的原入口恢复、POSIX/Windows/UNC位置不回显、原始长日志字节不截断、未授权请求不访问远端及请求ID逐次一致。它不代表真实SSH、Windows或完整Web验收。
 - 静态诊断与旧HEAD逐项核对、准确命令、源码前后指纹、原始输出、实际退出码和作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-039.json`。不将作者自查计作独审；2.2/7.2全局门仍未勾，团队协作与MCP显式持有继续延期。
+
+### 2026-10-29 会话目录搜索与刷新错误的公开事实（2.2/7.2部分收口）
+
+- 首次同步与后台刷新复用`failure_detail`，工作区错误只保存目标、原同步请求ID、阶段、异常类别及适用HTTP/系统错误码；后台任务沿用创建前冻结的原ID，原异常只留诊断。unavailable/stale/available、旧快照、健康目标、排序与限制保持，成功同步清除该目标错误，缓存schema及唯一writer不变。
+- 原实现21项新反例失败，修复后全文件33项通过，覆盖POSIX/盘符/UNC原生错误、HTTP/传输/校验/缓存失败、原异常身份、请求归属、旧正文不变及恢复；保留HTTP状态码后22项受影响用例通过（为前组子集，不相加）。原真实Gateway/Backend及独立HTTP替身聚合、落盘和重启离线回归1项通过；最终改动只追加HTTPStatusError的status事实，按精确SHA重构核对复用此前产品和未受影响用例，不重复原63秒产品运行。
+- Ruff3→3、Pyright9→9，按文件/最窄AST owner/规则/完整消息无新增；compileall、严格OpenSpec通过。准确命令、源码前后指纹、原始输出、实际退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-040.json`。原同步/存储/查询方法与产品测试保持，唯一旧预期变更是不可用错误的公开事实文案；未放宽状态或归属断言。不代表真实SSH/Windows、Web或原生磁盘故障的HTTP验收，2.2/7.2及独审总门继续未勾，延期项保持TODO。

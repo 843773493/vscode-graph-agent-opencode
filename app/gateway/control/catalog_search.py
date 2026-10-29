@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from app.core.failures import failure_detail
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
@@ -281,11 +282,11 @@ class GatewaySessionCatalogSearchService:
     async def _sync_all(self) -> None:
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
-        async def sync(target: WorkspaceTarget) -> None:
+        async def sync(target: WorkspaceTarget, request_id: str) -> None:
             async with semaphore:
                 await self._sync_workspace(
                     target,
-                    request_id=create_prefixed_id("req"),
+                    request_id=request_id,
                 )
 
         targets = self._registry.targets()
@@ -307,26 +308,24 @@ class GatewaySessionCatalogSearchService:
                     "跳过尚未连接工作区的会话目录同步: workspace_id=%s",
                     target.workspace_id,
                 )
-        synced_targets = tuple(
-            target
+        sync_requests = tuple(
+            (target, create_prefixed_id("req"))
             for target in targets
             if target.connection_kind == "remote_gateway"
             or target.backend_url.strip()
         )
         results = await asyncio.gather(
-            *(sync(target) for target in synced_targets),
+            *(sync(target, request_id) for target, request_id in sync_requests),
             return_exceptions=True,
         )
-        for target, result in zip(synced_targets, results, strict=True):
+        for (target, request_id), result in zip(sync_requests, results, strict=True):
             if isinstance(result, BaseException):
-                message = f"{type(result).__name__}: {result}"
-                self._workspace_errors[target.workspace_id] = message
-                self._fresh_workspace_ids.discard(target.workspace_id)
-                logger.warning(
-                    "同步工作区会话目录索引失败: workspace_id=%s, error=%s",
-                    target.workspace_id,
-                    message,
+                self._workspace_errors[target.workspace_id] = failure_detail(
+                    result, stage="session_catalog_sync",
+                    label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
+                           + (f", status={result.response.status_code}" if isinstance(result, httpx.HTTPStatusError) else "")),
                 )
+                self._fresh_workspace_ids.discard(target.workspace_id)
 
     async def _search_workspace(
         self,
@@ -347,7 +346,11 @@ class GatewaySessionCatalogSearchService:
                     request_id=request_id,
                 )
             except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
-                message = f"{type(error).__name__}: {error}"
+                message = failure_detail(
+                    error, stage="session_catalog_sync",
+                    label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
+                           + (f", status={error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else "")),
+                )
                 self._workspace_errors[target.workspace_id] = message
                 return [], GatewaySessionSearchWorkspaceStatusDTO(
                     workspace_id=target.workspace_id,
