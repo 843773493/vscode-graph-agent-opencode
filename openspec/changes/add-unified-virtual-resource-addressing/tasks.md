@@ -1460,3 +1460,9 @@
 - 正式矩阵的完整复制与前缀fork分别1 passed／131.16秒和1 passed／145.07秒。公开fork后逐字核对原assembly、activation及全部binding正文；来源Session由产品导航入口删除并核实物理settlement，来源Backend关闭、目标Backend硬重启后仍完整一致，冷幂等回执不增加模型调用；目标经消息入口续写后原封存结果不变。保留前缀上界及后续历史排除断言，不手填执行、capture或恢复状态。
 - 原20条断言全部保留，新增聚合与删除断言；Ruff／compileall通过。完整旧HEAD归档与当前Pyright均14项，按文件、最窄AST owner、规则、完整消息和表达式逐项一致，无新增，不称类型全绿。仅增强原178行测试，无新文件／目录，无产品实现修改；作者结构自查不代独审。
 - 准确命令、原始输出、源码指纹、实际退出码、正式场景产物和比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-102.json`。两套矩阵串行，复用既有240秒／4GiB限制、fork外置watchdog和跨worktree闸门；第二轮期间仅其他agent前端文件变化，后端受验源码保持。结合100的两种Provider factory发布／封存与本次产品验收，补齐内部聚合null的公开fork及独立进程重启证据；不代真实Provider、Responses进程或同步SDK、Windows及Web验收。2.2／7.2整体门继续未勾，前端及其OpenSpec仍待用户通知，其他agent独有修改／暂存和原Debug保持。
+
+### 2026-10-29 Browser WebSocket 输入拒绝（2.2／7.2部分收口）
+
+- WebSocket JSON 解析复用既有共享解析器，HTTP 读取消费者保持；非法 JSON 只公开阶段／类别，九类未知字段只公开原明确拒绝说明，原始解析异常及字段值进入原服务诊断，日志次错不替换原拒绝。合法用户正文、页面 file: URL、schema、授权与资源生命周期保持，不增加脱敏、回退或第二解析实现。
+- 原生产的新单测1 passed／30 failed；修复后共享读取与完整 transport 单测69 passed，真实Node WebSocket/HTTP与Chromium集成1 passed，原Terminal/Browser HTTP解析集成2 passed。三类原生路径共30次真实线格式拒绝后，Browser/context均为零，同连接仍能使用真实授权附加／分离正式创建的本地页面；完整原错留日志。新矩阵固定90秒/4GiB，各测试批次串行，复用跨worktree集成闸门及进程外保护。
+- 新测试Pyright零诊断，Ruff／compileall／Node语法及本change strict通过。作者AST核对仅共享parser提取与四个原校验函数变化，新增局部拒绝函数；编码、画面流控、普通值规范化及原测试保持，无新源码目录或依赖，不代独审。命令、原始输出、指纹与实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-108.json`。真实网络场景不代Gateway/主Web、Python业务owner、Backend重启、Windows实机或其它WebSocket运行时失败；2.2／7.2总门继续未勾。前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。

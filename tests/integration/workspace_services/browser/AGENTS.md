@@ -36,6 +36,8 @@ browser/
 
 `test_browser_governor_diagnostics.py`只替换Linux内核文件读取，经过原采样器、调度器与真实Node/HTTP健康接口验证cgroup目录不公开、采样失败停止并保留上次事实、完整原错留诊断，以及原服务重启后重新采样。suite `integration-browser-governor-diagnostics`固定60秒/4GiB；不创建Chromium，不代表Gateway/主Web或其他平台实机验收。
 
+`test_browser_websocket_input_errors.py`经真实Node WebSocket/HTTP验证非法JSON及九类未知字段的POSIX、盘符和UNC输入只进入诊断、零Browser/context副作用；同连接继续以真实授权附加/分离正式HTTP创建的本地文件页面。suite `integration-browser-websocket-input-errors`固定90秒/4GiB；不代表Gateway/主Web、Python业务owner、进程重启或其他WebSocket运行时失败验收。
+
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
 ## 可修改内容

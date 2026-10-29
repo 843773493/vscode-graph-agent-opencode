@@ -12,7 +12,7 @@ transport/
 
 页面在 `browserSession.js` 产生帧，后端入口将连接接入本目录；同一发布帧的封包按对象身份共享，ACK 和待发帧状态则逐连接隔离。
 
-`parseClientMessage`唯一解析原始WebSocket JSON，保留本层字段校验和默认值后，把对象直接交给`browser/protocol/messages.js`的schema规范化入口；不为了跨模块调用重复序列化、解析同一消息。JSON安全值规范化仍由协议owner负责，不能绕过它改变数值或未知字段的处理。
+`parseClientMessage`复用共享`serverJsonRequest.mjs`解析原始WebSocket JSON，保留本层字段校验和默认值后，把对象直接交给`browser/protocol/messages.js`的schema规范化入口；不为了跨模块调用重复序列化、解析同一消息。解析失败只公开阶段与类别，未知枚举字段只公开明确拒绝说明；原解析异常与字段值进入原服务日志，日志次错保留为cause。`protocolErrors.test.js`覆盖三种原生路径输入与日志故障，不清洗合法页面URL或普通用户正文。JSON安全值规范化仍由协议owner负责，不能绕过它改变数值或未知字段的处理。
 
 ## 可修改内容
 

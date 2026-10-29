@@ -2,6 +2,21 @@ import {
   encodeBrowserServerMessage,
   normalizeBrowserClientMessage,
 } from "../../protocol/messages.js";
+import { parseJsonInput } from "../../../../shared/serverJsonRequest.mjs";
+import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
+
+const logger = createRuntimeLogger("browser", "browser.protocol");
+
+function rejectUnknownValue(label, value) {
+  const error = new Error(label);
+  try {
+    logger.error("Browser WebSocket 字段拒绝", { stage: "websocket_validate", field: label, value });
+  } catch (cause) {
+    // 日志次错保留在原拒绝的 cause，不把 sink 位置送入 WebSocket 回执。
+    error.cause = cause;
+  }
+  throw error;
+}
 
 export const CLIENT_MESSAGE_TYPES = new Set([
   "attach",
@@ -98,7 +113,7 @@ function validateDeviceSettings(settings) {
   }
   if (settings.orientation !== undefined
     && !["portrait", "landscape"].includes(settings.orientation)) {
-    throw new Error(`未知浏览器设备方向: ${settings.orientation}`);
+    rejectUnknownValue("未知浏览器设备方向", settings.orientation);
   }
   for (const fieldName of ["width", "height"]) {
     if (settings[fieldName] === undefined) continue;
@@ -145,7 +160,7 @@ function validateModifiers(modifiers) {
 
 function validatePointerMessage(message) {
   if (!POINTER_ACTIONS.has(message.action)) {
-    throw new Error(`未知 pointer action: ${message.action}`);
+    rejectUnknownValue("未知 pointer action", message.action);
   }
   assertFiniteNumber(message.x, "x");
   assertFiniteNumber(message.y, "y");
@@ -154,7 +169,7 @@ function validatePointerMessage(message) {
   }
   const button = message.button ?? "none";
   if (!POINTER_BUTTONS.has(button)) {
-    throw new Error(`未知 pointer button: ${button}`);
+    rejectUnknownValue("未知 pointer button", button);
   }
   if (message.action === "wheel") {
     assertFiniteNumber(message.deltaX, "deltaX");
@@ -174,7 +189,7 @@ function validatePointerMessage(message) {
 
 function validateKeyMessage(message) {
   if (!KEY_ACTIONS.has(message.action)) {
-    throw new Error(`未知 key action: ${message.action}`);
+    rejectUnknownValue("未知 key action", message.action);
   }
   if (typeof message.key !== "string" || message.key.length === 0) {
     throw new Error("key 不能为空");
@@ -214,10 +229,10 @@ function validateFileSelectionMessage(message) {
 
 export function parseClientMessage(raw) {
   const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
-  const message = JSON.parse(text);
+  const message = parseJsonInput(text, { logger, transport: "WebSocket", stage: "websocket_json" });
   assertPlainObject(message);
   if (typeof message.type !== "string" || !CLIENT_MESSAGE_TYPES.has(message.type)) {
-    throw new Error(`未知消息类型: ${message.type}`);
+    rejectUnknownValue("未知消息类型", message.type);
   }
   if (message.type !== "detach") {
     assertBrowserId(message);
@@ -267,7 +282,7 @@ export function parseClientMessage(raw) {
     }
     if (message.orientation !== undefined
       && !["portrait", "landscape"].includes(message.orientation)) {
-      throw new Error(`未知浏览器设备方向: ${message.orientation}`);
+      rejectUnknownValue("未知浏览器设备方向", message.orientation);
     }
   }
   if (message.type === "deviceSettings") {
@@ -280,7 +295,7 @@ export function parseClientMessage(raw) {
   }
   if (message.type === "debugSnapshot" && message.panel !== undefined
     && !["elements", "console", "network", "all"].includes(message.panel)) {
-    throw new Error(`未知 debugSnapshot.panel: ${message.panel}`);
+    rejectUnknownValue("未知 debugSnapshot.panel", message.panel);
   }
   if (message.type === "frameAck") {
     assertPositiveInteger(message.frameId, "frameId");
@@ -295,12 +310,12 @@ export function parseClientMessage(raw) {
     }
     if (message.type === "selectElement" && message.mode !== undefined
       && !["basic", "rich"].includes(message.mode)) {
-      throw new Error(`未知元素选择模式: ${message.mode}`);
+      rejectUnknownValue("未知元素选择模式", message.mode);
     }
   }
   if (message.type === "command") {
     if (!COMMAND_NAMES.has(message.name)) {
-      throw new Error(`未知 command name: ${message.name}`);
+      rejectUnknownValue("未知 command name", message.name);
     }
     if (message.name === "goto" && (typeof message.url !== "string" || !message.url.trim())) {
       throw new Error("goto command 必须提供 url");
