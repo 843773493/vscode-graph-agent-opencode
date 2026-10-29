@@ -3,17 +3,17 @@ import { describe, expect, test } from "bun:test";
 import {
   encodeTerminalClientMessage,
   encodeTerminalServerMessage,
-  parseTerminalClientMessage,
+  normalizeTerminalClientMessage,
 } from "./messages.js";
 
 describe("Terminal Protobuf JSON adapter", () => {
   test("attach oneof 传递本次一次性 grant", () => {
-    const message = parseTerminalClientMessage(JSON.stringify({
+    const message = normalizeTerminalClientMessage({
       type: "attach",
       terminalId: "terminal_123",
       afterSequence: 4,
       grantToken: "current-one-use-grant",
-    }));
+    });
 
     expect(message).toEqual({
       type: "attach",

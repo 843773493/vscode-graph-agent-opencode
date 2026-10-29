@@ -1466,3 +1466,9 @@
 - WebSocket JSON 解析复用既有共享解析器，HTTP 读取消费者保持；非法 JSON 只公开阶段／类别，九类未知字段只公开原明确拒绝说明，原始解析异常及字段值进入原服务诊断，日志次错不替换原拒绝。合法用户正文、页面 file: URL、schema、授权与资源生命周期保持，不增加脱敏、回退或第二解析实现。
 - 原生产的新单测1 passed／30 failed；修复后共享读取与完整 transport 单测69 passed，真实Node WebSocket/HTTP与Chromium集成1 passed，原Terminal/Browser HTTP解析集成2 passed。三类原生路径共30次真实线格式拒绝后，Browser/context均为零，同连接仍能使用真实授权附加／分离正式创建的本地页面；完整原错留日志。新矩阵固定90秒/4GiB，各测试批次串行，复用跨worktree集成闸门及进程外保护。
 - 新测试Pyright零诊断，Ruff／compileall／Node语法及本change strict通过。作者AST核对仅共享parser提取与四个原校验函数变化，新增局部拒绝函数；编码、画面流控、普通值规范化及原测试保持，无新源码目录或依赖，不代独审。命令、原始输出、指纹与实际退出码见 `out/tests/temp/uri-global-closure/artifacts/verification-108.json`。真实网络场景不代Gateway/主Web、Python业务owner、Backend重启、Windows实机或其它WebSocket运行时失败；2.2／7.2总门继续未勾。前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
+
+### 2026-10-29 Terminal WebSocket 输入错误（2.2／7.2部分收口）
+
+- 原共享协议只保留对象到schema的唯一投影，原始文本解析迁至服务端`terminalInput.js`并复用共享JSON解析器；旧raw parser物理删除、调用方和原单测同批迁齐。原非有限数转null、负零转零及UTF-8输入保持，已解析对象不再序列化/解析。JSON解析、schema字段错误与原已附加后未知type拒绝只公开静态身份／阶段／类别，完整原错留cause及原workspaceLogger，日志次错按顺序保留；一次性grant、授权前后顺序、队列、输入、PID及detach保持。
+- 原生产的真实Node/HTTP/WebSocket测试1 failed，保存24条不合规回执；其余零资源、原授权顺序和同连接shell写文件断言已执行。修复后116项Bun单测及34项Node输出回归通过（其中16项为交叉复跑）；交付审查发现日志缺少workspace身份后改用原logger，31项受影响单测及真实PTY网络场景补验通过，24条新诊断逐行核对真实workspace_id。共享解析依赖的原Browser WebSocket1项和双服务HTTP2项也通过。初轮12项新断言误把原诊断当JSON转义，改为核对原值；另3项因误用Bun运行原Node测试失败，未改原测试或产品输出，改回Node后通过，失败原件保留。
+- Node语法、Ruff／compileall、单文件Pyright零诊断及本change strict通过。作者AST逐项核对原schema投影、编码、数值reviver、HTTP reader及backend其它方法保持，仅原消息入口注入logger和未知type拒绝变化；新服务端文件43行，未增源码目录或依赖，不代独审。准确命令、原始输出、源码指纹、实际退出码、正式场景产物及复用范围见 `out/tests/temp/uri-global-closure/artifacts/verification-109.json`。测试批次串行，保留跨worktree闸门、外部超时、4GiB/两CPU保护；不代表Gateway/Web、Python业务owner、进程重启、Windows实机或其它Terminal运行时错误。2.2／7.2总门继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存及原Debug保持。

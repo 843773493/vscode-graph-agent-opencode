@@ -1,10 +1,11 @@
 /** 辅助服务的 HTTP／WebSocket 共用 JSON 解析，原文只进入原服务诊断。 */
 /** @param {string} raw
- * @param {{ logger: { error(...values: unknown[]): void }, transport: string, stage: string }} context
+ * @param {{ logger: { error(...values: unknown[]): void }, transport: string, stage: string,
+ *   reviver?: (key: string, value: unknown) => unknown }} context
  */
-export function parseJsonInput(raw, { logger, transport, stage }) {
+export function parseJsonInput(raw, { logger, transport, stage, reviver }) {
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw, reviver);
   } catch (cause) {
     if (!(cause instanceof SyntaxError)) throw cause;
     const label = `${transport} JSON 请求解析失败`;

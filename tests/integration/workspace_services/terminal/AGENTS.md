@@ -21,6 +21,9 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_terminal_startup_cleanup.py`通过正式HTTP创建真实PTY父子进程，仅在原worker就绪消息交付前注入失败；父子均忽略SIGTERM，要求原owner核实强杀及worker退出后才签创建失败回执。首次停止故障保持created/unknown、原进程与句柄，原HTTP管理kill重试后才核实终态；独立/proc观察、原持久记录和peer资源共同验收。`terminal_startup_failure.mjs`只提供显式IPC/信号故障边界，不代填资源或进程终态。suite `integration-terminal-startup-cleanup`固定60秒/4GiB，仅证明Linux该窗口，不代表未交付PID的native阻塞、Gateway/Web或Windows。
 
+`test_websocket_input_errors.py`通过真实Node WebSocket/HTTP及PTY验证三类原生路径的JSON/schema/type拒绝、附加前零资源、原授权顺序，以及同连接真实shell写文件、PID保持与detach。`integration-terminal-websocket-input-errors`固定60秒/4GiB；不代表Gateway/Web、Python业务owner、进程重启、Windows实机或其它Terminal运行时错误验收。
+
+
 ## 可修改内容
 
 - Terminal 模块与受控子进程组成的集成测试及专用 fixture。

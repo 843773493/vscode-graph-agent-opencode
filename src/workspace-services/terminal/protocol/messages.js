@@ -20,18 +20,6 @@ function normalizeJsonSerializableValue(value) {
   return JSON.parse(serialized);
 }
 
-function normalizeParsedJsonNumber(_fieldName, value) {
-  if (typeof value !== "number") return value;
-  if (!Number.isFinite(value)) return null;
-  return Object.is(value, -0) ? 0 : value;
-}
-
-function rawText(raw) {
-  if (typeof raw === "string") return raw;
-  if (raw instanceof Uint8Array) return new TextDecoder().decode(raw);
-  return String(raw);
-}
-
 function clientProtoFromJson(message) {
   if (message.type === "attach") {
     const value = { terminalId: message.terminalId };
@@ -103,8 +91,8 @@ function clientMessageFromProto(message) {
   return { type, ...protobufJson[messageOneofCase] };
 }
 
-export function parseTerminalClientMessage(raw) {
-  const message = JSON.parse(rawText(raw), normalizeParsedJsonNumber);
+/** 已解码的JSON值直接进入唯一schema投影；传输解析及错误公开边界归server。 */
+export function normalizeTerminalClientMessage(message) {
   assertPlainObject(message, "Terminal WebSocket 消息");
   if (typeof message.type !== "string" || !message.type) {
     throw new Error(`Terminal WebSocket 消息缺少 type: ${message.type}`);

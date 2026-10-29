@@ -6,10 +6,8 @@ import http from "node:http";
 import path from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  encodeTerminalServerMessage,
-  parseTerminalClientMessage,
-} from "../protocol/messages.js";
+import { encodeTerminalServerMessage } from "../protocol/messages.js";
+import { parseTerminalClientMessage, rejectTerminalMessageType } from "./terminalInput.js";
 import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 
@@ -378,7 +376,7 @@ async function main() {
     };
 
     const processMessage = async (raw) => {
-      const message = parseTerminalClientMessage(raw);
+      const message = parseTerminalClientMessage(raw, workspaceLogger);
 
       if (message.type === "attach") {
         await detachCurrent();
@@ -437,7 +435,7 @@ async function main() {
         return;
       }
 
-      throw new Error(`未知 WebSocket 消息类型: ${message.type}`);
+      rejectTerminalMessageType(message.type, workspaceLogger);
     };
 
     socket.on("message", (raw) => {

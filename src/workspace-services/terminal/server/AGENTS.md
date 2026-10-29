@@ -5,6 +5,7 @@
 ```text
 server/
 ├── backend.js                    HTTP/WebSocket 入口与服务退出
+├── terminalInput.js              WebSocket解析、原JSON数值规范化与协议失败公开边界
 ├── terminalManager.js            工作区终端集合、容量与持久化协调
 ├── workspaceIdentity.js          UUID格式与权威工作区身份文件核对
 ├── terminalSession.js            单个终端的交互及状态转换
@@ -34,6 +35,8 @@ server/
 `TerminalSession`表示按`terminal_id`定位的Node执行记录，不是聊天会话。`os_pid`是PTY执行根，`pty_worker_pid`是隔离Node宿主，`process_session_id`是操作系统SID/Darwin sess；进程身份、信号和退出确认统一归[processes/](processes/AGENTS.md)，不与资源状态、聊天Session或输出消费状态混用。
 
 传输授权从Manager的一次性grant经WebSocket接线交给Session，内部统一用`TerminalTransportGrant.transportOwnerRevision`表示发放时冻结的owner版本；它不表示模型命令代际、输出sequence或完成事件编号。`expiresAtUnixMs`是授权过期的绝对时刻。公开HTTP字段`owner_revision/expires_at`和状态字段`transport_owner_revision`保持原合同，Node只保存传输所需的版本影子，不成为领域owner。
+
+原始WebSocket JSON只由`terminalInput.js`复用共享解析器解码一次，保留非有限数转null及负零转零的原语义，再直接进入纯协议schema投影。原生解析片段、Protobuf字段原值及未知type只留原服务诊断和cause；普通错误保留阶段、类别及静态消息/字段身份，日志次错不能替换原拒绝。未知扩展type仍在原已附加授权检查之后拒绝，不改变连接队列、一次性grant、PTY输入或detach顺序。
 
 ## 交互与命令事实
 
