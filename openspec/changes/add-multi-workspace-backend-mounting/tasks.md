@@ -212,3 +212,10 @@
 - 原registry的未知远端连接与未连接URL两个LookupError出口复用唯一failure_detail，原异常类别、cause、诊断与查询顺序保持；无新owner、解析器、持久化或兼容链。六个POSIX／盘符／UNC反例在旧生产全部失败，候选通过，核完整SQLite快照／revision／激活态不变及合法连接随后可附加runtime并查询原URL。
 - 扩大八文件回归219 passed／2 failed；两项分别是旧提交后观察者异常身份、旧健康错误文案断言，已在完整HEAD归档逐项复现，四个相关生产／测试文件指纹相同，本片未修改其预期。真实Gateway／独立health_stub扩为三类路径×八入口共24次拒绝，状态／request_id／SQLite不变及合法操作恢复通过。首轮止于setup：BadStatusLine及服务bind错误，ss观察到38600端口同源同目标TIME-WAIT；确认无监听／连接后重验通过，未杀未知进程或改环境。
 - Ruff／compileall通过；完整归档Pyright25→25按文件／最窄AST owner／规则／完整消息无新增。作者AST自查确认仅两处raise和import变动，原测试AST在扣除唯一新增HTTP tuple后保持；第一次审计脚本误将扩展场景按未变AST断言中止，最终复用已完成类型raw修正，未重跑类型。准确命令、前后指纹、raw、退出码及限制见`out/tests/temp/uri-global-closure/artifacts/verification-056.json`。4.3／8.2总门仍未勾；未代替真实Backend执行、Web、Windows、完整生命周期或独审，团队协作与MCP显式持有继续延期。
+
+
+### 2026-10-29 远端回归调用方的失败合同迁齐（8.2 部分收口）
+
+- 依据上一片完整HEAD复现与原生产合同，迁齐`test_federation`两项过时预期：提交后的精确GatewayRuntimeConsumerApplyError须保原original_error／直接cause、无待恢复补偿及remote-projection／registry-batch两个结算；revision、已提交snapshot、SQLite、路由及runtime未关闭等原断言保持。健康投影核精确公开失败事实，并核原始异常／actual UUID仍在诊断及完整DTO不含私钥路径；状态、身份与远端连接字段原断言保持。生产代码未修改。
+- 同一八文件回归221 passed／8.81秒；Ruff／compileall通过，完整HEAD归档Pyright8→7按最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST确认只改原两项测试及必要import，原27个顶层符号集合保持；1712行旧聚合测试与根单测46文件的结构债务保留既有职责下沉方向，不为本片添加包装或目录。原始命令、指纹、输出、退出码及局限见`out/tests/temp/uri-global-closure/artifacts/verification-057.json`。
+- 多工作区design D9将“16f时生命周期未实施”明确为历史基线，指向已完成第10节及仍未勾的4.3／8.2总验收。此片不代新真实网络／Web／Windows／完整生命周期或独审，8.2总门仍未勾；团队协作和MCP显式持有继续延期。

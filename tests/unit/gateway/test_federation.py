@@ -32,6 +32,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.registry.core import _REGISTRY_SCHEMA_VERSION
 from app.gateway.remote_gateway import reconcile_configured_remote_gateways
 from app.gateway.routes.workspaces_managed import _inbound_gateway_access_list
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyError
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
@@ -832,7 +833,7 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
     monkeypatch.setattr(remote_gateway_module, "_prepare_remote_gateway", prepare)
     registry.add_commit_observer(fail_after_commit)
     try:
-        with pytest.raises(RuntimeError) as raised:
+        with pytest.raises(GatewayRuntimeConsumerApplyError) as raised:
             await reconcile_configured_remote_gateways(
                 registry=registry,
                 configured_workspaces=(configured,),
@@ -843,7 +844,13 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
         workspace_id = build_projected_workspace_id(
             configured.connection_id, "batch-workspace"
         )
-        assert raised.value is failure
+        assert raised.value.original_error is failure
+        assert raised.value.__cause__ is failure
+        assert raised.value.recovery_required is False
+        assert raised.value.consumer_states == [
+            {"consumer_id": "remote-projection", "details": {}},
+            {"consumer_id": "registry-batch", "details": {}},
+        ]
         assert registry.registry_revision == previous_revision + 1
         assert registry._last_committed_snapshot is not previous_commit
         assert state.get_registry_revision() == registry.registry_revision
@@ -1140,6 +1147,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
     monkeypatch: pytest.MonkeyPatch,
     health_workspace_id: str,
     expected_status: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     gateway_root = tmp_path / "gateway"
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
@@ -1223,7 +1231,15 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
     assert workspace.status == expected_status
     assert workspace.backend_workspace_id == "00000000-0000-4000-8000-000000000002"
     if expected_status == "offline":
-        assert "backend UUID 不匹配" in workspace.services["workspace_api"].error
+        assert workspace.services["workspace_api"].error == (
+            "工作区健康检查失败: workspace_id=projected: stage=workspace_health, error=RuntimeError"
+        )
+        assert any(
+            record.exc_info and type(record.exc_info[1]) is RuntimeError
+            and "backend UUID 不匹配: expected=00000000-0000-4000-8000-000000000002" in str(record.exc_info[1])
+            for record in caplog.records
+        )
+        assert f"actual='{health_workspace_id}'" in caplog.text
     assert workspace.remote is not None
     assert workspace.remote.ssh_config_host == "gpu-server"
     assert workspace.remote.host == "remote.example.com"
@@ -1231,6 +1247,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
     assert workspace.remote.username == "developer"
     assert workspace.remote.remote_gateway_port == 9014
     assert "private_key_path" not in workspace.remote.model_dump()
+    assert "/secret/id_ed25519" not in workspace.model_dump_json()
 
 
 @pytest.mark.asyncio
