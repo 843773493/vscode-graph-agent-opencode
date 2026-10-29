@@ -261,7 +261,10 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
                     await delta_sink.fail_tool_invocation(
                         self._context.require_model_call_id(),
                         self._context.require_tool_call_id(),
-                        error=str(error),
+                        error=failure_detail(
+                            error, stage="tool-execution",
+                            label=f"工具执行失败: tool={request.tool_call['name']}, call_id={self._context.require_tool_call_id()}",
+                        ),
                     )
                 raise
 

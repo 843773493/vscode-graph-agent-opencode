@@ -16,7 +16,9 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
+from langgraph.checkpoint.serde.types import ERROR
 
+from app.core.failures import failure_detail
 from app.core.phase_observer import observe_phase_sync
 from app.core.session_thread_context import (
     require_current_session_thread_owner,
@@ -315,7 +317,13 @@ class RolloutLangGraphCheckpointMixin:
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             checkpoint_id=checkpoint_id,
-            writes=((channel, value) for channel, value in writes),
+            writes=(
+                (channel, failure_detail(
+                    value, stage="checkpoint-task",
+                    label=f"执行节点失败: task_id={task_id}, task_path={task_path}",
+                ) if channel == ERROR and isinstance(value, BaseException) else value)
+                for channel, value in writes
+            ),
             task_id=task_id,
             task_path=task_path,
         )

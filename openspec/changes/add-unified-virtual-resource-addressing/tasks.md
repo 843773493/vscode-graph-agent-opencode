@@ -1156,3 +1156,9 @@
 - 普通超时转换复用failure_detail，不再将TimeoutError原文复制到ToolMessage、canonical历史和下一次模型请求；保留超时码、errno、重试/检查状态提示及局部期限。所有超时分支保留原工具名称，修复名称缺失令request carrier与真实attempt终态冲突、整轮执行失败的问题；MCP及文件写入原结构化未知回执和artifact继续原样复用。
 - 使用现有model_stream和真实Session/Job入口，实际读取文件后注入含POSIX/Windows/UNC位置的超时，核原异常实例/完整日志、调用配对、canonical两种载体与全部恢复检查点。旧生产重现路径落盘与名称冲突；修复后集成通过，既有26项单元回归通过，涵盖取消提交顺序、MCP/文件回执、局部期限、并行调用和父scope保留。测试装配及检查点断言的错误尝试保留原件，不计业务反例；证据见`out/tests/temp/uri-global-closure/artifacts/verification-034.json`。
 - Ruff与compileall通过；Pyright既有文件17→13、按文件/最窄AST owner/规则/完整消息无新增，新集成文件零诊断。作者结构自查，无新增目录、事实源、schema或兼容链；全局门仍未勾，此片不替代同步执行、Web/Gateway、Windows实机、独立进程恢复或独立审查；两项明确延期设计保持TODO。
+
+### 2026-10-29 未捕获工具异常与检查点错误槽（2.2/7.2部分收口）
+
+- 工具异常在原canonical终态提交前复用共享failure_detail，随后仍传播同一个原异常。LangGraph同步put_writes在官方ERROR通道将BaseException转为失败事实文本，异步入口继续委托同一路径；替换官方serializer原来生成的repr文本，不改变恢复值类型、其它通道、控制槽索引或SQLite结构，不建立第二套保存链。
+- 将前片集成测试正名为`test_tool_failure_facts.py`并复用同一真实读取故障fixture；经Session/Job入口生成原attempt、未知结果及调度器ERROR写入，核Job/模型/canonical/全部检查点无原生位置、原异常实例及完整诊断。旧生产1项失败直接重现canonical原文；Saver同步／异步两项红测重现repr持久化。最终组合32 passed/46.70秒，含前片超时、取消及提交顺序、控制槽替换、普通写入冲突和冷读取；产品关键状态未由手工数据代做，独立Saver合同测试的预置仅证明局部协议。
+- Ruff与compileall通过，Pyright59→59且新集成代码零诊断，按文件/最窄AST owner/规则/完整消息无新增；作者结构自审无新目录、owner、schema或兼容链。命令、前后源码指纹、raw/退出码及审查证据见`out/tests/temp/uri-global-closure/artifacts/verification-035.json`。全局门仍未勾，未据此声称完整Web、Windows、真实同步产品执行、进程重启或独立审查通过；团队协作及MCP显式持有继续延期。

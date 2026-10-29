@@ -169,7 +169,7 @@ async def test_tool_error_waits_for_original_result_commit_before_scheduler_fail
         failure_case.model_delta_sink.fail_tool_invocation.assert_awaited_once_with(
             "original-model",
             "original-call",
-            error="target-deleted",
+            error="工具执行失败: tool=test_tool, call_id=original-call: stage=tool-execution, error=RuntimeError",
         )
         with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
             tool_invocation_context.require_tool_call_id()
