@@ -33,7 +33,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_request,
     record_upstream_response,
 )
-from app.runtime.provider_errors import is_provider_failure
+from app.core.failures import is_provider_failure
 from app.services.orchestration.agent_stream_helpers import (
     is_tracked_chat_model_event,
 )

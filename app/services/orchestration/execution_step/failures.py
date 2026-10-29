@@ -8,9 +8,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
+from app.core.failures import execution_failure_message
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
-from app.domain.itemized.errors import execution_failure_message
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )

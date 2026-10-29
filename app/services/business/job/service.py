@@ -15,6 +15,7 @@ from app.abstractions.pending_request_store import (
     PendingRequestStoreProtocol,
 )
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
+from app.core.failures import execution_failure_message
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
@@ -26,7 +27,6 @@ from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
 )
-from app.domain.itemized.errors import execution_failure_message
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,

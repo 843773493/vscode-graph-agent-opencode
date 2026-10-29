@@ -6,10 +6,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
-from app.runtime.provider_errors import (
-    is_transient_provider_error,
-    mark_provider_failure,
-)
+from app.core.failures import mark_provider_failure
+from app.runtime.provider_errors import is_transient_provider_error
 from app.tool_testing.model_invocation import (
     MAX_MODEL_CALLS_PER_ATTEMPT,
     MAX_TRANSIENT_RETRIES,

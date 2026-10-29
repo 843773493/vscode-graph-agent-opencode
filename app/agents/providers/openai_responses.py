@@ -60,6 +60,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_response,
 )
 from app.core.cancelable_stream import CancelableStream, close_async_stream
+from app.core.failures import mark_provider_failure
 from app.core.model_delta_context import (
     get_current_model_delta_sink,
     resolve_model_run_id,
@@ -69,7 +70,6 @@ from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
 )
 from app.runtime.litellm_runtime import litellm, prepare_model_request
-from app.runtime.provider_errors import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,

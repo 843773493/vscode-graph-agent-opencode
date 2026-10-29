@@ -4,11 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.failures import mark_provider_failure
 from app.runtime import litellm_runtime
-from app.runtime.provider_errors import (
-    is_transient_provider_error,
-    mark_provider_failure,
-)
+from app.runtime.provider_errors import is_transient_provider_error
 
 
 class _ProviderStatusError(Exception):

@@ -11,7 +11,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 
-from app.runtime.provider_errors import mark_provider_failure
+from app.core.failures import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_responses_tool_content,

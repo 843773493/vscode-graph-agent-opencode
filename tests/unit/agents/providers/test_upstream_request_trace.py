@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,8 +28,8 @@ from app.agents.upstream_request_trace import (
     record_upstream_error,
     record_upstream_request,
 )
+from app.core.failures import is_provider_failure
 from app.runtime.model_stream import ModelStreamTransportController
-from app.runtime.provider_errors import is_provider_failure
 from app.testing.model_stream import (
     load_model_stream_config,
 )
@@ -39,6 +40,22 @@ CHAT_CONFIG_PATH = (
 RESPONSES_CONFIG_PATH = (
     Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_responses.jsonc"
 )
+
+
+@pytest.fixture
+def assert_provider_failure_facts(caplog: pytest.LogCaptureFixture) -> Callable[[str, BaseException], None]:
+    caplog.set_level("ERROR", logger="app.core.failures")
+
+    def check(detail: str, error: BaseException) -> None:
+        expected = f"模型执行失败: stage=execution-provider, error={type(error).__name__}"
+        if isinstance(error, OSError):
+            expected += f", errno={error.errno}"
+        assert detail == expected
+        assert any(record.name == "app.core.failures" and record.exc_info is not None
+                   and record.exc_info[1] is error for record in caplog.records)
+        assert str(error) in caplog.text
+
+    return check
 
 
 def test_native_io_attempt_error_keeps_system_reason_without_file_locations() -> None:
@@ -215,6 +232,7 @@ def failed_provider(
 async def test_upstream_attempt_keeps_original_error_after_outer_failure(
     failed_provider: tuple[BoxteamLiteLLMChatModel | BoxteamOpenAIResponsesModel, RuntimeError],
     protocol: str, failure_stage: str, is_async: bool,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     model, error = failed_provider
     token = begin_upstream_capture()
@@ -233,7 +251,8 @@ async def test_upstream_attempt_keeps_original_error_after_outer_failure(
     assert is_provider_failure(error)
     assert len(attempts) == 1
     attempt = attempts[0]
-    assert attempt["error"] == f"original {protocol} {failure_stage} overloaded"
+    assert str(error) == f"original {protocol} {failure_stage} overloaded"
+    assert_provider_failure_facts(attempt["error"], error)
     assert attempt["response"] is None
     assert attempt["model"] == "test-model"
     assert attempt["sealed_dispatch"] is None
@@ -251,6 +270,7 @@ async def test_upstream_attempt_keeps_original_error_after_outer_failure(
 async def test_responses_failure_event_settles_attempt_before_outer_failure(
     failed_provider: tuple[BoxteamLiteLLMChatModel | BoxteamOpenAIResponsesModel, RuntimeError],
     is_async: bool,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     model, _error = failed_provider
     token = begin_upstream_capture()
@@ -266,7 +286,7 @@ async def test_responses_failure_event_settles_attempt_before_outer_failure(
         attempts = end_upstream_capture(token)
     assert is_provider_failure(raised.value)
     assert len(attempts) == 1
-    assert attempts[0]["error"] == str(raised.value)
+    assert_provider_failure_facts(attempts[0]["error"], raised.value)
     assert attempts[0]["response"] is None
 
 
@@ -303,6 +323,7 @@ async def test_nonstream_chat_generation_keeps_existing_capture_scope(
 @pytest.mark.asyncio
 async def test_responses_attempt_keeps_detailed_open_timeout(
     monkeypatch: pytest.MonkeyPatch,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     async def never_open(**_kwargs: object) -> None:
         await asyncio.Event().wait()
@@ -321,14 +342,16 @@ async def test_responses_attempt_keeps_detailed_open_timeout(
         record_upstream_error(RuntimeError("outer routing failed"))
     finally:
         attempts = end_upstream_capture(token)
-    assert attempts[0]["error"] == str(raised.value)
-    assert "provider=openai model=test-model timeout_seconds=0.01" in attempts[0]["error"]
+    assert_provider_failure_facts(attempts[0]["error"], raised.value)
+    assert "provider=openai model=test-model timeout_seconds=0.01" in str(raised.value)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_empty_chat_retry_settles_each_attempt_before_next_request(
     monkeypatch: pytest.MonkeyPatch, is_async: bool,
+    caplog: pytest.LogCaptureFixture,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     class EmptyStream:
         logging_obj = SimpleNamespace(model_call_details={"additional_args": {}})
@@ -374,8 +397,12 @@ async def test_empty_chat_retry_settles_each_attempt_before_next_request(
     finally:
         attempts = end_upstream_capture(token)
     assert len(attempts) == 2
-    for ordinal, attempt in enumerate(attempts, 1):
-        assert f"已尝试 {ordinal} 次" in attempt["error"]
+    errors = [record.exc_info[1] for record in caplog.records
+              if record.name == "app.core.failures" and record.exc_info is not None]
+    assert len(errors) == 2
+    for ordinal, (attempt, error) in enumerate(zip(attempts, errors, strict=True), 1):
+        assert error is not None and f"已尝试 {ordinal} 次" in str(error)
+        assert_provider_failure_facts(attempt["error"], error)
         assert attempt["response"] is None
 
 
@@ -463,6 +490,7 @@ def response_events(scenario: str) -> list[object]:
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_responses_clean_eof_without_terminal_settles_provider_error(
     event_stream_model_factory, response_events: list[object], scenario: str, is_async: bool,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     model, opened = event_stream_model_factory(response_events)
     chunks = []
@@ -479,7 +507,7 @@ async def test_responses_clean_eof_without_terminal_settles_provider_error(
         attempts = end_upstream_capture(token)
     assert is_provider_failure(raised.value)
     assert len(opened) == len(attempts) == 1
-    assert attempts[0]["error"] == str(raised.value)
+    assert_provider_failure_facts(attempts[0]["error"], raised.value)
     assert attempts[0]["response"] is None
     assert any(chunk.message.content or chunk.message.tool_call_chunks for chunk in chunks) == (scenario in {"text", "tool", "reasoning"})
     assert all(chunk.message.chunk_position != "last" for chunk in chunks)
@@ -521,6 +549,7 @@ async def test_responses_terminal_response_keeps_existing_semantics(
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_malformed_responses_event_is_archived_as_provider_error(
     event_stream_model_factory, event_type: str, with_response: bool, is_async: bool,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     # terminal 缺 response，或 function_call 缺 item ID，均属于实际收到的协议错误。
     event = SimpleNamespace(type=event_type, output_index=0, item={"type": "function_call"})
@@ -540,7 +569,7 @@ async def test_malformed_responses_event_is_archived_as_provider_error(
         attempts = end_upstream_capture(token)
     assert is_provider_failure(raised.value)
     assert len(opened) == len(attempts) == 1
-    assert attempts[0]["error"] == str(raised.value)
+    assert_provider_failure_facts(attempts[0]["error"], raised.value)
     assert attempts[0]["response"] is None
 
 
@@ -589,6 +618,7 @@ async def test_local_preflight_rejection_does_not_create_provider_attempt(
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_chat_partial_output_without_real_finish_does_not_retry(
     event_stream_model_factory, is_async: bool,
+    assert_provider_failure_facts: Callable[[str, BaseException], None],
 ) -> None:
     model, opened = event_stream_model_factory([
         {"choices": [{"index": 0, "delta": {"content": "partial"}, "finish_reason": None}]},
@@ -608,5 +638,5 @@ async def test_chat_partial_output_without_real_finish_does_not_retry(
         attempts = end_upstream_capture(token)
     assert any(chunk.message.text == "partial" for chunk in chunks)
     assert len(opened) == len(attempts) == 1
-    assert attempts[0]["error"] == str(raised.value)
+    assert_provider_failure_facts(attempts[0]["error"], raised.value)
     assert attempts[0]["response"] is None

@@ -5,8 +5,33 @@ from __future__ import annotations
 import logging
 import sqlite3
 from traceback import format_exception
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
+_PROVIDER_FAILURE_ATTRIBUTE = "_boxteam_provider_failure"
+_ProviderError = TypeVar("_ProviderError", bound=Exception)
+
+
+def mark_provider_failure(error: _ProviderError) -> _ProviderError:
+    """在不包装异常的前提下记录它来自上游 Provider 边界。"""
+    setattr(error, _PROVIDER_FAILURE_ATTRIBUTE, True)
+    return error
+
+
+def is_provider_failure(error: BaseException) -> bool:
+    """判断异常是否由 Provider 请求或其原始流迭代直接产生。"""
+    return getattr(error, _PROVIDER_FAILURE_ATTRIBUTE, False) is True
+
+
+def execution_failure_message(error: BaseException) -> str:
+    """执行记录保留已知业务说明，原生 I/O 与上游异常不复制诊断正文。"""
+    if is_provider_failure(error):
+        return failure_detail(error, stage="execution-provider", label="模型执行失败")
+    if isinstance(error, OSError) and (
+        error.errno is not None or error.filename is not None or error.filename2 is not None
+    ):
+        return f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
+    return str(error)
 
 
 def failure_detail(error: BaseException, *, stage: str, label: str) -> str:

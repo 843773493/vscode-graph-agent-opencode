@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_litellm import ChatLiteLLM
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+from app.core.failures import is_provider_failure
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
@@ -18,7 +19,6 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
-from app.runtime.provider_errors import is_provider_failure
 
 
 class _ChatCompletionChunkStream:

@@ -20,11 +20,11 @@ from app.agents.providers.openai_responses import (
     ResponsesPayloadBuildTimeoutError,
     ResponsesStreamOpenTimeoutError,
 )
+from app.core.failures import is_provider_failure
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
-from app.runtime.provider_errors import is_provider_failure
 
 
 @pytest.fixture

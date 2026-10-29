@@ -20,9 +20,9 @@ from app.agents.provider_capabilities import (
     detect_required_capabilities_from_messages,
     parse_provider_capabilities,
 )
+from app.core.failures import failure_detail, is_provider_failure
 from app.core.model_request_context import current_summary_candidate
 from app.core.turn_execution_scope import ScopeCancelledError
-from app.runtime.provider_errors import is_provider_failure
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +81,14 @@ def _visible_output_error(candidate: ProviderModelCandidate) -> RuntimeError:
 def _failure_payload(
     candidate: ProviderModelCandidate,
     error: Exception,
+    *,
+    error_message: str,
 ) -> dict[str, str]:
     return {
         "provider_id": candidate.provider_id,
         "model": candidate.model_id,
         "error_type": type(error).__name__,
-        "error": str(error),
+        "error": error_message,
     }
 
 
@@ -142,14 +144,12 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 if not is_provider_failure(error):
                     raise
                 last_error = error
-                logger.exception(
-                    "模型候选调用失败，准备尝试 fallback: provider_id=%s model=%s",
-                    candidate.provider_id,
-                    candidate.model_id,
-                )
                 dispatch_custom_event(
                     MODEL_FAILED_CUSTOM_EVENT,
-                    _failure_payload(candidate, error),
+                    _failure_payload(candidate, error, error_message=failure_detail(
+                        error, stage="model-provider",
+                        label=f"模型候选调用失败: provider_id={candidate.provider_id}, model={candidate.model_id}",
+                    )),
                 )
                 continue
             finally:
@@ -171,7 +171,7 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             )
             dispatch_custom_event(
                 MODEL_FAILED_CUSTOM_EVENT,
-                _failure_payload(candidate, error),
+                _failure_payload(candidate, error, error_message=str(error)),
             )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")
@@ -196,14 +196,12 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 if not is_provider_failure(error):
                     raise
                 last_error = error
-                logger.exception(
-                    "模型候选调用失败，准备尝试 fallback: provider_id=%s model=%s",
-                    candidate.provider_id,
-                    candidate.model_id,
-                )
                 await adispatch_custom_event(
                     MODEL_FAILED_CUSTOM_EVENT,
-                    _failure_payload(candidate, error),
+                    _failure_payload(candidate, error, error_message=failure_detail(
+                        error, stage="model-provider",
+                        label=f"模型候选调用失败: provider_id={candidate.provider_id}, model={candidate.model_id}",
+                    )),
                 )
                 continue
             finally:
@@ -225,7 +223,7 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             )
             await adispatch_custom_event(
                 MODEL_FAILED_CUSTOM_EVENT,
-                _failure_payload(candidate, error),
+                _failure_payload(candidate, error, error_message=str(error)),
             )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")

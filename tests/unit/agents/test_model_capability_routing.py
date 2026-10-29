@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,15 +17,12 @@ from app.agents.provider_capabilities import (
     detect_required_capabilities_from_messages,
     parse_provider_capabilities,
 )
+from app.core.failures import is_provider_failure, mark_provider_failure
 from app.core.model_request_context import (
     SummaryCandidateScope,
     summary_candidate_scope,
 )
 from app.core.turn_execution_scope import ScopeCancelledError
-from app.runtime.provider_errors import (
-    is_provider_failure,
-    mark_provider_failure,
-)
 
 
 def _model() -> BaseChatModel:
@@ -41,6 +40,64 @@ def _candidate(
         model=model,
         capabilities=frozenset({"text_input", *capabilities}),
     )
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_provider_failures_publish_facts_and_preserve_original_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    mode: str, exhausted: bool,
+) -> None:
+    primary, backup = _model(), _model()
+    middleware = CapabilityRoutingMiddleware([_candidate("primary", primary), _candidate("backup", backup)])
+    locations = ("/private/provider.sqlite", r"C:\private\provider.sqlite", r"\\target\private\provider.sqlite")
+    original = "原始 Provider 故障: " + " | ".join(locations)
+    first = mark_provider_failure(OSError(13, original, locations[0]))
+    final = mark_provider_failure(RuntimeError(original))
+    final.__cause__ = first
+    events: list[tuple[str, dict[str, str]]] = []
+    requested: list[BaseChatModel] = []
+
+    def record(name: str, data: dict[str, str]) -> None:
+        events.append((name, data))
+
+    async def arecord(name: str, data: dict[str, str]) -> None:
+        record(name, data)
+
+    monkeypatch.setattr("app.agents.model_capability_routing.dispatch_custom_event", record)
+    monkeypatch.setattr("app.agents.model_capability_routing.adispatch_custom_event", arecord)
+
+    def handle(request: ModelRequest) -> ModelResponse:
+        requested.append(request.model)
+        if request.model is primary:
+            raise first
+        if exhausted:
+            raise final
+        return ModelResponse(result=[AIMessage(content="fallback 正常完成")])
+
+    async def ahandle(request: ModelRequest) -> ModelResponse:
+        return handle(request)
+
+    request = ModelRequest(model=primary, messages=[HumanMessage(content="保留原始错误归属")])
+    with caplog.at_level(logging.ERROR):
+        try:
+            result = (middleware.wrap_model_call(request, handle) if mode == "sync" else
+                      await middleware.awrap_model_call(request, ahandle))
+        except RuntimeError as error:
+            assert exhausted and error is final and error.__cause__ is first
+        else:
+            assert not exhausted and isinstance(result, ModelResponse)
+            assert result.result[0].content == "fallback 正常完成"
+    assert requested == [primary, backup]
+    assert [name for name, _ in events] == ["boxteam_model_failed"] * (2 if exhausted else 1)
+    for (_, payload), provider, error in zip(events, ("primary", "backup"), (first, final), strict=False):
+        assert payload["provider_id"] == provider and payload["model"] == provider
+        assert payload["error_type"] == type(error).__name__
+        assert "stage=model-provider" in payload["error"] and "provider_id=" + provider in payload["error"]
+        assert "provider.sqlite" not in json.dumps(payload)
+        assert any(record.name == "app.core.failures" and record.exc_info is not None
+                   and record.exc_info[1] is error for record in caplog.records)
+    assert "errno=13" in events[0][1]["error"] and str(first) in caplog.text
 
 
 def test_provider_capabilities_accept_only_canonical_names() -> None:
@@ -262,7 +319,7 @@ async def test_text_request_falls_back_in_configured_order(monkeypatch: pytest.M
                 "provider_id": "primary",
                 "model": "primary",
                 "error_type": "RuntimeError",
-                "error": "primary failed",
+                "error": "模型候选调用失败: provider_id=primary, model=primary: stage=model-provider, error=RuntimeError",
             },
         )
     ]
@@ -458,7 +515,7 @@ def test_sync_router_falls_back_for_provider_failure_and_preserves_final_error(
         "provider_id": "fallback",
         "model": "fallback",
         "error_type": "RuntimeError",
-        "error": "fallback failed",
+        "error": "模型候选调用失败: provider_id=fallback, model=fallback: stage=model-provider, error=RuntimeError",
     }
 
 

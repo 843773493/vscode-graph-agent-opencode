@@ -5,6 +5,7 @@ import logging
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
+from app.core.failures import execution_failure_message
 from app.core.job_event_bus import EventType
 from app.core.trace_middleware import (
     reset_current_gateway_id,
@@ -12,7 +13,6 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.domain.itemized.errors import execution_failure_message
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.message_service import MessageService

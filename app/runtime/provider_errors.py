@@ -2,23 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
-
 import httpx
 
-_PROVIDER_FAILURE_ATTRIBUTE = "_boxteam_provider_failure"
-_ProviderError = TypeVar("_ProviderError", bound=Exception)
-
-
-def mark_provider_failure(error: _ProviderError) -> _ProviderError:
-    """在不包装异常的前提下记录它来自上游 Provider 边界。"""
-    setattr(error, _PROVIDER_FAILURE_ATTRIBUTE, True)
-    return error
-
-
-def is_provider_failure(error: BaseException) -> bool:
-    """判断异常是否由 Provider 请求或其原始流迭代直接产生。"""
-    return getattr(error, _PROVIDER_FAILURE_ATTRIBUTE, False) is True
+from app.core import failures
 
 
 def is_transient_provider_error(error: Exception) -> bool:
@@ -27,7 +13,7 @@ def is_transient_provider_error(error: Exception) -> bool:
     sdk_error_types: tuple[type[BaseException], ...] | None = None
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if is_provider_failure(current):
+        if failures.is_provider_failure(current):
             if isinstance(
                 current,
                 (

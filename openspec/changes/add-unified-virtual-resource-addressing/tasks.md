@@ -1162,3 +1162,9 @@
 - 工具异常在原canonical终态提交前复用共享failure_detail，随后仍传播同一个原异常。LangGraph同步put_writes在官方ERROR通道将BaseException转为失败事实文本，异步入口继续委托同一路径；替换官方serializer原来生成的repr文本，不改变恢复值类型、其它通道、控制槽索引或SQLite结构，不建立第二套保存链。
 - 将前片集成测试正名为`test_tool_failure_facts.py`并复用同一真实读取故障fixture；经Session/Job入口生成原attempt、未知结果及调度器ERROR写入，核Job/模型/canonical/全部检查点无原生位置、原异常实例及完整诊断。旧生产1项失败直接重现canonical原文；Saver同步／异步两项红测重现repr持久化。最终组合32 passed/46.70秒，含前片超时、取消及提交顺序、控制槽替换、普通写入冲突和冷读取；产品关键状态未由手工数据代做，独立Saver合同测试的预置仅证明局部协议。
 - Ruff与compileall通过，Pyright59→59且新集成代码零诊断，按文件/最窄AST owner/规则/完整消息无新增；作者结构自审无新目录、owner、schema或兼容链。命令、前后源码指纹、raw/退出码及审查证据见`out/tests/temp/uri-global-closure/artifacts/verification-035.json`。全局门仍未勾，未据此声称完整Web、Windows、真实同步产品执行、进程重启或独立审查通过；团队协作及MCP显式持有继续延期。
+
+### 2026-10-29 上游模型失败的事件与执行消息（2.2/7.2部分收口）
+
+- 原候选事件改用共享失败事实，执行消息同时迁齐Job、LLM响应/attempt及编排消费者；纯Provider标记、判定和执行消息合同归core，SDK临时失败分类仍归runtime。全仓迁齐导入后删除旧定义，不留转发；原异常实例/cause、候选顺序、用户取消、本地preflight、原生I/O及明确业务说明保持。
+- 使用现有model_stream，经真实Session/Job入口产生流内拒绝，核普通Job、Trace/消息流/LLM日志API、SQLite调用归属、canonical与检查点无诊断位置，随后原入口继续成功且旧记录不变。最终上游合同61项与真实TCP HTTP同步/异步跨协议fallback 4项合计65 passed；其余246项单元复用同源通过结果，产品场景在最终行为组合通过。旧全文断言迁为精确事实及原异常/全文日志断言，原顺序、重试和身份检查保留；装具缺done、SDK重试计数、错误SQL列及errno断言的失败原件均保留，不计为业务通过。
+- Ruff、compileall通过；完整旧HEAD归档4734个blob逐字核对，Pyright83→83，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断。作者结构自查确认纯标记函数AST保持，无新目录、owner、schema或兼容链；准确命令、源码前后指纹、raw/退出码与局限见`out/tests/temp/uri-global-closure/artifacts/verification-036.json`。2.2/7.2仍未勾、整体51/53；不代替完整Web、Windows、同步产品执行、独立进程恢复或独审，团队协作及MCP显式持有继续延期。

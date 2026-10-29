@@ -9,8 +9,8 @@ from typing import Any
 
 from pydantic import SecretStr
 
+from app.core.failures import execution_failure_message
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
-from app.domain.itemized.errors import execution_failure_message
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
 _REDACTED_KEYS = {
