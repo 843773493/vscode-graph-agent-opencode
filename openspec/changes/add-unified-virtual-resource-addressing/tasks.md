@@ -1186,3 +1186,9 @@
 - Terminal/Browser的访问、路由及上游失败复用`failure_detail`，完整原异常留诊断，关闭原因使用固定阶段说明，删除原异常截取；保留1008/1011分类与原路由引用、取消、握手和中继链，不新增错误数据帧或重试。固定说明满足123字节上限，不把Browser页面URL例外扩大到连接错误。
 - 旧生产15项新反例失败；最终48项通过，覆盖两种服务、POSIX/盘符/UNC、五类故障阶段、原异常实例与全文诊断、实际凭据/目标拒绝不连接上游、取消身份与引用释放，复用原HTTP/身份代理回归。首轮6项因故障替身未撤销导致计数读取再次失败，后轮2项为新增测试插入位置错误，修正测试后完整复验，不改业务断言。
 - Ruff、compileall、严格OpenSpec及差异检查通过；Pyright2→2按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断。准确命令、前后指纹、raw/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-041.json`。本轮为真实ASGI状态机及连接故障替身，未验证真实网络、完整Web、SSH/Windows或独立审查；无新目录、存储owner、schema或兼容链，2.2/7.2仍未勾，团队协作和MCP显式持有继续延期。
+
+### 2026-10-29 两域 active 配置快照解码的恢复错误（2.2/7.2部分收口）
+
+- Gateway/Workspace在原解码catch内复用`failure_detail`，恢复记录只保存config_domain、config-active-decode阶段、原异常类别及适用事实；完整原实例留诊断并原样重抛，日志sink再次失败仍按原事务标记recovery_required。除错误参数外，两域读取方法AST完全相同，其余方法与三份既有回归逐字/AST保持；原SQL、关闭顺序、revision与schema不变。
+- 旧生产14项反例失败，最终两域状态库、离线诊断及新增合同共110 passed/57.54秒，覆盖POSIX/盘符/UNC、修订号/时间损坏、原字段完整保持、原异常/全文日志、同进程冷重开与sink失败。外部故障修复后原记录仍为recovery_required，ensure不重建或清除状态，离线诊断消费同一已提交错误事实。没有以手工状态代替执行/fork/恢复验收，本片的损坏数据仅作该读取合同的故障注入。
+- compileall、严格OpenSpec及差异检查通过；Gateway状态包Ruff3→3且原始输出逐字相同，Pyright19→19按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断。准确命令、前后指纹、raw/退出码与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-042.json`。无新源码目录、事实源、schema或兼容链；未验独立Gateway/Backend重启、Web、Windows实机或独立审查，不宣称清理外部损坏字段或旧历史错误，2.2/7.2继续未勾，延期项保持TODO。

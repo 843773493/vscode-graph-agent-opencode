@@ -54,6 +54,11 @@
 - **WHEN** Workspace 或 Gateway 创建、重放、冷读 pending 配置候选，或升级包含候选记录的旧状态库
 - **THEN** SQLite 位置由原存储 owner 持有，候选记录及其诊断条目不另存或输出该位置；原有冗余位置列通过同一 owner 的有序 SQL 迁移删除，候选正文、来源基线、密钥引用、revision、幂等身份及应用和重启关联保持，普通重启不重建候选
 
+#### Scenario: 两域 active 配置损坏的恢复错误不复制异常全文
+
+- **WHEN** Gateway 或 Workspace 解码已提交的 active 配置快照时，修订号、时间或其它原字段损坏而失败
+- **THEN** 原 owner 沿既有事务标记recovery_required，last_error只保存配置域、解码阶段、异常类别及适用错误事实，原异常实例与全文留诊断并原样抛出；日志故障不阻止恢复标记。除state/last_error外的原快照字段及revision保持，冷重开继续拒绝原损坏记录；外部故障解除后仍保留恢复状态，不通过ensure、扫描或当前来源重建active
+
 #### Scenario: Gateway pending 启动失败不将异常全文持久化
 
 - **WHEN** 拥有正确 generation 与 fencing token 的 Gateway 在配置加载或后续启动阶段失败

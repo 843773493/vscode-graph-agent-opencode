@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import cast
 
+from app.core.failures import failure_detail
 from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.config.state import (
     ConfigActiveSnapshotRecord,
@@ -86,7 +87,10 @@ class WorkspaceStateStoreSnapshotMixin:
             except Exception as error:
                 self.mark_active_config_snapshot_recovery_required(
                     config_domain=config_domain,
-                    error=(f"active snapshot 损坏: {type(error).__name__}: {error}"),
+                    error=failure_detail(
+                        error, stage="config-active-decode",
+                        label=f"active snapshot 损坏: config_domain={config_domain}",
+                    ),
                 )
                 raise
         finally:
