@@ -1049,10 +1049,19 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
         for message in second_result["messages"]
         if message["type"] == "system"
     ]
-    assert (
-        first_result["native"]["request"]["input"][-2:]
-        == second_result["native"]["request"]["input"][-2:]
-    )
+    first_input = first_result["native"]["request"]["input"]
+    second_input = second_result["native"]["request"]["input"]
+    # rewind 只移除历史尾部；来源帧与用户输入继续逐字复用。
+    assert [frame for frame in first_input if frame["role"] != "assistant"] == [
+        frame for frame in second_input if frame["role"] != "assistant"
+    ]
+    assert [frame for frame in first_input if frame["role"] == "assistant"] == [
+        {"role": "assistant", "content": [{"type": "output_text", "text": text}]}
+        for text in ("第二条历史输出", "将隐藏的历史尾部")
+    ]
+    assert [frame for frame in second_input if frame["role"] == "assistant"] == [
+        {"role": "assistant", "content": [{"type": "output_text", "text": "第二条历史输出"}]}
+    ]
 
 
 def test_gc_tombstone_survives_file_delete_failure_and_restart(

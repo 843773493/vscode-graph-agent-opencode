@@ -15,7 +15,7 @@ export function canonicalizeJcsJson(value) {
     return JSON.stringify(value);
   }
   if (value === null || typeof value === 'boolean') return JSON.stringify(value);
-  if (Array.isArray(value)) return '[' + value.map(canonicalize).join(',') + ']';
+  if (Array.isArray(value)) return '[' + value.map(canonicalizeJcsJson).join(',') + ']';
   if (typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new TypeError('not a JSON value');
   }
