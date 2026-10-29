@@ -68,6 +68,16 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
   IsolatedPtyProcess.prototype.start = async function (options) {
     const ready = await start.call(this, options);
     const worker = this.workerProcess;
+    appendFileSync(path.join(control, "starts.jsonl"), JSON.stringify({ pid: ready.pid, worker_pid: worker.pid }) + "\\n");
+    const kill = process.kill.bind(process);
+    let rejectedStop = false;
+    process.kill = (pid, signal) => {
+      if (!rejectedStop && pid === ready.pid && signal === "SIGTERM" && existsSync(path.join(control, "fail-stop"))) {
+        rejectedStop = true;
+        throw Object.assign(new Error(`受控首次停止失败: ${control}/private-stop`), { code: "EPERM" });
+      }
+      return kill(pid, signal);
+    };
     const interval = setInterval(() => {
       if (!existsSync(path.join(control, "fail-worker"))) return;
       clearInterval(interval);
@@ -189,3 +199,94 @@ while True: signal.pause()
                 terminate_process(cold)
         run.write_result("passed", {"fail_sink": fail_sink, "identities": identities,
                                    "scope": "真实HTTP/Node/PTY父子及Worker错误、日志writer、冷Manager读取；不代Gateway/Web、Windows或未知停止接管"})
+
+
+@pytest.mark.parametrize("cold", [False, True], ids=["same-manager", "cold-manager"])
+@pytest.mark.parametrize("action", ["kill", "delete"])
+async def test_unknown_exit_without_worker_can_retry_management_with_original_process_identity(
+    terminal_service: TerminalService, cold: bool, action: str,
+) -> None:
+    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    terminal_id = f"term_{uuid4().hex}"
+    workload = f"""
+import json, os, signal
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+child = os.fork()
+if child == 0:
+    while True: signal.pause()
+Path({str(control / 'workload.pending')!r}).write_text(json.dumps({{'child_pid': child}}))
+Path({str(control / 'workload.pending')!r}).replace({str(control / 'workload.json')!r})
+while True: signal.pause()
+"""
+    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
+        created = await client.post("/api/terminals", json={
+            "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
+            "command": sys.executable, "args": ["-c", workload],
+        })
+        assert created.status_code == 200, created.text
+        original = created.json()["data"]
+        root_process, worker = psutil.Process(original["os_pid"]), psutil.Process(original["pty_worker_pid"])
+        tracked.extend([root_process, worker])
+        async with asyncio.timeout(8):
+            while not (control / "workload.json").is_file():
+                await asyncio.sleep(0.02)
+        child = psutil.Process(json.loads((control / "workload.json").read_text())["child_pid"])
+        tracked.append(child)
+        identities = [{"pid": process.pid, "created_at": process.create_time()} for process in tracked]
+        (control / "fail-stop").touch()
+        (control / "fail-worker").touch()
+        state_file = root / ".boxteam/terminal-manager/terminals.json"
+        async with asyncio.timeout(8):
+            while True:
+                record = json.loads(state_file.read_text())["terminals"][0]
+                if record["status"] == "exited" and record["release_reason"] == "pty_exit_cleanup_failed" and not executing(worker):
+                    break
+                await asyncio.sleep(0.02)
+        assert record["reconciliation_status"] == "unknown"
+        assert executing(root_process) and executing(child)
+        assert backend.poll() is None
+        diagnostics = [json.loads(line)["chunk"] for line in (control / "attempts.jsonl").read_text().splitlines()]
+        assert len(diagnostics) == 2
+        assert "受控首次停止失败" in diagnostics[1] and "EPERM" in diagnostics[1]
+        active_backend = backend
+        if cold:
+            terminate_process(backend)
+            assert executing(root_process) and executing(child)
+            active_backend = start_terminal_backend(backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+        try:
+            observed = await client.get(f"/api/terminals/{terminal_id}")
+            assert observed.status_code == 200, observed.text
+            unknown = observed.json()["data"]
+            assert unknown["pty_worker_pid"] is None
+            assert unknown["status"] == "exited" and unknown["reconciliation_status"] == "unknown"
+            assert all(unknown[key] == original[key] for key in ("os_pid", "process_session_id", "process_start_time", "created_at", "transport_owner_revision"))
+            stopped = await (client.post(f"/api/terminals/{terminal_id}/kill", json={}) if action == "kill"
+                             else client.delete(f"/api/terminals/{terminal_id}"))
+            assert stopped.status_code == 200, stopped.text
+            if action == "kill":
+                assert stopped.json()["data"]["killed"] is True
+            else:
+                assert stopped.json()["data"]["deleted"] is True
+            snapshot = stopped.json()["data"]["terminal"]
+            assert snapshot["status"] == ("terminated" if action == "kill" else "deleted")
+            assert snapshot["reconciliation_status"] == "verified"
+            assert snapshot["os_pid"] == original["os_pid"] and snapshot["transport_owner_revision"] == 4
+            assert all(not executing(process) for process in tracked)
+            record = json.loads(state_file.read_text())["terminals"][0]
+            assert all(snapshot[key] == value for key, value in record.items())
+            assert len((control / "starts.jsonl").read_text().splitlines()) == 1
+            # 已核实终态重复请求不再触及任何进程，也不创建新执行。
+            repeated = await (client.post(f"/api/terminals/{terminal_id}/kill", json={}) if action == "kill"
+                              else client.delete(f"/api/terminals/{terminal_id}"))
+            assert repeated.status_code == 200, repeated.text
+            if action == "kill":
+                assert repeated.json()["data"]["killed"] is False
+            assert len((control / "starts.jsonl").read_text().splitlines()) == 1
+            run.write_result("passed", {"cold": cold, "action": action, "identities": identities,
+                                       "scope": "原HTTP管理重试、真实PTY父子停止及冷Manager原身份核验；不代Python lease、Gateway/Web、Windows或无PID接管"})
+        finally:
+            if cold:
+                terminate_process(active_backend)

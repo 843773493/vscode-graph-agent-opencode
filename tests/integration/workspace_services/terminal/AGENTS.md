@@ -27,6 +27,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_terminal_exit_diagnostics.py`经正式HTTP创建真实PTY父子，忽略SIGTERM和SIGHUP以排除Worker退出自动挂断的替代证明；仅在真实Worker错误事件和原诊断writer注入故障。核对原进程身份、独立停止观察、原致命处理器开始前已发布的退出记录、退出码1和冷Manager读取，正常日志仍保持服务存活。suite `integration-terminal-exit-diagnostics`固定60秒/4GiB；关键状态只由产品生成，致命事件观察器不处理拒绝或改写产品记录，不代未知停止接管、Gateway/Web、Windows或其它生命周期错误验收。
 
+同文件另在原SIGTERM出口注入一次EPERM，经Worker错误产生exited/unknown及存活PTY父子；同Manager和冷Manager各经原HTTP kill/delete核实停止、持久终态、重复请求及无新执行。不替换身份核验或停止算法，不手填恢复记录；此证据只覆盖已有完整原生身份的无Worker重试，不代未知native无PID、Python operation lease或Windows验收。
+
 
 ## 可修改内容
 

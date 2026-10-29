@@ -498,7 +498,9 @@ export class TerminalSession {
     if (this.releasePromise) {
       return await this.releasePromise;
     }
-    const retainedRelease = this.ptyProcess && this.reconciliationStatus !== "verified"
+    const hasPersistedIdentity = Number.isSafeInteger(this.osPid) && this.osPid > 0
+      && this.processSessionId && this.processStartTime !== null;
+    const retainedRelease = (this.ptyProcess || hasPersistedIdentity) && this.reconciliationStatus !== "verified"
       && new Set(["created", "completed", "exited", "terminated", "deleted"]).has(this.status);
     if (this.status !== "running" && !retainedRelease) {
       return false;

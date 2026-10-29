@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
+import { readProcessStat } from "./processes/terminalProcessLifecycle.js";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalSession/workspace", randomUUID());
 // 文件级清理兜住准备失败；用例结束优先释放本次创建的独占工作区。
@@ -257,6 +258,62 @@ test("未实际执行停止时不能把原未知记录签为创建失败回执",
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(original.creationReceipt, undefined);
 });
+
+for (const status of ["created", "completed", "exited", "terminated", "deleted"]) {
+  test(`无Worker的${status}未知记录仍核验持久身份后尝试管理停止`, async (t) => {
+    const session = completedSession(t, {
+      status, reconciliation_status: "unknown", os_pid: 42002,
+      process_session_id: 42002, process_start_time: 123,
+    });
+    const original = new Error("原持久身份拒绝，禁止发送任何信号");
+    const verify = t.mock.method(session, "verifyPersistedProcessIdentity", async () => { throw original; });
+    const signals = t.mock.method(process, "kill", () => assert.fail("核验失败不得发送信号"));
+    const saved = [];
+    session.manager.persist = async () => { saved.push(session.toRecord()); };
+    await assert.rejects(session.kill(), (error) => error === original);
+    assert.equal(verify.mock.callCount(), 1);
+    assert.deepEqual(verify.mock.calls[0].arguments, [42002]);
+    assert.equal(signals.mock.callCount(), 0);
+    assert.equal(session.ptyProcess, null);
+    assert.equal(session.status, status);
+    assert.equal(session.reconciliationStatus, "unknown");
+    assert.equal(session.osPid, 42002);
+    assert.equal(session.processSessionId, 42002);
+    assert.equal(session.processStartTime, 123);
+    assert.equal(session.releasePromise, null);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].reconciliation_status, "unknown");
+  });
+}
+
+test("无Worker的未知记录拒绝真实PID的过期启动身份，不发送信号", { skip: process.platform !== "linux" }, async (t) => {
+  const identity = await readProcessStat(process.pid);
+  assert(identity);
+  const session = completedSession(t, {
+    status: "exited", reconciliation_status: "unknown", os_pid: process.pid,
+    process_group_id: identity.processGroupId,
+    process_session_id: identity.processSessionId, process_start_time: identity.processStartTime + 1,
+  });
+  const signals = t.mock.method(process, "kill", () => assert.fail("过期身份不得发送信号"));
+  await assert.rejects(session.delete(), /终端持久进程身份无法核实/);
+  assert.equal(signals.mock.callCount(), 0);
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(session.status, "exited");
+});
+
+for (const field of ["os_pid", "process_session_id", "process_start_time"]) {
+  test(`无Worker的未知记录缺少${field}时不能伪报管理停止`, async (t) => {
+    const session = completedSession(t, {
+      status: "exited", reconciliation_status: "unknown", os_pid: 42002,
+      process_session_id: 42002, process_start_time: 123, [field]: null,
+    });
+    const signals = t.mock.method(process, "kill", () => assert.fail("身份不完整不得发送信号"));
+    assert.equal(await session.kill(), false);
+    assert.equal(session.status, "exited");
+    assert.equal(session.reconciliationStatus, "unknown");
+    assert.equal(signals.mock.callCount(), 0);
+  });
+}
 
 test("启动收尾失败保留原Worker句柄、未知记录及两份异常", async (t) => {
   const session = completedSession(t, { status: "created" });
