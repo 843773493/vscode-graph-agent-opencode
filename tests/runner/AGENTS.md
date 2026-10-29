@@ -62,6 +62,7 @@
 - `integration-resource-record-errors` 经正式 Session、ASGI 资源 API 与真实 PTY/Chromium 核对记录发布失败、原资源与租约不变和显式重试，固定90秒/4GiB；不调用模型，不代替 Gateway/Web 或 Backend 进程重启验收。
 - `integration-resource-lease-errors` 在同一正式测试文件内选择授权账本失败场景，核原工具 active lease、零授权派发、冷账本与显式重试，固定90秒/4GiB；与记录场景串行运行，复用同一隔离配置和辅助服务，不创建第二套装具。
 - 矩阵显式声明层级、客户端、运行面、命令和真实前置条件。
+- `integration-shutdown-message-preparation`以真实双挂载、Session/消息HTTP与上传/canonical提交核对准备窗口和关闭竞争，固定120秒/4GiB；复用model_stream，不替代Gateway/Web、Windows或独立进程重启验收。
 - `unit-workspace-services` 递归发现 Browser、Terminal 的服务端、attach 页面纯逻辑及协议 JS 单测；它不启动实际辅助服务，不能代替真实进程 Integration 验收。
 - `integration-terminal-startup-cleanup`经真实HTTP创建、PTY父子进程及显式就绪交付故障验证停止证明与原管理入口重试，固定60秒/4GiB；独立核原进程树、worker及持久记录，不代表Windows、Gateway/Web或未交付PID的原生阻塞。
 - `run-workspace-services.mjs` 按静态导入的测试框架分组：`node:test` 交给Node原生测试器，`bun:test` 交给Bun。两组都执行并汇总失败，未知或混用框架在启动前拒绝；各进程沿用矩阵的超时与内存保护。测试器的编码等运行时语义须与被测行为匹配，不能用Bun的Node兼容行为代替Node服务端证据。

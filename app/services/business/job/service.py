@@ -253,6 +253,18 @@ class JobService:
     def open_admission(self) -> None:
         self._accepting_jobs = True
 
+    async def drain_preparations(self, session_ids: list[str] | None = None) -> None:
+        """准入关闭后排空所选或全部准备；不持调度锁等待或取消原调用。"""
+        while True:
+            async with self._dispatch_lock:
+                if not self._session_preparations or (
+                    session_ids is not None
+                    and all(self._session_preparations.get(sid, 0) == 0 for sid in session_ids)
+                ):
+                    return
+                self._preparation_changed.clear()
+            await self._preparation_changed.wait()
+
     def _spawn_finalization(
         self, coroutine: Coroutine[object, object, object], *, records_errors: bool = False,
     ) -> None:
@@ -619,13 +631,7 @@ class JobService:
                     self._deleting_sessions.update(normalized_session_ids)
                     admitted = True
                 phase = "job-preparation"
-                # 计数检查与清事件同锁；等待不持调度锁，取消也无需重新取锁。
-                while True:
-                    async with self._dispatch_lock:
-                        if all(self._session_preparations.get(sid, 0) == 0 for sid in normalized_session_ids):
-                            break
-                        self._preparation_changed.clear()
-                    await self._preparation_changed.wait()
+                await self.drain_preparations(normalized_session_ids)
             # 准备与物理删除串行使用同一绝对截止，不叠加或重置计时器。
             return await operation()
         except BaseException as error:

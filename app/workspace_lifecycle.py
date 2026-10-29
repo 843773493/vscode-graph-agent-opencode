@@ -96,6 +96,7 @@ async def _drain_workspace_jobs(container: AppContainer) -> None:
     container.persistent_task_runtime.close_admission()
     await container.persistent_task_runtime.drain_actions()
     container.job_service.close_admission()
+    await container.job_service.drain_preparations()
     await container.job_service.force_interrupt_active(reason="工作区后端正在关闭")
 
 

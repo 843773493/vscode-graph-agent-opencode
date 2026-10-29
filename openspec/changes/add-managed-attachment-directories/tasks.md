@@ -405,3 +405,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原Job先保持accepted，新准入与冷恢复均在同一调度锁内恢复原FIFO后才发布queued；取消和排空先写canonical终态，只有queued删除已有条目。accepted同样刷新快照，关闭仅发一次取消事件；写盘失败保留原Job和准入供原入口重试。移除永远无法返回false的队列删除检查及其死错误构造器，严格FIFO缺项仍明确报错，不增加兼容回退或镜像插入链。
 - 真实Session/持久任务API生成准入，再于原canonical outcome读取处注入装载失败；最终取消、Backend关闭、终态写入失败后原owner重试与正常模型恢复，加原队列故障组合共23 passed/175.62秒，核原Job/admission/hash、无重复执行、取消事件与快照。Job目录单元116 passed/39.45秒，相关删除3 passed/6.04秒。单元端口按原持久phase装载，修复恢复装具多一层workspace及每项残留问题，所有原业务断言和测试函数AST保持；完整旧HEAD归档4732个blob逐字核对，最终反例在旧生产取消/关闭2 failed，旧装具setup错误也独立复现。
 - Ruff、compileall及OpenSpec strict 51/0通过；Pyright旧HEAD40、候选40，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断，不称类型全绿。首次OSError注入、测试上下文遗漏及160秒外层保护终止均保留原件且不计通过，最终320秒验证预算未改产品期限。命令、前后指纹、raw/退出码及作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-032.json`；完整临时源码已删除，正式测试产物保留。不代表Gateway/Web、Windows、独立Backend硬重启、准备尚未提交的关闭竞争、同步阻塞可抢占或整个shutdown硬期限；5.2/5.4仍未勾，整体21/23，团队协作继续暂缓。
+
+### 2026-10-29 消息准备与Backend关闭竞争（5.4部分收口）
+
+- 真实发送停在上传前或canonical线程提交前时，旧关闭入口未等待准备便关闭附件catalog并返回成功，放行后原发送触发已关闭存储错误；两项有效反例与原始500保留。Workspace现在撤销新准入后，通过原计数排空准备，再取得Job取消快照与收尾。Session删除迁入同一等待主体，移除重复循环；无新账本、schema、兼容入口或执行链。
+- 最终新产品6 passed/49.03秒：真实双挂载、Session/消息HTTP入口与真实上传/canonical提交，分别覆盖上传前、canonical提交前、已通过Job准入但尚未登记三个窗口，以及关闭观察到期/取消；核原owner与依赖保留、peer独立关闭、新发送503、原输入/附件持久化与迟到Job取消终态。模型端复用model_stream。Job与Backend生命周期单元127 passed/41.46秒，含新3项多窗口、单等待取消及原准备成功/异常/取消；原任务体前取消writer回归2 passed/23.51秒，核落盘失败及原入口重试。矩阵新增独立120秒/4GiB suite `integration-shutdown-message-preparation`，真实CLI列表校验通过，命令与已通过产品运行一致，未无理由重跑同一业务。
+- 扩大旧关闭回归首项在触发关闭前超过原8秒ready期限，后续5项被原生命周期未关闭阻断；原件保留，不计业务通过。该前置长尾已有代码TODO，未扩大性能优化或放宽期限；从新进程定向运行不依赖该失败状态的上述writer两项通过。首次新测试导入错误、扩展装具将0.1秒观察预算误留至最终收尾所致失败也独立保留，修正装具后才取得最终6项结果。
+- Ruff、compileall及OpenSpec strict 51/0通过。完整旧HEAD归档4736个blob核对一致，Pyright旧12/最终12，按文件/最窄AST owner/规则/完整消息无新增，新测试零诊断；不称类型全绿。准确命令、源码前后指纹、raw/实际退出码、类型与作者结构自查见`out/tests/temp/uri-global-closure/artifacts/verification-037.json`；临时完整源码和tar已删除，正式测试及验证产物保留。未验证Gateway/Web、Windows、独立Backend硬重启、同步阻塞可抢占、任意线程终止或整个shutdown硬期限；5.2/5.4仍未勾，整体21/23，团队协作与MCP显式持有继续暂缓。
