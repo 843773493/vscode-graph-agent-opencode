@@ -1230,3 +1230,10 @@
 - 普通工作区代理先用现有UUID校验器验证可选Backend身份头，再查目标和比较身份；非法POSIX／盘符／UNC路径仅留原校验器诊断，不回显到普通400。原合法UUID冲突、缺省和成功转发合同保持，不新增脱敏层或身份链。
 - 旧生产10个反例失败，最终代理相关209项通过；真实Gateway与独立双mount Backend核12次拒绝、两条正确身份恢复、同PID及随后两工作区真实Session／Job／history与SQLite隔离通过。模型使用已有model_stream回放；未补Web、Windows或真实Provider。首次产品补验的新断言误含动态时间戳，已按实际DTO改核UUID／PID并保留失败原件。
 - compileall通过，Ruff7→7、Pyright12→12按owner／规则／完整消息无新增；作者AST与结构核对无新owner、目录、存储或兼容层。准确命令、源码指纹、raw和退出码见`out/tests/temp/uri-global-closure/artifacts/verification-054.json`。此片只关闭身份头回显，2.2／7.2与多工作区4.3／8.2总门继续未勾，团队协作与MCP显式持有仍延期。
+
+
+### 2026-10-29 未知 Gateway 目标与诊断选择的普通错误（2.2／7.2 部分收口）
+
+- registry CRUD六个未知目标／父级／排序失败和diagnostics两个选择失败沿原owner使用现有failure_detail。原生路径保留在直接cause和原始日志，普通错误仅含阶段、类别等失败事实；未扩大日志例外，未改变普通文件的相对／绝对／URI输入或未知目标错误类别、HTTP状态与写入顺序。
+- 旧生产34项反例失败；最终相关167项通过，cause非空断言细化后28项子集通过。真实Gateway／独立health_stub核三类路径×七入口共21次400／404、头体request_id、SQLite逐行不变与后续合法操作；不是实际Backend执行或Web验收。首次端口占用setup失败保留，不计业务反例。
+- Ruff／compileall通过，Pyright34→34逐AST owner／规则／完整消息无新增，新测试零诊断。作者AST与结构检查、源码指纹、准确命令、raw及实际退出码见`out/tests/temp/uri-global-closure/artifacts/verification-055.json`；未验完整Gateway／Backend恢复、Web、Windows或独审，2.2／7.2总门继续未勾，延期项保持TODO。

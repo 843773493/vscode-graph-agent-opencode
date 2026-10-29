@@ -19,6 +19,7 @@ from app.gateway.diagnostics import (
     _LogCandidate,
     _process_log_path,
     _scope_log_candidates,
+    collect_gateway_diagnostics,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.schemas.gateway.diagnostics import GatewayDiagnosticLogSource
@@ -83,6 +84,33 @@ def test_diagnostics_finds_role_logs_and_launcher_override(
     assert _launcher_log_path() == override
     candidates = _candidate_gateway_logs({paths[1].name})
     assert {candidate.log_path for candidate in candidates} == {override, paths[0], paths[2]}
+
+
+@pytest.mark.parametrize("native_path", [
+    "/private/diagnostic-selector-marker", r"C:\private\diagnostic-selector-marker",
+    r"\\server\private\diagnostic-selector-marker",
+], ids=["posix", "drive", "unc"])
+@pytest.mark.parametrize("selector", ["workspace", "log"])
+async def test_missing_diagnostic_selection_does_not_expand_the_raw_log_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    native_path: str, selector: str,
+) -> None:
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("BOXTEAM_SERVICE_LOG_PATH", str(tmp_path / "launcher.log"))
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    with pytest.raises(LookupError) as caught:
+        await collect_gateway_diagnostics(
+            registry, gateway_id="gateway_diagnostic_selector",
+            selected_workspace_id=native_path if selector == "workspace" else None,
+            selected_log_id=native_path if selector == "log" else None,
+        )
+    assert type(caught.value) is LookupError
+    assert "diagnostic-selector-marker" not in str(caught.value)
+    assert f"stage=gateway-diagnostic-{selector}" in str(caught.value)
+    cause = caught.value.__cause__
+    assert type(cause) is LookupError and native_path in cause.args[0]
+    assert any(record.exc_info is not None and record.exc_info[1] is cause for record in caplog.records)
+    assert registry.targets() == () and registry.registry_revision == 0
 
 
 @pytest.fixture

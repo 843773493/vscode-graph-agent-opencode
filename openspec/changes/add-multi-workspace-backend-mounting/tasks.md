@@ -198,3 +198,10 @@
 - `X-BoxTeam-Backend-Workspace-Id` 在目标查找前由现有唯一 UUID 校验器验证，非法原生路径不再进入冲突错误正文；合法 UUID 冲突仍为400，缺省、正确身份、上游注入和头部剥离行为保持。无新身份解析器、DTO、存储或代理链。
 - 新增10个单元反例在旧生产全部失败；最终代理相关209项通过。真实 Gateway／独立 managed Backend 双mount用例通过，核两目标、两种路径入口共12次非法输入的400及头体request_id、正确身份恢复与同PID，两工作区随后从产品入口完成Session／消息／Job并核SQLite隔离。模型沿用model_stream回放，未冒充真实Provider或Web。首轮新增恢复断言误比较每次读取都会变化的runtime时间戳，按实际DTO改核UUID／PID后重验；原失败保留。
 - compileall通过；Ruff7→7、Pyright12→12，按文件／最窄AST owner／规则／完整消息无新增，不称静态全绿。作者AST核对除身份头前移和校验外代理函数主体不变，未增目录、owner或兼容链；815行集成文件保留同一共享生命周期fixture，结构审查原件与准确命令、指纹、raw、退出码见`out/tests/temp/uri-global-closure/artifacts/verification-054.json`。旧146路径清单当前命中166路径，差集及6个新增生产路径增审见同目录`multi-workspace-inventory-20261029.json`；未声称全差集复核完成。4.3／8.2继续未勾，团队协作与MCP显式持有保持延期。
+
+
+### 2026-10-29 未知目标与诊断选择的失败出口（4.3／8.2 部分收口）
+
+- registry 六个未知目标／父级／排序出口及 diagnostics 两个未知选择出口复用现有 failure_detail，保留原异常类别、直接 cause、原始诊断和 HTTP 状态；原始输入不再回显到普通错误。原判断与写入顺序、日志正文例外不变，无新解析器、owner、存储或兼容链。
+- 旧生产34项路径反例失败；最终七文件167项通过，新增单测增加cause非空断言后28项子集重验通过，不相加。真实独立Gateway与独立健康协议替身完成三类路径×七入口共21次请求，核400／404、头体request_id、三张SQLite表逐行不变及后续合法修改与ready状态；下游是health_stub，不代替真实Backend执行验收。首次真实运行因端口占用止于setup，零业务验收，原件保留且未杀未知进程。
+- Ruff／compileall通过，Pyright34→34按文件／最窄AST owner／规则／完整消息无新增，不称类型全绿。作者AST自查确认仅八个raise替换及import改变，既有测试函数／类保持；结构计数、准确命令、前后指纹、raw及退出码见`out/tests/temp/uri-global-closure/artifacts/verification-055.json`。未验Web、Windows或完整生命周期闭包，不代独立审查；4.3／8.2继续未勾，团队协作与MCP显式持有仍延期。

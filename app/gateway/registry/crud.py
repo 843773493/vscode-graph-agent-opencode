@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.failures import failure_detail
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
@@ -138,7 +139,8 @@ class RegistryCrudMixin:
     def validate_target_removal(self, workspace_id: str, *, owner: str | None = None) -> WorkspaceTarget:
         target = self._targets.get(workspace_id)
         if target is None:
-            raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            error = KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            raise KeyError(failure_detail(error, stage="gateway-workspace-remove", label="未知 Gateway 工作区")) from error
         if not target.removable or target.system_default:
             raise PermissionError(f"默认工作区不能删除: {target.name}")
         mutation_owner = owner or target.owner
@@ -238,9 +240,8 @@ class RegistryCrudMixin:
         unknown_workspace_ids = sorted(requested_workspace_ids - known_workspace_ids)
         missing_workspace_ids = sorted(known_workspace_ids - requested_workspace_ids)
         if unknown_workspace_ids:
-            raise ValueError(
-                f"Gateway 工作区排序包含未知 ID: {', '.join(unknown_workspace_ids)}"
-            )
+            error = ValueError(f"Gateway 工作区排序包含未知 ID: {', '.join(unknown_workspace_ids)}")
+            raise ValueError(failure_detail(error, stage="gateway-workspace-order", label="Gateway 工作区排序包含未知 ID")) from error
         if missing_workspace_ids:
             raise ValueError(
                 f"Gateway 工作区排序缺少 ID: {', '.join(missing_workspace_ids)}"
@@ -253,7 +254,8 @@ class RegistryCrudMixin:
 
     def activate(self, workspace_id: str) -> None:
         if workspace_id not in self._targets:
-            raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            error = KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            raise KeyError(failure_detail(error, stage="gateway-workspace-activate", label="未知 Gateway 工作区")) from error
         self._active_workspace_id = workspace_id
         self._save(owner="manual_crud")
 
@@ -279,7 +281,8 @@ class RegistryCrudMixin:
     ) -> WorkspaceTarget:
         target = self._targets.get(workspace_id)
         if target is None:
-            raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            error = KeyError(f"未知 Gateway 工作区: {workspace_id}")
+            raise KeyError(failure_detail(error, stage="gateway-workspace-update", label="未知 Gateway 工作区")) from error
         if target.owner not in {"manual", "system"} or (
             target.owner == "system" and not target.system_default
         ):
@@ -310,9 +313,8 @@ class RegistryCrudMixin:
                 normalized_parent_workspace_id is not None
                 and normalized_parent_workspace_id not in self._targets
             ):
-                raise KeyError(
-                    f"未知 Gateway 父工作区: {normalized_parent_workspace_id}"
-                )
+                error = KeyError(f"未知 Gateway 父工作区: {normalized_parent_workspace_id}")
+                raise KeyError(failure_detail(error, stage="gateway-workspace-parent", label="未知 Gateway 父工作区")) from error
             ancestor_id = normalized_parent_workspace_id
             while ancestor_id is not None:
                 if ancestor_id == workspace_id:
@@ -333,7 +335,8 @@ class RegistryCrudMixin:
             raise LookupError("Gateway 尚未注册任何工作区")
         target = self._targets.get(target_id)
         if target is None:
-            raise LookupError(f"Gateway 工作区不存在: {target_id}")
+            error = LookupError(f"Gateway 工作区不存在: {target_id}")
+            raise LookupError(failure_detail(error, stage="gateway-workspace-resolve", label="Gateway 工作区不存在")) from error
         return target
 
     @staticmethod

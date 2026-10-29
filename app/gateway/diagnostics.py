@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import get_gateway_local_token
@@ -332,7 +333,8 @@ async def collect_gateway_diagnostics(
         )
     ]
     if selected_workspace_id is not None and not workspace_dtos:
-        raise LookupError(f"Gateway 工作区不存在: {selected_workspace_id}")
+        error = LookupError(f"Gateway 工作区不存在: {selected_workspace_id}")
+        raise LookupError(failure_detail(error, stage="gateway-diagnostic-workspace", label="Gateway 工作区不存在")) from error
 
     workspace_items = [
         GatewayDiagnosticWorkspaceDTO(
@@ -377,7 +379,8 @@ async def collect_gateway_diagnostics(
     if selected_log_id is not None and not any(
         candidate.log_id == selected_log_id for candidate in candidates
     ):
-        raise LookupError(f"诊断日志不存在: {selected_log_id}")
+        error = LookupError(f"诊断日志不存在: {selected_log_id}")
+        raise LookupError(failure_detail(error, stage="gateway-diagnostic-log", label="诊断日志不存在")) from error
     if selected_log_id is None:
         preferred_log_candidates = (
             [

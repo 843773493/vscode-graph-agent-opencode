@@ -15,6 +15,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
@@ -173,3 +174,76 @@ async def test_gateway_workspace_control_ignores_model_proxy_environment(
                 json.dumps({"list": listed.json(), "probe": probe.json()}, indent=2) + "\n",
                 encoding="utf-8",
             )
+
+
+@pytest.mark.asyncio
+async def test_unknown_target_and_diagnostic_selectors_keep_registry_and_allow_retry(
+    health_stub: tuple[TestRunContext, Path, str, int, int],
+) -> None:
+    context, _, backend_id, backend_port, gateway_port = health_stub
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    evidence = []
+    with ExitStack() as lifetime:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{backend_port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+        )
+        lifetime.callback(close_gateway_process, gateway)
+        credential = FederationCredentialStore(
+            storage_path=context.boxteam_home / "state/gateway/credentials/federation.json",
+        ).issue(connection_id="rgw_lookup_errors", peer_gateway_id="gateway_lookup_peer")
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20, trust_env=False,
+        ) as client:
+            await acquire_gateway_guest(client)
+            listed = await client.get("/api/gateway/workspaces")
+            assert listed.status_code == 200, listed.text
+            target, = listed.json()["data"]["items"]
+            target_id = target["workspace_id"]
+            state_path = context.boxteam_home / "state/gateway/gateway.sqlite"
+
+            def registry_snapshot() -> tuple[list[tuple[object, ...]], list[tuple[object, ...]], list[tuple[object, ...]]]:
+                with closing(sqlite3.connect(f"{state_path.as_uri()}?mode=ro", uri=True)) as connection:
+                    return (
+                        connection.execute("SELECT * FROM gateway_workspace_registry ORDER BY workspace_id").fetchall(),
+                        connection.execute("SELECT * FROM registry_meta ORDER BY registry_key").fetchall(),
+                        connection.execute("SELECT * FROM gateway_config WHERE config_key='workspace_registry_meta'").fetchall(),
+                    )
+
+            original = registry_snapshot()
+            for native in ("/private/lookup-marker/workspace", r"C:\private\lookup-marker\workspace",
+                           r"\\server\private\lookup-marker\workspace"):
+                cases: list[tuple[str, str, dict[str, str], dict[str, str], dict[str, object] | None, int]] = [
+                    ("GET", "/api/v1/workspace", {"X-BoxTeam-Workspace-Id": native}, {}, None, 404),
+                    ("PATCH", f"/api/gateway/workspaces/{target_id}", {}, {}, {"name": "不能提交", "parent_workspace_id": native}, 404),
+                    ("PUT", "/api/gateway/workspaces/order", {}, {}, {"workspace_ids": [target_id, native]}, 400),
+                    ("GET", "/api/gateway/diagnostics", {}, {"workspace_id": native}, None, 404),
+                    ("GET", "/api/gateway/diagnostics", {}, {"log_id": native}, None, 404),
+                    ("GET", "/api/gateway/federation/diagnostics", {}, {"remote_workspace_id": native}, None, 404),
+                    ("GET", "/api/gateway/federation/diagnostics", {}, {"log_id": native}, None, 404),
+                ]
+                for method, path, selection_headers, params, payload, status in cases:
+                    request_id = f"lookup-error-{len(evidence)}"
+                    headers = {**selection_headers, "X-Request-ID": request_id}
+                    if "/federation/" in path:
+                        headers["X-BoxTeam-Federation-Token"] = credential.token
+                    response = await client.request(method, path, headers=headers, params=params, json=payload)
+                    evidence.append({"path": path, "status": response.status_code, "body": response.json()})
+                    assert response.status_code == status, response.text
+                    assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+                    assert "lookup-marker" not in response.text
+                    assert "stage=gateway-" in response.json()["detail"]
+                    assert registry_snapshot() == original
+            renamed = await client.patch(f"/api/gateway/workspaces/{target_id}", json={"name": "重试成功", "parent_workspace_id": None})
+            assert renamed.status_code == 200, renamed.text
+            recovered, = renamed.json()["data"]["items"]
+            assert recovered["workspace_id"] == target_id and recovered["backend_workspace_id"] == backend_id
+            assert recovered["name"] == "重试成功" and recovered["parent_workspace_id"] is None
+            healthy = await client.get("/api/gateway/workspaces")
+            assert healthy.status_code == 200, healthy.text
+            recovered, = healthy.json()["data"]["items"]
+            assert recovered["status"] == "ready" and recovered["connection_error"] is None
+        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+        assert "lookup-marker" in logs
+        assert "stage=gateway-workspace-" in logs and "stage=gateway-diagnostic-" in logs
+        (context.artifacts_dir / "target-lookup-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
