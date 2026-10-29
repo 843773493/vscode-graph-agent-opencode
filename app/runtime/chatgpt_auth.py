@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import os
 import tempfile
 import time
@@ -11,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from app.core.failures import failure_detail
 from app.core.file_permissions import restrict_private_path_access
 from app.core.path_utils import get_boxteam_home
 
@@ -20,7 +20,6 @@ DEFAULT_CHATGPT_AUTH_FILE = "auth.json"
 CHATGPT_OAUTH_TYPE = "oauth"
 CHATGPT_OAUTH_METHOD = "chatgpt"
 TOKEN_EXPIRY_SKEW_SECONDS = 60
-logger = logging.getLogger(__name__)
 
 
 def is_chatgpt_oauth_provider(provider: Mapping[str, object]) -> bool:
@@ -65,8 +64,12 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
     auth_data = json.loads(auth_text)
     access_token = auth_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
-        logger.error("ChatGPT OAuth 凭据缺少 access_token: path=%s", auth_file)
-        raise ValueError("ChatGPT OAuth 凭据缺少 access_token: artifact=chatgpt_auth, stage=validate")
+        reason = "ChatGPT OAuth 凭据缺少 access_token"
+        error = ValueError(reason)
+        error.add_note(f"OAuth 凭据位置: {auth_file}")
+        raise ValueError(failure_detail(
+            error, stage="validate", label=f"{reason}: artifact=chatgpt_auth",
+        )) from error
     expires_at = auth_data.get("expires_at")
     if not isinstance(expires_at, int):
         expires_at = _jwt_exp(access_token)
@@ -135,12 +138,10 @@ def _auth_file_access(source: Path, *, artifact: str, stage: str) -> Iterator[No
     try:
         yield
     except (OSError, RuntimeError) as error:
-        detail = (
-            f"OAuth 凭据访问失败: artifact={artifact}, stage={stage}, "
-            f"error={type(error).__name__}, errno={getattr(error, 'errno', None)}, "
-            f"winerror={getattr(error, 'winerror', None)}"
+        error.add_note(f"OAuth 凭据位置: {source}")
+        detail = failure_detail(
+            error, stage=stage, label=f"OAuth 凭据访问失败: artifact={artifact}",
         )
-        logger.exception("%s path=%s", detail, source)
         if isinstance(error, OSError):
             raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
         raise RuntimeError(detail) from error
@@ -152,8 +153,12 @@ def _build_litellm_auth_record(source: Path) -> dict[str, Any]:
     source_data = json.loads(source_text)
     tokens = source_data.get("tokens")
     if not isinstance(tokens, dict):
-        logger.error("Codex 认证文件缺少 tokens 对象: path=%s", source)
-        raise TypeError("Codex 认证文件缺少 tokens 对象: artifact=codex_auth, stage=validate")
+        reason = "Codex 认证文件缺少 tokens 对象"
+        error = TypeError(reason)
+        error.add_note(f"OAuth 凭据位置: {source}")
+        raise TypeError(failure_detail(
+            error, stage="validate", label=f"{reason}: artifact=codex_auth",
+        )) from error
 
     required = ("access_token", "refresh_token", "id_token")
     missing = [

@@ -1371,3 +1371,10 @@
 - 首次把9场景放入原90秒suite触发TIMEOUT／exit3，没有完整pytest汇总，不计为通过。复用同一场景函数拆成原7项90秒与通知2项60秒正式矩阵，4GiB上限及所有原完成断言保持，串行运行分别71.52秒、26.00秒pytest通过；两批及79项单元所消费源码与最终相关文件指纹一致，不重复运行。矩阵清单、Ruff、compileall及本change严格校验通过。
 - 完整旧HEAD归档与当前Pyright均32项，逐条按文件、最窄AST owner、规则、完整消息和表达式确认无新增，不称类型全绿。作者按结构技能自查，无新源码目录或文件；账本490行、单测626行及基础设施根目录超过20个直接源码的既有组织风险保留，本片不扩大重构，不代独立审查。
 - 准确命令、前后指纹、raw、实际退出码、静态比较与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-089.json`。所有测试带进程外超时／内存保护，重型验证串行，测试scope已回收。Pydantic行校验不属于本片的信封拒绝验收；不代独立Backend重启、Gateway/Web、Windows或模型／fork验收。2.2／7.2及用户延期项继续未勾；未实施前端或其OpenSpec，其他agent独有改动与原Debug服务保持。
+
+### 2026-10-29 OAuth 凭据主错误与日志次错（2.2／7.2部分收口）
+
+- 原凭据I/O context及access_token／tokens两处具名拒绝复用 `failure_detail`，移除局部logger；位置只附原异常notes，原类别、字段规则、直接cause及适用系统错误码保留，日志次错只公开类别。全仓消费方检索未发现生产解析诊断文本，字段格式统一为 `artifact=…: stage=…`，不保留逗号旧格式或重复错误码缺省None。固定的发布／清理ExceptionGroup上下文保持原文，不是另一套I/O诊断格式。
+- 旧生产新增反例28项单元失败、22项通过：25项日志失败及3项正常日志下新增cause断言；真实认证／模型工厂／Agent服务／ASGI入口7项日志反例均失败，原配置错误复制真实OS日志写入位置。候选首轮46项失败、65项通过均停在旧逗号分隔断言，保留原件；迁齐统一文本格式的精确预期，归属、阶段、类别、cause和副作用断言不放宽。最终111项认证及调用方单元、原60秒／4GiB矩阵14项HTTP通过，后者pytest31.06秒；覆盖迁移、刷新、描述符关闭、主错／清理双错、并发不覆盖与同入口恢复，凭据正文不进日志。
+- 三文件Pyright零诊断、Ruff、compileall及本change严格校验通过。作者AST自查确认仅改原三处错误出口，I/O捕获类别、重抛、两个结构校验条件、其它步骤及完整发布／清理函数保持；按已登记分隔符变更核对全部旧断言保留，不代独立审查。认证单测513行仍共用原装具；集成agents目录既有41个直接Python文件，未在本片新增文件或扩修目录。初轮审计漏处理固定artifact的f-string分隔符，修正审计后复用原绿测，未改产品或测试以迁就审计。
+- 准确命令、指纹、raw、退出码与局限见 `out/tests/temp/uri-global-closure/artifacts/verification-090.json`。最终单元、HTTP与静态所消费相关源码一致，首轮单元期间仅另一agent的workbench Goal源码变化。测试有进程外保护、重型串行且scope已回收；没有真实OAuth网络、Windows、独立Backend／Gateway、Web、模型执行或fork验收。2.2／7.2与延期项继续未勾，前端及其OpenSpec未实施，其他agent改动、暂存内容和原Debug服务保持。

@@ -1,6 +1,7 @@
 import base64
 import errno
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -221,6 +222,24 @@ def test_expired_chatgpt_auth_fails_fast_without_valid_codex_auth(
         raise AssertionError("过期凭据必须快速失败")
 
 
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def auth_log_failure(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> OSError | None:
+    if not request.param:
+        return None
+    failure = OSError("日志输出失败 /private/auth-log-secret")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if record.getMessage().startswith((
+            "OAuth 凭据访问失败:", "ChatGPT OAuth 凭据缺少 access_token:", "Codex 认证文件缺少 tokens 对象:",
+        )):
+            raise failure
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return failure
+
+
 @pytest.fixture(params=["target", "migration", "refresh"])
 def auth_read_case(request, monkeypatch, tmp_path):
     home = tmp_path / "home"
@@ -245,7 +264,7 @@ def auth_read_case(request, monkeypatch, tmp_path):
     return source, target, invoke, artifact
 
 
-def test_auth_missing_fields_keep_location_in_diagnostics(auth_read_case, caplog):
+def test_auth_missing_fields_keep_location_in_diagnostics(auth_read_case, caplog, auth_log_failure):
     source, target, invoke, artifact = auth_read_case
     original = source.read_bytes()
     source.write_bytes(b"{}\n")
@@ -255,7 +274,15 @@ def test_auth_missing_fields_keep_location_in_diagnostics(auth_read_case, caplog
     with pytest.raises(category) as caught:
         invoke()
 
-    assert f"artifact={artifact}, stage=validate" in str(caught.value)
+    assert f"artifact={artifact}: stage=validate" in str(caught.value)
+    original_error = caught.value.__cause__
+    assert type(original_error) is category
+    if auth_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(caught.value)
+        assert any(str(auth_log_failure) in note for note in original_error.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in str(caught.value)
+    assert "auth-log-secret" not in str(caught.value)
     assert str(source) not in str(caught.value)
     assert str(source) in caplog.text
     assert source.read_bytes() == b"{}\n"
@@ -271,7 +298,7 @@ def test_auth_missing_fields_keep_location_in_diagnostics(auth_read_case, caplog
     (OSError, errno.EIO, r"\\private-auth-marker\share\auth.json"),
 ])
 def test_auth_read_errors_keep_native_cause_and_retry(
-    auth_read_case, monkeypatch, caplog, category, code, native,
+    auth_read_case, monkeypatch, caplog, category, code, native, auth_log_failure,
 ):
     source, target, invoke, artifact = auth_read_case
     source_before = source.read_bytes()
@@ -294,7 +321,13 @@ def test_auth_read_errors_keep_native_cause_and_retry(
     assert error.errno == code and error.filename is None
     assert getattr(error, "winerror", None) == getattr(failure, "winerror", None)
     assert error.__cause__ is failure
-    assert f"artifact={artifact}, stage=read" in str(error)
+    if auth_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(error)
+        assert any(str(auth_log_failure) in note for note in failure.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in str(error)
+    assert "auth-log-secret" not in str(error)
+    assert f"artifact={artifact}: stage=read" in str(error)
     assert native not in str(error) and str(source) not in str(error)
     assert str(source) in caplog.text and native in caplog.text
     assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
@@ -320,7 +353,7 @@ def test_auth_json_error_keeps_original_parse_coordinates(auth_read_case, caplog
     ("migration", "cleanup"),
 ], indirect=["auth_read_case"])
 def test_auth_publication_failure_preserves_files_and_closes_descriptor(
-    auth_read_case, monkeypatch, caplog, stage,
+    auth_read_case, monkeypatch, caplog, stage, auth_log_failure,
 ):
     from app.runtime import chatgpt_auth
 
@@ -377,8 +410,14 @@ def test_auth_publication_failure_preserves_files_and_closes_descriptor(
         assert closed.value.errno == errno.EBADF
     error = caught.value
     expected_stage = "write" if stage in {"permissions", "fsync"} else stage
-    assert f"artifact=chatgpt_auth, stage={expected_stage}" in str(error)
+    assert f"artifact=chatgpt_auth: stage={expected_stage}" in str(error)
     assert type(error) is type(failure) and error.__cause__ is failure
+    if auth_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(error)
+        assert any(str(auth_log_failure) in note for note in failure.__notes__)
+    else:
+        assert "diagnostic_sink_error" not in str(error)
+    assert "auth-log-secret" not in str(error)
     if isinstance(error, OSError):
         assert error.errno == errno.EACCES and error.filename is None
     assert "private-publish-marker" not in str(error) and str(target) not in str(error)
@@ -396,7 +435,7 @@ def test_auth_publication_failure_preserves_files_and_closes_descriptor(
 
 
 @pytest.mark.parametrize("auth_read_case", ["migration", "refresh"], indirect=True)
-def test_auth_failed_publication_and_cleanup_keep_both_causes(auth_read_case, monkeypatch):
+def test_auth_failed_publication_and_cleanup_keep_both_causes(auth_read_case, monkeypatch, auth_log_failure):
     source, target, invoke, _ = auth_read_case
     target_before = target.read_bytes() if target.exists() else None
     source_before = source.read_bytes()
@@ -420,6 +459,13 @@ def test_auth_failed_publication_and_cleanup_keep_both_causes(auth_read_case, mo
     primary, cleanup = caught.value.exceptions
     assert primary.__cause__ is publication_error
     assert cleanup.__cause__ is cleanup_error
+    for wrapped, original in ((primary, publication_error), (cleanup, cleanup_error)):
+        if auth_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in str(wrapped)
+            assert any(str(auth_log_failure) in note for note in original.__notes__)
+        else:
+            assert "diagnostic_sink_error" not in str(wrapped)
+        assert "auth-log-secret" not in str(wrapped)
     assert caught.value.__cause__ is primary
     assert "private-" not in str(caught.value) and str(target) not in str(caught.value)
     assert source.read_bytes() == source_before

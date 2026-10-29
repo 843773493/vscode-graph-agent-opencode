@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import errno
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -57,13 +58,35 @@ def auth_service(tmp_path, monkeypatch):
     return app, config_service, target, source, record
 
 
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def auth_log_failure(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path | None:
+    if not request.param:
+        return None
+    blocker = tmp_path / "auth-log-secret"
+    blocker.write_text("这是文件，不能作为日志父目录", encoding="utf-8")
+    destination = blocker / "errors.log"
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if record.getMessage().startswith((
+            "OAuth 凭据访问失败:", "ChatGPT OAuth 凭据缺少 access_token:", "Codex 认证文件缺少 tokens 对象:",
+        )):
+            # 原主错误已交现有诊断handler；本次日志写入由真实OS拒绝。
+            with destination.open("a", encoding="utf-8"):
+                pass
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return destination
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [
     "access_token", "tokens", "read_target", "read_migration", "read_refresh",
     "publish_migration", "publish_refresh",
 ])
 async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
-    auth_service, monkeypatch, caplog, request, failure,
+    auth_service, monkeypatch, caplog, request, failure, auth_log_failure,
 ):
     app, config_service, target, source, record = auth_service
     artifact = "codex_auth" if failure in {"tokens", "read_migration", "read_refresh"} else "chatgpt_auth"
@@ -108,21 +131,36 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
                 default = next(a for a in data if a["agent_id"] == "default") if isinstance(data, list) else data
                 provider = next(p for p in default["providers"] if p["provider_id"] == "backup_4")
                 assert provider["available"] is False
-                assert f"artifact={artifact}, stage=" in provider["configuration_error"]
+                assert f"artifact={artifact}: stage=" in provider["configuration_error"]
                 assert default["agent_id"] == "default" and len(default["providers"]) > 1
                 assert str(source) not in response.text and str(target) not in response.text
                 assert "private-auth-marker" not in response.text
+                assert "auth-log-secret" not in response.text
+                if auth_log_failure is not None:
+                    assert "diagnostic_sink_error=" in provider["configuration_error"]
+                else:
+                    assert "diagnostic_sink_error" not in provider["configuration_error"]
                 responses.append(response.json())
             with pytest.raises(RuntimeError) as caught:
                 build_runtime_for_agent("default", config_service, preferred_provider_id="backup_4")
             assert "provider_id=backup_4" in str(caught.value)
-            assert f"artifact={artifact}, stage=" in str(caught.value)
+            assert f"artifact={artifact}: stage=" in str(caught.value)
             assert str(path) not in str(caught.value)
+            assert "auth-log-secret" not in str(caught.value)
+            if auth_log_failure is not None:
+                assert "diagnostic_sink_error=" in str(caught.value)
+                cause = caught.value.__cause__
+                assert cause is not None and cause.__cause__ is not None
+                assert any(str(auth_log_failure) in note for note in cause.__cause__.__notes__)
+            else:
+                assert "diagnostic_sink_error" not in str(caught.value)
             if failure.startswith(("read_", "publish_")):
                 assert type(caught.value.__cause__) is PermissionError
                 assert caught.value.__cause__.__cause__ is io_failure
         assert {file: file.read_bytes() if file.exists() else None for file in (source, target)} == before
         assert str(path) in caplog.text
+        assert "test-refresh" not in caplog.text and "test-id" not in caplog.text
+        assert record["access_token"] not in caplog.text
         if failure.startswith(("read_", "publish_")):
             assert any(r.exc_info and r.exc_info[1] is io_failure for r in caplog.records)
         assert list(target.parent.glob(".auth.*.tmp")) == []
@@ -135,6 +173,7 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
         assert recovered.json()["data"] == initial.json()["data"]
         assert json.loads(target.read_bytes()) == record
         context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-        (context.artifacts_dir / f"auth-errors-{failure}.json").write_text(json.dumps({
+        mode = "log-failed" if auth_log_failure is not None else "log-ok"
+        (context.artifacts_dir / f"auth-errors-{failure}-{mode}.json").write_text(json.dumps({
             "responses": responses, "recovered": recovered.json(),
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
