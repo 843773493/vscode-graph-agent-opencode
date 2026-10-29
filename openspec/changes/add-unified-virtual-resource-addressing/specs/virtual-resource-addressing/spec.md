@@ -139,6 +139,7 @@
 
 - **WHEN** 显式 v1 导入在来源读取、staging 验收或目录安装前后失败或中断
 - **THEN** 原 importer 的审计只保存既有迁移及来源/目标身份、发布与回滚事实、异常类别和适用系统错误码或解析坐标；完整原异常只留诊断，向原调用方继续抛出同一实例。未安装 staging 保持隔离，已安装 v2 历史不能因审计失败被删除；冷恢复沿原 marker、已提交报告和 owner 校验收敛，不新增 writer 或将路径写入审计
+- **AND** rollout schema 迁移的失败 journal 遵循同一诊断边界；由原维护 owner 恢复备份并记录失败版本与 `recovery_required`，已提交 canonical、checkpoint、assembly 和视图事实保持不变，不因诊断调整改变 SQL、版本顺序、事务或备份/恢复链
 
 #### Scenario: 持久任务准入失败只保存公开事实
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.failures import failure_detail
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.sqlite_state import load_sql
 from app.core.sqlite_state import utc_now_text as _now
@@ -320,7 +321,11 @@ class RolloutMaintenanceOwner(
                             checksum,
                             timestamp,
                             failure_time,
-                            str(error),
+                            failure_detail(
+                                error,
+                                stage=f"rollout-schema-migration:{current_version}:{to_version}",
+                                label="SQLite 迁移失败",
+                            ),
                         ),
                     )
                     connection.execute(

@@ -55,6 +55,8 @@ Gateway与Workspace的active快照解码catch在原恢复标记写入之前复�
 
 一次性 v1 历史导入的失败审计同样消费 `app.core.failures`，以既有 migration_id 定位失败；来源/目标 SessionThread、状态与回滚事实继续由原审计记录持有，系统错误码和 JSON 坐标保留。完整异常只留诊断，原实例继续抛出，包括中断；安装前隔离与安装后保留 v2、marker 验收及冷恢复顺序保持，不增加迁移 schema 或第二审计入口。
 
+rollout schema 维护迁移同样在原失败 journal 写入处使用该出口，以原 from/to version 表明失败阶段；SQLite 仍持有原迁移名、校验和与归属。原异常继续抛出，备份恢复、失败 journal 与 recovery_required 提交顺序及 SQL 资产不变；失败不能改写既有 canonical、checkpoint、assembly、view 或追加成功控制事实。
+
 ### D1a：保留三种文件输入，在目标端统一解释
 
 普通文件入口接受相对路径、绝对路径和资源 URI，引用公共 spec「普通文件入口必须保留原生路径输入并统一目标解析」。输入分类复用同一原语：目标平台原生绝对路径优先，只有输入开头的协议形式交给唯一 URI grammar；不能将原生路径中间的 `://` 当协议。POSIX 的 `./build://debug` 和对应绝对路径按原生目录处理，URI 输入的未知协议和非法地址仍明确拒绝、不回退。先固定目标 Gateway/机器与工作区或选定目录，再在目标端按原生平台解释路径，归入同一文件 owner；中继当前目录、source 文件系统与激活工作区切换都不能改变目标。工作区内路径可转换为已有 URI；工作区外路径沿既有能力和授权处理，不能偷偷改为工作区内目标或强制先注册。Windows 盘符与路径分隔符不能先被 source 的 POSIX 规则改写。
