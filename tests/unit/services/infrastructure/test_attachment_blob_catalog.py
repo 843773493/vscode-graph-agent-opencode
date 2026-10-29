@@ -354,8 +354,18 @@ async def test_source_point_projects_ingress_attachment_with_frozen_scope(
     assert before.resources == []
     assert before.anchor_item_id == point.anchor_item_id
     assert before.source_view_revision == point.source_view_revision
+    # 前缀的revision只是调用方观察值；候选响应必须仍冻结真实view、锚点及附件。
+    assert point.source_view_revision > 0
+    for observed_revision in (point.source_view_revision - 1, point.source_view_revision + 1):
+        refreshed = await fork_source_point_service.source_point(**{
+            **frozen, "source_view_revision": observed_revision,
+        })
+        assert refreshed.model_dump() == point.model_dump()
+    # 完整复制继续严格核对来源revision，不能套用前缀的观察语义。
     with pytest.raises(ValueError, match="revision 已变化"):
-        await fork_source_point_service.source_point(**{**frozen, "source_view_revision": point.source_view_revision + 1})
+        await fork_source_point_service.source_point(**{
+            **frozen, "mode": "full_rollout_copy", "source_view_revision": point.source_view_revision + 1,
+        })
 
 
 @pytest.fixture
