@@ -1210,3 +1210,9 @@
 - 原暂停变量catch复用`failure_detail`，状态只保存Session/Thread、node-debug-variables阶段及异常类别/系统错误码，原实例与全文留诊断；sink再次失败仍完成原结算，迟到错误留诊断但不改写已继续或另一暂停frame。失效上下文、过期对象、取消、日志点、原命令及pending回收保持，不增加重试、进程重启、持久副本或schema。
 - 旧生产8项单元反例与1项真实Node产品反例失败，后者确证HTTP状态携带原生位置。最终相关46 passed/55.17秒，覆盖POSIX/盘符/UNC、sink故障、迟到结果、已知失效语义与取消；实际Session/调试方案/Node经HTTP启动、暂停失败、独立GET、同PID继续/再次暂停恢复、停止及方案/动作冷读均通过。新增连接替身签名修正类型后，受影响产品1项再验通过，为前组子集不相加；未用手工状态代替产品启动/暂停。
 - Ruff、compileall通过；Pyright4→4按文件/最窄AST owner/规则/完整消息无新增。作者AST自查确认生产除原catch生成公开事实和替换error_message之外全部保持，两份既有测试函数/类保持；原始输出、命令、前后指纹、退出码与限制见`out/tests/temp/uri-global-closure/artifacts/verification-045.json`。HTTP为进程内ASGI、冷读为同进程服务重建，未验完整Gateway/Web、Windows或独立后端重启及独审；2.2/7.2仍未勾，团队协作与MCP显式持有保持延期。
+
+### 2026-10-29 Inspector 连接与命令响应（2.2/7.2部分收口）
+
+- 原协议owner在连接失败、远端命令拒绝和非对象result处复用failure_detail；公开Session/Thread、阶段、命令及整数协议错误码，原始说明只留诊断与直接cause。失效上下文/过期对象由同一响应owner分类，变量链删除错误正文匹配；发送异常、命令超时、取消及pending回收保持。无新存储、重试或连接链。
+- 旧生产9项反例失败；最终Node Debug单元326项、真实Node新启动/冷读/同配置恢复3项及既有真实Node回归10项通过。后两组经真实方案/启动HTTP形成状态并核进程终结、动作/manifest、claim及request_id，同进程冷服务重建不冒充独立后端重启。初候选4项诊断转义断言和1项测试连接签名类型错误均已修复，原失败保留。
+- Ruff/compileall和全量strict51/0通过。Pyright当前5项：4项与原三文件同指纹基线逐owner/规则/完整消息一致，另1项为HEAD中AST不变的winerror赋值；新增代码零诊断，不称类型全绿。作者AST自查确认只改Inspector四个方法并添加协议错误分类。命令、源码指纹、raw、退出码及类型核对见`out/tests/temp/uri-global-closure/artifacts/verification-048.json`。未验完整Gateway/Web、Windows、独立Backend重启或独审，亦不代表所有Node/Inspector错误出口均已收口；2.2/7.2继续未勾，团队协作与MCP显式持有仍延期。

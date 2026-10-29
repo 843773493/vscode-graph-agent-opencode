@@ -186,6 +186,7 @@ class HydrationSocket:
     def __init__(self, runtime: NodeDebugRuntime) -> None:
         self.runtime = runtime
         self.error: BaseException | None = None
+        self.protocol_error: str | None = None
         self.entered = asyncio.Event()
         self.release: asyncio.Event | None = None
         self.methods: list[str] = []
@@ -199,6 +200,11 @@ class HydrationSocket:
         if self.error is not None:
             error, self.error = self.error, None
             raise error
+        if self.protocol_error is not None:
+            self.runtime.inspector.pending_commands[payload["id"]].set_result(
+                {"error": {"code": -32000, "message": self.protocol_error}}
+            )
+            return
         self.runtime.inspector.pending_commands[payload["id"]].set_result(
             {
                 "result": {
@@ -356,7 +362,7 @@ async def test_expired_variable_context_preserves_existing_semantics(
     paused_event: dict[str, object],
     message: str,
 ) -> None:
-    hydration_socket.error = RuntimeError(message)
+    hydration_socket.protocol_error = message
     runtime.logpoint_error_message = "已有的日志点说明"
     await inspector._handle_event(runtime, "Debugger.paused", paused_event)
     task = runtime.inspector.variable_hydration_task

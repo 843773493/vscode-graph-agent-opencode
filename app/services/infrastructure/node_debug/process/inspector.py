@@ -27,6 +27,17 @@ from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 logger = logging.getLogger(__name__)
 
 
+class NodeDebugCommandError(RuntimeError):
+    """公开命令失败事实，失效上下文分类供同一 Inspector 消费。"""
+
+    def __init__(
+        self, message: str, *,
+        reason: Literal["context_missing", "object_missing", "command_rejected"],
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class NodeDebugInspector:
     """集中管理 Node Inspector 命令、事件和暂停变量读取。"""
 
@@ -51,10 +62,19 @@ class NodeDebugInspector:
 
         # Node Inspector 不兼容 websockets 默认的 20 秒 keepalive ping；
         # 该 ping 会导致连接关闭，进而让暂停中的脚本继续执行。
-        runtime.inspector.socket = await websockets.connect(
-            inspector_url,
-            ping_interval=None,
-        )
+        try:
+            runtime.inspector.socket = await websockets.connect(
+                inspector_url,
+                ping_interval=None,
+            )
+        except Exception as error:
+            raise RuntimeError(failure_detail(
+                error, stage="node-debug-connect",
+                label=(
+                    f"连接 Node Inspector 失败: session_id={runtime.session_id}, "
+                    f"thread_id={runtime.thread_id}"
+                ),
+            )) from error
         runtime.inspector.receiver_task = asyncio.create_task(
             self.receive_messages(runtime)
         )
@@ -143,11 +163,34 @@ class NodeDebugInspector:
                 runtime.inspector.pending_commands.pop(command_id, None)
         error = response.get("error")
         if isinstance(error, dict):
-            message = error.get("message") or "Node Inspector 命令失败"
-            raise RuntimeError(str(message))  # noqa: TRY004 - 这是远端协议错误
+            message = str(error.get("message") or "Node Inspector 命令失败")
+            # 先分类远端的失效语义，再发布公开事实；不让消费者解析诊断正文。
+            reason: Literal["context_missing", "object_missing", "command_rejected"] = (
+                "context_missing" if "Cannot find context with specified id" in message
+                else "object_missing" if "Could not find object with given id" in message
+                else "command_rejected"
+            )
+            original = RuntimeError(message)
+            detail = failure_detail(
+                original, stage="node-debug-command",
+                label=(
+                    f"Node Inspector 命令失败: session_id={runtime.session_id}, "
+                    f"thread_id={runtime.thread_id}, method={method}"
+                ),
+            )
+            if type(code := error.get("code")) is int:
+                detail += f", code={code}"
+            raise NodeDebugCommandError(detail, reason=reason) from original
         result = response.get("result", {})
         if not isinstance(result, dict):
-            raise TypeError(f"Node Inspector 响应 result 不是对象: {result!r}")
+            result_error = TypeError(f"Node Inspector 响应 result 不是对象: {result!r}")
+            raise TypeError(failure_detail(
+                result_error, stage="node-debug-result",
+                label=(
+                    f"Node Inspector 响应无效: session_id={runtime.session_id}, "
+                    f"thread_id={runtime.thread_id}, method={method}"
+                ),
+            )) from result_error
         return cast(dict[str, object], result)
 
     async def receive_messages(self, runtime: NodeDebugRuntime) -> None:
@@ -288,7 +331,7 @@ class NodeDebugInspector:
         try:
             await self._hydrate_frame_variables(runtime, frame)
         except Exception as error:  # noqa: BLE001 - 变量读取故障必须暴露在调试状态
-            if "Cannot find context with specified id" in str(error):
+            if isinstance(error, NodeDebugCommandError) and error.reason == "context_missing":
                 return
             message = failure_detail(
                 error,
@@ -326,8 +369,8 @@ class NodeDebugInspector:
                             "accessorPropertiesOnly": False,
                         },
                     )
-                except RuntimeError as error:
-                    if "Could not find object with given id" not in str(error):
+                except NodeDebugCommandError as error:
+                    if error.reason != "object_missing":
                         raise
                     expired_object_count += 1
                     continue

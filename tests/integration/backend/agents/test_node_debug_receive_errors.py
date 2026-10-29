@@ -44,6 +44,111 @@ DebugReceiveClient = tuple[
 ]
 
 
+@pytest.mark.parametrize("phase", ["connect", "response", "result"])
+async def test_launch_inspector_boundary_keeps_durable_failure_private_and_retries(
+    debug_receive_client: DebugReceiveClient, phase: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    private = str(root / "inspector-boundary-secret")
+    raw = RuntimeError(f"Inspector 边界拒绝 {private}；" + "完整诊断" * 80)
+    original_connect = websockets.connect
+    opened: list[ClientConnection] = []
+    replaced: list[int] = []
+
+    class BoundarySocket:
+        def __init__(self, socket: ClientConnection) -> None:
+            self.socket = socket
+            self.command_id: int | None = None
+
+        async def send(self, message: str) -> None:
+            payload = json.loads(message)
+            if payload["method"] == "Runtime.enable":
+                self.command_id = payload["id"]
+            await self.socket.send(message)
+
+        async def close(self) -> None:
+            await self.socket.close()
+
+        def __aiter__(self) -> AsyncIterator[str | bytes]:
+            async def messages() -> AsyncIterator[str | bytes]:
+                async for message in self.socket:
+                    payload = json.loads(message)
+                    if self.command_id is not None and payload.get("id") == self.command_id:
+                        replaced.append(self.command_id)
+                        yield json.dumps({"id": self.command_id, **(
+                            {"error": {"code": -32000, "message": str(raw)}}
+                            if phase == "response" else {"result": [private]}
+                        )})
+                    else:
+                        yield message
+            return messages()
+
+    async def connect(uri: str, *, ping_interval: float | None) -> BoundarySocket:
+        if phase == "connect":
+            raise raw
+        socket = await original_connect(uri, ping_interval=ping_interval)
+        opened.append(socket)
+        return BoundarySocket(socket)
+
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "Inspector 边界故障后重试", "script_path": "entry.mjs",
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    payload = {**owner, "configuration_id": configuration_id, "path": "entry.mjs"}
+    with monkeypatch.context() as patch, caplog.at_level(logging.ERROR):
+        patch.setattr(websockets, "connect", connect)
+        failed = await client.post("/api/v1/debug/node/start", json=payload)
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    assert f"stage=node-debug-{'command' if phase == 'response' else phase}" in failed.text
+    assert private not in failed.text
+    assert private in caplog.text
+    if phase == "connect":
+        assert any(record.exc_info and record.exc_info[1] is raw for record in caplog.records)
+        assert not opened and not replaced
+    else:
+        assert len(opened) == len(replaced) == 1
+        assert opened[0].close_code is not None
+        assert "method=Runtime.enable" in failed.text
+    state = await client.get("/api/v1/debug/node", params=owner)
+    assert state.status_code == 200, state.text
+    data = state.json()["data"]
+    assert data["status"] == "failed" and isinstance(data["pid"], int)
+    assert probe_process_identity(data["pid"]) is None
+    assert data["active_configuration_id"] == configuration_id
+    assert data["error_message"] == failed.json()["detail"]
+    failed_actions = [a for a in data["actions"] if a["action"] == "start_failed"]
+    assert len(failed_actions) == 1 and failed_actions[0]["message"] == data["error_message"]
+    manifest_bytes, manifest = store.read_manifest_payload(**owner)
+    assert manifest_bytes is not None and manifest is not None
+    assert private not in manifest_bytes.decode() + state.text
+    assert [a.model_dump(mode="json") for a in manifest.actions] == data["actions"]
+    claim = store.read_launch_claim(**owner)
+    assert claim is not None and claim.phase == "settled" and claim.pid == data["pid"]
+    await reopen(True)
+    cold = await client.get("/api/v1/debug/node", params=owner)
+    assert cold.status_code == 200, cold.text
+    assert cold.json()["data"]["actions"] == data["actions"]
+    assert cold.json()["data"]["active_configuration_id"] == configuration_id
+    assert cold.json()["data"]["status"] == "idle" and cold.json()["data"]["pid"] is None
+    assert private not in cold.text
+    retried = await client.post("/api/v1/debug/node/start", json=payload)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["data"]["status"] == "running"
+    assert retried.json()["data"]["active_configuration_id"] == configuration_id
+    stopped = await client.post("/api/v1/debug/node/action", json={**owner, "action": "stop"})
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["status"] == "exited"
+    assert [a for a in stopped.json()["data"]["actions"] if a["action"] == "start_failed"] == failed_actions
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / f"inspector-boundary-{phase}.json").write_text(json.dumps({
+        "failed": failed.json(), "live": state.json(), "cold": cold.json(),
+        "retried": retried.json(), "stopped": stopped.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
 @pytest.fixture
 async def debug_receive_client(integration_workspace_root_path: str) -> AsyncIterator[DebugReceiveClient]:
     root = Path(integration_workspace_root_path)
