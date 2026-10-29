@@ -1420,6 +1420,13 @@
 - 准确命令、源码指纹、原始输出、退出码及比较证据见 `out/tests/temp/uri-global-closure/artifacts/verification-101.json`。测试串行并有进程外超时／内存保护，集成闸门保持；HTTP为ASGI，不代真实网络、独立Backend重启、模型／fork、Windows或Web验收。2.2／7.2继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
 
 
+### 2026-10-29 远端 fork 来源意图的日志次错（2.2／7.2部分收口）
+
+- 真实 ENOTDIR 日志写入故障会替换远端 source intent 的 Pydantic 校验拒绝。原 catch 现复用 `failure_detail`，保留 operation／Gateway／Workspace、协议分类、阶段及原异常 cause，完整输入和日志次错只留诊断；不新增异常、账本、协议或恢复链。
+- 来源历史迁至产品消息入口与真实 Agent 执行，复用 `model_stream`。旧生产正常日志3项通过、故障日志3项均失败；修复后两种日志状态下的POSIX／盘符／UNC输入6项全部通过，验证原异常输入、普通错误无路径、目标零副作用及原key重试的唯一capture。原18条断言全部保留，fork服务另54项单测通过。新增正式矩阵入口，固定180秒／4GiB并保留原fork watchdog和跨worktree集成闸门。
+- Ruff／compileall通过；完整旧HEAD归档与当前Pyright均34项，按文件、最窄AST owner、规则、完整消息及表达式逐项一致，无新增，不称类型全绿。作者AST核对确认只有来源意图原catch及必要import变化，其余方法保持；既有1211行服务与business根27个直接代码文件的组织风险保留，无新源码目录，不代独审。
+- 准确命令、原始输出、指纹、实际退出码及类型／结构对照见 `out/tests/temp/uri-global-closure/artifacts/verification-103.json`。两批测试串行；运行期间其他agent修改了消息API、无关测试与前端文件，受验fork owner／来源装具和执行链源码保持，不称全树未变。传输为进程内替身，不代真实HTTP、Gateway/Web、独立Backend重启或Windows实机验收。2.2／7.2整体继续未勾，前端及其OpenSpec等待用户通知，其他agent独有改动／暂存与原Debug服务保持。
+
 ### 2026-10-29 内部聚合资源的公开 fork 与进程重启（7.2聚合生命周期子门）
 
 - 在既有三真实Gateway／Backend／localhost SSH场景内增强断言，不新建模型协议、业务writer或测试链路。消息入口与原Agent执行生成关键历史；封存的原规范化请求与model_stream实际请求一致，逐个重算assembly hash，Skill与MCP聚合binding及SQLite均保留显式null URI。

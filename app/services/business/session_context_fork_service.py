@@ -20,6 +20,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     GraphBinding,
 )
+from app.core.failures import failure_detail
 from app.core.identifier import create_prefixed_id
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
@@ -622,13 +623,13 @@ class SessionContextForkService:
                 if goal_settings.objective is None or not goal_settings.objective.strip():
                     raise ValueError("fork source intent 的 Goal objective 不能为空")
         except (KeyError, TypeError, ValueError) as error:
-            detail = (
-                f"fork_response_protocol_invalid: 远端 source intent 回执协议无效: "
-                f"operation_id={self._creation_key(request.idempotency_key)}, "
-                f"gateway_id={source.gateway_authority}, workspace_id={source.scope_id}, "
-                f"stage=source_intent_validation, error={type(error).__name__}"
+            detail = failure_detail(
+                error, stage="source_intent_validation", label=(
+                    f"fork_response_protocol_invalid: 远端 source intent 回执协议无效: "
+                    f"operation_id={self._creation_key(request.idempotency_key)}, "
+                    f"gateway_id={source.gateway_authority}, workspace_id={source.scope_id}"
+                ),
             )
-            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
             raise RuntimeError(detail) from error
         return intent, owner_instance_id, storage_domain_id, target_preimage
 
