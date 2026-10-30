@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import TypeVar
@@ -54,6 +55,7 @@ from app.schemas.internal_v2.pending_request import (
     PendingRequestSummaryListDTO,
 )
 from app.services.business.job.control_service import JobControlService
+from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.business.job.lifecycle import (
     FAILED_JOB_STATUSES,
     HEARTBEAT_TRACKED_JOB_STATUSES,
@@ -176,6 +178,7 @@ class JobService:
         self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
+        self._thread_input_admission = ThreadInputAdmission()
         self._preparation_changed = asyncio.Event()
         self._job_creation_locks = KeyLockPool()
         self._pending_restore_locks = KeyLockPool()
@@ -495,37 +498,23 @@ class JobService:
             raise KeyError(f"Job execution binding 不存在: {job_id}")
         return job.execution_binding
 
-    async def run_session_idle_operation(
+    async def run_thread_idle_operation(
         self,
         session_id: str,
+        thread_id: str,
         operation: Callable[[], Awaitable[T]],
     ) -> T:
-        """与 job admission 共用锁，仅在会话空闲期间执行 checkpoint 操作。"""
-        async with self._dispatch_lock:
-            if session_id in self._deleting_sessions:
-                raise SessionDeletionPendingError(
-                    "session_deletion_pending: 会话正在删除，拒绝 checkpoint 操作: "
-                    f"session_id={session_id}"
-                )
-            preparation_count = self._session_preparations.get(session_id, 0)
-            if preparation_count:
+        """准入覆盖空闲检查和修改；不跨业务 await 持有全局调度锁。"""
+        async with self.thread_input_admission(session_id, thread_id):
+            await self._ensure_pending_loaded(session_id)
+            active_job_id = self._thread_current_job.get((session_id, thread_id))
+            if active_job_id is not None or any(
+                job.thread_id == thread_id and job.status not in TERMINAL_JOB_STATUSES
+                for job in self._jobs.values() if job.session_id == session_id
+            ):
                 raise RuntimeError(
-                    "会话正在准备持久化消息，不能修改 checkpoint: "
-                    f"session_id={session_id}, preparation_count={preparation_count}"
-                )
-            active_job_id = next(
-                (
-                    job_id
-                    for (candidate_session_id, _thread_id), job_id
-                    in self._thread_current_job.items()
-                    if candidate_session_id == session_id
-                ),
-                None,
-            )
-            if active_job_id is not None:
-                raise RuntimeError(
-                    "会话存在运行中或正在收尾的任务，不能修改 checkpoint: "
-                    f"session_id={session_id}, active_job_id={active_job_id}"
+                    "线程存在运行中或正在收尾的任务，不能修改 checkpoint: "
+                    f"session_id={session_id}, thread_id={thread_id}, active_job_id={active_job_id}"
                 )
             return await operation()
 
@@ -573,17 +562,39 @@ class JobService:
         require_open_admission: bool = True,
     ) -> T:
         """登记会话存储窗口；外部新准入检查 admission，既有工作恢复可显式跳过。"""
+        async with self._session_preparation(
+            session_id, require_open_admission=require_open_admission,
+        ):
+            return await operation()
+
+    @asynccontextmanager
+    async def thread_input_admission(
+        self, session_id: str, thread_id: str,
+    ) -> AsyncIterator[None]:
+        # 等锁者也计入排空；只有同一个 Task 可以重入。
+        async with (
+            self._session_preparation(session_id),
+            self._thread_input_admission.hold(session_id, thread_id),
+        ):
+            yield
+
+    @asynccontextmanager
+    async def _session_preparation(
+        self, session_id: str, *, require_open_admission: bool = True,
+    ) -> AsyncIterator[None]:
         async with self._dispatch_lock:
             if require_open_admission:
                 self.assert_accepting_jobs()
             self._session_lifecycle_guard(session_id)
             if session_id in self._deleting_sessions:
-                raise RuntimeError(f"会话正在删除，拒绝写入新消息: {session_id}")
+                raise SessionDeletionPendingError(
+                    f"session_deletion_pending: 会话正在删除，拒绝写入新消息: {session_id}"
+                )
             self._session_preparations[session_id] = (
                 self._session_preparations.get(session_id, 0) + 1
             )
         try:
-            return await operation()
+            yield
         finally:
             # 计数与事件只在本事件循环同步更新；归还不能在锁等待中被再次取消。
             remaining = self._session_preparations[session_id] - 1
@@ -801,7 +812,7 @@ class JobService:
         ):
             raise ValueError("预留 Job ID 必须是非空字符串")
 
-        async def start_prepared() -> JobDispatchSnapshotDTO:
+        async with self.thread_input_admission(session_id, thread_id):
             return await self._start_job_prepared(
                 session_id,
                 message,
@@ -815,8 +826,6 @@ class JobService:
                 message_metadata=message_metadata,
                 delivery_policy=delivery_policy,
             )
-
-        return await self.run_session_preparation(session_id, start_prepared)
 
     async def _start_job_prepared(
         self,

@@ -60,43 +60,55 @@ class DummyTask:
 
 
 @pytest.mark.asyncio
-async def test_session_idle_operation_is_atomic_with_job_admission(job_service_factory,
+async def test_thread_idle_operation_is_atomic_with_job_admission(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
+    release_job = asyncio.Event()
+
+    class HeldExecutor:
+        async def run(self, job):
+            await release_job.wait()
+            return "done"
+
+    service = job_service_factory(
+        job_event_bus=JobEventBus(), job_executor=HeldExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
     session_id = "session_compaction_lock"
+    thread_id = job_fixture_thread_id(session_id)
     operation_started = asyncio.Event()
     release_operation = asyncio.Event()
-    admission_finished = asyncio.Event()
 
     async def checkpoint_operation() -> str:
         operation_started.set()
         await release_operation.wait()
         return "scheduled"
 
-    async def competing_admission() -> None:
-        async with service._dispatch_lock:
-            service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = "job_after_compaction"
-        admission_finished.set()
-
     compact_task = asyncio.create_task(
-        service.run_session_idle_operation(session_id, checkpoint_operation)
+        service.run_thread_idle_operation(session_id, thread_id, checkpoint_operation)
     )
     await operation_started.wait()
-    admission_task = asyncio.create_task(competing_admission())
-    await asyncio.sleep(0)
-    assert admission_finished.is_set() is False
-
-    release_operation.set()
-    assert await compact_task == "scheduled"
-    await admission_task
-    assert admission_finished.is_set() is True
-
-    with pytest.raises(RuntimeError, match="不能修改 checkpoint"):
-        await service.run_session_idle_operation(
-            session_id,
-            checkpoint_operation,
-        )
+    admission_task = asyncio.create_task(service.start_job(
+        session_id, "与摘要竞争的输入", thread_id=thread_id,
+        message_id="msg_after_compaction", message_created_at=datetime.now(UTC).isoformat(),
+    ))
+    try:
+        sibling = await asyncio.wait_for(service.run_thread_idle_operation(
+            session_id, "thr_sibling", lambda: asyncio.sleep(0, result="sibling"),
+        ), timeout=2)
+        assert sibling == "sibling"
+        assert not admission_task.done()
+        release_operation.set()
+        assert await compact_task == "scheduled"
+        admitted = await admission_task
+        with pytest.raises(RuntimeError, match="不能修改 checkpoint"):
+            await service.run_thread_idle_operation(session_id, thread_id, checkpoint_operation)
+    finally:
+        release_operation.set()
+        release_job.set()
+        await asyncio.gather(compact_task, admission_task, return_exceptions=True)
+        await asyncio.gather(*(job.task for job in service._jobs.values() if job.task is not None))
+    assert admitted.thread_id == thread_id
 
 
 @pytest.mark.asyncio

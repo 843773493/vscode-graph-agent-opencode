@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol, TypeVar, runtime_checkable
 
 from app.domain.itemized.execution_admission import (
@@ -41,9 +42,14 @@ class JobServiceProtocol(Protocol):
 
     def get_execution_binding(self, job_id: str) -> ExecutionBinding: ...
 
-    async def run_session_idle_operation(
+    def thread_input_admission(
+        self, session_id: str, thread_id: str,
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    async def run_thread_idle_operation(
         self,
         session_id: str,
+        thread_id: str,
         operation: Callable[[], Awaitable[T]],
     ) -> T: ...
 

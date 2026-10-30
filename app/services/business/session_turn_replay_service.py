@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import zlib
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Protocol
@@ -42,10 +40,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 
 CONTEXT_ONLY_NOTICE = "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
 
-# Replay 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
-REPLAY_LOCK_SHARDS = 64
-
-
 class PreparedMessageDispatcher(Protocol):
     async def dispatch_prepared_message(
         self,
@@ -81,15 +75,6 @@ class SessionTurnReplayService:
         self._dispatcher = dispatcher
         self._trace_event_store = trace_event_store
         self._attachment_holder = attachment_holder
-        self._session_locks: tuple[asyncio.Lock, ...] = tuple(
-            asyncio.Lock() for _ in range(REPLAY_LOCK_SHARDS)
-        )
-
-    def _session_lock(self, session_id: str) -> asyncio.Lock:
-        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
-        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
-        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._session_locks)
-        return self._session_locks[shard]
 
     async def replay(
         self,
@@ -102,78 +87,77 @@ class SessionTurnReplayService:
                 "必须确认：操作会移除目标消息及其后的会话上下文，但不会撤销工作区文件修改"
             )
 
-        session_lock = self._session_lock(session_id)
-        async with session_lock, self._attachment_holder.lock_for(session_id, exclusive=False):
+        async with self._attachment_holder.lock_for(session_id, exclusive=False):
             owner = MutationIntentOwner(
                 session_id=session_id,
                 thread_id=await self._session_service.resolve_main_thread(session_id),
             )
-            # TODO：回退与普通消息准入需共享 Thread 临界区，不能跨 dispatch 持有其内部调度锁。
-            await self._assert_thread_idle(owner)
-            session = await self._session_service.get(session_id)
-            visible_messages = (
-                await self._message_service.list(session_id=session_id, limit=100_000)
-            ).items
-            target_index = next(
-                (
-                    index
-                    for index, message in enumerate(visible_messages)
-                    if message.message_id == target_message_id
-                ),
-                -1,
-            )
-            if target_index < 0:
-                raise ValueError(
-                    f"目标用户消息不在当前有效上下文中: message_id={target_message_id}"
+            async with self._job_service.thread_input_admission(session_id, owner.thread_id):
+                await self._assert_thread_idle(owner)
+                session = await self._session_service.get(session_id)
+                visible_messages = (
+                    await self._message_service.list(session_id=session_id, limit=100_000)
+                ).items
+                target_index = next(
+                    (
+                        index
+                        for index, message in enumerate(visible_messages)
+                        if message.message_id == target_message_id
+                    ),
+                    -1,
                 )
-            target = visible_messages[target_index]
-            if target.role != MessageRole.user:
-                raise ValueError("轮次操作只能以用户消息为目标")
-            target_turn_id = target.metadata.get("turn_id")
-            if not isinstance(target_turn_id, str) or not target_turn_id:
-                raise RuntimeError(f"目标用户消息缺少权威 Turn identity: message_id={target_message_id}")
+                if target_index < 0:
+                    raise ValueError(
+                        f"目标用户消息不在当前有效上下文中: message_id={target_message_id}"
+                    )
+                target = visible_messages[target_index]
+                if target.role != MessageRole.user:
+                    raise ValueError("轮次操作只能以用户消息为目标")
+                target_turn_id = target.metadata.get("turn_id")
+                if not isinstance(target_turn_id, str) or not target_turn_id:
+                    raise RuntimeError(f"目标用户消息缺少权威 Turn identity: message_id={target_message_id}")
 
-            await self._validate_action(
-                session_id=session_id,
-                request=request,
-                target=target,
-                target_index=target_index,
-                visible_messages=visible_messages,
-            )
-            content = self._resolved_content(request, target)
-            replacement = await self._message_service.create(
-                session_id,
-                MessageCreateRequest(
-                    role=MessageRole.user,
-                    content=content,
-                    attachments=target.attachments,
-                    metadata={
-                        "replay_action": request.action,
-                        "replaced_message_id": target_message_id,
-                    },
-                ),
-            )
-            with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
-                removed_message_count = await self._append_replay_checkpoint(
-                    owner=owner,
-                    target_message_id=target_message_id,
-                    target_turn_id=target_turn_id,
-                    action=request.action,
+                await self._validate_action(
+                    session_id=session_id,
+                    request=request,
+                    target=target,
+                    target_index=target_index,
+                    visible_messages=visible_messages,
                 )
-            accepted = await self._dispatcher.dispatch_prepared_message(
-                session_id,
-                replacement,
-                requested_agent_id=session.current_agent_id,
-            )
-            return MessageReplayAccepted(
-                **accepted.model_dump(),
-                session_id=session_id,
-                action=request.action,
-                replaced_message_id=target_message_id,
-                removed_message_count=removed_message_count,
-                workspace_changes_reverted=False,
-                notice=CONTEXT_ONLY_NOTICE,
-            )
+                content = self._resolved_content(request, target)
+                replacement = await self._message_service.create(
+                    session_id,
+                    MessageCreateRequest(
+                        role=MessageRole.user,
+                        content=content,
+                        attachments=target.attachments,
+                        metadata={
+                            "replay_action": request.action,
+                            "replaced_message_id": target_message_id,
+                        },
+                    ),
+                )
+                with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+                    removed_message_count = await self._append_replay_checkpoint(
+                        owner=owner,
+                        target_message_id=target_message_id,
+                        target_turn_id=target_turn_id,
+                        action=request.action,
+                    )
+                accepted = await self._dispatcher.dispatch_prepared_message(
+                    session_id,
+                    replacement,
+                    requested_agent_id=session.current_agent_id,
+                )
+                return MessageReplayAccepted(
+                    **accepted.model_dump(),
+                    session_id=session_id,
+                    action=request.action,
+                    replaced_message_id=target_message_id,
+                    removed_message_count=removed_message_count,
+                    workspace_changes_reverted=False,
+                    notice=CONTEXT_ONLY_NOTICE,
+                )
 
     async def replay_turn(
         self,

@@ -306,7 +306,10 @@ class SessionOrchestrator:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
         logger = logging.getLogger(__name__)
-        async with self._attachment_holder.lock_for(session_id, exclusive=False):
+        async with (
+            self._attachment_holder.lock_for(session_id, exclusive=False),
+            self._job_service.thread_input_admission(session_id, message.thread_id),
+        ):
             session = await self._session_service.get(session_id)
             if message.session_id != session_id:
                 raise ValueError(

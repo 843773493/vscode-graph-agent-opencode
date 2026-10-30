@@ -1379,3 +1379,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 25项单测通过；强化后的正式 `integration-thread-rewind-isolation` 为1 passed/105.71秒，runner114.36秒。真实入口验证 child 运行时 main 可重生成、main自身运行时仍返回409且两份完整SQLite/JSONL不变，随后保留硬重启、child续聊及5次原sealed请求的owner/hash审计。固定180秒/4GiB和原跨worktree独占闸门；旧实现失败原件保留。
 - 受改业务与测试Ruff通过；API仅更新过期方法名注释，AST未改变，该文件现有13条Depends默认参数B008未扩修。真实Pyright当前9条诊断与修改前原checkpoint方法逐项同规则/消息，新增集成逻辑零诊断，不称类型全绿。通过后的生产改动仅增加并发准入TODO，AST与受测版本一致。
 - 同Thread普通消息准入与回退的并发窗口尚未收口，已在代码登记TODO；本片只证明上述Thread隔离，不证明同Thread准入原子性、Web、Windows、同步入口或全部8.3。准确命令、源码指纹、原始输出、退出码和范围见 `out/tests/temp/replay_thread_idle_20261030/artifacts/verification.json`。7.5/8.3及整体111/119保持未关闭；前端、团队专项与他人共享暂存不纳入本片提交。
+
+### 2026-10-30 8.3 同 Thread 消息、回退与手动摘要准入（部分）
+
+- 普通消息的 canonical acceptance→Job 登记、直接 Job 准入、main replay 和手动摘要共用精确 `(session_id, thread_id)` 临界区；以真实 Task 身份重入，派生 Task 不继承锁所有权。等待者计入原 Session preparation，取消、退出后归还计数与锁条目。删除 replay 独立分片锁及单 Session checkpoint idle 接口，迁齐协议、调用方与测试装具；原多 Session 存储 idle 操作继续承担自己的职责，不跨业务 await 持全局调度锁。
+- 完整 HEAD 归档中的两项新 API 负例均失败：新消息在 replay 空闲检查后推进最后用户轮次，或 acceptance 未登记 Job 时 replay 已开始检查。修复后的正式 `integration-thread-input-admission` 为3 passed／128.50秒、exit0：覆盖双顺序竞争、main 手动摘要暂停期间 child 完成真实模型执行、main 新消息等待、随后真正摘要和后继响应；关键历史及 child 通过消息与公开 fork 生成，模型复用 model_stream。中间版本还复现了 Session 写锁阻塞 child；手动摘要现只在读取会话信息及发布请求标记时持短写锁，读取/判断期间由原 preparation 和 Thread 准入保护存储及目标 Thread。
+- 定向单测74 passed／30.59秒，加 preparation/deadline/cleanup/cancel/pending 回归43 passed／24.91秒；缩短 Session 临界区后的既有摘要/删除 API 14项通过，附件装具显式迁齐后11 passed／61.29秒。合计145个不同相关用例通过，不将重复运行计入数量。所有测试保留进程外超时与4GiB保护，集成串行；早期资源服务/Gateway身份/临时端口装配失败及漏配摘要响应的原件均保留，不计为业务通过。
+- 受改 Ruff通过；生产Pyright的17条诊断与完整HEAD基线按文件、规则、完整消息、AST方法owner和诊断表达式逐项一致，新增准入与新验收零诊断，不称类型全绿。作者AST自查：准入锁独立46行模块，Job目录直接Python文件9个；既有service.py仍1952行，本片不关闭7.5-F架构门，也不冒称独立审查。
+- 准确命令、源码指纹、退出码、失败归因与证据见 `out/tests/temp/thread_input_admission_20261030/artifacts/verification.json`。本片不新增Web、真实Gateway业务代理、OS重启、同步入口或Windows证据；7.5/8.3及整体111/119保持未关闭。前端、团队专项、MCP持有延期项、他人改动与共享暂存不纳入本片提交。

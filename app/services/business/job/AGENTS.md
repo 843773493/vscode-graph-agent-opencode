@@ -8,6 +8,7 @@
 Job业务
 ├── 执行与状态
 │   ├── service.py                    Job准入、执行调度与生命周期协调
+│   ├── input_admission.py            acceptance/Job登记与上下文修改的Thread临界区
 │   ├── runtime_state.py              单个Job的运行时状态与执行句柄
 │   └── lifecycle.py                  状态转换规则与允许状态集合
 ├── 用户控制

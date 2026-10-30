@@ -4,6 +4,8 @@
 
 `integration-thread-rewind-isolation` 经真实 Gateway/Backend 消息、fork 与 main regenerate 验证 child 完整存储和请求隔离、硬重启后的历史及 child 续聊；只读核对原封存请求与 owner/hash。固定180秒/4GiB及原集成独占闸门，不代替 compaction、Web、Windows 或完整8.3。
 
+`integration-thread-input-admission` 经 ASGI 消息、回退和手动摘要入口及真实 Agent/model_stream 验证同 Thread 的 acceptance→Job 登记互斥，以及同 Session 的 child 并行；关键历史与 child 经产品入口生成。固定180秒/4GiB及原集成独占闸门，不代替真实 Gateway 业务代理、Web、重启或 Windows 验收。
+
 `integration-thread-compaction-isolation` 经真实 Gateway/Backend 消息生成六轮长历史和 child，再由手动摘要入口及后继执行生成摘要，核 child 完整存储不变、硬重启及未摘要历史续聊请求。两项 Thread 视图 suite 分别选择单个用例，串行运行，各保留180秒/4GiB及原集成独占闸门，不代替 Web、Windows 或完整8.3。
 
 `integration-child-compaction-isolation` 经正式工具选择、真实消息/fork/child 摘要工具及归档读取，核 main 完整存储隔离、硬重启和双方续聊请求；固定300秒/4GiB及原集成独占闸门。模型 usage 由原 model_stream 编码器提供，不修改产品摘要阈值，不代替 Web、Windows 或完整8.3。

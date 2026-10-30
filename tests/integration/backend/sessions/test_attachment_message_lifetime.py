@@ -54,6 +54,7 @@ from app.schemas.internal_v2.message import (
     RunOptions,
 )
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -313,6 +314,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
                 validate_agent_id=lambda agent_id: None,
             ),
             job_service=SimpleNamespace(
+                thread_input_admission=ThreadInputAdmission().hold,
                 run_session_preparation=run_preparation, start_job=start_job,
                 reserve_user_execution_identity=lambda: identity,
             ),

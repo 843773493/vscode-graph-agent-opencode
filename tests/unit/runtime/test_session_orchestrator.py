@@ -25,6 +25,7 @@ from app.schemas.internal_v2.message import (
     MessageRunRequest,
     RunOptions,
 )
+from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
 )
@@ -59,6 +60,7 @@ def prepared_child_dispatch_context(attachment_holder):
             update={"thread_id": kwargs["thread_id"]}
         )
 
+    jobs.thread_input_admission = ThreadInputAdmission().hold
     jobs.run_session_preparation = run_preparation
     jobs.start_job = start_job
     bus = JobEventBus()
@@ -285,6 +287,8 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
     captured: dict[str, str] = {}
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_test_001")
 
@@ -327,6 +331,8 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
     captured: dict[str, object] = {}
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_system_reminder")
 
@@ -385,6 +391,8 @@ async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content(
     captured: dict[str, object] = {}
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_internal_display")
 
@@ -431,6 +439,8 @@ async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content(
 @pytest.mark.asyncio
 async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata(attachment_holder):
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_hidden_internal")
 
@@ -473,6 +483,8 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(at
     message_service = _FakeMessageService()
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_literal_markup")
 
@@ -555,6 +567,8 @@ async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_ho
     captured: dict[str, object] = {}
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_interrupt")
 
@@ -589,6 +603,8 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
     captured: dict[str, str] = {}
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_test_002")
 
@@ -631,6 +647,8 @@ async def test_orchestrator_fails_closed_when_session_lacks_main_thread(attachme
     """SessionDTO 缺权威 main thread 身份时必须显式失败，不得用 session_id 冒充。"""
 
     class _FakeJobService:
+        thread_input_admission = ThreadInputAdmission().hold
+
         def reserve_user_execution_identity(self):
             return _user_identity("job_should_not_start")
 
