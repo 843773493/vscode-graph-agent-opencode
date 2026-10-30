@@ -12,6 +12,8 @@
 
 `integration-fork-prepared-control` 经真实消息和 fork 入口建立未发布目标，核只读校验不补建空/缺表控制库、不切换 journal、不重建缺失文件；故障恢复后由同一操作完成发布与幂等重试。固定120秒/4GiB及单次60秒fork期限，使用 model_stream，不代表独立进程重启、Gateway/Web或Windows验收。
 
+`integration-fork-child-publication` 经消息／Agent 生成带附件历史，核 child 发布后确认写入前后及阶段观察失败的原错误、唯一目标、附件结算和同 key 恢复。固定180秒/4GiB及原60秒fork期限，复用 model_stream 和集成独占闸门；不代表真实网络、OS重启、Gateway/Web或团队验收。
+
 `integration-chatgpt-auth-errors` 经真实认证、模型工厂、Agent服务及ASGI路由验证凭据读取、结构拒绝及迁移/刷新发布失败的错误归属、文件不变与同入口恢复，固定60秒/4GiB；仅替换原生故障和路由依赖装配，不代表真实OAuth网络、Gateway、独立Backend或Web验收。
 
 存放测试套件注册、能力矩阵和统一命令入口，不包含具体测试实现。

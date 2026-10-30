@@ -1352,3 +1352,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 连接／锁定向回归38 passed/0.84秒；最终正式`integration-rollout-snapshot-release`为16 passed/19.66秒，包含最终源码的8项新增释放场景与原8项独立reader／硬退出恢复场景。核同一原连接实际关闭、另线程真实独占锁与BEGIN IMMEDIATE可用、已提交canonical字节及冷读身份不变；尾部回滚失败的单测明确保留未清尾部，不以helper证明完整执行或进程恢复。
 - Ruff／compileall／strict通过，新增两份测试真实Pyright零诊断。首轮静态的嵌套with及测试原生方法类型问题已修正，最终源码集中复验；原失败输出不覆盖。作者AST审查确认仅3个生命周期方法变化、公开签名／SQL操作／错误文本不变，依赖只增加标准库ExitStack；原255文件静态清单不冒称当前独立审查。
 - 各运行串行，正式matrix保留跨worktree集成闸门、60秒／4GiB及进程组回收，另有外部85秒／整组4GiB／零swap／2核CPU保护。3531项源码前后指纹一致，原Debug PID未重启；其他工作区及共享暂存内容不纳入本次提交，前端和延期协作保持原边界。准确命令、raw、退出码、指纹与作者审查见`out/tests/temp/uri-global-closure/artifacts/verification-118.json`。本切片不代替公开消息执行、Gateway/Web、Windows实机或7.5组合总门，7.5继续未勾。
+
+
+### 2026-10-30 7.5-C child 发布确认失败与原操作恢复（部分）
+
+- 原生产最小反例确认：首次 child publication 的附件回调或阶段观察抛出 RuntimeError，会被 CAS 捕获当成已发布结果返回；两例均在“未传播原错误”处失败。现将错误捕获限制为发布前复验/CAS及同 key 已发布身份核对，首次成功和已提交未确认恢复共用仍持原 gate 的确认尾段；确认失败保留原错误、已发布 child、capture、claim 和结算事实，不倒删或中止已发布目标。真正发布前失败仍先释放 gate，再按原 owner 定点清理；生产只改变原方法，净减4行。
+- 最终单元回归92 passed/5.43秒，含原创建/CAS/身份冲突/删除竞争/清理场景和4项回调/phase失败，另核真实OS锁在确认中仍持有、失败后可重取。正式 integration-fork-child-publication 为3 passed/45.51秒；历史由消息/Agent入口与 model_stream 生成，覆盖附件确认写入前、写入后和phase失败，逐项核原错误对象、唯一idle child、原capture/claim/结算、JSONL字节和同key重试不重新物化、不创建execution。固定180秒/4GiB及单fork60秒watchdog，使用现有集成独占闸门。
+- Ruff和strict通过；完整HEAD归档的生产Pyright与最终三文件均为相同6条既有诊断，逐项比对文件/规则/消息/位置零新增，新增两份测试零诊断，不称类型全绿。作者AST自查确认仅 ThreadCreationService._publish_in_gate 变化，imports和公开签名不变，未新增生产模块/领域或双轨；不称独立审查。
+- 初版装具遗漏details参数，前两轮未完成并以143结束，均不作业务红例；补同产品入口的finally收尾后暴露并修正参数错误。单测首次两轮分别被缺参数和空历史回调合同拒绝，也不作目标缺陷证据；真正红例是发布阶段的两项RuntimeError未传播。原始输出全部保留，不改变fork期限。准确命令、实际退出码、收据指纹、类型基线及范围见 out/tests/temp/child_publication_20261030/artifacts/verification.json。
+- 本切片是进程内消息/Agent与fork服务验收，不新增真实网络、Gateway/Web、OS强杀重启或Windows证据，不处理延期团队功能。7.5和8.3组合门仍未关闭，整体保持111/119；其他agent前端与共享暂存改动不纳入本次提交。

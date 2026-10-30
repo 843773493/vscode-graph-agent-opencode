@@ -161,6 +161,11 @@ fork SHALL 使用既有 operation journal 固定请求 preimage、来源 snapsho
 - **WHEN** target 已发布但资源回执尚未终结，随后进程退出或目标被删除
 - **THEN** 恢复按原 journal 和目标 fence 定点确认或释放，不重复导入、不复活目标、不以响应丢失推断未执行
 
+#### Scenario: child 发布后的确认失败明确传播并可补齐
+
+- **WHEN** child catalog 已提交，原目标 gate 内的附件 publication 确认或发布阶段观察失败，包括另一执行根已提交同 key 后的恢复确认
+- **THEN** 原错误必须传播，不能将该失败当作 CAS 冲突并返回成功；保留已发布 child、原 capture、附件 claim 和结算事实，不清理或中止已发布目标。同 key 重试只补齐原确认与结算，不重新物化或创建 child，身份冲突仍明确拒绝
+
 ### Requirement: Fork 测试 fixture 对单次操作施加固定期限
 
 所有触发 fork 的测试 fixture SHALL 对单次 fork 操作施加固定 60 秒的单调绝对期限：浏览器场景从用户确认提交开始，API 场景从发出请求开始，直接服务调用从进入调用开始；fixture setup、弹窗中的用户思考时间和 fork 完成后的独立聊天不计入。操作完成以服务端可证明目标已 durable/published 的完成结果为准；跨 Gateway 场景中 `pending` 回执不算完成，必须等到 owner 确认。

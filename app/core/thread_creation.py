@@ -1325,8 +1325,7 @@ class ThreadCreationService:
         before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
         on_published: Callable[[ThreadCreationRecord], None] | None = None,
     ) -> ThreadCreationRecord:
-        """topology shared → Session gate exclusive 内 CAS publish；
-        失败定点清理 + abort。
+        """持 gate 完成 CAS 与发布确认；仅发布前失败可定点清理 + abort。
 
         publish 临界区**先 fresh 复验 workspace catalog owner 节点仍
         active**：R14 删除流的提交点是 catalog 整树 deleting，而 per-session
@@ -1336,8 +1335,10 @@ class ThreadCreationService:
         （fail closed：deleting 时新可见性发布必须取消）。
         """
         idempotency_key = record.thread_creation_idempotency_key
-        try:
-            async with self._gate.shared(), self._session_gate.exclusive(session_id):
+        published: ThreadCreationRecord | None = None
+        publish_error: RuntimeError | None = None
+        async with self._gate.shared(), self._session_gate.exclusive(session_id):
+            try:
                 # fresh 复验：workspace catalog owner 节点必须仍 active
                 # （与步骤 1 同一投影口径；不重基、不降级）。catalog
                 # deleting → 统一 session_deletion_pending 合同（2.3-D）。
@@ -1357,16 +1358,46 @@ class ThreadCreationService:
                 published = self._control_store.publish_thread_creation_record(
                     idempotency_key, session_id=session_id
                 )
+            except SessionDeletionPendingError as error:
+                publish_error = error
+            except RuntimeError as error:
+                current = self._control_store.get_thread_creation_record(idempotency_key)
+                if current.state == "published":
+                    # 另一执行根已提交同 key 时，只恢复身份完全一致的原结果。
+                    if (
+                        current.preimage_hash != record.preimage_hash
+                        or current.child_thread_id != record.child_thread_id
+                    ):
+                        raise RuntimeError(
+                            "thread creation publish 失败：record 已 published "
+                            "但身份与本次请求不一致（同 key 不同内容，fail "
+                            "closed，拒绝复用）: "
+                            f"key={idempotency_key!r}, "
+                            f"existing_preimage={current.preimage_hash!r}, "
+                            f"requested_preimage={record.preimage_hash!r}, "
+                            f"existing_child={current.child_thread_id!r}, "
+                            f"requested_child={record.child_thread_id!r}"
+                        ) from error
+                    published = current
+                else:
+                    publish_error = error
+            if published is not None:
+                # 已提交事实不进入 CAS 失败处理；确认失败保留原 child、claim 和错误。
+                # 首次提交与另一执行根已提交的恢复共用此尾段，仍持原 target gate。
                 if on_published is not None:
                     on_published(published)
                 await observe_phase(idempotency_key, "thread.creation.published")
-        except SessionDeletionPendingError as error:
+                return published
+
+        # 清理会进入其它 owner，必须先释放发布 gate。
+        assert publish_error is not None
+        current = self._control_store.get_thread_creation_record(idempotency_key)
+        if isinstance(publish_error, SessionDeletionPendingError):
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），
             # 错误类型原样传播（调用方据此终止，不换 key 重放）。
             reason = "session_deletion_pending: " + _thread_failure_detail(
-                session_id, record.child_thread_id, "publish", error,
+                session_id, record.child_thread_id, "publish", publish_error,
             )
-            current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "preparing":
                 await self._cleanup_after_failed_publish(
                     current,
@@ -1378,64 +1409,29 @@ class ThreadCreationService:
                 self._control_store.abort_thread_creation_record(
                     idempotency_key, reason
                 )
-            raise SessionDeletionPendingError(reason) from error
-        except RuntimeError as error:
-            # TODO(8.5): 本 except 目前把**全部** RuntimeError 视为确定性
-            # publish 冲突并走定点清理 + abort；8.5 扩展 publish 错误面
-            # （引入可重试错误）时必须收窄捕获范围——可用
-            # ``type(error) is RuntimeError`` 精确捕获确定性冲突，让
-            # RuntimeError 子类（可重试类）向调用方传播而不误 abort 换 key。
-            reason = _thread_failure_detail(session_id, record.child_thread_id, "publish", error)
-            current = self._control_store.get_thread_creation_record(idempotency_key)
-            if current.state == "published":
-                # 跨执行根（多进程 GUI/worker/CLI）重复投递同一
-                # idempotency_key：进程内 asyncio.Lock 只保护本进程，另一
-                # 实例可能已完成唯一可见性提交点。按 create-or-get 语义
-                # 幂等恢复同一结果；但仅当身份逐字段一致才算命中——key
-                # 相同内容不同（preimage/child 漂移）必须 fail closed，绝不
-                # 静默复用他人线程。绝不走定点清理/abort（那是给真失败准备
-                # 的路，会误删/误 abort 已发布线程）。
-                if (
-                    current.preimage_hash != record.preimage_hash
-                    or current.child_thread_id != record.child_thread_id
-                ):
-                    raise RuntimeError(
-                        "thread creation publish 失败：record 已 published "
-                        "但身份与本次请求不一致（同 key 不同内容，fail "
-                        "closed，拒绝复用）: "
-                        f"key={idempotency_key!r}, "
-                        f"existing_preimage={current.preimage_hash!r}, "
-                        f"requested_preimage={record.preimage_hash!r}, "
-                        f"existing_child={current.child_thread_id!r}, "
-                        f"requested_child={record.child_thread_id!r}"
-                    ) from error
-                return current
-            if current.state != "preparing":
-                # aborted（或未知非 preparing 态）：不清理、原样失败。
-                raise RuntimeError(
-                    "thread creation publish 失败且 record 已非 preparing"
-                    f"（state={current.state!r}），不执行定点清理: "
-                    f"key={idempotency_key!r}: {reason}"
-                ) from error
-            # CAS 失败：不发布、不重基——按 record 定点清理 staging/final
-            # 目录（清理失败保持 record preparing 并直接抛错，人工核账），
-            # 再 abort record（8.5-A：调用方以新 operation 重试）。
-            await self._cleanup_after_failed_publish(
-                current,
-                session_id=session_id,
-                session_dir=session_dir,
-                inventory=inventory,
-                before_abort=before_abort,
-            )
-            self._control_store.abort_thread_creation_record(
-                idempotency_key, reason
-            )
+            raise SessionDeletionPendingError(reason) from publish_error
+        # TODO(8.5): 发布前 RuntimeError 仍按确定性冲突处理；新增可重试错误时明确区分。
+        reason = _thread_failure_detail(session_id, record.child_thread_id, "publish", publish_error)
+        if current.state != "preparing":
+            # aborted 或释放 gate 后已由其它执行根发布：不清理、不倒删。
             raise RuntimeError(
-                "thread creation publish CAS 失败，已定点清理 record 列出的"
-                "目录并 abort record，调用方须换新 idempotency_key 重试: "
+                "thread creation publish 失败且 record 已非 preparing"
+                f"（state={current.state!r}），不执行定点清理: "
                 f"key={idempotency_key!r}: {reason}"
-            ) from error
-        return published
+            ) from publish_error
+        await self._cleanup_after_failed_publish(
+            current,
+            session_id=session_id,
+            session_dir=session_dir,
+            inventory=inventory,
+            before_abort=before_abort,
+        )
+        self._control_store.abort_thread_creation_record(idempotency_key, reason)
+        raise RuntimeError(
+            "thread creation publish CAS 失败，已定点清理 record 列出的"
+            "目录并 abort record，调用方须换新 idempotency_key 重试: "
+            f"key={idempotency_key!r}: {reason}"
+        ) from publish_error
 
     @staticmethod
     def _has_fork_completion(record: ThreadCreationRecord, session_id: str) -> bool:
