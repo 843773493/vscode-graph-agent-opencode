@@ -127,7 +127,7 @@ class FederationCredentialStore:
             # 只有尚未打开的缺文件表示空库；权限核验等后续失败不能被当作未配置。
             if stage == "open" and isinstance(error, FileNotFoundError):
                 return {}
-            raise _file_access_error(self._storage_path, "federation_credentials", "read", stage, error) from error
+            raise credential_file_error(self._storage_path, "federation_credentials", "read", stage, error) from error
 
     def _save(self, credentials: dict[str, FederationCredential]) -> None:
         payload = {
@@ -174,7 +174,7 @@ class FederationCredentialStore:
             os.replace(temporary_path, self._storage_path)
             temporary_path = None
         except (OSError, ValueError, TypeError, RuntimeError) as error:
-            primary_error = _file_access_error(self._storage_path, "federation_credentials", "write", stage, error)
+            primary_error = credential_file_error(self._storage_path, "federation_credentials", "write", stage, error)
             raise primary_error from error
         except BaseException as error:
             primary_error = error
@@ -185,12 +185,12 @@ class FederationCredentialStore:
                 try:
                     os.close(descriptor)
                 except OSError as error:
-                    cleanup_errors.append(_file_access_error(self._storage_path, "federation_credentials", "write", "close_descriptor", error))
+                    cleanup_errors.append(credential_file_error(self._storage_path, "federation_credentials", "write", "close_descriptor", error))
             if temporary_path is not None:
                 try:
                     temporary_path.unlink(missing_ok=True)
                 except OSError as error:
-                    cleanup_errors.append(_file_access_error(self._storage_path, "federation_credentials", "write", "cleanup", error))
+                    cleanup_errors.append(credential_file_error(self._storage_path, "federation_credentials", "write", "cleanup", error))
             if cleanup_errors:
                 if primary_error is not None:
                     cleanup_errors.insert(0, primary_error)
@@ -201,15 +201,21 @@ class FederationCredentialStore:
                 ) from primary_error
 
 
-def _file_access_error(
+def credential_file_error(
     storage_path: Path,
-    artifact: Literal["federation_credentials", "gateway_identity"],
+    artifact: Literal["federation_credentials", "gateway_identity", "local_token"],
     operation: Literal["read", "write"],
     stage: str,
     error: OSError | ValueError | TypeError | KeyError | RuntimeError,
 ) -> Exception:
     action = "读取" if operation == "read" else "写入"
-    label = "Gateway 身份文件非法" if artifact == "gateway_identity" else f"联邦凭据{action}失败"
+    label = {
+        "gateway_identity": "Gateway 身份文件非法",
+        "federation_credentials": f"联邦凭据{action}失败",
+        "local_token": f"Gateway 本地凭据{action}失败",
+    }[artifact]
+    if artifact == "local_token" and stage == "validate":
+        label = "Gateway 本地凭据文件为空"
     detail = f"{label}: artifact={artifact}, stage={stage}, error={type(error).__name__}"
     if isinstance(error, OSError):
         detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
@@ -268,7 +274,7 @@ def load_or_create_gateway_id(storage_path: Path) -> str:
             stage = "close"
         return gateway_id
     except (OSError, ValueError, TypeError, RuntimeError) as error:
-        primary_error = _file_access_error(storage_path, "gateway_identity", "read" if stage in {
+        primary_error = credential_file_error(storage_path, "gateway_identity", "read" if stage in {
             "stat", "read", "decode", "validate",
         } else "write", stage, error)
         raise primary_error from error
@@ -280,7 +286,7 @@ def load_or_create_gateway_id(storage_path: Path) -> str:
             try:
                 os.close(descriptor)
             except OSError as error:
-                cleanup_error = _file_access_error(storage_path, "gateway_identity", "write", "close_descriptor", error)
+                cleanup_error = credential_file_error(storage_path, "gateway_identity", "write", "close_descriptor", error)
                 if primary_error is not None:
                     raise BaseExceptionGroup(
                         "Gateway 身份创建与收尾均失败: artifact=gateway_identity, stage=close_descriptor",

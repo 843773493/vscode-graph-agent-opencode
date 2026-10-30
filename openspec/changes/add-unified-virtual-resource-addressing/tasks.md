@@ -1601,3 +1601,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 定义校验与执行前 prompt 解析继续共用原 JSON Schema validator，错误出口复用 `failure_detail`；公开 provider 身份、阶段、异常类别、顶层标识符参数、深度和规则，输入值、动态嵌套键与 schema 正文留原始诊断。保留直接 `ValidationError` cause；日志 ENOTDIR 仅追加次错类别，完整次错附原异常，不新增校验器或错误存储。
 - 旧实现28项有效反例检出输入／动态键外泄；另4项 pattern 场景的原件断言未考虑正则转义，修正测试后最终53项生成器单测通过。2项ASGI集成经实际Session创建、定义校验、任务创建／更新和Agent／model_stream执行通过，核400／request_id、拒绝后零导航／任务／Job副作用、原task及revision不变和同Thread后续真实请求。首次集成误读错误字段为message，按既有detail合同修正后通过，未修改产品错误信封。
 - Ruff、三文件Pyright、compileall与本change strict通过；作者AST核只改原resolver，未新增生产模块，新集成子目录有四段AGENTS。准确命令、指纹、原始输出及实际退出码见 `out/tests/temp/generation_validation_20261030/artifacts/verification.json`。新suite固定60秒／4GiB；本次定向集成保留独占闸门和进程外700秒／4GiB保护，含等待名额总160.33秒。不代真实Gateway业务代理、真实Provider、Web、Backend硬重启、Windows或URI全局盘点，2.2／7.2仍未勾；前端、原Debug服务与协作延期边界保持。
+
+
+### 2026-10-30 Gateway 本地 token 的读取与创建错误（2.2／7.2部分收口）
+
+- 本地 token 复用原凭据文件错误出口；原私有函数正名为 `credential_file_error`，联邦凭据和 Gateway 身份的调用方同批迁移，删除旧符号。普通错误仅报告 artifact、阶段、类别及适用系统码，位置与日志次错留诊断／直接 cause，解码异常不将凭据正文写入日志。仅打开时缺文件才进入原首次创建链；权限核验失败不得重新创建。fdopen 成功前仍由当前调用关闭原描述符，取消保持原实例，主错与收尾再次失败同时保留；创建竞争继续明确拒绝并保留胜出者凭据，不覆盖、不轮换或另建写入链。
+- 原实现16项新增反例全部失败；修复后凭据与鉴权91项单测通过、2项 Windows 实机场景在 Linux 跳过。最终23项本地／私有凭据复验是其中子集，不重复相加。真实 Gateway 原联邦 HTTP 场景通过；新增场景经正式 local-credential 入口创建 token，完成空文件、UTF-8 损坏、权限和目录冲突 × 正常／真实 ENOTDIR 日志的8种组合，核500、原类别、同 request_id、原字节、密钥不进入错误／日志及恢复后同 token 和工作区完整状态。首次新增场景误将每次重算的 checked_at 当作固定业务字段；核原 list_dtos producer 后改为检查时间不倒退，其余字段仍完整比较。原产品未为此调整，原联邦场景和装具函数 AST 保持。
+- 定向 HTTP 复验曾因其它会话 Web 测试占用跨 worktree 闸门，在原600秒等待上限前未取得名额；该次仅 setup 失败，没有启动服务，不计业务验证。观察闸门实际释放后以60秒／4GiB保护复验，1 passed／24.29秒（外层26.34秒）；不绕过闸门、不调整并发或共享 debug 服务。Ruff／compileall通过；Pyright保留未改动 verify_gateway_token 的1条返回类型诊断，原函数及 supplier 返回注解逐 AST 核对不变，新测试类型问题已修复。准确命令、源码指纹、原始失败／退出码、作者结构自查与最终收据见 `out/tests/temp/local_token_errors_20261030/artifacts/verification.json`。本片不代完整 Web、Windows、Backend 硬重启或 URI 全局不变量验收，2.2／7.2保持未勾；前端、Workbench、其它会话独有改动和暂存保持。

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 from traceback import format_exception
 
@@ -125,5 +126,107 @@ async def test_federation_credential_and_log_failures_keep_http_classification_a
         assert str(blocked / "service.log") in logs and "NotADirectoryError" in logs
         assert credential.token not in logs
         (context.artifacts_dir / "credential-errors.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="使用 POSIX 权限故障；不代替 Windows ACL 实机验收")
+@pytest.mark.asyncio
+async def test_local_token_corruption_and_log_failures_keep_http_errors_and_original_token(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    workspace = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=workspace)
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    runtime.mkdir(parents=True, exist_ok=True)
+    blocker = runtime / "blocked-local-token-log"
+    blocker.write_text("日志目录阻塞文件", encoding="utf-8")
+    control = runtime / "local-token-sink-enabled"
+    audit = context.artifacts_dir / "local-token-sink-diagnostics.jsonl"
+    audit.unlink(missing_ok=True)
+    ports = integration_port_block_for_file(Path(request.node.fspath))
+    evidence = []
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=workspace, default_backend_url=None, port=ports.port(0),
+            artifacts_dir=context.artifacts_dir, asgi_app=f"{__name__}:create_credential_diagnostic_failure_app",
+            extra_env={"BOXTEAM_TEST_CREDENTIAL_SINK_CONTROL": str(control),
+                       "BOXTEAM_TEST_CREDENTIAL_SINK_DESTINATION": str(blocker / "service.log"),
+                       "BOXTEAM_TEST_CREDENTIAL_SINK_AUDIT": str(audit)},
+        )
+        processes.callback(close_gateway_process, gateway)
+        path = context.boxteam_home / "state/gateway/credentials/local-token"
+        # 移除启动装具的固定 token，关键凭据由正式产品入口创建。
+        path.unlink()
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", timeout=20) as client:
+            issued = await client.get("/api/gateway/auth/local-credential")
+            assert issued.status_code == 200, issued.text
+            token = issued.json()["data"]["token"]
+            assert token and token != "local-dev-token"
+            original = path.read_bytes()
+            headers = {"X-Local-Token": token}
+            healthy = await client.get("/api/gateway/workspaces", headers=headers)
+            assert healthy.status_code == 200, healthy.text
+            for sink_failed in (False, True):
+                if sink_failed:
+                    control.touch()
+                for damage, error_type in (("empty", "ValueError"), ("utf8", "UnicodeDecodeError"),
+                                           ("permissions", "PermissionError"), ("directory", "IsADirectoryError")):
+                    if damage == "empty":
+                        path.write_bytes(b" \n")
+                    elif damage == "utf8":
+                        path.write_bytes(token.encode() + b"\xff")
+                    elif damage == "permissions":
+                        path.chmod(0o644)
+                    else:
+                        path.unlink()
+                        path.mkdir()
+                    damaged = path.read_bytes() if damage != "directory" else None
+                    try:
+                        request_id = f"req_local_credential_{damage}_{int(sink_failed)}"
+                        rejected = await client.get("/api/gateway/workspaces", headers={
+                            **headers, "X-Request-ID": request_id,
+                        })
+                        assert rejected.status_code == 500, rejected.text
+                        assert rejected.json()["request_id"] == rejected.headers["X-Request-ID"] == request_id
+                        assert f"error={error_type}" in rejected.text
+                        assert all(value not in rejected.text for value in (str(path), str(blocker), token))
+                        if damage == "directory":
+                            assert path.is_dir() and not list(path.iterdir())
+                        else:
+                            assert path.read_bytes() == damaged
+                        evidence.append({"damage": damage, "sink_failed": sink_failed, "response": rejected.json()})
+                    finally:
+                        if damage == "directory":
+                            path.rmdir()
+                        path.write_bytes(original)
+                        path.chmod(0o600)
+                    recovered = await client.get("/api/gateway/workspaces", headers=headers)
+                    assert recovered.status_code == 200, recovered.text
+                    recovered_data = recovered.json()["data"]
+                    healthy_data = healthy.json()["data"]
+                    # list_dtos 每次生成新的 checked_at；其余字段必须逐项保持。
+                    for current, prior in zip(recovered_data["items"], healthy_data["items"], strict=True):
+                        assert datetime.fromisoformat(current["checked_at"]) >= datetime.fromisoformat(prior["checked_at"])
+                        current["checked_at"] = prior["checked_at"]
+                    assert recovered_data == healthy_data
+                    reloaded = await client.get("/api/gateway/auth/local-credential")
+                    assert reloaded.status_code == 200 and reloaded.json()["data"]["token"] == token
+                    assert path.read_bytes() == original
+            control.unlink()
+        records = [json.loads(line) for line in audit.read_text().splitlines()]
+        assert len(records) == 4
+        for record, damage in zip(records, ("empty", "utf8", "permissions", "directory"), strict=True):
+            assert "artifact=local_token" in record["message"] and str(path) in record["message"]
+            assert f"request_id=req_local_credential_{damage}_1" in record["message"]
+            if damage in {"empty", "utf8"}:
+                assert record["error_type"] is None and record["diagnostic"] is None
+            else:
+                assert str(path) in record["diagnostic"]
+        assert token not in audit.read_text()
+        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+        assert str(blocker / "service.log") in logs and token not in logs
+        (context.artifacts_dir / "local-token-errors.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )
