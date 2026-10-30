@@ -399,4 +399,6 @@ Terminal 与 Browser 的 HTTP 正文读取统一到共享的 `serverJsonRequest.
 
 Gateway profile 的原生存储与 JSON/UTF-8 解码失败复用 `failure_detail` 的统一诊断出口，公开说明沿用 profile owner 的用户、操作、原异常类别及坐标合同。日志次错原文附到原异常，普通说明补充日志失败类别，不能替换主失败或把 sink 的文件位置送到普通 HTTP。原账户回滚/删除顺序、原子文件写入、主题资源目录与损坏原件保持，不增加日志回退或新 profile owner。
 
+原 profile 原子写入在 `fdopen` 成功后才移交临时描述符，成功移交后只由原 stream 关闭；构造失败时先关闭尚未移交的描述符，仍继续定点清理本次临时文件。关闭或清理再失败均附在原异常 notes，保留原异常实例及中断，不能以次错替换主失败；普通 HTTP 继续消费既有 owner 的公开事实，完整位置与次错只留诊断。原 replace、文件同步、私有权限、创建回滚及删除顺序保持，不增加另一文件 writer 或清理扫描。
+
 旧生成器显式导入沿原`import_generator`校验分支记录新失败事实：reason只包含阶段、task/workspace身份与异常类别，完整原错由共享诊断出口保留。安装事务、needs_attention与修复后显式恢复保持原链；同一导入幂等重试不覆盖新revision，旧运行的历史error和generation正文不被新校验结果改写。此处不增加管理例外，也不将受支持provider/版本的明确不可用说明误当作原生异常正文。

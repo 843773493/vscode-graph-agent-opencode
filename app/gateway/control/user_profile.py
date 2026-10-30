@@ -245,9 +245,12 @@ def _atomic_write_text(path: Path, content: str) -> None:
         text=True,
     )
     temporary_path = Path(temporary_name)
-    primary_error: Exception | None = None
+    primary_error: BaseException | None = None
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        stream = os.fdopen(descriptor, "w", encoding="utf-8")
+        # fdopen成功才移交；失败时原描述符仍由本次写入负责关闭。
+        descriptor = None
+        with stream as file:
             restrict_private_path_access(
                 temporary_path,
                 descriptor=file.fileno(),
@@ -256,10 +259,20 @@ def _atomic_write_text(path: Path, content: str) -> None:
             file.flush()
             os.fsync(file.fileno())
         os.replace(temporary_path, path)
-    except Exception as error:
+    except BaseException as error:
         primary_error = error
         raise
     finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    "用户 profile 未移交描述符关闭失败: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
         try:
             temporary_path.unlink(missing_ok=True)
         except Exception as cleanup_error:

@@ -1638,3 +1638,12 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原生产新增44项中22项正常日志通过、22项日志故障反例失败；修复后340项相关owner／API单测及4项正式Session／ASGI／真实PTY或Chromium／HTTP场景通过（后者36.63秒）。真实创建后仅注入损坏回执及日志故障，核HTTP类型／request_id、外部身份、可发现unknown和精确lease冷读；存活查询不结清，正式stop回执核实后settle。两处旧API测试只迁移诊断断言至完整原异常notes，原业务断言保留。
 - Ruff通过；Pyright的26条诊断均位于与HEAD逐函数AST相同的既有函数，新增测试及改动函数无诊断，未称类型全绿。最初集成4项在fixture端口49160的TIME_WAIT阶段失败；无监听且真实bind成功后才复验，不杀进程、不换端口。另一次单测选择器误指不存在文件，零用例运行；原始输出保留，不计通过。
 - 准确命令、源码指纹、原始输出及退出码见`out/tests/temp/resource_receipt_diagnostics_20261030/artifacts/verification.json`；测试有进程外超时／4GiB保护，真实集成沿原独占闸门，并额外监督取得名额后的90秒期限。未验证Gateway/Web、Windows、Backend硬重启或任意不合作操作终止，2.2／7.2及资源5.2／5.4总门仍未勾；不修改Web／Workbench、其自动化或共享Debug服务。
+
+
+### 2026-10-30 Gateway profile 未移交描述符（2.2/7.2 部分收口）
+
+- 原写入在 `fdopen` 拒绝后只清理路径，未关闭本次描述符；单项反例证实原关闭调用缺失。现成功构造 stream 后才移交，未移交时关闭原 fd，再继续本次临时文件清理；两类收尾错误均附在原异常，包含中断的原实例继续传播。原私有权限、flush/fsync/close/replace/unlink、公开错误和账户回滚/删除顺序保持，无第二 writer 或扫描清理。
+- 88项相关单元通过（含15项新增）；真实 Gateway／Backend／辅助服务及 HTTP 的3项集成通过（69.40秒，总71.56秒）。新增一项使用同一真实 Gateway 覆盖fdopen拒绝、临时清理失败、诊断失败的四种组合，核8份失败及原身份重试、账户回滚、设置原件、全部fd真实关闭与原因链；组合间仅经产品release/delete回到空账户，不手填业务状态。原两项集成函数AST保持。沿原独占闸门、4GiB保护及取得名额后90秒执行限时，注册命令和原矩阵90秒配置未改。
+- 两次启动验证遇42000端口自连接／出站TIME_WAIT，均未进入业务，保留ss、真实bind和Gateway退出日志；未换端口、改系统网络配置或终止未知进程。另一次矩阵在Web测试持锁时排队90秒到期；四个独立Gateway组合已完成但整组尚未跑完原场景的运行触及90秒，不能算全组通过。根据原始启动开销，将新组合合到一次Gateway并通过产品清理恢复前提后复验成功，不放宽期限或断言。新增测试的unlink替换签名初次Pyright诊断已修正。
+- Pyright零诊断、测试文件Ruff、compileall和strict通过；生产文件Ruff有5条既有TRY004，HEAD原码实跑与当前逐项核规则、消息及最窄语句AST完全一致，零新增，不称全绿。作者结构自查确认只改原子写函数，其余14个函数/方法保持，生产模块324行、目录10个直接Python文件，不代表独立审查。准确命令、指纹、raw、退出码、自查及提交回执在 `out/tests/temp/profile_atomic_descriptor_20261030/artifacts/`；正式HTTP／fd原件保留于 `out/tests/integration/gateway/test_user_profile_errors/`。
+- 未验证Web/Workbench、Windows实机、Gateway硬重启、原生close拒绝后的强制释放或全仓路径不变量；2.2/7.2与整体51/53继续未完成。未修改另一会话的Web实现/自动化或重启共享debug，团队协作与MCP显式持有继续TODO。

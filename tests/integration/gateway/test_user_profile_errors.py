@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -22,6 +23,58 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
+
+
+def create_profile_descriptor_failure_app() -> FastAPI:
+    """产品写入时只注入fdopen/清理故障，独立观察真实描述符终态。"""
+    from app.gateway.control import user_profile as profile_module
+
+    app = create_profile_diagnostic_failure_app()
+    control = Path(os.environ["BOXTEAM_TEST_PROFILE_DESCRIPTOR_CONTROL"])
+    audit = Path(os.environ["BOXTEAM_TEST_PROFILE_DESCRIPTOR_AUDIT"])
+    original_write = profile_module._atomic_write_text
+    original_open, original_unlink, original_close = os.fdopen, Path.unlink, os.close
+
+    def write(path: Path, content: str) -> None:
+        if not control.is_file():
+            original_write(path, content)
+            return
+        cleanup_failure = control.read_text(encoding="utf-8") == "unlink"
+        descriptors: list[int] = []
+
+        def fail_open(descriptor: int, mode: str, *, encoding: str) -> None:
+            descriptors.append(descriptor)
+            raise PermissionError(errno.EACCES, "测试原生stream打开失败", str(path))
+
+        def unlink(self: Path, missing_ok: bool = False) -> None:
+            if cleanup_failure and self.parent == path.parent and self.name.startswith(f".{path.name}."):
+                raise PermissionError(errno.EACCES, "测试原生临时文件清理失败", str(self))
+            original_unlink(self, missing_ok=missing_ok)
+
+        # 包裹仅限制同步故障点的生效区间，原写入与HTTP/账户owner均实际执行。
+        profile_module.os.fdopen = fail_open
+        Path.unlink = unlink
+        try:
+            original_write(path, content)
+        finally:
+            profile_module.os.fdopen = original_open
+            Path.unlink = original_unlink
+            for descriptor in descriptors:
+                try:
+                    os.fstat(descriptor)
+                except OSError as error:
+                    assert error.errno == errno.EBADF
+                    closed = True
+                else:
+                    closed = False
+                with audit.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"closed": closed, "path": str(path)}, ensure_ascii=False) + "\n")
+                if not closed:
+                    # 反例仍由harness回收，审计中的closed=false不能因此变成通过。
+                    original_close(descriptor)
+
+    profile_module._atomic_write_text = write
+    return app
 
 
 def create_profile_diagnostic_failure_app() -> FastAPI:
@@ -51,6 +104,98 @@ def create_profile_diagnostic_failure_app() -> FastAPI:
     for name in ("app.gateway.control.user_profile", "app.core.failures"):
         logging.getLogger(name).addHandler(handler)
     return app
+
+
+async def test_profile_fdopen_failure_keeps_http_state_and_closes_original_descriptor(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+) -> None:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    workspace = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=workspace)
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    runtime.mkdir(parents=True, exist_ok=True)
+    control, sink_control = runtime / "descriptor-enabled", runtime / "sink-enabled"
+    blocked_log = runtime / "blocked-log-directory"
+    blocked_log.write_text("保留原日志阻塞位置", encoding="utf-8")
+    audit, sink_audit = runtime / "descriptor-audit.jsonl", runtime / "sink-audit.jsonl"
+    ports = integration_port_block_for_file(Path(request.node.fspath))
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir,
+            asgi_app=f"{__name__}:create_profile_descriptor_failure_app",
+            extra_env={"BOXTEAM_TEST_PROFILE_DESCRIPTOR_CONTROL": str(control),
+                       "BOXTEAM_TEST_PROFILE_DESCRIPTOR_AUDIT": str(audit),
+                       "BOXTEAM_TEST_PROFILE_SINK_CONTROL": str(sink_control),
+                       "BOXTEAM_TEST_PROFILE_SINK_DESTINATION": str(blocked_log / "service.log"),
+                       "BOXTEAM_TEST_PROFILE_SINK_AUDIT": str(sink_audit)},
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30,
+        ) as client:
+            for cleanup_failure, sink_failure in ((False, False), (True, False), (False, True), (True, True)):
+                evidence = []
+                audit.unlink(missing_ok=True)
+                sink_audit.unlink(missing_ok=True)
+                log_path = context.artifacts_dir / "gateway.stderr.log"
+                log_offset = len(log_path.read_text(encoding="utf-8"))
+                profile_root = context.boxteam_home / "state/gateway/users/descriptor-user"
+                profile_path = profile_root / "profile.jsonc"
+                for operation in ("create", "update"):
+                    original = profile_path.read_bytes() if operation == "update" else None
+                    control.write_text("unlink" if cleanup_failure else "fdopen", encoding="utf-8")
+                    if sink_failure:
+                        sink_control.touch()
+                    try:
+                        if operation == "create":
+                            response = await client.post("/api/gateway/users", json={"user_id": "descriptor-user", "display_name": "原身份"})
+                        else:
+                            response = await client.put("/api/gateway/ui-settings", json={"layout": {"workbench_view": "gateway"}})
+                    finally:
+                        control.unlink()
+                        sink_control.unlink(missing_ok=True)
+                    assert response.status_code == (500 if operation == "create" else 409), response.text
+                    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+                    assert "PermissionError" in response.text and "errno=13" in response.text
+                    assert ("diagnostic_sink_error=NotADirectoryError" in response.text) == sink_failure
+                    assert str(profile_root) not in response.text and str(blocked_log) not in response.text
+                    records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+                    assert len(records) == (1 if operation == "create" else 2)
+                    assert all(record["closed"] for record in records)
+                    assert records[-1]["path"] == str(profile_path if operation == "update" else profile_root / ".gitignore")
+                    leftovers = list(profile_root.glob(".*.*"))
+                    assert len(leftovers) == int(cleanup_failure)
+                    for temporary in leftovers:
+                        temporary.unlink()
+                    if operation == "create":
+                        assert not profile_path.exists()
+                        accounts = await client.get("/api/gateway/users")
+                        assert accounts.status_code == 200 and accounts.json()["data"]["items"] == []
+                        recovered = await client.post("/api/gateway/users", json={"user_id": "descriptor-user", "display_name": "原身份"})
+                        assert recovered.status_code == 200 and recovered.json()["data"]["user_id"] == "descriptor-user"
+                        acquired = await client.post("/api/gateway/users/descriptor-user/access", json={"client_label": "descriptor-test"})
+                        assert acquired.status_code == 200, acquired.text
+                    else:
+                        assert profile_path.read_bytes() == original
+                        recovered = await client.put("/api/gateway/ui-settings", json={"layout": {"workbench_view": "gateway"}})
+                        assert recovered.status_code == 200, recovered.text
+                        assert recovered.json()["data"]["layout"]["workbench_view"] == "gateway"
+                    assert json.loads(profile_path.read_bytes())["display_name"] == "原身份"
+                    evidence.append({"operation": operation, "failure": response.json(), "recovered": recovered.json(), "descriptor": records[-1]})
+                if sink_failure:
+                    diagnostic = sink_audit.read_text(encoding="utf-8")
+                else:
+                    diagnostic = log_path.read_text(encoding="utf-8")[log_offset:]
+                assert str(profile_path) in diagnostic and "stream打开失败" in diagnostic
+                assert ("临时文件清理失败" in diagnostic) == cleanup_failure
+                assert blocked_log.read_text(encoding="utf-8") == "保留原日志阻塞位置"
+                # 每组通过产品入口回到空账户，不靠手填或清库重建下一组前提。
+                assert (await client.delete("/api/gateway/users/current")).status_code == 200
+                assert (await client.delete("/api/gateway/users/descriptor-user")).status_code == 200
+                assert (await client.get("/api/gateway/users")).json()["data"]["items"] == []
+                assert not profile_root.exists()
+                destination = context.artifacts_dir / f"descriptor-errors-cleanup-{cleanup_failure}-sink-{sink_failure}.json"
+                destination.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.asyncio
