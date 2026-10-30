@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from traceback import format_exception
 from typing import Literal
 
 from app.core.file_permissions import (
@@ -213,8 +214,12 @@ def _file_access_error(
     if isinstance(error, OSError):
         detail += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
     # 解码与字段校验的原异常可能含凭据正文，只保留在cause，不写入日志。
-    logger.error("%s path=%s request_id=%s", detail, storage_path, get_current_request_id(),
-                 exc_info=(type(error), error, error.__traceback__) if isinstance(error, (OSError, RuntimeError)) else None)
+    try:
+        logger.error("%s path=%s request_id=%s", detail, storage_path, get_current_request_id(),
+                     exc_info=(type(error), error, error.__traceback__) if isinstance(error, (OSError, RuntimeError)) else None)
+    except Exception as sink_error:  # noqa: BLE001 — 次错留在原原因，不能改变认证拒绝或阻断原收尾。
+        error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
+        detail += f", diagnostic_sink_error={type(sink_error).__name__}"
     projected: Exception
     if isinstance(error, OSError):
         if error.errno is None:

@@ -1569,3 +1569,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 ### 2026-10-30 Browser 页面URL与超时恢复的完整清理验收补齐（7.2部分）
 
 - 三个真实Chromium场景改以Page内evaluate触发页面等待，保留此前全部HTTP、路径、URL／checkpoint／错误和恢复断言；恢复失败先由正式stop核实context关闭再解除关联，不再以Node内永不结束的Promise代替页面操作。3项及独立原脚本unknown／迟到收尾4项通过；任意不合作脚本仍保留原TODO，不把其未知结果改为成功。完整命令、原件、148→148类型基线及限定证据统一归`out/tests/temp/browser_timeout_scope_20261030/artifacts/verification.json`和managed-attachment任务台账；原verification-064失败继续保留。本片不新增URI例外或生产实现，2.2／7.2总门保持未勾，整体51/53。
+### 2026-10-30 Gateway 凭据与身份诊断次错（2.2／7.2部分收口）
+
+- 原凭据／身份文件共用错误出口在日志 I/O 再失败时，将完整次错附到原异常 notes，公开信息只追加次错类别；解码／字段校验仍不把可能含密钥的原异常交给 logger。原异常类别、直接 cause、系统码和 JSON／Unicode 坐标保持，读取、原子发布、fd 转交与收尾的 AST 不变；不新增日志回退或凭据状态。
+- 完整工作树快照恢复旧生产后，7 项新增单测全部失败；真实 Gateway 还复现原权限拒绝从 401 变成日志 ENOTDIR 的 500。修复后84 passed／2 skipped，真实 Gateway HTTP 1 passed／22.54秒，核权限与 JSON 损坏的原分类、同 request_id、原凭据字节、密钥不进入响应／日志及恢复后同 token 继续有效。新 suite 固定60秒／4GiB并使用原集成独占闸门。
+- Ruff、三文件 Pyright 零诊断，OpenSpec strict 全量54／0。原HTTP快照首次缺少本机 .env，在启动健康检查的 SecretResolutionError 阶段超时，未进入鉴权；清理该次4个原进程后以相同已授权本机环境复验才计作有效反例。首次误用未安装的 uv pyright 命令也保留，最终采用已有本地 Bun Pyright，无依赖或配置改动。
+- 准确命令、完整源码指纹、原始输出／实际退出码、完整快照 tree、AST 自查及超时清理收据在 `out/tests/temp/credential_sink_20261030/artifacts/`。作者自查不代独审；2.2／7.2全局门、Windows ACL 与其它失败出口仍未关闭，前端及原 Debug 服务未改动。

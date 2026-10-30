@@ -23,6 +23,7 @@
     {"id":"integration-skill-catalog-publication","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/rollout_context/test_skill_catalog_shadow_binding.py"]},
     {"id":"integration-workspace-file-navigation-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":100000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/test_workspace_file_navigation_errors.py"]},
     {"id":"integration-gateway-profile-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_user_profile_errors.py"]},
+    {"id":"integration-gateway-credential-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_credential_diagnostic_errors.py"]},
     {"id":"integration-test-gate","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/harness/test_integration_gate.py"]},
     {
       "id": "integration-itemized-legacy-migration",
