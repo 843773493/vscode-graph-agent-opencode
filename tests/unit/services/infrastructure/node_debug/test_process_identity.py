@@ -16,6 +16,44 @@ from app.services.infrastructure.node_debug.process.process_identity import (
 )
 
 
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def identity_diagnostic_errors(
+    request: pytest.FixtureRequest, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> list[OSError]:
+    failures: list[OSError] = []
+    if request.param:
+        blocker = tmp_path / "identity-log-secret"
+        blocker.write_text("此普通文件不能承载日志子文件")
+        destination = blocker / "service.log"
+        capture = caplog.handler.emit
+
+        def emit(record: logging.LogRecord) -> None:
+            capture(record)
+            if record.name not in {process_identity.__name__, "app.core.failures"}:
+                return
+            try:
+                destination.write_text(record.getMessage())
+            except OSError as error:
+                failures.append(error)
+                raise
+
+        monkeypatch.setattr(caplog.handler, "emit", emit)
+    return failures
+
+
+def assert_private_diagnostics(
+    cause: BaseException, failures: list[OSError], caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
+    notes = getattr(cause, "__notes__", [])
+    if failures:
+        assert failures[-1].errno == errno.ENOTDIR
+        assert any(str(failures[-1]) in note for note in notes)
+    else:
+        assert not any("诊断日志输出失败" in note for note in notes)
+
+
 def test_psutil_provides_verifiable_identity_off_linux(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -62,6 +100,7 @@ def test_linux_process_identity_requires_boot_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    identity_diagnostic_errors: list[OSError],
 ) -> None:
     monkeypatch.setattr(process_identity.sys, "platform", "linux")
     monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
@@ -89,6 +128,11 @@ def test_linux_process_identity_requires_boot_id(
     assert str(boot_id_path) not in str(caught.value)
     assert f"source={IDENTITY_SOURCE_LINUX_PROC}" in str(caught.value)
     assert str(boot_id_path) in caplog.text
+    cause = caught.value.__cause__
+    assert isinstance(cause, RuntimeError)
+    assert any(str(boot_id_path) in note for note in cause.__notes__)
+    assert_private_diagnostics(cause, identity_diagnostic_errors, caplog)
+    assert "identity-log-secret" not in str(caught.value)
 
 
 @pytest.mark.parametrize("stage,code", [
@@ -139,6 +183,7 @@ def test_linux_identity_io_failure_keeps_native_facts_and_private_cause(
 def test_linux_malformed_identity_rejects_without_publishing_private_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     raw: str, reason: str,
+    identity_diagnostic_errors: list[OSError],
 ) -> None:
     process_root = tmp_path / "4242"
     process_root.mkdir()
@@ -154,6 +199,11 @@ def test_linux_malformed_identity_rejects_without_publishing_private_input(
     assert str(tmp_path) not in message and "identity-secret" not in message and "/proc/" not in message
     assert "pid=4242" in message and f"source={IDENTITY_SOURCE_LINUX_PROC}" in message
     assert str(stat_path) in caplog.text and raw in caplog.text
+    cause = caught.value.__cause__
+    assert isinstance(cause, RuntimeError)
+    assert any(str(stat_path) in note and raw in note for note in cause.__notes__)
+    assert_private_diagnostics(cause, identity_diagnostic_errors, caplog)
+    assert "identity-log-secret" not in message
 
 
 @pytest.fixture(params=["/private/identity-secret", r"C:\private\identity-secret", r"\\server\private\identity-secret"])
@@ -164,6 +214,7 @@ def psutil_identity_error(request: pytest.FixtureRequest) -> psutil.AccessDenied
 def test_psutil_identity_failure_keeps_cause_and_private_diagnostics(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     psutil_identity_error: psutil.AccessDenied,
+    identity_diagnostic_errors: list[OSError],
 ) -> None:
     def denied_process(pid: int) -> None:
         assert pid == 4242
@@ -180,6 +231,8 @@ def test_psutil_identity_failure_keeps_cause_and_private_diagnostics(
     assert "error_type=AccessDenied" in message
     assert any(record.exc_info and record.exc_info[1] is psutil_identity_error for record in caplog.records)
     assert str(psutil_identity_error) in caplog.text
+    assert_private_diagnostics(psutil_identity_error, identity_diagnostic_errors, caplog)
+    assert "identity-log-secret" not in message
 
 
 @pytest.mark.parametrize("state", ["Z", "X", "x"])

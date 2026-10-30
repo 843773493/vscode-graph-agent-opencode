@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import logging
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
@@ -29,7 +28,6 @@ IDENTITY_SOURCE_LINUX_PROC = "linux_proc_stat"
 IDENTITY_SOURCE_PSUTIL = "psutil_create_time"
 
 _PROC_ROOT = Path("/proc")
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,15 +96,17 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
     # comm 字段可能包含空格与括号，必须从最后一个 ')' 之后再切分。
     closing = raw.rfind(")")
     if closing < 0:
-        logger.error("Linux 进程身份格式异常: pid=%s path=%s raw=%r", pid, stat_path, raw)
-        raise RuntimeError(f"进程 stat 格式异常，无法解析进程起始身份: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}")
+        error = RuntimeError(f"进程 stat 格式异常，无法解析进程起始身份: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}")
+        error.add_note(f"原生进程身份: path={stat_path}, raw={raw!r}")
+        raise RuntimeError(failure_detail(error, stage="process_stat_parse", label=str(error))) from error
     fields = raw[closing + 2 :].split()
     # 剩余字段从 state 开始：state 是第 3 个字段，starttime 是第 22 个字段。
     if len(fields) < 20:
-        logger.error("Linux 进程身份字段不足: pid=%s path=%s raw=%r", pid, stat_path, raw)
-        raise RuntimeError(
+        error = RuntimeError(
             f"进程 stat 字段不足，无法解析进程起始身份: pid={pid}, source={IDENTITY_SOURCE_LINUX_PROC}, fields={len(fields)}"
         )
+        error.add_note(f"原生进程身份: path={stat_path}, raw={raw!r}")
+        raise RuntimeError(failure_detail(error, stage="process_stat_parse", label=str(error))) from error
     state = fields[0]
     starttime_ticks = fields[19]
     if state in {"Z", "X", "x"}:
@@ -135,8 +135,9 @@ def _read_linux_boot_id(boot_id_path: Path) -> str:
         )
         raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
     if not boot_id:
-        logger.error("Linux 启动 ID 为空: path=%s", boot_id_path)
-        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: source={IDENTITY_SOURCE_LINUX_PROC}")
+        error = RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: source={IDENTITY_SOURCE_LINUX_PROC}")
+        error.add_note(f"原生启动身份: path={boot_id_path}")
+        raise RuntimeError(failure_detail(error, stage="boot_id_parse", label=str(error))) from error
     return boot_id
 
 
@@ -150,10 +151,8 @@ def _probe_psutil_identity(pid: int) -> NodeDebugProcessIdentity | None:
         return None
     except psutil.Error as error:
         # psutil 的异常可能包含可执行文件等原生位置，原异常只留诊断与 cause。
-        logger.exception("读取 psutil 进程起始身份失败: pid=%s", pid)
-        raise RuntimeError(
-            f"读取进程起始身份失败: pid={pid}, source={IDENTITY_SOURCE_PSUTIL}, error_type={type(error).__name__}"
-        ) from error
+        reason = f"读取进程起始身份失败: pid={pid}, source={IDENTITY_SOURCE_PSUTIL}, error_type={type(error).__name__}"
+        raise RuntimeError(failure_detail(error, stage="psutil_identity_read", label=reason)) from error
     return NodeDebugProcessIdentity(
         pid=pid,
         source=IDENTITY_SOURCE_PSUTIL,

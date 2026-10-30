@@ -1551,3 +1551,9 @@
 - 原进程锁 owner 只在原生句柄实际关闭后移除引用；记录该句柄是否已成功解锁，显式重试不重复解锁。数据库关闭立即撤销新连接准入，同一 close 入口仍可重试原 owner 的释放。保留原 unlock→close 顺序、原生错误类别／errno／cause 和诊断出口，不新增清理队列、schema 或替代 owner。
 - 原实现四项反例均检出释放前丢失句柄。修复后94项SQLite定向单测通过、3项Windows测试在Linux跳过；包含真实文件锁仍占用、关闭／解锁双错、真实日志ENOTDIR、原库字节不变、同入口重试、已解锁不重复释放及冷重开。原产品Session创建→存储拒绝→原件保全→冷container重试4项集成通过，Ruff通过；首轮静态检查的嵌套with已合并，定向4项复验通过。
 - 准确命令、源码指纹、原始输出及退出码保留在 `out/tests/temp/sqlite_ownership_retry_20261030/artifacts/{red,verification}.json` 及同目录日志。测试均有进程外超时／4GiB保护，集成沿用单进程闸门。本片不证明Windows实机、Gateway/Web或所有SQLite连接关闭前失败的接管；后者仍在原连接owner处保留TODO。2.2／7.2总门及前端／协作延期边界保持。
+
+### 2026-10-30 Node 进程身份拒绝的诊断次错（2.2／7.2部分收口）
+
+- 原身份 owner 的 stat 格式／字段不足、空 boot_id 和 psutil 失败统一消费 `failure_detail`，删除局部 logger。公开原拒绝原因、PID／来源及阶段，原生位置、stat 原文与真实日志 ENOTDIR 留直接 cause／notes；原生身份读取调用、Linux 权威来源和已终结判定不变，不新增探测器或恢复链。
+- 旧实现单测9 failed／18 passed：6项日志故障替换原错误，3项正常日志拒绝缺少原因链；冷 service 读取真实产品 claim 的1项集成反例同样检出日志异常替换身份拒绝。最终27项身份单测、6项新增冷读集成及10项原启动／冷读回归通过。新增集成由配置／启动 API 生成真实 Node 与 claim，核拒绝期间进程仍存活且身份相同、claim及manifest原件不变，故障解除后由原owner核实终结并只结清一次；没有手填运行历史。组合回归原60秒超时保留且不计通过，按解析／I/O／冷读拆为3／6／1项后，各组仍用原60秒／4GiB和跨worktree闸门串行完成。
+- Ruff、三文件Pyright、compileall通过；初次Ruff仅拒绝新测试import排版，调整后完整AST与已通过类型版本相同。准确命令、指纹、raw／实际退出码、红绿及作者结构自查见 `out/tests/temp/node_identity_diagnostic_20261030/artifacts/verification.json`。产品仅原3函数改变，未增加生产模块；新集成子目录含四段AGENTS，既有单测目录保持20文件。本片不代真实Gateway/Web、独立进程重启、Windows或URI全局不变量验收，2.2／7.2及前端／协作延期边界保持。
