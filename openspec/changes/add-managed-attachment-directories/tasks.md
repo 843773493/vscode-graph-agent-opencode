@@ -450,3 +450,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原普通同步异常会丢弃冻结版本；发送前失败时，两端版本不同导致新管理停止持续拒绝。原恢复记录现同时保留版本与仅管理重试标记：普通查询仍可发现unknown且不重发同步，显式stop/delete在原锁及准入后重试同一版本；重复失败不造管理lease、不派发停止，同步成功后才移除pending。取消、健康资源、旧占用及唯一停止/结算链保持，无新持久状态、schema或账本。
 - 原生产8个有效反例失败，最终相关单测410 passed/11.33秒。新增真实Node/PTY或Chromium/HTTP及正式Session/ASGI创建、授权、冷owner/管理场景4 passed/56.62秒，原冷管理4 passed/37.72秒；均走独占闸门和外部期限/4GiB。原Browser撤权suite首轮4 passed/4 fixture setup errors，健康探针收到原请求行且随后端口占用，未进入失败场景主体；确认原端口可重新绑定后，仅重跑受阻4项，4 passed/34.47秒，未改配置、生产或断言。
 - Ruff/compileall、生产和新增两文件Pyright零诊断、规范strict及作者AST结构自查通过。准确命令、指纹、原始输出、退出码与限定证据见`out/tests/temp/resource_cold_sync_retry_20261030/artifacts/verification.json`。初版单测因已detach资源没有Thread关联而拒绝，未当业务红例；后改用正式workspace授权入口生成未知占用。无临时源码/截图/二进制，正式运行输出保留。未验Backend进程硬重启、Gateway/Web、Windows、同步阻塞、不合作取消或整个shutdown期限；5.2/5.4仍未勾，整体21/23，团队协作及MCP显式持有继续TODO。
+
+### 2026-10-30 页面超时恢复与未结束 Node 脚本的验收边界（5.2／5.4部分）
+
+- 旧页面恢复及file URL用例用Node内永不结束的Promise触发超时，却要求后续detach成功；页面reset无法终止该Promise，保留unknown属于原合同。三处输入改为真实`page.evaluate`等待，由关闭原Page结束执行；reset失败用例通过正式stop先关闭context并核verified终态，再detach/delete。原53条断言全部保留，新增4条管理停止／清理断言；没有修改生产实现、超时、失败码或停止证明。
+- 三项真实工具／HTTP／Chromium场景3 passed/28.76秒，覆盖页面reset后短操作及显式清理、reset原生失败与日志路径边界、file页面URL的导航错误／checkpoint／恢复例外。独立原脚本产品回归4 passed/35.44秒：真实fetch在超时后继续等待，stop/delete到期保留unknown和原记录、peer可读，放行原执行后同入口重试；另验证等待context关闭的脚本先关闭再排空。未以页面用例替代这些脚本场景。
+- 队列及原脚本关闭Bun单测6项、Node原生日志失败单测9项通过，共22个不同用例；首次混用Bun runner的9项`node:test`因`t.mock`未实现而失败，改用该文件所需的Node runner后9项通过，原件保留。Ruff通过，Pyright与完整HEAD归档基线均148条，按最窄AST owner／规则／消息／出错表达式比较零新增；作者AST复核确认只变三个测试函数，原断言未减少，不称类型全绿或独立审查。
+- 准确命令、源码前后指纹、原始输出、实际退出码、工具选择失败、作者复核及限定证据见`out/tests/temp/browser_timeout_scope_20261030/artifacts/verification.json`。不新增生产终止机制；任意不合作Node脚本、同步阻塞、整个shutdown期限、Gateway/Web和Windows继续未验证。5.2／5.4及整体21/23保持未完成，团队协作与MCP持有延期边界不变。

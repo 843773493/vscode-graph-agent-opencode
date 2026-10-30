@@ -1565,3 +1565,7 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原身份 owner 的 stat 格式／字段不足、空 boot_id 和 psutil 失败统一消费 `failure_detail`，删除局部 logger。公开原拒绝原因、PID／来源及阶段，原生位置、stat 原文与真实日志 ENOTDIR 留直接 cause／notes；原生身份读取调用、Linux 权威来源和已终结判定不变，不新增探测器或恢复链。
 - 旧实现单测9 failed／18 passed：6项日志故障替换原错误，3项正常日志拒绝缺少原因链；冷 service 读取真实产品 claim 的1项集成反例同样检出日志异常替换身份拒绝。最终27项身份单测、6项新增冷读集成及10项原启动／冷读回归通过。新增集成由配置／启动 API 生成真实 Node 与 claim，核拒绝期间进程仍存活且身份相同、claim及manifest原件不变，故障解除后由原owner核实终结并只结清一次；没有手填运行历史。组合回归原60秒超时保留且不计通过，按解析／I/O／冷读拆为3／6／1项后，各组仍用原60秒／4GiB和跨worktree闸门串行完成。
 - Ruff、三文件Pyright、compileall通过；初次Ruff仅拒绝新测试import排版，调整后完整AST与已通过类型版本相同。准确命令、指纹、raw／实际退出码、红绿及作者结构自查见 `out/tests/temp/node_identity_diagnostic_20261030/artifacts/verification.json`。产品仅原3函数改变，未增加生产模块；新集成子目录含四段AGENTS，既有单测目录保持20文件。本片不代真实Gateway/Web、独立进程重启、Windows或URI全局不变量验收，2.2／7.2及前端／协作延期边界保持。
+
+### 2026-10-30 Browser 页面URL与超时恢复的完整清理验收补齐（7.2部分）
+
+- 三个真实Chromium场景改以Page内evaluate触发页面等待，保留此前全部HTTP、路径、URL／checkpoint／错误和恢复断言；恢复失败先由正式stop核实context关闭再解除关联，不再以Node内永不结束的Promise代替页面操作。3项及独立原脚本unknown／迟到收尾4项通过；任意不合作脚本仍保留原TODO，不把其未知结果改为成功。完整命令、原件、148→148类型基线及限定证据统一归`out/tests/temp/browser_timeout_scope_20261030/artifacts/verification.json`和managed-attachment任务台账；原verification-064失败继续保留。本片不新增URI例外或生产实现，2.2／7.2总门保持未勾，整体51/53。

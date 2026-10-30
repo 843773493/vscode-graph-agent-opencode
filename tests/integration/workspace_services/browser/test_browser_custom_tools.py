@@ -947,7 +947,8 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
         await run_playwright_code.ainvoke(
             {
                 "pageId": page_id,
-                "code": "await new Promise(() => undefined);",
+                # 等待发生在真实页面，reset 关闭旧 Page 时必须结束原执行。
+                "code": "await page.evaluate(() => new Promise(() => undefined));",
                 "timeoutMs": 25,
             }
         )
@@ -975,6 +976,8 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
         await screenshot_page.ainvoke({"pageId": page_id})
     )
     assert str(screenshot["mime_type"]) == "image/png"
+    deleted = await _detach_delete(integration_client, page_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.asyncio
@@ -1000,7 +1003,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     # 只替换第三方 Playwright 的建页边界；超时、队列、HTTP和持久化均走产品链路。
     code = (
         f"context.newPage = async () => {{ throw new Error({json.dumps(reason)}); }};"
-        "await new Promise(() => undefined);"
+        "await page.evaluate(() => new Promise(() => undefined));"
     )
     transport = BrowserManagerClient(
         workspace_id=container.workspace_id,
@@ -1047,6 +1050,13 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
         "api_body": blocked.json(), "request_id": blocked.headers["X-Request-ID"],
         "owner_projection": observed, "node_record": record,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+    # reset 失败时旧页面仍持有 evaluate；由正式管理停止先关闭 context，核实后再解除关联。
+    stopped = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={
+        "expected_revision": observed["owner_revision"],
+    })
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["status"] == "closed"
+    assert stopped.json()["data"]["reconciliation_status"] == "verified"
     deleted = await _detach_delete(integration_client, browser_id, browser_context)
     assert deleted.status_code == 200, deleted.text
 
@@ -2350,7 +2360,9 @@ async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
     assert failed_page["pages"][0]["navigation_error"]["requested_url"] == missing_url
     await transport.perform(browser_id, "navigate", {"type": "url", "url": url}, actor="agent")
     with pytest.raises(BrowserRequestError) as caught:
-        await transport.perform(browser_id, "run", {"code": "await new Promise(() => undefined);", "timeoutMs": 25}, actor="agent")
+        await transport.perform(browser_id, "run", {
+            "code": "await page.evaluate(() => new Promise(() => undefined));", "timeoutMs": 25,
+        }, actor="agent")
     assert caught.value.status == 408
     assert caught.value.code == "browser_tool_timeout"
     recovered = await transport.perform(browser_id, "run", {"code": "return {url: page.url(), title: await page.title()};"}, actor="agent")
