@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack, asynccontextmanager
 
 import pytest
 
 from app.core.session_lifecycle_gate import OperationHolderGate, SessionLifecycleGate
+from app.services.business.workspace_resources import owner as owner_module
 from tests.support.resource_owners.browser import BrowserOwnerFixture
 from tests.support.resource_owners.sessions import (
     SESSION_A,
@@ -16,6 +20,14 @@ from tests.support.resource_owners.sessions import (
     THREAD_B,
 )
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
+from tests.unit.core.session_deletion.test_operation_replay_gc import (
+    NativeStep,
+    _entered,
+    _turns,
+)
+from tests.unit.core.session_deletion.test_operation_replay_gc import (
+    native_step as native_step,  # noqa: PLC0414
+)
 from tests.unit.services.business.test_resource_operation_close_deadline import (
     advance_clock as advance_clock,  # noqa: PLC0414
 )
@@ -236,3 +248,100 @@ async def test_read_failure_keeps_identity_and_releases_holder(
     assert caught.value is error
     async with resource_holder.lock_for(SESSION_A, wait=False) as proof:
         assert proof.acquired
+
+
+@pytest.mark.parametrize("stage", ["main", "thread"])
+@pytest.mark.parametrize("ending", ["complete", "cancel", "deadline"])
+@pytest.mark.parametrize("pool_wait", [False, True])
+async def test_thread_lookup_settles_io_before_releasing_original_admission(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, gates, resource_holder,
+    deadlines: list[asyncio.Timeout], native_step: NativeStep,
+    monkeypatch: pytest.MonkeyPatch, stage: str, ending: str, pool_wait: bool,
+) -> None:
+    owner = bundle.owner
+    assert owner is not None
+    await owner.recover(())
+    before = owner._store.path.read_bytes() if owner._store.path.exists() else None
+    method = "main_thread_id" if stage == "main" else "resolve_thread_node"
+    original = getattr(bundle.sessions, method)
+    loop_thread = threading.get_ident()
+    bodies = []
+
+    def read(*args):
+        if args[0] == SESSION_A and not native_step.calls:
+            native_step.block()
+        return original(*args)
+
+    async def access() -> None:
+        async with owner.admit_thread(SESSION_A, None if stage == "main" else THREAD_A) as ref:
+            bodies.append(ref)
+
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="resource-thread-admission")
+    pool_step = NativeStep()
+    queued = asyncio.Event()
+    tasks: list[Awaitable[object]] = []
+    session_entered = asyncio.Event()
+
+    async def contend() -> None:
+        async with gates.exclusive(SESSION_A):
+            session_entered.set()
+
+    worker = owner_module.run_sync_shielded if pool_wait else None
+
+    async def queue(operation, *args, **kwargs):
+        if pool_wait and not queued.is_set():
+            tasks.append(loop.run_in_executor(None, pool_step.block))
+            while not pool_step.entered.is_set():
+                await asyncio.sleep(0.001)
+            queued.set()
+        assert worker is not None
+        return await worker(operation, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle.sessions, method, read)
+        if pool_wait:
+            patch.setattr(loop, "_default_executor", executor)
+            patch.setattr(owner_module, "run_sync_shielded", queue)
+        pending = asyncio.create_task(access(), name="thread-admit-under-test")
+        tasks.append(pending)
+        try:
+            await asyncio.wait_for(queued.wait(), 2) if pool_wait else await _entered(native_step)
+            tasks.append(asyncio.create_task(contend()))
+            if ending == "cancel":
+                pending.cancel("原Thread同步核验取消")
+            elif ending == "deadline":
+                assert len(deadlines) == 1
+                deadlines[0].reschedule(loop.time())
+            await _turns()
+            assert not pending.done() and not session_entered.is_set() and bodies == []
+            async with resource_holder.lock_for(SESSION_A, wait=False) as proof:
+                assert not proof.acquired
+            if pool_wait:
+                assert not native_step.calls
+                pool_step.release.set()
+                await _entered(native_step)
+            native_step.release.set()
+            if ending == "cancel":
+                with pytest.raises(asyncio.CancelledError, match="原Thread同步核验取消"):
+                    await pending
+            elif ending == "deadline":
+                with pytest.raises(TimeoutError, match="Thread 准入等待超过 30 秒"):
+                    await pending
+                assert deadlines[0].expired()
+            else:
+                await pending
+            await asyncio.gather(*tasks, return_exceptions=True)
+            assert session_entered.is_set()
+            assert len(bodies) == (1 if ending == "complete" else 0)
+            assert len(native_step.calls) == 1 and native_step.calls[0] != loop_thread
+        finally:
+            pool_step.release.set()
+            native_step.release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            executor.shutdown(wait=True)
+    assert (owner._store.path.read_bytes() if owner._store.path.exists() else None) == before
+    async with resource_holder.lock_for(SESSION_A, wait=False) as proof:
+        assert proof.acquired
+    async with owner.admit_thread(SESSION_A, THREAD_A) as ref:
+        assert ref.thread_id == THREAD_A

@@ -147,7 +147,7 @@ class SessionService:
         async with AsyncExitStack() as admission:
             async with self._navigation_topology_gate.shared():
                 await admission.enter_async_context(self._session_lifecycle_gate.shared(session_id))
-                self.assert_session_active(session_id)
+                await run_sync_shielded(self.assert_session_active, session_id)
             yield
 
     @asynccontextmanager
@@ -161,7 +161,7 @@ class SessionService:
                     self._session_lifecycle_gate.exclusive(session_id)
                 )
                 try:
-                    node = self._path_resolver.get_node(session_id)
+                    node = await run_sync_shielded(self._path_resolver.get_node, session_id)
                 except KeyError as error:
                     raise NotFoundError(
                         f"Session {session_id} not found"
@@ -314,23 +314,26 @@ class SessionService:
     async def get(self, session_id: str) -> SessionDTO:
         # 按 ID 的单节点查询（不触发全 catalog BFS）：单会话读取的工作量
         # 与目录规模无关。未登记会话的 KeyError 与其余缺失同样归为 NotFound。
-        try:
-            node = self._path_resolver.get_node(session_id)
-        except KeyError as error:
-            raise NotFoundError(f"Session {session_id} not found") from error
-        if not isinstance(node, SessionCatalogSessionProjection):
-            raise NotFoundError(f"Session {session_id} not found")
-        path = self._path_resolver.catalog_store.resolve_session_locator(
-            f"sessions/{node.storage_relative_path}"
-        )
-        if not path.is_dir() or path.is_symlink():
-            raise RuntimeError(
-                "会话物理目录缺失或不是普通目录，拒绝解析（fail closed）: "
-                f"session_id={session_id}"
+        def read() -> SessionCatalogSessionProjection:
+            try:
+                node = self._path_resolver.get_node(session_id)
+            except KeyError as error:
+                raise NotFoundError(f"Session {session_id} not found") from error
+            if not isinstance(node, SessionCatalogSessionProjection):
+                raise NotFoundError(f"Session {session_id} not found")
+            path = self._path_resolver.catalog_store.resolve_session_locator(
+                f"sessions/{node.storage_relative_path}"
             )
-        if not (path / "session.json").is_file():
-            raise NotFoundError(f"Session {session_id} not found")
-        return self.project_catalog_session(node)
+            if not path.is_dir() or path.is_symlink():
+                raise RuntimeError(
+                    "会话物理目录缺失或不是普通目录，拒绝解析（fail closed）: "
+                    f"session_id={session_id}"
+                )
+            if not (path / "session.json").is_file():
+                raise NotFoundError(f"Session {session_id} not found")
+            return node
+
+        return self.project_catalog_session(await run_sync_shielded(read))
 
     def project_catalog_session(
         self,

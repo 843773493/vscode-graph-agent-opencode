@@ -20,3 +20,4 @@
 - 工具资源准入验证恢复和资源锁共用一次预算、已有/尚无lease时的超时及取消、原异常身份、锁后关闭/关联校验，以及准入完成后正式执行继续持原锁；单调时钟推进不代表真实等待或外部终止证明。
 - fork关联核恢复/资源锁共用预算及派发前、dispatching、committed三类取消边界；用原调用产生回执和lease，核同key重试及解锁后不后台补做，不把传输替身视为外部终态证明。
 - Thread准入用真实Session文件锁及独立打开的原namespace holder核持有期；覆盖holder/Session锁/读取的期限、取消和跨阶段预算。同Session peer须能在长operation内进入，删除的exclusive holder须等原operation收尾；不为旧生产补装新holder来制造红测结果。
+- main/显式Thread同步定位覆盖正常、取消、到期及线程池排队，原Session gate和holder必须等原worker结算；原生故障点自带释放上限，不能用取消等待冒充线程终止。

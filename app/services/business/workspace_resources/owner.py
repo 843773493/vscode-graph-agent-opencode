@@ -24,6 +24,7 @@ from app.core.failures import report_failure
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,
     STOPPED_STATUSES,
@@ -99,7 +100,7 @@ class WorkspaceResourceOwner:
         thread_id: str | None,
     ) -> AsyncIterator[ThreadRef]:
         """短锁核定来源，长操作只持原OS holder，删除沿同一holder等待。"""
-        # TODO(5.4)：同步存储、不合作取消及整个operation/shutdown的期限仍须原owner核实。
+        # TODO(5.4)：worker 结算不能抢占原生 I/O；不合作取消及整个operation/shutdown期限仍须核实。
         async with AsyncExitStack() as lifetime:
             budget = asyncio.timeout(30)
             try:
@@ -110,10 +111,15 @@ class WorkspaceResourceOwner:
                         session = await self._sessions.get(session_id)
                         if session.workspace_id != self.workspace_id:
                             raise ValueError("外部资源 来源 Session 不属于当前工作区")
-                        ref = ThreadRef(
-                            session_id, thread_id or self._threads.main_thread_id(session_id)
-                        )
-                        self._threads.resolve_thread_node(ref.session_id, ref.thread_id)
+
+                        def resolve() -> ThreadRef:
+                            ref = ThreadRef(
+                                session_id, thread_id or self._threads.main_thread_id(session_id)
+                            )
+                            self._threads.resolve_thread_node(ref.session_id, ref.thread_id)
+                            return ref
+
+                        ref = await run_sync_shielded(resolve)
             except TimeoutError as error:
                 if not budget.expired():
                     raise

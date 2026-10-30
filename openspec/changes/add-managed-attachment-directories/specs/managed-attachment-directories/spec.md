@@ -276,6 +276,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal或Browser进入来源Thread准入，并在真实工具操作及收尾期间等待网络或资源锁
 - **THEN** 在短Session写准入内从权威catalog核定workspace与精确Thread，省略Thread仍只解析canonical main；Session独占锁不跨真实工具执行。同一Session的无关资源可以独立准入，原operation由共用`workspace_resources` namespace的Session shared OS holder保护；holder先于Session锁取得，删除只登记该namespace一次，先等待holder退出再取得Session锁并清理，不增加另一份业务lease或推断外部终态。holder等待、Session锁与准入读取共用入口一次30秒协作式预算，到期/取消排空本次准入并保留原错误归属，尚未进入主体不创建资源、lease或unknown，不后台补做；deleting Session拒绝新准入。成功准入后预算退出，holder覆盖真实operation及原受保护收尾；此前冷恢复、同步阻塞、不合作取消及整个operation/shutdown期限仍属5.4后续验收
 
+#### Scenario: Session与资源Thread准入等待同步存储
+
+- **WHEN** Session读写准入或Terminal/Browser的Thread准入在active核验、Session目录、canonical main或显式Thread定位时等待同步I/O、catalog连接锁或线程池
+- **THEN** 复用原同步查询与受保护worker，原topology/Session gate及已取得的资源holder覆盖该调用真实结算，不阻断事件循环及不依赖该存储的HTTP查询；取消或外层期限到达后不遗弃已提交调用、不提前释放原gate，也不进入后续准入或资源创建。工作区归属、冻结Thread身份、目录核验、原异常及DTO投影保持原合同，不新增查询链或业务lease；正常重试沿原入口完成。worker不能抢占原生I/O，不将协作式等待预算称为线程终止或整个operation/shutdown硬期限
+
 #### Scenario: 工具方法的资源准入等待到期
 
 - **WHEN** Terminal或Browser的单次工具方法等待所选资源冷恢复或原资源锁

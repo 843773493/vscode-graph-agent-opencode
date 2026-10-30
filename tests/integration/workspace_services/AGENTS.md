@@ -30,7 +30,7 @@ workspace_services/
 
 `test_resource_operation_admission.py`复用正式Session、ASGI资源创建及原operation，真实PTY或Chromium/HTTP核对资源锁准入到期、peer继续执行、原记录/lease冷读、外部身份及显式重试；不派发与无后台补做由原transport调用观察证明。suite `integration-resource-operation-admission`固定90秒/4GiB；只推进本次截止，不代表真实等待30秒、Gateway/Web、Backend重启或完整operation终止核实。
 
-`test_resource_thread_admission.py`复用正式Session、ASGI资源创建、原工具operation及导航enqueue/唯一worker，验证Thread准入503/request_id、原记录/lease不变、显式重试、同Session peer并行，以及逻辑删除先提交而原holder退出后才资源清理/物理隔离。suite `integration-resource-thread-admission`固定90秒/4GiB；真实PTY/Chromium与HTTP不代表Gateway/Web、Backend重启或整个operation终止期限，Windows Browser的内存前置条件另记未验证。
+`test_resource_thread_admission.py`复用正式Session、ASGI资源创建、原工具operation及导航enqueue/唯一worker，验证Thread准入503/request_id、原记录/lease不变、显式重试、同Session peer并行，以及逻辑删除先提交而原holder退出后才资源清理/物理隔离。同步I/O场景还覆盖active、Session目录、main/Thread定位、共享catalog连接锁与线程池排队，取消/到期后原gate及holder等真实结算，外部HTTP仍响应且无迟到创建。suite `integration-resource-thread-admission`固定90秒/4GiB；真实PTY/Chromium与HTTP不代表Gateway/Web、Backend重启、原生线程可终止或整个operation终止期限，Windows Browser的内存前置条件另记未验证。
 
 `test_resource_cold_management.py`经正式Session/ASGI创建、detach及脚本执行，冷建原owner并取消已发送版本的普通恢复，再由原stop/delete API释放真实context并核实原脚本结束、当前版本与终态。首次清单场景仅暂停真实HTTP回执，核Terminal/Browser peer独立恢复、迟到清单不重复推进、原PTY/页面身份及冷账本。suite `integration-resource-cold-management`固定60秒；Linux按每进程4GiB数据段保护，不代表整树预算。不手填资源或执行历史，不代表Backend硬重启、Gateway/Web、Windows或任意脚本强制终止。
 

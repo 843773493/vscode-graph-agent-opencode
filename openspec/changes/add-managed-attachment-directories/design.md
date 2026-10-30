@@ -464,3 +464,9 @@ Session main 与 child 的 `on_published` 统一为可等待回调，首次发�
 Session 创建 owner 的记录冻结、目录探测/准备/复验、发布前 capability/proof 核验及 rename、发布 CAS、已发布结果核验，以及隔离中止均复用既有 `run_sync_shielded`。每段保留原同步调用顺序和事务，不另建 writer 或恢复链；原 key 锁和相应 topology/Session gate 覆盖线程池排队及真实 I/O 结算。取消或外层期限到达后先等本段结束，再传播原错误，不继续下一阶段；已经提交的 preparing/published/aborted、冻结身份及 locator 供同 key 恢复，不倒删目标或重发发布。
 
 异步发布确认仍在原事件循环与原 gate 内执行，其持久结算沿上一切片的同一 worker 合同。产品消息/Agent/model_stream 生成带附件来源，经 ASGI fork API 验证原记录、取消期间独立工作区请求、来源与目标 canonical 原字节、唯一恢复目标及 aborted 隔离。同步辅助查询的其它异步消费者、Session/fork 编排中的其它存储访问及共享连接锁竞争继续 TODO；本片不将整个创建流程 shield，也不承诺原生线程可终止、独立 Backend 重启、Windows、Gateway/Web 或全 shutdown 硬期限，5.2/5.4 保持未完成。
+
+### Session及资源Thread准入的同步读取（5.4 部分收口）
+
+Session读写准入的active catalog查询、`SessionService.get`的单节点/目录读取，以及Terminal/Browser共用Thread准入的main和locator核验统一复用既有`run_sync_shielded`。DTO投影仍在原事件循环；原同步查询、工作区与目录判断、异常及锁序保持，不新增同步兼容入口、事务或租约。topology/Session gate和已取得的资源holder覆盖线程池排队与真实I/O结算，取消/外层期限不遗弃worker，也不继续创建资源。成功后短Session锁仍先于真实工具执行释放，原holder覆盖operation收尾。
+
+真实PTY/Chromium及ASGI资源入口验证active、Session目录、main/显式Thread、共享catalog连接锁和线程池排队共16个阶段，核其它HTTP可响应、原gate/holder持有、记录与lease原字节及显式重试。共享连接锁仍可阻塞依赖同一存储的读取；worker不是原生终止机制，取消仍须等已提交I/O完成。其它同步业务存储、不合作任务、旧代接管、独立Backend重启、Windows、Gateway/Web和完整shutdown硬期限继续TODO，5.2/5.4保持未完成。
