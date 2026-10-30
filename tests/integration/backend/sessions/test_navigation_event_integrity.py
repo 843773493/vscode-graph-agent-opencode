@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -9,8 +10,12 @@ from pathlib import Path
 import pytest
 
 from app.container import AppContainer
+from app.core import session_subtree_delete as deletion
 from app.core.session_catalog_store import CatalogMaintenanceRequiredError
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.business.session_navigation.operations_service import (
+    local_navigation_scope,
+)
 from tests.integration.backend.sessions.test_catalog_startup_creation_records import (
     _close_and_files,
 )
@@ -26,10 +31,54 @@ from tests.integration.backend.sessions.test_catalog_startup_journal_metadata im
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
 )
-from tests.support.session_navigation_queue import (
+from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
 )
+
+
+async def test_catalog_helper_keeps_worker_until_delete_physically_settles(
+    startup_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = startup_container
+    session = await container.session_service.create(SessionCreateRequest(title="逻辑提交后仍等待物理清理"))
+    catalog = container.session_catalog_service
+    path = catalog.path_resolver.resolve_session_node(session.session_id)
+    intent = create_catalog_intent(catalog, "delete_session", target_node_id=session.session_id)
+    scope = local_navigation_scope(container.workspace_id)
+    marked, release = asyncio.Event(), asyncio.Event()
+    observe = deletion.observe_phase
+
+    async def blocking(operation_id: str, phase: str, **options) -> None:
+        await observe(operation_id, phase, **options)
+        if operation_id == intent.client_operation_id and phase == "deletion.catalog_deleting":
+            marked.set()
+            await release.wait()
+
+    monkeypatch.setattr(deletion, "observe_phase", blocking)
+    pending = asyncio.create_task(submit_catalog_intent(catalog, intent))
+    try:
+        await asyncio.wait_for(marked.wait(), 3)
+        original = catalog.operations.record(intent.client_operation_id, scope)
+        assert original.state == "committed" and original.pending_settlement
+        assert original.result_node_id == session.session_id and path.is_dir()
+        events = _event_rows(catalog.path_resolver.catalog_store.database_path)
+        # 让原await_terminal观察已提交回执；尚未释放物理清理屏障。
+        await asyncio.sleep(0.05)
+        assert not pending.done(), "装具不能在逻辑提交后取消仍未物理结算的原worker"
+        assert catalog.operations.worker_state == "running"
+        release.set()
+        receipt = await asyncio.wait_for(pending, 3)
+        assert receipt.state == "committed" and not receipt.pending_settlement
+        assert receipt.operation_id == original.operation_id and receipt.queue_seq == original.queue_seq
+        assert receipt.result_node_id == original.result_node_id
+        assert receipt.receipt_revision > original.receipt_revision
+        assert not path.exists() and catalog.operations.worker_state == "stopped"
+        assert _event_rows(catalog.path_resolver.catalog_store.database_path) == events
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await catalog.operations.stop()
 
 
 async def _create_event(container: AppContainer) -> str:

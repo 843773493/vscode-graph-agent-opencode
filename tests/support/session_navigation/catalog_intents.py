@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
 from app.core.identifier import create_prefixed_id
@@ -72,6 +73,7 @@ async def submit_catalog_intent(
     catalog: SessionCatalogService,
     intent: NavigationMutationIntentDTO,
 ) -> NavigationMutationRecord:
+    """等待原worker完成操作及物理结算，再结束本装具持有的worker。"""
     scope = local_navigation_scope(catalog.workspace_id)
     await catalog.operations.start()
     try:
@@ -79,10 +81,18 @@ async def submit_catalog_intent(
             NavigationMutationEnqueueRequest(intents=[intent]),
             scope,
         )
-        return await catalog.operations.await_terminal(
-            intent.client_operation_id,
-            scope,
-        )
+        budget = asyncio.timeout(30)
+        try:
+            async with budget:
+                while True:
+                    receipt = await catalog.operations.await_terminal(intent.client_operation_id, scope)
+                    if not receipt.pending_settlement:
+                        return receipt
+                    await asyncio.sleep(0.02)
+        except TimeoutError as error:
+            if not budget.expired():
+                raise
+            raise AssertionError(f"导航 catalog operation 未完成终态或物理 settlement: {intent.client_operation_id}") from error
     finally:
         await catalog.operations.stop()
 

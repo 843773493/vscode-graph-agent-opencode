@@ -587,3 +587,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - `integration-fork-confirmation-io`6项回归通过（89.62秒），真实消息/Agent/model_stream生成带附件来源，原Session/child发布确认、原gate与canonical保全继续通过。集成串行走原独占闸门，资源suite维持90秒/4GiB、fork维持180秒/4GiB及原60秒watchdog；未改测试runner或Web自动化。
 - Ruff通过；Pyright23项生产诊断与完整HEAD基线的规则、完整消息、最窄owner及源语句逐项相同，测试零诊断，不称类型全绿。作者逆转worker调度与两个局部闭包抽取后，两份完整生产模块AST与原版相同；同步get的生产消费者未发现跨await持有同catalog原生事务锁。906/1054行模块及既有目录结构债务未在本片解决，不关闭架构总门。
 - 准确命令、前后源码指纹、原始输出/实际退出码、完整基线及反例来源、类型对照和作者复核见`out/tests/temp/resource_admission_io_20261030/artifacts/verification.json`及同目录原件。共享连接锁仍会阻塞依赖该存储的读取，worker不能抢占原生I/O；其它同步存储、旧代接管、不合作取消、独立Backend重启、Windows、Gateway/Web及完整shutdown硬期限继续TODO。5.2/5.4与整体21/23保持未完成；未修改Web/Workbench及其自动化或重启共享debug，团队协作及MCP显式持有继续延期。
+
+### 2026-10-30 导航删除装具等待物理结算（5.4 验证装具修复）
+
+- direct catalog 装具继续持有原 worker，逻辑终态与物理 settlement 共用一次30秒观察预算；只有原回执不再 pending 才正常停止 worker，失败或取消仍清理本装具持有的 worker。产品 durable acceptance、逻辑终态及删除恢复合同未变，不增加产品等待接口。两处后端集成测试迁至现有装具模块，移除已删除模块的悬空导入。
+- 新真实 Session 删除屏障用例在旧装具上于“提前完成并停止 worker”断言失败；修复后原目录确实移除、原 operation/queue_seq/target 不变、receipt revision 前进、导航事件字节行不变。后端两文件40项集成通过，沿原独占闸门且保留180秒/4GiB保护。另修复纯Folder单测的等待竞态：屏障内精确核 committed/pending 和 deleting 恢复行，放行后保留 settled、节点移除及无重复事件的强断言，并显式停止自己的 worker；原HEAD单独运行该用例通过，不把它称为稳定失败反例。
+- 四文件单测最终99项通过，包含前片排除的Session删除；与集成合计139个不同用例。Ruff与本change strict通过；Pyright保留5条与完整HEAD基线的规则、完整消息及最窄语句AST一致的既有诊断，新增零条并消除两处悬空导入，不称类型全绿。本片证据与准确命令、源码指纹、原始输出及实际退出码保存在`out/tests/temp/catalog_intent_settlement_20261030/artifacts/verification.json`及同目录原件；临时完整HEAD源码副本在比对后删除。本片只恢复验证装具的证明能力，不代表旧代接管、任意原生I/O终止、Backend重启、Windows、Gateway/Web或完整shutdown硬期限完成；5.2/5.4与整体21/23保持未完成。未修改另一会话的Web迁移及自动化，未重启共享debug；团队协作和MCP显式持有继续延期。

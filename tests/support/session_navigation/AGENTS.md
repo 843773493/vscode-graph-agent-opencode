@@ -23,4 +23,5 @@ session_navigation/
 
 - 按要验证的边界选择入口：HTTP helper 证明 API 链路，catalog helper 只证明 owner 合同。
 - HTTP 等待使用单一总期限；超时只结束观察，不取消已受理的后台 operation。
+- direct catalog 装具持有自己的 worker，终态及删除的物理 settlement 共用一次30秒观察预算；确认原回执不再 pending 后才正常停止worker，不把逻辑committed当作物理清理成功。它不改变产品的异步接受或逻辑终态合同；失败／取消沿原finally停止本装具持有的worker，未结算事实由原owner保留。
 - 新辅助按入口边界命名，并同步更新 `tests/support/AGENTS.md` 职责树。

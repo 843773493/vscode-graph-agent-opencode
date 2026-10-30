@@ -34,7 +34,7 @@ from tests.integration.backend.sessions.test_navigation_intent_integrity import 
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
 )
-from tests.support.session_navigation_queue import create_catalog_intent
+from tests.support.session_navigation.catalog_intents import create_catalog_intent
 
 
 @pytest.mark.parametrize("column,value", [

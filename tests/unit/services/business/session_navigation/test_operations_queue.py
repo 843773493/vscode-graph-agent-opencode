@@ -977,6 +977,7 @@ async def test_intent_carries_base_catalog_revision_for_snapshot_reconciliation(
 @pytest.mark.asyncio
 async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
     navigation_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """递归删除：导航逻辑 committed 与物理排空分开上报（8.1-G 删除链路契约）。
 
@@ -1001,27 +1002,46 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
         target_node_id=folder_id,
         recursive=True,
     )
-    await stack.enqueue(
-        NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
-    )
-    record = await stack.service.await_terminal(
-        deletion.client_operation_id, stack.scope
-    )
+    delete_service = stack.resolver._delete_service
+    drain = delete_service._drain
+    drain_started, release_drain = asyncio.Event(), asyncio.Event()
 
-    assert record.state == "committed"
-    # 纯 Folder 子树也必须显式确认排空完成。
-    assert record.settlement == "settled"
-    # 删除链路复用的是共享子树删除流：其 mark 事务关闭逻辑可见性、最终 tombstone
-    # 事务移除节点行。因此删除 committed 后，该节点对正常读者不再存在。
-    with pytest.raises(KeyError):
-        stack.resolver.get_node(folder_id)
-    assert folder_id not in {node.node_id for node in stack.resolver.list_nodes()}
-    # 删除的 terminal 同样进了导航事件 outbox（与普通 mutation 同一观测面）。
-    events = stack.service.events(after=0, limit=50)
-    assert [
-        event.operation_id for event in events.items
-    ] == [created.client_operation_id, deletion.client_operation_id]
-    assert events.items[-1].result_state == "committed"
+    async def blocked_drain(record: SubtreeDeleteRecord, key: str) -> None:
+        drain_started.set()
+        await release_drain.wait()
+        await drain(record, key)
+
+    monkeypatch.setattr(delete_service, "_drain", blocked_drain)
+    try:
+        await stack.enqueue(
+            NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
+        )
+        await asyncio.wait_for(drain_started.wait(), 3)
+        record = await stack.service.await_terminal(deletion.client_operation_id, stack.scope)
+        assert record.state == "committed" and record.settlement == "pending"
+        # mark 保留 deleting 行作为恢复依据，不能把它当成物理 settlement。
+        assert stack.store.get_node(folder_id).state == "deleting"
+        events = stack.service.events(after=0, limit=50)
+        assert [event.operation_id for event in events.items] == [
+            created.client_operation_id, deletion.client_operation_id,
+        ]
+        assert events.items[-1].result_state == "committed"
+        release_drain.set()
+        async with asyncio.timeout(3):
+            while (settled := stack.service.record(deletion.client_operation_id, stack.scope)).pending_settlement:
+                await asyncio.sleep(0.01)
+        # 纯 Folder 子树同样要核实原操作完成排空，不能丢掉 settled 断言。
+        assert settled.state == "committed" and settled.settlement == "settled"
+        assert settled.queue_seq == record.queue_seq and settled.result_node_id == folder_id
+        assert settled.receipt_revision > record.receipt_revision
+        assert stack.store.get_subtree_delete_record(deletion.client_operation_id).state == "completed"
+        with pytest.raises(KeyError):
+            stack.resolver.get_node(folder_id)
+        assert folder_id not in {node.node_id for node in stack.resolver.list_nodes()}
+        assert stack.service.events(after=0, limit=50) == events
+    finally:
+        release_drain.set()
+        await stack.service.stop()
 
 
 @pytest.mark.asyncio
