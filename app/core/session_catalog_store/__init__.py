@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import failure_detail
 from app.core.session_catalog_store._schema import (
     _CATALOG_METADATA_SEED,
     _CATALOG_METADATA_TABLE_DDL,
@@ -179,10 +180,17 @@ class SessionCatalogStore(
     def _ensure_open(self) -> None:
         if self._rollback_failure is not None:
             raise RuntimeError(
-                f"session catalog store 回滚失败，已关闭业务访问: {self.database_path}"
+                failure_detail(
+                    self._rollback_failure, stage="catalog-rollback",
+                    label="session catalog store 回滚失败，已关闭业务访问: artifact=session_catalog",
+                )
             ) from self._rollback_failure
         if self._closed:
-            raise RuntimeError(f"session catalog store 已关闭: {self.database_path}")
+            error = RuntimeError(f"session catalog store 已关闭: {self.database_path}")
+            raise RuntimeError(failure_detail(
+                error, stage="catalog-access",
+                label="session catalog store 已关闭: artifact=session_catalog",
+            )) from error
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -331,6 +339,7 @@ class SessionCatalogStore(
                 return
             self._connection.execute("ROLLBACK")
         except BaseException as rollback_error:  # noqa: BLE001 — 清理错误不得覆盖首错。
+            rollback_error.add_note(f"Session catalog 回滚位置: {self.database_path}")
             self._rollback_failure = rollback_error
             error.add_note(f"Session catalog 回滚失败: {rollback_error!r}")
             try:
@@ -345,10 +354,15 @@ class SessionCatalogStore(
                 "SELECT generation FROM catalog_metadata WHERE singleton_id = 1"
             ).fetchone()
             if row is None:
-                raise CatalogMaintenanceRequiredError(
+                error = CatalogMaintenanceRequiredError(
                     "session catalog 缺少 catalog_metadata 单例行（库被外部改动，"
                     f"须进入维护模式核对）: path={self.database_path}"
                 )
+                raise CatalogMaintenanceRequiredError(failure_detail(
+                    error, stage="catalog-generation",
+                    label="session catalog 缺少 catalog_metadata 单例行，须进入维护模式核对: "
+                    "artifact=session_catalog, coordinate=generation",
+                )) from error
             return int(row[0])
 
     def current_navigation_revision(self) -> int:
@@ -359,10 +373,15 @@ class SessionCatalogStore(
                 "WHERE singleton_id = 1"
             ).fetchone()
             if row is None:
-                raise CatalogMaintenanceRequiredError(
+                error = CatalogMaintenanceRequiredError(
                     "session catalog 缺少 navigation revision 记录，"
                     f"须进入维护模式核对: path={self.database_path}"
                 )
+                raise CatalogMaintenanceRequiredError(failure_detail(
+                    error, stage="catalog-navigation-revision",
+                    label="session catalog 缺少 navigation revision 记录，须进入维护模式核对: "
+                    "artifact=session_catalog",
+                )) from error
             return int(row[0])
 
     @contextmanager

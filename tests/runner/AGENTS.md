@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-catalog-access-errors` 经实际 Session HTTP 创建、SQLite 回滚失败隔离及冷 container 重开核对 409、request_id、原件与身份；固定60秒/4GiB，ASGI装具不代真实网络、独立进程重启或Gateway/Web。
+
 `integration-fork-source-scope` 经真实消息、捕获及 fork 入口验证私有来源解析失败的错误归属、原意图中止、来源不变、作用域释放与新意图发布。固定60秒/4GiB及原fork期限，复用model_stream，不代Gateway/Web、OS重启或Windows实机。
 
 `integration-fork-prepared-control` 经真实消息和 fork 入口建立未发布目标，核只读校验不补建空/缺表控制库、不切换 journal、不重建缺失文件；故障恢复后由同一操作完成发布与幂等重试。固定120秒/4GiB及单次60秒fork期限，使用 model_stream，不代表独立进程重启、Gateway/Web或Windows验收。

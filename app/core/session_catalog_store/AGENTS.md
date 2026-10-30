@@ -52,6 +52,8 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 
 # 规范
 
+- 运行期关闭、回滚隔离及 metadata 缺失的公开拒绝只保留逻辑 artifact、阶段和错误类别／系统码；原数据库位置及诊断次错留原异常链。不得改变事务提交、回滚和关闭的顺序，缺失 metadata 不补建。
+
 - 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
 
 - 方法族 mixin 之间只通过宿主 `self` 协作；每个方法在 `SessionCatalogStore.__mro__` 中只允许

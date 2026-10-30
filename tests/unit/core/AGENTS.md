@@ -10,6 +10,8 @@
 
 ```text
 tests/unit/core/
+├── session_catalog_store/
+│   └── test_access_errors.py（关闭、回滚隔离与metadata缺失的错误出口）
 ├── identity/
 │   ├── test_identifier*.py、test_canonical_identifier_matrix.py
 │   ├── test_distribution_identity.py、test_user_identity.py、test_workspace_identity.py

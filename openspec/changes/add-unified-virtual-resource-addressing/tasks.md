@@ -1527,3 +1527,9 @@
 - 原 ForkPathScope 在最终 resolve／目录检查边界复用 failure_detail，公开来源 Session/Thread、阶段、类别与原生错误码；原位置、异常及日志次错留诊断和直接 cause。保持原路径选择、拒绝类别、ContextVar准入与释放顺序，不增加解析器、捕获writer或回退路径。
 - 缺目录、普通文件、真实循环链接和原生检查失败 × 正常／故障日志的8项原实现反例全部检出位置外泄。修复后74项定位／checkpoint回归通过；真实消息→捕获→fork验收1 passed／18.31秒，核原创建及capture中止、来源canonical不变、作用域释放、旧key不复活、新意图发布及幂等副本原字节。首轮产品装具误用Saver属性而未到被测故障，修正为原存储owner；回调类型及Ruff两项也在最终检查前修正，原始失败保留。
 - Ruff通过；Pyright14条诊断均在原有测试函数，与基线逐项一致，产品及新集成文件零诊断；原有测试函数AST不变，产品仅一方法改变。作者按架构技能核对205行原owner、748行定位测试及15文件fork集成目录，无新增产品文件／目录；单测根57文件及接近800行的组织风险保留，不代独审。命令、源码指纹、raw／退出码与结构／类型核对见 `out/tests/temp/uri-global-closure/artifacts/` 的 `fork-snapshot-scope-*-13*` 和 `fork-snapshot-scope-structure-types-136.json`。测试串行、60秒matrix及原fork期限、进程外4GiB／两CPU保护保持；不代Gateway/Web、独立Backend重启、Windows实机或URI全局闭包，2.2／7.2仍未勾，前端与延期协作保持。
+
+### 2026-10-30 catalog 运行期访问错误（2.2／7.2部分收口）
+
+- 关闭、回滚隔离及 metadata 缺失沿原拒绝点复用 failure_detail，只公开逻辑 artifact、阶段、类别与 SQLite 码；位置和日志次错留原异常链。原事务提交／回滚／关闭顺序及缺失 metadata 拒绝保持，不新增错误类型或存储链。
+- 原实现16项单测反例及2项ASGI反例检出位置外泄；最终310项catalog单测通过。集成通过HTTP创建Session，实际触发回滚失败隔离，核409／request_id、原异常身份与原件不变，再由冷container重开经同一路由核原Session；不以手填隔离状态代替最终验收。
+- Ruff和3文件Pyright通过；类型首轮发现新装具注册handler的参数方差错误，已按框架的Exception合同收窄并复验。作者AST核对仅原4方法改变，facade404行仍属原生命周期职责，未增产品模块；单测新目录含四段AGENTS，未扩大既有根目录测试文件数。准确命令、指纹、raw和退出码见 `out/tests/temp/uri-global-closure/artifacts/catalog-access-*` 及 `verification-140.json`。测试串行、60秒matrix及进程外4GiB／两CPU保护保持；本片不代真实网络、独立进程重启、Gateway/Web或启动／schema／备份其它出口，2.2／7.2仍未勾，前端与延期项保持。
