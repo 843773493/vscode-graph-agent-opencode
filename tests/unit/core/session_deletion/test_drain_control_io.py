@@ -133,12 +133,15 @@ async def test_delete_waits_for_original_control_access(
     pool_queued = asyncio.Event()
     list_pending = SessionControlStore.list_pending_thread_creations
 
-    def pending(control: SessionControlStore) -> tuple[ThreadCreationRecord, ...]:
+    def occupy_pool() -> None:
         nonlocal queued
+        queued = loop.run_in_executor(None, pool_step.block)
+        pool_queued.set()
+
+    def pending(control: SessionControlStore) -> tuple[ThreadCreationRecord, ...]:
         result = list_pending(control)
         if wait_kind == "pool" and stage == "close" and queued is None:
-            queued = loop.run_in_executor(None, pool_step.block)
-            pool_queued.set()
+            loop.call_soon_threadsafe(occupy_pool)
         return result
 
     monkeypatch.setattr(SessionControlStore, "list_pending_thread_creations", pending)

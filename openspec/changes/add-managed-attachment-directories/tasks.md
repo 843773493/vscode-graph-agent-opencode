@@ -510,3 +510,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原实现的真实SQLite写锁等待和同步关闭故障点各复现1项阻塞反例；现由原worker原语完成检查/打开/关闭，打开结果交付前已登记关闭。取消与到期结算原连接后传播，同key锁不提前释放；原异步收敛、后序holder/Session gate和删除进度顺序保持，不把此阶段误写成已持Session gate。
 - 128项相关单元通过，含12项排队/原生等待、完成/取消/到期和3项原错误/关闭/重试场景。原预检3项排队装具迁到真实排空回调后，全部原断言保持；首轮122通过/3失败及静态修正原件均保留。4项产品ASGI集成通过（15.00秒，矩阵21.66秒），由创建/导航入队生成journal，核暂停时HTTP/request_id、原件/fence、worker停止前原连接结算及同操作恢复；关闭故障点不冒称SQLite原生关闭锁竞争，worker重启不代Backend进程重启。
 - Ruff、Pyright零诊断、compileall、strict及作者AST复核的命令、指纹、raw和退出码见`out/tests/temp/session_delete_control_io_20261030/artifacts/verification.json`。收敛内部SQL/文件校验、前序目标读取和catalog事务仍同步；原生终止、完整shutdown、Backend进程重启、Windows与Gateway/Web仍未验。5.2/5.4及21/23保持未完成；未改Web实现/自动化或重启共享debug。
+
+### 2026-10-30 删除接管未发布Thread的同步等待（5.4 部分收口）
+
+- 原清单读取和staging删除各有1项有效阻塞反例。现迁齐原清单/记录读取、最后复核/中止及唯一目录清理的五处调用；目录全部核验后才删除/同步，异步fork中止回调仍留原事件循环。取消/到期结算原worker与holder/gate，按实际提交保留preparing或aborted，不重造创建身份、账本或进度。
+- 237项单元通过，含21项原生读取/核验/删除/屏障、真实SQLite中止锁竞争、线程池排队及完成/取消/到期。首轮235通过/2失败是清理排队观察早于前序读取交付，装具现确认真实清理队列后取消，原断言保持。4项导航产品ASGI集成通过（15.37秒，矩阵21.93秒），未发布记录和staging经原创建服务生成；原fork取消/中止恢复套件8项通过（78.67秒，矩阵86.28秒），核原capture、附件claim及不重建/不重捕获。
+- Ruff、compileall、strict通过；Pyright仍为6项既有诊断，已在完整HEAD归档逐项复现，规则/消息/源语句相同，本轮零新增，不宣称全绿。作者AST复核保留其余31个符号、五处调用、全部核验/删除语句与原控制库测试断言；结构审查登记既有1492行模块和core目录49个直接Python文件，本次不新增领域或顶层owner。准确命令、指纹、raw/退出码及审查见`out/tests/temp/thread_creation_cleanup_io_20261030/artifacts/verification.json`。原创建准备、前序目标读取/catalog事务、Backend进程重启、Windows、Gateway/Web与完整shutdown仍未验；5.2/5.4及21/23不勾，未改Web实现/自动化或重启共享debug。

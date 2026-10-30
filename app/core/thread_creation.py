@@ -114,6 +114,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 
 __all__ = [
     "ThreadCreationResult",
@@ -570,11 +571,18 @@ async def settle_thread_creations_for_deletion(
     locator/清单接管取消，不扫盘、不重建或更换创建 identity。
     """
     holders = OperationHolderGate(sessions_root, namespace="thread_creation")
-    for pending in control.list_pending_thread_creations():
+
+    def abort_record(expected: ThreadCreationRecord) -> None:
+        key = expected.thread_creation_idempotency_key
+        if control.get_thread_creation_record(key) != expected:
+            raise RuntimeError("删除取消的创建 record 在 holder 内变化")
+        control.abort_thread_creation_record(key, "session_deletion_pending")
+
+    for pending in await run_sync_shielded(control.list_pending_thread_creations):
         key = pending.thread_creation_idempotency_key
         async with holders.lock_for(f"{session_id}/{key}"):
             async with session_gate.exclusive(session_id):
-                record = control.get_thread_creation_record(key)
+                record = await run_sync_shielded(control.get_thread_creation_record, key)
                 if record.state != "preparing":
                     continue
                 inventory = json.loads(record.artifact_manifest) if record.artifact_manifest is not None else None
@@ -591,9 +599,7 @@ async def settle_thread_creations_for_deletion(
                 before_abort=abort_fork if record.request_intent_json is not None else None,
             )
             async with session_gate.exclusive(session_id):
-                if control.get_thread_creation_record(key) != record:
-                    raise RuntimeError("删除取消的创建 record 在 holder 内变化")
-                control.abort_thread_creation_record(key, "session_deletion_pending")
+                await run_sync_shielded(abort_record, record)
             await observe_phase(key, "thread.creation.cancelled")
 
 
@@ -1462,31 +1468,35 @@ class ThreadCreationService:
         清理前先校验目录内容确属本 operation（与预期清单一致）——外来
         内容 fail closed（不吸收、不误删），record 保持 preparing。
         """
-        stage = "CAS 失败定点清理"
-        targets = (
-            (native_io_path(session_dir / record.final_relative_locator), "final"),
-            (native_io_path(session_dir / record.staging_locator), "staging"),
-        )
         materialized_rollout = False
         if record.request_intent_json is not None:
             if before_abort is None:
                 raise RuntimeError("fork child 清理缺少资源 owner 回调")
             materialized_rollout = await before_abort(record)
-        for directory, label in targets:
-            with _thread_access(session_id, record.child_thread_id, "cleanup_verify"):
-                exists = directory.exists() or directory.is_symlink()
-            if not exists:
-                continue
-            if inventory is None:
-                raise _thread_conflict(session_id, record.child_thread_id, stage, "未冻结清单的创建已有目录", path=directory)
-            verify_node_directory(
-                directory, inventory, session_id=session_id, thread_id=record.child_thread_id,
-                stage=f"{stage}({label})", partial=label == "staging",
-                materialized_rollout=label == "final" and materialized_rollout,
+
+        def cleanup() -> None:
+            stage = "CAS 失败定点清理"
+            targets = (
+                (native_io_path(session_dir / record.final_relative_locator), "final"),
+                (native_io_path(session_dir / record.staging_locator), "staging"),
             )
-        with _thread_access(session_id, record.child_thread_id, "cleanup"):
-            for directory, _label in targets:
-                if not (directory.exists() or directory.is_symlink()):
+            for directory, label in targets:
+                with _thread_access(session_id, record.child_thread_id, "cleanup_verify"):
+                    exists = directory.exists() or directory.is_symlink()
+                if not exists:
                     continue
-                shutil.rmtree(directory)
-                _fsync_directory(directory.parent)
+                if inventory is None:
+                    raise _thread_conflict(session_id, record.child_thread_id, stage, "未冻结清单的创建已有目录", path=directory)
+                verify_node_directory(
+                    directory, inventory, session_id=session_id, thread_id=record.child_thread_id,
+                    stage=f"{stage}({label})", partial=label == "staging",
+                    materialized_rollout=label == "final" and materialized_rollout,
+                )
+            with _thread_access(session_id, record.child_thread_id, "cleanup"):
+                for directory, _label in targets:
+                    if not (directory.exists() or directory.is_symlink()):
+                        continue
+                    shutil.rmtree(directory)
+                    _fsync_directory(directory.parent)
+
+        await run_sync_shielded(cleanup)
