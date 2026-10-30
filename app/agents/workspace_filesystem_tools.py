@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import time
 from functools import partial, update_wrapper
 from pathlib import Path, PurePosixPath
@@ -24,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
+from app.core.failures import report_failure
 from app.core.resource_uri import (
     ParsedResourceUri,
     ResourceUriGrammarError,
@@ -51,7 +51,6 @@ from app.services.infrastructure.workspace_files.text_owner import (
 )
 
 GrepOutputMode = Literal["files_with_matches", "content", "count"]
-logger = logging.getLogger(__name__)
 DEFAULT_MAX_LINES = 2_000
 class _ToolSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -164,12 +163,13 @@ def _path_error(
             "code": error.reason_code, "message": str(error),
         }, ensure_ascii=False)
     elif tool_name in {"ls", "read_file", "glob", "grep"} and isinstance(error, (OSError, httpx.HTTPError)):
-        logger.error("文件导航执行失败", exc_info=error)
         content = json.dumps({
             "owner": "resource_file_operations", "code": "execution_failed",
             "reason": "filesystem" if isinstance(error, OSError) else "transport",
             "type": type(error).__name__, "errno": getattr(error, "errno", None),
-            "message": "文件导航文件系统访问失败" if isinstance(error, OSError) else "文件导航传输失败",
+            "message": report_failure(error, detail=(
+                "文件导航文件系统访问失败" if isinstance(error, OSError) else "文件导航传输失败"
+            )),
         }, ensure_ascii=False)
     else:
         content = f"Error: {error}"
