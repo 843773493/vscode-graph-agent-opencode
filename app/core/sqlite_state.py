@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -49,6 +49,25 @@ def _sqlite_runtime_failure(
     if isinstance(error, sqlite3.Error) and hasattr(error, "sqlite_errorname"):
         label += f", sqlite_errorname={error.sqlite_errorname}"
     return failure_detail(error, stage=stage, label=label)
+
+
+@contextmanager
+def _sqlite_access(path: Path, stage: str) -> Iterator[None]:
+    """只在原生访问点分离公开事实与原异常，不包装已核定的规则拒绝。"""
+    try:
+        yield
+    except (OSError, sqlite3.Error) as error:
+        detail = _sqlite_runtime_failure(path, "SQLite 原生访问失败", stage, error)
+        if isinstance(error, OSError):
+            winerror = getattr(error, "winerror", None)
+            if winerror is not None:
+                raise type(error)(error.errno, detail, None, winerror) from error
+            raise type(error)(error.errno, detail) from error
+        projected = type(error)(detail)
+        for name in ("sqlite_errorcode", "sqlite_errorname"):
+            if hasattr(error, name):
+                setattr(projected, name, getattr(error, name))
+        raise projected from error
 
 
 def sqlite_vfs_max_pathname() -> int:
@@ -297,7 +316,8 @@ class SQLiteStateDatabase:
         self._allow_shared_processes = allow_shared_processes
         self._closed = False
         validate_sqlite_path_budget(self.path)
-        native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
+        with _sqlite_access(self.path, "database_directory"):
+            native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
         # 构造期任一步骤失败都必须归还进程所有权锁：异常对象会连同
         # traceback 一起被调用方长期持有，锁 fd 若随之存活，调用方重试
         # 同一路径时只会看到「已被另一个进程占用」，真实迁移错误被掩盖。
@@ -316,94 +336,108 @@ class SQLiteStateDatabase:
         if self._closed:
             error = RuntimeError("SQLite 状态库已关闭")
             raise RuntimeError(_sqlite_runtime_failure(self.path, "SQLite 状态库已关闭", "connection", error)) from error
-        connection = sqlite3.connect(
-            sqlite_file_uri(self.path), uri=True,
-            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
-            isolation_level=None,
-            check_same_thread=False,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
-        if journal_mode.lower() != "wal":
+        with _sqlite_access(self.path, "connection_open"):
+            connection = sqlite3.connect(
+                sqlite_file_uri(self.path), uri=True,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+        # 成功交付才转移所有权；准备、诊断或取消失败均关闭本次未发布连接。
+        with ExitStack() as pending:
+            pending.callback(self._close_connection, connection)
+            with _sqlite_access(self.path, "connection_prepare"):
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+                journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
+            if journal_mode.lower() != "wal":
+                pending.close()
+                reason = f"SQLite 无法启用 WAL: journal_mode={journal_mode}"
+                error = RuntimeError(reason)
+                raise RuntimeError(_sqlite_runtime_failure(
+                    self.path, reason, "journal_mode", error,
+                )) from error
+            with _sqlite_access(self.path, "connection_prepare"):
+                connection.execute("PRAGMA synchronous = NORMAL")
+            pending.pop_all()
+            return connection
+
+    def _close_connection(self, connection: sqlite3.Connection) -> None:
+        """本 owner 回收的连接共用同一原生关闭与诊断边界。"""
+        # TODO：原生关闭在释放前失败时，需由原 owner 保留句柄并提供显式重试；当前拒绝不证明释放。
+        with _sqlite_access(self.path, "connection_close"):
             connection.close()
-            reason = f"SQLite 无法启用 WAL: journal_mode={journal_mode}"
-            error = RuntimeError(reason)
-            raise RuntimeError(_sqlite_runtime_failure(
-                self.path, reason, "journal_mode", error,
-            )) from error
-        connection.execute("PRAGMA synchronous = NORMAL")
-        return connection
 
     def _initialize(self) -> None:
         connection = self._connect()
         try:
-            connection.execute(
-                load_sql(__package__, "sqlite_state.sql")
-            )
-            applied = tuple(
-                int(row[0])
-                for row in connection.execute(
-                    "SELECT version FROM schema_migrations ORDER BY version"
-                ).fetchall()
-            )
-            current = applied[-1] if applied else 0
-            if current > self._schema_version:
-                reason = (
-                    "SQLite schema 版本高于当前程序支持范围: "
-                    f"current={current}, supported={self._schema_version}"
+            with _sqlite_access(self.path, "initialize"):
+                connection.execute(
+                    load_sql(__package__, "sqlite_state.sql")
                 )
-                error = RuntimeError(reason)
-                raise RuntimeError(_sqlite_runtime_failure(
-                    self.path, reason, "schema_version", error,
-                )) from error
-            # 迁移账本必须是连续的 1..current；任何缺号都说明有人绕过软件
-            # 直接改写了 schema_migrations，继续打开会让缺号迁移永久不生效，
-            # 因此明确报错而不是静默忽略。
-            expected_applied = tuple(range(1, current + 1))
-            if applied != expected_applied:
-                missing = tuple(
-                    version
-                    for version in expected_applied
-                    if version not in set(applied)
+                applied = tuple(
+                    int(row[0])
+                    for row in connection.execute(
+                        "SELECT version FROM schema_migrations ORDER BY version"
+                    ).fetchall()
                 )
-                reason = (
-                    "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
-                    f"applied={applied}, missing={missing}"
-                )
-                error = RuntimeError(reason)
-                raise RuntimeError(_sqlite_runtime_failure(
-                    self.path, reason, "migration_ledger", error,
-                )) from error
-            if current:
-                self._require_migrated_tables(connection, current)
-            for version, migration in enumerate(self._migrations, start=1):
-                if version <= current:
-                    continue
-                try:
-                    if isinstance(migration, str):
-                        connection.executescript(
-                            "BEGIN IMMEDIATE;\n"
-                            f"{migration}\n"
-                            "INSERT INTO schema_migrations(version, applied_at) "
-                            f"VALUES ({version}, '{utc_now_text()}');\n"
-                            "COMMIT;"
-                        )
-                    else:
-                        connection.execute("BEGIN IMMEDIATE")
-                        migration(connection)
-                        connection.execute(
-                            "INSERT INTO schema_migrations(version, applied_at) "
-                            "VALUES (?, ?)",
-                            (version, utc_now_text()),
-                        )
-                        connection.execute("COMMIT")
-                except Exception:
-                    connection.rollback()
-                    raise
+                current = applied[-1] if applied else 0
+                if current > self._schema_version:
+                    reason = (
+                        "SQLite schema 版本高于当前程序支持范围: "
+                        f"current={current}, supported={self._schema_version}"
+                    )
+                    error = RuntimeError(reason)
+                    raise RuntimeError(_sqlite_runtime_failure(
+                        self.path, reason, "schema_version", error,
+                    )) from error
+                # 迁移账本必须是连续的 1..current；任何缺号都说明有人绕过软件
+                # 直接改写了 schema_migrations，继续打开会让缺号迁移永久不生效，
+                # 因此明确报错而不是静默忽略。
+                expected_applied = tuple(range(1, current + 1))
+                if applied != expected_applied:
+                    missing = tuple(
+                        version
+                        for version in expected_applied
+                        if version not in set(applied)
+                    )
+                    reason = (
+                        "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
+                        f"applied={applied}, missing={missing}"
+                    )
+                    error = RuntimeError(reason)
+                    raise RuntimeError(_sqlite_runtime_failure(
+                        self.path, reason, "migration_ledger", error,
+                    )) from error
+                if current:
+                    self._require_migrated_tables(connection, current)
+                for version, migration in enumerate(self._migrations, start=1):
+                    if version <= current:
+                        continue
+                    try:
+                        if isinstance(migration, str):
+                            connection.executescript(
+                                "BEGIN IMMEDIATE;\n"
+                                f"{migration}\n"
+                                "INSERT INTO schema_migrations(version, applied_at) "
+                                f"VALUES ({version}, '{utc_now_text()}');\n"
+                                "COMMIT;"
+                            )
+                        else:
+                            connection.execute("BEGIN IMMEDIATE")
+                            migration(connection)
+                            connection.execute(
+                                "INSERT INTO schema_migrations(version, applied_at) "
+                                "VALUES (?, ?)",
+                                (version, utc_now_text()),
+                            )
+                            connection.execute("COMMIT")
+                    except Exception:
+                        connection.rollback()
+                        raise
         finally:
-            connection.close()
+            self._close_connection(connection)
 
     def _require_migrated_tables(
         self,
@@ -442,20 +476,21 @@ class SQLiteStateDatabase:
     def diagnostics(self) -> SQLiteDiagnostics:
         connection = self._connect()
         try:
-            rows = connection.execute(
-                "SELECT version FROM schema_migrations ORDER BY version"
-            ).fetchall()
-            journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0])
-            versions = tuple(int(row[0]) for row in rows)
-            return SQLiteDiagnostics(
-                path=str(self.path),
-                schema_version=versions[-1] if versions else 0,
-                applied_migrations=versions,
-                journal_mode=journal_mode,
-                owner_process_id=os.getpid(),
-            )
+            with _sqlite_access(self.path, "diagnostics"):
+                rows = connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
+                journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0])
+                versions = tuple(int(row[0]) for row in rows)
+                return SQLiteDiagnostics(
+                    path=str(self.path),
+                    schema_version=versions[-1] if versions else 0,
+                    applied_migrations=versions,
+                    journal_mode=journal_mode,
+                    owner_process_id=os.getpid(),
+                )
         finally:
-            connection.close()
+            self._close_connection(connection)
 
     def close(self) -> None:
         if self._closed:
