@@ -458,3 +458,9 @@ CAS在取消前后实际提交的child不会倒删、回退或再分配。等待
 Session main 与 child 的 `on_published` 统一为可等待回调，首次发布与同 key 恢复均在原目标 gate 内等待；不再保留同步回调入口。确认入口仍在事件循环中执行，fork owner 的冻结证明核验、catalog 查询与附件 settlement 写入共用一次既有 `run_sync_shielded`，保持原核对、事务与异常顺序。原 gate 和同 key 锁覆盖线程池排队及真实 I/O 结算；调用方取消须等 worker 完成后传播，不继续后续阶段，也不回退已 published 事实或重发物化/CAS。
 
 附件确认失败继续保留原 claim、preparing 或 published_pending_attachment_commit 结算与原异常，同 key 显式重试沿原目标补齐 committed。新 Session 与 child 的产品消息/Agent/model_stream 验收覆盖确认写入前后及线程池排队取消，核冻结目标、来源及目标 canonical 原字节、回调线程、原 gate 和恢复；完整原生线程终止、Session 其余同步创建 I/O、独立 Backend 重启、Windows 与全 shutdown 硬期限仍 TODO，5.2/5.4 保持未完成。
+
+### Session 创建原同步阶段的结算（5.4 部分收口）
+
+Session 创建 owner 的记录冻结、目录探测/准备/复验、发布前 capability/proof 核验及 rename、发布 CAS、已发布结果核验，以及隔离中止均复用既有 `run_sync_shielded`。每段保留原同步调用顺序和事务，不另建 writer 或恢复链；原 key 锁和相应 topology/Session gate 覆盖线程池排队及真实 I/O 结算。取消或外层期限到达后先等本段结束，再传播原错误，不继续下一阶段；已经提交的 preparing/published/aborted、冻结身份及 locator 供同 key 恢复，不倒删目标或重发发布。
+
+异步发布确认仍在原事件循环与原 gate 内执行，其持久结算沿上一切片的同一 worker 合同。产品消息/Agent/model_stream 生成带附件来源，经 ASGI fork API 验证原记录、取消期间独立工作区请求、来源与目标 canonical 原字节、唯一恢复目标及 aborted 隔离。同步辅助查询的其它异步消费者、Session/fork 编排中的其它存储访问及共享连接锁竞争继续 TODO；本片不将整个创建流程 shield，也不承诺原生线程可终止、独立 Backend 重启、Windows、Gateway/Web 或全 shutdown 硬期限，5.2/5.4 保持未完成。

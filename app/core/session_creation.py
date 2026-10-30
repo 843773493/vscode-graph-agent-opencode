@@ -82,6 +82,7 @@ from app.core.session_catalog_store.creation_envelope import (
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 
 __all__ = [
@@ -306,7 +307,8 @@ class SessionCreationService:
         # 住两个 catalog 短临界区（锁序 gate → 单 SQLite 写事务）。
         async with self._key_lock(idempotency_key):
             async with self._gate.exclusive():
-                record = self._store.create_or_get_creation_record(
+                record = await run_sync_shielded(
+                    self._store.create_or_get_creation_record,
                     idempotency_key=idempotency_key,
                     workspace_id=self._workspace_id,
                     parent_node_id=parent_node_id,
@@ -328,27 +330,30 @@ class SessionCreationService:
                     f"idempotency_key 重试: key={idempotency_key!r}, "
                     f"reason={record.abort_reason!r}"
                 )
-            staging = self._staging_dir(record.session_id)
-            target = self._date_bucket_dir(record.storage_relative_locator)
-            if staging.exists() or staging.is_symlink():
-                if target.exists() or target.is_symlink():
-                    raise RuntimeError(
-                        "prepared 日期桶与 staging 同时存在（外部改动，"
-                        "fail closed）: "
-                        f"session_id={record.session_id}"
-                    )
-                prepared = staging
-            elif target.exists() or target.is_symlink():
-                prepared = target
-            else:
-                self._prepare_staging(record, frozen_metadata)
-                prepared = staging
-            self._verify_session_directory(
-                prepared,
-                record,
-                frozen_metadata,
-                stage="prepared Session 复验",
-            )
+            def prepare_directory() -> None:
+                staging = self._staging_dir(record.session_id)
+                target = self._date_bucket_dir(record.storage_relative_locator)
+                if staging.exists() or staging.is_symlink():
+                    if target.exists() or target.is_symlink():
+                        raise RuntimeError(
+                            "prepared 日期桶与 staging 同时存在（外部改动，"
+                            "fail closed）: "
+                            f"session_id={record.session_id}"
+                        )
+                    prepared = staging
+                elif target.exists() or target.is_symlink():
+                    prepared = target
+                else:
+                    self._prepare_staging(record, frozen_metadata)
+                    prepared = staging
+                self._verify_session_directory(
+                    prepared,
+                    record,
+                    frozen_metadata,
+                    stage="prepared Session 复验",
+                )
+
+            await run_sync_shielded(prepare_directory)
             return record
 
     async def publish_prepared(
@@ -364,33 +369,40 @@ class SessionCreationService:
                 f"record 必须是 SessionCreationRecord: {record!r}"
             )
         async with self._key_lock(record.session_creation_idempotency_key):
-            current = self._require_record_capability(record)
-            self._validate_fork_completion(current, fork_completion)
+            def prepare_publication() -> SessionCreationRecord:
+                current = self._require_record_capability(record)
+                self._validate_fork_completion(current, fork_completion)
+                if current.state == "published":
+                    validate_session_creation_envelope(current)
+                    return current
+                if current.state == "aborted":
+                    raise RuntimeError(
+                        "session creation record 已中止，拒绝发布: "
+                        f"key={current.session_creation_idempotency_key!r}, "
+                        f"reason={current.abort_reason!r}"
+                    )
+                metadata = self.read_prepared_session_metadata(current)
+                prepared = self._prepared_directory(current)
+                target = self._date_bucket_dir(current.storage_relative_locator)
+                if prepared == self._staging_dir(current.session_id):
+                    self._rename_staging_to_target(current, metadata)
+                elif prepared != target:
+                    raise RuntimeError(
+                        "prepared Session path 与冻结 locator 不一致（fail closed）: "
+                        f"session_id={current.session_id}"
+                    )
+                return current
+
+            current = await run_sync_shielded(prepare_publication)
             if current.state == "published":
-                validate_session_creation_envelope(current)
                 if on_published is not None:
                     async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
                         await on_published(current)
-                return self._result_for_published(current)
-            if current.state == "aborted":
-                raise RuntimeError(
-                    "session creation record 已中止，拒绝发布: "
-                    f"key={current.session_creation_idempotency_key!r}, "
-                    f"reason={current.abort_reason!r}"
-                )
-            metadata = self.read_prepared_session_metadata(current)
-            prepared = self._prepared_directory(current)
-            target = self._date_bucket_dir(current.storage_relative_locator)
-            if prepared == self._staging_dir(current.session_id):
-                self._rename_staging_to_target(current, metadata)
-            elif prepared != target:
-                raise RuntimeError(
-                    "prepared Session path 与冻结 locator 不一致（fail closed）: "
-                    f"session_id={current.session_id}"
-                )
+                return await run_sync_shielded(self._result_for_published, current)
             async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
                 try:
-                    node = self._store.publish_creation_record(
+                    node = await run_sync_shielded(
+                        self._store.publish_creation_record,
                         current.session_creation_idempotency_key,
                         expected_purpose=current.purpose,
                     )
@@ -426,19 +438,22 @@ class SessionCreationService:
         if not reason:
             raise ValueError("abort reason 不能为空")
         async with self._key_lock(record.session_creation_idempotency_key):
-            current = self._require_record_capability(record)
-            if current.state == "aborted":
-                return current
-            if current.state == "published":
-                raise RuntimeError(
-                    "session creation record 已发布，不可 abort: "
-                    f"key={current.session_creation_idempotency_key!r}"
+            def abort() -> SessionCreationRecord:
+                current = self._require_record_capability(record)
+                if current.state == "aborted":
+                    return current
+                if current.state == "published":
+                    raise RuntimeError(
+                        "session creation record 已发布，不可 abort: "
+                        f"key={current.session_creation_idempotency_key!r}"
+                    )
+                self._quarantine_prepared(current)
+                return self._store.abort_creation_record(
+                    current.session_creation_idempotency_key,
+                    reason,
                 )
-            self._quarantine_prepared(current)
-            return self._store.abort_creation_record(
-                current.session_creation_idempotency_key,
-                reason,
-            )
+
+            return await run_sync_shielded(abort)
 
     def list_preparing_creation_records(
         self,
