@@ -79,9 +79,11 @@ def test_prepare_failure_closes_unpublished_connection_and_retries(
     assert "stage=connection_prepare" in str(caught.value) and _PRIVATE not in str(caught.value)
     diagnostic_sink(caught.value)
     assert state_path.read_bytes() == before
-    with sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as database:
-        with closing(database.connection()) as recovered:
-            assert recovered.execute("SELECT value FROM marker").fetchone()[0] == "原始 Ω"
+    with (
+        sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as database,
+        closing(database.connection()) as recovered,
+    ):
+        assert recovered.execute("SELECT value FROM marker").fetchone()[0] == "原始 Ω"
 
 
 @pytest.mark.parametrize("fault", ["directory", "open"])
