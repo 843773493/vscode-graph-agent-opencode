@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import os
 import sqlite3
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,11 +20,56 @@ from app.core import sqlite_state
 from app.core.atomic_fs import native_io_path
 
 
+@pytest.fixture(autouse=True, params=[False, True], ids=["diagnostics", "sink-failure"])
+def diagnostic_sink(
+    request: pytest.FixtureRequest, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> Iterator[Callable[[BaseException], None]]:
+    """同一原生失败在真实日志 I/O 故障下仍须结算，完整双错留原原因。"""
+    target = tmp_path / "private-diagnostic-target"
+    original = "保留日志冲突原件".encode()
+
+    def check(error: BaseException) -> None:
+        cause = error.__cause__
+        assert cause is not None
+        assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
+        assert str(target) not in str(error)
+        if request.param:
+            assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+            assert any(str(target) in note and "NotADirectoryError" in note
+                       for note in getattr(cause, "__notes__", ()))
+        else:
+            assert "diagnostic_sink_error=" not in str(error)
+
+    if not request.param:
+        yield check
+        return
+    target.write_bytes(original)
+
+    class FailedSink(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if "artifact=sqlite_runtime" in record.getMessage():
+                # pytest 在 call 阶段重排 root handlers；只读观察须先于故障 writer。
+                caplog.handler.handle(record)
+                (target / "error.log").write_text(record.getMessage(), encoding="utf-8")
+
+    # 产品没有日志回退；装具观察原记录后，唯一故障 writer 由真实 ENOTDIR 拒绝。
+    root = logging.getLogger()
+    handler = FailedSink()
+    root.addHandler(handler)
+    try:
+        yield check
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+    assert target.read_bytes() == original
+
+
 @pytest.mark.parametrize("name", ["native.sqlite", "数据库.sqlite"])
 @pytest.mark.parametrize("component", ["main", "-journal"])
 def test_budget_failure_reports_exact_boundary_without_database_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, name: str, component: str,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     database = tmp_path / name
     main_bytes = len(str(native_io_path(database.resolve())).encode("utf-8"))
@@ -33,11 +80,12 @@ def test_budget_failure_reports_exact_boundary_without_database_path(
         sqlite_state.validate_sqlite_path_budget(database)
     detail = str(caught.value)
     assert "SQLite 绝对路径超出当前默认 VFS 预算" in detail
-    assert "artifact=sqlite_runtime stage=path_budget" in detail
+    assert "artifact=sqlite_runtime" in detail and "stage=path_budget" in detail
     assert f"component={component}, bytes={overflowing_bytes}, mxPathname={maximum}" in detail
     assert f"sqlite_version={sqlite3.sqlite_version}" in detail
     assert str(database) not in detail and str(database) in caplog.text
     assert not database.exists()
+    diagnostic_sink(caught.value)
 
 
 def test_wrong_path_type_does_not_echo_native_input() -> None:
@@ -49,6 +97,7 @@ def test_wrong_path_type_does_not_echo_native_input() -> None:
 
 def test_native_resolve_failure_keeps_errno_and_cause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     database = tmp_path / "index.sqlite"
     failure = PermissionError(errno.EACCES, f"原生错误 {database}", str(database))
@@ -67,11 +116,13 @@ def test_native_resolve_failure_keeps_errno_and_cause(
     assert "stage=path_resolve" in str(caught.value)
     assert str(database) not in str(caught.value) and str(database) in caplog.text
     assert not database.exists()
+    diagnostic_sink(caught.value)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX 符号链接环")
 def test_symlink_loop_preserves_native_type_without_path(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     database = tmp_path / "loop.sqlite"
     database.symlink_to(database.name)
@@ -81,6 +132,7 @@ def test_symlink_loop_preserves_native_type_without_path(
     assert "stage=path_resolve" in str(caught.value)
     assert str(database) not in str(caught.value) and str(database) in caplog.text
     assert database.is_symlink()
+    diagnostic_sink(caught.value)
 
 
 @pytest.fixture
@@ -95,6 +147,7 @@ def extension_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_extension_load_failure_keeps_original_error(
     extension_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     failure = OSError(errno.ENOENT, f"原生加载错误 {extension_path}", str(extension_path))
     monkeypatch.setattr(ctypes, "CDLL", Mock(side_effect=failure))
@@ -102,12 +155,14 @@ def test_extension_load_failure_keeps_original_error(
         sqlite_state.sqlite_vfs_max_pathname()
     assert caught.value.__cause__ is failure and "errno=2" in str(caught.value)
     assert str(extension_path) not in str(caught.value) and str(extension_path) in caplog.text
+    diagnostic_sink(caught.value)
 
 
 @pytest.mark.parametrize("state", ["missing-symbol", "missing-vfs", "invalid-header"])
 def test_vfs_contract_failures_keep_reason_and_header_facts(
     extension_path: Path, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, state: str,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     if state == "missing-symbol":
         native = SimpleNamespace()
@@ -126,10 +181,26 @@ def test_vfs_contract_failures_keep_reason_and_header_facts(
     if state == "missing-symbol":
         assert isinstance(caught.value.__cause__, AttributeError)
     assert str(extension_path) not in str(caught.value) and str(extension_path) in caplog.text
+    diagnostic_sink(caught.value)
+
+
+def test_missing_extension_retains_diagnostic_cause_without_guessing_library(
+    extension_path: Path, monkeypatch: pytest.MonkeyPatch,
+    diagnostic_sink: Callable[[BaseException], None],
+) -> None:
+    monkeypatch.setattr(sqlite_state._sqlite3, "__file__", None)
+    load = Mock()
+    monkeypatch.setattr(ctypes, "CDLL", load)
+    with pytest.raises(RuntimeError, match="无法定位当前 Python SQLite 扩展") as caught:
+        sqlite_state.sqlite_vfs_max_pathname()
+    diagnostic_sink(caught.value)
+    load.assert_not_called()
+    assert not extension_path.exists()
 
 
 def test_builtin_probe_failure_preserves_sqlite_code_and_disables_loading(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     probe = tmp_path / "sqlite_vfs_probe.so"
     failure = sqlite3.OperationalError(f"原生探针错误 {probe}")
@@ -148,6 +219,7 @@ def test_builtin_probe_failure_preserves_sqlite_code_and_disables_loading(
     assert str(probe) not in str(caught.value) and str(probe) in caplog.text
     assert connection.enable_load_extension.call_args_list == [call(True), call(False)]
     connection.close.assert_called_once_with()
+    diagnostic_sink(caught.value)
 
 
 @pytest.fixture
@@ -169,6 +241,7 @@ def state_migrations() -> tuple[str, ...]:
 
 def test_real_ownership_contention_keeps_original_database_and_reopens(
     state_path: Path, state_migrations: tuple[str, ...], caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     original = state_path.read_bytes()
     with sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations):
@@ -179,6 +252,7 @@ def test_real_ownership_contention_keeps_original_database_and_reopens(
         assert str(state_path) not in str(caught.value)
         assert str(state_path.with_name(f".{state_path.name}.lock")) in caplog.text
         assert state_path.read_bytes() == original
+        diagnostic_sink(caught.value)
     with (
         sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as recovered,
         closing(recovered.connection()) as connection,
@@ -190,6 +264,7 @@ def test_real_ownership_contention_keeps_original_database_and_reopens(
 def test_ownership_io_failure_preserves_cause_closes_handle_and_recovers(
     state_path: Path, state_migrations: tuple[str, ...], stage: str,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     lock_path = state_path.with_name(f".{state_path.name}.lock")
     # 写入场景需要由原 owner 初始化空锁文件。
@@ -248,6 +323,7 @@ def test_ownership_io_failure_preserves_cause_closes_handle_and_recovers(
     assert str(lock_path) not in str(caught.value) and str(lock_path) in caplog.text
     assert all(handle.closed for handle in handles)
     assert owner._lock_handle is None and state_path.read_bytes() == before
+    diagnostic_sink(caught.value)
     with (
         sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as recovered,
         closing(recovered.connection()) as connection,
@@ -259,6 +335,7 @@ def test_ownership_io_failure_preserves_cause_closes_handle_and_recovers(
 def test_schema_rejection_keeps_facts_and_original_state_then_reopens(
     state_path: Path, state_migrations: tuple[str, ...], damage: str,
     caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     with closing(sqlite3.connect(state_path)) as connection:
         row = connection.execute("SELECT * FROM schema_migrations WHERE version=1").fetchone()
@@ -273,11 +350,12 @@ def test_schema_rejection_keeps_facts_and_original_state_then_reopens(
     stage = {"newer_schema": "schema_version", "ledger_gap": "migration_ledger", "missing_table": "migration_tables"}[damage]
     with pytest.raises(RuntimeError) as caught:
         sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=supported, migrations=state_migrations[:supported])
-    assert f"artifact=sqlite_runtime stage={stage}" in str(caught.value)
+    assert "artifact=sqlite_runtime" in str(caught.value) and f"stage={stage}" in str(caught.value)
     facts = {"newer_schema": "current=2, supported=1", "ledger_gap": "applied=(2,), missing=(1,)", "missing_table": "current=2, missing=['extra']"}[damage]
     assert facts in str(caught.value)
     assert str(state_path) not in str(caught.value) and str(state_path) in caplog.text
     assert state_path.read_bytes() == original
+    diagnostic_sink(caught.value)
     with closing(sqlite3.connect(state_path)) as connection:
         assert tuple(connection.iterdump()) == before
         if damage == "ledger_gap":
@@ -293,6 +371,7 @@ def test_schema_rejection_keeps_facts_and_original_state_then_reopens(
 
 def test_closed_database_rejects_without_location_and_can_reopen(
     state_path: Path, state_migrations: tuple[str, ...], caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     database = sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations)
     database.close()
@@ -302,6 +381,7 @@ def test_closed_database_rejects_without_location_and_can_reopen(
     assert "stage=connection" in str(caught.value)
     assert str(state_path) not in str(caught.value) and str(state_path) in caplog.text
     assert state_path.read_bytes() == original
+    diagnostic_sink(caught.value)
     with sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations):
         pass
 
@@ -309,6 +389,7 @@ def test_closed_database_rejects_without_location_and_can_reopen(
 def test_wal_rejection_keeps_reported_mode_closes_connection_and_retries(
     state_path: Path, state_migrations: tuple[str, ...],
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: Callable[[BaseException], None],
 ) -> None:
     original = sqlite3.connect
     before = state_path.read_bytes()
@@ -338,5 +419,6 @@ def test_wal_rejection_keeps_reported_mode_closes_connection_and_retries(
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         opened[0].execute("SELECT 1")
     assert state_path.read_bytes() == before
+    diagnostic_sink(caught.value)
     with sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as recovered:
         assert recovered.diagnostics().journal_mode == "wal"

@@ -1539,3 +1539,9 @@
 - 启动版本、schema、SQLite完整性和只读备份校验迁齐同一诊断出口：位置、外部改写的列名／表名和完整检查结果留原异常链，公开已知规则、阶段、类别及适用SQLite码；不解析或脱敏异常正文。备份类型／碰撞／缺失／checksum／落后拒绝保持原异常类别，SQL资产、schema版本与事务顺序不变。
 - 原实现46项定向反例中42项检出位置／原值外泄，另4项检出source-point拒绝缺少阶段和诊断；最终381项单测及28项集成通过。集成由实际Session创建和导航worker生成关键事实，核启动与只读备份拒绝、原库及会话原字节、健康源可读，以及显式恢复产品备份后的原身份／revision。最初组合集成在60秒到期，保留TIMEOUT且不计部分通过；随后拆成11项错误／完整性与17项schema两组串行，均保留原60秒及4GiB／两CPU保护，未删场景或放宽断言。
 - Ruff通过；Pyright原10／现10，按文件、最窄AST owner、规则、完整消息与表达式一致，新增模块和测试零诊断，不称类型全绿。完整HEAD归档4779个blob核对后用于类型基线，临时源码已删除；作者核原6函数改变、63处SQLite执行／提交／回滚／备份／关闭调用AST一致，新诊断模块13行、目录17个Python文件。命令、指纹、raw／退出码及适用局限见 `out/tests/temp/uri-global-closure/artifacts/catalog-maintenance-*` 和 `verification-147.json`。本片不代独立审查、真实网络、Gateway/Web、Windows或独立Backend重启，也不证明其它catalog原生I/O出口及全局不变量；2.2／7.2继续未勾，前端与延期协作保持。
+
+### 2026-10-30 共享 SQLite 运行时诊断次错（2.2／7.2部分收口）
+
+- 路径预算、VFS、进程所有权锁、关闭访问及 schema 拒绝迁齐既有 `failure_detail`；删除原独立日志出口。原生位置与日志次错留直接 cause，规则拒绝同样保留明确原因；错误类别、系统码、SQLite版本和原数值事实保持，不改变锁、连接或迁移顺序。
+- 原生产在真实日志 ENOTDIR 下23项失败，另23条teardown诊断断言失败不重复计数；最终SQLite单测66 passed／3个Windows场景skip。首次候选的caplog为空来自pytest阶段间重排handler，修正只读观察顺序后原故障和原件断言全部通过。产品创建Session后的所有权冲突、结构拒绝及冷容器重试4项通过；首轮2项将锁文件位置误写为数据库位置，按实际原生owner修正后通过。没有用装具代写Session或迁移状态；损坏账本仅作为故障输入，原库恢复是显式测试操作。
+- 原命令、源码指纹、raw／实际退出码、类型基线和作者AST核对在 `out/tests/temp/uri-global-closure/artifacts/sqlite-diagnostic-*`，总索引为 `verification-152.json`。完整HEAD归档逐blob核验后已删除源码副本；只改原6函数，29处原生锁／SQLite调用AST保持。正式集成保留原60秒矩阵、跨worktree锁及进程外4GiB／两CPU保护。本片不代真实网络、Gateway/Web、Windows、独立Backend重启、所有SQLite原生I/O出口或URI总门；2.2／7.2及前端／协作延期项继续未勾。

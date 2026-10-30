@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import _sqlite3
 import ctypes
-import logging
 import os
 import re
 import sqlite3
@@ -19,6 +18,7 @@ import portalocker
 
 from app.core.atomic_fs import native_io_path
 from app.core.config_migration_guard import require_settled_config_migration
+from app.core.failures import failure_detail
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 
@@ -38,21 +38,17 @@ class _SQLiteVFSHeader(ctypes.Structure):
     ]
 
 
-logger = logging.getLogger(__name__)
-
-
 def _sqlite_runtime_failure(
-    path: object, reason: str, stage: str, error: BaseException | None = None,
+    path: object, reason: str, stage: str, error: BaseException,
 ) -> str:
-    detail = f"{reason}: artifact=sqlite_runtime stage={stage}, sqlite_version={sqlite3.sqlite_version}"
-    if error is not None:
-        detail += f", error_type={type(error).__name__}"
-        for name in ("errno", "winerror", "sqlite_errorcode", "sqlite_errorname"):
-            value = getattr(error, name, None)
-            if value is not None:
-                detail += f", {name}={value}"
-    logger.error("%s; path=%s", detail, path, exc_info=error)
-    return detail
+    """原生位置和日志次错留原原因，全部调用方使用同一诊断出口。"""
+    note = f"SQLite 运行时位置: {path}"
+    if note not in getattr(error, "__notes__", ()):
+        error.add_note(note)
+    label = f"{reason}: artifact=sqlite_runtime, sqlite_version={sqlite3.sqlite_version}"
+    if isinstance(error, sqlite3.Error) and hasattr(error, "sqlite_errorname"):
+        label += f", sqlite_errorname={error.sqlite_errorname}"
+    return failure_detail(error, stage=stage, label=label)
 
 
 def sqlite_vfs_max_pathname() -> int:
@@ -77,9 +73,11 @@ def sqlite_vfs_max_pathname() -> int:
                     setattr(projected, name, getattr(error, name))
             raise projected from error
     if not isinstance(extension_path, str) or not extension_path:
+        reason = "无法定位当前 Python SQLite 扩展，不能读取默认 VFS mxPathname"
+        error = RuntimeError(reason)
         raise RuntimeError(_sqlite_runtime_failure(
-            extension_path, "无法定位当前 Python SQLite 扩展，不能读取默认 VFS mxPathname", "vfs_extension",
-        ))
+            extension_path, reason, "vfs_extension", error,
+        )) from error
     try:
         if os.name == "nt":
             # CPython 的 Windows 扩展从已加载的 sqlite3.dll 导入符号；
@@ -108,17 +106,21 @@ def sqlite_vfs_max_pathname() -> int:
     find_vfs.restype = ctypes.POINTER(_SQLiteVFSHeader)
     header = find_vfs(None)
     if not header:
+        reason = "当前 Python SQLite 未注册默认 VFS，不能校验数据库路径"
+        error = RuntimeError(reason)
         raise RuntimeError(_sqlite_runtime_failure(
-            extension_path, "当前 Python SQLite 未注册默认 VFS，不能校验数据库路径", "vfs_header",
-        ))
+            extension_path, reason, "vfs_header", error,
+        )) from error
     value = header.contents
     if value.iVersion < 1 or value.szOsFile < 0 or value.mxPathname < 1:
-        raise RuntimeError(_sqlite_runtime_failure(
-            extension_path,
+        reason = (
             "当前 Python SQLite 默认 VFS 头部字段非法，不能校验数据库路径: "
-            f"iVersion={value.iVersion}, szOsFile={value.szOsFile}, mxPathname={value.mxPathname}",
-            "vfs_header",
-        ))
+            f"iVersion={value.iVersion}, szOsFile={value.szOsFile}, mxPathname={value.mxPathname}"
+        )
+        error = RuntimeError(reason)
+        raise RuntimeError(_sqlite_runtime_failure(
+            extension_path, reason, "vfs_header", error,
+        )) from error
     return value.mxPathname
 
 
@@ -149,10 +151,14 @@ def validate_sqlite_path_budget(database_path: Path) -> None:
         candidate = f"{absolute_path}{suffix}"
         path_bytes = len(candidate.encode("utf-8"))
         if path_bytes > maximum:
+            reason = (
+                "SQLite 绝对路径超出当前默认 VFS 预算: "
+                f"component={suffix or 'main'}, bytes={path_bytes}, mxPathname={maximum}"
+            )
+            error = ValueError(reason)
             raise ValueError(_sqlite_runtime_failure(
-                candidate, "SQLite 绝对路径超出当前默认 VFS 预算: "
-                f"component={suffix or 'main'}, bytes={path_bytes}, mxPathname={maximum}", "path_budget",
-            ))
+                candidate, reason, "path_budget", error,
+            )) from error
 
 # 迁移文本里的建表/删表语句；用于把「已登记应用的迁移」绑定到它应建出的表。
 _CREATE_TABLE_PATTERN: Final = re.compile(
@@ -308,7 +314,8 @@ class SQLiteStateDatabase:
 
     def _connect(self) -> sqlite3.Connection:
         if self._closed:
-            raise RuntimeError(_sqlite_runtime_failure(self.path, "SQLite 状态库已关闭", "connection"))
+            error = RuntimeError("SQLite 状态库已关闭")
+            raise RuntimeError(_sqlite_runtime_failure(self.path, "SQLite 状态库已关闭", "connection", error)) from error
         connection = sqlite3.connect(
             sqlite_file_uri(self.path), uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
@@ -321,9 +328,11 @@ class SQLiteStateDatabase:
         journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
         if journal_mode.lower() != "wal":
             connection.close()
+            reason = f"SQLite 无法启用 WAL: journal_mode={journal_mode}"
+            error = RuntimeError(reason)
             raise RuntimeError(_sqlite_runtime_failure(
-                self.path, f"SQLite 无法启用 WAL: journal_mode={journal_mode}", "journal_mode",
-            ))
+                self.path, reason, "journal_mode", error,
+            )) from error
         connection.execute("PRAGMA synchronous = NORMAL")
         return connection
 
@@ -341,10 +350,14 @@ class SQLiteStateDatabase:
             )
             current = applied[-1] if applied else 0
             if current > self._schema_version:
+                reason = (
+                    "SQLite schema 版本高于当前程序支持范围: "
+                    f"current={current}, supported={self._schema_version}"
+                )
+                error = RuntimeError(reason)
                 raise RuntimeError(_sqlite_runtime_failure(
-                    self.path, "SQLite schema 版本高于当前程序支持范围: "
-                    f"current={current}, supported={self._schema_version}", "schema_version",
-                ))
+                    self.path, reason, "schema_version", error,
+                )) from error
             # 迁移账本必须是连续的 1..current；任何缺号都说明有人绕过软件
             # 直接改写了 schema_migrations，继续打开会让缺号迁移永久不生效，
             # 因此明确报错而不是静默忽略。
@@ -355,10 +368,14 @@ class SQLiteStateDatabase:
                     for version in expected_applied
                     if version not in set(applied)
                 )
+                reason = (
+                    "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
+                    f"applied={applied}, missing={missing}"
+                )
+                error = RuntimeError(reason)
                 raise RuntimeError(_sqlite_runtime_failure(
-                    self.path, "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
-                    f"applied={applied}, missing={missing}", "migration_ledger",
-                ))
+                    self.path, reason, "migration_ledger", error,
+                )) from error
             if current:
                 self._require_migrated_tables(connection, current)
             for version, migration in enumerate(self._migrations, start=1):
@@ -410,10 +427,14 @@ class SQLiteStateDatabase:
         }
         missing = [table for table in required if table not in present]
         if missing:
+            reason = (
+                "SQLite 迁移账本声明的表缺失，拒绝以缺表状态打开（库被"
+                f"外部改写）: current={current}, missing={missing}"
+            )
+            error = RuntimeError(reason)
             raise RuntimeError(_sqlite_runtime_failure(
-                self.path, "SQLite 迁移账本声明的表缺失，拒绝以缺表状态打开（库被"
-                f"外部改写）: current={current}, missing={missing}", "migration_tables",
-            ))
+                self.path, reason, "migration_tables", error,
+            )) from error
 
     def connection(self) -> sqlite3.Connection:
         return self._connect()
