@@ -36,6 +36,8 @@ workspace_services/
 
 `test_resource_cold_sync_retry.py`经正式Session/ASGI资源创建、生命周期detach、真实授权及冷owner验证同步发送前失败与已提交后回执丢失。普通查询保留unknown、peer继续可用，重复显式管理失败不造新占用，沿同一冻结版本恢复后只派发一次停止/删除并核实真实PTY或Chromium终态、原lease结算及request_id。suite `integration-resource-cold-sync-retry`固定90秒/4GiB并使用原集成独占闸门；不代表Backend进程硬重启、Gateway/Web、Windows或整个operation/shutdown期限。
 
+`test_resource_recovery_errors.py`复用上述fixture，经正式Session、ASGI创建/授权和真实PTY/Chromium/HTTP生成资源与未知lease；冷owner同步失败后中断批次，核原错误/cause、冻结版本与pending分类、lease冷读、外部身份、健康资源可读及显式停止结算。定向pytest须带进程外180秒/4GiB并走原独占闸门，通用`integration-python`会发现此文件；不扩大原同步重试suite期限，不代表真实等待30秒、Backend进程重启、Gateway/Web、Windows或不合作终止验收。
+
 ## 可修改内容
 
 - 真实辅助服务模块、测试页面服务、mini MCP 和明确协议替身的组合测试。

@@ -600,3 +600,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 关闭由唯一原Promise持有创建排空、各资源检查点/失败收尾、共享运行时与末次写盘；每次调用默认30秒观察，阶段不重置，到期保留原执行、句柄、检查点与准入关闭。资源独立推进，正文捕获仍走原串行队列；整批实际结算后才允许失败重试，原错按资源顺序汇总并记录迟到失败。运行时关闭成功后，最后写盘失败只补未完成步骤，成功重入无重复副作用。
 - 68项单测、10个真实Chromium/HTTP/磁盘检查点/冷Manager场景及6项POSIX生产信号关闭测试通过；完整候选归档还原旧Manager后，两项反例分别检出重叠检查点与末次写盘失败后的重复共享池关闭。默认30秒timer及跨阶段复用在单测中受控推进，真实context释放场景使用显式2秒观察，不冒称已真实等待默认30秒。JS解析、AST作者自查和strict通过；既有集成函数及其原断言未改。
 - 准确命令、源码指纹、原始输出和实际退出码见`out/tests/temp/browser_shutdown_owner_20261030/artifacts/verification.json`。首轮临时runner导入路径错误未进入产品；首次新场景误把primitive操作封套当字符串，仅修正取值后保留原表单值断言，失败原件保留。未运行Gateway/主Web、Windows、Backend硬重启或任意脚本强制终止；共享检查点捕获仍串行，同步阻塞及生产进程退出总期限仍TODO，5.2/5.4保持未完成（21/23）。未修改另一会话Web/Workbench迁移文件或暂存，不重启共享debug。
+
+### 2026-10-30 批量冷恢复中断保留此前失败（5.4部分收口）
+
+- 原ResourceRecovery排空本次任务后，按资源选择顺序保留已完成的原异常；预算到期与本次TimeoutError共同聚合，调用者取消保持原CancelledError/消息并以聚合cause保留此前失败。冻结版本、仅管理重试标记和原lease账本保持，成功项不回滚，后续普通恢复不重发已失败同步。
+- 424项相关单测通过（12.86秒），覆盖两类owner、多错逆序完成、取消/到期、原对象与pending分类；完整旧生产归档加相同新单测4项均在预期行为处失败。4项真实PTY/Chromium/HTTP集成通过（69.37秒），经正式Session、ASGI创建/授权及冷owner生成关键状态，核原未知lease冷读、外部身份/版本、健康项可读、不重发同步和显式停止后结算；串行使用原集成闸门，外部180秒/4GiB保护。Ruff、三文件Pyright零诊断及本change strict通过。
+- 准确命令、前后源码指纹、原始输出/实际退出码和作者AST自查见`out/tests/temp/resource_recovery_errors_20261030/artifacts/verification.json`。首轮import格式与fixture可空类型已修；误用Python入口的Pyright未执行，保留原件并改用现有Bun入口。只推进本次30秒截止，不代表真实等候30秒、独立Backend重启、Gateway/Web、Windows、任意脚本终止或完整shutdown期限；5.2/5.4与整体21/23保持未完成。未修改另一会话Web/Workbench、自动化或暂存，未重启共享debug。

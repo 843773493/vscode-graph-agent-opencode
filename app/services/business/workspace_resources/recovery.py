@@ -34,6 +34,7 @@ class ResourceRecovery:
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
         # 一个调用只取得一次预算，清单、准备锁和各资源同步共同消耗。
         deadline = timeout(30)
+        errors: list[Exception] = []
         try:
             async with deadline:
                 await self._prepare()
@@ -46,20 +47,29 @@ class ResourceRecovery:
                     # 调用取消必须排空自己创建的等待者，不能留下脱离调用生命周期的恢复任务。
                     for task in tasks:
                         task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    settled = await asyncio.gather(*tasks, return_exceptions=True)
+                    # 已完成的同步返回原异常对象；取消其它等待不能将这些失败丢掉。
+                    errors = [result for result in settled if isinstance(result, Exception)]
                     raise
                 errors = [result for result in results if result is not None]
                 if len(errors) == 1:
                     raise errors[0]
                 if errors:
                     raise ExceptionGroup("外部资源 恢复存在未核实资源", errors)
+        except asyncio.CancelledError as error:
+            if errors:
+                raise error from ExceptionGroup("外部资源 恢复存在未核实资源", errors)
+            raise
         except TimeoutError as error:
             if not deadline.expired():
                 raise
-            raise TimeoutError(
+            expired = TimeoutError(
                 f"外部资源冷恢复等待超过 30 秒: workspace_id={self._owner.workspace_id} "
                 f"kind={self._owner.kind}；保留未核实版本与占用，未确认外部操作停止"
-            ) from error
+            )
+            if errors:
+                raise ExceptionGroup("外部资源 恢复存在未核实资源", [*errors, expired]) from error
+            raise expired from error
 
     async def _prepare(self) -> None:
         if self._pending is not None:
