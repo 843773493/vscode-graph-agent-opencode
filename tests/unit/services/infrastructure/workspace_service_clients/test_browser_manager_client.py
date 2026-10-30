@@ -131,10 +131,13 @@ async def test_valid_local_page_url_survives_the_same_response_decoder(
     record = {
         "browser_id": "browser_1", "page_id": "page_1", "workspace_id": WORKSPACE_ID,
         "status": "running", "transport_owner_revision": 1, "reconciliation_status": "verified",
+        "sequence": 0,
         "url": url, "pages": [{"page_id": "page_1", "url": url, "active": True}],
     }
     resource_http(lambda request: httpx.Response(200, json={"data": record}))
-    assert await browser_manager_client.get_resource("browser_1") == record
+    actual = await browser_manager_client.get_resource("browser_1")
+    assert actual == record
+    assert type(actual["sequence"]) is int
 
 
 @pytest.fixture
@@ -231,6 +234,7 @@ async def test_untrusted_409_is_not_deterministic_grant_rejection(
     browser_manager_client: BrowserManagerClient, resource_http,
 ) -> None:
     target = grant_rejection_payload if field in {"code", "operation_outcome", "error"} else grant_rejection_payload["browser"]
+    assert isinstance(target, dict)
     target[field] = value
     resource_http(lambda request: httpx.Response(409, json=grant_rejection_payload))
     with pytest.raises((BrowserRequestError, ValueError, TypeError)):

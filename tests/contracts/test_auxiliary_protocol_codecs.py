@@ -9,6 +9,7 @@ from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
 )
+from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.schemas.gateway.diagnostics import GatewayHealthDTO
 
@@ -137,8 +138,9 @@ def test_terminal_completed_snapshot_is_accepted_during_command_release() -> Non
     assert decoded == value
 
 
-def test_browser_snapshot_round_trip_preserves_extended_json_fields() -> None:
-    value = {
+@pytest.fixture
+def browser_snapshot() -> dict[str, object]:
+    return {
         "browser_id": "browser_123",
         "page_id": "page_123",
         "workspace_id": "00000000-0000-4000-8000-000000000001",
@@ -150,11 +152,99 @@ def test_browser_snapshot_round_trip_preserves_extended_json_fields() -> None:
         "pages": [{"page_id": "page_123", "active": True}],
     }
 
+
+def test_browser_snapshot_round_trip_preserves_extended_json_fields(browser_snapshot: dict[str, object]) -> None:
+    value = browser_snapshot
     encoded = browser_page_to_proto(value)
 
     decoded = browser_page_to_json(encoded)
     assert isinstance(decoded["transport_owner_revision"], int)
     assert decoded == value
+
+
+@pytest.fixture
+def extended_browser_type(monkeypatch: pytest.MonkeyPatch) -> type[browser_pb2.BrowserPage]:
+    """扩展真实页面 descriptor；新增同形字段不能再维护一份手工映射。"""
+    shape = descriptor_pb2.FileDescriptorProto(
+        name="test/browser_codec_extended.proto", package="boxteam.test.browser_codec",
+        syntax="proto3", dependency=[browser_pb2.DESCRIPTOR.name],
+    )
+    page = shape.message_type.add()
+    browser_pb2.BrowserPage.DESCRIPTOR.CopyToProto(page)
+    for number, (name, kind) in enumerate([
+        ("page_label", descriptor_pb2.FieldDescriptorProto.TYPE_STRING),
+        ("frame_count", descriptor_pb2.FieldDescriptorProto.TYPE_UINT32),
+        ("event_sequence", descriptor_pb2.FieldDescriptorProto.TYPE_UINT64),
+    ], start=15):
+        index = len(page.oneof_decl)
+        page.oneof_decl.add(name=f"_{name}")
+        page.field.add(name=name, number=number, type=kind,
+                       label=descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL,
+                       proto3_optional=True, oneof_index=index)
+    pool = descriptor_pool.Default()
+    pool.Add(shape)
+    message_type = message_factory.GetMessageClass(pool.FindMessageTypeByName("boxteam.test.browser_codec.BrowserPage"))
+    monkeypatch.setattr(browser_pb2, "BrowserPage", message_type)
+    return cast(type[browser_pb2.BrowserPage], message_type)
+
+
+@pytest.mark.parametrize("presence", ["omitted", "null", "zero", "value"])
+def test_browser_added_descriptor_fields_survive_wire_without_another_mapping(
+    browser_snapshot: dict[str, object], extended_browser_type: type[browser_pb2.BrowserPage], presence: str,
+) -> None:
+    fields: dict[str, str | int | None] = {"page_label": "本地页面", "frame_count": 7, "event_sequence": 2**64 - 1}
+    if presence == "null":
+        fields = dict.fromkeys(fields)
+    elif presence == "zero":
+        fields = {name: "" if isinstance(value, str) else 0 for name, value in fields.items()}
+    if presence != "omitted":
+        browser_snapshot.update(fields)
+    encoded = browser_page_to_proto(browser_snapshot)
+    restored = extended_browser_type.FromString(encoded.SerializeToString())
+    for name in fields:
+        assert restored.HasField(name) is (presence in {"zero", "value"})
+        if presence in {"zero", "value"}:
+            assert getattr(restored, name) == browser_snapshot[name]
+    decoded = browser_page_to_json(restored)
+    assert decoded == browser_snapshot
+    if presence in {"zero", "value"}:
+        assert all(type(decoded[name]) is int for name in fields if name != "page_label")
+
+
+@pytest.mark.parametrize("sequence", [0, 2**32 - 1, None])
+def test_browser_sequence_preserves_integer_type_and_nullable_raw_value(browser_snapshot, sequence):
+    browser_snapshot["sequence"] = sequence
+    encoded = browser_page_to_proto(browser_snapshot)
+    restored = browser_pb2.BrowserPage.FromString(encoded.SerializeToString())
+    decoded = browser_page_to_json(restored)
+    assert decoded == browser_snapshot
+    assert decoded["sequence"] is None if sequence is None else type(decoded["sequence"]) is int
+
+
+@pytest.mark.parametrize("name", ["title", "url"])
+def test_browser_text_fields_keep_strict_validation(browser_snapshot, name):
+    browser_snapshot[name] = 42
+    with pytest.raises(ValueError, match=f"Browser 页面字段类型错误: {name}"):
+        browser_page_to_proto(browser_snapshot)
+
+
+@pytest.mark.parametrize("invalid", [-1, 1.5, "1"])
+def test_browser_sequence_keeps_strict_validation(browser_snapshot, invalid):
+    browser_snapshot["sequence"] = invalid
+    with pytest.raises(ValueError, match="Browser 页面 sequence 必须是非负整数"):
+        browser_page_to_proto(browser_snapshot)
+
+
+@pytest.mark.parametrize("name,invalid,message", [
+    ("viewport", {"width": 0, "height": 800}, "viewport width/height 必须是正整数"),
+    ("transport_owner_revision", True, "transport_owner_revision 必须是正整数"),
+    ("transport_owner_revision", 0, "transport_owner_revision 必须是正整数"),
+    ("reconciliation_status", "running", "reconciliation_status 无效"),
+])
+def test_browser_business_constraints_remain_at_the_boundary(browser_snapshot, name, invalid, message):
+    browser_snapshot[name] = invalid
+    with pytest.raises(ValueError, match=message):
+        browser_page_to_proto(browser_snapshot)
 
 
 def test_gateway_adapter_uses_only_gateway_protocol_fields() -> None:

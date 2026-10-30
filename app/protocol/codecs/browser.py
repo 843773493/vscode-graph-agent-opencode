@@ -3,17 +3,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from google.protobuf.descriptor import FieldDescriptor
+
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 
 
-def _status(value: object) -> int:
+def _status(value: object) -> browser_pb2.BrowserStatus:
     if not isinstance(value, str) or not value:
         raise ValueError(f"Browser 状态必须是非空字符串: {value!r}")
     enum_value = getattr(browser_pb2, f"BROWSER_STATUS_{value.upper()}", None)
     if not isinstance(enum_value, int):
         raise TypeError(f"Browser 状态不在协议范围内: {value}")
-    return enum_value
+    return cast(browser_pb2.BrowserStatus, enum_value)
 
 
 def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPage:
@@ -27,12 +29,14 @@ def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPag
         workspace_id=cast(str, value["workspace_id"]),
         status=_status(value["status"]),
     )
-    for field_name in ("title", "url"):
-        field_value = value.get(field_name)
+    for field in page.DESCRIPTOR.fields:
+        if field.is_repeated or field.type != FieldDescriptor.TYPE_STRING or field.name in (*required, "reconciliation_status"):
+            continue
+        field_value = value.get(field.name)
         if field_value is not None:
             if not isinstance(field_value, str):
-                raise ValueError(f"Browser 页面字段类型错误: {field_name}")
-            setattr(page, field_name, field_value)
+                raise ValueError(f"Browser 页面字段类型错误: {field.name}")
+            setattr(page, field.name, field_value)
     viewport = value.get("viewport")
     if viewport is not None:
         if not isinstance(viewport, Mapping):
@@ -43,11 +47,14 @@ def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPag
             raise ValueError("Browser 页面 viewport width/height 必须是正整数")
         page.viewport.width = width
         page.viewport.height = height
-    sequence = value.get("sequence")
-    if sequence is not None:
-        if not isinstance(sequence, int) or sequence < 0:
-            raise ValueError("Browser 页面 sequence 必须是非负整数")
-        page.sequence = sequence
+    for field in page.DESCRIPTOR.fields:
+        if field.is_repeated or field.type not in (FieldDescriptor.TYPE_UINT32, FieldDescriptor.TYPE_UINT64) or field.name == "transport_owner_revision":
+            continue
+        field_value = value.get(field.name)
+        if field_value is not None:
+            if not isinstance(field_value, int) or field_value < 0:
+                raise ValueError(f"Browser 页面 {field.name} 必须是非负整数")
+            setattr(page, field.name, field_value)
     revision = value.get("transport_owner_revision")
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
         raise ValueError("Browser 页面 transport_owner_revision 必须是正整数")
@@ -55,7 +62,7 @@ def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPag
     recovery = value.get("reconciliation_status")
     if recovery not in {"verified", "unknown", "reconcile_required"}:
         raise ValueError("Browser 页面 reconciliation_status 无效")
-    page.reconciliation_status = recovery
+    page.reconciliation_status = cast(str, recovery)
     page.metadata.CopyFrom(struct_from_mapping({"raw": dict(value)}))
     return page
 
@@ -70,4 +77,11 @@ def browser_page_to_json(value: browser_pb2.BrowserPage) -> dict[str, object]:
     result["workspace_id"] = value.workspace_id
     result["transport_owner_revision"] = value.transport_owner_revision
     result["reconciliation_status"] = value.reconciliation_status
+    # Struct 数字经过 double；协议已声明的整数从 typed 字段取回，保持零值和 presence。
+    for field in value.DESCRIPTOR.fields:
+        if field.is_repeated or field.type not in (FieldDescriptor.TYPE_UINT32, FieldDescriptor.TYPE_UINT64):
+            continue
+        present = value.HasField(field.name) if field.has_presence else field.name in result and result[field.name] is not None
+        if present:
+            result[field.name] = getattr(value, field.name)
     return result
