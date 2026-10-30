@@ -44,6 +44,32 @@ from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 resource_stub_app = FastAPI()
 
 
+@resource_stub_app.post("/api/v1/context/read")
+def stub_context_read(request: Request, query: dict[str, object]) -> JSONResponse:
+    control = json.loads(Path(os.environ["BOXTEAM_TEST_CATALOG_CONTROL"]).read_text())
+    request_id = request.headers["X-Request-ID"]
+    with Path(control["requests_path"]).open("a") as output:
+        output.write(json.dumps({"workspace_id": request.headers["X-BoxTeam-Workspace-Id"], "request_id": request_id}) + "\n")
+    reference = {
+        "display_uri": control.get("display_uri"), "resource_kind": "mcp_catalog", "owner_scope": "workspace",
+        "facet": "catalog", "revision": "sha256:jcs:v1:" + "a" * 64, "availability": "available",
+        "provenance_ref": {"kind": "sealed_resource", "token": "sha256:jcs:v1:" + "b" * 64},
+    }
+    item = {"kind": "record", "uri": control.get("item_uri"), "text": "/user/document.txt",
+            "resource_refs": [reference]}
+    result = {**{key: query[key] for key in ("resource_identity", "uri", "scope", "view")},
+              "revision": "read-fixture-1", "items": [item]}
+    if control["mode"] == "read_uri":
+        result["uri"] = control["native_path"]
+    elif control["mode"] == "item_uri":
+        item["uri"] = control["native_path"]
+    elif control["mode"] == "display_uri":
+        reference["display_uri"] = control["native_path"]
+    elif control["mode"] == "missing_display_uri":
+        del reference["display_uri"]
+    return JSONResponse({"request_id": request_id, "data": result}, headers={"X-Request-ID": request_id})
+
+
 @resource_stub_app.get("/api/v1/health")
 async def stub_health(workspace_id: str | None = Header(default=None, alias="X-BoxTeam-Workspace-Id")) -> object:
     return {"status": "ok", "workspace_id": workspace_id or os.environ["BOXTEAM_TEST_CATALOG_OWNER"]}
@@ -76,8 +102,13 @@ def stub_context_search(request: Request, query: dict[str, object]) -> JSONRespo
             "record_index": 0, "match_start": 0, "match_end": 20,
         }],
     }
-    if owner == os.environ["BOXTEAM_TEST_CATALOG_OWNER"] and control["mode"] == "validation":
-        result["total_matches"] = control["native_path"]
+    if owner == os.environ["BOXTEAM_TEST_CATALOG_OWNER"]:
+        if control["mode"] == "validation":
+            result["total_matches"] = control["native_path"]
+        elif control["mode"] == "search_uri":
+            result["uri"] = control["native_path"]
+        elif control["mode"] == "match_uri":
+            result["matches"][0]["uri"] = control["native_path"]
     return JSONResponse({"request_id": request_id, "data": result}, headers={"X-Request-ID": request_id})
 
 
@@ -231,8 +262,11 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
             })
             payload = {"operation": "read", "resource_target": query.resource_target.to_payload(), "body": query.model_dump(mode="json")}
             state = json.loads(control.read_text())
-            for index, native_path in enumerate(("/private/context-marker/state.sqlite", r"C:\private\context-marker\state.sqlite", r"\\server\context-marker\state.sqlite")):
-                state.update(mode="validation", native_path=native_path)
+            faults = [(mode, path) for mode in ("validation", "search_uri", "match_uri") for path in (
+                "/private/context-marker/state.sqlite", r"C:\private\context-marker\state.sqlite", r"\\server\context-marker\state.sqlite",
+            )]
+            for index, (mode, native_path) in enumerate(faults):
+                state.update(mode=mode, native_path=native_path)
                 control.write_text(json.dumps(state))
                 request_id = f"context-validation-{index}"
                 failed = await client.post("/api/gateway/federation/relay", json=payload, headers={"X-Request-ID": request_id})
@@ -265,5 +299,72 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
             evidence.append(recovered.json())
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
         assert "context-marker" in logs and "ValidationError" in logs and "Traceback" in logs
-        assert all(f"context-validation-{index}" in logs for index in range(3))
+        assert all(f"context-validation-{index}" in logs for index in range(len(faults)))
         (context.artifacts_dir / "context-search-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_context_read_rejects_invalid_addresses_and_preserves_null_and_dangling_uri(
+    catalog_upstream: tuple[TestRunContext, Path, str, int, int],
+) -> None:
+    context, control, owner, upstream_port, gateway_port = catalog_upstream
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    evidence = []
+    with ExitStack() as lifetime:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{upstream_port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+        )
+        lifetime.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
+            await acquire_gateway_guest(client)
+            health = await client.get("/api/gateway/health")
+            health.raise_for_status()
+            gateway_id = health.json()["data"]["gateway_id"]
+            read = {
+                "resource_identity": str(session_resource_identity(owner, SESSION_A)),
+                "uri": session_resource_uri(owner, SESSION_A), "scope": "workspace", "view": "overview",
+            }
+            query = ContextQueryRequest.model_validate({
+                "source_gateway_id": gateway_id,
+                "resource_target": {"gateway_id": gateway_id, **{key: read[key] for key in ("resource_identity", "uri", "scope")}},
+                "read": read,
+            })
+            payload = {"operation": "read", "resource_target": query.resource_target.to_payload(), "body": query.model_dump(mode="json")}
+            state = json.loads(control.read_text())
+            faults = [(field, path) for field in ("read_uri", "item_uri", "display_uri") for path in (
+                "/private/context-marker/source.json", r"C:\private\context-marker\source.json",
+                r"\\server\context-marker\source.json", "", "file:///private/context-marker/source.json",
+            )] + [("missing_display_uri", "unused")]
+            for index, (field, path) in enumerate(faults):
+                state.update(mode=field, native_path=path)
+                control.write_text(json.dumps(state))
+                request_id = f"context-address-{index}"
+                failed = await client.post("/api/gateway/federation/relay", json=payload, headers={"X-Request-ID": request_id})
+                assert failed.status_code == 409, failed.text
+                body = failed.json()
+                assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
+                assert body["detail"]["code"] == "federation-malformed-frame"
+                assert "context-marker" not in failed.text and "input_value" not in failed.text
+                evidence.append(body)
+            # 地址只核 grammar，不解析当前文件或补造内部聚合地址；合法历史字节原样保留。
+            dangling = "boxteam://gateway_remote/workspace/ws_missing/resources/files/root/%7eabsent%2520file"
+            for uri in (None, dangling):
+                state.update(mode="ready", display_uri=uri, item_uri=uri)
+                control.write_text(json.dumps(state))
+                recovered = await client.post("/api/gateway/federation/relay", json=payload)
+                assert recovered.status_code == 200, recovered.text
+                result = recovered.json()["data"]
+                assert all(result[key] == read[key] for key in read)
+                item, = result["items"]
+                reference, = item["resource_refs"]
+                assert item["uri"] == reference["display_uri"] == uri
+                assert item["text"] == "/user/document.txt"
+                assert reference["revision"] == "sha256:jcs:v1:" + "a" * 64
+                assert reference["provenance_ref"] == {"kind": "sealed_resource", "token": "sha256:jcs:v1:" + "b" * 64}
+                evidence.append(recovered.json())
+            observed = [json.loads(line) for line in Path(state["requests_path"]).read_text().splitlines()]
+            assert {row["request_id"] for row in observed}.issuperset(f"context-address-{index}" for index in range(len(faults)))
+        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+        assert "context-marker" in logs and "ValidationError" in logs
+        (context.artifacts_dir / "context-addresses.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

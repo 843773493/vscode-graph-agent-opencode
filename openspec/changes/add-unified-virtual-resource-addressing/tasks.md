@@ -1651,3 +1651,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 两次启动验证遇42000端口自连接／出站TIME_WAIT，均未进入业务，保留ss、真实bind和Gateway退出日志；未换端口、改系统网络配置或终止未知进程。另一次矩阵在Web测试持锁时排队90秒到期；四个独立Gateway组合已完成但整组尚未跑完原场景的运行触及90秒，不能算全组通过。根据原始启动开销，将新组合合到一次Gateway并通过产品清理恢复前提后复验成功，不放宽期限或断言。新增测试的unlink替换签名初次Pyright诊断已修正。
 - Pyright零诊断、测试文件Ruff、compileall和strict通过；生产文件Ruff有5条既有TRY004，HEAD原码实跑与当前逐项核规则、消息及最窄语句AST完全一致，零新增，不称全绿。作者结构自查确认只改原子写函数，其余14个函数/方法保持，生产模块324行、目录10个直接Python文件，不代表独立审查。准确命令、指纹、raw、退出码、自查及提交回执在 `out/tests/temp/profile_atomic_descriptor_20261030/artifacts/`；正式HTTP／fd原件保留于 `out/tests/integration/gateway/test_user_profile_errors/`。
 - 未验证Web/Workbench、Windows实机、Gateway硬重启、原生close拒绝后的强制释放或全仓路径不变量；2.2/7.2与整体51/53继续未完成。未修改另一会话的Web实现/自动化或重启共享debug，团队协作与MCP显式持有继续TODO。
+
+
+### 2026-10-30 上下文结构化响应地址（2.2／7.2部分收口）
+
+- 真实Gateway relay与上下文客户端均复现200成功响应携带原生路径。五个输出地址字段现统一复用原grammar；合法悬空地址及编码字节不改写，可空item与聚合必填null保持，输入请求仍由原owner解析。目标响应校验失败使用既有federation-malformed-frame，原异常及输入留诊断；搜索聚合继续保留健康工作区，不增加解析或查询链。
+- 关联单测468 passed／1 failed；唯一失败custom_invoker_rejects_unknown_target_argument在完整旧HEAD也复现，未改其代码或断言。独立Gateway／真实HTTP替身3项通过（39.29秒），含五个地址出口、三平台路径、空值、file URL、必填字段、部分失败及原入口恢复；正式跨Gateway读取矩阵1项通过（100.84秒）。聚合恢复／fork补充矩阵在自身60秒期限到期，退出3，没有完成结果，不计通过、不猜测失败阶段。首次整组HTTP检查在150秒总期限结束前仅完成首项；增加包含原独占闸门排队时间的外部期限后完整通过，未提高并发。
+- Ruff、compileall及strict通过；9个上下文模型JSON Schema与完整HEAD相同。Pyright两项既有诊断逐项核规则、完整消息和最窄语句AST一致，新增测试零诊断；作者结构自查确认除输出注解、单一grammar校验和一个响应异常分支外，两份生产模块AST均保持。准确命令、源码指纹、原始输出、实际退出码与基线证据见`out/tests/temp/context_response_uri_20261030/artifacts/verification.json`；完整临时基线源码已删除，原测试输出保留。
+- 本片不代表全局路径不变量或publish／seal／restart／fork／hash总门完成，2.2／7.2仍未勾，整体51/53。未修改另一会话的Web／Workbench、Web自动化、其暂存或共享debug服务；团队／协作与MCP显式持有继续按用户裁定延期。

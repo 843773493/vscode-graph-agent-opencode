@@ -22,6 +22,68 @@ from tests.unit.services.infrastructure.gateway_clients.test_gateway_session_con
 )
 
 
+@pytest.mark.parametrize("field", ["read_uri", "item_uri", "display_uri", "search_uri", "match_uri"])
+@pytest.mark.parametrize("invalid_uri", [
+    "/private/context-marker/source.json", r"C:\private\context-marker\source.json",
+    r"\\server\context-marker\source.json", "file:///private/context-marker/source.json",
+    "", "boxteam://workspace/ws_query/resources/files/root/../source.json",
+])
+async def test_context_client_rejects_non_resource_response_addresses(
+    gateway_clients: list[GatewaySessionContextClient], monkeypatch: pytest.MonkeyPatch,
+    field: str, invalid_uri: str,
+) -> None:
+    read = _read_request("ws_query")
+    identity = read.model_dump(include={"resource_identity", "uri", "scope"})
+    reference: dict[str, object] = {
+        "display_uri": None, "resource_kind": "mcp_catalog", "owner_scope": "workspace",
+        "facet": "catalog", "revision": "sha256:jcs:v1:" + "a" * 64,
+        "availability": "available", "provenance_ref": {"token": "sha256:jcs:v1:" + "b" * 64},
+    }
+    item = {"kind": "record", **identity, "resource_refs": [reference]}
+    match = {**identity, "preview": "needle", "source": "effective_context",
+             "revision": "rev-1", "match_start": 0, "match_end": 6}
+    data: dict[str, object] = {
+        **identity, "revision": "rev-1", "view": "overview",
+        "items": [item],
+    } if field in {"read_uri", "item_uri", "display_uri"} else {
+        **identity, "revision": "rev-1", "query": "needle", "match_mode": "literal",
+        "matches": [match],
+    }
+    if field in {"read_uri", "search_uri"}:
+        data["uri"] = invalid_uri
+        location = ("uri",)
+    elif field == "item_uri":
+        item["uri"] = invalid_uri
+        location = ("items", 0, "uri")
+    elif field == "display_uri":
+        reference["display_uri"] = invalid_uri
+        location = ("items", 0, "resource_refs", 0, "display_uri")
+    else:
+        match["uri"] = invalid_uri
+        location = ("matches", 0, "uri")
+    before = copy.deepcopy(data)
+
+    async def respond(_client, method, url, **kwargs):
+        request_id = kwargs["headers"]["X-Request-ID"]
+        return httpx.Response(200, request=httpx.Request(method, url),
+            headers={"X-Request-ID": request_id}, json={"request_id": request_id, "data": data})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "context-protocol-test")
+    gateway_clients.append(client)
+    with pytest.raises(RuntimeError, match="stage=response_validation") as caught:
+        if field in {"search_uri", "match_uri"}:
+            await client.search_resource_context(SessionContextSearchRequest(**identity, query="needle"))
+        else:
+            await client.read_resource_context(read)
+    original = caught.value.__cause__
+    assert isinstance(original, ValidationError)
+    issue, = original.errors()
+    assert issue["loc"] == location and issue["input"] == invalid_uri
+    assert "context-marker" not in str(caught.value)
+    assert data == before
+
+
 @pytest.mark.parametrize("operation,native_path", [
     ("read", "/private/context/response.json"),
     ("search", r"C:\private\context\response.json"),

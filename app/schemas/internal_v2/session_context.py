@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from app.core.resource_uri import parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResourceIdentity,
     validate_resource_identity,
@@ -38,6 +39,15 @@ SessionResourceIdentity = Annotated[
     ResourceIdentity,
     AfterValidator(validate_resource_identity),
 ]
+
+
+def _validate_context_uri(value: str) -> str:
+    # 仅复用 grammar 核验输出；不解析当前来源，也不改写封存 URI 字节。
+    parse_resource_uri(value)
+    return value
+
+
+SessionContextURI = Annotated[str, AfterValidator(_validate_context_uri)]
 
 
 class SessionContextReadRequest(BaseModel):
@@ -92,7 +102,7 @@ class SessionContextResourceDTO(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    display_uri: str | None
+    display_uri: SessionContextURI | None
     resource_kind: str
     owner_scope: str
     facet: str
@@ -104,7 +114,7 @@ class SessionContextResourceDTO(BaseModel):
 class SessionContextItemDTO(BaseModel):
     kind: str
     resource_identity: SessionResourceIdentity | None = None
-    uri: str | None = None
+    uri: SessionContextURI | None = None
     scope: SessionContextScope | None = None
     assembly_ref: SessionResourceIdentity | None = None
     role: str | None = None
@@ -127,7 +137,7 @@ class SessionContextPartialErrorDTO(BaseModel):
 
 class SessionContextReadResultDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    uri: str
+    uri: SessionContextURI
     scope: SessionContextScope
     view: SessionContextView
     record_index: int | None = None
@@ -148,7 +158,7 @@ class SessionContextReadResultDTO(BaseModel):
 
 class SessionContextSearchMatchDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    uri: str
+    uri: SessionContextURI
     scope: SessionContextScope
     preview: str
     source: SessionContextSearchSource
@@ -160,7 +170,7 @@ class SessionContextSearchMatchDTO(BaseModel):
 
 class SessionContextSearchResultDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    uri: str
+    uri: SessionContextURI
     scope: SessionContextScope
     query: str
     match_mode: SessionContextMatchMode

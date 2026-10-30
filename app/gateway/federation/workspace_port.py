@@ -483,6 +483,9 @@ class WorkspaceSessionMainPort:
                         raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询缺少 read/search")
             except TimeoutError as error:
                 raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "上下文查询超过联邦总 deadline") from error
+            except ValidationError as error:
+                logger.exception("目标 owner 上下文响应不符合合同")
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "目标 owner 上下文响应不符合合同") from error
             return result.model_dump(mode="json")
         if operation in {"send", "reply"}:
             from app.schemas.internal_v2.communication import (
