@@ -1594,3 +1594,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 通用动作删除重复失败编排，专用动作继续共用原 `_failure_from_error`；同一次公开原因同时写入工具结果和原动作 owner。复用 `execution_failure_message`／`report_failure`，原生 I/O 保留类别及 errno，既有业务说明、错误码和原 tool-call 身份保持；完整异常与日志次错只留诊断，不增加错误存储或恢复链。
 - 旧实现20项有效反例失败；另10项新测试漏传变量名，修正装具后最终49项工具单测通过。两项 ASGI 消息／真实 Agent／model_stream 集成通过，覆盖正常日志与真实 ENOTDIR 日志故障、canonical 配对、持久动作与 manifest、同 Thread 真实断点重试、旧 canonical 字节及 assembly owner／request hash；关键状态均由产品入口生成。NodeDebug 动作保存原 wire tool-call ID，canonical operation ID 由原模型调用身份派生，二者分别核对，不改写产品身份合同。
 - Ruff、三文件 Pyright 与 compileall 通过；作者 AST 核对只改原两方法，生产净删2行，无新增产品目录。矩阵按正常／失败日志分为两个60秒／4GiB suite；本轮矩阵尝试在其他测试占用闸门时超时，不计通过。最终定向运行保留原独占闸门及进程外700秒／4GiB保护（含最多600秒排队），2项94.48秒通过。准确命令、源码指纹、原始输出／退出码及失败归因见 `out/tests/temp/debug_tool_failures_20261030/artifacts/verification.json`；本片不代完整 Gateway 业务代理、真实 Provider、Web、独立 Backend 重启、Windows或全部原生错误出口，2.2／7.2总门及前端／协作延期边界保持。
+
+
+### 2026-10-30 会话生成器 Schema 校验的公开错误（2.2／7.2部分收口）
+
+- 定义校验与执行前 prompt 解析继续共用原 JSON Schema validator，错误出口复用 `failure_detail`；公开 provider 身份、阶段、异常类别、顶层标识符参数、深度和规则，输入值、动态嵌套键与 schema 正文留原始诊断。保留直接 `ValidationError` cause；日志 ENOTDIR 仅追加次错类别，完整次错附原异常，不新增校验器或错误存储。
+- 旧实现28项有效反例检出输入／动态键外泄；另4项 pattern 场景的原件断言未考虑正则转义，修正测试后最终53项生成器单测通过。2项ASGI集成经实际Session创建、定义校验、任务创建／更新和Agent／model_stream执行通过，核400／request_id、拒绝后零导航／任务／Job副作用、原task及revision不变和同Thread后续真实请求。首次集成误读错误字段为message，按既有detail合同修正后通过，未修改产品错误信封。
+- Ruff、三文件Pyright、compileall与本change strict通过；作者AST核只改原resolver，未新增生产模块，新集成子目录有四段AGENTS。准确命令、指纹、原始输出及实际退出码见 `out/tests/temp/generation_validation_20261030/artifacts/verification.json`。新suite固定60秒／4GiB；本次定向集成保留独占闸门和进程外700秒／4GiB保护，含等待名额总160.33秒。不代真实Gateway业务代理、真实Provider、Web、Backend硬重启、Windows或URI全局盘点，2.2／7.2仍未勾；前端、原Debug服务与协作延期边界保持。

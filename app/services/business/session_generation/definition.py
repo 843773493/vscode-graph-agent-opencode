@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from app.core.failures import failure_detail
 from app.schemas.internal_v2.session_navigation.models import (
     SessionGenerationDefinitionDTO,
 )
@@ -34,9 +35,14 @@ def resolve_generation_provider(
     try:
         Draft202012Validator(provider.config_schema).validate(definition.config)
     except ValidationError as error:
-        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        detail = failure_detail(
+            error, stage="session-generation-config",
+            label=f"会话生成器配置不符合 provider schema: type_id={provider.type_id}",
+        )
+        path = list(error.absolute_path)
+        # 动态键与输入正文留在原始诊断，公开位置只保留顶层参数名及深度。
+        parameter = path[0] if path and isinstance(path[0], str) and path[0].isidentifier() else None
         raise ValueError(
-            "会话生成器配置不符合 provider schema: "
-            f"type_id={provider.type_id}, path={location}, error={error.message}"
+            f"{detail}, parameter={parameter}, depth={len(path)}, rule={error.validator}"
         ) from error
     return provider
