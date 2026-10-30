@@ -452,3 +452,9 @@ Child准入的catalog读取、owner与控制库绑定/main指针核对、路径�
 Child发布与失败收尾的直接catalog/control访问统一调用既有`run_sync_shielded`：原发布gate内以同一次worker核对owner节点并提交原CAS，冲突后的记录重读、gate外失败复核和中止、初始execution intent读取及返回前published核验均结算各自原调用。fork物化前capture查询、物化后record重读与失败中止也沿同一原语；清理/物化回调仍走原异步owner，不把整条流程shield。
 
 CAS在取消前后实际提交的child不会倒删、回退或再分配。等待取消时原gate和创建holder维持至该worker结束；取消后不继续本阶段后续动作，原业务确认回调留给同key恢复。重试跳过已提交CAS并补齐原附件发布结算；回调和异步阶段观察保持原事件循环、原gate及先后顺序，回调故障仍保留已发布事实。未发布失败按原状态、原因和定点目录清理中止，取消发生在中止写入时保留实际aborted而非伪造preparing。回调中的同步I/O、任意原生线程终止与完整shutdown硬期限继续TODO，5.2/5.4不因本切片勾选。
+
+### Fork 发布确认的异步合同（5.4 部分收口）
+
+Session main 与 child 的 `on_published` 统一为可等待回调，首次发布与同 key 恢复均在原目标 gate 内等待；不再保留同步回调入口。确认入口仍在事件循环中执行，fork owner 的冻结证明核验、catalog 查询与附件 settlement 写入共用一次既有 `run_sync_shielded`，保持原核对、事务与异常顺序。原 gate 和同 key 锁覆盖线程池排队及真实 I/O 结算；调用方取消须等 worker 完成后传播，不继续后续阶段，也不回退已 published 事实或重发物化/CAS。
+
+附件确认失败继续保留原 claim、preparing 或 published_pending_attachment_commit 结算与原异常，同 key 显式重试沿原目标补齐 committed。新 Session 与 child 的产品消息/Agent/model_stream 验收覆盖确认写入前后及线程池排队取消，核冻结目标、来源及目标 canonical 原字节、回调线程、原 gate 和恢复；完整原生线程终止、Session 其余同步创建 I/O、独立 Backend 重启、Windows 与全 shutdown 硬期限仍 TODO，5.2/5.4 保持未完成。

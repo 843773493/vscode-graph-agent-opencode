@@ -24,6 +24,7 @@ from app.core.session_catalog_store.creation_envelope import (
 )
 from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.thread_creation import compute_thread_creation_preimage_hash
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -654,13 +655,16 @@ class CheckpointForkOwner:
                 "source_snapshot_sha256": capture.snapshot_sha256,
                 "target_session_id": target_session_id, "target_thread_id": record.child_thread_id}
 
-    def mark_published_child_fork(self, target_session_id: str, record: ThreadCreationRecord) -> None:
-        proof = self.read_child_fork_completion(target_session_id, record)
-        if record.fork_completion_json is None or json.loads(record.fork_completion_json) != proof:
-            raise RuntimeError("fork child publication completion 已漂移")
-        capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.thread_creation_idempotency_key)
-        if capture is not None and self.source.attachment_store is not None:
-            self.source.attachment_store.mark_copy_published(capture, publication_preimage_hash=record.preimage_hash)
+    async def mark_published_child_fork(self, target_session_id: str, record: ThreadCreationRecord) -> None:
+        def confirm() -> None:
+            proof = self.read_child_fork_completion(target_session_id, record)
+            if record.fork_completion_json is None or json.loads(record.fork_completion_json) != proof:
+                raise RuntimeError("fork child publication completion 已漂移")
+            capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.thread_creation_idempotency_key)
+            if capture is not None and self.source.attachment_store is not None:
+                self.source.attachment_store.mark_copy_published(capture, publication_preimage_hash=record.preimage_hash)
+
+        await run_sync_shielded(confirm)
 
     async def finalize_published_child_fork(self, target_session_id: str, record: ThreadCreationRecord) -> None:
         if record.state != "published":
@@ -719,10 +723,13 @@ class CheckpointForkOwner:
             remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
             return has_rollout
 
-    def mark_published_fork(self, record: SessionCreationRecord) -> None:
-        capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.session_creation_idempotency_key)
-        if capture is not None and self.source.attachment_store is not None:
-            self.source.attachment_store.mark_copy_published(capture, publication_preimage_hash=record.preimage_hash)
+    async def mark_published_fork(self, record: SessionCreationRecord) -> None:
+        def confirm() -> None:
+            capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.session_creation_idempotency_key)
+            if capture is not None and self.source.attachment_store is not None:
+                self.source.attachment_store.mark_copy_published(capture, publication_preimage_hash=record.preimage_hash)
+
+        await run_sync_shielded(confirm)
 
     async def finalize_published_fork(self, record: SessionCreationRecord) -> None:
         capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.session_creation_idempotency_key)

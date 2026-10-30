@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import portalocker
 import pytest
@@ -54,7 +54,7 @@ async def test_post_publication_error_propagates_and_same_key_recovers(
             with path.open("rb") as file, pytest.raises(portalocker.AlreadyLocked):
                 portalocker.lock(file, portalocker.LOCK_EX | portalocker.LOCK_NB)
 
-    def confirm(record: ThreadCreationRecord) -> None:
+    async def confirm(record: ThreadCreationRecord) -> None:
         assert_gates_held()
         assert record.state == "published"
         confirmed.append(record.child_thread_id)
@@ -66,7 +66,7 @@ async def test_post_publication_error_propagates_and_same_key_recovers(
             assert operation_id == "publication-failure"
             raise failure
 
-    async def create(callback: Callable[[ThreadCreationRecord], None]):
+    async def create(callback: Callable[[ThreadCreationRecord], Awaitable[None]]):
         return await service._publish_and_finalize(
             owner.control.get_thread_creation_record("publication-failure"),
             session_id=owner.session_id, session_dir=owner.session_dir,
@@ -97,7 +97,7 @@ async def test_post_publication_error_propagates_and_same_key_recovers(
     async with service._gate.shared(), service._session_gate.exclusive(owner.session_id):
         pass
 
-    def recovered(current: ThreadCreationRecord) -> None:
+    async def recovered(current: ThreadCreationRecord) -> None:
         assert_gates_held()
         assert current == record
         confirmed.append(current.child_thread_id)

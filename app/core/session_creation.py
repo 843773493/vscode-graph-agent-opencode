@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -356,7 +356,7 @@ class SessionCreationService:
         record: SessionCreationRecord,
         *,
         fork_completion: ForkCompletionProof | None = None,
-        on_published: Callable[[SessionCreationRecord], None] | None = None,
+        on_published: Callable[[SessionCreationRecord], Awaitable[None]] | None = None,
     ) -> SessionCreationResult:
         """仅在准备 envelope 与 fork proof 完整时 CAS 发布 Session。"""
         if not isinstance(record, SessionCreationRecord):
@@ -370,7 +370,7 @@ class SessionCreationService:
                 validate_session_creation_envelope(current)
                 if on_published is not None:
                     async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
-                        on_published(current)
+                        await on_published(current)
                 return self._result_for_published(current)
             if current.state == "aborted":
                 raise RuntimeError(
@@ -402,7 +402,7 @@ class SessionCreationService:
                     ) from error
                 # catalog 已发布；回调仍持有目标 gate，失败必须保留已发布事实和原错误。
                 if on_published is not None:
-                    on_published(current)
+                    await on_published(current)
             return SessionCreationResult(
                 session_id=current.session_id,
                 main_thread_id=current.main_thread_id,

@@ -562,3 +562,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 正式原`integration-fork-child-publication`7项通过（109.47秒）：产品消息/真实Agent/model_stream生成带附件来源，原三类确认失败恢复保持；新增真实SQLite写锁、CAS提交后、已提交冲突重读及返回前核验的四种取消。核原holder/gate、唯一published child、零初始execution、冻结record及来源/目标canonical原字节，未确认时settlement保持preparing，原确认完成后保持published_pending_attachment_commit，同key重试完成committed且CAS仅一次。实际确认回调线程核对仍为事件循环。保留原60秒fork期限、180秒/4GiB矩阵与集成独占闸门，未改suite或Web自动化。
 - Ruff、compileall通过；Pyright原6项生产诊断与完整HEAD归档的规则/完整消息/最窄AST owner/源语句逐项一致，新增测试零诊断，不称全绿。作者AST核对：逆转worker调度并还原publish闭包后，整个模块AST与原版完全相同；原gate、事务、异常/确认/观察顺序及全部其它符号保持。单元与fork目录直接Python文件分别10/20，没有新增源码目录；1525行模块与core直接49文件的既有结构债务未在本片解决，不关闭7.5-F。
 - 命令、源码指纹、原始输出/实际退出码、完整归档反例、类型对照和作者审查见`out/tests/temp/child_publication_io_20261030/artifacts/verification.json`及同目录原件。业务确认回调的同步I/O、任意原生线程终止、完整shutdown硬期限、Backend硬重启、Windows及Gateway/Web继续TODO；5.2/5.4与整体21/23保持未完成。Web迁移/自动化、共享debug、团队协作及MCP显式持有延期边界未扩展。
+
+### 2026-10-30 Fork 发布确认的异步合同（5.4 部分收口）
+
+- Session main/child 的首次发布及已发布重入统一 await 原 on_published；Session service、fork owner 及测试消费者全量迁齐，不保留同步兼容入口。确认回调入口仍在原事件循环/gate，原 proof 核对、catalog 查询及附件 settlement 写入放入同一次既有 shielded worker；原锁覆盖线程池排队及真实结算，取消不继续下一阶段、不回退已发布事实，不另建 writer、事务、schema 或确认账本。
+- 168项定向单测通过（12.54秒）：Session/child 创建、发布错误身份/同key恢复及owner工厂。新增正式 integration-fork-confirmation-io 共6项通过（92.22秒），由产品消息/Agent/model_stream生成带附件历史，核新Session与child在确认写入前后及线程池排队取消时的原gate、回调/worker线程、published目标、冻结来源与目标canonical原字节、原claim与preparing→pending→committed结算。同key恢复禁止重新物化，目标身份与记录不变。
+- 原 integration-fork-child-publication 7项回归通过（101.73秒），保留三类确认/观察失败的原异常及四种真实SQLite写锁/发布后/冲突重读/终态核验取消。两suite串行走集成独占闸门，各保留180秒/4GiB与原60秒fork watchdog；未改Web suite、共享debug或其它会话暂存。
+- Ruff、compileall、OpenSpec strict与diff检查通过。扩大到五个生产模块及受影响测试的Pyright为81项既有生产诊断；完整HEAD归档逐项核对规则、完整消息、最窄AST owner与源语句一致，本轮无新增、测试零诊断，不称类型全绿。作者AST核验确认正文与旧版相同，其余模块逆转异步确认合同后整模块AST相同，原gate/异常/观察顺序保持。已有大模块和core目录结构债务未解决，不关闭相关架构任务。
+- 完整候选源码归档仅还原同步确认后，main反例在事件循环阻塞、原任务已提前终结的断言处失败；child在等待故障点阶段超时，原件保留，不单独作精确归因。首次反例误用直接pytest，被正式watchdog装具拒绝，已改用原matrix，不算有效反例；首轮测试executor恢复类型及import格式问题已修复，保留原始失败。准确命令、候选/归档指纹、原始输出/退出码、类型对照及作者复核在 out/tests/temp/fork_confirmation_io_20261030/artifacts/verification.json 与同目录原件。两个临时源码归档已删除，正式产物与反例输出保留。Session其余同步I/O、任意原生线程终止、独立Backend重启、Windows、Gateway/Web及完整shutdown硬期限继续TODO；5.2/5.4与整体21/23不提前勾选。

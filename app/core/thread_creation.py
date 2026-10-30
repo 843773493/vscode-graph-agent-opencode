@@ -736,7 +736,7 @@ class ThreadCreationService:
         fork_delivery_request_id: str | None = None,
         before_publish: Callable[[ThreadCreationRecord], Awaitable[None]] | None = None,
         before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
-        on_published: Callable[[ThreadCreationRecord], None] | None = None,
+        on_published: Callable[[ThreadCreationRecord], Awaitable[None]] | None = None,
     ) -> ThreadCreationResult:
         """执行（或幂等恢复）一次 child thread 创建（协议见类 docstring）。
 
@@ -1280,7 +1280,7 @@ class ThreadCreationService:
         final_dir: Path,
         inventory: dict[str, str],
         before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
-        on_published: Callable[[ThreadCreationRecord], None] | None = None,
+        on_published: Callable[[ThreadCreationRecord], Awaitable[None]] | None = None,
     ) -> ThreadCreationResult:
         """（必要时）gate exclusive 内 CAS publish → admission intent → 复验。
 
@@ -1300,7 +1300,7 @@ class ThreadCreationService:
             )
         elif on_published is not None:
             async with self._gate.shared(), self._session_gate.exclusive(session_id):
-                on_published(published)
+                await on_published(published)
         # 步骤 5：初始 execution admission intent（publish 后幂等写入；
         # 本轮不绑定真实 Job——state 恒 pending，8.5 幂等 worker 消费）。
         intent = None
@@ -1351,7 +1351,7 @@ class ThreadCreationService:
         session_dir: Path,
         inventory: dict[str, str],
         before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
-        on_published: Callable[[ThreadCreationRecord], None] | None = None,
+        on_published: Callable[[ThreadCreationRecord], Awaitable[None]] | None = None,
     ) -> ThreadCreationRecord:
         """持 gate 完成 CAS 与发布确认；仅发布前失败可定点清理 + abort。
 
@@ -1416,7 +1416,7 @@ class ThreadCreationService:
                 # 已提交事实不进入 CAS 失败处理；确认失败保留原 child、claim 和错误。
                 # 首次提交与另一执行根已提交的恢复共用此尾段，仍持原 target gate。
                 if on_published is not None:
-                    on_published(published)
+                    await on_published(published)
                 await observe_phase(idempotency_key, "thread.creation.published")
                 return published
 

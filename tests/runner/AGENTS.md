@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-fork-confirmation-io` 经产品消息、Agent 和 model_stream 生成带附件来源，核新 Session main/child 的异步发布确认、线程池排队及确认写入前后取消；保留原 gate、published 事实、附件结算和同 key 恢复。固定180秒/4GiB及原60秒fork期限，复用集成独占闸门；不代表独立进程重启、Gateway/Web、Windows或整个shutdown期限。
+
 `integration-thread-attachment-isolation` 经真实 Gateway 消息与 fork 创建 main/child，使用 model_stream 验证 sibling 并行、各自 FIFO、未来输入隔离、独立上传关联及硬重启历史；固定180秒/4GiB及集成独占闸门，不代表 Web、Windows、GC 或全部 Thread 隔离验收。
 
 `integration-thread-rewind-isolation` 经真实 Gateway/Backend 消息、fork 与 main regenerate 验证 child 完整存储和请求隔离、硬重启后的历史及 child 续聊；只读核对原封存请求与 owner/hash。固定180秒/4GiB及原集成独占闸门，不代替 compaction、Web、Windows 或完整8.3。

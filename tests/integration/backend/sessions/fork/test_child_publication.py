@@ -191,9 +191,9 @@ async def test_product_child_publication_cancellation_keeps_committed_target_and
             native_step.block()
         return original_terminal(control, *args, **kwargs)
 
-    def callback(*args, **kwargs):
+    async def callback(*args, **kwargs):
         callback_threads.append(threading.get_ident())
-        original_callback(*args, **kwargs)
+        await original_callback(*args, **kwargs)
 
     holders = OperationHolderGate(resolver.sessions_root, namespace="thread_creation")
     gates = [holders.lock_for(f"{source.session_id}/{key}"),

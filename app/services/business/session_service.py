@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, closing
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -534,7 +534,7 @@ class SessionService:
         record: SessionCreationRecord,
         *,
         fork_completion: ForkCompletionProof,
-        on_published: Callable[[SessionCreationRecord], None] | None = None,
+        on_published: Callable[[SessionCreationRecord], Awaitable[None]] | None = None,
     ) -> SessionDTO:
         result = await self._creation_service.publish_prepared(
             record,
