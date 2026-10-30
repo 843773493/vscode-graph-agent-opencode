@@ -1,6 +1,7 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
 import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
+import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
 
 import http from "node:http";
 import { randomUUID } from "node:crypto";
@@ -207,18 +208,6 @@ function wsClient(socket) {
       return frameFlow.snapshot();
     },
   };
-}
-
-async function closeHttpServer(server) {
-  await new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
 }
 
 async function main() {
@@ -970,10 +959,17 @@ async function main() {
         return;
       }
     }
-    // TODO：统一检查点持久化、HTTP 排空和整个 shutdown 的总期限及挂起终止核实。
-    wss.close();
-    await closeHttpServer(server);
-    process.exit(hasFatalError ? 1 : exitCode);
+    // TODO：检查点持久化和整个 shutdown 的总期限及挂起终止仍须原 owner 核实。
+    let finalExitCode = exitCode;
+    try {
+      wss.close();
+      await closeHttpServer(server);
+    } catch (transportError) {
+      finalExitCode = 1;
+      workspaceLogger.error("[browser-backend] transport 关闭失败", transportError);
+    } finally {
+      process.exit(hasFatalError ? 1 : finalExitCode);
+    }
   };
 
   process.on("SIGINT", () => void shutdown("browser_manager_sigint", 130));

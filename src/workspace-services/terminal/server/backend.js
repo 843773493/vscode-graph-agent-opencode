@@ -1,6 +1,7 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
 import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
+import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
 
 import http from "node:http";
 import path from "node:path";
@@ -142,18 +143,6 @@ function wsClient(socket) {
       socket.close(code, reason);
     },
   };
-}
-
-function closeHttpServer(server) {
-  return new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
 }
 
 async function main() {
@@ -489,7 +478,7 @@ async function main() {
         return;
       }
     }
-    // TODO(5.4)：HTTP排空与同步阻塞的总期限、未知启动的原生进程接管仍需独立核实。
+    // TODO(5.4)：同步阻塞的总期限、未知启动的原生进程接管仍需独立核实。
     try {
       wss.close();
       await closeHttpServer(server);

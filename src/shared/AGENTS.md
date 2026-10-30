@@ -14,6 +14,7 @@
 - Gateway 交付的 `BOXTEAM_RUNTIME_LOG_SINK` 仅提供冻结文件身份；进程状态同时核对实际 stdout/stderr 与当前文件的 device/inode，不能把环境中的路径当成已验证去向。Launcher 通过 `registerRuntimeLogSink` 登记自己实际持有的日志描述符，登记成功后才提供诊断证明；未交付证明时 `log_sink` 为 null。
 - `serverRuntimeLoggingControl.mjs`：复用 Gateway 私有凭据与既有服务端口／Launcher 控制通道的日志查询和应用。实际设置与 revision 只在日志入口保存；同实例、同 revision 重放幂等，冲突和过期确认明确拒绝。Launcher 应用确认复用其原 Logger 和文件 sink。
 - `serverJsonRequest.mjs`：Terminal／Browser 共用的 JSON 解析及 HTTP 正文读取。Browser WebSocket 复用同一解析器，分别传入传输名、阶段及原服务 logger。空 HTTP 正文及正常 JSON 保持原语义；解析失败只公开阶段与类别，原异常写入已绑定工作区的服务日志并保留 cause，日志失败也不得覆盖原解析失败。
+- `serverHttpShutdown.mjs`：两类辅助服务共用的 HTTP 收尾，最多等待5秒；到期关闭原连接并抛出明确错误，宿主记录失败并退出1。普通关闭须先完成Manager排空，未核实则沿原管理重试链；致命错误仍按原合同退出1。传输收尾不是整个shutdown或外部资源的终止证明。
 
 ## 不可修改内容
 

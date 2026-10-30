@@ -37,6 +37,7 @@
       ]
     },
     {"id":"integration-service-json-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/test_http_json_errors.py"]},
+    {"id":"integration-service-http-shutdown","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/test_http_shutdown_deadline.py"]},
     {"id":"integration-browser-governor-diagnostics","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/browser/test_browser_governor_diagnostics.py"]},
     {"id":"integration-browser-websocket-input-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/browser/test_browser_websocket_input_errors.py"]},
     {"id":"integration-terminal-websocket-input-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/workspace_services/terminal/test_websocket_input_errors.py"]},

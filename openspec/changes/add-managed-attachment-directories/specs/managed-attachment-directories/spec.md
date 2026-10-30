@@ -359,7 +359,12 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 #### Scenario: Browser 生产信号关闭失败后重试
 
 - **WHEN** Browser 后端收到关闭信号，原 Manager 的排空或核实收尾明确失败
-- **THEN** 记录原资源与完整错误，保留原进程、HTTP 管理入口、原执行及恢复依据，并保持原 Manager 的关闭准入；在途关闭不因重复信号重复执行。核实原操作后，再次关闭信号沿同一 Manager 重试，只有原关闭成功才停止监听并按该信号退出；不自动重发原业务操作。未捕获致命错误仍沿原退出规则处理，本场景不承诺整个 shutdown 或 HTTP 排空的总期限
+- **THEN** 记录原资源与完整错误，保留原进程、HTTP 管理入口、原执行及恢复依据，并保持原 Manager 的关闭准入；在途关闭不因重复信号重复执行。核实原操作后，再次关闭信号沿同一 Manager 重试，只有原关闭成功才进入 HTTP 收尾并按该信号退出；不自动重发原业务操作。未捕获致命错误仍沿原退出规则处理；HTTP 阶段遵循下述期限，整个 shutdown 的总期限仍须单独核实
+
+#### Scenario: 辅助服务 HTTP 收尾仍有未完成请求正文
+
+- **WHEN** Terminal 或 Browser 已进入 HTTP 收尾，而原连接仍在等待未发送完的请求正文
+- **THEN** 两类服务复用同一 HTTP 关闭实现，默认最多等待 5000 毫秒；到期关闭原连接并抛出 `http_server_drain_timeout`，宿主记录 transport 关闭失败后退出 1。正常 SIGTERM 关闭仍退出 143。普通 Manager 关闭未核实则保留原进程和管理重试，不进入此阶段；未捕获致命错误仍沿原退出 1 合同处理。传输关闭不构成外部资源停止证明，也不替代整个 shutdown、同步阻塞或不合作操作的终止核实
 
 #### Scenario: Browser Manager 关闭遇到创建中的资源
 

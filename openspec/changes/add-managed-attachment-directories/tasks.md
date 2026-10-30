@@ -437,3 +437,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 固定旧产品仍完整归档自 `cb90835523b9ff6d91e3f8dfaf3491855d55191d`，由真实产品入口生成附件、执行和两代 fork。只在各测试工作区副本中调用既有 catalog v10→11 离线转换和 rollout 24→25→26 的登记 SQL 升级；Session/Thread 从权威 catalog/control owner 取得，不扫描重建身份。原始旧库及生成工作区保留，转换原库字节与副本 canonical JSONL 升级前后逐字校验；不改生产 preflight、schema 或迁移支持范围。
 - 原四文件直接 pytest 回归 86 passed、1 failed：失败发生于旧产品 fork 输入生成的 watchdog 启动前置条件，尚未进入当前迁移。改用现有正式 `integration-attachment-offline-migration` matrix 套件，87 passed/275.43秒、exit0，未改 watchdog、期限、身份/hash 或 fork 断言。已安装 catalog 的产品 owner 启动、历史读取和新上传也通过，移除该场景已无消费者的 `WORKSPACE_ROOT` 准备。
 - Ruff/compileall通过；现有 Pyright 1.1.414 与完整 HEAD 归档基线均9项诊断，按文件、最窄 AST owner、规则、完整消息及出错表达式完全一致，新升级函数无诊断，不称类型全绿。首次 uvx 下载超时未进入类型分析，保留原件且不重试。作者结构自查仅新增167行 fixture 内的一个元数据升级 helper，无新目录或生产实现；同目录旧聚合测试的组织债务不在此扩展。命令、源码指纹、raw、真实退出码、基线比较和限制见 `out/tests/temp/uri-global-closure/artifacts/verification-066.json`。本片无 Web/Windows/真实 Provider 新验收，不勾5.2/5.4或多工作区4.3/8.2。
+
+### 2026-10-30 辅助服务 HTTP 收尾期限（5.4部分收口）
+
+- Terminal／Browser 删除两份无限等待的 HTTP 关闭函数，共用默认5000毫秒收尾；到期关闭原连接，明确诊断并退出1，正常SIGTERM仍为143。普通Manager未核实继续保留原进程与管理重试；致命错误沿原退出1合同，不把断网当作资源停止证明。
+- 原生产在两个未完成正文场景均超过8秒，2 failed／2 passed；候选真实Node／HTTP／POSIX信号4 passed／12.99秒，两原信号回归各6 passed／46.08与58.55秒。三组串行走原独占闸门及matrix外部期限／4GiB保护；正文场景等正式100 Continue后才发部分正文，核精确诊断、原退出码与空持久资源集合。
+- Ruff、新测试Pyright零诊断、Node语法、规范strict与作者AST结构自查通过，HTTP／WebSocket／Manager其余接线保持。首次fixture缺参及端口冲突均未进入业务，原件保留。准确命令、指纹、raw／退出码、四场景正式产物与限定证据见`out/tests/temp/service_http_shutdown_20261030/artifacts/verification.json`；无临时源码或二进制产物。未验Windows、Gateway/Web、整个shutdown、同步阻塞或未知原生进程接管，5.2／5.4仍未勾，整体21/23；团队协作与MCP显式持有继续TODO。

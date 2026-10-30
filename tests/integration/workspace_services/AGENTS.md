@@ -12,6 +12,8 @@ workspace_services/
 
 按被测辅助服务选择目录；纯解析和状态计算留在对应模块的单元测试，经过完整用户入口的流程归 E2E。
 
+`test_http_shutdown_deadline.py`通过真实Terminal／Browser进程、HTTP及POSIX SIGTERM，验证正常关闭保持143，不完整创建请求的正文不能无限阻塞已排空Manager的HTTP收尾：默认5秒后明确诊断并退出1，原持久资源集合仍为空。suite `integration-service-http-shutdown`固定60秒／4GiB；空Manager场景不代替资源排空、整个shutdown、Gateway/Web或Windows验收。
+
 `test_http_json_errors.py` 复用原双辅助服务装具，通过真实 HTTP 核对 Terminal／Browser 非法 JSON 的三类原生路径输入只留诊断、不创建资源；随后正常请求仍可创建和删除真实 PTY／本地文件页面。空正文、正常 JSON、分块 UTF-8、原始 cause 和日志失败由共享解析器单测验证。suite `integration-service-json-errors` 固定90秒；Linux按每进程4GiB数据段保护，不代表整树总内存预算，也不代表 Python owner、Gateway／Web 或 Backend 重启验收。
 
 `test_resource_record_errors.py` 经正式 Session、ASGI 资源 API 和真实 PTY/Chromium 验证 owner／lease 落盘失败不发布候选、普通错误不泄露位置、原资源身份与精确占用不变及同入口显式重试。原工具读取生成 active lease，授权账本失败不得派发真实授权，收尾仅释放原 operation。无模型调用，配置仅作用于本测试工作区；`integration-resource-record-errors` 与 `integration-resource-lease-errors` 分别选择记录和授权场景，均固定90秒/4GiB，须串行运行，不代表 Gateway/Web 或 Backend 进程重启验收。
