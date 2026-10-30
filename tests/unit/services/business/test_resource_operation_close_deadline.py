@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.services.business.terminal_resources.operations import TerminalOperations
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
@@ -142,3 +143,85 @@ async def test_close_preserves_underlying_timeout_identity_without_mistaking_it_
         assert operation._lease_refs == {rid: lease.lease_id}
         await operation.close()
         assert bundle.leases.get_lease(lease.lease_id).status == "released"
+
+
+@pytest.mark.parametrize("failure_count", [0, 1, 2])
+async def test_close_cancellation_preserves_completed_errors_and_retries_original_leases(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    failure_count: int,
+) -> None:
+    owner = bundle.owner
+    assert owner is not None
+    resources = [str((await bundle.create())["resource_id"]) for _ in range(4)]
+    first, second, healthy, blocked = resources
+    async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
+                               holder_id="request:close-cancel", operation_id="close-cancel") as operation:
+        for rid in resources:
+            if isinstance(operation, TerminalOperations):
+                await operation.read_terminal(rid)
+            else:
+                await operation.perform(rid, "navigate", {"url": "https://close-cancel.test"})
+        leases = {rid: bundle.leases.leases_for_resource(rid)[0] for rid in resources}
+        ledger_ids = set(bundle.leases._leases)
+        failures = dict(zip((first, second), (OSError("原账本释放失败"), TimeoutError("原持久层超时")), strict=True))
+        failures = dict(tuple(failures.items())[:failure_count])
+        release = bundle.leases.release
+        first_finished = asyncio.Event()
+
+        def releasing(lease_id: str):
+            if lease_id == leases[first].lease_id:
+                first_finished.set()
+            for rid, error in failures.items():
+                if lease_id == leases[rid].lease_id:
+                    raise error
+            return release(lease_id)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(bundle.leases, "release", releasing)
+            blocked_lock = owner._resource_lock(blocked)
+            async with blocked_lock:
+                first_lock = owner._resource_lock(first)
+                await first_lock.acquire()
+                closing = asyncio.create_task(operation.close())
+                try:
+                    async with asyncio.timeout(1):
+                        while healthy in operation._lease_refs:
+                            await asyncio.sleep(0)
+                    # 第一项最后完成，错误仍须按资源输入顺序保留。
+                    first_lock.release()
+                    await asyncio.wait_for(first_finished.wait(), 1)
+                    assert not closing.done()
+                    closing.cancel("保留调用方取消消息")
+                    with pytest.raises(asyncio.CancelledError, match="^保留调用方取消消息$") as caught:
+                        await closing
+                    assert closing.cancelled()
+                    cause = caught.value.__cause__
+                    if failures:
+                        assert isinstance(cause, BaseExceptionGroup)
+                        assert cause.exceptions == tuple(failures.values())
+                    else:
+                        assert cause is None
+                    expected_refs = {rid: leases[rid].lease_id for rid in (*failures, blocked)}
+                    assert operation._lease_refs == expected_refs
+                    cold = type(bundle.leases)(state_path=bundle.leases._state_path)
+                    for rid, lease in leases.items():
+                        current = cold.get_lease(lease.lease_id)
+                        assert current is not None
+                        assert current.status == ("active" if rid in expected_refs else "released")
+                    assert not blocked_lock._waiters
+                finally:
+                    if first_lock.locked():
+                        first_lock.release()
+                    closing.cancel()
+                    await asyncio.gather(closing, return_exceptions=True)
+        # 解锁不补做；同一operation只在显式重试时结清原占用。
+        await asyncio.sleep(0)
+        assert operation._lease_refs == expected_refs
+        await operation.close()
+        await operation.close()
+        assert operation._lease_refs == {}
+        cold = type(bundle.leases)(state_path=bundle.leases._state_path)
+        assert set(cold._leases) == ledger_ids
+        for lease in leases.values():
+            current = cold.get_lease(lease.lease_id)
+            assert current is not None and current.status == "released"

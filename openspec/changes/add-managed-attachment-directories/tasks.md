@@ -473,3 +473,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原`integration-resource-release`的管理lock场景仍以`recover((rid,))`作为持锁注入点；现行stop/delete只调用`recover(())`准备冷清单，再在原资源锁内做停止同步。因此旧装具在资源命令实际已完成时仍等待10秒未触发的事件。仅将该fixture的tuple判定迁齐为`()`并说明边界；AST核对全文件92条既有断言、产品期限、身份、版本、原lease、终态及不重发行为均保持，不改产品实现或加入旧恢复fallback。
 - 首轮复验遇47960端口`EADDRINUSE`，11项均在fixture准备阶段报错，未进入业务；随后逐一核三个端口可绑定、无监听，保留状态原件后复验。最终原固定120秒/4GiB矩阵11 passed/110.76秒，总114.62秒，原集成独占闸门继续生效。它与上一独立suite的2项真实故障组合分别证明不同场景，不能替代整个5.2/5.4、Gateway/Web、Windows、Backend重启或不合作终止。
 - Ruff/编译/本change strict通过；原文件Pyright46条既有诊断逐项保持，无新增。准确命令、前后源码指纹、原始输出/退出码、端口状态、92条断言AST及类型基线比较位于`out/tests/temp/resource_command_fixture_20261030/artifacts/`，旧钩子失败原件复用`resource_release_errors_20261030/artifacts/product-existing-diagnose-001.*`。性能TODO：本机本次总114.62秒已接近原120秒门槛，后续其它主体完成后再按相同工作负载测量并优化，不擅自增大测试期限或调整业务期限。5.2/5.4保持未勾，团队与协作继续TODO。
+
+### 2026-10-30 operation取消保全已完成释放错误（5.4部分收口）
+
+- 原`ResourceOperations.close()`在部分lease释放失败、另一项仍等待锁时被调用方取消，会丢掉此前失败。现复用原gather排空及按资源顺序取错的分支，保持原CancelledError和消息，已发生的释放错误聚合为其cause；没有先前错误时原样取消。只修改共享close，原30秒预算、账本、锁、持久成功后移除引用及同operation显式重试链保持，无后台补做或第二套释放实现。
+- 修改前4个有效反例失败、2个无错误取消场景通过；最终相关单元312 passed/9.16秒。新增6项在补齐类型收窄及逆序完成断言后定向复验全部通过，属于上述子集，不重复相加。正式Session/ASGI资源创建和原operation生成真实PTY/Chromium/HTTP与占用，原`integration-resource-release-errors`矩阵4 passed/52.06秒，总55.97秒，固定60秒/4GiB；等待其它会话Web测试释放独占名额后才启动，未绕过原闸门、改Web自动化或重启共享debug。核原错误身份、取消消息、精确lease冷读、健康释放、外部身份/版本不变、解锁不补做与原入口重试。
+- Ruff、compileall和本change strict通过；生产及新增场景Pyright零诊断，原单测11条诊断均定位于本次AST未改的函数，不称类型全绿。首次新增代码的5条类型收窄诊断已修正，原件保留；所有原测试函数及断言AST保持。准确命令、源码指纹、原始输出、退出码、正式产品收据和作者结构自查见`out/tests/temp/resource_operation_cancel_20261030/artifacts/verification.json`。性能TODO：本次矩阵总55.97秒接近原60秒门槛，保留测量，待主体完成后再优化，不增大期限。本片不代表Gateway/Web、Windows、Backend硬重启、同步阻塞、不合作终止或完整shutdown验收；5.2/5.4与整体21/23保持未完成，团队协作及MCP显式持有继续TODO。

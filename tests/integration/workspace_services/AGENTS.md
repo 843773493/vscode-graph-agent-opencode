@@ -51,4 +51,4 @@ workspace_services/
 
 `test_resource_release.py`沿正式Session、资源创建、operation及原Session资源drain生成状态，复用双辅助服务fixture。真实PTY/Chromium/HTTP核全量lease冲突不部分detach、peer完成后可查询、一次30秒覆盖撤权与删除回执、原lease及同入口核实不重发删除；operation收尾场景推进本进程单调时间，核锁等待到期、健康占用已释放、精确原lease保留、PTY/页面身份和版本不变及同operation显式重试。suite `integration-resource-release`固定120秒/4GiB。Thread入口由共享owner单测验证，不把该场景称为整个Session删除、runtime卸载、Gateway/Web或Windows验收。
 
-`test_resource_release_errors.py`复用同一服务/API fixture，经正式Session及ASGI创建真实PTY/Chromium；真实删除后注入一项回执读取失败并暂停另一项回执，推进原30秒截止，核原错误及超时同时可见、健康项保持完成、精确lease冷读及同入口只核终态而不重放删除。suite `integration-resource-release-errors`独立固定60秒/4GiB，不增加原释放suite预算；取消消息和多错顺序由共享owner单测覆盖，不代替Gateway/Web、Windows、Backend重启或不合作终止验收。
+`test_resource_release_errors.py`复用同一服务/API fixture，经正式Session及ASGI创建真实PTY/Chromium；真实删除后注入一项回执读取失败并暂停另一项回执，推进原30秒截止，核原错误及超时同时可见、健康项保持完成、精确lease冷读及同入口只核终态而不重放删除。operation收尾另核释放失败后取消仍保留原取消消息和错误cause、健康占用已释放、精确未释放lease冷读、外部身份/版本不变及同operation显式重试；解锁不后台补做。suite `integration-resource-release-errors`独立固定60秒/4GiB，不增加原释放suite预算；多错逆序完成仍按输入顺序归属由共享owner单测覆盖，不代替Gateway/Web、Windows、Backend重启或不合作终止验收。

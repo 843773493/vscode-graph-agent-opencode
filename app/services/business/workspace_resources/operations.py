@@ -82,11 +82,15 @@ class ResourceOperations:
             async with budget:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
             errors = [result for result in results if isinstance(result, BaseException)]
-        except TimeoutError:
-            if not budget.expired():
+        except (TimeoutError, asyncio.CancelledError) as failure:
+            if isinstance(failure, TimeoutError) and not budget.expired():
                 raise
-            # gather已排空取消；保留到期前返回的原错误，不被整批期限覆盖。
+            # gather已排空取消；到期或调用方取消都保留此前返回的原错误。
             errors = [error for task in tasks if not task.cancelled() and (error := task.exception()) is not None]
+            if isinstance(failure, asyncio.CancelledError):
+                if errors:
+                    raise failure from BaseExceptionGroup("外部资源 operation 关闭失败", errors)
+                raise
             errors.append(TimeoutError(
                 "外部资源 operation 关闭等待已达总截止时间；保留未释放占用: "
                 f"operation_id={self._operation_id}, holder_id={self._holder_id}, "

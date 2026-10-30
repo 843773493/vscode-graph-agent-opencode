@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
+from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources import owner as owner_module
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.external_resource_leases import (
@@ -117,3 +118,93 @@ async def test_real_release_retains_completed_failure_when_peer_receipt_expires(
             finally:
                 release.set()
                 await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_real_operation_close_cancellation_retains_failure_and_original_leases(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, context):
+        assert context.thread_binding is not None
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            ids: list[str] = []
+            for number in range(3):
+                response = await client.post(f"/api/v1/resources/{kind}s", json={
+                    "session_id": sid, "retention_scope": "thread", "title": f"close-cancel-{number}",
+                })
+                assert response.status_code == 200, response.text
+                assert response.json()["request_id"] == response.headers["X-Request-ID"]
+                ids.append(response.json()["data"]["resource_id"])
+            failed, healthy, blocked = ids
+            async with owner.operation(session_id=sid, thread_id=context.thread_binding.thread_id,
+                                       holder_id="request:real-close-cancel", operation_id="real-close-cancel") as operation:
+                for rid in ids:
+                    if isinstance(operation, TerminalOperations):
+                        await operation.read_terminal(rid)
+                    else:
+                        await operation.perform(rid, "navigate", {"url": "about:blank"})
+                leases = {rid: owner._leases.leases_for_resource(rid)[0] for rid in ids}
+                ledger_ids = set(owner._leases._leases)
+                records = {rid: owner._store.get(rid) for rid in ids}
+                external = {rid: await owner._transport.get_resource(rid) for rid in ids}
+                original = OSError("原占用释放写盘失败")
+                release = owner._leases.release
+
+                def releasing(lease_id: str):
+                    if lease_id == leases[failed].lease_id:
+                        raise original
+                    return release(lease_id)
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(owner._leases, "release", releasing)
+                    lock = owner._resource_lock(blocked)
+                    async with lock:
+                        closing = asyncio.create_task(operation.close())
+                        try:
+                            async with asyncio.timeout(5):
+                                while healthy in operation._lease_refs:
+                                    await asyncio.sleep(0)
+                            assert not closing.done()
+                            closing.cancel("原调用取消")
+                            with pytest.raises(asyncio.CancelledError, match="^原调用取消$") as caught:
+                                await closing
+                            assert closing.cancelled()
+                            cause = caught.value.__cause__
+                            assert isinstance(cause, BaseExceptionGroup) and cause.exceptions == (original,)
+                            expected_refs = {rid: leases[rid].lease_id for rid in (failed, blocked)}
+                            assert operation._lease_refs == expected_refs
+                            cold = ExternalResourceLeaseLedger(state_path=owner._leases._state_path)
+                            for rid, lease in leases.items():
+                                current = cold.get_lease(lease.lease_id)
+                                assert current is not None
+                                assert current.status == ("released" if rid == healthy else "active")
+                            assert not lock._waiters
+                        finally:
+                            closing.cancel()
+                            await asyncio.gather(closing, return_exceptions=True)
+                await asyncio.sleep(0)
+                assert operation._lease_refs == expected_refs
+                for rid in ids:
+                    assert owner._store.get(rid) == records[rid]
+                    current = await owner._transport.get_resource(rid)
+                    identity = "os_pid" if kind == "terminal" else "active_page_id"
+                    assert current["status"] == external[rid]["status"] == "running"
+                    assert current[identity] == external[rid][identity]
+                    assert current["transport_owner_revision"] == external[rid]["transport_owner_revision"]
+                await operation.close()
+                await operation.close()
+                assert operation._lease_refs == {}
+                cold = ExternalResourceLeaseLedger(state_path=owner._leases._state_path)
+                assert set(cold._leases) == ledger_ids
+                for lease in leases.values():
+                    current = cold.get_lease(lease.lease_id)
+                    assert current is not None and current.status == "released"
+                run.write_result("passed", {
+                    "kind": kind, "resource_ids": ids, "lease_ids": {rid: lease.lease_id for rid, lease in leases.items()},
+                    "entry": "resource-operation-close", "original_error": type(original).__name__,
+                    "cancellation": str(caught.value),
+                    "scope": "正式Session/ASGI资源创建、原operation及真实PTY/Chromium/HTTP；只注入原lease释放失败和锁等待，不代表Gateway/Web、Windows、Backend重启或不合作终止验收",
+                })
