@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-30 压缩归档读取失败切片（2.2/7.2部分收口）：原同步／异步工具共用出口复用 failure_detail，backend 错误正文留在诊断及直接 cause，真实日志 ENOTDIR 次错附于原 cause；公开 detail-unavailable 文本、精确 thread owner 和不回读其它 thread 的合同不变。旧生产4项单测失败，真实消息入口还复现日志次错使整个 Job 失败。修复后66项相关单测及2项 Agent／ASGI 集成通过，核 canonical 工具正文、canonical／协议调用配对、后继模型请求、同会话重试及4次封存请求的 owner/hash；不手填归档或执行状态，模型复用 model_stream。
+
+Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，末轮因他人新建的add-electron-history-cache草案未完成变为53通过／1失败，不介入前端草案。真实Pyright原单测10条诊断与HEAD逐项相同，产品及新集成文件零诊断。首次集成测试误把canonical调用ID用于协议配对，按保留请求原件更正后分别核对，未放宽身份断言；首次组合在60秒总上限退出124不计通过，两个场景分开保留60秒／4GiB及原集成闸门均正常退出。命令、指纹、红绿原件和限制见 `out/tests/temp/compaction_history_failure_20261030/artifacts/verification.json`。不代Gateway、真实HTTP、进程重启、Windows或全部归档故障验收，2.2/7.2保持未勾，前端及协作延期项不动。
+
 2026-10-29 提示词文件旧watcher失败已按实际发布／重绑顺序修正测试等待，保留原断言及期限；31项全部通过，真实旧路径残留变异仍被拒绝。095原件见 `out/tests/temp/uri-global-closure/artifacts/verification-095.json` 与CIL同日9.5收据，生产实现未变；093／094失败原件保留，不改写历史结果，不据此勾选2.2／7.2。
 
 2026-10-29 来源reader审计更正：092／093中旧检查拒绝配置发布owner，与CIL 9.5已批准的候选构建合同不一致；现只允许InstructionFileInputs.load，readiness／diagnostics两项越域变异仍被拒绝。21项合同通过，生产代码和读取／发布／恢复边界不变，准确证据及6项既有类型诊断对比见 `out/tests/temp/uri-global-closure/artifacts/verification-094.json` 与CIL 7.1同日收据。此项更正不消除093的独立watcher失败，也不代替2.2／7.2总体门。

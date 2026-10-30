@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Annotated
 
 from deepagents.backends.protocol import ReadResult
@@ -20,8 +19,7 @@ from pydantic import Field
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.planning import build_safe_compaction_partition
 from app.agents.summarization.state import CachePreservingPartition
-
-logger = logging.getLogger(__name__)
+from app.core.failures import failure_detail
 
 
 class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
@@ -41,11 +39,12 @@ class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
     ) -> BaseTool:
         def content(result: ReadResult, line_offset: int) -> str:
             if result.error:
-                logger.error("压缩历史 backend 读取失败: %s", result.error)
+                cause = RuntimeError(result.error)
+                failure_detail(cause, stage="compaction-history-read", label="压缩历史 backend 读取失败")
                 raise ToolException(
                     "detail-unavailable: 当前 thread 的压缩归档不可读取；"
                     f"line_offset={line_offset}。归档缺失或读取失败时不会改读其它 thread。"
-                )
+                ) from cause
             if result.file_data is None or result.file_data["encoding"] != "utf-8":
                 raise RuntimeError("压缩历史必须返回 UTF-8 正文")
             return format_content_with_line_numbers(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import logging
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables.config import var_child_runnable_config
+from langchain_core.tools import ToolException
 
 from app.agents.deep_agent_stack import (
     _build_summarization_middleware,
@@ -253,11 +256,15 @@ def test_auto_compaction_also_exposes_history_tool_when_manual_compaction_is_dis
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_thread_without_archive_fails_without_reading_source_or_leaking_its_location(
     archive_case: _HistoryArchiveCase,
     archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     use_async: bool,
+    log_fails: bool,
 ) -> None:
     middleware = CachePreservingSummarizationMiddleware(
         model=FakeListChatModel(responses=["unused"]), backend=archive_case.backend,
@@ -268,6 +275,24 @@ async def test_thread_without_archive_fails_without_reading_source_or_leaking_it
     main, child = archive_case.owners
     with archive_scope(main):
         assert archive_case.backend.write(middleware._get_history_path(), "来源线程的私有归档").error is None
+    failures: list[OSError] = []
+    if log_fails:
+        blocker = tmp_path / "archive-log-secret"
+        blocker.write_text("普通文件不能承载日志子文件", encoding="utf-8")
+        destination = blocker / "service.log"
+        capture = caplog.handler.emit
+
+        def emit(record: logging.LogRecord) -> None:
+            capture(record)
+            if record.name not in {"app.agents.summarization.tool_middleware", "app.core.failures"}:
+                return
+            try:
+                destination.write_text(record.getMessage(), encoding="utf-8")
+            except OSError as error:
+                failures.append(error)
+                raise
+
+        monkeypatch.setattr(caplog.handler, "emit", emit)
     runtime = ToolRuntime(state={}, context=None, config={}, stream_writer=lambda _: None,
                           tool_call_id="missing-archive", store=None)
     with archive_scope(child):
@@ -276,4 +301,22 @@ async def test_thread_without_archive_fails_without_reading_source_or_leaking_it
     assert "来源线程的私有归档" not in result
     assert "session-artifacts" not in result and "history.md" not in result
     assert str(archive_case.session_dir) not in result
+    assert "archive-log-secret" not in result
     assert "backend 读取失败" in caplog.text and "history.md" in caplog.text
+    # 关闭框架的公开错误转换，直接核对原失败与日志次错的诊断链。
+    tool.handle_tool_error = False
+    with archive_scope(child), pytest.raises(ToolException, match="detail-unavailable") as caught:
+        if use_async:
+            await tool.ainvoke({"runtime": runtime})
+        else:
+            tool.invoke({"runtime": runtime})
+    assert str(caught.value) == result
+    cause = caught.value.__cause__
+    assert isinstance(cause, RuntimeError) and "history.md" in str(cause)
+    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
+    notes = getattr(cause, "__notes__", [])
+    if log_fails:
+        assert len(failures) == 2 and all(error.errno == errno.ENOTDIR for error in failures)
+        assert any(str(failures[-1]) in note for note in notes)
+    else:
+        assert not notes
