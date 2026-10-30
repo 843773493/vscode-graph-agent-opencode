@@ -284,7 +284,8 @@ async def test_real_management_command_total_deadline_preserves_facts_and_reconc
             async def recover_then_lock(resource_ids=None):
                 nonlocal acquired
                 await recover(resource_ids)
-                if is_command() and resource_ids == (rid,):
+                # stop只准备冷清单，同版本同步留在资源锁内，装具拦截同一准入点。
+                if is_command() and resource_ids == ():
                     await lock.acquire()
                     acquired = True
                     entered.set()

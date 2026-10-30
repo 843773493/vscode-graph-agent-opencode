@@ -466,3 +466,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Ruff/compileall通过；三个当前文件Pyright有45条既有诊断，按所属符号、rule、原message及源片段与基线逐项匹配，无新增；新集成文件零诊断。原owner1049行及原单测目录33个直接Python文件仍为既有P2结构负担，本次未新建源码目录或引入通用抽象。准确命令、源码指纹、原始输出、退出码、AST和类型基线核对见`out/tests/temp/resource_release_errors_20261030/artifacts/`。
 - 首次完整原释放矩阵120秒超时，原件保留；新增场景最初5秒观察窗早于真实PTY约8.5秒删除回执，依据终态时间修正为15秒观察并独立短suite，产品30秒合同不变。原矩阵定点还复现管理lock-terminal在10秒等不到旧`recover((rid,))`钩子；此前冷管理已改用原recovery准备和锁内停止同步，装具迁齐留待下一独立边界，不以新2项通过宣称原矩阵或5.4全门完成。首轮取消消息经gather丢失及新增import/类型准备问题均保留失败原件，最终未放宽取消消息、业务状态、lease或错误顺序断言。
 - 本次不代表Gateway/Web、Windows、Backend硬重启、同步阻塞、不合作终止或整个Session删除/shutdown验收；5.2/5.4继续未勾选，Agent团队与协作继续TODO。
+
+
+### 2026-10-30 冷管理准入装具迁齐（5.4 验证补齐）
+
+- 原`integration-resource-release`的管理lock场景仍以`recover((rid,))`作为持锁注入点；现行stop/delete只调用`recover(())`准备冷清单，再在原资源锁内做停止同步。因此旧装具在资源命令实际已完成时仍等待10秒未触发的事件。仅将该fixture的tuple判定迁齐为`()`并说明边界；AST核对全文件92条既有断言、产品期限、身份、版本、原lease、终态及不重发行为均保持，不改产品实现或加入旧恢复fallback。
+- 首轮复验遇47960端口`EADDRINUSE`，11项均在fixture准备阶段报错，未进入业务；随后逐一核三个端口可绑定、无监听，保留状态原件后复验。最终原固定120秒/4GiB矩阵11 passed/110.76秒，总114.62秒，原集成独占闸门继续生效。它与上一独立suite的2项真实故障组合分别证明不同场景，不能替代整个5.2/5.4、Gateway/Web、Windows、Backend重启或不合作终止。
+- Ruff/编译/本change strict通过；原文件Pyright46条既有诊断逐项保持，无新增。准确命令、前后源码指纹、原始输出/退出码、端口状态、92条断言AST及类型基线比较位于`out/tests/temp/resource_command_fixture_20261030/artifacts/`，旧钩子失败原件复用`resource_release_errors_20261030/artifacts/product-existing-diagnose-001.*`。性能TODO：本机本次总114.62秒已接近原120秒门槛，后续其它主体完成后再按相同工作负载测量并优化，不擅自增大测试期限或调整业务期限。5.2/5.4保持未勾，团队与协作继续TODO。
