@@ -27,6 +27,7 @@ from app.core.session_catalog_store.creation_envelope import (
     compute_session_creation_preimage_hash,
 )
 from app.core.session_catalog_store.queries import _register_session_list_functions
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
     ForkCompletionProof,
@@ -37,6 +38,7 @@ from app.core.session_creation import (
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.sqlite_state import (
+    sqlite_file_uri,
     sqlite_vfs_max_pathname,
     validate_sqlite_path_budget,
 )
@@ -543,6 +545,84 @@ async def test_context_fork_publish_requires_committed_completion_proof(
     assert published_materialization.read_text(encoding="utf-8") == "{}"
 
 
+@pytest.fixture
+async def prepared_sqlite_record(
+    service: SessionCreationService, sessions_root: Path,
+) -> tuple[Path, SessionCreationRecord, dict[str, object]]:
+    metadata = make_metadata()
+    record = await service.prepare(
+        idempotency_key="sqlite-artifacts", title="控制库辅助文件", parent_node_id=None,
+        graph_binding=TEST_THREAD_GRAPH_BINDING, session_metadata=metadata,
+    )
+    directory = sessions_root / ".staging" / record.session_id
+    control = directory / CONTROL_DATABASE_NAME
+    with closing(sqlite3.connect(sqlite_file_uri(control) + "?mode=ro", uri=True)) as reader:
+        assert reader.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    assert (directory / f"{CONTROL_DATABASE_NAME}-wal").is_file()
+    assert (directory / f"{CONTROL_DATABASE_NAME}-shm").is_file()
+    return directory, record, metadata
+
+
+async def test_closed_sqlite_reader_artifacts_do_not_block_creation_publication(
+    service: SessionCreationService, store: SessionCatalogStore,
+    prepared_sqlite_record: tuple[Path, SessionCreationRecord, dict[str, object]],
+) -> None:
+    directory, record, metadata = prepared_sqlite_record
+    before = (directory / CONTROL_DATABASE_NAME).read_bytes()
+    assert service.read_prepared_session_metadata(record) == metadata
+    assert (directory / CONTROL_DATABASE_NAME).read_bytes() == before
+    assert store.get_creation_record(record.session_creation_idempotency_key) == record
+    result = await service.publish_prepared(record)
+    assert result.record_state == "published" and result.session_id == record.session_id
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+async def test_creation_rejects_non_regular_sqlite_sidecars_without_publication(
+    service: SessionCreationService, store: SessionCatalogStore,
+    prepared_sqlite_record: tuple[Path, SessionCreationRecord, dict[str, object]],
+    suffix: str, kind: str, tmp_path: Path,
+) -> None:
+    directory, record, _metadata = prepared_sqlite_record
+    control = directory / CONTROL_DATABASE_NAME
+    before = control.read_bytes()
+    artifact = directory / f"{CONTROL_DATABASE_NAME}{suffix}"
+    artifact.unlink()
+    sentinel = tmp_path / "unrelated-sqlite-artifact"
+    sentinel.write_bytes(b"untouched")
+    if kind == "directory":
+        artifact.mkdir()
+    else:
+        artifact.symlink_to(sentinel)
+    with pytest.raises(RuntimeError, match="控制库辅助文件必须是普通文件"):
+        await service.publish_prepared(record)
+    assert control.read_bytes() == before and sentinel.read_bytes() == b"untouched"
+    assert artifact.is_dir() if kind == "directory" else artifact.is_symlink()
+    assert store.get_creation_record(record.session_creation_idempotency_key) == record
+    with pytest.raises(KeyError):
+        store.get_node(record.session_id)
+
+
+async def test_creation_verifies_current_wal_instead_of_ignoring_frozen_fence_change(
+    service: SessionCreationService, store: SessionCatalogStore,
+    prepared_sqlite_record: tuple[Path, SessionCreationRecord, dict[str, object]],
+) -> None:
+    directory, record, metadata = prepared_sqlite_record
+    with closing(sqlite3.connect(directory / CONTROL_DATABASE_NAME)) as writer:
+        writer.execute("UPDATE lifecycle_fence SET generation=2 WHERE id=1")
+        writer.commit()
+        try:
+            with pytest.raises(RuntimeError, match="fence 与期望"):
+                service.read_prepared_session_metadata(record)
+            assert writer.execute("SELECT generation FROM lifecycle_fence WHERE id=1").fetchone() == (2,)
+            assert store.get_creation_record(record.session_creation_idempotency_key) == record
+        finally:
+            writer.execute("UPDATE lifecycle_fence SET generation=1 WHERE id=1")
+            writer.commit()
+    assert service.read_prepared_session_metadata(record) == metadata
+    assert (await service.publish_prepared(record)).record_state == "published"
+
+
 async def test_context_fork_cas_failure_preserves_prepared_state_until_abort(
     service: SessionCreationService,
     store: SessionCatalogStore,
@@ -640,6 +720,8 @@ async def test_create_places_directory_in_date_bucket_and_clears_staging(
     assert session_dir.is_dir()
     assert sorted(p.name for p in session_dir.iterdir()) == [
         "session-control.sqlite",
+        "session-control.sqlite-shm",
+        "session-control.sqlite-wal",
         "session.json",
         "threads",
     ]

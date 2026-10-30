@@ -762,12 +762,18 @@ class SessionCreationService:
         with _creation_access(record, f"{stage}/list"):
             entries = sorted(entry.name for entry in directory.iterdir())
         required_entries = {_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME, "threads"}
-        allowed_entries = required_entries
+        control_sidecars = {f"{CONTROL_DATABASE_NAME}{suffix}" for suffix in ("-wal", "-shm")}
+        allowed_entries = required_entries | control_sidecars
         if not required_entries.issubset(entries) or set(entries) - allowed_entries:
             raise _creation_conflict(
                 record, stage, "条目集与预期不一致（外部改动或上次准备中断，fail closed）",
                 directory=directory, required=sorted(required_entries), actual=entries,
             )
+        # SQLite 只读连接也可能留下 WAL/SHM；它们属于原控制库，不由目录 owner 删除。
+        for name in set(entries) & control_sidecars:
+            artifact = directory / name
+            if artifact.is_symlink() or not artifact.is_file():
+                raise _creation_conflict(record, stage, "控制库辅助文件必须是普通文件", path=artifact)
         threads_root = directory / "threads"
         if threads_root.is_symlink() or not threads_root.is_dir():
             raise _creation_conflict(record, stage, "threads 必须是普通目录", path=threads_root)
@@ -815,10 +821,10 @@ class SessionCreationService:
     ) -> None:
         """只读复验唯一 main row、冻结 GraphBinding 与初始 active fence。"""
         control_path = session_dir / CONTROL_DATABASE_NAME
-        if not control_path.is_file():
-            raise _creation_conflict(record, stage, "session-control.sqlite 缺失", path=control_path)
+        if control_path.is_symlink() or not control_path.is_file():
+            raise _creation_conflict(record, stage, "session-control.sqlite 缺失或不是普通文件", path=control_path)
         with _creation_access(record, f"{stage}/session-control.sqlite/open"):
-            connection = sqlite3.connect(sqlite_file_uri(control_path), uri=True)
+            connection = sqlite3.connect(sqlite_file_uri(control_path) + "?mode=ro", uri=True)
         try:
             with _creation_access(record, f"{stage}/session-control.sqlite/read"):
                 rows = connection.execute(

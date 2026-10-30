@@ -1515,3 +1515,9 @@
 - 原退出/无Worker管理HTTP回归6 passed/31.27秒；原生进程树回归5 passed/13.61秒，Windows1项因平台skip，不称实机通过。静态检查、作者AST/调用方核对及命令、源码指纹、raw/实际退出码见`out/tests/temp/uri-global-closure/artifacts/verification-116.json`。各批串行、原集成锁、60秒matrix与进程外4GiB/两CPU保护保持；本片不代Gateway/Web、Python lease、Backend重启、Windows/Darwin实机或全部URI不变量，2.2/7.2继续未勾，前端与延期项、他人暂存和原Debug服务保持。
 
 - 同日原生失败后的存在性核实续片：ps/taskkill主错不再被后续探测EIO覆盖，共用原错误出口保留操作、探测及各自诊断次错的实例与顺序，公开主阶段/错误码仍归原操作。原生产4项定向反例全部失败（只剩EIO），修复后Node166 passed/13.22秒；真实HTTP/PTY12项通过/35.41秒，其中4项组合故障明确替换平台查询/探测边界，资源仍由真实Linux创建，核unknown落盘记录、原身份、完整双错日志及解除故障后的同管理入口停止，不称Windows/Darwin实机。原生调用参数、解析器和停止算法保持，无新任务、重试或账本。静态与作者结构检查、准确命令、源码指纹、raw/退出码见`out/tests/temp/uri-global-closure/artifacts/verification-117.json`；保持60秒matrix、串行锁、进程外保护，2.2/7.2和所有延期项仍未勾，前端、他人暂存与原Debug服务保持。
+
+### 2026-10-30 prepared fork 控制库只读校验（2.2／7.2部分收口）
+
+- 未发布目标校验复用原 SessionControlStore 的只读入口，显式保留 GraphBinding 列完整性检查；缺失控制库错误只公开 Session/Thread 与逻辑 artifact，物理位置留原诊断。创建 owner 同样以只读连接核 main、冻结 GraphBinding 与初始 fence，承认原 SQLite 的普通 WAL/SHM，继续拒绝目录、符号链接和未知条目，不删除旁文件或忽略 WAL 中的新状态。
+- 真实消息及 fork 入口生成来源和 preparing 目标，六类损坏／journal 场景最终6 passed／74.17秒；原操作恢复发布、幂等身份与来源字节均严格核对。67项创建单测通过／2.74秒，包含旁文件类型与实际 WAL fence 拒绝。原生产反例为4 failed／2 passed，明确检出补建空库／缺表、切换 journal 和缺失错误回显位置；不把两项原已通过的场景计为缺陷。新装具曾误把合法 WAL/SHM 当成损坏，在故障注入前失败并由原60秒watchdog终止；修正为由 SQLite 收束 WAL 后冻结 DELETE journal 基线，原失败与即时诊断保留，不放宽原件断言或期限。
+- Ruff通过；Pyright仍为11条既存诊断，与改动前逐项完全一致，新集成文件零诊断。准确命令、3533项源码前后指纹、raw／实际退出码、类型对比和作者结构核对保留在 `out/tests/temp/uri-global-closure/artifacts/` 的 `fork-prepared-*-13*`、`prepared-control-type-comparison-134.json` 与 `prepared-control-structure-132.json`。测试串行、原集成锁、进程外4GiB／两CPU保护保持；本片不代 OS 重启、Gateway/Web或Windows实机，不关闭2.2／7.2总门，前端重构及其OpenSpec等待用户另行通知。

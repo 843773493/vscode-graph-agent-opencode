@@ -159,12 +159,17 @@ class CheckpointForkSource:
         resolver.resolve_prepared_thread_node(record, thread_id)
         control_path = session_path / CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
-            raise RuntimeError(
+            error = RuntimeError(
                 "prepared fork target 缺少普通文件形式的 per-session thread "
-                f"catalog: session_id={record.session_id}, path={control_path}"
+                f"catalog: session_id={record.session_id}, thread_id={thread_id}, "
+                f"artifact={CONTROL_DATABASE_NAME}"
             )
-        control_store = SessionControlStore(control_path)
+            error.add_note(f"prepared fork target control: path={control_path}")
+            raise error
+        control_store = SessionControlStore(control_path, read_only=True)
         try:
+            # 校验保留原列完整性约束，但不能补建损坏控制库或切换其 journal。
+            control_store._require_thread_catalog_graph_binding_columns()
             control_store.verify_matches_catalog_main_thread(thread_id)
         finally:
             control_store.close()
