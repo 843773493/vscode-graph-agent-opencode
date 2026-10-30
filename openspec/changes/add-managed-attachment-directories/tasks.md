@@ -479,3 +479,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原`ResourceOperations.close()`在部分lease释放失败、另一项仍等待锁时被调用方取消，会丢掉此前失败。现复用原gather排空及按资源顺序取错的分支，保持原CancelledError和消息，已发生的释放错误聚合为其cause；没有先前错误时原样取消。只修改共享close，原30秒预算、账本、锁、持久成功后移除引用及同operation显式重试链保持，无后台补做或第二套释放实现。
 - 修改前4个有效反例失败、2个无错误取消场景通过；最终相关单元312 passed/9.16秒。新增6项在补齐类型收窄及逆序完成断言后定向复验全部通过，属于上述子集，不重复相加。正式Session/ASGI资源创建和原operation生成真实PTY/Chromium/HTTP与占用，原`integration-resource-release-errors`矩阵4 passed/52.06秒，总55.97秒，固定60秒/4GiB；等待其它会话Web测试释放独占名额后才启动，未绕过原闸门、改Web自动化或重启共享debug。核原错误身份、取消消息、精确lease冷读、健康释放、外部身份/版本不变、解锁不补做与原入口重试。
 - Ruff、compileall和本change strict通过；生产及新增场景Pyright零诊断，原单测11条诊断均定位于本次AST未改的函数，不称类型全绿。首次新增代码的5条类型收窄诊断已修正，原件保留；所有原测试函数及断言AST保持。准确命令、源码指纹、原始输出、退出码、正式产品收据和作者结构自查见`out/tests/temp/resource_operation_cancel_20261030/artifacts/verification.json`。性能TODO：本次矩阵总55.97秒接近原60秒门槛，保留测量，待主体完成后再优化，不增大期限。本片不代表Gateway/Web、Windows、Backend硬重启、同步阻塞、不合作终止或完整shutdown验收；5.2/5.4与整体21/23保持未完成，团队协作及MCP显式持有继续TODO。
+
+### 2026-10-30 文件监听关闭保留原任务（5.4部分收口）
+
+- 移除关闭/最后订阅退出时提前清空登记的两处实现，统一等原任务终结后移除；原任务只取消一次，取消观察者、重复shutdown及同key新订阅不会跳过或再次取消原清理。其它root不跨等待持共享锁，关闭后拒绝新订阅；初始化取消沿原release清理本次队列，失败身份与顺序保留，无第二关闭owner或持久账本。
+- 修改前6项反例失败；最终六文件共67个不同单元用例通过，其中10项新增场景。首次66 passed/1 setup error来自该测试目录遗留schema10库（当前要求11），保留旧工作区后仅补跑该1项通过，不改schema或断言。真实双挂载lifespan/原生watchfiles验收1 passed/10.62秒，矩阵总17.26秒；暂停位置在真实原生退出后、原任务最终完成前，核peer关闭、原30秒观察到期、取消消息、原任务/scope/registry/维护锁保留及同owner继续排空。首次矩阵在另一会话Web测试占用名额时排队60秒TIMEOUT；确认持锁进程退出后重跑通过，未绕独占闸门或扩大期限。
+- Ruff、Pyright零诊断、compileall及本change strict通过；作者AST复核确认路径解析、事件分发、普通监听错误帧等原方法保持，非独立审查。准确命令、前后源码指纹、原始输出、退出码及旧库归档位置见`out/tests/temp/watch_shutdown_20261030/artifacts/verification.json`。未改Web实现/自动化或重启共享debug，不声称独立进程重启、Windows、任意原生线程终止或完整shutdown验收；5.2/5.4及21/23保持未完成，团队协作与MCP显式持有继续TODO。

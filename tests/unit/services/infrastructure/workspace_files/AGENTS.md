@@ -11,6 +11,7 @@ workspace_files/
 ├── test_workspace_file_operations.py         HTTP 接受、排队、目录版本和文件操作状态
 ├── test_workspace_file_resources.py          文件资源身份、Skill 与 AGENTS.md 观察
 ├── test_workspace_file_watch_service.py      watcher 生命周期、过滤、共享和有界通知
+├── test_watch_shutdown.py                   关闭中的原任务、取消观察者、同 key 交接与失败保留
 ├── test_workspace_text_publication_errors.py 文本读取和原子发布错误合同
 ├── test_native_staging.py                    原生目录暂存和发布
 └── test_text_journal_errors.py               文本变更 journal 的持久化错误

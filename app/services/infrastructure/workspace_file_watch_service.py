@@ -4,7 +4,6 @@ import asyncio
 import errno
 import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -58,6 +57,7 @@ class _SharedWatcher:
     task: asyncio.Task[None]
     subscribers: dict[asyncio.Queue[WorkspaceFileChangeBatch], bool]
     ready: asyncio.Event
+    stopping: bool = False
 
 
 class WorkspaceFileWatchService:
@@ -67,6 +67,7 @@ class WorkspaceFileWatchService:
         self._workspace_root = workspace_root.resolve()
         self._watchers: dict[_WatcherKey, _SharedWatcher] = {}
         self._lock = asyncio.Lock()
+        self._closing = False
 
     def resolve_watch_roots(self, extra_paths: Iterable[str]) -> tuple[Path, ...]:
         candidates = [self._workspace_root]
@@ -149,6 +150,7 @@ class WorkspaceFileWatchService:
             key = self._watcher_key(root, recursive, change_filter)
             while True:
                 async with self._lock:
+                    self._require_open()
                     watcher = self._watchers.get(key)
                 if watcher is None:
                     await asyncio.sleep(0)
@@ -160,17 +162,43 @@ class WorkspaceFileWatchService:
 
     async def shutdown(self) -> None:
         async with self._lock:
-            watchers = tuple(self._watchers.values())
-            self._watchers.clear()
-        for watcher in watchers:
-            self._publish(
-                watcher.subscribers,
-                WorkspaceFileChangeBatch(error="文件监听服务已停止"),
-            )
+            self._closing = True
+            watchers = tuple(self._watchers.items())
+            for _, watcher in watchers:
+                if not watcher.stopping:
+                    self._publish(
+                        watcher.subscribers,
+                        WorkspaceFileChangeBatch(error="文件监听服务已停止"),
+                    )
+                    self._stop_watcher(watcher)
+        await self._drain_watchers(watchers)
+
+    def _require_open(self) -> None:
+        if self._closing:
+            raise RuntimeError("文件监听服务已停止接受订阅")
+
+    @staticmethod
+    def _stop_watcher(watcher: _SharedWatcher) -> None:
+        if not watcher.stopping:
+            watcher.stopping = True
             watcher.task.cancel()
-        for watcher in watchers:
-            with suppress(asyncio.CancelledError):
-                await watcher.task
+
+    async def _drain_watchers(self, watchers: tuple[tuple[_WatcherKey, _SharedWatcher], ...]) -> None:
+        # 原监听任务持有实际清理；取消观察者不能再次打断该任务的 finally。
+        results = await asyncio.shield(asyncio.gather(
+            *(watcher.task for _, watcher in watchers), return_exceptions=True,
+        ))
+        errors: list[BaseException] = []
+        async with self._lock:
+            for (key, watcher), result in zip(watchers, results, strict=True):
+                if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                    errors.append(result)
+                elif self._watchers.get(key) is watcher:
+                    del self._watchers[key]
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("文件监听任务清理失败，保留原任务供核实", errors)
 
     async def _acquire(
         self,
@@ -181,37 +209,53 @@ class WorkspaceFileWatchService:
         recursive: bool = True,
         change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> None:
-        watchers_to_ready: list[_SharedWatcher] = []
-        async with self._lock:
-            for root in roots:
-                resolved_root = root.resolve()
-                key = self._watcher_key(resolved_root, recursive, change_filter)
-                watcher = self._watchers.get(key)
-                if watcher is None or watcher.task.done():
-                    if watcher is not None:
-                        watcher.task.result()
-                    subscribers = {queue: include_internal_paths}
-                    ready = asyncio.Event()
-                    task = asyncio.create_task(
-                        self._watch_root(
-                            resolved_root, subscribers, ready,
-                            recursive=recursive, change_filter=change_filter,
-                        ),
-                        name=f"boxteam-file-watch:{resolved_root}",
-                    )
-                    watcher = _SharedWatcher(
-                        task=task,
-                        subscribers=subscribers,
-                        ready=ready,
-                    )
-                    self._watchers[key] = watcher
-                else:
-                    watcher.subscribers[queue] = include_internal_paths
-                watchers_to_ready.append(watcher)
-        for watcher in watchers_to_ready:
-            await watcher.ready.wait()
-            if watcher.task.done():
-                watcher.task.result()
+        keys = tuple(dict.fromkeys(self._watcher_key(root.resolve(), recursive, change_filter) for root in roots))
+        while True:
+            async with self._lock:
+                self._require_open()
+                stopping = tuple((key, watcher) for key in keys
+                                 if (watcher := self._watchers.get(key)) is not None and watcher.stopping)
+                watchers_to_ready: list[_SharedWatcher] = []
+                if not stopping:
+                    # 先核全批已有结果，再登记订阅，避免失败到一半遗留部分订阅。
+                    for key in keys:
+                        watcher = self._watchers.get(key)
+                        if watcher is not None and watcher.task.done():
+                            watcher.task.result()
+                    for key in keys:
+                        watcher = self._watchers.get(key)
+                        if watcher is None or watcher.task.done():
+                            subscribers = {queue: include_internal_paths}
+                            ready = asyncio.Event()
+                            task = asyncio.create_task(
+                                self._watch_root(
+                                    key[0], subscribers, ready,
+                                    recursive=recursive, change_filter=change_filter,
+                                ),
+                                name=f"boxteam-file-watch:{key[0]}",
+                            )
+                            watcher = _SharedWatcher(task=task, subscribers=subscribers, ready=ready)
+                            self._watchers[key] = watcher
+                        else:
+                            watcher.subscribers[queue] = include_internal_paths
+                        watchers_to_ready.append(watcher)
+            if not stopping:
+                break
+            # 新订阅必须先等同 key 的原生清理结束，不能与旧监听重叠运行。
+            await self._drain_watchers(stopping)
+        try:
+            for watcher in watchers_to_ready:
+                await watcher.ready.wait()
+                if watcher.task.done():
+                    watcher.task.result()
+        except BaseException as error:
+            try:
+                await run_cleanup_shielded(lambda: self._release(
+                    roots, queue, recursive=recursive, change_filter=change_filter,
+                ))
+            except BaseException as release_error:  # noqa: BLE001 - 同时保留订阅原错和清理失败。
+                raise BaseExceptionGroup("文件监听订阅与清理均失败", [error, release_error]) from None
+            raise
 
     async def _release(
         self,
@@ -221,7 +265,7 @@ class WorkspaceFileWatchService:
         recursive: bool = True,
         change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> None:
-        tasks_to_stop: list[asyncio.Task[None]] = []
+        watchers_to_stop: dict[_WatcherKey, _SharedWatcher] = {}
         async with self._lock:
             for root in roots:
                 key = self._watcher_key(root.resolve(), recursive, change_filter)
@@ -231,14 +275,9 @@ class WorkspaceFileWatchService:
                 watcher.subscribers.pop(queue, None)
                 if watcher.subscribers:
                     continue
-                if self._watchers.get(key) is watcher:
-                    del self._watchers[key]
-                if not watcher.task.done():
-                    watcher.task.cancel()
-                tasks_to_stop.append(watcher.task)
-        for task in tasks_to_stop:
-            with suppress(asyncio.CancelledError):
-                await task
+                self._stop_watcher(watcher)
+                watchers_to_stop[key] = watcher
+        await self._drain_watchers(tuple(watchers_to_stop.items()))
 
     async def _watch_root(
         self,
