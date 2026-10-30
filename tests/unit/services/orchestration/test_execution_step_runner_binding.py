@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -21,6 +22,10 @@ from app.services.orchestration.execution_step.failures import (
 )
 from app.services.orchestration.execution_step.runner import StepRunner
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
+)
 
 
 async def test_failure_before_execution_is_logged_and_publishes_only_system_reason(
@@ -43,6 +48,53 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
     })
     assert str(missing) in caplog.text
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+
+
+@pytest.mark.parametrize("boundary", ["before-execution", "execution", "interrupted"])
+async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
+    diagnostic_sink: DiagnosticFailure, boundary: str,
+) -> None:
+    original = OSError(errno.EIO, "执行读取失败", "/private/execution-secret")
+    diagnostic_sink.primary = original
+    runtime = AsyncMock()
+    writer = AsyncMock()
+    checkpointer = MagicMock()
+    publish = AsyncMock()
+    execution_id = None if boundary == "before-execution" else "execution"
+    await handle_step_failure(
+        error=original, interrupt_state=SimpleNamespace(
+            interrupt_request_id="interrupt" if boundary == "interrupted" else None,
+            cancellation_reason=None, tool_name=None,
+        ), message_stream_runtime=runtime, message_stream_writer=writer,
+        checkpointer=checkpointer, session_id="session", thread_id="thread", job_id="job",
+        turn_id="turn", execution_id=execution_id, checkpoint_ns="", publish=publish,
+        logger=logging.getLogger(__name__),
+    )
+    assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR
+    assert any(str(diagnostic_sink.errors[0]) in note for note in original.__notes__)
+    message = "执行系统 I/O 失败: error=OSError, errno=5, diagnostic_sink_error=NotADirectoryError"
+    if boundary == "interrupted":
+        runtime.finalize_interruption_facts.assert_awaited_once_with()
+        writer.close_interrupted.assert_awaited_once_with("interrupt")
+        writer.close_failed.assert_not_awaited()
+        publish.assert_not_awaited()
+        checkpointer.converge_execution.assert_not_called()
+    else:
+        publish.assert_awaited_once_with(EventType.ERROR, {"error": message, "phase": "agent_execution"})
+        if execution_id is None:
+            writer.close_failed.assert_not_awaited()
+            runtime.fail_model.assert_not_awaited()
+            checkpointer.converge_execution.assert_not_called()
+        else:
+            runtime.fail_model.assert_awaited_once_with(code="execution_error", message=message)
+            writer.close_failed.assert_awaited_once_with(
+                code="execution_error", message=message, after_interrupt_requested=False, resumable=False,
+            )
+            checkpointer.converge_execution.assert_called_once_with(
+                "session", thread_id="thread", turn_id="turn", execution_id="execution",
+                outcome="failed", turn_status="failed", checkpoint_ns="",
+            )
+    checkpointer.mark_execution_lost.assert_not_called()
 
 
 @pytest.mark.parametrize("confirm_envelope", [False, True])

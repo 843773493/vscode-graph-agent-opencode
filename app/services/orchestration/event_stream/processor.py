@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -21,6 +20,7 @@ from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_result_text import tool_output_status
+from app.core.failures import report_failure
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
@@ -80,8 +80,6 @@ from app.services.orchestration.event_stream.tool_events import (
     tool_message_from_output,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
-
-logger = logging.getLogger(__name__)
 
 
 def _field_value(value: object, field_name: str) -> object | None:
@@ -689,12 +687,14 @@ async def process_agent_event_stream(
                     error = data.get("error")
                     if not isinstance(error, BaseException):
                         raise TypeError("工具错误事件缺少真实异常")
-                    logger.error("工具错误callback: run_id=%s", run_id, exc_info=error)
+                    failure_message = report_failure(
+                        error, detail=activity_failure_message(error, phase="tool_callback"),
+                    )
                     # SDK校验错误也有start/error，却没有end；不伪造ToolMessage覆盖框架处理后的结果。
                     message_stream_tool_call_ids_by_run_id.pop(run_id, None)
                     message_stream_tool_attempt_ids_by_run_id.pop(run_id, None)
                     await close_tool_callback(
-                        run_id, display_context, activity_failure_message(error, phase="tool_callback"), failed=True,
+                        run_id, display_context, failure_message, failed=True,
                     )
                     continue
                 raw_output = data.get("output")

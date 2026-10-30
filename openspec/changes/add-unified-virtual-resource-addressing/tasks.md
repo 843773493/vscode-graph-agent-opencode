@@ -1581,3 +1581,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 将既有 `failure_detail` 的日志部分提取为同模块唯一的 `report_failure`，原格式化及日志体 AST 保持，Inspector 接收错误复用该出口并删除局部 logger。原 Session/Thread、error_type、errno/winerror 和 JSON 坐标格式保持；日志次错附到原异常且公开只追加类别，failed 状态、原 cause、暂停快照清理和全部等待命令结算不再被日志故障打断，不增加恢复或重放链。
 - 原生产5类新增日志故障单测全部失败；真实 Node 启动还复现原权限错被泛化为“WebSocket 已关闭”。修复后172项相关单测通过，原30条断言全部保留；真实Node/Inspector与ASGI的4项场景通过（31.00秒，矩阵35.27秒），核409、同request_id、原错误、动作/manifest、精确claim/进程终态、冷读和同方案重试。新suite固定60秒／4GiB并沿用原独占闸门。
 - Ruff/compileall通过，Pyright的原2条诊断按规则/消息/源片段一致，新集成零诊断；初轮Ruff的空行及宽捕获说明已修。证据与新鲜异常出口候选盘点见 `out/tests/temp/uri_node_inspector_20261030/artifacts/verification.json`；盘点命中须沿owner核验，不是外泄结论。未验Gateway/Web、独立Backend重启、Windows或全部URI不变量，2.2／7.2总门及前端/协作延期项保持，原Debug服务和他人改动/暂存不动。
+
+
+### 2026-10-30 执行失败结算的诊断次错（2.2／7.2部分收口）
+
+- 真实日志写入产生ENOTDIR时，step、Job任务回调和自动命名的局部logger会打断原执行。14项新增单测复现；真实消息API还定位到工具错误callback先把原OSError替换为日志NotADirectoryError。沿该执行链复用既有`report_failure`，原业务说明、错误实例和终态owner保持，次错仅以类别进入普通响应，完整诊断附到原异常；删除两个只负责重复日志的模块logger，不新增失败存储或恢复链。
+- 179项Job／step／中断回归经正式矩阵通过，62项工具错误callback与并发工具回归通过；原日志正常场景和工具权威结果断言保留。真实ASGI消息入口、model_stream及Gateway Skill来源owner生成失败与同Thread后继状态，核对工具仅执行一次、unknown结果、execution／Turn／队列终态、消息流关闭、旧canonical字节不变、工具配对、来源归属和两次封存请求hash；SQLite普通持久正文与公开载体均不含原执行或诊断目标路径。该装具不是完整Gateway业务代理、真实Provider、Web或Backend硬重启验收。
+- Ruff及compileall通过；两组类型检查的18与9条既有诊断按文件、规则、完整消息、AST owner及原行逐项一致，新集成与诊断fixture无类型诊断。保留原始失败、集成揭示的遗漏、修复后结果及源码指纹，收据：`out/tests/temp/execution_failure_settlement_20261030/artifacts/verification.json`。正式suite保持进程外保护和独占闸门；本项不代替2.2／7.2全局盘点，也不声明复杂取消／清理诊断已完整收口。

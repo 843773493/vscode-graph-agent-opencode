@@ -13,6 +13,10 @@ from app.domain.itemized.execution_admission import (
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.runtime_state import JobRuntimeState
 from app.services.orchestration.job_execution_service import JobExecutionService
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
+)
 
 
 class _StepExecutor:
@@ -113,15 +117,19 @@ async def test_run_forwards_full_execution_binding_and_message_identity(
     ]
 
 
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_auto_title_io_failure_preserves_execution_and_original_diagnostic(
     execution_service: tuple[JobExecutionService, _StepExecutor],
     tmp_path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    sink_fails: bool, diagnostic_sink: DiagnosticFailure,
 ) -> None:
     service, executor = execution_service
     missing = tmp_path / "private-title-input"
     with pytest.raises(FileNotFoundError) as raised:
         missing.read_bytes()
     error = raised.value
+    if sink_fails:
+        diagnostic_sink.primary = error
     monkeypatch.setattr(service._session_title_service, "maybe_auto_title_before_first_message",
                         AsyncMock(side_effect=error))
     job = JobRuntimeState(
@@ -134,8 +142,12 @@ async def test_auto_title_io_failure_preserves_execution_and_original_diagnostic
     assert job.status == JobStatus.completed and len(executor.calls) == 1
     failure, = [event["payload"] for event in service._bus.events if event["event_type"] == EventType.ERROR]
     assert failure == {
-        "error": f"会话自动命名失败: 执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}",
+        "error": f"会话自动命名失败: 执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}"
+                 + (", diagnostic_sink_error=NotADirectoryError" if sink_fails else ""),
         "phase": "session_auto_title",
     }
     assert str(missing) in caplog.text
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    if sink_fails:
+        assert len(diagnostic_sink.errors) == 1
+        assert any(str(diagnostic_sink.errors[0]) in note for note in error.__notes__)

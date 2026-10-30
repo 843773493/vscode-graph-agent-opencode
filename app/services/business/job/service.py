@@ -16,7 +16,7 @@ from app.abstractions.pending_request_store import (
     PendingRequestStoreProtocol,
 )
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
-from app.core.failures import execution_failure_message
+from app.core.failures import execution_failure_message, report_failure
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
@@ -1000,16 +1000,12 @@ class JobService:
                 # 写入点没有机会执行。依赖回调补齐，否则 Job 永久停在
                 # cancelling，会话活动槽与 FIFO 队首一并卡死。
                 self._converge_cancel_without_task_body(job, task)
-            except Exception as e:
-                logger.exception(
-                    "Job task failed: job_id=%s",
-                    job.job_id,
-                )
+            except Exception as e:  # noqa: BLE001 - 诊断失败不能打断原 Job 终态结算。
+                failure_message = report_failure(e, detail=execution_failure_message(e))
                 if job.status == JobStatus.cancelling:
                     # 取消终态未提交：原 task 保留错误供 control/drain 读取，
                     # 不能发布业务失败或交还尚未结算的活动槽。
                     return
-                failure_message = execution_failure_message(e)
                 if not self._is_terminal_status(job.status):
                     transition_job_status(job, JobStatus.failed, error_message=failure_message)
                 if self._bus is not None:
@@ -1469,9 +1465,8 @@ class JobService:
                     },
                     agent_id="job_service",
                 )
-        except Exception as error:
-            logger.exception("Job execution failed: job_id=%s", job_id)
-            failure_message = execution_failure_message(error)
+        except Exception as error:  # noqa: BLE001 - 保留原错误并完成 canonical 与 Job 终态。
+            failure_message = report_failure(error, detail=execution_failure_message(error))
             await self._persist_terminal_execution_status(job, "failed")
             transition_job_status(job, JobStatus.failed, error_message=failure_message)
             if self._bus is not None:

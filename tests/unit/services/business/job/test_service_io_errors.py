@@ -12,6 +12,10 @@ from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobState
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
+)
 from tests.support.job_thread_fixture import job_fixture_thread_id
 from tests.unit.services.business.job.ports import enqueue_job
 
@@ -47,10 +51,14 @@ class _FailedExecutor:
 
 
 @pytest.mark.parametrize("boundary", ["executor", "task_callback"])
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_job_io_failure_has_public_reason_and_original_diagnostic(
     job_service_factory, session_lifecycle_guard, native_error: OSError,
     boundary: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    sink_fails: bool, diagnostic_sink: DiagnosticFailure,
 ) -> None:
+    if sink_fails:
+        diagnostic_sink.primary = native_error
     bus = _RecordingBus()
     service = job_service_factory(job_event_bus=bus, job_executor=_FailedExecutor(native_error),
                                   session_lifecycle_guard=session_lifecycle_guard)
@@ -78,6 +86,10 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
         assert await service._start_next_pending(session_id, thread_id=job.thread_id)
         await asyncio.wait_for(job.task, 2)
     expected = f"执行系统 I/O 失败: error={type(native_error).__name__}, errno={native_error.errno}"
+    if sink_fails:
+        expected += ", diagnostic_sink_error=NotADirectoryError"
+        assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR
+        assert any(str(diagnostic_sink.errors[0]) in note for note in native_error.__notes__)
     assert job.status == JobStatus.failed
     assert (await service.get(job.job_id)).error_message == expected
     failed, = [event["payload"] for event in bus.events if event["event_type"] == EventType.JOB_FAILED]

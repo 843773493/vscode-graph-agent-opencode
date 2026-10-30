@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
-from app.core.failures import execution_failure_message
+from app.core.failures import execution_failure_message, report_failure
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.services.business.system_reminder_checkpoint_service import (
@@ -193,12 +193,7 @@ async def handle_step_failure(
     logger: logging.Logger,
 ) -> None:
     """区分确定业务失败与取消/失联，收敛同一 v2 execution 终态。"""
-    logger.error(
-        "[agent_execution_service] step failed: session_id=%s thread_id=%s job_id=%s turn_id=%s",
-        session_id, thread_id, job_id, turn_id,
-        exc_info=(type(error), error, error.__traceback__),
-    )
-    failure_message = execution_failure_message(error)
+    failure_message = report_failure(error, detail=execution_failure_message(error))
     if execution_id is None:
         await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
         return
