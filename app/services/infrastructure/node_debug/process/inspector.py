@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Literal, cast
@@ -11,7 +10,7 @@ from urllib.request import url2pathname
 
 from websockets.exceptions import ConnectionClosed
 
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, report_failure
 from app.schemas.internal_v2.node_debug import (
     NodeDebugAction,
     NodeDebugStackFrameDTO,
@@ -23,8 +22,6 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugStopSnapshotClearer,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
-
-logger = logging.getLogger(__name__)
 
 
 class NodeDebugCommandError(RuntimeError):
@@ -226,7 +223,7 @@ class NodeDebugInspector:
                             or "Node Inspector WebSocket 已断开"
                         )
                     self._clear_stop_snapshot(runtime)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - 接收故障必须结算状态及所有等待命令
             # 传输异常与无效帧可能含原生位置；公开状态只记录目标和结构化原因。
             message = (
                 "读取 Node Inspector 事件失败: "
@@ -237,7 +234,7 @@ class NodeDebugInspector:
                 message += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
             elif isinstance(error, json.JSONDecodeError):
                 message += f", line={error.lineno}, column={error.colno}, position={error.pos}"
-            logger.exception(message)
+            message = report_failure(error, detail=message)
             receive_error = RuntimeError(message)
             receive_error.__cause__ = error
             receive_error.__suppress_context__ = True

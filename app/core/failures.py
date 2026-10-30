@@ -63,6 +63,11 @@ def failure_detail(error: BaseException, *, stage: str, label: str) -> str:
     for coordinate in ("lineno", "colno", "pos"):
         if isinstance(value := getattr(error, coordinate, None), int):
             detail += f", {coordinate}={value}"
+    return report_failure(error, detail=detail)
+
+
+def report_failure(error: BaseException, *, detail: str) -> str:
+    """记录原始诊断，保留调用方已分离的公开事实及既有格式。"""
     try:
         logger.error("%s；完整诊断见异常链", detail, exc_info=error)
     except Exception as sink_error:  # noqa: BLE001 — 不递归写入失败sink，原异常继续携带两份原因。

@@ -1575,3 +1575,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 完整工作树快照恢复旧生产后，7 项新增单测全部失败；真实 Gateway 还复现原权限拒绝从 401 变成日志 ENOTDIR 的 500。修复后84 passed／2 skipped，真实 Gateway HTTP 1 passed／22.54秒，核权限与 JSON 损坏的原分类、同 request_id、原凭据字节、密钥不进入响应／日志及恢复后同 token 继续有效。新 suite 固定60秒／4GiB并使用原集成独占闸门。
 - Ruff、三文件 Pyright 零诊断，OpenSpec strict 全量54／0。原HTTP快照首次缺少本机 .env，在启动健康检查的 SecretResolutionError 阶段超时，未进入鉴权；清理该次4个原进程后以相同已授权本机环境复验才计作有效反例。首次误用未安装的 uv pyright 命令也保留，最终采用已有本地 Bun Pyright，无依赖或配置改动。
 - 准确命令、完整源码指纹、原始输出／实际退出码、完整快照 tree、AST 自查及超时清理收据在 `out/tests/temp/credential_sink_20261030/artifacts/`。作者自查不代独审；2.2／7.2全局门、Windows ACL 与其它失败出口仍未关闭，前端及原 Debug 服务未改动。
+
+### 2026-10-30 Node Inspector 接收失败的诊断次错（2.2／7.2部分收口）
+
+- 将既有 `failure_detail` 的日志部分提取为同模块唯一的 `report_failure`，原格式化及日志体 AST 保持，Inspector 接收错误复用该出口并删除局部 logger。原 Session/Thread、error_type、errno/winerror 和 JSON 坐标格式保持；日志次错附到原异常且公开只追加类别，failed 状态、原 cause、暂停快照清理和全部等待命令结算不再被日志故障打断，不增加恢复或重放链。
+- 原生产5类新增日志故障单测全部失败；真实 Node 启动还复现原权限错被泛化为“WebSocket 已关闭”。修复后172项相关单测通过，原30条断言全部保留；真实Node/Inspector与ASGI的4项场景通过（31.00秒，矩阵35.27秒），核409、同request_id、原错误、动作/manifest、精确claim/进程终态、冷读和同方案重试。新suite固定60秒／4GiB并沿用原独占闸门。
+- Ruff/compileall通过，Pyright的原2条诊断按规则/消息/源片段一致，新集成零诊断；初轮Ruff的空行及宽捕获说明已修。证据与新鲜异常出口候选盘点见 `out/tests/temp/uri_node_inspector_20261030/artifacts/verification.json`；盘点命中须沿owner核验，不是外泄结论。未验Gateway/Web、独立Backend重启、Windows或全部URI不变量，2.2／7.2总门及前端/协作延期项保持，原Debug服务和他人改动/暂存不动。

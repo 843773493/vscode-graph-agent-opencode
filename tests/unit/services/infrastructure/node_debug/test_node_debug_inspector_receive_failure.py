@@ -44,10 +44,13 @@ def inspector(tmp_path: Path) -> NodeDebugInspector:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["json", "payload", "posix", "drive", "unc"])
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_receive_failure_reaches_pending_command(
     inspector: NodeDebugInspector,
     inspector_runtime: NodeDebugRuntime,
     failure: str,
+    sink_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """公开故障保留目标和原因类型，原异常只进 cause 与诊断。"""
@@ -59,6 +62,22 @@ async def test_receive_failure_reaches_pending_command(
     }
     original = PermissionError(errno.EACCES, "读取原生位置失败", native_paths.get(failure))
     original.winerror = 5
+    sink_errors: list[OSError] = []
+    blocker = inspector_runtime.workspace_root / "receive-log-secret"
+    blocker.write_text("日志父目录是普通文件")
+    destination = blocker / "service.log"
+    call_handlers = logging.Logger.callHandlers
+
+    def emit(logger: logging.Logger, record: logging.LogRecord) -> None:
+        call_handlers(logger, record)
+        if sink_fails and record.getMessage().startswith("读取 Node Inspector 事件失败:"):
+            try:
+                destination.write_text(record.getMessage())
+            except OSError as error:
+                sink_errors.append(error)
+                raise
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", emit)
 
     class MalformedSocket:
         async def send(self, message: str) -> None:
@@ -79,11 +98,14 @@ async def test_receive_failure_reaches_pending_command(
     inspector_runtime.inspector.socket = MalformedSocket()  # type: ignore[assignment]
     command = asyncio.create_task(inspector.command(inspector_runtime, "Runtime.enable"))
     await asyncio.wait_for(sent.wait(), timeout=1)
-    with caplog.at_level(logging.ERROR, logger=NodeDebugInspector.__module__):
+    with caplog.at_level(logging.ERROR):
         receiver = asyncio.create_task(inspector.receive_messages(inspector_runtime))
-        with pytest.raises(RuntimeError, match="读取 Node Inspector 事件失败") as caught:
-            await command
-        await receiver
+        try:
+            with pytest.raises(RuntimeError, match="读取 Node Inspector 事件失败") as caught:
+                await command
+        finally:
+            await asyncio.gather(receiver, return_exceptions=True)
+        assert receiver.exception() is None
 
     public = str(caught.value)
     cause = caught.value.__cause__
@@ -103,6 +125,14 @@ async def test_receive_failure_reaches_pending_command(
     assert inspector_runtime.status == "failed"
     assert inspector_runtime.error_message == public
     assert inspector_runtime.inspector.pending_commands == {}
+    if sink_fails:
+        assert len(sink_errors) == 1 and sink_errors[0].errno == errno.ENOTDIR
+        assert cause is not None
+        assert any(str(sink_errors[0]) in note for note in cause.__notes__)
+        assert "diagnostic_sink_error=NotADirectoryError" in public
+    else:
+        assert not sink_errors and "diagnostic_sink_error" not in public
+    assert str(destination) not in public and "receive-log-secret" not in public
 
 
 @pytest.mark.parametrize("location", [
