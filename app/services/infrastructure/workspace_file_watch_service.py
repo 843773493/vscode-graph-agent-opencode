@@ -323,13 +323,17 @@ class WorkspaceFileWatchService:
                     )
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # noqa: BLE001 — 底层监听失败必须沿原订阅公布。
+        except Exception as error:
             self._publish(
                 subscribers,
                 WorkspaceFileChangeBatch(error=failure_detail(
                     error, stage="workspace-file-watch", label="文件监听失败",
                 )),
             )
+            # 取消后的原生收尾失败必须返回 owner，不能以错误帧代替停止证明。
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise
         finally:
             ready.set()
 

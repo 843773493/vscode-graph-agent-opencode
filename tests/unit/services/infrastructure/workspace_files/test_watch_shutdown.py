@@ -25,6 +25,7 @@ class NativeWatch:
     finished: asyncio.Event = field(default_factory=asyncio.Event)
     interrupted: bool = False
     starts: int = 0
+    failures: dict[Path, RuntimeError] = field(default_factory=dict)
 
 
 @dataclass
@@ -57,6 +58,8 @@ async def watch_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIt
                 raise
             finally:
                 native.finished.set()
+                if error := native.failures.get(_root):
+                    raise error
 
     monkeypatch.setattr(watch_module, "awatch", watch)
     service = WorkspaceFileWatchService(workspace_root=root)
@@ -200,8 +203,9 @@ async def test_other_root_can_subscribe_while_original_root_is_cleaning(watch_ca
 
 
 @pytest.mark.parametrize("failure_count", [1, 2])
-async def test_shutdown_keeps_original_cleanup_failures_visible_on_retry(
-    watch_case: WatchCase, monkeypatch: pytest.MonkeyPatch, failure_count: int,
+@pytest.mark.parametrize("last_subscriber", [False, True], ids=["shutdown", "last-subscriber"])
+async def test_stop_keeps_original_cleanup_failures_visible_on_retry(
+    watch_case: WatchCase, failure_count: int, last_subscriber: bool,
 ) -> None:
     root = watch_case.roots[0].parent / "failing-close"
     roots = tuple(root / str(index) for index in range(3))
@@ -210,26 +214,14 @@ async def test_shutdown_keeps_original_cleanup_failures_visible_on_retry(
     service = WorkspaceFileWatchService(workspace_root=root)
     failures = {directory: RuntimeError(f"原监听清理失败-{index}")
                 for index, directory in enumerate(roots[:failure_count])}
-    original = service._watch_root
-
-    async def watch(
-        directory: Path, subscribers: dict[asyncio.Queue[WorkspaceFileChangeBatch], bool],
-        ready: asyncio.Event, *, recursive: bool, change_filter: watch_module.WorkspaceFileChangeFilter | None,
-    ) -> None:
-        try:
-            await original(directory, subscribers, ready, recursive=recursive, change_filter=change_filter)
-        except asyncio.CancelledError:
-            if directory in failures:
-                raise failures[directory] from None
-            raise
-
-    monkeypatch.setattr(service, "_watch_root", watch)
+    watch_case.native.failures.update(failures)
     watch_case.native.release.set()
-    await service._acquire(roots, asyncio.Queue(), include_internal_paths=False)
+    queue: asyncio.Queue[WorkspaceFileChangeBatch] = asyncio.Queue()
+    await service._acquire(roots, queue, include_internal_paths=False)
     starts = watch_case.native.starts
     for _ in range(2):
         with pytest.raises((RuntimeError, BaseExceptionGroup)) as caught:
-            await service.shutdown()
+            await (service._release(roots, queue) if last_subscriber else service.shutdown())
         errors = caught.value.exceptions if isinstance(caught.value, BaseExceptionGroup) else (caught.value,)
         assert errors == tuple(failures.values())
         assert set(service._watchers) == {service._watcher_key(directory, True, None) for directory in failures}
