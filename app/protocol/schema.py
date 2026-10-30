@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
+from google.protobuf.descriptor_pb2 import FileDescriptorSet
+from google.protobuf.descriptor_pool import DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.codecs.json import enum_json_names
+
+
+def descriptor_pool_from_set(data: bytes) -> DescriptorPool:
+    """消费本次编译的 descriptor，避免旧 binding 掩盖源协议漂移。"""
+    pool = DescriptorPool()
+    # Buf build 输出按依赖顺序排列；缺少依赖时由 protobuf 明确拒绝。
+    for file in FileDescriptorSet.FromString(data).file:
+        pool.Add(file)
+    return pool
 
 
 def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> None:

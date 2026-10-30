@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from google.protobuf.descriptor import Descriptor
+from google.protobuf.descriptor_pool import DescriptorPool
+from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
@@ -12,6 +14,13 @@ from app.protocol.generated.boxteam.workspace.v2 import (
     session_stream_pb2,
     trace_pb2,
 )
+from app.protocol.schema import assert_public_schema
+
+# 只登记本切片已迁齐的 HTTP 根模型，嵌套字段由 descriptor 递归校验。
+HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    name: public_pb2.DESCRIPTOR.message_types_by_name[name]
+    for name in ("ResourceNavigationRequest", "ResourceNavigationResultDTO")
+}
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
@@ -38,3 +47,15 @@ _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
 def protobuf_message_name_for_model(model_name: str) -> str | None:
     descriptor = _SSE_DESCRIPTORS.get(model_name)
     return descriptor.full_name if descriptor is not None else None
+
+
+def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
+    """核对真实 OpenAPI 组件，保留原模型的业务约束和 HTTP 外形。"""
+    components = document["components"]
+    schemas = components["schemas"]
+    for name, descriptor in HTTP_JSON_DESCRIPTORS.items():
+        if name not in schemas:
+            raise ValueError(f"公开 HTTP 结构未被导出: {name}")
+        if pool is not None:
+            descriptor = pool.FindMessageTypeByName(descriptor.full_name)
+        assert_public_schema({**schemas[name], "components": components}, descriptor)

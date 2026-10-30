@@ -6,6 +6,7 @@
 
 - 可以维护 Python 协议生成入口、JSON/SSE/WS codec 和边界适配器。
 - `schema.py` 从 descriptor 核对同形公开 JSON 的字段、嵌套结构和类型；业务联合的各分支合计必须完整覆盖协议字段，只有具备 presence 的协议字段可因分支而省略。业务取值与字段间约束仍属于内部 Pydantic。
+- `openapi.py` 只登记已迁齐的 HTTP 根模型；导出与协议生成均在发布产物前递归校验真实 OpenAPI，并可消费本次 Buf 编译的 descriptor。
 
 ## 不可修改内容
 

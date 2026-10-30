@@ -127,6 +127,10 @@ async function main() {
   try {
     const descriptorSet = path.join(stagingDirectory, "protocol.binpb");
     await run(bufExecutable, ["build", "--as-file-descriptor-set", "--output", descriptorSet]);
+    const pythonExecutable = path.join(projectRoot, ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    await run(pythonExecutable, ["-m", "scripts.export_openapi_snapshot", "--validate-only",
+      "--descriptor-set", descriptorSet]);
     // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
     await run(bufExecutable, ["generate", "--output", stagingDirectory]);
     await addPythonPackageMarkers(

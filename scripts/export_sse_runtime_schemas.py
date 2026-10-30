@@ -6,13 +6,11 @@ from pathlib import Path
 from typing import cast
 
 from google.protobuf.descriptor import Descriptor
-from google.protobuf.descriptor_pb2 import FileDescriptorSet
-from google.protobuf.descriptor_pool import DescriptorPool
 
 from app.protocol.codecs.json import event_payload_fields
 from app.protocol.generated.boxteam.workspace.v2 import session_interaction_pb2
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
-from app.protocol.schema import assert_public_schema
+from app.protocol.schema import assert_public_schema, descriptor_pool_from_set
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 
@@ -25,13 +23,7 @@ def main() -> None:
     project_root = Path.cwd()
     if not (project_root / "pyproject.toml").is_file():
         raise RuntimeError(f"必须从项目根目录运行: cwd={project_root}")
-    pool = None
-    if args.descriptor_set:
-        pool = DescriptorPool()
-        bundle = FileDescriptorSet.FromString(args.descriptor_set.read_bytes())
-        # Buf build 输出按依赖顺序排列；缺少依赖时由 protobuf 明确拒绝。
-        for file in bundle.file:
-            pool.Add(file)
+    pool = descriptor_pool_from_set(args.descriptor_set.read_bytes()) if args.descriptor_set else None
     schemas: dict[str, object] = {}
     checked: set[str] = set()
     for model in SSE_EVENT_MODELS.values():

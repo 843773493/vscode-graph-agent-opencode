@@ -36,13 +36,29 @@ def generator_workspace(tmp_path: Path) -> Path:
     executable.write_text(
         '#!/usr/bin/env bun\nimport {mkdir,writeFile} from "node:fs/promises";\n'
         'import path from "node:path";\nconst args=process.argv.slice(2);\n'
+        'if(args[0]==="build")await writeFile(args[args.indexOf("--output")+1],"descriptor");\n'
         'if(args[0]==="generate"){\n'
         'const output=args[args.indexOf("--output")+1];\n'
+        'if(process.env.PROTOCOL_TEST_FAIL_BUF){\n'
+        'await writeFile(path.join(output,"partial.ts"),"partial");\n'
+        'process.stderr.write("injected remote generation failure\\n");process.exit(23);}\n'
         f'for(const name of {list(_BINDINGS)!r}){{\n'
         'const file=path.join(output,name);await mkdir(path.dirname(file),{recursive:true});\n'
         'await writeFile(file,"generated binding\\n");}}\n',
     )
     executable.chmod(0o755)
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        '#!/usr/bin/env bun\nimport {readFile} from "node:fs/promises";\n'
+        'const args=process.argv.slice(2);\n'
+        'if(args[0]!=="-m"||args[1]!=="scripts.export_openapi_snapshot"'
+        '||!args.includes("--validate-only"))throw new Error("HTTP校验命令不正确");\n'
+        'if(await readFile(args[args.indexOf("--descriptor-set")+1],"utf8")!=="descriptor")'
+        'throw new Error("必须消费本次编译的descriptor");\n'
+        'if(process.env.PROTOCOL_TEST_FAIL_HTTP)process.exit(25);\n',
+    )
+    python.chmod(0o755)
     exporter = tmp_path / "scripts/generate_sse_runtime.mjs"
     exporter.parent.mkdir()
     exporter.write_text(
@@ -56,12 +72,12 @@ def generator_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _run(workspace: Path, *arguments: str, fail_export: bool = False) -> subprocess.CompletedProcess[str]:
+def _run(workspace: Path, *arguments: str, failure: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bun", str(_GENERATOR), "--staging-root", str(workspace / "artifacts/staging"), *arguments],
         cwd=workspace,
         env={**os.environ, "BOXTEAM_PROJECT_ROOT": str(workspace),
-             **({"PROTOCOL_TEST_FAIL_EXPORT": "1"} if fail_export else {})},
+             **({f"PROTOCOL_TEST_FAIL_{failure}": "1"} if failure else {})},
         capture_output=True, text=True, timeout=15, check=False,
     )
 
@@ -101,13 +117,18 @@ def test_check_finds_changed_missing_and_extra_artifacts_without_repairing(gener
     assert tuple((workspace / "artifacts/staging").iterdir()) == ()
 
 
-def test_runtime_generation_failure_never_publishes_partial_bindings(generator_workspace: Path) -> None:
+@pytest.mark.parametrize(("failure", "code"), [("BUF", 23), ("EXPORT", 24), ("HTTP", 25)])
+def test_protocol_validation_failure_never_publishes_partial_bindings(
+    generator_workspace: Path, failure: str, code: int,
+) -> None:
     workspace = generator_workspace
     for name in (*_BINDINGS, *_RUNTIME):
         target = workspace / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"original output\n")
-    result = _run(workspace, fail_export=True)
-    assert result.returncode != 0 and "code=24" in result.stderr
+    result = _run(workspace, failure=failure)
+    assert result.returncode != 0 and f"code={code}" in result.stderr
+    if failure == "BUF":
+        assert "injected remote generation failure" in result.stderr
     assert all((workspace / name).read_bytes() == b"original output\n" for name in (*_BINDINGS, *_RUNTIME))
     assert tuple((workspace / "artifacts/staging").iterdir()) == ()
