@@ -52,8 +52,7 @@ from app.testing.model_stream import (
     ModelStreamHTTPTransport,
     StreamScenario,
     build_cassette,
-    data_frame,
-    done_frame,
+    chat_completion_frames,
     load_cassette_from_object,
     load_model_stream_config,
     load_scenario,
@@ -340,28 +339,9 @@ def _sequence_scenario() -> StreamScenario:
             asset_id=f"sequence-{step}",
             url="https://provider.example/v1/chat/completions",
             model="test-model",
-            frames=(
-                data_frame(
-                    {
-                        "id": f"sequence-{step}",
-                        "object": "chat.completion.chunk",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"role": "assistant", "content": text},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                ),
-                data_frame(
-                    {
-                        "choices": [
-                            {"index": 0, "delta": {}, "finish_reason": "stop"}
-                        ]
-                    }
-                ),
-                done_frame(),
+            frames=chat_completion_frames(
+                response_id=f"sequence-{step}", model="test-model",
+                deltas=({"role": "assistant", "content": text},), finish_reason="stop",
             ),
         )
         interaction = dict(cassette.raw["interactions"][0])
