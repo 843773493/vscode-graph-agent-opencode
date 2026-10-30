@@ -371,6 +371,15 @@
       "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/test_resource_release.py"]
     },
     {
+      "id": "integration-resource-release-errors",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/test_resource_release_errors.py"]
+    },
+    {
       "id": "integration-resource-detail-deadline",
       "layer": "integration",
       "client": null,

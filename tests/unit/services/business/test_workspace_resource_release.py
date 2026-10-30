@@ -121,6 +121,86 @@ async def test_release_reports_original_errors_in_order_after_peer_finishes(
     assert not any(bundle.owner._resource_lock(item).locked() for item in ids)
 
 
+@pytest.mark.parametrize("interruption", ["deadline", "cancel"])
+async def test_release_preserves_completed_errors_when_another_receipt_is_interrupted(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    releasing: Callable[[], Awaitable[int | None]], deadlines: list[asyncio.Timeout],
+    monkeypatch: pytest.MonkeyPatch, interruption: str,
+) -> None:
+    owner = bundle.owner
+    assert owner is not None
+    ids = [str((await bundle.create())["resource_id"]) for _ in range(4)]
+    errors = [ConnectionError("首项丢失回执"), OSError("次项回执读取失败")]
+    failed = [asyncio.Event(), asyncio.Event()]
+    entered, release, peer_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = bundle.transport.delete_resource
+    calls: list[str] = []
+
+    async def deleting(resource_id: str) -> dict[str, object]:
+        calls.append(resource_id)
+        receipt = await original(resource_id)
+        if resource_id == ids[0]:
+            # 第二项先失败，聚合仍必须保持原输入顺序。
+            await failed[1].wait()
+            failed[0].set()
+            raise errors[0]
+        if resource_id == ids[1]:
+            failed[1].set()
+            raise errors[1]
+        if resource_id == ids[2]:
+            entered.set()
+            await release.wait()
+        else:
+            peer_done.set()
+        return receipt
+
+    monkeypatch.setattr(bundle.transport, "delete_resource", deleting)
+    task = asyncio.ensure_future(releasing())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(failed[0].wait(), 2)
+        await asyncio.wait_for(peer_done.wait(), 2)
+        pending = {rid: bundle.leases.leases_for_resource(rid)[0].lease_id for rid in ids[:3]}
+        assert len(deadlines) == 1
+        if interruption == "deadline":
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
+            with pytest.raises(ExceptionGroup) as caught:
+                await asyncio.wait_for(task, 2)
+            assert list(caught.value.exceptions[:2]) == errors
+            deadline_error, = caught.value.exceptions[2:]
+            assert isinstance(deadline_error, TimeoutError)
+            assert "关联释放等待超过 30 秒" in str(deadline_error)
+            assert isinstance(deadline_error.__cause__, TimeoutError)
+        else:
+            task.cancel("原调用取消")
+            with pytest.raises(asyncio.CancelledError, match="原调用取消") as cancelled:
+                await task
+            assert task.cancelled()
+            assert isinstance(cancelled.value.__cause__, ExceptionGroup)
+            assert list(cancelled.value.__cause__.exceptions) == errors
+        for rid in ids[:3]:
+            record = owner._store.get(rid)
+            assert record is not None and record.reconciliation_status == "unknown"
+            lease, = bundle.leases.leases_for_resource(rid)
+            assert lease.lease_id == pending[rid] and lease.status == "reconcile_required"
+        healthy = owner._store.get(ids[3])
+        assert healthy is not None and healthy.status == "deleted"
+        assert not bundle.leases.leases_for_resource(ids[3])
+        assert not any(owner._resource_lock(rid).locked() for rid in ids)
+        before = list(calls)
+        release.set()
+        # 外部删除已完成；沿原入口核实，不再派发删除或回滚健康项。
+        await releasing()
+        assert calls == before and len(calls) == 4
+        for rid in ids:
+            record = owner._store.get(rid)
+            assert record is not None and record.status == "deleted"
+        assert not any(bundle.leases.leases_for_resource(rid) for rid in ids)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize("phase", ["prepare", "recovery", "preflight_lock", "observation", "revision", "delete"])
 async def test_release_deadline_covers_preflight_and_dispatch_without_false_release(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, releasing: Callable[[], Awaitable[int | None]], deadlines: list[asyncio.Timeout],

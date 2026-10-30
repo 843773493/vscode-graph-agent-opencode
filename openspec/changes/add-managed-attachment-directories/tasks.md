@@ -457,3 +457,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 三项真实工具／HTTP／Chromium场景3 passed/28.76秒，覆盖页面reset后短操作及显式清理、reset原生失败与日志路径边界、file页面URL的导航错误／checkpoint／恢复例外。独立原脚本产品回归4 passed/35.44秒：真实fetch在超时后继续等待，stop/delete到期保留unknown和原记录、peer可读，放行原执行后同入口重试；另验证等待context关闭的脚本先关闭再排空。未以页面用例替代这些脚本场景。
 - 队列及原脚本关闭Bun单测6项、Node原生日志失败单测9项通过，共22个不同用例；首次混用Bun runner的9项`node:test`因`t.mock`未实现而失败，改用该文件所需的Node runner后9项通过，原件保留。Ruff通过，Pyright与完整HEAD归档基线均148条，按最窄AST owner／规则／消息／出错表达式比较零新增；作者AST复核确认只变三个测试函数，原断言未减少，不称类型全绿或独立审查。
 - 准确命令、源码前后指纹、原始输出、实际退出码、工具选择失败、作者复核及限定证据见`out/tests/temp/browser_timeout_scope_20261030/artifacts/verification.json`。不新增生产终止机制；任意不合作Node脚本、同步阻塞、整个shutdown期限、Gateway/Web和Windows继续未验证。5.2／5.4及整体21/23保持未完成，团队协作与MCP持有延期边界不变。
+
+
+### 2026-10-30 整批关联释放保全已完成项错误（5.4 部分收口）
+
+- 原Thread/Session释放在其它回执等待到期或被调用者取消时，会丢掉已完成项返回的失败。现删除任务内把异常变成返回值的分支，在同一批任务排空后统一按资源顺序收集；原单错保持对象，多错与批次超时聚合。调用者取消保留原`CancelledError`与消息，已发生的其它失败由其cause聚合保留；原preflight、锁、unknown、lease和只核终态的重试链保持。没有新owner、后台重放或兼容入口。
+- 修改前8项反例全部失败；最终相关六文件201 passed，其中8项新场景随后因补强存在性/静态类型断言定向重验全部通过，不重复相加。独立`integration-resource-release-errors`沿正式Session/ASGI创建及真实PTY/Chromium/HTTP验证2 passed/24.65秒，矩阵总28.50秒，固定60秒/4GiB和原集成独占闸门。核原错误身份、超时cause、精确lease冷读、健康终态及同入口核实不重发删除。
+- Ruff/compileall通过；三个当前文件Pyright有45条既有诊断，按所属符号、rule、原message及源片段与基线逐项匹配，无新增；新集成文件零诊断。原owner1049行及原单测目录33个直接Python文件仍为既有P2结构负担，本次未新建源码目录或引入通用抽象。准确命令、源码指纹、原始输出、退出码、AST和类型基线核对见`out/tests/temp/resource_release_errors_20261030/artifacts/`。
+- 首次完整原释放矩阵120秒超时，原件保留；新增场景最初5秒观察窗早于真实PTY约8.5秒删除回执，依据终态时间修正为15秒观察并独立短suite，产品30秒合同不变。原矩阵定点还复现管理lock-terminal在10秒等不到旧`recover((rid,))`钩子；此前冷管理已改用原recovery准备和锁内停止同步，装具迁齐留待下一独立边界，不以新2项通过宣称原矩阵或5.4全门完成。首轮取消消息经gather丢失及新增import/类型准备问题均保留失败原件，最终未放宽取消消息、业务状态、lease或错误顺序断言。
+- 本次不代表Gateway/Web、Windows、Backend硬重启、同步阻塞、不合作终止或整个Session删除/shutdown验收；5.2/5.4继续未勾选，Agent团队与协作继续TODO。

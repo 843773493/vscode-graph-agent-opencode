@@ -644,12 +644,13 @@ class WorkspaceResourceOwner:
         operation_id: str,
     ) -> int:
         locked: dict[str, asyncio.Lock] = {}
-        tasks: list[asyncio.Task[Exception | None]] = []
+        tasks: list[asyncio.Task[None]] = []
+        failure: BaseException | None = None
 
-        async def release(record: OwnedResourceRecord) -> Exception | None:
+        async def release(record: OwnedResourceRecord) -> None:
             try:
                 if record.status == "deleted":
-                    return None
+                    return
                 with self._management_lease(record, None, holder_id, operation_id) as lease_id:
                     try:
                         if record.retention_scope == "thread":
@@ -665,9 +666,6 @@ class WorkspaceResourceOwner:
                     except BaseException as error:
                         self._unknown(record, error, lease_id=lease_id)
                         raise
-                return None
-            except Exception as error:  # noqa: BLE001 - 各资源独立收敛后保留原错误。
-                return error
             finally:
                 # 完整preflight后各任务接管自己的原锁，成功项不等其它网络回执。
                 locked.pop(record.resource_id).release()
@@ -713,26 +711,38 @@ class WorkspaceResourceOwner:
                             f"Thread 释放仍有未结清 外部资源 operation: {record.resource_id}"
                         )
                 tasks = [asyncio.create_task(release(record)) for record in affected]
-                results = await asyncio.gather(*tasks)
-                errors = [result for result in results if isinstance(result, Exception)]
-                if len(errors) == 1:
-                    raise errors[0]
-                if errors:
-                    raise ExceptionGroup("外部资源关联释放存在未收敛资源", errors)
-                return len(affected)
-        except TimeoutError as error:
-            if not deadline.expired():
-                raise
-            raise TimeoutError(
-                f"外部资源关联释放等待超过 30 秒: workspace_id={self.workspace_id} kind={self.kind} "
-                f"holder_id={holder_id}；保留未核实记录与原占用，未确认外部操作停止"
-            ) from error
+                if tasks:
+                    # 等待者保留原取消；各资源结果统一在排空后收集。
+                    await asyncio.wait(tasks)
+        except BaseException as error:  # noqa: BLE001 - 排空本批后连同原资源错误重新抛出。
+            failure = error
         finally:
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             for lock in locked.values():
                 lock.release()
+        # 到期或取消不能覆盖此前已返回的失败；本次取消产生的子任务取消只归属入口。
+        errors = [result for result in results if isinstance(result, BaseException)
+                  and (failure is None or not isinstance(result, asyncio.CancelledError))]
+        if isinstance(failure, asyncio.CancelledError):
+            if errors:
+                raise failure from BaseExceptionGroup("外部资源关联释放存在未收敛资源", errors)
+            raise failure
+        if isinstance(failure, TimeoutError) and deadline.expired():
+            deadline_error = TimeoutError(
+                f"外部资源关联释放等待超过 30 秒: workspace_id={self.workspace_id} kind={self.kind} "
+                f"holder_id={holder_id}；保留未核实记录与原占用，未确认外部操作停止"
+            )
+            deadline_error.__cause__ = failure
+            failure = deadline_error
+        if failure is not None:
+            errors.append(failure)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("外部资源关联释放存在未收敛资源", errors)
+        return len(tasks)
 
     async def sweep_orphans(self) -> list[ResourceSnapshot]:
         if not self._store.ids():
