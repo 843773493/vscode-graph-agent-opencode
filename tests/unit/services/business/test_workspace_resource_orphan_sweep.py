@@ -8,6 +8,7 @@ from datetime import timedelta
 import pytest
 
 from app.services.business.workspace_resources import owner as owner_module
+from app.services.business.workspace_resources.recovery import RecoveryVersion
 from tests.support.resource_owners.browser import BrowserOwnerFixture
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
@@ -147,7 +148,7 @@ async def test_sweep_deadline_covers_all_phases_without_false_release_or_automat
             await asyncio.wait_for(sweeping, 2)
         if original_lease is None:
             if phase == "recovery":
-                assert owner._recovery._pending == {rid: before.owner_revision + 1}
+                assert owner._recovery._pending == {rid: RecoveryVersion(before.owner_revision + 1)}
                 assert owner._store.get(rid).owner_revision == before.owner_revision + 1
                 assert owner._store.get(rid).reconciliation_status == "unknown"
             else:

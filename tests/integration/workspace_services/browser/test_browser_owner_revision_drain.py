@@ -455,7 +455,7 @@ async def test_cold_owner_budget_keeps_real_browser_and_frozen_revision_after_lo
                 record = owner._store.get(rid)
                 assert record.reconciliation_status == ("unknown" if phase == "revision" else "verified")
                 assert record.owner_revision == expected
-                assert owner._recovery._pending == ({rid: expected} if phase == "revision" else None)
+                assert owner._recovery._pending == ({rid: recovery.RecoveryVersion(expected)} if phase == "revision" else None)
                 assert owner._leases.leases_for_resource(rid) == []
             finally:
                 release.set()

@@ -430,6 +430,15 @@
       "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/browser/test_browser_resource_listing.py"]
     },
     {
+      "id": "integration-resource-cold-sync-retry",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 90000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/test_resource_cold_sync_retry.py"]
+    },
+    {
       "id": "integration-resource-cold-management",
       "layer": "integration",
       "client": null,

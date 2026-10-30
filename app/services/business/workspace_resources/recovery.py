@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from asyncio import timeout
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from app.services.business.workspace_resources.facts import (
@@ -17,11 +18,18 @@ if TYPE_CHECKING:
     from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 
 
+@dataclass
+class RecoveryVersion:
+    revision: int | None
+    # 普通失败后仍可查询unknown；只有显式停止继续核实原冻结版本。
+    management_only: bool = False
+
+
 class ResourceRecovery:
     def __init__(self, owner: WorkspaceResourceOwner) -> None:
         self._owner = owner
         # 只协调本进程尚未同步的冻结版本；持久资源与占用仍分别由原 owner/lease 账本保存。
-        self._pending: dict[str, int | None] | None = None
+        self._pending: dict[str, RecoveryVersion] | None = None
 
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
         # 一个调用只取得一次预算，清单、准备锁和各资源同步共同消耗。
@@ -106,7 +114,7 @@ class ResourceRecovery:
         if owner._store.ids():
             owner._store.save(*records)
         self._pending = {
-            record.resource_id: record.owner_revision if record.resource_id in observed else None
+            record.resource_id: RecoveryVersion(record.owner_revision if record.resource_id in observed else None)
             for record in records
         }
 
@@ -120,17 +128,20 @@ class ResourceRecovery:
         assert self._pending is not None
         if resource_id not in self._pending:
             return None
+        pending = self._pending[resource_id]
+        if pending.management_only and not for_stop:
+            return None
         record = owner._require_owned_resource_record(resource_id)
-        revision = self._pending[resource_id]
-        failure = None
         try:
-            if revision is not None:
-                await owner._transport.sync_owner_revision(resource_id, revision, for_stop=for_stop)
+            if pending.revision is not None:
+                await owner._transport.sync_owner_revision(resource_id, pending.revision, for_stop=for_stop)
         except BaseException as error:
+            if isinstance(error, Exception):
+                pending.management_only = True
             owner._unknown(record, error)
             if not isinstance(error, Exception):
                 raise
-            failure = error
+            return error
         owner._sync_ledger(owner._require_owned_resource_record(resource_id))
         del self._pending[resource_id]
-        return failure
+        return None

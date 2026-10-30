@@ -12,6 +12,7 @@ import pytest
 from app.container import WorkspaceContainerRegistry
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import catalog_provider_scope
+from app.services.business.workspace_resources.recovery import RecoveryVersion
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -102,7 +103,7 @@ async def test_cold_peer_recovers_while_first_real_listing_receipt_is_pending(
                     assert independent.json()["data"]["resource_id"] == peer
                     assert independent.json()["data"]["reconciliation_status"] == "verified"
                     assert independent.json()["data"]["owner_revision"] == frozen[peer]
-                    assert owner._recovery._pending == {rid: frozen[rid]}
+                    assert owner._recovery._pending == {rid: RecoveryVersion(frozen[rid])}
                     peer_record = owner._store.get(peer)
                     release.set()
                     response = await asyncio.wait_for(reading, 5)
@@ -208,7 +209,7 @@ async def test_cold_management_can_close_context_after_cancelled_recovery(
                 reading.cancel()
                 await asyncio.gather(reading, return_exceptions=True)
                 assert reading.cancelled()
-                assert owner._recovery._pending is not None and owner._recovery._pending[rid] == revision
+                assert owner._recovery._pending is not None and owner._recovery._pending[rid] == RecoveryVersion(revision)
                 unknown = owner._store.get(rid)
                 assert unknown is not None and unknown.reconciliation_status == "unknown"
                 independent = await api.get(f"/api/v1/resources/{peer['resource_id']}")

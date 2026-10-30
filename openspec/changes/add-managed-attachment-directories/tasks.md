@@ -443,3 +443,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Terminal／Browser 删除两份无限等待的 HTTP 关闭函数，共用默认5000毫秒收尾；到期关闭原连接，明确诊断并退出1，正常SIGTERM仍为143。普通Manager未核实继续保留原进程与管理重试；致命错误沿原退出1合同，不把断网当作资源停止证明。
 - 原生产在两个未完成正文场景均超过8秒，2 failed／2 passed；候选真实Node／HTTP／POSIX信号4 passed／12.99秒，两原信号回归各6 passed／46.08与58.55秒。三组串行走原独占闸门及matrix外部期限／4GiB保护；正文场景等正式100 Continue后才发部分正文，核精确诊断、原退出码与空持久资源集合。
 - Ruff、新测试Pyright零诊断、Node语法、规范strict与作者AST结构自查通过，HTTP／WebSocket／Manager其余接线保持。首次fixture缺参及端口冲突均未进入业务，原件保留。准确命令、指纹、raw／退出码、四场景正式产物与限定证据见`out/tests/temp/service_http_shutdown_20261030/artifacts/verification.json`；无临时源码或二进制产物。未验Windows、Gateway/Web、整个shutdown、同步阻塞或未知原生进程接管，5.2／5.4仍未勾，整体21/23；团队协作与MCP显式持有继续TODO。
+
+### 2026-10-30 冷恢复同步失败后的显式管理重试（5.2部分收口）
+
+- 原普通同步异常会丢弃冻结版本；发送前失败时，两端版本不同导致新管理停止持续拒绝。原恢复记录现同时保留版本与仅管理重试标记：普通查询仍可发现unknown且不重发同步，显式stop/delete在原锁及准入后重试同一版本；重复失败不造管理lease、不派发停止，同步成功后才移除pending。取消、健康资源、旧占用及唯一停止/结算链保持，无新持久状态、schema或账本。
+- 原生产8个有效反例失败，最终相关单测410 passed/11.33秒。新增真实Node/PTY或Chromium/HTTP及正式Session/ASGI创建、授权、冷owner/管理场景4 passed/56.62秒，原冷管理4 passed/37.72秒；均走独占闸门和外部期限/4GiB。原Browser撤权suite首轮4 passed/4 fixture setup errors，健康探针收到原请求行且随后端口占用，未进入失败场景主体；确认原端口可重新绑定后，仅重跑受阻4项，4 passed/34.47秒，未改配置、生产或断言。
+- Ruff/compileall、生产和新增两文件Pyright零诊断、规范strict及作者AST结构自查通过。准确命令、指纹、原始输出、退出码与限定证据见`out/tests/temp/resource_cold_sync_retry_20261030/artifacts/verification.json`。初版单测因已detach资源没有Thread关联而拒绝，未当业务红例；后改用正式workspace授权入口生成未知占用。无临时源码/截图/二进制，正式运行输出保留。未验Backend进程硬重启、Gateway/Web、Windows、同步阻塞、不合作取消或整个shutdown期限；5.2/5.4仍未勾，整体21/23，团队协作及MCP显式持有继续TODO。

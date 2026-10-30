@@ -9,6 +9,7 @@ import pytest
 
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.business.workspace_resources.recovery import RecoveryVersion
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
@@ -420,7 +421,7 @@ async def test_cancelling_recovery_keeps_frozen_revision_and_does_not_repeat_fin
         recovering.cancel()
     with pytest.raises(asyncio.CancelledError):
         await recovering
-    assert owner._recovery._pending == {rid: 2}
+    assert owner._recovery._pending == {rid: RecoveryVersion(2)}
     assert owner._store.get(rid).reconciliation_status == "unknown"
     healthy_current = await owner.get_resource(healthy)
     assert healthy_current["owner_revision"] == 2 and healthy_current["reconciliation_status"] == "verified"

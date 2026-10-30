@@ -12,6 +12,7 @@ from app.services.business.browser_resources.operations import BrowserOperations
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources import recovery
 from app.services.business.workspace_resources.owner import ResourceConflict
+from app.services.business.workspace_resources.recovery import RecoveryVersion
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
@@ -90,7 +91,7 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
         assert calls == (2 if phase == "concurrent_listing" else 1)
         if phase == "resource_lock":
             assert lock.locked()
-            assert owner._recovery._pending == {rid: before.owner_revision + 1}
+            assert owner._recovery._pending == {rid: RecoveryVersion(before.owner_revision + 1)}
             stored = owner._store.get(rid)
             assert stored is not None and stored.reconciliation_status == "verified"
         else:
@@ -175,7 +176,7 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
         deadlines[0].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(TimeoutError, match="未确认外部操作停止"):
             await asyncio.wait_for(waiting, 2)
-        assert owner._recovery._pending == {rid: 2}
+        assert owner._recovery._pending == {rid: RecoveryVersion(2)}
         waiting_record, healthy_record = owner._store.get(rid), owner._store.get(healthy)
         assert waiting_record is not None and waiting_record.reconciliation_status == "unknown"
         assert healthy_record is not None and healthy_record.reconciliation_status == "verified"
@@ -257,7 +258,7 @@ async def test_slow_initial_listing_does_not_block_peer_or_replace_its_frozen_ve
         assert healthy["resource_id"] == peer
         assert healthy["owner_revision"] == 2
         assert healthy["reconciliation_status"] == "verified"
-        assert owner._recovery._pending == {rid: 2}
+        assert owner._recovery._pending == {rid: RecoveryVersion(2)}
         peer_record = owner._store.get(peer)
         if outcome == "cancel":
             reading.cancel()
@@ -336,7 +337,7 @@ async def test_cold_management_revokes_before_waiting_for_the_original_operation
         detached_revision = detached["owner_revision"]
         assert isinstance(detached_revision, int)
         revision = detached_revision + 1
-        assert owner._recovery._pending == {rid: revision}
+        assert owner._recovery._pending == {rid: RecoveryVersion(revision)}
         result = await owner.command(
             rid, action=action, expected_revision=revision,
             holder_id="request:cold-stop", operation_id="cold-stop",
@@ -366,7 +367,7 @@ async def test_stale_cold_management_does_not_revoke_the_pending_version(
             rid, action=action, expected_revision=1,
             holder_id="request:stale-stop", operation_id="stale-stop",
         )
-    assert owner._recovery._pending == {rid: 2}
+    assert owner._recovery._pending == {rid: RecoveryVersion(2)}
     assert owner._store.path.read_bytes() == before
     assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
     assert (await bundle.transport.get_resource(rid))["transport_owner_revision"] == 1
@@ -386,7 +387,7 @@ async def test_related_cold_delete_keeps_pending_authorization_unchanged(
             rid, action="delete", expected_revision=2,
             holder_id="request:related-delete", operation_id="related-delete",
         )
-    assert owner._recovery._pending == {rid: 2}
+    assert owner._recovery._pending == {rid: RecoveryVersion(2)}
     assert owner._store.path.read_bytes() == before
     assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
     assert (await bundle.transport.get_resource(rid))["transport_owner_revision"] == 1

@@ -34,6 +34,8 @@ workspace_services/
 
 `test_resource_cold_management.py`经正式Session/ASGI创建、detach及脚本执行，冷建原owner并取消已发送版本的普通恢复，再由原stop/delete API释放真实context并核实原脚本结束、当前版本与终态。首次清单场景仅暂停真实HTTP回执，核Terminal/Browser peer独立恢复、迟到清单不重复推进、原PTY/页面身份及冷账本。suite `integration-resource-cold-management`固定60秒；Linux按每进程4GiB数据段保护，不代表整树预算。不手填资源或执行历史，不代表Backend硬重启、Gateway/Web、Windows或任意脚本强制终止。
 
+`test_resource_cold_sync_retry.py`经正式Session/ASGI资源创建、生命周期detach、真实授权及冷owner验证同步发送前失败与已提交后回执丢失。普通查询保留unknown、peer继续可用，重复显式管理失败不造新占用，沿同一冻结版本恢复后只派发一次停止/删除并核实真实PTY或Chromium终态、原lease结算及request_id。suite `integration-resource-cold-sync-retry`固定90秒/4GiB并使用原集成独占闸门；不代表Backend进程硬重启、Gateway/Web、Windows或整个operation/shutdown期限。
+
 ## 可修改内容
 
 - 真实辅助服务模块、测试页面服务、mini MCP 和明确协议替身的组合测试。
