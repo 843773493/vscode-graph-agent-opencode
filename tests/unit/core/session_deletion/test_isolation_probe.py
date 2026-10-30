@@ -113,6 +113,18 @@ async def test_probe_settles_before_releasing_key_without_holding_session_gate(
     deleting: asyncio.Task[SubtreeDeleteResult] | None = None
     key_waiter: asyncio.Task[None] | None = None
     key_entered = asyncio.Event()
+    probe_queued = asyncio.Event()
+    original_drain = service._drain
+
+    async def queue_probe(*args, **kwargs):
+        nonlocal queued
+        if wait_kind == "pool" and queued is None:
+            queued = loop.run_in_executor(None, pool_step.block)
+            await _entered(pool_step)
+            probe_queued.set()
+        return await original_drain(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_drain", queue_probe)
 
     async def same_key() -> None:
         async with service._key_lock(key):
@@ -122,13 +134,12 @@ async def test_probe_settles_before_releasing_key_without_holding_session_gate(
         if wait_kind == "pool":
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="isolation-target-probe")
             loop.set_default_executor(executor)
-            queued = loop.run_in_executor(None, pool_step.block)
-            await _entered(pool_step)
         deleting = asyncio.create_task(service.delete(idempotency_key=key, root_node_id=node.node_id))
         if wait_kind == "native":
             await _entered(native_step)
         else:
             # catalog标记已提交，worker尚在唯一线程池排队。
+            await probe_queued.wait()
             await _turns()
             assert not reads and not native_step.calls
         assert not deleting.done()

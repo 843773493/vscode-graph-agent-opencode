@@ -441,3 +441,5 @@ Thread创建收敛所用控制库的存在性检查、打开和关闭现由原wo
 收敛的待处理清单、逐记录读取和最后重读/比较/中止复用原worker原语；原holder与两段Session gate覆盖相应worker的排队及结算，最后复核和中止仍在同一worker依次完成。唯一的定点目录清理函数先在原事件循环执行异步fork资源中止，再以一个worker核验全部目录、删除原目录并同步父目录；五处既有调用共用此实现。取消若落在目录清理，结算后保留preparing供同record恢复；若落在中止写入，保留已提交的aborted，不补造进度或重删目录。原创建准备及catalog事务仍同步；完整shutdown、原生终止核实及5.2/5.4继续TODO。
 
 删除的前序隔离目标探测也复用原 `run_sync_shielded`，在同一次 worker 内保留 `exists() or is_symlink()` 的短路判定。此时仅持同 key 锁和外层删除预算，尚未取得资源 holder、Session gate或调用 retention/drain；后序锁内的目标核验仍为隔离权威。取消或到期须等原 worker（包括线程池排队）结算，再传播原取消或预算错误；不继续资源排空、fence、rename或进度发布。已隔离恢复仍由原 journal和冻结 locator校验，不重放已完成的管理动作；断链symlink继续拒绝，不覆盖原件。catalog事务和任意原生I/O终止的完整5.4合同仍TODO。
+
+删除流的 catalog 冻结／mark（含原拒绝中止）、进度写入、finish 与提交回执读取，以及到期回收的已完成 journal 清单，均复用原 `run_sync_shielded`。冻结和 mark 在同一 worker 内沿原事务顺序执行，mark／finish 的导航 hook 仍在各自原 SQLite 事务中；同 key 锁及对应 topology gate 持有至原调用实际结算，取消或到期不能遗弃在途提交。清单读取取消后不进入物理回收；已实际提交的删除状态按原 journal 重试，不重做已完成的资源 drain。此变更只迁移该删除／回收链，不将全仓 catalog 同步入口改为异步，也不承诺原生 I/O 或完整 shutdown 的硬期限。

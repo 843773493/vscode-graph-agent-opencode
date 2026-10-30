@@ -97,6 +97,18 @@ async def test_gc_keeps_gate_and_loop_available_until_original_io_finishes(
     concurrent: asyncio.Task[datetime | None] | None = None
     same_gate: asyncio.Task[None] | None = None
     gate_entered = asyncio.Event()
+    gc_queued = asyncio.Event()
+    original_worker = deletion.run_sync_shielded
+
+    async def queue_gc(operation, *args, **kwargs):
+        nonlocal queued
+        if wait_kind == "pool" and operation == service._collect_operation_replay and queued is None:
+            queued = loop.run_in_executor(None, pool_step.block)
+            await _entered(pool_step)
+            gc_queued.set()
+        return await original_worker(operation, *args, **kwargs)
+
+    monkeypatch.setattr(deletion, "run_sync_shielded", queue_gc)
 
     async def take_same_gate() -> None:
         async with service._session_gate.exclusive(node.node_id):
@@ -105,12 +117,11 @@ async def test_gc_keeps_gate_and_loop_available_until_original_io_finishes(
     try:
         if wait_kind == "pool":
             loop.set_default_executor(executor)
-            queued = loop.run_in_executor(None, pool_step.block)
-            await _entered(pool_step)
         collecting = asyncio.create_task(service.collect_expired_operation_replays(now=now))
         if wait_kind == "native":
             await _entered(native_step)
         else:
+            await gc_queued.wait()
             await _turns()
             assert not native_step.calls, "原回收应仍在唯一线程池中排队"
         assert not collecting.done()

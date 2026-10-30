@@ -254,9 +254,10 @@ class SessionSubtreeDeleteService:
 
     async def collect_expired_operation_replays(self, *, now: datetime) -> datetime | None:
         """唯一物理 GC：整节点所有观察/通信窗口结束且全部 lease 已终态才清理。"""
-        # TODO(5.4)：catalog清单仍同步读取；原生I/O结算不代表整个GC/shutdown已有硬期限。
+        # TODO(5.4)：原生I/O结算不代表整个GC/shutdown已有硬期限。
         next_expiry = None
-        for record in self._store.list_completed_subtree_deletes(self._workspace_id):
+        records = await run_sync_shielded(self._store.list_completed_subtree_deletes, self._workspace_id)
+        for record in records:
             journal_deadline = datetime.fromisoformat(record.record_updated_at) + timedelta(days=1, seconds=30)
             if now < journal_deadline:
                 next_expiry = journal_deadline if next_expiry is None else min(next_expiry, journal_deadline)
@@ -322,7 +323,7 @@ class SessionSubtreeDeleteService:
             idempotency_key=idempotency_key,
             root_node_id=root_node_id,
         )
-        # TODO(5.4)：同步 I/O 与不合作取消仍需原 owner 核实，不能靠此预算抢占。
+        # TODO(5.4)：原生 I/O 与不合作取消仍需原 owner 核实，不能靠此预算抢占。
         loop = asyncio.get_running_loop()
         deadline = loop.time() + SUBTREE_DELETE_WAIT_SECONDS if deadline is None else deadline
         failure_detail = (
@@ -341,33 +342,13 @@ class SessionSubtreeDeleteService:
                 phase = "catalog-mark"
                 # 步骤 1：gate 内冻结 + mark（唯一逻辑可见性关闭点）。
                 async with self._gate.exclusive():
-                    record = self._store.create_or_get_subtree_delete_record(
-                        idempotency_key=idempotency_key,
-                        workspace_id=self._workspace_id,
-                        root_node_id=root_node_id,
+                    record = await run_sync_shielded(
+                        self._mark_subtree_delete, idempotency_key, root_node_id, mark_transaction_hook,
                     )
-                    if record.state == "preparing" or (
-                        mark_transaction_hook is not None
-                        and record.state in ("deleting", "draining")
-                    ):
-                        try:
-                            self._store.mark_subtree_deleting(
-                                idempotency_key,
-                                transaction_hook=mark_transaction_hook,
-                            )
-                        except SubtreeDeleteMarkRejectedError as error:
-                            self._store.abort_subtree_delete(
-                                idempotency_key, str(error)
-                            )
-                            raise
-                        record = self._store.get_subtree_delete_record(
-                            idempotency_key
-                        )
                 if record.state == "completed":
                     if finish_transaction_hook is not None:
-                        self._store.finish_subtree_delete(
-                            idempotency_key,
-                            transaction_hook=finish_transaction_hook,
+                        record = await run_sync_shielded(
+                            self._finish_subtree_delete, idempotency_key, finish_transaction_hook,
                         )
                     return self._result_from_record(record)
                 if record.state == "aborted":
@@ -383,16 +364,38 @@ class SessionSubtreeDeleteService:
                 # 步骤 3：gate 内 finish（全树 tombstone）。
                 phase = "catalog-finish"
                 async with self._gate.exclusive():
-                    self._store.finish_subtree_delete(
-                        idempotency_key,
-                        transaction_hook=finish_transaction_hook,
+                    record = await run_sync_shielded(
+                        self._finish_subtree_delete, idempotency_key, finish_transaction_hook,
                     )
-                record = self._store.get_subtree_delete_record(idempotency_key)
                 return self._result_from_record(record)
         except TimeoutError as error:
             if not budget.expired():
                 raise
             raise SubtreeDeleteWaitTimeout(failure_detail + f"phase={phase}") from error
+
+    def _mark_subtree_delete(
+        self, idempotency_key: str, root_node_id: str,
+        transaction_hook: CatalogTransactionHook | None,
+    ) -> SubtreeDeleteRecord:
+        """同一 worker 内完成原冻结、提交或拒绝记录；调用方持原 topology gate。"""
+        record = self._store.create_or_get_subtree_delete_record(
+            idempotency_key=idempotency_key, workspace_id=self._workspace_id, root_node_id=root_node_id,
+        )
+        if record.state == "preparing" or (transaction_hook is not None and record.state in ("deleting", "draining")):
+            try:
+                self._store.mark_subtree_deleting(idempotency_key, transaction_hook=transaction_hook)
+            except SubtreeDeleteMarkRejectedError as error:
+                self._store.abort_subtree_delete(idempotency_key, str(error))
+                raise
+            record = self._store.get_subtree_delete_record(idempotency_key)
+        return record
+
+    def _finish_subtree_delete(
+        self, idempotency_key: str, transaction_hook: CatalogTransactionHook | None,
+    ) -> SubtreeDeleteRecord:
+        """结清原事务并读取已提交回执，不让取消遗弃尚未结算的 catalog 调用。"""
+        self._store.finish_subtree_delete(idempotency_key, transaction_hook=transaction_hook)
+        return self._store.get_subtree_delete_record(idempotency_key)
 
     # ------------------------------------------------------------------
     # 输入校验与并发原语
@@ -472,7 +475,7 @@ class SessionSubtreeDeleteService:
                             session_id
                         ],
                     )
-                self._store.record_drain_progress(idempotency_key, session_id)
+                await run_sync_shielded(self._store.record_drain_progress, idempotency_key, session_id)
                 continue
             # 首次排空等待包含 retention/creation 的 holder 与 gate；
             # 观察点必须先于这些等待，且此时尚未持有任何排空锁。
@@ -528,7 +531,7 @@ class SessionSubtreeDeleteService:
                         session_id
                     ],
                 )
-            self._store.record_drain_progress(idempotency_key, session_id)
+            await run_sync_shielded(self._store.record_drain_progress, idempotency_key, session_id)
 
     async def _drain_session(
         self,

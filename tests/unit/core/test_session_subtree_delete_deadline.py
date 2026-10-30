@@ -61,7 +61,16 @@ async def test_delete_deadline_covers_each_wait_and_resumes_original_record(
                 reached.set()
             if stage == "finish" and phase == f"deletion.renamed/{node.node_id}":
                 await blockers.enter_async_context(service._gate.exclusive())
+
+        original_drain = service._drain
+
+        async def observe_drain(*args, **kwargs):
+            await original_drain(*args, **kwargs)
+            if stage == "finish":
+                # 原进度worker已结算，下一步确实等待finish gate后才推进测试时钟。
                 reached.set()
+
+        monkeypatch.setattr(service, "_drain", observe_drain)
 
         async def retention(session_id: str) -> None:
             assert session_id == node.node_id

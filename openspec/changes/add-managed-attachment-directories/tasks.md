@@ -531,3 +531,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 170项相关单元通过，含21项新增探测、排队、完成/取消/到期、原错和断链目标场景。首次168通过/2失败来自旧控制库打开装具提前占用线程池，现移到真实 retention 回调后，原28条断言AST全部保持。原17项产品ASGI/生命周期场景通过（49.72秒），新增两项产品导航入队、原 worker 停止及同 journal 恢复通过（10.01秒）；两组分别注册，保持各60秒/4GiB与集成独占闸门，未删旧场景或放宽业务期限。直接运行新增两项的10.16秒结果仅作先期验证，不重复计数。
 - Ruff、Pyright零诊断、compileall与strict通过；作者AST自查确认生产仅改 `_drain`，其余17个方法/函数及控制库原断言保持，不代表非作者独立审查。首次import/闭包绑定静态失败及误传重复 `--suite` 参数的零执行失败原件均保留。准确命令、源码指纹、原始输出、退出码和自查位于 `out/tests/temp/session_isolation_probe_20261030/artifacts/`。
 - 原创建准备、catalog同步事务、任意原生I/O终止、整个shutdown硬期限、Backend独立进程重启、Windows和Gateway/Web仍未完成本轮验证；5.2/5.4及整体21/23保持未完成。未修改Web/Workbench实现或其自动化，未重启共享debug；团队协作及MCP显式持有继续TODO。
+
+### 2026-10-30 删除与回收的 catalog 等待（5.4 部分收口）
+
+- 删除冻结/mark、拒绝中止、进度、finish/回执读取和回收清单统一复用原 shielded worker；导航 hook 仍在原 SQLite 事务内。同 key 锁及对应 topology gate 等原调用实际结算后释放，取消不遗弃提交，也不继续下一阶段；重试沿原 journal、冻结 locator 和已完成进度，不增加 writer、schema 或恢复链。
+- 完整 HEAD 归档中的旧生产实现被两项阻塞反例区分。最终相关单元222项通过（36.64秒）；新增产品导航入队、mark/finish 等待期间停止 worker、同 journal 恢复及回收取消3项通过（12.75秒）；相邻删除/故障结算/启动扫描17项通过、2项目标探测由先前独立套件覆盖。全部有进程外超时与4GiB保护，集成沿跨 worktree 独占闸门串行；相邻批排队137.06秒，取得名额后47.80秒，未超60秒执行预算，不把排队算作业务耗时。
+- 原线程池排队装具迁到各自实际阶段，finish 时钟屏障等原进度提交后才推进；既有85条断言的AST全部保持。早期装具/静态失败及221通过/1失败原件保留，不算最终通过。Ruff通过；Pyright原4项既有locator类型诊断在完整HEAD归档逐项复现，新增生产/场景零诊断，不称类型全绿。作者AST自查保留其它15个生产方法，不称独立审查。
+- 准确命令、源码指纹、原始输出、实际退出码、类型基线和结构自查见 `out/tests/temp/deletion_catalog_io_20261030/artifacts/verification.json` 及同目录原件。全仓同步catalog消费者及其共享连接锁、创建准备、原生I/O终止、完整shutdown硬期限、Backend独立进程重启、Windows和Gateway/Web仍未验；5.2/5.4及整体21/23保持未完成。未修改Web/Workbench及其自动化，未重启共享debug，团队协作及MCP显式持有继续TODO。
