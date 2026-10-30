@@ -1,10 +1,14 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
 from app.protocol.codecs.session_sse import session_sse_to_json, session_sse_to_proto
+from app.protocol.generated.boxteam.workspace.v2 import session_stream_pb2
+from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.session_interaction import (
     JobProgressDTO,
     JobUpdatedExecutionEventDTO,
@@ -12,6 +16,26 @@ from app.schemas.internal_v2.session_interaction import (
     MessageUpdatedExecutionEventDTO,
     SessionExecutionSseDTO,
 )
+
+
+@pytest.mark.parametrize("event_type", ["job.updated", "job.status.changed", "session.completed"])
+@pytest.mark.parametrize("status", list(JobStatus))
+def test_job_progress_wire_preserves_status_defaults_and_optional_values(event_type: str, status: JobStatus) -> None:
+    for optional in ({}, {"message": "", "current_step_id": ""},
+                     {"message": "执行中 Ω", "current_step_id": "step_1", "progress": 42}):
+        source = SessionExecutionSseDTO.model_validate({
+            "event": {"event_id": "evt_job", "session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
+                      "time": "2026-10-30T00:00:00Z", "type": event_type,
+                      "payload": {"job_id": "job_1", "status": status.value, **optional}},
+            "raw_type": "job_status_changed", "raw_payload": {"status": status.value},
+        })
+        wire = session_stream_pb2.SessionExecutionSse.FromString(session_sse_to_proto(source).SerializeToString())
+        payload_name = wire.event.WhichOneof("payload")
+        assert payload_name == event_type.replace(".", "_")
+        payload = getattr(wire.event, payload_name)
+        assert payload.HasField("message") == ("message" in optional)
+        assert payload.HasField("current_step_id") == ("current_step_id" in optional)
+        assert session_sse_to_json(wire) == source.model_dump(mode="json")
 
 
 def test_child_message_sse_round_trip_preserves_owner_and_lifecycle_time() -> None:
@@ -41,9 +65,13 @@ def test_child_message_sse_round_trip_preserves_owner_and_lifecycle_time() -> No
     assert encoded.event.WhichOneof("payload") == "message_updated"
     assert encoded.event.message_updated.thread_id == "thr_child"
     decoded = session_sse_to_json(encoded)
-    assert decoded["event"]["payload"]["thread_id"] == "thr_child"
-    assert decoded["event"]["payload"]["created_at"] == "2026-10-14T11:59:00Z"
-    assert decoded["event"]["time"] == "2026-10-14T12:00:00Z"
+    event = decoded["event"]
+    assert isinstance(event, dict)
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    assert payload["thread_id"] == "thr_child"
+    assert payload["created_at"] == "2026-10-14T11:59:00Z"
+    assert event["time"] == "2026-10-14T12:00:00Z"
 
 
 def test_session_sse_codec_preserves_oneof_and_dynamic_payload() -> None:
@@ -56,7 +84,7 @@ def test_session_sse_codec_preserves_oneof_and_dynamic_payload() -> None:
             type="job.updated",
             payload=JobProgressDTO(
                 job_id="job_123",
-                status="running",
+                status=JobStatus.running,
                 progress=42,
                 message="working",
             ),
@@ -71,8 +99,12 @@ def test_session_sse_codec_preserves_oneof_and_dynamic_payload() -> None:
 
     decoded = session_sse_to_json(encoded)
     assert decoded["raw_payload"] == {"provider": {"request_id": "request_123"}}
-    assert decoded["event"]["payload"]["progress"] == 42
-    assert decoded["event"]["payload"]["message"] == "working"
+    event = decoded["event"]
+    assert isinstance(event, dict)
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    assert payload["progress"] == 42
+    assert payload["message"] == "working"
 
 
 def test_message_stream_snapshot_preserves_tool_call_arguments() -> None:

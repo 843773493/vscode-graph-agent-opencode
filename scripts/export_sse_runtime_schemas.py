@@ -28,16 +28,25 @@ def main() -> None:
         for file in bundle.file:
             pool.Add(file)
     schemas: dict[str, object] = {}
+    checked: set[str] = set()
     for model in SSE_EVENT_MODELS.values():
         schema = model.model_json_schema(mode="serialization")
-        descriptor = SSE_JSON_DESCRIPTORS.get(model.__name__)
-        if descriptor is not None:
+        definitions = schema.get("$defs", {})
+        for name, shape in [(model.__name__, schema), *definitions.items()]:
+            descriptor = SSE_JSON_DESCRIPTORS.get(name)
+            if descriptor is None:
+                continue
             if pool is not None:
                 descriptor = pool.FindMessageTypeByName(descriptor.full_name)
-            assert_public_schema(schema, descriptor)
-            schema["x-protobuf-message"] = descriptor.full_name
+            assert_public_schema({**shape, "$defs": definitions}, descriptor)
+            checked.add(name)
+            if name == model.__name__:
+                schema["x-protobuf-message"] = descriptor.full_name
         schema["$id"] = f"urn:boxteam:sse:{model.__name__}"
         schemas[model.__name__] = schema
+    missing = sorted(set(SSE_JSON_DESCRIPTORS) - checked)
+    if missing:
+        raise ValueError(f"公开 SSE 结构未被导出或校验: {missing}")
     payload = {"generated": True, "schemas": schemas}
     target = (
         args.output_root

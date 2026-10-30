@@ -4,17 +4,18 @@ from datetime import UTC
 from typing import cast
 
 from google.protobuf import json_format
+from google.protobuf.descriptor import Descriptor
 from google.protobuf.message import Message
 from pydantic import BaseModel
 
 from app.core.identifier import validate_session_id
 from app.protocol.codecs.json import (
+    map_enum_values,
     struct_from_mapping,
     struct_to_mapping,
     timestamp_from_datetime,
 )
 from app.protocol.generated.boxteam.workspace.v2 import (
-    job_pb2,
     session_interaction_pb2,
     session_stream_pb2,
 )
@@ -39,7 +40,10 @@ from app.schemas.internal_v2.session_status import (
 
 def _parse_model(model: BaseModel, target: Message) -> None:
     payload = cast(dict[str, object], model.model_dump(mode="json"))
-    json_format.ParseDict(payload, target, ignore_unknown_fields=False)
+    json_format.ParseDict(
+        map_enum_values(payload, cast(Descriptor, target.DESCRIPTOR), to_proto=True),
+        target, ignore_unknown_fields=False,
+    )
 
 
 def _header(event: SessionExecutionEventBaseDTO) -> session_interaction_pb2.SessionExecutionEventHeader:
@@ -53,28 +57,6 @@ def _header(event: SessionExecutionEventBaseDTO) -> session_interaction_pb2.Sess
     if event.job_id is not None:
         header.job_id = event.job_id
     return header
-
-
-def _job_status(value: str) -> int:
-    status_name = f"JOB_STATUS_{value.upper()}"
-    status = getattr(job_pb2, status_name, None)
-    if not isinstance(status, int):
-        raise TypeError(f"SSE JobStatus 无法映射到 Protobuf: {value}")
-    return status
-
-
-def _job_progress(payload: JobProgressDTO) -> job_pb2.JobProgress:
-    status_value = getattr(payload.status, "value", payload.status)
-    progress = job_pb2.JobProgress(
-        job_id=payload.job_id,
-        status=_job_status(str(status_value)),
-        progress=payload.progress,
-    )
-    if payload.current_step_id is not None:
-        progress.current_step_id = payload.current_step_id
-    if payload.message is not None:
-        progress.message = payload.message
-    return progress
 
 
 def _session_status(
@@ -119,15 +101,15 @@ def session_sse_to_proto(value: SessionExecutionSseDTO) -> session_stream_pb2.Se
     if isinstance(source_event, MessageUpdatedExecutionEventDTO):
         _parse_model(source_event.payload, event.message_updated)
     elif isinstance(source_event, JobUpdatedExecutionEventDTO):
-        event.job_updated.CopyFrom(_job_progress(source_event.payload))
+        _parse_model(source_event.payload, event.job_updated)
     elif isinstance(source_event, JobStepUpdatedExecutionEventDTO):
         _parse_model(source_event.payload, event.job_step_updated)
     elif isinstance(source_event, JobStatusChangedExecutionEventDTO):
-        event.job_status_changed.CopyFrom(_job_progress(source_event.payload))
+        _parse_model(source_event.payload, event.job_status_changed)
     elif isinstance(source_event, SessionStatusChangedExecutionEventDTO):
         event.session_status_changed.CopyFrom(_session_status(source_event.payload))
     elif isinstance(source_event, SessionCompletedExecutionEventDTO):
-        event.session_completed.CopyFrom(_job_progress(source_event.payload))
+        _parse_model(source_event.payload, event.session_completed)
     elif isinstance(source_event, SessionErrorExecutionEventDTO):
         _parse_model(source_event.payload, event.session_error)
     elif isinstance(source_event, TraceObservedExecutionEventDTO):
@@ -142,23 +124,18 @@ def session_sse_to_proto(value: SessionExecutionSseDTO) -> session_stream_pb2.Se
     )
 
 
-def _job_progress_to_json(value: job_pb2.JobProgress) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "job_id": value.job_id,
-        "status": job_pb2.JobStatus.Name(value.status).removeprefix("JOB_STATUS_").lower(),
-        "current_step_id": value.current_step_id if value.HasField("current_step_id") else None,
-        "progress": value.progress,
-        "message": value.message if value.HasField("message") else None,
-    }
-    return payload
-
-
 def _event_payload_to_json(event: session_interaction_pb2.SessionExecutionEvent) -> dict[str, object]:
     payload_case = event.WhichOneof("payload")
     if payload_case is None:
         raise ValueError(f"Workspace SSE 事件缺少 payload: type={event.type}")
     if payload_case in {"job_updated", "job_status_changed", "session_completed"}:
-        return _job_progress_to_json(getattr(event, payload_case))
+        value = getattr(event, payload_case)
+        payload = json_format.MessageToDict(
+            value, preserving_proto_field_name=True, always_print_fields_with_no_presence=True,
+        )
+        return JobProgressDTO.model_validate(
+            map_enum_values(payload, value.DESCRIPTOR, to_proto=False),
+        ).model_dump(mode="json")
     if payload_case == "session_status_changed":
         value = event.session_status_changed
         if value.observation_state:

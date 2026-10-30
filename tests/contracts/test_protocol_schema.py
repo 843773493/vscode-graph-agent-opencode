@@ -12,7 +12,10 @@ from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError, validate
 
-from app.protocol.generated.boxteam.workspace.v2 import public_pb2
+from app.protocol.generated.boxteam.workspace.v2 import (
+    public_pb2,
+    session_interaction_pb2,
+)
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2.persistent_task import TaskConditionDTO
@@ -21,7 +24,11 @@ from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 
 @pytest.mark.parametrize("name", SSE_JSON_DESCRIPTORS)
 def test_same_shape_public_schema_matches_descriptor_and_keeps_business_constraints(name: str) -> None:
-    schema = SSE_EVENT_MODELS[name].model_json_schema(mode="serialization")
+    if name in SSE_EVENT_MODELS:
+        schema = SSE_EVENT_MODELS[name].model_json_schema(mode="serialization")
+    else:
+        root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
+        schema = {**root["$defs"][name], "$defs": root["$defs"]}
     original = deepcopy(schema)
     assert_public_schema(schema, SSE_JSON_DESCRIPTORS[name])
     assert schema == original
@@ -82,7 +89,10 @@ def test_business_union_still_rejects_public_field_drift(mutation: str) -> None:
         assert_public_schema(schema, public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"])
 
 
-@pytest.mark.parametrize("message_name", ["TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO"])
+@pytest.mark.parametrize("message_name", [
+    "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO", "JobProgress",
+    "JobStepProgress", "MessageObservation", "SessionError", "TraceObserved",
+])
 def test_export_checks_fresh_proto_descriptor_before_publishing(tmp_path: Path, message_name: str) -> None:
     """模拟 proto 已新增字段而 Python binding 未更新，不能用旧 binding 自证一致。"""
     bundle = FileDescriptorSet()
@@ -98,6 +108,7 @@ def test_export_checks_fresh_proto_descriptor_before_publishing(tmp_path: Path, 
 
     for descriptor in SSE_JSON_DESCRIPTORS.values():
         collect(descriptor.file)
+    collect(session_interaction_pb2.DESCRIPTOR)
     message = next(message for file in bundle.file for message in file.message_type if message.name == message_name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
     descriptor_set = tmp_path / "fresh.binpb"
