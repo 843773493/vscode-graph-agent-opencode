@@ -9,7 +9,9 @@ storage/
 ├── test_sql_assets.py       SQLite SQL 资源定位和缺失行为
 ├── test_sqlite_state.py     数据库 owner、迁移与连接行为
 ├── test_sqlite_vfs.py       当前 Python SQLite VFS 路径预算
-└── test_sqlite_errors.py    运行时失败事实、原始诊断与异常类型
+├── test_sqlite_errors.py    运行时失败事实、原始诊断与异常类型
+├── test_sqlite_connection_failures.py 连接发布前失败与原句柄回收
+└── test_sqlite_ownership_retry.py 锁释放前失败与原 owner 关闭重试
 ```
 
 # 可修改内容

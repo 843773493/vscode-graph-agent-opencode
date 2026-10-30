@@ -1545,3 +1545,9 @@
 - 路径预算、VFS、进程所有权锁、关闭访问及 schema 拒绝迁齐既有 `failure_detail`；删除原独立日志出口。原生位置与日志次错留直接 cause，规则拒绝同样保留明确原因；错误类别、系统码、SQLite版本和原数值事实保持，不改变锁、连接或迁移顺序。
 - 原生产在真实日志 ENOTDIR 下23项失败，另23条teardown诊断断言失败不重复计数；最终SQLite单测66 passed／3个Windows场景skip。首次候选的caplog为空来自pytest阶段间重排handler，修正只读观察顺序后原故障和原件断言全部通过。产品创建Session后的所有权冲突、结构拒绝及冷容器重试4项通过；首轮2项将锁文件位置误写为数据库位置，按实际原生owner修正后通过。没有用装具代写Session或迁移状态；损坏账本仅作为故障输入，原库恢复是显式测试操作。
 - 原命令、源码指纹、raw／实际退出码、类型基线和作者AST核对在 `out/tests/temp/uri-global-closure/artifacts/sqlite-diagnostic-*`，总索引为 `verification-152.json`。完整HEAD归档逐blob核验后已删除源码副本；只改原6函数，29处原生锁／SQLite调用AST保持。正式集成保留原60秒矩阵、跨worktree锁及进程外4GiB／两CPU保护。本片不代真实网络、Gateway/Web、Windows、独立Backend重启、所有SQLite原生I/O出口或URI总门；2.2／7.2及前端／协作延期项继续未勾。
+
+### 2026-10-30 SQLite 原所有权句柄的关闭重试（2.2／7.2部分收口）
+
+- 原进程锁 owner 只在原生句柄实际关闭后移除引用；记录该句柄是否已成功解锁，显式重试不重复解锁。数据库关闭立即撤销新连接准入，同一 close 入口仍可重试原 owner 的释放。保留原 unlock→close 顺序、原生错误类别／errno／cause 和诊断出口，不新增清理队列、schema 或替代 owner。
+- 原实现四项反例均检出释放前丢失句柄。修复后94项SQLite定向单测通过、3项Windows测试在Linux跳过；包含真实文件锁仍占用、关闭／解锁双错、真实日志ENOTDIR、原库字节不变、同入口重试、已解锁不重复释放及冷重开。原产品Session创建→存储拒绝→原件保全→冷container重试4项集成通过，Ruff通过；首轮静态检查的嵌套with已合并，定向4项复验通过。
+- 准确命令、源码指纹、原始输出及退出码保留在 `out/tests/temp/sqlite_ownership_retry_20261030/artifacts/{red,verification}.json` 及同目录日志。测试均有进程外超时／4GiB保护，集成沿用单进程闸门。本片不证明Windows实机、Gateway/Web或所有SQLite连接关闭前失败的接管；后者仍在原连接owner处保留TODO。2.2／7.2总门及前端／协作延期边界保持。

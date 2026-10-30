@@ -241,6 +241,7 @@ class SQLiteProcessOwnership:
     def __init__(self, database_path: Path) -> None:
         self._lock_path = database_path.with_name(f".{database_path.name}.lock")
         self._lock_handle: BinaryIO | None = None
+        self._locked = False
 
     @contextmanager
     def _io(self, stage: str) -> Iterator[None]:
@@ -281,18 +282,27 @@ class SQLiteProcessOwnership:
                 handle.close()
             raise
         self._lock_handle = handle
+        self._locked = True
 
     def release(self) -> None:
         handle = self._lock_handle
         if handle is None:
             return
-        self._lock_handle = None
         try:
-            with self._io("ownership_release"):
-                portalocker.unlock(handle)
+            if self._locked:
+                with self._io("ownership_release"):
+                    portalocker.unlock(handle)
+                self._locked = False
         finally:
-            with self._io("ownership_close"):
-                handle.close()
+            try:
+                with self._io("ownership_close"):
+                    handle.close()
+            finally:
+                # 原生关闭可能在释放前失败，原 owner 必须保留句柄供显式重试；
+                # 已成功解锁则不再解锁，避免 Windows 拒绝重复释放。
+                if handle.closed:
+                    self._lock_handle = None
+                    self._locked = False
 
 
 class SQLiteStateDatabase:
@@ -493,8 +503,6 @@ class SQLiteStateDatabase:
             self._close_connection(connection)
 
     def close(self) -> None:
-        if self._closed:
-            return
         self._closed = True
         self._ownership.release()
 
