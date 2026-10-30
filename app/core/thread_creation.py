@@ -472,6 +472,12 @@ def _thread_conflict(
     return RuntimeError(detail)
 
 
+def _thread_path_exists(directory: Path, session_id: str, thread_id: str, stage: str) -> bool:
+    """目录探测保留断链符号链接与原错误归属，供同一创建链的 worker 使用。"""
+    with _thread_access(session_id, thread_id, stage):
+        return directory.exists() or directory.is_symlink()
+
+
 def verify_node_directory(
     directory: Path,
     inventory: dict[str, str],
@@ -778,6 +784,7 @@ class ThreadCreationService:
         async with self._key_lock(idempotency_key), self._holders.lock_for(f"{session_id}/{idempotency_key}"):
             # 步骤 1：准入 = topology shared → Session gate exclusive（2.3-A
             # 固定锁序），fresh 验证后冻结 record（等价 operation lease）。
+            # TODO(5.4)：准入/发布的同步catalog与control事务仍待收口；本轮只迁冻结后的目录I/O。
             async with self._gate.shared(), self._session_gate.exclusive(session_id):
                 node = self._store.get_node(session_id)
                 self._validate_owner_node(node)
@@ -852,8 +859,9 @@ class ThreadCreationService:
                 artifact_manifest=artifact_manifest,
             )
             inventory = build_thread_node_inventory(expected_files)
-            with _thread_access(session_id, record.child_thread_id, "locate"):
-                final_exists = final_dir.exists() or final_dir.is_symlink()
+            final_exists = await run_sync_shielded(
+                _thread_path_exists, final_dir, session_id, record.child_thread_id, "locate",
+            )
             if record.request_intent_json is not None and record.state == "preparing":
                 capture = self._store.get_fork_source_capture(creation_key=idempotency_key)
                 if capture is not None:
@@ -898,15 +906,17 @@ class ThreadCreationService:
                         record, session_id=session_id, session_dir=session_dir, inventory=inventory,
                         before_publish=before_publish, before_abort=before_abort,
                     )
-                verify_node_directory(
+                await run_sync_shielded(
+                    verify_node_directory,
                     final_dir,
                     inventory,
                     session_id=session_id, thread_id=record.child_thread_id, stage="恢复(最终 locator 已存在)",
                     published=record.state == "published",
                     materialized_rollout=self._has_fork_completion(record, session_id),
                 )
-                with _thread_access(session_id, record.child_thread_id, "locate"):
-                    staging_exists = staging_dir.exists() or staging_dir.is_symlink()
+                staging_exists = await run_sync_shielded(
+                    _thread_path_exists, staging_dir, session_id, record.child_thread_id, "locate",
+                )
                 if staging_exists:
                     raise RuntimeError(
                         "最终 locator 与 staging 同时存在（外部改动，fail "
@@ -922,8 +932,11 @@ class ThreadCreationService:
                     before_abort=before_abort,
                     on_published=on_published,
                 )
-            self._prepare_staging(staging_dir, session_dir, expected_files, inventory, record, session_id)
-            self._rename_staging_to_final(
+            await run_sync_shielded(
+                self._prepare_staging, staging_dir, session_dir, expected_files, inventory, record, session_id,
+            )
+            await run_sync_shielded(
+                self._rename_staging_to_final,
                 staging_dir,
                 final_dir,
                 session_dir,
@@ -1293,16 +1306,18 @@ class ThreadCreationService:
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
         staging_dir = native_io_path(session_dir / published.staging_locator)
-        with _thread_access(session_id, published.child_thread_id, "published_staging"):
-            if staging_dir.exists() or staging_dir.is_symlink():
-                raise RuntimeError(
-                    "publish 后 staging 仍残留（外部改动，fail closed）: "
-                    f"key={published.thread_creation_idempotency_key!r}, "
-                    f"session_id={session_id}, thread_id={published.child_thread_id}"
-                )
+        if await run_sync_shielded(
+            _thread_path_exists, staging_dir, session_id, published.child_thread_id, "published_staging",
+        ):
+            raise RuntimeError(
+                "publish 后 staging 仍残留（外部改动，fail closed）: "
+                f"key={published.thread_creation_idempotency_key!r}, "
+                f"session_id={session_id}, thread_id={published.child_thread_id}"
+            )
         # 复验最终目录与唯一可见性提交点产物（published 幂等返回的统一
         # 收敛出口）。
-        verify_node_directory(
+        await run_sync_shielded(
+            verify_node_directory,
             final_dir,
             inventory,
             session_id=session_id, thread_id=published.child_thread_id, stage="published 复验",
