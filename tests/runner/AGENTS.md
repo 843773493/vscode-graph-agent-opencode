@@ -6,6 +6,8 @@
 
 `integration-thread-compaction-isolation` 经真实 Gateway/Backend 消息生成六轮长历史和 child，再由手动摘要入口及后继执行生成摘要，核 child 完整存储不变、硬重启及未摘要历史续聊请求。两项 Thread 视图 suite 分别选择单个用例，串行运行，各保留180秒/4GiB及原集成独占闸门，不代替 Web、Windows 或完整8.3。
 
+`integration-child-compaction-isolation` 经正式工具选择、真实消息/fork/child 摘要工具及归档读取，核 main 完整存储隔离、硬重启和双方续聊请求；固定300秒/4GiB及原集成独占闸门。模型 usage 由原 model_stream 编码器提供，不修改产品摘要阈值，不代替 Web、Windows 或完整8.3。
+
 `integration-resource-cold-sync-retry`经正式资源API、真实Node/PTY或Chromium/HTTP及冷owner验证同步失败后显式重试原版本、未知占用保护与终态结算，固定90秒/4GiB和原集成独占闸门；不代替Backend硬重启、Gateway/Web、Windows或全shutdown验收。
 
 `integration-shared-backend-history-restart` 通过真实 Gateway／共享 Backend、双挂载 Session 和消息入口，分别验证 Backend 整组重启及 Gateway 冷重启后的完整组、原历史与续轮请求。模型复用 model_stream，固定360秒／4GiB和集成独占闸门；不代替Web、Windows、任意故障恢复或全部多工作区验收。

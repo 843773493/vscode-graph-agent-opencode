@@ -1364,3 +1364,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - Ruff和strict通过；完整HEAD归档的生产Pyright与最终三文件均为相同6条既有诊断，逐项比对文件/规则/消息/位置零新增，新增两份测试零诊断，不称类型全绿。作者AST自查确认仅 ThreadCreationService._publish_in_gate 变化，imports和公开签名不变，未新增生产模块/领域或双轨；不称独立审查。
 - 初版装具遗漏details参数，前两轮未完成并以143结束，均不作业务红例；补同产品入口的finally收尾后暴露并修正参数错误。单测首次两轮分别被缺参数和空历史回调合同拒绝，也不作目标缺陷证据；真正红例是发布阶段的两项RuntimeError未传播。原始输出全部保留，不改变fork期限。准确命令、实际退出码、收据指纹、类型基线及范围见 out/tests/temp/child_publication_20261030/artifacts/verification.json。
 - 本切片是进程内消息/Agent与fork服务验收，不新增真实网络、Gateway/Web、OS强杀重启或Windows证据，不处理延期团队功能。7.5和8.3组合门仍未关闭，整体保持111/119；其他agent前端与共享暂存改动不纳入本次提交。
+
+### 2026-10-30 8.3 child 工具摘要、归档与双方冷恢复隔离（部分）
+
+- 正式 `integration-child-compaction-isolation` 经真实 Gateway/Backend 消息生成六轮共同历史，通过公开 fork 和工具选择入口创建 child，再由 child 实际调用 `compact_conversation` 与 `read_compaction_history`。核唯一 canonical 摘要及其精确 Turn/item 身份、工具配对、实际中段移除和归档读回；main 的完整 SQLite/JSONL、历史及归档位置均不被 child 摘要改写。没有手填 checkpoint、view、CSM 或归档，也未改产品摘要阈值；usage 复用原 model_stream 编码器。
+- 后端 SIGKILL 重启后，两条 thread 的完整存储、历史和 child 完整活动详情不变；child 从原归档读回相同正文，旧对话消息不复活，模型显式读取的归档 tool 正文正常保留。main 续聊仍包含所有未摘要原文及自己的独立输入，排除 child 摘要和后继输入；双方执行均不改变 sibling 存储。14 次请求逐项审计原封存 assembly、精确 owner、canonical 引用与 request hash。
+- 最终 suite 为1 passed/202.98秒，runner 211.71秒，固定300秒/4GiB及原跨worktree集成独占闸门；1112份 Python 产品源码及本片测试/装具/矩阵运行前后指纹一致。Ruff与矩阵注册检查通过；真实 Pyright 当前44条诊断逐项对应 HEAD 装具基线44条，零新增，新测试零诊断，不称类型全绿。作者结构自查不替代独立审查。
+- 首轮1 failed/150.45秒是测试未显式请求 history include，误把默认无活动正文当成完整详情；原 SQLite 证明摘要已归属 child 当前 Turn。修正为正式完整详情读取，保留摘要身份和工具配对断言；原输出保留，不作为产品缺陷红例。准确命令、退出码、源码/产物指纹、失败归因及作者审查见 `out/tests/temp/child_compaction_isolation_20261030/artifacts/verification.json`。
+- 本片不新增前端、真实外部 Provider、同步入口、Windows、删除/GC竞争或完整8.3组合门证据；7.5和8.3继续未勾，整体保持111/119。用户延期的团队/MCP持有项与前端实施边界保持，其他agent改动及共享暂存不纳入提交。

@@ -9,7 +9,7 @@ import os
 import signal
 import sqlite3
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import ExitStack, closing
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -66,7 +66,7 @@ from tests.support.workspaces import (
 async def _plan_communication_calls(
     replay: ModelStreamReplay, client: httpx.AsyncClient, workspace: Path,
     session_id: str, responses: list[dict[str, object]],
-    *, thread_id: str | None = None,
+    *, thread_id: str | None = None, usage: Mapping[str, int] | None = None,
 ) -> tuple[list[str], str]:
     if thread_id is None:
         main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
@@ -80,6 +80,7 @@ async def _plan_communication_calls(
             response_id=f"chatcmpl-communication-{index}", model="e2e-stub-model",
             deltas=({"role": "assistant", **response},),
             finish_reason="tool_calls" if "tool_calls" in response else "stop",
+            usage=usage,
         ),
     ).raw["interactions"][0] for index, response in enumerate(responses)]
     return replay.control.plan_model_calls(session_id, thread_id, interactions), thread_id
@@ -134,9 +135,10 @@ class CommunicationCase:
 
     async def plan(
         self, session_id: str, responses: list[dict[str, object]], *, thread_id: str | None = None,
+        usage: Mapping[str, int] | None = None,
     ) -> list[str]:
         calls, thread_id = await _plan_communication_calls(
-            self.replay, self.client, self.workspace, session_id, responses, thread_id=thread_id,
+            self.replay, self.client, self.workspace, session_id, responses, thread_id=thread_id, usage=usage,
         )
         self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
         return calls
