@@ -15,6 +15,8 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 （`subtree_delete.py`）、只读查询（`queries.py`）、备份与目录一致性（`backup.py`），表 DDL 与
 共享列清单收敛在 `_schema.py`。
 
+`diagnostics.py` 只将原生校验位置附在原异常上，并复用 core.failure_detail 输出逻辑 artifact、阶段与已知规则；不解析异常正文、不持久化状态、不吞掉日志次错或替换原异常类别。启动、schema、SQLite完整性与只读备份消费同一出口。
+
 `sqlite_integrity.py` 是启动与只读备份共用的 SQLite 页、索引、约束和外键校验；
 调用方注册既有表达式索引函数并持同一读快照，不重建索引或修复数据。
 `schema_validation.py` 是这两个入口共用的只读schema闸门；既有当前版本缺表、

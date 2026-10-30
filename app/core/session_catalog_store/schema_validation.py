@@ -15,6 +15,7 @@ from app.core.session_catalog_store._schema import (
     _REQUIRED_TABLES,
 )
 from app.core.session_catalog_store.contracts import CatalogMaintenanceRequiredError
+from app.core.session_catalog_store.diagnostics import catalog_failure
 
 
 def require_catalog_schema(
@@ -38,11 +39,16 @@ def require_catalog_schema(
         if table not in present
     ]
     if missing:
-        raise RuntimeError(
+        error = RuntimeError(
             f"{database_label} 缺表，拒绝以空表重建（库被外部改写）: "
             f"path={database_path}, user_version={current}, "
             f"missing={missing}"
         )
+        raise RuntimeError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} 缺表，拒绝以空表重建（库被外部改写）: "
+            f"user_version={current}, missing={missing}",
+        )) from error
     node_columns = {
         str(row[1])
         for row in connection.execute("PRAGMA table_info(nodes)").fetchall()
@@ -61,11 +67,15 @@ def require_catalog_schema(
                 "graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash"}
         <= creation_columns
     ):
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} v8 缺少权威会话字段，拒绝自动修复: "
             f"path={database_path}, nodes={sorted(node_columns)}, "
             f"creation_records={sorted(creation_columns)}"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} v8 缺少权威会话字段，拒绝自动修复",
+        )) from error
     metadata_columns = {
         str(row[1])
         for row in connection.execute(
@@ -77,24 +87,36 @@ def require_catalog_schema(
         "navigation_revision",
     } - metadata_columns
     if missing_columns:
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} metadata 缺少必需列，拒绝自动修复: "
             f"path={database_path}, missing={sorted(missing_columns)}"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} metadata 缺少必需列，拒绝自动修复: missing={sorted(missing_columns)}",
+        )) from error
     metadata_row = connection.execute(
         "SELECT 1 FROM catalog_metadata WHERE singleton_id = 1"
     ).fetchone()
     if metadata_row is None:
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} 缺少 catalog_metadata 单例行，"
             "拒绝重置备份或导航 revision: "
             f"path={database_path}"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} 缺少 catalog_metadata 单例行，拒绝重置备份或导航 revision",
+        )) from error
     capture_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(fork_source_captures)")}
     if current >= 11 and "source_point_json" not in capture_columns:
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} 缺少实际冻结 source point 列，拒绝自动修复"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=str(error),
+        )) from error
     canonical = sqlite3.connect(":memory:")
     try:
         canonical.execute(_NODES_TABLE_DDL)
@@ -127,10 +149,15 @@ def require_catalog_schema(
         if present_queue_sql.get(name) != canonical_queue_sql[name]
     ]
     if mismatched_queue_schema:
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} navigation queue schema 缺失或定义不符，拒绝自动修复: "
             f"path={database_path}, objects={mismatched_queue_schema}"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} navigation queue schema 缺失或定义不符，拒绝自动修复: "
+            f"objects={mismatched_queue_schema}",
+        )) from error
 
     present_trigger_sql = {
         str(row[0]): str(row[1])
@@ -149,10 +176,15 @@ def require_catalog_schema(
         and present_trigger_sql[name] != canonical_trigger_sql[name]
     }
     if missing_triggers or mismatched_triggers:
-        raise CatalogMaintenanceRequiredError(
+        error = CatalogMaintenanceRequiredError(
             f"{database_label} 缺少导航 revision triggers 或定义不符，"
             "拒绝继续读写: "
             f"path={database_path}, "
             f"missing={sorted(missing_triggers)}, "
             f"definition_mismatch={sorted(mismatched_triggers)}"
         )
+        raise CatalogMaintenanceRequiredError(catalog_failure(
+            error, database_path=database_path, stage="catalog-schema",
+            reason=f"{database_label} 缺少导航 revision triggers 或定义不符，拒绝继续读写: "
+            f"missing={sorted(missing_triggers)}, definition_mismatch={sorted(mismatched_triggers)}",
+        )) from error

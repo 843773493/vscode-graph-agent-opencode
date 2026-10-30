@@ -1533,3 +1533,9 @@
 - 关闭、回滚隔离及 metadata 缺失沿原拒绝点复用 failure_detail，只公开逻辑 artifact、阶段、类别与 SQLite 码；位置和日志次错留原异常链。原事务提交／回滚／关闭顺序及缺失 metadata 拒绝保持，不新增错误类型或存储链。
 - 原实现16项单测反例及2项ASGI反例检出位置外泄；最终310项catalog单测通过。集成通过HTTP创建Session，实际触发回滚失败隔离，核409／request_id、原异常身份与原件不变，再由冷container重开经同一路由核原Session；不以手填隔离状态代替最终验收。
 - Ruff和3文件Pyright通过；类型首轮发现新装具注册handler的参数方差错误，已按框架的Exception合同收窄并复验。作者AST核对仅原4方法改变，facade404行仍属原生命周期职责，未增产品模块；单测新目录含四段AGENTS，未扩大既有根目录测试文件数。准确命令、指纹、raw和退出码见 `out/tests/temp/uri-global-closure/artifacts/catalog-access-*` 及 `verification-140.json`。测试串行、60秒matrix及进程外4GiB／两CPU保护保持；本片不代真实网络、独立进程重启、Gateway/Web或启动／schema／备份其它出口，2.2／7.2仍未勾，前端与延期项保持。
+
+### 2026-10-30 catalog 启动与备份校验错误（2.2／7.2部分收口）
+
+- 启动版本、schema、SQLite完整性和只读备份校验迁齐同一诊断出口：位置、外部改写的列名／表名和完整检查结果留原异常链，公开已知规则、阶段、类别及适用SQLite码；不解析或脱敏异常正文。备份类型／碰撞／缺失／checksum／落后拒绝保持原异常类别，SQL资产、schema版本与事务顺序不变。
+- 原实现46项定向反例中42项检出位置／原值外泄，另4项检出source-point拒绝缺少阶段和诊断；最终381项单测及28项集成通过。集成由实际Session创建和导航worker生成关键事实，核启动与只读备份拒绝、原库及会话原字节、健康源可读，以及显式恢复产品备份后的原身份／revision。最初组合集成在60秒到期，保留TIMEOUT且不计部分通过；随后拆成11项错误／完整性与17项schema两组串行，均保留原60秒及4GiB／两CPU保护，未删场景或放宽断言。
+- Ruff通过；Pyright原10／现10，按文件、最窄AST owner、规则、完整消息与表达式一致，新增模块和测试零诊断，不称类型全绿。完整HEAD归档4779个blob核对后用于类型基线，临时源码已删除；作者核原6函数改变、63处SQLite执行／提交／回滚／备份／关闭调用AST一致，新诊断模块13行、目录17个Python文件。命令、指纹、raw／退出码及适用局限见 `out/tests/temp/uri-global-closure/artifacts/catalog-maintenance-*` 和 `verification-147.json`。本片不代独立审查、真实网络、Gateway/Web、Windows或独立Backend重启，也不证明其它catalog原生I/O出口及全局不变量；2.2／7.2继续未勾，前端与延期协作保持。

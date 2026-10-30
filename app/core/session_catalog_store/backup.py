@@ -24,6 +24,7 @@ from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
     _parse_frozen_session_locators,
 )
+from app.core.session_catalog_store.diagnostics import catalog_failure
 from app.core.session_catalog_store.queries import _register_session_list_functions
 from app.core.session_catalog_store.schema_validation import require_catalog_schema
 from app.core.session_catalog_store.sqlite_integrity import (
@@ -66,13 +67,24 @@ class CatalogBackupMixin:
         时刻 catalog generation，``checksum`` 是备份文件 sha256。
         """
         if not isinstance(backup_path, Path):
-            raise TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+            error = TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+            raise TypeError(catalog_failure(
+                error, database_path=backup_path, stage="catalog-backup-target",
+                reason="backup_path 必须是 Path",
+            )) from error
         resolved = backup_path.expanduser().resolve()
         if resolved == self.database_path:
-            raise ValueError(f"备份目标不能是 catalog 本体: {resolved}")
+            error = ValueError(f"备份目标不能是 catalog 本体: {resolved}")
+            raise ValueError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-target",
+                reason="备份目标不能是 catalog 本体",
+            )) from error
         validate_sqlite_path_budget(resolved)
         if native_io_path(resolved).exists():
-            raise RuntimeError(f"备份目标已存在，拒绝覆盖: {resolved}")
+            error = RuntimeError(f"备份目标已存在，拒绝覆盖: {resolved}")
+            raise RuntimeError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-target", reason="备份目标已存在，拒绝覆盖",
+            )) from error
         native_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
         with self._connection_lock:
             self._ensure_open()
@@ -110,20 +122,30 @@ class CatalogBackupMixin:
         - 相等 → 返回核对报告（不修改任何数据）。
         """
         if not isinstance(backup_path, Path):
-            raise TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+            error = TypeError(f"backup_path 必须是 Path: {backup_path!r}")
+            raise TypeError(catalog_failure(
+                error, database_path=backup_path, stage="catalog-backup-target", reason="backup_path 必须是 Path",
+            )) from error
         resolved = backup_path.expanduser().resolve()
         if not native_io_path(resolved).is_file():
-            raise CatalogMaintenanceRequiredError(
+            error = CatalogMaintenanceRequiredError(
                 f"一致性备份缺失，须进入维护模式核对: {resolved}"
             )
+            raise CatalogMaintenanceRequiredError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-check", reason="一致性备份缺失，须进入维护模式核对",
+            )) from error
         actual_checksum = _sha256_file(resolved)
         if actual_checksum != expected_checksum:
-            raise CatalogMaintenanceRequiredError(
+            error = CatalogMaintenanceRequiredError(
                 "一致性备份 checksum 不符（被外部改动或损坏，须进入维护模式"
                 "核对并保留原数据）: "
                 f"path={resolved}, expected={expected_checksum}, "
                 f"actual={actual_checksum}"
             )
+            raise CatalogMaintenanceRequiredError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-check",
+                reason="一致性备份 checksum 不符（被外部改动或损坏，须进入维护模式核对并保留原数据）",
+            )) from error
         # 备份是独立的单文件快照；只读且不创建 WAL/SHM，不调用会初始化的 catalog 构造器。
         try:
             snapshot = sqlite3.connect(sqlite_file_uri(resolved) + "?mode=ro&immutable=1", uri=True)
@@ -147,7 +169,12 @@ class CatalogBackupMixin:
                 copied_generation = int(row[0])
             finally:
                 snapshot.close()
-        except (sqlite3.DatabaseError, RuntimeError) as error:
+        except sqlite3.DatabaseError as error:
+            raise CatalogMaintenanceRequiredError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-read",
+                reason="一致性备份损坏或结构不完整，须进入维护模式核对",
+            )) from error
+        except RuntimeError as error:
             raise CatalogMaintenanceRequiredError(
                 f"一致性备份损坏或结构不完整，须进入维护模式核对: {error}"
             ) from error
@@ -158,11 +185,16 @@ class CatalogBackupMixin:
             )
         current = self.current_generation()
         if backup_generation < current:
-            raise CatalogMaintenanceRequiredError(
+            error = CatalogMaintenanceRequiredError(
                 "一致性备份落后于已提交操作（须进入维护模式核对，不得扫盘补齐）: "
                 f"backup_generation={backup_generation}, "
                 f"current_generation={current}, path={resolved}"
             )
+            raise CatalogMaintenanceRequiredError(catalog_failure(
+                error, database_path=resolved, stage="catalog-backup-check",
+                reason="一致性备份落后于已提交操作（须进入维护模式核对，不得扫盘补齐）: "
+                f"backup_generation={backup_generation}, current_generation={current}",
+            )) from error
         return CatalogIntegrityReport(
             generation=current,
             quick_check="ok",

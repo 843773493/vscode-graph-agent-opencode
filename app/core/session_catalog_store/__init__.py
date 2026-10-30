@@ -64,6 +64,7 @@ from app.core.session_catalog_store.contracts import (
     SubtreeFrozenNode,
 )
 from app.core.session_catalog_store.creation_journal import CreationJournalMixin
+from app.core.session_catalog_store.diagnostics import catalog_failure
 from app.core.session_catalog_store.fork_retention import ForkRetentionMixin
 from app.core.session_catalog_store.fork_source_capture import ForkSourceCaptureMixin
 from app.core.session_catalog_store.nodes import CatalogNodesMixin
@@ -212,16 +213,20 @@ class SessionCatalogStore(
             )
         except sqlite3.DatabaseError as error:
             connection.close()
-            raise CatalogMaintenanceRequiredError(
-                "session catalog 无法打开（文件损坏或被外部改写，须从备份恢复"
-                f"或进入维护模式核对）: path={self.database_path}: {error}"
-            ) from error
+            raise CatalogMaintenanceRequiredError(catalog_failure(
+                error, database_path=self.database_path, stage="catalog-open",
+                reason="session catalog 无法打开（文件损坏或被外部改写，须从备份恢复或进入维护模式核对）",
+            )) from error
         if journal_mode.lower() != "wal":
             connection.close()
-            raise RuntimeError(
+            error = RuntimeError(
                 "session catalog 无法启用 WAL: "
                 f"path={self.database_path}, journal_mode={journal_mode}"
             )
+            raise RuntimeError(catalog_failure(
+                error, database_path=self.database_path, stage="catalog-journal",
+                reason="session catalog 无法启用 WAL",
+            )) from error
         return connection
 
     def _initialize(self) -> None:
@@ -231,29 +236,43 @@ class SessionCatalogStore(
         )
         if current not in (0, self.SCHEMA_VERSION):
             if current < self.SCHEMA_VERSION:
-                raise CatalogMaintenanceRequiredError(
+                error = CatalogMaintenanceRequiredError(
                     "session catalog schema 旧版不受支持，拒绝自动迁移；"
                     "须通过显式维护流程核对或恢复备份: "
                     f"path={self.database_path}, user_version={current}, "
                     f"required={self.SCHEMA_VERSION}"
                 )
-            raise RuntimeError(
+                raise CatalogMaintenanceRequiredError(catalog_failure(
+                    error, database_path=self.database_path, stage="catalog-version",
+                    reason="session catalog schema 旧版不受支持，拒绝自动迁移；须通过显式维护流程核对或恢复备份: "
+                    f"user_version={current}, required={self.SCHEMA_VERSION}",
+                )) from error
+            error = RuntimeError(
                 "session catalog schema 版本未知，fail-closed 拒绝打开: "
                 f"path={self.database_path}, user_version={current}, "
                 f"supported={self.SCHEMA_VERSION}"
             )
+            raise RuntimeError(catalog_failure(
+                error, database_path=self.database_path, stage="catalog-version",
+                reason="session catalog schema 版本未知，fail-closed 拒绝打开: "
+                f"user_version={current}, supported={self.SCHEMA_VERSION}",
+            )) from error
         if current == 0:
             existing_tables = self._connection.execute(
                 "SELECT name FROM sqlite_master "
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
             if existing_tables:
-                raise CatalogMaintenanceRequiredError(
+                error = CatalogMaintenanceRequiredError(
                     "session catalog user_version 为 0 但已包含数据表，"
                     "拒绝按全新库初始化: "
                     f"path={self.database_path}, "
                     f"tables={[str(row[0]) for row in existing_tables]}"
                 )
+                raise CatalogMaintenanceRequiredError(catalog_failure(
+                    error, database_path=self.database_path, stage="catalog-version",
+                    reason="session catalog user_version 为 0 但已包含数据表，拒绝按全新库初始化",
+                )) from error
         else:
             with self.read_transaction() as connection:
                 verify_catalog_sqlite_integrity(
