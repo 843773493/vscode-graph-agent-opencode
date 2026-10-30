@@ -247,6 +247,8 @@
 
 - 2026-10-29 后续独立切片已解决上述附件12项 setup 版本衔接：固定旧产品原件保留，测试副本先沿现有 owner 升级 catalog10→11、rollout24→26，再做原附件迁移；删除原拟移除的无效 `WORKSPACE_ROOT` 准备。正式四文件 matrix 87 passed/275.43秒、exit0，详见 `verification-066.json` 与附件 change 同日记录。该通过只补附件回归，不补 Goal 的8秒 ready 屏障或4.3/8.2总门。
 
+- 2026-10-30 清理旧快照中两条持续约一周、各占用约一核CPU的孤儿测试Backend后，仅复验原Goal关闭四场景，仍4 failed／70.59秒、exit1，全部止于原`ready.wait()`8秒屏障；1240个采样源码文件前后内容相同。旧进程已核原身份、无父/子进程和端口/连接，并保留精确清理回执；不能据此将超时归因CPU竞争，也未证明Goal终态／关闭断言。原性能TODO及所有期限保持，不再重复运行。准确命令、指纹、原始输出和清理回执见 `out/tests/temp/mounted_gateway_restart_20261030/artifacts/goal-recheck-1.json` 及同目录 `legacy-process-cleanup.json`。
+
 - 2026-10-29 Session创建失败持久说明补核：原未发布分支复用`failure_detail`，不复制任意RuntimeError正文；原实例仍抛出、已发布事实不abort。真实创建/rename/catalog发布与原件/cold catalog回读共116项通过，三类位置文本旧实现未发布反例3项失败；Pyright20→20无新增，Ruff/compileall/strict通过。范围与准确原件见URI change同日记录及`verification-067.json`；不代替独立重启、Windows或4.3/8.2总门。
 
 ### 2026-10-30 Gateway 冷重启后的双挂载历史与续轮（8.2 部分收口）
