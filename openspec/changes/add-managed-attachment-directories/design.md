@@ -96,6 +96,8 @@ runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30
 
 资源 owner 的记录与原 operation 账本各自只在原持久链成功后发布内存；记录读取为隔离草稿，写入保留其它资源最新快照，等待资源锁后必须重新读取。创建、scope/关联、fork dispatch/commit、版本冻结与终态共用同一 save，不保留共享对象先改后写或外层回滚。终态记录落盘后才结清占用；unknown 记录写盘前先将本次精确 lease 保护为待核实，失败时普通存活观察仍核对原账本，不能清除未核实操作或重放副作用。仅改变发布顺序和访问合同，schema 1 与现有恢复格式不变；全量JSON写入成本继续按测量证据另行优化。
 
+记录的读取、写入和格式拒绝共用原 `report_failure` 诊断出口；移除记录模块直接写日志的分支。正常公开说明保持原格式，日志再次失败时仅附日志错误类别，原始位置和完整日志次错保存在原异常 notes，外层仍保留原类别、原生错误码与直接 cause。日志故障不影响未发布状态、原账本和显式重试规则，不增加另一套持久或诊断链。
+
 单次 Terminal/Browser operation 关闭时，各占用分别取得原资源锁并通过原账本释放；只有持久释放成功后才移除本次内存引用。单项写盘失败或锁等待不阻断其它资源的释放，全部结果保留原单错或按输入顺序聚合；取消等待时，未释放引用继续由原 operation 保留，后续关闭沿原 lease 重试，未知/已结清占用仍服从既有 owner 判定。这不构成外部终止证明，也不补足整个 operation/shutdown 的总期限。
 
 Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOperationQueue`的同一执行集合持有，不只登记已经超时返回的外层请求。排空每批settle后在原单次预算内继续复核集合，覆盖等待开始后才启动的内部执行；集合大小是句柄数，不是业务操作数。stop/delete在释放原context后仍等待这份集合，默认5秒未排空返回`browser_close_operation_drain_timeout`/408，保持unknown和原身份，不发布verified终态。原执行结束后，同一显式关闭重试完成检查点删除与终态持久化，不重复关闭context。真实Python传输客户端→Node/Chromium/HTTP场景覆盖工具超时、页面reset后的短操作、stop/delete失败后的磁盘unknown、peer可读和迟到结束重试；证据见tasks 5.2。该切片不能强制终止不合作脚本，Python业务owner的版本同步可能先等待同一挂起脚本，整个operation/shutdown期限继续TODO，backend信号失败后的重试见生产信号切片；5.2/5.4/6.2均保持未完成，Agent团队与协作继续暂缓。

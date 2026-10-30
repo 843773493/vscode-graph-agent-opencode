@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Iterator, KeysView
 from contextlib import contextmanager
@@ -11,14 +10,13 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Never
 
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
+from app.core.failures import report_failure
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import validate_workspace_id
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +127,9 @@ class ResourceRecordStore:
                 return
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         if payload.get("schema_version") != 1 or payload.get("workspace_id") != workspace_id:
-            raise ValueError(self._failure("validate", "持久格式或工作区不匹配"))
+            self._raise_failure("validate", ValueError("持久格式或工作区不匹配"))
         if not isinstance(payload.get("records"), list):
-            raise TypeError(self._failure("validate", "records 必须是数组"))
+            self._raise_failure("validate", TypeError("records 必须是数组"))
         for raw in payload["records"]:
             record = OwnedResourceRecord(
                 **{
@@ -149,14 +147,20 @@ class ResourceRecordStore:
                 raise ValueError(f"资源 owner 记录重复: {record.resource_id}")
             self._records[record.resource_id] = record
 
-    def _failure(self, stage: str, reason: str, error: OSError | None = None) -> str:
+    def _raise_failure(self, stage: str, error: OSError | ValueError | TypeError) -> Never:
+        reason = "文件访问失败" if isinstance(error, OSError) else str(error)
         detail = f"资源 owner {reason}: workspace_id={self.workspace_id}, kind={self.kind}, stage={stage}"
-        if error is not None:
+        if isinstance(error, OSError):
             detail += f", error_type={type(error).__name__}, errno={error.errno}"
             if (winerror := getattr(error, "winerror", None)) is not None:
                 detail += f", winerror={winerror}"
-        logger.error("%s; path=%s", detail, self.path, exc_info=error)
-        return detail
+        error.add_note(f"资源 owner 记录位置: {self.path}")
+        detail = report_failure(error, detail=detail)
+        if isinstance(error, OSError):
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                raise type(error)(error.errno, detail, None, winerror) from error
+            raise type(error)(error.errno, detail) from error
+        raise type(error)(detail) from error
 
     @contextmanager
     def _io(self, stage: str) -> Iterator[None]:
@@ -164,10 +168,7 @@ class ResourceRecordStore:
         try:
             yield
         except OSError as error:
-            detail = self._failure(stage, "文件访问失败", error)
-            if (winerror := getattr(error, "winerror", None)) is not None:
-                raise type(error)(error.errno, detail, None, winerror) from error
-            raise type(error)(error.errno, detail) from error
+            self._raise_failure(stage, error)
 
     def ids(self) -> KeysView[str]:
         return self._records.keys()
