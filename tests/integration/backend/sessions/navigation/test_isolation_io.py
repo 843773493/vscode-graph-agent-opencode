@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from contextlib import closing
 from pathlib import Path
@@ -36,7 +37,7 @@ from tests.unit.core.session_deletion.test_operation_replay_gc import (
 )
 
 
-@pytest.mark.parametrize("stage", ["rename", "source-barrier"])
+@pytest.mark.parametrize("stage", ["rename", "source-barrier", "fence-sqlite"])
 @pytest.mark.parametrize("stop_worker", [False, True])
 async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
     navigation_api: tuple[AppContainer, httpx.AsyncClient, str],
@@ -53,6 +54,8 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
     operation_id = create_prefixed_id("op")
     target = resolver.sessions_root / ".deleting" / operation_id / session.session_id
     original_rename, original_barrier = deletion.os.rename, deletion._fsync_directory
+    original_cas = SessionControlStore.cas_fence_transition
+    blockers: list[sqlite3.Connection] = []
     renames: list[tuple[Path, Path]] = []
     loop_thread = threading.get_ident()
 
@@ -68,8 +71,18 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
             native_step.block()
         original_barrier(path)
 
+    def cas(control: SessionControlStore, expected_generation: int, new_state: str) -> bool:
+        if stage == "fence-sqlite" and control.database_path == source / "session-control.sqlite" and not native_step.calls:
+            blocker = sqlite3.connect(control.database_path, isolation_level=None, check_same_thread=False)
+            blocker.execute("BEGIN IMMEDIATE")
+            blockers.append(blocker)
+            native_step.calls.append(threading.get_ident())
+            native_step.entered.set()
+        return original_cas(control, expected_generation, new_state)
+
     monkeypatch.setattr(deletion.os, "rename", rename)
     monkeypatch.setattr(deletion, "_fsync_directory", barrier)
+    monkeypatch.setattr(SessionControlStore, "cas_fence_transition", cas)
     worker = operations._worker_task
     assert worker is not None and not worker.done()
     stopping: asyncio.Task[None] | None = None
@@ -110,16 +123,20 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
         record = resolver.catalog_store.get_subtree_delete_record(operation_id)
         assert record.state == "deleting" and record.drained_session_ids == ()
         assert set(record.frozen_session_locators) == {session.session_id}
-        physical = source if stage == "rename" else target
+        physical = source if stage in ("rename", "fence-sqlite") else target
         assert (physical / "session.json").read_bytes() == manifest
         with closing(SessionControlStore(physical / "session-control.sqlite", read_only=True)) as control:
-            assert control.get_fence() == ("deleting", 2)
+            assert control.get_fence() == (("active", 1) if stage == "fence-sqlite" else ("deleting", 2))
         native_step.release.set()
+        for blocker in blockers:
+            blocker.execute("ROLLBACK")
         if stopping is not None:
             await stopping
             assert worker.cancelled() and operations.worker_state == "stopped"
             assert resolver.catalog_store.get_subtree_delete_record(operation_id) == record
-            assert not source.exists() and (target / "session.json").read_bytes() == manifest
+            stopped_physical = source if stage == "fence-sqlite" else target
+            assert source.exists() == (stage == "fence-sqlite")
+            assert (stopped_physical / "session.json").read_bytes() == manifest
             await operations.start()
         settled = await _settlement(client, operation_id, "settled")
         assert settled.state == "committed" and settled.receipt_revision > pending.receipt_revision
@@ -132,4 +149,8 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
         assert completed.frozen_session_locators == record.frozen_session_locators
     finally:
         native_step.release.set()
+        for blocker in blockers:
+            if blocker.in_transaction:
+                blocker.execute("ROLLBACK")
+            blocker.close()
         await asyncio.gather(*[task for task in (stopping, gate_waiter) if task is not None], return_exceptions=True)

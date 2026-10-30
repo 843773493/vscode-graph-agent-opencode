@@ -5,6 +5,7 @@
 # 可修改内容
 
 - 原删除 journal、Session gate、保留期限和同步 I/O 的聚焦单元测试。
+- 隔离预检、fence推进及真实SQLite锁竞争的原任务与恢复边界。
 - 复用既有 catalog/物理节点 fixture，受控暂停原生调用或线程池队列。
 
 # 不可修改内容

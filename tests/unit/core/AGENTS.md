@@ -13,7 +13,7 @@ tests/unit/core/
 ├── session_catalog_store/
 │   └── test_access_errors.py（关闭、回滚隔离与metadata缺失的错误出口）
 ├── session_deletion/
-│   └── test_operation_replay_gc.py、test_isolation_io.py（隔离/回收的原gate、期限及同步I/O）
+│   └── test_operation_replay_gc.py、test_isolation_io.py、test_isolation_preflight.py（隔离/回收的原gate、期限及同步I/O）
 ├── identity/
 │   ├── test_identifier*.py、test_canonical_identifier_matrix.py
 │   ├── test_distribution_identity.py、test_user_identity.py、test_workspace_identity.py

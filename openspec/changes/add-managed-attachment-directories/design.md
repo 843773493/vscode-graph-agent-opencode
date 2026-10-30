@@ -431,3 +431,5 @@ Terminal的Worker已经退出且记录非运行时，只要unknown记录仍有�
 物理隔离的 mkdir、rename 和三道目录屏障复用同一 worker，原错误映射与屏障顺序保持；fence 关闭与隔离完成的异步观察点仍在原位置。首次删除和已隔离目录的恢复均持原 Session gate 至 worker 结算，同 key 锁也不提前释放；取消或协作式截止到达不能中断原生 I/O、补记进度或把尚未结算的操作视为停止。失败或取消后的同 key 恢复核验原目标并重做屏障，不重复资源 drain 或 rename。
 
 实际导航删除、worker 停止及重新启动验证沿同一 journal 恢复；原目录扫描竞态与删除回执回归保持。目录/控制库预检和 catalog 事务仍同步；整个删除/关闭硬期限、任意线程终止、独立进程重启、Windows 与 Gateway/Web 继续 TODO，不以 worker 排队和结算成功勾选完整 5.4。
+
+隔离内的源目录预检、已有目标核验和控制库fence CAS现已合并到同一worker阶段，原CAS入口随唯一调用方迁移一并删除。返回“已隔离”后只重做原屏障；未隔离时在原gate内完成检查、打开/关闭控制库和CAS，之后才到达原异步fence观察点。真实SQLite写锁等待、原生检查及线程池排队期间取消或到期，仍待原worker结算，不提前释放锁或执行后续rename；原fence和journal保留供同key恢复，不能将源目录仍在误判成fence未推进。`_drain`前序的目标存在性读取、Thread创建收敛控制库访问和catalog事务仍同步，整个关闭及原生终止合同继续TODO。

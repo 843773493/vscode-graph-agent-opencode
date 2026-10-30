@@ -533,22 +533,12 @@ class SessionSubtreeDeleteService:
         rename，但仍须重做目录 durability barrier 后才允许补记进度。
         目标存在只证明 fence 已关闭，不能证明上次 fsync 已经完成。
         """
-        stage = "子树删除 drain"
         source = self._date_bucket_dir(storage_relative_locator)
         target = self._deleting_dir(idempotency_key) / session_id
-        already_isolated = target.exists() or target.is_symlink()
-        if already_isolated:
-            self._verify_isolated_target(
-                source, target, session_id, stage=stage
-            )
-        else:
-            if not source.is_dir() or source.is_symlink():
-                raise RuntimeError(
-                    f"{stage}: 源日期桶目录缺失且隔离目标不存在，无法证明"
-                    f"（外部改动，fail closed）: session_id={session_id}, "
-                    f"operation_id={idempotency_key}, artifact=session-directory"
-                )
-            self._cas_session_fence(source, session_id, stage=stage)
+        already_isolated = await run_sync_shielded(
+            self._prepare_session_isolation, source, target, session_id, idempotency_key,
+        )
+        if not already_isolated:
             await observe_phase(idempotency_key, "deletion.fence_closed/" + session_id)
         await run_sync_shielded(
             self._isolate_session_directory, source, target,
@@ -590,21 +580,31 @@ class SessionSubtreeDeleteService:
                 f"error={type(error).__name__}, errno={error.errno}",
             ) from error
 
-    def _cas_session_fence(
+    def _prepare_session_isolation(
         self,
         source: Path,
+        target: Path,
         session_id: str,
-        *,
-        stage: str,
-    ) -> None:
-        """关闭 session 的本地 fence：CAS ``(active, 1)`` → ``(deleting, 2)``。
+        idempotency_key: str,
+    ) -> bool:
+        """核验原源或隔离目标；未隔离时关闭本地fence，返回是否已隔离。
 
-        - ``False`` 且 fence 已 ``deleting`` → 幂等跳过（上次运行 CAS
+        - CAS 返回 ``False`` 且 fence 已 ``deleting`` → 幂等跳过（上次运行 CAS
           后、rename 前崩溃的恢复窗口）；
-        - ``False`` 且 generation 不符 → fail closed；
+        - CAS 返回 ``False`` 且 generation 不符 → fail closed；
         - 控制库文件缺失 → fail closed（``SessionControlStore`` 构造会
           新建空库，必须先判存在性，绝不在源位置制造假库）。
         """
+        stage = "子树删除 drain"
+        if target.exists() or target.is_symlink():
+            self._verify_isolated_target(source, target, session_id, stage=stage)
+            return True
+        if not source.is_dir() or source.is_symlink():
+            raise RuntimeError(
+                f"{stage}: 源日期桶目录缺失且隔离目标不存在，无法证明"
+                f"（外部改动，fail closed）: session_id={session_id}, "
+                f"operation_id={idempotency_key}, artifact=session-directory"
+            )
         control_path = source / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
@@ -641,6 +641,7 @@ class SessionSubtreeDeleteService:
             ) from error
         finally:
             control.close()
+        return False
 
     def _verify_isolated_target(
         self,

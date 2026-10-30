@@ -126,6 +126,18 @@ async def test_isolation_keeps_original_execution_until_io_settles(
     retry: asyncio.Task[SubtreeDeleteResult] | None = None
     gate_waiter: asyncio.Task[None] | None = None
     gate_entered = asyncio.Event()
+    pool_queued = asyncio.Event()
+    original_observe = deletion.observe_phase
+
+    async def observe(operation_id: str, phase: str) -> None:
+        nonlocal queued
+        await original_observe(operation_id, phase)
+        if wait_kind == "pool" and phase == f"deletion.fence_closed/{node.node_id}":
+            queued = loop.run_in_executor(None, pool_step.block)
+            await _entered(pool_step)
+            pool_queued.set()
+
+    monkeypatch.setattr(deletion, "observe_phase", observe)
 
     async def same_gate() -> None:
         async with service._session_gate.exclusive(node.node_id):
@@ -135,12 +147,11 @@ async def test_isolation_keeps_original_execution_until_io_settles(
         if wait_kind == "pool":
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="isolation-io")
             loop.set_default_executor(executor)
-            queued = loop.run_in_executor(None, pool_step.block)
-            await _entered(pool_step)
         deleting = asyncio.create_task(service.delete(idempotency_key=key, root_node_id=node.node_id))
         if wait_kind == "native":
             await _entered(native_step)
         else:
+            await asyncio.wait_for(pool_queued.wait(), 2)
             await _turns()
             assert not native_step.calls and not renames
         record = store.get_subtree_delete_record(key)

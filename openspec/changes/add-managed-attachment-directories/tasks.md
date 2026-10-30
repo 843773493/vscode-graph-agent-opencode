@@ -498,3 +498,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原同步rename/目录屏障各有1项有效反例。现将mkdir、rename及三道目录barrier迁入同一worker；原错误映射、操作顺序及两处异步phase观察保持。恢复分支也持原Session gate至原worker结算，取消/到期不提前释放原gate或同key锁，不补记尚未核实的进度、不重复drain/rename。
 - 101项相关单元通过，含27项首次/恢复、全部磁盘阶段、完成/取消/截止和线程池排队场景；15项产品ASGI/生命周期集成通过（44.77秒，矩阵51.25秒），经真实导航入队、删除、worker停止和重新启动核原journal、未提交进度、原件/fence、HTTP查询及同操作恢复，并保留原删除回执和目录扫描竞态回归。worker重启不等于Backend进程重启。
 - Ruff、Pyright零诊断、compileall、本change strict及作者AST复核通过；准确命令、指纹、原始输出、退出码及限定证据见`out/tests/temp/session_isolation_io_20261030/artifacts/verification.json`。初次新增测试locator类型收窄及import格式错误已修，原件保留。目录/控制库预检及catalog事务仍同步，任意原生I/O终止、独立进程重启、Windows、Gateway/Web与完整shutdown继续未验；5.2/5.4及整体21/23保持未完成。未改Web实现/自动化或重启共享debug，团队协作及MCP显式持有继续TODO。
+
+### 2026-10-30 隔离预检与fence的同步等待（5.4 部分收口）
+
+- 源目录检查、真实SQLite写锁竞争及预检线程池排队的原实现共3项有效反例。现将隔离内的目录检查、恢复目标核验和原fence CAS合并到同一worker；迁齐唯一调用方后删除旧CAS入口。原验证/错误、CAS事务及连接关闭顺序、异步phase与物理屏障保持，原Session gate/同key锁覆盖排队与I/O结算。取消或到期不执行后续rename、不假报未推进fence或删除成功。
+- 113项相关单元通过；原物理隔离排队装具改在真实fence观察点占用线程池，保留原身份、进度、取消及barrier断言。17项产品ASGI/生命周期集成通过（49.22秒，矩阵55.51秒），新增真实SQLite竞争期间导航查询、worker停止及同journal重启恢复，原删除回执/扫描竞态回归仍通过；关键删除记录由产品入队生成。
+- Ruff、Pyright零诊断、compileall、规范strict及作者AST复核通过；准确命令、指纹、raw/退出码和限定证据见`out/tests/temp/session_isolation_preflight_20261030/artifacts/verification.json`。前序目标存在性查询、Thread创建收敛的控制库访问及catalog事务仍同步；整个shutdown硬期限、任意原生I/O终止、Backend进程重启、Windows和Gateway/Web仍未验。5.2/5.4与整体21/23保持未完成，团队协作及MCP显式持有继续TODO；未改Web实现/自动化或重启共享debug。
