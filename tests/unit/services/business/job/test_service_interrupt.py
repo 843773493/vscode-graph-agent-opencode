@@ -112,54 +112,6 @@ async def test_thread_idle_operation_is_atomic_with_job_admission(job_service_fa
 
 
 @pytest.mark.asyncio
-async def test_multiple_session_storage_operation_rejects_any_active_session(job_service_factory,
-    session_lifecycle_guard,
-) -> None:
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
-    service._thread_current_job[("ses_active", job_fixture_thread_id("ses_active"))] = "job_active"
-    operation_called = False
-
-    async def move_storage() -> None:
-        nonlocal operation_called
-        operation_called = True
-
-    with pytest.raises(RuntimeError, match="不能移动物理存储"):
-        await service.run_sessions_idle_operation(
-            ["ses_idle", "ses_active"],
-            move_storage,
-        )
-
-    assert operation_called is False
-
-
-@pytest.mark.asyncio
-async def test_storage_move_rejects_message_preparation_window(job_service_factory,
-    session_lifecycle_guard,
-) -> None:
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
-    preparation_started = asyncio.Event()
-    release_preparation = asyncio.Event()
-
-    async def prepare_message() -> None:
-        preparation_started.set()
-        await release_preparation.wait()
-
-    preparation_task = asyncio.create_task(
-        service.run_session_preparation("ses_preparing", prepare_message)
-    )
-    await preparation_started.wait()
-
-    with pytest.raises(RuntimeError, match="正在准备持久化消息"):
-        await service.run_sessions_idle_operation(
-            ["ses_preparing"],
-            lambda: asyncio.sleep(0),
-        )
-
-    release_preparation.set()
-    await preparation_task
-
-
-@pytest.mark.asyncio
 async def test_delete_tombstone_blocks_new_session_writes(job_service_factory,
     session_lifecycle_guard,
 ) -> None:

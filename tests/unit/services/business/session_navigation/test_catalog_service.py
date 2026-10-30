@@ -112,22 +112,8 @@ class _SessionService(SessionService):
         return await super().get(session_id)
 
 
-class _JobService:
+class _DeleteJobService:
     def __init__(self) -> None:
-        self.locked_session_ids: list[str] = []
-
-    async def run_sessions_idle_operation(
-        self,
-        session_ids: list[str],
-        operation: Callable[[], Awaitable[T]],
-    ) -> T:
-        self.locked_session_ids = list(session_ids)
-        return await operation()
-
-
-class _DeleteJobService(_JobService):
-    def __init__(self) -> None:
-        super().__init__()
         self.deleted_session_ids: list[str] = []
 
     async def run_sessions_delete_operation(
@@ -373,7 +359,7 @@ async def test_renaming_folder_does_not_require_descendant_sessions_idle(
     for session_id in session_ids:
         session_bundle_factory(sessions_root, session_id)
         _relocate(resolver, session_id, nested.node_id)
-    job_service = _JobService()
+    job_service = _DeleteJobService()
     catalog = SessionCatalogService(
         session_service=session_service,
         job_service=job_service,
@@ -392,7 +378,7 @@ async def test_renaming_folder_does_not_require_descendant_sessions_idle(
     )
 
     # 不再经过 idle guard，且物理 locator 不变。
-    assert job_service.locked_session_ids == []
+    assert job_service.deleted_session_ids == []
     assert resolver.get_node(folder.node_id).name == "任务目录已改名"
     assert {
         session_id: resolver.resolve_session_node(session_id)

@@ -518,42 +518,6 @@ class JobService:
                 )
             return await operation()
 
-    async def run_sessions_idle_operation(
-        self,
-        session_ids: list[str],
-        operation: Callable[[], Awaitable[T]],
-    ) -> T:
-        """与 job admission 共用锁，仅在所有目标会话空闲期间执行存储操作。"""
-        normalized_session_ids = sorted(set(session_ids))
-        async with self._dispatch_lock:
-            for session_id in normalized_session_ids:
-                if session_id in self._deleting_sessions:
-                    raise RuntimeError(
-                        f"会话正在删除，不能移动物理存储: {session_id}"
-                    )
-                preparation_count = self._session_preparations.get(session_id, 0)
-                if preparation_count:
-                    raise RuntimeError(
-                        "会话正在准备持久化消息，不能移动物理存储: "
-                        f"session_id={session_id}, "
-                        f"preparation_count={preparation_count}"
-                    )
-                active_job_id = next(
-                    (
-                        job_id
-                        for (candidate_session_id, _thread_id), job_id
-                        in self._thread_current_job.items()
-                        if candidate_session_id == session_id
-                    ),
-                    None,
-                )
-                if active_job_id is not None:
-                    raise RuntimeError(
-                        "会话存在运行中或正在收尾的任务，不能移动物理存储: "
-                        f"session_id={session_id}, active_job_id={active_job_id}"
-                    )
-            return await operation()
-
     async def run_session_preparation(
         self,
         session_id: str,

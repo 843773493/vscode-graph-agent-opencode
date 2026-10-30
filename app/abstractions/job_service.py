@@ -53,12 +53,6 @@ class JobServiceProtocol(Protocol):
         operation: Callable[[], Awaitable[T]],
     ) -> T: ...
 
-    async def run_sessions_idle_operation(
-        self,
-        session_ids: list[str],
-        operation: Callable[[], Awaitable[T]],
-    ) -> T: ...
-
     async def run_session_preparation(
         self,
         session_id: str,

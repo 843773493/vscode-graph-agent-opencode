@@ -1382,8 +1382,15 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 ### 2026-10-30 8.3 同 Thread 消息、回退与手动摘要准入（部分）
 
-- 普通消息的 canonical acceptance→Job 登记、直接 Job 准入、main replay 和手动摘要共用精确 `(session_id, thread_id)` 临界区；以真实 Task 身份重入，派生 Task 不继承锁所有权。等待者计入原 Session preparation，取消、退出后归还计数与锁条目。删除 replay 独立分片锁及单 Session checkpoint idle 接口，迁齐协议、调用方与测试装具；原多 Session 存储 idle 操作继续承担自己的职责，不跨业务 await 持全局调度锁。
+- 普通消息的 canonical acceptance→Job 登记、直接 Job 准入、main replay 和手动摘要共用精确 `(session_id, thread_id)` 临界区；以真实 Task 身份重入，派生 Task 不继承锁所有权。等待者计入原 Session preparation，取消、退出后归还计数与锁条目。删除 replay 独立分片锁及单 Session checkpoint idle 接口，迁齐协议、调用方与测试装具。原台账对多 Session 存储 idle 操作仍有职责的判断有误；后续 7.5-F 核对确认其无生产调用且仍跨业务 await 持全局锁，已物理删除，见下条记录。
 - 完整 HEAD 归档中的两项新 API 负例均失败：新消息在 replay 空闲检查后推进最后用户轮次，或 acceptance 未登记 Job 时 replay 已开始检查。修复后的正式 `integration-thread-input-admission` 为3 passed／128.50秒、exit0：覆盖双顺序竞争、main 手动摘要暂停期间 child 完成真实模型执行、main 新消息等待、随后真正摘要和后继响应；关键历史及 child 通过消息与公开 fork 生成，模型复用 model_stream。中间版本还复现了 Session 写锁阻塞 child；手动摘要现只在读取会话信息及发布请求标记时持短写锁，读取/判断期间由原 preparation 和 Thread 准入保护存储及目标 Thread。
 - 定向单测74 passed／30.59秒，加 preparation/deadline/cleanup/cancel/pending 回归43 passed／24.91秒；缩短 Session 临界区后的既有摘要/删除 API 14项通过，附件装具显式迁齐后11 passed／61.29秒。合计145个不同相关用例通过，不将重复运行计入数量。所有测试保留进程外超时与4GiB保护，集成串行；早期资源服务/Gateway身份/临时端口装配失败及漏配摘要响应的原件均保留，不计为业务通过。
 - 受改 Ruff通过；生产Pyright的17条诊断与完整HEAD基线按文件、规则、完整消息、AST方法owner和诊断表达式逐项一致，新增准入与新验收零诊断，不称类型全绿。作者AST自查：准入锁独立46行模块，Job目录直接Python文件9个；既有service.py仍1952行，本片不关闭7.5-F架构门，也不冒称独立审查。
 - 准确命令、源码指纹、退出码、失败归因与证据见 `out/tests/temp/thread_input_admission_20261030/artifacts/verification.json`。本片不新增Web、真实Gateway业务代理、OS重启、同步入口或Windows证据；7.5/8.3及整体111/119保持未关闭。前端、团队专项、MCP持有延期项、他人改动与共享暂存不纳入本片提交。
+
+### 2026-10-30 7.5-F 旧跨 Session 物理移动准入清理（部分）
+
+- 全仓核对 `run_sessions_idle_operation` 仅剩协议、实现、两项自身单测和导航 fake，无生产调用。现删除原声明、持全局调度锁跨 await 的实现及仅验证它的旧测试；catalog 改名回归复用删除协调 fake，仍逐项核对名称和全部后代 locator，不留旧接口、转发或第二准入链。生产 AST 除删除该方法外逐项等价；当前 Thread 准入、Session preparation 与删除排空不变。生产净减42行，连同旧测试和装具净减104行。
+- 定向线程准入／准备排空／删除期限／catalog 单测58 passed／20.77秒；真实 catalog、canonical acceptance、active/queued/unstarted Job 与准备窗口的删除排空集成3 passed／3.99秒。均保留进程外期限及4GiB保护，集成使用跨 worktree 独占闸门。首次集成命令误指定不存在的节点，退出4且零用例执行，修正为实际节点后才取得上述结果。
+- Ruff、compileall与本 change strict validation通过；Pyright完整HEAD归档加本轮开始前源码基线24条、最终24条，23条按文件／最窄AST owner／规则／完整消息／表达式一致，另一条仅为原不完整fake从 `_JobService` 复用 `_DeleteJobService` 的类型名称变化，底层协议缺项、位置归属和表达式一致，不称类型全绿。未新增架构抽象，既有Job聚合文件由1952降为1916行，不据本片关闭7.5-F整体门。
+- 准确命令、源码前后指纹、原始输出、实际退出码、AST审查及类型对照见 `out/tests/temp/job_storage_gate_cleanup_20261030/artifacts/verification.json`；完整临时源码与验证脚本在保留正式产物后清理。他人源码和共享暂存保留。无新增Web、Windows、真实Provider、Gateway代理或OS重启验收，7.5/8.3与整体111/119保持未关闭；前端和团队专项继续按用户要求暂缓。
