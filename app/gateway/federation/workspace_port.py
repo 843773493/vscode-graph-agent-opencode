@@ -375,7 +375,12 @@ class WorkspaceSessionMainPort:
                 workspace_id=resource.scope_id, method="POST", path="/api/v1/resources/text-mutations",
                 origin=origin, body=mutation.model_dump(mode="json", exclude_none=True), timeout=timeout,
             )
-            return TextMutationTransferDTO.model_validate(data).model_dump(mode="json", exclude_none=True)
+            try:
+                result = TextMutationTransferDTO.model_validate(data)
+            except ValidationError as error:
+                logger.exception("目标 owner 文本修改响应不符合合同")
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "目标 owner 文本修改响应不符合合同") from error
+            return result.model_dump(mode="json", exclude_none=True)
         if set(target) == {"gateway_id", "uri"}:
             from app.core.resource_uri import parse_resource_uri
             from app.schemas.internal_v2.communication import (

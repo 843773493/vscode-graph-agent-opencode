@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core.session_control_communication_ledger.observations import (
     observation_error_code,
@@ -23,6 +24,7 @@ from app.core.trace_middleware import (
 from app.gateway.federation import workspace_port
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
+    FEDERATION_MALFORMED_FRAME,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
     FEDERATION_TARGET_NOT_RESOLVABLE,
     FEDERATION_TARGET_OWNER_REJECTED,
@@ -443,3 +445,59 @@ async def test_navigation_forwards_execution_budget_without_changing_query(http_
     assert json.loads(outgoing.content)["timeout_ms"] == 1234
     assert float(outgoing.headers[NAVIGATION_DEADLINE_HEADER]) == 1000.5
     assert outgoing.headers["X-Request-ID"] == REQUEST_ID
+
+
+@pytest.fixture
+def mutation_body():
+    gateway = "gateway_3097a8378d6e2c98a52a687e4a004769"
+    uri = f"boxteam://{gateway}/workspace/{WORKSPACE_ID}/resources/files/root/%E6%96%87%20%E4%BB%B6.txt"
+    return {
+        "source_gateway_id": "gateway_source", "source_workspace_id": WORKSPACE_ID,
+        "mutation_target": {"gateway_id": gateway, "uri": uri, "mutation_kind": "text"},
+        "mutation": {"create": {"target": uri, "content": "/ordinary/file-content", "expected_version": "absent"}},
+    }
+
+
+@pytest.fixture
+def mutation_response(mutation_body):
+    uri = mutation_body["mutation_target"]["uri"]
+    return {
+        "receipt": {"status": "success", "effect": "completed", "target": uri, "retryable": False, "explanation": "",
+                    "files": [{"path": uri, "state": "published", "expected_version": "absent"}]},
+        "snapshots": [{"uri": uri, "before_exists": False, "before_content": "",
+                       "after_exists": True, "after_content": "/ordinary/file-content"}],
+    }
+
+
+@pytest.mark.parametrize("address", [
+    "/private/target.txt", r"C:\private\target.txt", r"\\host\share\target.txt",
+    "relative/target.txt", "file:///private/target.txt", "boxteam://invalid",
+])
+@pytest.mark.parametrize("location", [("receipt", "target"), ("receipt", "files", 0, "path"), ("snapshots", 0, "uri")])
+async def test_text_mutation_rejects_invalid_output_addresses_at_target_port(
+    http_context, mutation_body, mutation_response, location, address, caplog,
+):
+    node = mutation_response
+    for key in location[:-1]:
+        node = node[key]
+    node[location[-1]] = address
+    http_context.data = {"request_id": REQUEST_ID, "data": mutation_response}
+    with pytest.raises(FederationError) as caught:
+        await http_context.port.execute(operation="file_write", target=mutation_body["mutation_target"],
+            body=mutation_body, origin="gateway_source", timeout=5)
+    assert caught.value.code == FEDERATION_MALFORMED_FRAME
+    assert address not in json.dumps(caught.value.to_wire())
+    cause = caught.value.__cause__
+    assert isinstance(cause, ValidationError)
+    assert [(item["loc"], item["input"]) for item in cause.errors()] == [(location, address)]
+    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
+    outgoing, = http_context.requests
+    assert outgoing.url.path == "/api/v1/resources/text-mutations"
+    assert outgoing.headers["X-Request-ID"] == REQUEST_ID
+
+    # 同入口恢复后原样传递已封存 URI 和正文，不读取文件、不改写编码。
+    node[location[-1]] = mutation_body["mutation_target"]["uri"]
+    actual = await http_context.port.execute(operation="file_write", target=mutation_body["mutation_target"],
+        body=mutation_body, origin="gateway_source", timeout=5)
+    assert actual == mutation_response
+    assert len(http_context.requests) == 2

@@ -18,6 +18,8 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.schemas.internal_v2.text_mutation import (
+    CreateText,
+    EditText,
     PatchText,
     TextMutationRequest,
 )
@@ -105,6 +107,50 @@ async def _read(source, uri):
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     return response.json()["data"]["content"]
+
+
+async def test_target_rejects_malformed_receipt_without_replaying_published_write(mutation_case):
+    source, target, owner, artifacts, _ = mutation_case
+    root = resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="files",
+        tail_segments=("root", "src"), gateway_authority=target.gateway_id)
+    for field in ("target", "path", "uri"):
+        name = "invalid-" + field + ".txt"
+        uri = root + "/" + name
+        (source.workspace / "src" / name).write_text("SOURCE DECOY", encoding="utf-8")
+        receipt = await owner.execute_async(CreateText(target=uri, content="TARGET published", expected_version="absent"))
+        assert receipt["status"] == "error" and receipt["effect"] == "unknown" and receipt["retryable"] is False
+        assert receipt["owner"] == "federation" and receipt["code"] == "federation-malformed-frame"
+        assert receipt["target"] == receipt["files"][0]["path"] == uri
+        assert receipt["files"][0]["state"] == "unknown" and receipt["files"][0]["expected_version"] == "absent"
+        assert (target.workspace / "src" / name).read_text(encoding="utf-8") == "TARGET published"
+        assert (source.workspace / "src" / name).read_text(encoding="utf-8") == "SOURCE DECOY"
+        assert load_text_mutation_snapshots(json.dumps(receipt), workspace_root=source.workspace) == []
+        journal = (source.workspace / ".boxteam/cache/text_mutations" / (receipt["journal_id"] + ".json")).read_text()
+        assert "/private/text-mutation-" not in json.dumps(receipt) + journal
+        valid = json.loads((artifacts / ("valid-" + field + ".json")).read_text())
+        assert valid["data"]["receipt"]["effect"] == "completed"
+        assert valid["data"]["receipt"]["files"][0]["state"] == "published"
+        assert valid["request_id"] == "req-file-effects"
+        assert await _read(source, uri) == "TARGET published"
+        attempts = [json.loads(line) for line in (artifacts / "mutation-attempts.jsonl").read_text().splitlines()]
+        assert [item for item in attempts if item["target"] == uri] == [
+            {"target": uri, "content": "TARGET published", "expected_version": "absent"}]
+
+        # 通过产品重读取得新版本，在原目标上继续条件修改；只移除 HTTP 故障。
+        reopened = await source.client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"})
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.headers["X-Request-ID"] == reopened.json()["request_id"]
+        version = reopened.json()["data"]["content_hash"]
+        (artifacts / ("repair-" + field)).touch()
+        recovered = await owner.execute_async(EditText(target=uri, old_string="TARGET published", new_string="TARGET recovered",
+            expected_version=version))
+        assert recovered["status"] == "success" and recovered["effect"] == "completed"
+        snapshot, = load_text_mutation_snapshots(json.dumps(recovered), workspace_root=source.workspace)
+        assert snapshot["uri"] == uri and snapshot["before_content"] == "TARGET published" and snapshot["after_content"] == "TARGET recovered"
+        assert await _read(source, uri) == "TARGET recovered"
+        attempts = [json.loads(line) for line in (artifacts / "mutation-attempts.jsonl").read_text().splitlines()]
+        assert [item["expected_version"] for item in attempts if item["target"] == uri] == ["absent", version]
+        (artifacts / (field + "-source.json")).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
 
 
 async def test_target_exit_and_lost_receipt_stay_unknown_until_reopened(mutation_case):

@@ -1659,3 +1659,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 关联单测468 passed／1 failed；唯一失败custom_invoker_rejects_unknown_target_argument在完整旧HEAD也复现，未改其代码或断言。独立Gateway／真实HTTP替身3项通过（39.29秒），含五个地址出口、三平台路径、空值、file URL、必填字段、部分失败及原入口恢复；正式跨Gateway读取矩阵1项通过（100.84秒）。聚合恢复／fork补充矩阵在自身60秒期限到期，退出3，没有完成结果，不计通过、不猜测失败阶段。首次整组HTTP检查在150秒总期限结束前仅完成首项；增加包含原独占闸门排队时间的外部期限后完整通过，未提高并发。
 - Ruff、compileall及strict通过；9个上下文模型JSON Schema与完整HEAD相同。Pyright两项既有诊断逐项核规则、完整消息和最窄语句AST一致，新增测试零诊断；作者结构自查确认除输出注解、单一grammar校验和一个响应异常分支外，两份生产模块AST均保持。准确命令、源码指纹、原始输出、实际退出码与基线证据见`out/tests/temp/context_response_uri_20261030/artifacts/verification.json`；完整临时基线源码已删除，原测试输出保留。
 - 本片不代表全局路径不变量或publish／seal／restart／fork／hash总门完成，2.2／7.2仍未勾，整体51/53。未修改另一会话的Web／Workbench、Web自动化、其暂存或共享debug服务；团队／协作与MCP显式持有继续按用户裁定延期。
+
+### 2026-10-30 条件文本修改回包地址（2.2／7.2部分收口）
+
+- 回执target、逐文件path和快照uri改由原grammar校验，不改普通工具三种路径输入、文件正文、nullable目标、悬空地址或历史编码。目标Gateway的响应校验失败沿既有federation-malformed-frame拒绝并保留原异常诊断；源端继续记录未知效果，不伪造快照或重放写入。旧实现target端口的原生路径反例未拒绝，修复后覆盖三地址×POSIX／盘符／UNC／相对路径／file URL／非法URI及同入口恢复。
+- 定向单元54项与关联回归209项通过，数量重叠不相加。真实三Gateway／Backend及两跳HTTP新增场景最终1 passed／77.15秒（含启动的外部总79.96秒），覆盖三地址被破坏前已真实发布、精确联邦拒绝码、同request_id、源端URI及journal无坏地址、零伪造快照、目标调用一次，以及经产品重读取得版本后对原文件继续条件修改。复用原独占闸门和4GiB／外部300秒保护；首次同场景通过后补齐调用次数与原文件恢复证据再验，不计两份独立场景。
+- Ruff与本change strict通过；Pyright14项既有诊断与完整HEAD基线逐条核规则、消息和最窄语句AST一致，零新增，不称全绿；8模型JSON Schema相同，无需改协议或前端生成物。作者AST审查确认仅输出校验和原目标响应异常分支改变，原有集成函数保持；不代独立审查。基线核对脚本的行号漂移／导入路径两次装具错误已修正，复用有效输出，不改业务断言。准确命令、指纹、raw、实际退出码与核验见`out/tests/temp/text_mutation_response_uri_20261030/artifacts/verification.json`；正式HTTP原件保留于`out/tests/integration/backend/agents/test_text_mutation_effects/`。
+- 未验证Web／Workbench、Windows实机、真实Provider或Backend硬重启，不代替全局2.2／7.2总门，仍51/53。未改另一会话的Web迁移、自动化、其暂存或共享debug；团队／协作及MCP显式持有继续延期。

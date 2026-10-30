@@ -73,6 +73,7 @@ class TransferCase:
     lose_response: bool = False
     wrong_owner: bool = False
     malformed_response: bool = False
+    invalid_address: str | None = None
 
 
 @pytest.fixture
@@ -109,6 +110,12 @@ def transfer_case(tmp_path, monkeypatch, text_mutations_factory):
         if case.wrong_owner:
             result["receipt"]["files"][0]["path"] = resource_display_uri(
                 scope="workspace", scope_id=source_id, kind="files", tail_segments=("root", "file.txt"))
+        if case.invalid_address == "target":
+            result["receipt"]["target"] = str(case.target / "file.txt")
+        elif case.invalid_address == "path":
+            result["receipt"]["files"][0]["path"] = str(case.target / "file.txt")
+        elif case.invalid_address == "uri":
+            result["snapshots"][0]["uri"] = str(case.target / "file.txt")
         return httpx.Response(200, headers={"X-Request-ID": "req-text-owner"},
                               json=[] if case.malformed_response else {"code": 0, "data": result, "request_id": "req-text-owner"})
 
@@ -156,11 +163,12 @@ def test_remote_commands_publish_at_target_and_record_target_observation(transfe
     assert str(case.source) not in json.dumps(receipt) and str(case.target) not in json.dumps(receipt)
 
 
-@pytest.mark.parametrize("failure", ["lost_response", "wrong_owner", "malformed_response"])
+@pytest.mark.parametrize("failure", ["lost_response", "wrong_owner", "malformed_response", "target", "path", "uri"])
 def test_after_dispatch_failure_is_unknown_without_invented_diff_or_replay(transfer_case, failure):
     case = transfer_case
     case.lose_response, case.wrong_owner = failure == "lost_response", failure == "wrong_owner"
     case.malformed_response = failure == "malformed_response"
+    case.invalid_address = failure if failure in {"target", "path", "uri"} else None
     (case.source / "file.txt").write_bytes(b"SOURCE DECOY")
     receipt = case.owner.execute(CreateText(target=case.target_uri + "/file.txt", content="target published", expected_version="absent"))
     assert receipt["status"] == "error" and receipt["effect"] == "unknown" and receipt["retryable"] is False
@@ -170,6 +178,8 @@ def test_after_dispatch_failure_is_unknown_without_invented_diff_or_replay(trans
     assert receipt["target"] == receipt["files"][0]["path"] == case.target_uri + "/file.txt"
     assert receipt["files"][0]["state"] == "unknown" and receipt["files"][0]["expected_version"] == "absent"
     assert load_text_mutation_snapshots(json.dumps(receipt), workspace_root=case.source) == []
+    assert str(case.target) not in json.dumps(receipt)
+    assert str(case.target) not in (case.source / ".boxteam/cache/text_mutations" / (receipt["journal_id"] + ".json")).read_text()
 
 
 def test_source_permission_denial_precedes_transport_and_target_publication(transfer_case):

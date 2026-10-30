@@ -135,6 +135,12 @@
 - **THEN** 响应根、item、match 的 `uri` 及来源 `display_uri` 均复用唯一 URI grammar 校验；非法非空地址、原生路径和空字符串显式失败，不能转为 NULL。可空 item 地址和内部聚合必填的 `display_uri: null` 保持原语义；合法悬空 URI 和历史编码字节原样保留，不读取当前文件、补造地址或改写用户正文
 - **AND** 联邦目标的响应校验失败沿既有 `federation-malformed-frame` 合同拒绝，原异常和输入留诊断；Gateway 搜索聚合沿原部分失败合同隔离该工作区。不得把输出协议故障的原始校验文本当作普通请求错误返回
 
+#### Scenario: 条件文本修改回包的结构化地址复用唯一 grammar
+
+- **WHEN** 本地 owner 构造或联邦目标接收条件文本修改回包
+- **THEN** 回执 `target`、逐文件 `path` 与快照 `uri` 均复用唯一 URI grammar 校验；原生路径、相对路径、file URL 及非法资源 URI 显式拒绝，不回填、猜测或改写地址。可空回执目标及合法悬空 URI 保持原语义，文件正文不受地址校验影响，普通工具三种路径输入仍由原目标 owner 解释
+- **AND** 目标 Gateway 的回包校验失败沿既有 `federation-malformed-frame` 合同拒绝，完整原异常与输入留诊断。已经交给目标执行的写入不能因此改报未执行；源端仅保留原请求已知 URI、版本与未知效果，不生成伪造快照、不自动重放，用户可从原资源入口重读核实并继续条件修改
+
 #### Scenario: Gateway 代理连接错误不得回显底层位置
 
 - **WHEN** 工作区业务代理、辅助服务代理或 attach 静态前端代理遇到上游 HTTP 传输失败

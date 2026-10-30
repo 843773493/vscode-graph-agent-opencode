@@ -3,13 +3,22 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from app.core.resource_uri import parse_resource_uri
 
 Version = Annotated[str, Field(pattern=r"^(absent|sha256:[0-9a-f]{64})$")]
 MAX_MUTATION_REQUEST_BYTES = 1048576
 MAX_MUTATION_RESPONSE_BYTES = 8388608
+
+
+def _validate_output_uri(value: str) -> str:
+    # 回执只保存资源地址；不解析当前文件或改写已观察的 URI 字节。
+    parse_resource_uri(value)
+    return value
+
+
+TextMutationOutputURI = Annotated[str, AfterValidator(_validate_output_uri)]
 
 
 class _Model(BaseModel):
@@ -73,7 +82,7 @@ class TextMutationRequest(_Model):
 
 
 class TextMutationFileDTO(_Model):
-    path: str
+    path: TextMutationOutputURI
     operation: Literal["add", "update", "delete", "move"] | None = None
     state: Literal["published", "not_published", "not_attempted", "unknown"]
     expected_version: Version
@@ -86,7 +95,7 @@ class TextMutationFileDTO(_Model):
 class TextMutationReceiptDTO(_Model):
     status: Literal["success", "error"]
     effect: Literal["completed", "partial", "not_executed", "unknown"]
-    target: str | None = None
+    target: TextMutationOutputURI | None = None
     journal_id: str | None = None
     files: tuple[TextMutationFileDTO, ...] = ()
     retryable: Literal[False] = False
@@ -102,7 +111,7 @@ class TextMutationReceiptDTO(_Model):
 
 
 class TextMutationSnapshotDTO(_Model):
-    uri: str
+    uri: TextMutationOutputURI
     before_exists: bool
     before_content: str
     after_exists: bool | None = None
