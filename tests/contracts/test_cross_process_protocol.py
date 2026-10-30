@@ -13,10 +13,15 @@ from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
 )
+from app.protocol.codecs.workspace_events import (
+    file_change_batch_to_json,
+    file_change_batch_to_proto,
+)
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 from app.protocol.generated.boxteam.gateway.v1 import proxy_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
+    file_events_pb2,
     message_pb2,
     public_pb2,
     session_stream_pb2,
@@ -33,6 +38,7 @@ from app.schemas.internal_v2.turn import TurnAttachmentDTO
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryKeyDTO,
     WorkspaceFileListDTO,
+    WorkspaceFileNodeDTO,
 )
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
@@ -104,7 +110,7 @@ def test_representative_boundaries_round_trip_through_protobuf_wire() -> None:
     sse_value = SessionExecutionSseDTO.model_validate(cast(dict[str, object], sse))
     sse_wire = session_sse_to_proto(sse_value).SerializeToString()
     decoded_sse = session_stream_pb2.SessionExecutionSse.FromString(sse_wire)
-    assert session_sse_to_json(decoded_sse)["event"]["type"] == "job.updated"
+    assert cast(dict[str, object], session_sse_to_json(decoded_sse)["event"])["type"] == "job.updated"
 
     terminal = cast(dict[str, object], cast(dict[str, object], baseline["http_json"])["response"])["json"]
     terminal_value = cast(dict[str, object], cast(dict[str, object], terminal)["data"])
@@ -134,7 +140,8 @@ def test_workspace_file_list_directory_identity_survives_proto_wire(kind: str, r
     root = f"boxteam://workspace/{workspace}/resources/{kind}/{resource_id}"
     path = root + "/derived"
     key = WorkspaceDirectoryKeyDTO(workspace_id=workspace, scope="workspace", root=root, path=path)
-    value = WorkspaceFileListDTO(root_path=root, path=path, items=[{"name": "output.txt", "path": path + "/output.txt", "kind": "file"}],
+    value = WorkspaceFileListDTO(root_path=root, path=path,
+        items=[WorkspaceFileNodeDTO(name="output.txt", path=path + "/output.txt", kind="file")],
         directory_key=key, directory_revision=3)
     encoded = ParseDict(value.model_dump(exclude_none=True), public_pb2.WorkspaceFileListDTO()).SerializeToString()
     decoded = public_pb2.WorkspaceFileListDTO.FromString(encoded)
@@ -147,3 +154,77 @@ def test_attachment_text_mutation_keeps_exact_target_through_proto_wire() -> Non
     encoded = ParseDict(value.model_dump(exclude_none=True), public_pb2.TextMutationRequest()).SerializeToString()
     decoded = public_pb2.TextMutationRequest.FromString(encoded)
     assert TextMutationRequest.model_validate(MessageToDict(decoded, preserving_proto_field_name=True)) == value
+
+
+@pytest.fixture
+def workspace_file_batch() -> dict[str, object]:
+    workspace = "019d1b4a-1111-7000-8000-000000000001"
+    root = f"boxteam://workspace/{workspace}/resources/files/root"
+    directory = root + "/derived"
+    key = {"workspace_id": workspace, "scope": "workspace", "root": root, "path": directory}
+    return {
+        "changes": [{"kind": "edit", "path": directory + "/%E4%B8%AD.txt"}],
+        "overflow": True,
+        "event_id": 2**53 + 19,
+        "directories": [{"directory_key": key, "directory_revision": 2**53 + 11, "exists": False}],
+        "invalidated_roots": [root],
+        "snapshots": [{
+            "root_path": root, "path": directory,
+            "items": [{"name": "中.txt", "path": directory + "/%E4%B8%AD.txt", "kind": "file",
+                       "has_children": False, "size": 2**53 + 31, "modified_at": None}],
+            "truncated": False, "limit": 500, "next_cursor": None,
+            "directory_key": key, "directory_revision": 2**53 + 13,
+        }],
+    }
+
+
+def test_workspace_file_changes_preserve_full_public_shape_through_proto_wire(
+    workspace_file_batch: dict[str, object],
+) -> None:
+    encoded = file_change_batch_to_proto(workspace_file_batch).SerializeToString()
+    decoded = file_events_pb2.WorkspaceFileChangeBatch.FromString(encoded)
+    value = file_change_batch_to_json(decoded)
+    assert value == workspace_file_batch
+    assert type(value["event_id"]) is int
+    directories = cast(list[dict[str, object]], value["directories"])
+    assert type(directories[0]["directory_revision"]) is int
+    snapshots = cast(list[dict[str, object]], value["snapshots"])
+    assert type(snapshots[0]["directory_revision"]) is int
+    items = cast(list[dict[str, object]], snapshots[0]["items"])
+    assert type(items[0]["size"]) is int and items[0]["modified_at"] is None
+
+
+def test_workspace_file_changes_keep_empty_defaults() -> None:
+    encoded = file_change_batch_to_proto({"changes": [], "overflow": False}).SerializeToString()
+    assert file_change_batch_to_json(file_events_pb2.WorkspaceFileChangeBatch.FromString(encoded)) == {
+        "changes": [], "overflow": False, "directories": [], "event_id": 0,
+        "invalidated_roots": [], "snapshots": [],
+    }
+
+
+@pytest.mark.parametrize("path", ["/private/native/source.txt", r"C:\private\source.txt", r"\\server\private\source.txt"])
+@pytest.mark.parametrize("field", ["changes", "invalidated_roots"])
+@pytest.mark.parametrize("boundary", ["encode", "decode"])
+def test_workspace_file_changes_reject_native_paths_at_both_boundaries(path: str, field: str, boundary: str) -> None:
+    value = {"changes": [{"kind": "edit", "path": path}] if field == "changes" else [],
+             "overflow": False, "invalidated_roots": [path] if field == "invalidated_roots" else []}
+    with pytest.raises(ValueError, match=field):
+        if boundary == "encode":
+            file_change_batch_to_proto(value)
+        else:
+            encoded = ParseDict(value, file_events_pb2.WorkspaceFileChangeBatch()).SerializeToString()
+            file_change_batch_to_json(file_events_pb2.WorkspaceFileChangeBatch.FromString(encoded))
+
+
+@pytest.mark.parametrize("boundary", ["encode", "decode"])
+@pytest.mark.parametrize("field", ["kind", "event_id"])
+def test_workspace_file_changes_keep_business_validation(field: str, boundary: str) -> None:
+    root = "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/files/root"
+    value = {"changes": [{"kind": "rename" if field == "kind" else "edit", "path": root + "/a.txt"}],
+             "overflow": False, "event_id": -1 if field == "event_id" else 1}
+    with pytest.raises(ValueError, match=field):
+        if boundary == "encode":
+            file_change_batch_to_proto(value)
+        else:
+            encoded = ParseDict(value, file_events_pb2.WorkspaceFileChangeBatch()).SerializeToString()
+            file_change_batch_to_json(file_events_pb2.WorkspaceFileChangeBatch.FromString(encoded))

@@ -92,6 +92,7 @@ def test_business_union_still_rejects_public_field_drift(mutation: str) -> None:
 @pytest.mark.parametrize("message_name", [
     "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO", "JobProgress",
     "JobStepProgress", "MessageObservation", "SessionError", "TraceObserved",
+    "WorkspaceFileChangeBatch", "WorkspaceDirectoryKeyDTO", "WorkspaceFileNodeDTO",
 ])
 def test_export_checks_fresh_proto_descriptor_before_publishing(tmp_path: Path, message_name: str) -> None:
     """模拟 proto 已新增字段而 Python binding 未更新，不能用旧 binding 自证一致。"""

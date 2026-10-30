@@ -8,10 +8,7 @@ from google.protobuf.descriptor import FieldDescriptor
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.workspace.v2 import file_events_pb2, trace_pb2
-from app.schemas.internal_v2.workspace_file_operations import (
-    WorkspaceDirectoryRevisionDTO,
-    WorkspaceFileListDTO,
-)
+from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
 
 # 字符串的必填、presence 与数组映射直接取自 descriptor，WKT 保留具名转换。
 _TRACE_STRING_FIELDS = tuple(
@@ -22,63 +19,21 @@ _TRACE_STRING_FIELDS = tuple(
 def file_change_batch_to_proto(
     value: Mapping[str, object],
 ) -> file_events_pb2.WorkspaceFileChangeBatch:
-    changes = value.get("changes")
-    overflow = value.get("overflow")
-    if not isinstance(changes, list) or not isinstance(overflow, bool):
-        raise TypeError("Workspace 文件变更批次必须包含 changes 和 overflow")
-    result = file_events_pb2.WorkspaceFileChangeBatch(overflow=overflow)
-    for item in changes:
-        if not isinstance(item, Mapping):
-            raise TypeError("Workspace 文件变更必须是对象")
-        kind = item.get("kind")
-        path = item.get("path")
-        if not isinstance(kind, str) or not isinstance(path, str) or not path:
-            raise ValueError("Workspace 文件变更缺少 kind/path")
-        result.changes.add(kind=kind, path=path)
-    directories = value.get("directories", [])
-    if not isinstance(directories, list):
-        raise TypeError("Workspace 文件目录 revision 必须为数组")
-    for item in directories:
-        revision = WorkspaceDirectoryRevisionDTO.model_validate(item)
-        target = result.directories.add(directory_revision=revision.directory_revision, exists=revision.exists)
-        for name, field in revision.directory_key.model_dump().items():
-            setattr(target.directory_key, name, field)
-    event_id = value.get("event_id", 0)
-    if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 0:
-        raise ValueError("Workspace 文件事件 event_id 必须是非负整数")
-    result.event_id = event_id
-    roots = value.get("invalidated_roots", [])
-    if not isinstance(roots, list) or not all(isinstance(root, str) and root for root in roots):
-        raise ValueError("Workspace 文件失效根必须是非空路径数组")
-    result.invalidated_roots.extend(roots)
-    snapshots = value.get("snapshots", [])
-    if not isinstance(snapshots, list):
-        raise TypeError("Workspace 文件目录快照必须为数组")
-    for snapshot in snapshots:
-        listing = WorkspaceFileListDTO.model_validate(snapshot)
-        json_format.ParseDict(listing.model_dump(), result.snapshots.add(), ignore_unknown_fields=False)
+    # 结构映射交给 descriptor；URI、目录键和业务取值仍由原 DTO 核定。
+    batch = WorkspaceFileChangeBatchDTO.model_validate(value, strict=True)
+    result = file_events_pb2.WorkspaceFileChangeBatch()
+    json_format.ParseDict(batch.model_dump(mode="json"), result, ignore_unknown_fields=False)
     return result
 
 
 def file_change_batch_to_json(
     value: file_events_pb2.WorkspaceFileChangeBatch,
 ) -> dict[str, object]:
-    return {
-        "changes": [
-            {"kind": change.kind, "path": change.path}
-            for change in value.changes
-        ],
-        "overflow": value.overflow,
-        "directories": [{"directory_key": {"workspace_id": item.directory_key.workspace_id,
-                                            "scope": item.directory_key.scope, "root": item.directory_key.root,
-                                            "path": item.directory_key.path},
-                         "directory_revision": item.directory_revision, "exists": item.exists} for item in value.directories],
-        "event_id": value.event_id,
-        "invalidated_roots": list(value.invalidated_roots),
-        "snapshots": [WorkspaceFileListDTO.model_validate(json_format.MessageToDict(
-            item, preserving_proto_field_name=True, always_print_fields_with_no_presence=True,
-        )).model_dump() for item in value.snapshots],
-    }
+    payload = json_format.MessageToDict(
+        value, preserving_proto_field_name=True, always_print_fields_with_no_presence=True,
+    )
+    # protobuf JSON 的 int64 为字符串；原 DTO 还原公开整数、空值与业务默认值。
+    return WorkspaceFileChangeBatchDTO.model_validate(payload).model_dump(mode="json")
 
 
 def sse_error_to_proto(message: str) -> file_events_pb2.SseError:
