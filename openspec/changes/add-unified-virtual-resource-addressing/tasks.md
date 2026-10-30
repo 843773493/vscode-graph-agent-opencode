@@ -1623,3 +1623,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧生产的32项新增单测为16 failed／16 passed，全部失败来自日志ENOTDIR替换原工具错误；首轮另外4项grep恢复断言因装具误选根目录触发原有拒绝，改用明确src目录后才计作有效反例，未放宽原权限。最终40项单测通过（含原8项总期限），真实ASGI消息、Agent、model_stream与SQLite的2项场景通过（95.15秒，矩阵101.01秒）：真实文件open产生ENOTDIR，核canonical failure及后继模型工具配对、解除故障后同Thread成功重读、原文件字节与旧canonical不变、新Saver冷读及全部8次真实封存请求的owner/hash。合法中文／空格／百分号与旧标记字面文件名通过同一文件URI定位；不据此声称它们进入了activation binding或完成fork验收。
 - Ruff、compileall通过；Pyright仅余3条原诊断，逐条消息/位置与基线一致，所在两个函数AST不变，新增测试零诊断。新suite分别固定60秒和120秒／4GiB，沿用跨worktree集成独占闸门；首次集成反例尝试90秒均在等待另一会话Web测试的名额，exit124且未进入业务，不计反例或通过，也未抢占、终止其进程。准确命令、源码指纹、原始输出／实际退出码、类型基线与作者自查见 `out/tests/temp/file_navigation_diagnostics_20261030/artifacts/verification.json`。
 - 本片不代Gateway/Web、独立Backend重启、真实网络／Windows或全局URI不变量验收；2.2／7.2继续未勾，整体51/53。未修改前端、Web自动化或原Debug服务；团队／协作与显式MCP连接持有继续按用户裁定延期。
+
+
+### 2026-10-30 工作区身份失败的诊断次错与描述符收尾（2.2／7.2部分收口）
+
+- 唯一workspace_identity owner复用既有report_failure，删除局部logger；格式拒绝、原生I/O、解码及绑定错误的公开格式和类别保持，位置与日志次错正文只留原异常诊断。fdopen成功前创建者关闭原描述符，取消保持原实例；关闭再次失败按主错、收尾错顺序保存原因，残留身份文件仍由原入口拒绝，不覆盖或重建。
+- 旧生产20项有效反例均被日志错误覆盖；最终124项身份、挂载、错误出口和请求scope定向单测通过，含真实O_EXCL后fdopen失败／取消与关闭次错4种组合。Ruff、四文件Pyright零诊断及compileall通过。扩展身份扫描另发现原HEAD已有runtime_source_dispatcher._digest重复摘要助手，相关生产与测试逐字同HEAD；原失败保留，不改其源码或放宽断言。
+- 真实Gateway／受管Backend的原验收1 passed／53.18秒，核注册、stop、损坏后502、同request_id、精确Backend owner失败事实、SQLite及列表一致、冻结合同／UUID／desired_running不变，以及修复原件后原入口恢复ready。原2026-10-22证据中的公开CLI文本及“前置拒绝不记错误”已分别被7b3429593和444db1411的现行合同取代；本次仅迁齐旧测试，保留原身份／原件／顺序约束，并加强owner、generation及完整成员检查，未修改产品生命周期。另一次取得闸门后遇固定端口EADDRINUSE，待ss及真实bind确认释放后才复验，未终止未知进程或换端口。
+- 原始反例、过期断言与端口失败、源码指纹、准确命令／退出码和作者AST结构自查统一保留在`out/tests/temp/workspace_identity_diagnostics_20261030/artifacts/verification.json`；正式测试产物仍在其镜像目录。原独占闸门与进程外超时／4GiB保护保持，不修改Web、Workbench、其自动化或共享Debug服务。未验证Windows、全部原生错误出口或URI全局不变量，2.2／7.2仍未勾，整体51/53。

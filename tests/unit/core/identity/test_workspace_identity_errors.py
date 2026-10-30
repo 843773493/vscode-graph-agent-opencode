@@ -23,6 +23,22 @@ def identity_entry(request: pytest.FixtureRequest) -> Callable[[Path, str], str]
     return lambda root, expected: identity.bind_workspace_id(root, expected)
 
 
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def identity_log_failure(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> OSError | None:
+    if not request.param:
+        return None
+    failure = OSError("身份日志失败 /private/workspace-identity-log-secret")
+    original = logging.Logger.callHandlers
+
+    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+        original(logger, record)
+        if record.getMessage().startswith("Workspace ") or "artifact=workspace_identity" in record.getMessage():
+            raise failure
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
+    return failure
+
+
 @pytest.mark.parametrize("content,category", [
     (b'{"workspace_id":', RuntimeError),
     (b'[]', TypeError),
@@ -33,17 +49,23 @@ def identity_entry(request: pytest.FixtureRequest) -> Callable[[Path, str], str]
 def test_invalid_identity_file_keeps_bytes_and_recovers_without_path_output(
     tmp_path: Path, identity_entry: Callable[[Path, str], str], content: bytes,
     category: type[Exception], caplog: pytest.LogCaptureFixture,
+    identity_log_failure: OSError | None,
 ) -> None:
     expected = identity.load_or_create_workspace_id(tmp_path)
     path = identity.workspace_identity_path(tmp_path)
     original = path.read_bytes()
     path.write_bytes(content)
     for _ in range(2):
-        with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(category) as caught:
+        with caplog.at_level(logging.ERROR), pytest.raises(category) as caught:
             identity_entry(tmp_path, expected)
         assert str(path) not in str(caught.value)
         assert "artifact=workspace_identity" in str(caught.value)
         assert str(path) in caplog.text
+        assert caught.value.__cause__ is not None
+        if identity_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in str(caught.value)
+            assert any(str(identity_log_failure) in note for note in caught.value.__cause__.__notes__)
+        assert "workspace-identity-log-secret" not in str(caught.value)
         assert path.read_bytes() == content
     path.write_bytes(original)
     assert identity_entry(tmp_path, expected) == expected
@@ -55,6 +77,7 @@ def test_invalid_identity_file_keeps_bytes_and_recovers_without_path_output(
 def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     stage: str, native_path: str,
+    identity_log_failure: OSError | None,
 ) -> None:
     expected = identity.load_or_create_workspace_id(tmp_path)
     path = identity.workspace_identity_path(tmp_path)
@@ -110,7 +133,7 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
             # 真正首次创建进入原fsync；失败后的既有创建行为保持，不由测试回填UUID。
             path.unlink()
             patch.setattr(identity.os, "fsync", flush)
-        with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(PermissionError) as caught:
+        with caplog.at_level(logging.ERROR), pytest.raises(PermissionError) as caught:
             identity.load_or_create_workspace_id(tmp_path)
         projected = caught.value
         assert projected is not raw
@@ -122,6 +145,10 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
         assert "artifact=workspace_identity" in str(projected)
         assert raw.filename in caplog.text
         assert any(record.exc_info is not None and record.exc_info[1] is raw for record in caplog.records)
+        if identity_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in str(projected)
+            assert any(str(identity_log_failure) in note for note in raw.__notes__)
+        assert "workspace-identity-log-secret" not in str(projected)
     if stage != "flush":
         assert (path.read_bytes() if path.exists() else None) == before
     recovered = identity.load_or_create_workspace_id(tmp_path)
@@ -133,6 +160,7 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
 @pytest.mark.parametrize("concurrent", [False, True])
 def test_binding_mismatch_exposes_only_expected_and_actual_uuid(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, concurrent: bool,
+    identity_log_failure: OSError | None,
 ) -> None:
     actual = identity.load_or_create_workspace_id(tmp_path)
     expected = str(uuid4())
@@ -147,28 +175,39 @@ def test_binding_mismatch_exposes_only_expected_and_actual_uuid(
             return real_stat(target, *args, **kwargs)
 
         monkeypatch.setattr(Path, "stat", stat)
-    with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(RuntimeError) as caught:
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as caught:
         identity.bind_workspace_id(tmp_path, expected)
     assert f"expected={expected}, actual={actual}" in str(caught.value)
     assert str(path) not in str(caught.value)
     assert str(path) in caplog.text
+    assert caught.value.__cause__ is not None
+    if identity_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(caught.value)
+        assert any(str(identity_log_failure) in note for note in caught.value.__cause__.__notes__)
+    assert "workspace-identity-log-secret" not in str(caught.value)
     assert path.read_bytes() == original
 
 
-def test_non_file_identity_is_never_replaced_or_reported_as_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_non_file_identity_is_never_replaced_or_reported_as_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, identity_log_failure: OSError | None,
+) -> None:
     path = identity.workspace_identity_path(tmp_path)
     path.mkdir(parents=True)
     marker = path / "marker"
     marker.write_text("keep")
-    with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(RuntimeError) as caught:
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as caught:
         identity.load_or_create_workspace_id(tmp_path)
     assert str(path) not in str(caught.value) and "不是文件" in str(caught.value)
     assert str(path) in caplog.text
+    if identity_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(caught.value)
+    assert "workspace-identity-log-secret" not in str(caught.value)
     assert marker.read_text() == "keep"
 
 
 def test_concurrent_creator_read_failure_keeps_read_stage_and_direct_cause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    identity_log_failure: OSError | None,
 ) -> None:
     expected = identity.load_or_create_workspace_id(tmp_path)
     path = identity.workspace_identity_path(tmp_path)
@@ -190,22 +229,27 @@ def test_concurrent_creator_read_failure_keeps_read_stage_and_direct_cause(
     with monkeypatch.context() as patch:
         patch.setattr(Path, "stat", stat)
         patch.setattr(Path, "read_text", read)
-        with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(PermissionError) as caught:
+        with caplog.at_level(logging.ERROR), pytest.raises(PermissionError) as caught:
             identity.load_or_create_workspace_id(tmp_path)
         assert caught.value.__cause__ is raw
         assert "stage=read" in str(caught.value) and "stage=create" not in str(caught.value)
         assert str(path) not in str(caught.value)
-        assert len([record for record in caplog.records if record.name == identity.__name__]) == 1
+        assert len([record for record in caplog.records if record.exc_info is not None and record.exc_info[1] is raw]) == 1
+        if identity_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in str(caught.value)
+        assert "workspace-identity-log-secret" not in str(caught.value)
     assert path.read_bytes() == original
     assert identity.load_or_create_workspace_id(tmp_path) == expected
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="真实Linux符号链接循环；不替代Windows原生验证")
-def test_native_symlink_loop_preserves_failure_and_creates_no_identity(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_native_symlink_loop_preserves_failure_and_creates_no_identity(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, identity_log_failure: OSError | None,
+) -> None:
     left, right = tmp_path / "left", tmp_path / "right"
     left.symlink_to(right)
     right.symlink_to(left)
-    with caplog.at_level(logging.ERROR, logger=identity.__name__), pytest.raises(RuntimeError) as caught:
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as caught:
         identity.load_or_create_workspace_id(left)
     assert str(left) not in str(caught.value) and str(right) not in str(caught.value)
     assert "artifact=workspace_identity" in str(caught.value) and "stage=resolve" in str(caught.value)
@@ -213,3 +257,28 @@ def test_native_symlink_loop_preserves_failure_and_creates_no_identity(tmp_path:
     assert str(left) in caplog.text or str(right) in caplog.text
     assert left.readlink() == right and right.readlink() == left
     assert sorted(path.name for path in tmp_path.iterdir()) == ["left", "right"]
+    if identity_log_failure is not None:
+        assert "diagnostic_sink_error=OSError" in str(caught.value)
+    assert "workspace-identity-log-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize("value,reason", [
+    ("/private/invalid-workspace-id", "必须是标准 UUID"),
+    ("00000000-0000-4000-8000-00000000000A", "必须使用标准 UUID 文本"),
+])
+def test_identity_input_rejection_preserves_original_public_rule_when_logging_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, identity_log_failure: OSError | None,
+    value: str, reason: str,
+) -> None:
+    source = tmp_path / "identity.json"
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as caught:
+        identity.validate_workspace_id(value, source=source)
+    expected = "Workspace 后端工作区 ID " + reason
+    if identity_log_failure is not None:
+        expected += ", diagnostic_sink_error=OSError"
+    assert str(caught.value) == expected
+    assert caught.value.__cause__ is not None
+    assert str(source) in caplog.text and repr(value) in caplog.text
+    assert str(source) not in str(caught.value) and value not in str(caught.value)
+    assert "workspace-identity-log-secret" not in str(caught.value)
+    assert not source.exists() and not (tmp_path / ".boxteam").exists()

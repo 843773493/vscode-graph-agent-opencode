@@ -2,26 +2,31 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from stat import S_ISREG
+from typing import Never
 from uuid import UUID, uuid4
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import report_failure
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
-logger = logging.getLogger(__name__)
 
-
-def _identity_failure(identity_path: Path, stage: str, reason: str, *, error: BaseException | None = None) -> str:
+def _identity_failure(identity_path: Path, stage: str, reason: str, *, error: BaseException) -> str:
     message = f"{reason}: artifact=workspace_identity, stage={stage}"
-    logger.error("%s path=%s", message, identity_path,
-                 exc_info=None if error is None else (type(error), error, error.__traceback__))
-    return message
+    error.add_note(f"Workspace 身份位置: {identity_path}")
+    return report_failure(error, detail=message)
+
+
+def _reject_identity(
+    identity_path: Path, stage: str, reason: str, error_type: type[RuntimeError | TypeError] = RuntimeError,
+) -> Never:
+    error = error_type(reason)
+    raise error_type(_identity_failure(identity_path, stage, reason, error=error)) from error
 
 
 @contextmanager
@@ -56,13 +61,16 @@ def validate_workspace_id(workspace_id: str, *, source: Path | None = None) -> s
     try:
         parsed = UUID(workspace_id)
     except (AttributeError, ValueError) as error:
-        logger.error("Workspace 身份格式拒绝: source=%s value=%r", source, workspace_id)
-        raise RuntimeError("Workspace 后端工作区 ID 必须是标准 UUID") from error
-    normalized = str(parsed)
-    if normalized != workspace_id:
-        logger.error("Workspace 身份非规范文本: source=%s value=%r", source, workspace_id)
-        raise RuntimeError("Workspace 后端工作区 ID 必须使用标准 UUID 文本")
-    return normalized
+        failure = error
+        message = "Workspace 后端工作区 ID 必须是标准 UUID"
+    else:
+        normalized = str(parsed)
+        if normalized == workspace_id:
+            return normalized
+        failure = ValueError("Workspace 身份非规范文本")
+        message = "Workspace 后端工作区 ID 必须使用标准 UUID 文本"
+    failure.add_note(f"Workspace 身份格式拒绝: source={source} value={workspace_id!r}")
+    raise RuntimeError(report_failure(failure, detail=message)) from failure
 
 
 def _read_workspace_id(identity_path: Path) -> str:
@@ -76,10 +84,10 @@ def _read_workspace_id(identity_path: Path) -> str:
         message = _identity_failure(identity_path, "decode", "Workspace 后端身份文件不是有效 UTF-8", error=error)
         raise UnicodeDecodeError(error.encoding, error.object, error.start, error.end, message) from error
     if not isinstance(payload, dict):
-        raise TypeError(_identity_failure(identity_path, "validate", "Workspace 后端身份文件必须是 JSON object"))
+        _reject_identity(identity_path, "validate", "Workspace 后端身份文件必须是 JSON object", TypeError)
     workspace_id = payload.get("workspace_id")
     if not isinstance(workspace_id, str):
-        raise TypeError(_identity_failure(identity_path, "validate", "Workspace 后端身份文件缺少 workspace_id"))
+        _reject_identity(identity_path, "validate", "Workspace 后端身份文件缺少 workspace_id", TypeError)
     return validate_workspace_id(workspace_id, source=identity_path)
 
 
@@ -101,16 +109,32 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
     except OSError as error:
         raise _identity_io_error(identity_path, "create", error) from error
 
-    with _identity_access(identity_path, "flush"), os.fdopen(descriptor, "w", encoding="utf-8") as file:
-        json.dump(
-            {"workspace_id": workspace_id},
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
-        file.write("\n")
-        file.flush()
-        os.fsync(file.fileno())
+    primary_error: BaseException | None = None
+    try:
+        with _identity_access(identity_path, "flush"):
+            file = os.fdopen(descriptor, "w", encoding="utf-8")
+            descriptor = None  # stream创建成功才交付关闭责任，失败仍由本次创建负责。
+            with file:
+                json.dump({"workspace_id": workspace_id}, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                cleanup_error = _identity_io_error(identity_path, "close_descriptor", error)
+                cleanup_error.__cause__ = error
+                if primary_error is not None:
+                    raise BaseExceptionGroup(
+                        "Workspace 身份创建与收尾均失败: artifact=workspace_identity, stage=close_descriptor",
+                        [primary_error, cleanup_error],
+                    ) from primary_error
+                raise cleanup_error from error
     return workspace_id
 
 
@@ -121,7 +145,7 @@ def _read_existing_workspace_id(identity_path: Path) -> str | None:
         except FileNotFoundError:
             return None
     if not S_ISREG(identity_stat.st_mode):
-        raise RuntimeError(_identity_failure(identity_path, "validate", "Workspace 后端身份路径不是文件"))
+        _reject_identity(identity_path, "validate", "Workspace 后端身份路径不是文件")
     return _read_workspace_id(identity_path)
 
 
@@ -146,13 +170,13 @@ def bind_workspace_id(workspace_root: Path, workspace_id: str) -> str:
     if existing_id is not None:
         actual_id = existing_id
         if actual_id != expected_id:
-            raise RuntimeError(_identity_failure(identity_path, "bind",
-                f"挂载工作区 UUID 与工作区身份文件不一致: expected={expected_id}, actual={actual_id}"))
+            _reject_identity(identity_path, "bind",
+                f"挂载工作区 UUID 与工作区身份文件不一致: expected={expected_id}, actual={actual_id}")
         return actual_id
     actual_id = _create_workspace_id(identity_path, expected_id)
     if actual_id != expected_id:
-        raise RuntimeError(_identity_failure(identity_path, "bind",
-            f"并发初始化得到的 Workspace 后端 UUID 与 mount 契约不一致: expected={expected_id}, actual={actual_id}"))
+        _reject_identity(identity_path, "bind",
+            f"并发初始化得到的 Workspace 后端 UUID 与 mount 契约不一致: expected={expected_id}, actual={actual_id}")
     return actual_id
 
 

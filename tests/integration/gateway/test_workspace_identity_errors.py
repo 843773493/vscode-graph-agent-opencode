@@ -68,15 +68,31 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
                 if item["workspace_id"] == workspace_id
             )
             assert stopped_item["status"] == "offline"
+            state = context.boxteam_home / "state/gateway/gateway.sqlite"
+            with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
+                metadata_row, = connection.execute(
+                    "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+                ).fetchone()
+            original_contracts = json.loads(metadata_row)["managed_backends"]
+            owner_contract, = [
+                contract for contract in original_contracts
+                if any(member["workspace_id"] == workspace_id for member in contract["members"])
+            ]
+            expected_error = (
+                f"Backend 启动失败: owner={owner_contract['owner_id']}: stage=backend_start, error=RuntimeError"
+            )
 
             # 外部损坏仅用于触发失败；目标、绑定和停机状态全部由产品入口建立。
             processes.callback(identity.write_bytes, original)
             damaged = json.dumps({"workspace_id": str(target / "private-identity-marker")}).encode()
             identity.write_bytes(damaged)
-            failed = await client.post(f"/api/gateway/workspaces/{workspace_id}/runtime/start")
+            failed = await client.post(
+                f"/api/gateway/workspaces/{workspace_id}/runtime/start",
+                headers={"X-Request-ID": "workspace-identity-failed-start"},
+            )
             assert failed.status_code == 502, failed.text
-            assert failed.json()["detail"] == "Workspace backend UUID CLI 执行失败: exit=1"
-            assert failed.headers["X-Request-ID"]
+            assert failed.json()["detail"] == "工作区启动失败: stage=workspace_start, error=RuntimeError"
+            assert failed.json()["request_id"] == failed.headers["X-Request-ID"] == "workspace-identity-failed-start"
             assert str(target) not in failed.text
             assert "private-identity-marker" not in failed.text
             assert identity.read_bytes() == damaged, "身份损坏不能静默初始化替代 UUID"
@@ -89,21 +105,26 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
                 item = next(item for item in body["data"]["items"] if item["workspace_id"] == workspace_id)
                 assert item["backend_workspace_id"] == backend_id
                 assert item["status"] == "offline"
-                assert item["connection_error"] == stopped_item["connection_error"]
+                assert item["connection_error"] == expected_error
+                assert item["backend_generation"] == owner_contract["generation"]
+                assert item["affected_workspace_ids"] == [workspace_id]
                 assert str(target) not in response.text
                 assert "private-identity-marker" not in response.text
                 evidence[f"failed-list-{health}"] = item
 
-            state = context.boxteam_home / "state/gateway/gateway.sqlite"
             with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
                 row, = connection.execute(
                     "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (workspace_id,),
+                ).fetchone()
+                metadata_row, = connection.execute(
+                    "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                 ).fetchone()
                 record = json.loads(row)
                 assert record["root_path"] == str(target)
                 assert record["backend_workspace_id"] == backend_id
                 assert record["desired_running"] is False
-                assert record["connection_error"] is None, "前置身份校验失败不应发布新的运行时状态"
+                assert record["connection_error"] == expected_error, "启动失败由唯一Backend owner记录"
+                assert json.loads(metadata_row)["managed_backends"] == original_contracts
                 assert "private-identity-marker" not in str(record["connection_error"])
                 assert str(target) not in str(record["connection_error"])
                 evidence["registry-after-failure"] = record
@@ -124,6 +145,8 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
         assert str(identity) in logs
         assert "private-identity-marker" in logs
         assert "stdout=" in logs and "stderr=" in logs
+        assert "Workspace backend UUID CLI 执行失败: exit=1" in logs
+        assert "workspace-identity-failed-start" in logs
         (context.artifacts_dir / "managed-identity-errors.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )

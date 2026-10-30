@@ -391,7 +391,7 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁内复用既有 storage 错误出口（artifact=fork_target，stage 为 publication / publication_recovery / publication_finalize）。原生类别、errno/winerror与直接 cause 保持；安装失败后回滚再次失败时，两份原异常仍按原 cause/context 保留。真实位置及完整原错只留诊断，普通错误和创建记录不包含目标路径或内部 locator。原 target→rollback、stage→target、各次目录同步、失败还原和最终删除顺序逐项保持；恢复只消费同一 materialization 的既有目录与 journal，不增加安装/清理链或 schema。故障解除后仍沿原恢复或产品新请求读取同一历史 checkpoint、metadata、pending writes、assembly owner 与 request_hash。
 
-工作区UUID文件的解析、读取、首次创建和绑定继续归唯一workspace_identity owner。原生resolve/stat/mkdir/open/flush与读取失败共用该owner的错误出口，普通异常只公布逻辑artifact、阶段和原生事实，位置及原异常留诊断；JSON/UTF-8坐标与既有拒绝类别保持。正常缺失不记错误，O_EXCL并发冲突仍读取既有文件，后续读取失败不被外层创建阶段重复包装。格式、初始化及绑定顺序保持，损坏文件、目录目标和冲突UUID不被默认身份覆盖；不新建身份缓存或另一writer。
+工作区UUID文件的解析、读取、首次创建和绑定继续归唯一workspace_identity owner。原生resolve/stat/mkdir/open/flush与读取失败共用该owner的错误出口，并复用既有report_failure保留诊断次错；普通异常只公布逻辑artifact、阶段和原生事实，位置、原异常和日志次错正文留诊断，公开消息只追加日志失败类别。JSON/UTF-8坐标、既有拒绝类别和直接cause保持。正常缺失不记错误，O_EXCL并发冲突仍读取既有文件，后续读取失败不被外层创建阶段重复包装。fdopen成功前描述符由创建者关闭，失败或取消均收尾；关闭再次失败以原顺序保留主错和收尾错，不替换取消或发布位置。格式、初始化及绑定顺序保持，损坏文件、目录目标和冲突UUID不被默认身份覆盖；不新建身份缓存或另一writer。
 
 Terminal 与 Browser 的 HTTP 正文读取统一到共享的 `serverJsonRequest.mjs`，删除两个 backend 中重复的流读取／JSON 解析实现；每个服务注入原工作区 logger，原业务路由与日志管理路由继续消费同一 reader。解析失败保持 SyntaxError、原 HTTP 500 和直接 cause，公开 request_json 阶段及类别；引擎生成的原始片段只进原服务诊断。日志失败时按顺序保留解析和 sink 两份原因，读取流自身异常仍保持原身份。空正文、UTF-8 解码、合法 JSON 和正常资源操作均不变，不引入正文脱敏、输入回退、另一资源 writer 或异常文本分类器。
 
