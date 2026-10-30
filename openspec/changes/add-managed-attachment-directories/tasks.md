@@ -504,3 +504,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 源目录检查、真实SQLite写锁竞争及预检线程池排队的原实现共3项有效反例。现将隔离内的目录检查、恢复目标核验和原fence CAS合并到同一worker；迁齐唯一调用方后删除旧CAS入口。原验证/错误、CAS事务及连接关闭顺序、异步phase与物理屏障保持，原Session gate/同key锁覆盖排队与I/O结算。取消或到期不执行后续rename、不假报未推进fence或删除成功。
 - 113项相关单元通过；原物理隔离排队装具改在真实fence观察点占用线程池，保留原身份、进度、取消及barrier断言。17项产品ASGI/生命周期集成通过（49.22秒，矩阵55.51秒），新增真实SQLite竞争期间导航查询、worker停止及同journal重启恢复，原删除回执/扫描竞态回归仍通过；关键删除记录由产品入队生成。
 - Ruff、Pyright零诊断、compileall、规范strict及作者AST复核通过；准确命令、指纹、raw/退出码和限定证据见`out/tests/temp/session_isolation_preflight_20261030/artifacts/verification.json`。前序目标存在性查询、Thread创建收敛的控制库访问及catalog事务仍同步；整个shutdown硬期限、任意原生I/O终止、Backend进程重启、Windows和Gateway/Web仍未验。5.2/5.4与整体21/23保持未完成，团队协作及MCP显式持有继续TODO；未改Web实现/自动化或重启共享debug。
+
+### 2026-10-30 删除收敛控制库的打开与关闭（5.4 部分收口）
+
+- 原实现的真实SQLite写锁等待和同步关闭故障点各复现1项阻塞反例；现由原worker原语完成检查/打开/关闭，打开结果交付前已登记关闭。取消与到期结算原连接后传播，同key锁不提前释放；原异步收敛、后序holder/Session gate和删除进度顺序保持，不把此阶段误写成已持Session gate。
+- 128项相关单元通过，含12项排队/原生等待、完成/取消/到期和3项原错误/关闭/重试场景。原预检3项排队装具迁到真实排空回调后，全部原断言保持；首轮122通过/3失败及静态修正原件均保留。4项产品ASGI集成通过（15.00秒，矩阵21.66秒），由创建/导航入队生成journal，核暂停时HTTP/request_id、原件/fence、worker停止前原连接结算及同操作恢复；关闭故障点不冒称SQLite原生关闭锁竞争，worker重启不代Backend进程重启。
+- Ruff、Pyright零诊断、compileall、strict及作者AST复核的命令、指纹、raw和退出码见`out/tests/temp/session_delete_control_io_20261030/artifacts/verification.json`。收敛内部SQL/文件校验、前序目标读取和catalog事务仍同步；原生终止、完整shutdown、Backend进程重启、Windows与Gateway/Web仍未验。5.2/5.4及21/23保持未完成；未改Web实现/自动化或重启共享debug。

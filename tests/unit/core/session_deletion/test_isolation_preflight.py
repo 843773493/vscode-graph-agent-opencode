@@ -81,6 +81,11 @@ async def test_preflight_preserves_original_gate_until_native_access_settles(
     drained = asyncio.Event()
 
     async def drain(_session_id: str) -> None:
+        nonlocal queued
+        if wait_kind == "pool" and queued is None:
+            # 控制库的打开/关闭先完成，再占用隔离预检所需的worker。
+            queued = loop.run_in_executor(None, pool_step.block)
+            await _entered(pool_step)
         drained.set()
 
     service.set_session_drain_callback(drain)
@@ -125,8 +130,6 @@ async def test_preflight_preserves_original_gate_until_native_access_settles(
         if wait_kind == "pool":
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="isolation-preflight")
             loop.set_default_executor(executor)
-            queued = loop.run_in_executor(None, pool_step.block)
-            await _entered(pool_step)
         deleting = asyncio.create_task(service.delete(idempotency_key=key, root_node_id=node.node_id))
         if wait_kind == "native":
             await _entered(native_step)

@@ -433,3 +433,5 @@ Terminal的Worker已经退出且记录非运行时，只要unknown记录仍有�
 实际导航删除、worker 停止及重新启动验证沿同一 journal 恢复；原目录扫描竞态与删除回执回归保持。目录/控制库预检和 catalog 事务仍同步；整个删除/关闭硬期限、任意线程终止、独立进程重启、Windows 与 Gateway/Web 继续 TODO，不以 worker 排队和结算成功勾选完整 5.4。
 
 隔离内的源目录预检、已有目标核验和控制库fence CAS现已合并到同一worker阶段，原CAS入口随唯一调用方迁移一并删除。返回“已隔离”后只重做原屏障；未隔离时在原gate内完成检查、打开/关闭控制库和CAS，之后才到达原异步fence观察点。真实SQLite写锁等待、原生检查及线程池排队期间取消或到期，仍待原worker结算，不提前释放锁或执行后续rename；原fence和journal保留供同key恢复，不能将源目录仍在误判成fence未推进。`_drain`前序的目标存在性读取、Thread创建收敛控制库访问和catalog事务仍同步，整个关闭及原生终止合同继续TODO。
+
+Thread创建收敛所用控制库的存在性检查、打开和关闭现由原worker原语结算；连接在worker返回前登记到本次ExitStack，打开取消且结果尚未交付时也由异步finally关闭。原收敛业务保持可取消，不将整个异步流程shield；同key锁持续至关闭结算，此阶段仍在资源holder与Session gate之前。打开、收敛或关闭失败保留原异常、原件与未提交进度，同key显式重试；不新增存储、账本或同步兜底关闭。收敛内部SQL/文件校验、前序目标读取及catalog事务仍同步，5.2/5.4与完整关闭期限继续TODO。

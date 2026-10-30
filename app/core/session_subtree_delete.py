@@ -67,7 +67,7 @@ import os
 import shutil
 import sqlite3
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, ExitStack, closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -481,14 +481,24 @@ class SessionSubtreeDeleteService:
             if self._fork_retention_release_callback is not None:
                 await self._fork_retention_release_callback(session_id)
             source = self._date_bucket_dir(record.frozen_session_locators[session_id])
-            if not (source / CONTROL_DATABASE_NAME).is_file():
-                raise RuntimeError(
-                    "删除排空缺少原控制库: "
-                    f"session_id={session_id}, artifact=session-control, "
-                    f"operation_id={idempotency_key}"
+            control_scope = ExitStack()
+
+            def open_control(
+                source: Path, session_id: str, control_scope: ExitStack,
+            ) -> SessionControlStore:
+                if not (source / CONTROL_DATABASE_NAME).is_file():
+                    raise RuntimeError(
+                        "删除排空缺少原控制库: "
+                        f"session_id={session_id}, artifact=session-control, "
+                        f"operation_id={idempotency_key}"
+                    )
+                # 先登记关闭再交付连接；取消可能发生在 worker 返回之前。
+                return control_scope.enter_context(
+                    closing(SessionControlStore(source / CONTROL_DATABASE_NAME))
                 )
-            control = SessionControlStore(source / CONTROL_DATABASE_NAME)
+
             try:
+                control = await run_sync_shielded(open_control, source, session_id, control_scope)
                 await settle_thread_creations_for_deletion(
                     control=control,
                     session_id=session_id,
@@ -498,7 +508,7 @@ class SessionSubtreeDeleteService:
                     fork_abort=self._fork_child_abort_callback,
                 )
             finally:
-                control.close()
+                await run_sync_shielded(control_scope.close)
             async with AsyncExitStack() as drain_scope:
                 # 长操作先退出原 holder，旧 lease 才能短时取得 Session gate
                 # 结算；删除等待期间绝不持有它需要的 publish/write gate。
