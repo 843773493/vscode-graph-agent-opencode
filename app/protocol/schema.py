@@ -5,6 +5,8 @@ from __future__ import annotations
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from pydantic.json_schema import JsonSchemaValue
 
+from app.protocol.codecs.json import enum_json_names
+
 
 def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> None:
     """检查同形 JSON 的字段、容器和类型，允许业务模型收紧取值与 required。"""
@@ -56,7 +58,17 @@ def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> Non
                 require_type(node, special, path)
             elif field.message_type.full_name != "google.protobuf.Value":
                 message_shape(node, field.message_type, path)
-        elif field.type in (FieldDescriptor.TYPE_STRING, FieldDescriptor.TYPE_BYTES, FieldDescriptor.TYPE_ENUM):
+        elif field.enum_type is not None:
+            require_type(node, "string", path)
+            names = enum_json_names(field.enum_type, to_proto=True)
+            for value in variants(node, path):
+                declared = value.get("enum", [value["const"]] if "const" in value else None)
+                if declared is None:
+                    raise ValueError(f"公开结构与 proto 枚举不一致: {path}, 缺少明确的 enum/const 值域")
+                extra = sorted(set(declared) - names.keys())
+                if extra:
+                    raise ValueError(f"公开结构与 proto 枚举不一致: {path}, unsupported={extra}")
+        elif field.type in (FieldDescriptor.TYPE_STRING, FieldDescriptor.TYPE_BYTES):
             require_type(node, "string", path)
         elif field.type == FieldDescriptor.TYPE_BOOL:
             require_type(node, "boolean", path)

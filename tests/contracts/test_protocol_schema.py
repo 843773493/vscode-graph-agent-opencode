@@ -89,6 +89,62 @@ def test_business_union_still_rejects_public_field_drift(mutation: str) -> None:
         assert_public_schema(schema, public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"])
 
 
+@pytest.mark.parametrize("mutation", ["unbounded", "unknown", "const_unknown", "union_unknown"])
+def test_public_enum_rejects_values_the_codec_cannot_encode(mutation: str) -> None:
+    root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
+    schema = {**root["$defs"]["JobProgressDTO"], "$defs": root["$defs"]}
+    status: dict[str, object] = {"type": "string"}
+    if mutation == "unknown":
+        status["enum"] = ["completed", "invented"]
+    elif mutation == "const_unknown":
+        status["const"] = "invented"
+    elif mutation == "union_unknown":
+        status = {"anyOf": [{"type": "string", "const": "completed"},
+                            {"type": "string", "const": "invented"}]}
+    schema["properties"]["status"] = status
+    with pytest.raises(ValueError, match=r"公开结构与 proto 枚举不一致: .*/status"):
+        assert_public_schema(schema, SSE_JSON_DESCRIPTORS["JobProgressDTO"])
+
+
+@pytest.mark.parametrize("status", [
+    {"type": "string", "enum": ["completed", "failed"]},
+    {"type": "string", "const": "completed"},
+    {"anyOf": [{"type": "string", "const": "completed"}, {"type": "string", "const": "failed"}]},
+])
+def test_public_enum_keeps_narrower_business_constraints(status: dict[str, object]) -> None:
+    root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
+    schema = {**root["$defs"]["JobProgressDTO"], "$defs": root["$defs"]}
+    schema["properties"]["status"] = status
+    original = deepcopy(schema)
+    assert_public_schema(schema, SSE_JSON_DESCRIPTORS["JobProgressDTO"])
+    assert schema == original
+
+
+@pytest.mark.parametrize("mutation", ["renamed", "removed"])
+def test_export_rejects_fresh_proto_enum_drift_before_publishing(
+    tmp_path: Path, protocol_descriptor_bundle: FileDescriptorSet, mutation: str,
+) -> None:
+    enum = next(enum for file in protocol_descriptor_bundle.file for enum in file.enum_type
+                if enum.name == "JobStatus")
+    completed = next(value for value in enum.value if value.name == "JOB_STATUS_COMPLETED")
+    if mutation == "renamed":
+        completed.name = "JOB_STATUS_FINISHED"
+    else:
+        enum.value.remove(completed)
+    descriptor_set = tmp_path / "fresh.binpb"
+    descriptor_set.write_bytes(protocol_descriptor_bundle.SerializeToString())
+    output = tmp_path / "generated"
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.export_sse_runtime_schemas", "--output-root", str(output),
+         "--descriptor-set", str(descriptor_set)],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "公开结构与 proto 枚举不一致" in result.stderr
+    assert "completed" in result.stderr and "/status" in result.stderr
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("message_name", [
     "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO", "JobProgress",
     "JobStepProgress", "MessageObservation", "SessionError", "TraceObserved",

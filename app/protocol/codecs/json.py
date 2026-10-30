@@ -13,7 +13,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 
 @cache
-def _enum_names(descriptor: EnumDescriptor, to_proto: bool) -> Mapping[str, str]:
+def enum_json_names(descriptor: EnumDescriptor, to_proto: bool) -> Mapping[str, str]:
     """枚举值的公共小写名称由 proto 的零值前缀推导。"""
     zero = descriptor.values_by_number[0].name
     if not zero.endswith("_UNSPECIFIED"):
@@ -32,7 +32,7 @@ def map_enum_values(
     for field in descriptor.fields:
         value = result.get(field.name)
         if field.enum_type is not None:
-            names = _enum_names(field.enum_type, to_proto)
+            names = enum_json_names(field.enum_type, to_proto)
             if field.is_repeated and isinstance(value, list):
                 result[field.name] = [names.get(item, item) if isinstance(item, str) else item for item in value]
             elif isinstance(value, str):
