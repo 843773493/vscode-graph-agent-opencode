@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeHandle, LifetimeScope
 
 
@@ -450,27 +451,44 @@ class AgentControlInbox:
             return
         self._state_path.unlink(missing_ok=True)
 
+    def _state_failure(self, error: TypeError | RuntimeError, *, reason: str) -> TypeError | RuntimeError:
+        """控制文件和非法字段只留诊断，公开失败仍保留具体拒绝原因。"""
+        error.add_note(
+            f"Turn 控制状态: path={self._state_path}, session_id={self.session_id}, "
+            f"turn_stream_id={self.turn_stream_id}"
+        )
+        return type(error)(failure_detail(
+            error, stage="turn-control-load", label=f"{reason}; artifact=turn_control_state",
+        ))
+
     def _load(self) -> None:
         if self._state_path is None or not self._state_path.is_file():
             return
         raw = json.loads(self._state_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise TypeError(f"AgentControlInbox 状态文件必须是对象: path={self._state_path}")
+            error = TypeError("AgentControlInbox 状态文件必须是对象")
+            raise self._state_failure(error, reason=str(error)) from error
         # 会话归属校验：状态文件按会话节点存放，文件自述的 session_id 必须与
         # 请求写入的归属一致，防止跨会话复用同一 turn_stream_id 的状态。
         persisted_session_id = raw.get("session_id")
         if persisted_session_id is not None and persisted_session_id != self.session_id:
-            raise RuntimeError(
+            error = RuntimeError(
                 "AgentControlInbox 状态文件的 session_id 不匹配: "
                 f"path={self._state_path}, persisted={persisted_session_id}, "
                 f"expected={self.session_id}"
             )
+            raise self._state_failure(error, reason="AgentControlInbox 状态文件的 session_id 不匹配") from error
         for value in raw.get("commands", []):
             if not isinstance(value, dict):
-                raise TypeError("AgentControlInbox 状态文件包含无效命令")
-            command = AgentControlCommand(**value)
+                error = TypeError("AgentControlInbox 状态文件包含无效命令")
+                raise self._state_failure(error, reason=str(error)) from error
+            try:
+                command = AgentControlCommand(**value)
+            except TypeError as error:
+                raise self._state_failure(error, reason="AgentControlInbox 控制命令字段无效") from error
             if command.turn_stream_id != self.turn_stream_id:
-                raise RuntimeError("AgentControlInbox 状态文件的 turn_stream_id 不匹配")
+                error = RuntimeError("AgentControlInbox 状态文件的 turn_stream_id 不匹配")
+                raise self._state_failure(error, reason=str(error)) from error
             self._commands[command.command_id] = command
             self._next_seq = max(self._next_seq, command.control_seq)
 
