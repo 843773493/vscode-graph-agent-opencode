@@ -444,6 +444,11 @@ Thread创建收敛所用控制库的存在性检查、打开和关闭现由原wo
 
 删除流的 catalog 冻结／mark（含原拒绝中止）、进度写入、finish 与提交回执读取，以及到期回收的已完成 journal 清单，均复用原 `run_sync_shielded`。冻结和 mark 在同一 worker 内沿原事务顺序执行，mark／finish 的导航 hook 仍在各自原 SQLite 事务中；同 key 锁及对应 topology gate 持有至原调用实际结算，取消或到期不能遗弃在途提交。清单读取取消后不进入物理回收；已实际提交的删除状态按原 journal 重试，不重做已完成的资源 drain。此变更只迁移该删除／回收链，不将全仓 catalog 同步入口改为异步，也不承诺原生 I/O 或完整 shutdown 的硬期限。
 
-Child创建在冻结record之后的目录探测、staging准备及原子写/同步、rename及目录同步、原final恢复核验和发布后复验，均由同一创建链调用既有shielded worker。各步骤分别等待原调用结算；取消或外层期限到达后不继续下一步骤，也不提前释放同key锁和原`thread_creation` holder。准备/rename仍在Session及topology gate外，控制库发布与业务回调留在原事件循环和原gate内；已发布目标不会因复验取消而倒删。重入复用原record的child身份、locator和清单，恢复未发布final或返回已发布目标，不建立第二发布/清理实现。发布的同步catalog/control事务以及完整shutdown硬期限继续TODO。
+Child创建在冻结record之后的目录探测、staging准备及原子写/同步、rename及目录同步、原final恢复核验和发布后复验，均由同一创建链调用既有shielded worker。各步骤分别等待原调用结算；取消或外层期限到达后不继续下一步骤，也不提前释放同key锁和原`thread_creation` holder。准备/rename仍在Session及topology gate外，控制库发布按下文复用原worker，业务回调留在原事件循环和原gate内；已发布目标不会因复验取消而倒删。重入复用原record的child身份、locator和清单，恢复未发布final或返回已发布目标，不建立第二发布/清理实现。业务确认回调中的同步I/O以及完整shutdown硬期限继续TODO。
 
-Child准入的catalog读取、owner与控制库绑定/main指针核对、路径预算检查、creation record建立和artifact清单冻结，作为一个连续同步操作交给既有`run_sync_shielded`。原topology shared、Session exclusive、同key锁和`thread_creation` holder覆盖线程池排队及原调用结算；取消或外层到期后仍完成该次准入的原事务序列，再传播取消，不进入prepared观察、staging或发布。实际已冻结的record与清单留给同key恢复，不新建事务、writer或恢复链。发布事务与原业务回调仍在原事件循环内，完整shutdown硬期限及任意原生线程终止继续TODO，5.2/5.4保持未完成。
+Child准入的catalog读取、owner与控制库绑定/main指针核对、路径预算检查、creation record建立和artifact清单冻结，作为一个连续同步操作交给既有`run_sync_shielded`。原topology shared、Session exclusive、同key锁和`thread_creation` holder覆盖线程池排队及原调用结算；取消或外层到期后仍完成该次准入的原事务序列，再传播取消，不进入prepared观察、staging或发布。实际已冻结的record与清单留给同key恢复，不新建事务、writer或恢复链。发布事务按下文复用原worker，原业务回调仍在原事件循环内，完整shutdown硬期限及任意原生线程终止继续TODO，5.2/5.4保持未完成。
+
+
+Child发布与失败收尾的直接catalog/control访问统一调用既有`run_sync_shielded`：原发布gate内以同一次worker核对owner节点并提交原CAS，冲突后的记录重读、gate外失败复核和中止、初始execution intent读取及返回前published核验均结算各自原调用。fork物化前capture查询、物化后record重读与失败中止也沿同一原语；清理/物化回调仍走原异步owner，不把整条流程shield。
+
+CAS在取消前后实际提交的child不会倒删、回退或再分配。等待取消时原gate和创建holder维持至该worker结束；取消后不继续本阶段后续动作，原业务确认回调留给同key恢复。重试跳过已提交CAS并补齐原附件发布结算；回调和异步阶段观察保持原事件循环、原gate及先后顺序，回调故障仍保留已发布事实。未发布失败按原状态、原因和定点目录清理中止，取消发生在中止写入时保留实际aborted而非伪造preparing。回调中的同步I/O、任意原生线程终止与完整shutdown硬期限继续TODO，5.2/5.4不因本切片勾选。

@@ -351,6 +351,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** child创建在原准入gate内核对catalog、控制库绑定和main指针，或建立creation record和冻结artifact清单时遇到原生I/O、SQLite锁等待或线程池排队，且调用被取消或外层期限到达
 - **THEN** 同一worker沿原顺序完成这次准入核对与冻结，不阻塞事件循环；原topology shared、Session exclusive、同key锁和创建holder保持至原调用结算，再传播取消或期限错误，不进入后续目录准备或发布。实际提交的原record和清单供同key恢复，既有冲突和失败原样暴露，不重复分配child、不新建事务或恢复链；不将worker结算视为原生线程可强制终止或完整shutdown有硬期限
 
+#### Scenario: Child发布及失败收尾的原存储调用尚未结算
+
+- **WHEN** child创建在原gate内读取catalog并提交发布CAS、冲突后重读记录，或在原失败收尾/返回前读取和终结记录时，原I/O或线程池排队尚未结算且调用被取消或外层期限到达
+- **THEN** 直接存储调用由既有worker执行，持有相应原gate、key锁和创建holder至该调用真实结算，再传播取消或期限错误，不执行本阶段后续动作。实际已发布的child与原冻结身份保留，同key重试跳过CAS并补齐原确认和附件结算；未发布失败仍按原清理和中止合同处理，实际aborted不得改写为preparing。确认回调及异步阶段观察仍在原事件循环和原gate内，失败不能倒删已发布目标；不将worker结算当作强制终止或完整shutdown硬期限的证明
+
 #### Scenario: Child目录准备或恢复的原生调用尚未结算
 
 - **WHEN** 已冻结的child创建正在探测目录、准备staging、rename及同步目录，或核验原final/已发布目标，且调用被取消或其外层期限到达

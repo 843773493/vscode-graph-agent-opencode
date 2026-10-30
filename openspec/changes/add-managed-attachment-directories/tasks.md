@@ -554,3 +554,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 最终原`integration-fork-child-preparation-io`共8项通过（107.52秒）：新增两项由产品消息/Agent/model_stream生成历史，实际fork在SQLite写锁或manifest冻结后取消；核原gate/holder、原child/locator/清单、唯一目标、零初始执行及来源/目标canonical字节不变。同批保留原三项目录等待及三项发布确认/附件结算恢复。新用例并入既有文件、移除临时新suite，fork目录直接Python文件保持20；迁移前首次8项通过（117.25秒），不重复计数。保留原60秒fork期限、180秒/4GiB矩阵及集成独占闸门。
 - Ruff、compileall通过；Pyright仍为原6项生产诊断，完整归档逐项核对规则、完整消息、原owner及源语句一致，新准入闭包只是原gate正文的完整AST迁移，新增测试零诊断。作者AST核对原gate上下文和全部其它模块AST不变；原1522行模块及core直接49文件的结构债务未解决，不据此关闭7.5-F。首轮import格式检查失败已修复并保留原件。
 - 准确命令、源码指纹、原始输出、实际退出码、类型对照和作者复核在`out/tests/temp/child_admission_io_20261030/artifacts/verification.json`及同目录原件。发布同步I/O、任意原生线程终止、完整shutdown硬期限、Backend硬重启、Windows及Gateway/Web仍TODO；5.2/5.4和整体21/23保持未完成。未触碰另一会话的Web迁移/自动化、共享debug、团队协作及MCP显式持有延期范围。
+
+### 2026-10-30 Child发布、失败收尾与终态核验（5.4 部分收口）
+
+- 原gate内owner核对与发布CAS复用同一次shielded worker；冲突后重读、gate外失败复核/中止、初始execution intent和返回前published核验均结算各自原调用。fork物化前capture查询、物化后record重读/失败中止迁齐同一链；原业务回调与异步阶段观察保持原事件循环/gate及顺序，不新建事务、writer、schema、恢复链或第二确认链。实际已发布/aborted事实不因取消回退，同key重试补齐原确认而不重发CAS。
+- 251项相关单测通过：创建/目录准备/准入/本轮发布190项（20.86秒，含新增48项发布catalog、CAS前后、冲突重读、失败复核/中止、intent及终态核验 × 完成/取消/到期 × 原生I/O/线程池排队）；相邻创建收敛、Session gate与工厂61项（9.44秒）。完整旧生产归档加相同新增测试的发布写锁和终态核验两个反例均失败，复现事件循环阻塞及SQLITE_BUSY。首轮import格式问题已修正，测试全AST保持相同，复用原190项结果，不为格式重复长跑。
+- 正式原`integration-fork-child-publication`7项通过（109.47秒）：产品消息/真实Agent/model_stream生成带附件来源，原三类确认失败恢复保持；新增真实SQLite写锁、CAS提交后、已提交冲突重读及返回前核验的四种取消。核原holder/gate、唯一published child、零初始execution、冻结record及来源/目标canonical原字节，未确认时settlement保持preparing，原确认完成后保持published_pending_attachment_commit，同key重试完成committed且CAS仅一次。实际确认回调线程核对仍为事件循环。保留原60秒fork期限、180秒/4GiB矩阵与集成独占闸门，未改suite或Web自动化。
+- Ruff、compileall通过；Pyright原6项生产诊断与完整HEAD归档的规则/完整消息/最窄AST owner/源语句逐项一致，新增测试零诊断，不称全绿。作者AST核对：逆转worker调度并还原publish闭包后，整个模块AST与原版完全相同；原gate、事务、异常/确认/观察顺序及全部其它符号保持。单元与fork目录直接Python文件分别10/20，没有新增源码目录；1525行模块与core直接49文件的既有结构债务未在本片解决，不关闭7.5-F。
+- 命令、源码指纹、原始输出/实际退出码、完整归档反例、类型对照和作者审查见`out/tests/temp/child_publication_io_20261030/artifacts/verification.json`及同目录原件。业务确认回调的同步I/O、任意原生线程终止、完整shutdown硬期限、Backend硬重启、Windows及Gateway/Web继续TODO；5.2/5.4与整体21/23保持未完成。Web迁移/自动化、共享debug、团队协作及MCP显式持有延期边界未扩展。

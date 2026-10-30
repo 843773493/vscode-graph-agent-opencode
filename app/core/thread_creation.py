@@ -785,7 +785,7 @@ class ThreadCreationService:
             # 步骤 1：准入 = topology shared → Session gate exclusive（2.3-A
             # 固定锁序），fresh 验证后冻结 record（等价 operation lease）。
             # 同一次worker完成准入核对和record/manifest冻结；取消先等原调用结算。
-            # TODO(5.4)：发布事务与完整shutdown硬期限仍须沿原owner继续收口。
+            # TODO(5.4)：业务回调的同步I/O与完整shutdown硬期限仍须沿原owner继续收口。
             def admit() -> tuple[Path, ThreadCreationRecord]:
                 node = self._store.get_node(session_id)
                 self._validate_owner_node(node)
@@ -868,7 +868,7 @@ class ThreadCreationService:
                 _thread_path_exists, final_dir, session_id, record.child_thread_id, "locate",
             )
             if record.request_intent_json is not None and record.state == "preparing":
-                capture = self._store.get_fork_source_capture(creation_key=idempotency_key)
+                capture = await run_sync_shielded(self._store.get_fork_source_capture, creation_key=idempotency_key)
                 if capture is not None:
                     request = json.loads(capture.request_json)
                     if (capture.copy_operation_id, capture.creation_key, capture.target_session_id,
@@ -882,7 +882,8 @@ class ThreadCreationService:
                             record, session_id=session_id, session_dir=session_dir, inventory=inventory,
                             before_abort=before_abort,
                         )
-                        aborted = self._control_store.abort_thread_creation_record(
+                        aborted = await run_sync_shielded(
+                            self._control_store.abort_thread_creation_record,
                             idempotency_key, capture.abort_reason or "fork capture 已中止",
                         )
                         raise ThreadCreationAbortedError(aborted)
@@ -975,17 +976,18 @@ class ThreadCreationService:
             with _thread_access(session_id, record.child_thread_id, "fork_materialize"):
                 await before_publish(record)
         except Exception as error:
-            current = self._control_store.get_thread_creation_record(key)
+            current = await run_sync_shielded(self._control_store.get_thread_creation_record, key)
             if current.state == "preparing":
                 await self._cleanup_after_failed_publish(
                     current, session_id=session_id, session_dir=session_dir, inventory=inventory,
                     before_abort=before_abort,
                 )
-                self._control_store.abort_thread_creation_record(
+                await run_sync_shielded(
+                    self._control_store.abort_thread_creation_record,
                     key, _thread_failure_detail(session_id, record.child_thread_id, "fork_materialize", error),
                 )
             raise
-        return self._control_store.get_thread_creation_record(key)
+        return await run_sync_shielded(self._control_store.get_thread_creation_record, key)
 
     # ------------------------------------------------------------------
     # 输入校验与并发原语
@@ -1303,8 +1305,8 @@ class ThreadCreationService:
         # 本轮不绑定真实 Job——state 恒 pending，8.5 幂等 worker 消费）。
         intent = None
         if published.purpose == "task":
-            intent = self._control_store.get_initial_execution_intent(
-                published.thread_creation_idempotency_key
+            intent = await run_sync_shielded(
+                self._control_store.get_initial_execution_intent, published.thread_creation_idempotency_key,
             )
             if intent.session_id != session_id or intent.thread_id != published.child_thread_id:
                 raise RuntimeError("publication 的初始 execution intent owner 不一致")
@@ -1328,8 +1330,8 @@ class ThreadCreationService:
             session_id=session_id, thread_id=published.child_thread_id, stage="published 复验",
             published=True,
         )
-        self._control_store.mark_thread_creation_published(
-            published.thread_creation_idempotency_key
+        await run_sync_shielded(
+            self._control_store.mark_thread_creation_published, published.thread_creation_idempotency_key,
         )
         return ThreadCreationResult(
             child_thread_id=published.child_thread_id,
@@ -1363,31 +1365,34 @@ class ThreadCreationService:
         idempotency_key = record.thread_creation_idempotency_key
         published: ThreadCreationRecord | None = None
         publish_error: RuntimeError | None = None
+        def publish() -> ThreadCreationRecord:
+            # fresh 复验：workspace catalog owner 节点必须仍 active
+            # （与步骤 1 同一投影口径；不重基、不降级）。catalog
+            # deleting → 统一 session_deletion_pending 合同（2.3-D）。
+            node = self._store.get_node(session_id)
+            if node.state == "deleting":
+                raise SessionDeletionPendingError(
+                    "session_deletion_pending: workspace catalog owner "
+                    "节点已进入删除流，新可见性发布取消（fail closed）: "
+                    f"session_id={session_id!r}"
+                )
+            if node.state != "active":
+                raise RuntimeError(
+                    "thread creation publish 前 workspace catalog owner "
+                    "节点非 active（创建/删除双顺序红线，fail closed）: "
+                    f"session_id={session_id!r}, state={node.state!r}"
+                )
+            return self._control_store.publish_thread_creation_record(
+                idempotency_key, session_id=session_id
+            )
+
         async with self._gate.shared(), self._session_gate.exclusive(session_id):
             try:
-                # fresh 复验：workspace catalog owner 节点必须仍 active
-                # （与步骤 1 同一投影口径；不重基、不降级）。catalog
-                # deleting → 统一 session_deletion_pending 合同（2.3-D）。
-                node = self._store.get_node(session_id)
-                if node.state == "deleting":
-                    raise SessionDeletionPendingError(
-                        "session_deletion_pending: workspace catalog owner "
-                        "节点已进入删除流，新可见性发布取消（fail closed）: "
-                        f"session_id={session_id!r}"
-                    )
-                if node.state != "active":
-                    raise RuntimeError(
-                        "thread creation publish 前 workspace catalog owner "
-                        "节点非 active（创建/删除双顺序红线，fail closed）: "
-                        f"session_id={session_id!r}, state={node.state!r}"
-                    )
-                published = self._control_store.publish_thread_creation_record(
-                    idempotency_key, session_id=session_id
-                )
+                published = await run_sync_shielded(publish)
             except SessionDeletionPendingError as error:
                 publish_error = error
             except RuntimeError as error:
-                current = self._control_store.get_thread_creation_record(idempotency_key)
+                current = await run_sync_shielded(self._control_store.get_thread_creation_record, idempotency_key)
                 if current.state == "published":
                     # 另一执行根已提交同 key 时，只恢复身份完全一致的原结果。
                     if (
@@ -1417,7 +1422,7 @@ class ThreadCreationService:
 
         # 清理会进入其它 owner，必须先释放发布 gate。
         assert publish_error is not None
-        current = self._control_store.get_thread_creation_record(idempotency_key)
+        current = await run_sync_shielded(self._control_store.get_thread_creation_record, idempotency_key)
         if isinstance(publish_error, SessionDeletionPendingError):
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），
             # 错误类型原样传播（调用方据此终止，不换 key 重放）。
@@ -1432,9 +1437,7 @@ class ThreadCreationService:
                     inventory=inventory,
                     before_abort=before_abort,
                 )
-                self._control_store.abort_thread_creation_record(
-                    idempotency_key, reason
-                )
+                await run_sync_shielded(self._control_store.abort_thread_creation_record, idempotency_key, reason)
             raise SessionDeletionPendingError(reason) from publish_error
         # TODO(8.5): 发布前 RuntimeError 仍按确定性冲突处理；新增可重试错误时明确区分。
         reason = _thread_failure_detail(session_id, record.child_thread_id, "publish", publish_error)
@@ -1452,7 +1455,7 @@ class ThreadCreationService:
             inventory=inventory,
             before_abort=before_abort,
         )
-        self._control_store.abort_thread_creation_record(idempotency_key, reason)
+        await run_sync_shielded(self._control_store.abort_thread_creation_record, idempotency_key, reason)
         raise RuntimeError(
             "thread creation publish CAS 失败，已定点清理 record 列出的"
             "目录并 abort record，调用方须换新 idempotency_key 重试: "
