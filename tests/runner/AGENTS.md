@@ -36,6 +36,7 @@
 - `integration-execution-input-commit`经Saver准入、真实SQLite/JSONL及冷Saver核对内部输入在提交前/后失败或取消时的正文、准入和队列原子性，以及原身份重试不重复写入；复跑既有队列投影/显式迁移及checkpoint提交窗口，固定60秒/4GiB，不代表完整消息执行、Backend进程重启、Gateway/Web或Windows实机。
 - `integration-rollout-snapshot-release`经真实SQLite/JSONL与Saver准入验证快照建立、取消及关闭失败后的连接／文件锁释放，并复跑原硬退出恢复与独立reader合同，固定60秒/4GiB；不代表完整消息执行、Gateway/Web或Windows实机验收。
 - `integration-fork-live-diagnostics`通过产品执行历史、ASGI公开fork和真实文件循环／日志故障核对unknown租约、已提交关联及同key恢复，固定180秒/4GiB并保留原fork watchdog；外设传输为替身，不代表真实PTY/Chromium、Gateway/Web或Backend重启。
+- `integration-fork-live-deadline`经产品消息执行、ASGI公开fork、真实原owner锁竞争及同key重试核对已发布目标、未派发回执与唯一关联，固定90秒/4GiB和集成独占闸门；仅推进原关联预算，不覆盖原fork watchdog。外设传输为替身，不代真实PTY/Chromium、Gateway/Web或Backend重启。
 - `integration-fork-export-diagnostics`通过产品消息／Agent生成来源及公开fork验证已发布目标、释放pending、原取消、冷catalog与周期恢复，固定120秒/4GiB并保留原60秒fork watchdog；传输为进程内替身，不代真实网络、Backend重启或Web验收。
 - `integration-fork-source-intent-errors`通过产品消息与真实Agent生成来源，验证远端intent字段拒绝、真实日志写入次错、零目标副作用及原key重试，固定180秒/4GiB并保留原fork watchdog；传输为进程内替身，不代真实HTTP、Gateway/Web或Backend重启验收。
 - `integration-skill-catalog-publication`经真实文件watcher、目录owner、catalog派生及SQLite封存装具验证来源失败/日志次错后的继续发布与同名覆盖历史绑定，固定60秒/4GiB；Gateway来源是显式替身，不代产品执行、HTTP、独立Backend重启或Web验收。

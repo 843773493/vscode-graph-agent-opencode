@@ -356,50 +356,62 @@ class WorkspaceResourceOwner:
         self, resource_id: str, *, creation_key: str, expected_revision: int, thread: ThreadRef,
     ) -> tuple[ResourceSnapshot, ForkAttachReceipt]:
         """仅为 fork 的发布后恢复保留最小回执，实际 attach 共用原命令写入方。"""
-        await self.recover((resource_id,))
-        async with self._resource_lock(resource_id):
-            existing = self.fork_attach_receipt(
-                resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
-            )
-        if existing is not None:
-            return await self.get_resource(resource_id), existing
-        async with self.admit_thread(thread.session_id, thread.thread_id), self._resource_lock(resource_id):
-            record = self._require_owned_resource_record(resource_id)
-            existing = self.fork_attach_receipt(
-                resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
-            )
-            if existing is not None:
-                return resource_projection(record, None, self.kind), existing
-            receipt = ForkAttachReceipt(creation_key, thread, expected_revision, "rejected")
-            try:
-                decision = check_resource_target(
-                    resource_target_facts(resource_projection(record, None, self.kind)),
-                    ResourceTargetContext(storage_domain_id=self.workspace_id, workspace_id=self.workspace_id,
-                                          owner_session_id=thread.session_id, owner_thread_id=thread.thread_id),
-                    choice="reuse_reference",
-                )
-                if not decision.available:
-                    raise ResourceConflict(decision.reason)
-                snapshot = await self._command_record(
-                    record, "attach", expected_revision, thread, f"fork:{creation_key}",
-                    self._fork_attach_operation_id(resource_id, creation_key), fork_attachment=receipt,
-                )
-            except Exception as error:  # noqa: BLE001 — 原异常进入统一诊断，已派发回执仍由原 owner 结算。
-                # 已派发的失败保持 dispatching/unknown；绝不因存活快照自动重发。
-                record = self._require_owned_resource_record(resource_id)
-                receipt = record.fork_attachments.get(creation_key) or ForkAttachReceipt(
-                    creation_key, thread, expected_revision, "rejected",
-                )
-                receipt.error = public_error(
-                    error, stage="fork_live_attach",
-                    label=(f"fork attach 未完成: workspace_id={self.workspace_id} kind={self.kind} "
-                           f"resource_id={resource_id} creation_key={creation_key}"
-                           + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
-                )
-                record.fork_attachments[creation_key] = receipt
-                self._store.save(record)
-                snapshot = resource_projection(record, None, self.kind)
-            return snapshot, replace(receipt)
+        # TODO(5.4)：同步写盘与不合作取消仍须原owner核实；此预算不证明外部停止。
+        budget = timeout(30)
+        try:
+            async with budget:
+                await self.recover((resource_id,))
+                async with self._resource_lock(resource_id):
+                    existing = self.fork_attach_receipt(
+                        resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
+                    )
+                if existing is not None:
+                    return await self.get_resource(resource_id), existing
+                async with self.admit_thread(thread.session_id, thread.thread_id), self._resource_lock(resource_id):
+                    record = self._require_owned_resource_record(resource_id)
+                    existing = self.fork_attach_receipt(
+                        resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
+                    )
+                    if existing is not None:
+                        return resource_projection(record, None, self.kind), existing
+                    receipt = ForkAttachReceipt(creation_key, thread, expected_revision, "rejected")
+                    try:
+                        decision = check_resource_target(
+                            resource_target_facts(resource_projection(record, None, self.kind)),
+                            ResourceTargetContext(storage_domain_id=self.workspace_id, workspace_id=self.workspace_id,
+                                                  owner_session_id=thread.session_id, owner_thread_id=thread.thread_id),
+                            choice="reuse_reference",
+                        )
+                        if not decision.available:
+                            raise ResourceConflict(decision.reason)
+                        snapshot = await self._command_record(
+                            record, "attach", expected_revision, thread, f"fork:{creation_key}",
+                            self._fork_attach_operation_id(resource_id, creation_key), fork_attachment=receipt,
+                        )
+                    except Exception as error:  # noqa: BLE001 — 原异常进入统一诊断，已派发回执仍由原 owner 结算。
+                        # 已派发的失败保持 dispatching/unknown；绝不因存活快照自动重发。
+                        record = self._require_owned_resource_record(resource_id)
+                        receipt = record.fork_attachments.get(creation_key) or ForkAttachReceipt(
+                            creation_key, thread, expected_revision, "rejected",
+                        )
+                        receipt.error = public_error(
+                            error, stage="fork_live_attach",
+                            label=(f"fork attach 未完成: workspace_id={self.workspace_id} kind={self.kind} "
+                                   f"resource_id={resource_id} creation_key={creation_key}"
+                                   + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
+                        )
+                        record.fork_attachments[creation_key] = receipt
+                        self._store.save(record)
+                        snapshot = resource_projection(record, None, self.kind)
+                    return snapshot, replace(receipt)
+        except TimeoutError as error:
+            if not budget.expired():
+                raise
+            raise TimeoutError(
+                "外部资源 fork 关联等待超过 30 秒: "
+                f"workspace_id={self.workspace_id}, kind={self.kind}, resource_id={resource_id}, "
+                f"creation_key={creation_key}；保留原回执与占用，未确认外部操作停止"
+            ) from error
 
     async def _command(
         self,

@@ -286,6 +286,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal 或 Browser 的 promote/attach/detach/stop/delete 管理命令等待冷恢复、Thread准入、资源锁、授权同步或正式回执
 - **THEN** 全链共用入口取得的一次30秒协作式等待预算，阶段不重置；到期明确失败且不声明外部操作已经停止。管理动作尚未派发时不补造unknown或管理lease，已提交的冷恢复事实保留；已经派发但未核实的命令沿原异常链保留unknown及精确占用，外部回执迟到不发布成功。无关资源继续独立推进，新管理请求沿原owner核实已提交终态，不重发已完成停止；底层TimeoutError和调用方取消保持归属。该预算不证明同步阻塞可抢占、不合作执行可终止或整个工具operation已有总期限
 
+#### Scenario: Fork 已发布目标的运行资源关联等待到期
+
+- **WHEN** fork已发布目标，原Terminal或Browser资源关联仍等待恢复、回执查询锁、Thread准入、提交锁或原attach回执
+- **THEN** 单次关联从入口共用一次30秒协作式预算，阶段不重置；到期保留已发布目标与已提交恢复事实，关联尚未派发不创建该关联回执或lease，派发未核实保留原dispatching/unknown及精确占用，已提交的关联和committed回执不回滚。公开fork沿原逐资源结算合同返回不可用原因与实际operation状态；释放原锁后不后台补做，同key显式重试复用原目标与回执，不重发未知动作或重复关联。原取消及底层异常保持归属；本预算不替代整个fork期限，也不证明同步存储可抢占或外部操作已停止
+
 #### Scenario: 批量 runtime 关闭中一个 Thread 挂起或失败
 
 - **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成
