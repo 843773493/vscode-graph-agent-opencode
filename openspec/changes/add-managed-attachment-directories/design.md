@@ -476,3 +476,7 @@ Session 创建 owner 的记录冻结、目录探测/准备/复验、发布前 ca
 Session读写准入的active catalog查询、`SessionService.get`的单节点/目录读取，以及Terminal/Browser共用Thread准入的main和locator核验统一复用既有`run_sync_shielded`。DTO投影仍在原事件循环；原同步查询、工作区与目录判断、异常及锁序保持，不新增同步兼容入口、事务或租约。topology/Session gate和已取得的资源holder覆盖线程池排队与真实I/O结算，取消/外层期限不遗弃worker，也不继续创建资源。成功后短Session锁仍先于真实工具执行释放，原holder覆盖operation收尾。
 
 真实PTY/Chromium及ASGI资源入口验证active、Session目录、main/显式Thread、共享catalog连接锁和线程池排队共16个阶段，核其它HTTP可响应、原gate/holder持有、记录与lease原字节及显式重试。共享连接锁仍可阻塞依赖同一存储的读取；worker不是原生终止机制，取消仍须等已提交I/O完成。其它同步业务存储、不合作任务、旧代接管、独立Backend重启、Windows、Gateway/Web和完整shutdown硬期限继续TODO，5.2/5.4保持未完成。
+
+### 活动记录库关闭沿原Workspace任务等待worker
+
+`WorkspaceLifespan`的`activity.close`与已有文件/附件存储关闭共用`run_sync_shielded`，仅将原同步关闭交给worker；MCP/AnyIO scope仍在原生命周期任务执行。线程池排队及原生句柄释放均受Backend同一次观察预算约束，观察到期或取消不取消原关闭任务，不提前移除当前步骤或归还后续catalog与维护锁。原关闭错误保持归属，重试仍从未完成步骤继续；不改SQLite关闭语义或增加关闭writer。配置source owner不持有连接，其空关闭入口保持原行为。其它同步I/O、不合作操作终止及整个shutdown硬期限仍属5.4未完成范围。

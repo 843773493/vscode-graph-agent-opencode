@@ -128,7 +128,7 @@ class WorkspaceLifespan:
             ("tool_test.shutdown", container.tool_test_service.shutdown),
             ("trace_recorder.stop", container.trace_event_recorder.stop),
             ("mcp_connections.close", container.mcp_connection_service.close),
-            ("activity.close", container.workspace_activity_service.close),
+            ("activity.close", partial(run_sync_shielded, container.workspace_activity_service.close)),
             ("mcp_catalog.shutdown", container.mcp_catalog_owner.shutdown),
             ("workspace_service.stop", container.workspace_service.stop),
             ("context_transport.close", container.workspace_session_context_transport.aclose),
