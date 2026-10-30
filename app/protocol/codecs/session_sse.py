@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.core.identifier import validate_session_id
 from app.protocol.codecs.json import (
+    event_payload_fields,
     map_enum_values,
     struct_from_mapping,
     struct_to_mapping,
@@ -32,10 +33,7 @@ from app.schemas.internal_v2.session_status import (
 )
 
 # 事件名与 oneof 字段遵循同一命名合同，不再逐类维护派发表。
-_PAYLOAD_FIELDS = {
-    field.name.replace("_", "."): field.name
-    for field in session_interaction_pb2.SessionExecutionEvent.DESCRIPTOR.oneofs_by_name["payload"].fields
-}
+_PAYLOAD_FIELDS = event_payload_fields(cast(Descriptor, session_interaction_pb2.SessionExecutionEvent.DESCRIPTOR))
 
 
 def _parse_model(model: BaseModel, target: Message) -> None:
@@ -104,7 +102,7 @@ def session_sse_to_proto(value: SessionExecutionSseDTO) -> session_stream_pb2.Se
     if isinstance(source_event, SessionStatusChangedExecutionEventDTO):
         event.session_status_changed.CopyFrom(_session_status(source_event.payload))
     else:
-        _parse_model(source_event.payload, getattr(event, payload_field))
+        _parse_model(source_event.payload, getattr(event, payload_field.name))
 
     return session_stream_pb2.SessionExecutionSse(
         event=event,
@@ -117,6 +115,9 @@ def _event_payload_to_json(event: session_interaction_pb2.SessionExecutionEvent)
     payload_case = event.WhichOneof("payload")
     if payload_case is None:
         raise ValueError(f"Workspace SSE 事件缺少 payload: type={event.type}")
+    expected = _PAYLOAD_FIELDS.get(event.type)
+    if expected is None or payload_case != expected.name:
+        raise ValueError(f"Workspace SSE 事件 type 与 payload 不一致: expected={expected.name if expected else None}, actual={payload_case}")
     value = getattr(event, payload_case)
     if isinstance(value, job_pb2.JobProgress):
         payload = json_format.MessageToDict(

@@ -6,10 +6,31 @@ from functools import cache
 from typing import cast
 
 from google.protobuf import json_format
-from google.protobuf.descriptor import Descriptor, EnumDescriptor
+from google.protobuf.descriptor import Descriptor, EnumDescriptor, FieldDescriptor
 from google.protobuf.message import Message
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
+
+
+def event_payload_fields(
+    descriptor: Descriptor, *, aliases: Mapping[str, tuple[str, ...]] | None = None,
+) -> dict[str, FieldDescriptor]:
+    """普通事件标签由 oneof 字段推导，非同形业务别名单独声明。"""
+    fields = descriptor.oneofs_by_name["payload"].fields
+    aliases = aliases or {}
+    unknown = sorted(aliases.keys() - {field.name for field in fields})
+    if unknown:
+        raise ValueError(f"事件别名没有对应的 proto payload: {descriptor.full_name}, fields={unknown}")
+    result: dict[str, FieldDescriptor] = {}
+    for field in fields:
+        tags = aliases.get(field.name, (field.name.replace("_", "."),))
+        if not tags:
+            raise ValueError(f"proto payload 缺少公开事件标签: {descriptor.full_name}.{field.name}")
+        for tag in tags:
+            if not tag or tag in result:
+                raise ValueError(f"公开事件标签为空或重复: {descriptor.full_name}.{field.name}")
+            result[tag] = field
+    return result
 
 
 @cache

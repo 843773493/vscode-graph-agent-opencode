@@ -9,6 +9,7 @@ from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
 from google.protobuf.descriptor_pool import DescriptorPool
 
+from app.protocol.codecs.json import event_payload_fields
 from app.protocol.generated.boxteam.workspace.v2 import session_interaction_pb2
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
@@ -40,8 +41,7 @@ def main() -> None:
             event = cast(Descriptor, session_interaction_pb2.SessionExecutionEvent.DESCRIPTOR)
             if pool is not None:
                 event = pool.FindMessageTypeByName(event.full_name)
-            payloads = {field.name.replace("_", "."): field
-                        for field in event.oneofs_by_name["payload"].fields}
+            payloads = event_payload_fields(event)
             branches = schema["properties"]["event"]["discriminator"]["mapping"]
             if payloads.keys() != branches.keys():
                 raise ValueError(f"公开 SSE 事件与 proto 分支不一致: "

@@ -7,6 +7,7 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_proto,
 )
 from app.protocol.codecs.session_sse import session_sse_to_json, session_sse_to_proto
+from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import session_stream_pb2
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.session_interaction import (
@@ -16,6 +17,28 @@ from app.schemas.internal_v2.session_interaction import (
     MessageUpdatedExecutionEventDTO,
     SessionExecutionSseDTO,
 )
+
+
+@pytest.mark.parametrize("event_type", ["job.updated", "session.error", "unknown.event", ""])
+def test_session_decoder_rejects_discriminator_payload_mismatch(event_type: str) -> None:
+    wire = session_stream_pb2.SessionExecutionSse()
+    wire.event.type = event_type
+    wire.event.header.SetInParent()
+    wire.event.message_updated.message_id = "msg_discriminator"
+    original = wire.SerializeToString()
+    with pytest.raises(ValueError, match="type 与 payload 不一致"):
+        session_sse_to_json(session_stream_pb2.SessionExecutionSse.FromString(original))
+    assert wire.SerializeToString() == original
+
+
+@pytest.mark.parametrize("event_type", ["stream.opened", "tool_call.delta", "activity.failed", "unknown.event", ""])
+def test_message_decoder_rejects_discriminator_payload_mismatch(event_type: str) -> None:
+    wire = message_stream_pb2.MessageStreamEvent(type=event_type)
+    wire.block_delta.text = "增量 Ω"
+    original = wire.SerializeToString()
+    with pytest.raises(ValueError, match="type 与 payload 不一致"):
+        message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(original))
+    assert wire.SerializeToString() == original
 
 
 @pytest.mark.parametrize(("event_type", "payload", "payload_name"), [

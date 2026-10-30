@@ -5,41 +5,26 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from google.protobuf import json_format
+from google.protobuf.descriptor import Descriptor
 from google.protobuf.message import Message
 
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import (
+    event_payload_fields,
     map_enum_values,
     message_to_json,
     timestamp_from_datetime,
 )
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
-_PAYLOAD_FIELDS: dict[str, str] = {
-    "stream.opened": "stream_opened",
-    "model.started": "model_started",
-    "model.completed": "model_completed",
-    "model.retrying": "model_retrying",
-    "model.failed": "model_failed",
-    "block.started": "block_started",
-    "block.delta": "block_delta",
-    "block.completed": "block_completed",
-    "tool_call": "tool_call",
-    "tool_call.delta": "tool_call_delta",
-    "tool_call.completed": "tool_call_completed",
-    "tool.started": "tool_started",
-    "tool.completed": "tool_completed",
-    "activity.started": "activity",
-    "activity.updated": "activity",
-    "activity.completed": "activity",
-    "activity.failed": "activity",
-    "interrupt.requested": "interrupt_requested",
-    "interrupt.rejected": "interrupt_rejected",
-    "stream.completed": "stream_completed",
-    "stream.interrupted": "stream_interrupted",
-    "stream.failed": "stream_failed",
-    "stream.snapshot": "stream_snapshot",
-}
+_PAYLOAD_FIELDS = event_payload_fields(
+    cast(Descriptor, message_stream_pb2.MessageStreamEvent.DESCRIPTOR), aliases={
+        "tool_call": ("tool_call",),
+        "tool_call_delta": ("tool_call.delta",),
+        "tool_call_completed": ("tool_call.completed",),
+        "activity": ("activity.started", "activity.updated", "activity.completed", "activity.failed"),
+    },
+)
 
 
 # 公共信封身份字段闭集：encode 侧写入与 decode 侧还原共用同一来源。
@@ -113,7 +98,7 @@ def message_stream_to_proto(
             )
         if envelope_value is None and isinstance(payload_value, str):
             setattr(event, field_name, payload_value)
-    target = getattr(event, payload_field)
+    target = getattr(event, payload_field.name)
     if event.type == "stream.snapshot" and isinstance(payload.get("snapshot"), Mapping):
         payload = cast(Mapping[str, Any], payload["snapshot"])
     json_format.ParseDict(
@@ -131,8 +116,11 @@ def message_stream_to_json(
     payload_field = value.WhichOneof("payload")
     if payload_field is None:
         raise ValueError(f"消息流事件缺少 payload: type={value.type}")
+    expected = _PAYLOAD_FIELDS.get(value.type)
+    if expected is None or payload_field != expected.name:
+        raise ValueError(f"消息流事件 type 与 payload 不一致: expected={expected.name if expected else None}, actual={payload_field}")
     payload_message = cast(Message, getattr(value, payload_field))
-    payload = map_enum_values(message_to_json(payload_message), payload_message.DESCRIPTOR, to_proto=False)
+    payload = map_enum_values(message_to_json(payload_message), cast(Descriptor, payload_message.DESCRIPTOR), to_proto=False)
     if value.type == "stream.snapshot":
         payload = _denormalize_snapshot(payload)
     result: dict[str, Any] = {
