@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.abstractions.state_conflict import ClientStateConflictError
@@ -250,6 +251,9 @@ async def transfer_session_fork(
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        # 内部 DTO 损坏交给全局 500 出口；原始输入只保留在诊断中。
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -266,6 +270,8 @@ async def create_session(
         result = await session_service.create(payload)
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -283,6 +289,8 @@ async def list_sessions(
 ):
     try:
         result = await session_service.list(limit=limit, cursor=cursor)
+    except ValidationError:
+        raise
     except (KeyError, ValueError, TypeError, RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态；非法/过期 cursor 属于
         # 客户端输入错误。两者都不能伪装成空列表，也不能让前端收到无上下文的 500。
@@ -456,6 +464,8 @@ async def get_fork_source_point(
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -486,6 +496,8 @@ async def fork_session_context(
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

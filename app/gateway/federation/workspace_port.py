@@ -452,6 +452,7 @@ class WorkspaceSessionMainPort:
             from app.core.resource_uri import parse_resource_uri
             from app.schemas.internal_v2.session_fork_transfer import (
                 SessionForkTransferRequest,
+                SessionForkTransferResultDTO,
             )
 
             transfer = SessionForkTransferRequest.model_validate(body)
@@ -460,10 +461,16 @@ class WorkspaceSessionMainPort:
             resource = parse_resource_uri(transfer.fork_target.uri, local_gateway_id=require_current_gateway_id("fork target"))
             if resource.gateway_authority is not None or resource.scope_id not in self._backend_urls:
                 raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "fork Workspace 未共享或不属于当前 Gateway")
-            return await self._request(
+            data = await self._request(
                 workspace_id=resource.scope_id, method="POST", path="/api/v1/sessions/fork-transfer",
                 origin=origin, body=transfer.model_dump(mode="json"), timeout=timeout,
             )
+            try:
+                SessionForkTransferResultDTO.model_validate(data).validate_for_request(transfer)
+            except ValueError as error:
+                logger.exception("目标 Workspace fork 响应不符合合同")
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "目标 Workspace fork 响应不符合合同") from error
+            return data
         if "resource_identity" in target:
             from app.schemas.internal_v2.communication import ContextQueryRequest
             query = ContextQueryRequest.model_validate(body)

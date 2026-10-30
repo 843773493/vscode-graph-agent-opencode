@@ -12,7 +12,11 @@ from app.core.session_catalog_store.contracts import (
 from app.schemas.canonical_params import CanonicalThreadId
 
 from .common import TimestampedDTO
-from .session_context import SessionContextScope, SessionResourceIdentity
+from .session_context import (
+    SessionContextScope,
+    SessionContextURI,
+    SessionResourceIdentity,
+)
 from .session_resource import SessionResourceKind
 from .team import TeamBoardDTO
 from .workspace_resource import WorkspaceResourceDTO
@@ -96,10 +100,10 @@ class SessionForkGoalSelection(BaseModel):
 
 
 class SessionForkResourceResult(BaseModel):
-    resource_uri: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    resource_uri: SessionContextURI | None = Field(default=None, exclude_if=lambda value: value is None)
     action: SessionForkResourceAction
     availability: Literal["available", "unavailable"]
-    target_uri: str | None = None
+    target_uri: SessionContextURI | None = None
     reason: str | None = None
     owner_reference: SessionForkOwnerReference | None = Field(default=None, exclude_if=lambda value: value is None)
     owner_resource: WorkspaceResourceDTO | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -158,7 +162,7 @@ class SessionForkRequest(BaseModel):
 class SessionForkResourceSourceDTO(BaseModel):
     """冻结正文依赖及可选静态资源的来源事实；不表示目标许可。"""
 
-    resource_uri: str
+    resource_uri: SessionContextURI
     name: str | None = Field(description="领域 owner 的资源名称展示投影，不由 URI 推断。")
     content_type: str | None = Field(description="领域 owner 的资源正文类型展示投影。")
     availability: Literal["available", "unavailable"] = Field(description="来源 owner/blob 的可用性事实，不表示目标授权或可复制许可。")
@@ -168,12 +172,12 @@ class SessionForkResourceSourceDTO(BaseModel):
 class SessionForkSourcePointDTO(BaseModel):
     """服务按真实 Thread 索引冻结的弹窗来源；前端不猜 item 或追随 latest。"""
 
-    source_uri: str
+    source_uri: SessionContextURI
     source_view_id: str
     source_view_revision: int
     anchor_item_id: str | None = Field(description="所选范围的有效截止 item；完整历史或无默认点击锚点时为空。")
-    child_container_uri: str
-    main_container_uri: str
+    child_container_uri: SessionContextURI
+    main_container_uri: SessionContextURI
     title: str = Field(description="新目标名称的可编辑预填值，不是来源 Session 名称。")
     goal_available: bool = Field(description="来源 Session 是否有可选 Goal，不表示已经继承到目标。")
     resources: list[SessionForkResourceSourceDTO]
@@ -197,7 +201,7 @@ class SessionDTO(TimestampedDTO):
     session_id: str
     workspace_id: str
     resource_identity: SessionResourceIdentity
-    uri: str
+    uri: SessionContextURI
     scope: SessionContextScope
     title: str
     title_source: TitleSource = "default"
@@ -233,10 +237,10 @@ class SessionForkExportReleaseDTO(BaseModel):
 class SessionForkResultDTO(BaseModel):
     session: SessionDTO = Field(description="实际目标 Thread 所属的完整目标 Session；不表示应切换主会话。")
     thread_id: str = Field(description="实际新目标 Thread 的稳定身份。")
-    thread_uri: str = Field(description="实际新目标 Thread URI，区别于请求的创建容器 URI。")
+    thread_uri: SessionContextURI = Field(description="实际新目标 Thread URI，区别于请求的创建容器 URI。")
     target_gateway_id: str = Field(min_length=1, description="实际发布目标的稳定 Gateway 身份；客户端据此匹配已登记路由，不自行解析 URI。")
     creation_kind: SessionForkCreationKind
-    source_uri: str
+    source_uri: SessionContextURI
     source_view_id: str
     source_view_revision: int
     anchor_item_id: str | None = None

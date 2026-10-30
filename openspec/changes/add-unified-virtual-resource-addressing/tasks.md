@@ -1666,3 +1666,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 定向单元54项与关联回归209项通过，数量重叠不相加。真实三Gateway／Backend及两跳HTTP新增场景最终1 passed／77.15秒（含启动的外部总79.96秒），覆盖三地址被破坏前已真实发布、精确联邦拒绝码、同request_id、源端URI及journal无坏地址、零伪造快照、目标调用一次，以及经产品重读取得版本后对原文件继续条件修改。复用原独占闸门和4GiB／外部300秒保护；首次同场景通过后补齐调用次数与原文件恢复证据再验，不计两份独立场景。
 - Ruff与本change strict通过；Pyright14项既有诊断与完整HEAD基线逐条核规则、消息和最窄语句AST一致，零新增，不称全绿；8模型JSON Schema相同，无需改协议或前端生成物。作者AST审查确认仅输出校验和原目标响应异常分支改变，原有集成函数保持；不代独立审查。基线核对脚本的行号漂移／导入路径两次装具错误已修正，复用有效输出，不改业务断言。准确命令、指纹、raw、实际退出码与核验见`out/tests/temp/text_mutation_response_uri_20261030/artifacts/verification.json`；正式HTTP原件保留于`out/tests/integration/backend/agents/test_text_mutation_effects/`。
 - 未验证Web／Workbench、Windows实机、真实Provider或Backend硬重启，不代替全局2.2／7.2总门，仍51/53。未改另一会话的Web迁移、自动化、其暂存或共享debug；团队／协作及MCP显式持有继续延期。
+
+### 2026-10-30 fork 输出地址与封套（2.2／7.2部分收口）
+
+- Session 与 fork 的九个输出地址字段复用既有 URI grammar，拒绝原生路径及损坏地址；合法悬空 URI、百分号编码字节、可空资源引用和普通标题／说明保持。请求仍由原 owner 解析。目标 Gateway 复用原 transfer DTO 及 action 校验，拒绝损坏／错阶段回包并保留原异常诊断，合法封套原样传输；来源客户端沿原错误出口，不新增重放或创建链路。
+- 内部输出 DTO 的 ValidationError 不再被 Session 创建／列表及三条 fork 路由误当客户端输入错误，统一交给原 TraceMiddleware 返回不含原始输入的500，原异常与输入留诊断；普通 ValueError 的400／409保持。旧业务层损坏 transport 测试改为显式绕过 wire 校验后保留原身份、错误归属和不创建断言。
+- 最终关联单元／合同397项通过，含五入口×三平台路径的15项新增HTTP错误验证；此前扩大HTTP检查109 passed／2 failed，与最终组重叠不相加。两项失败均为旧session-generations URL返回404，在完整旧HEAD也复现，未改其实现或断言。正式fork确认I/O矩阵6项通过（88.22秒），关键历史经原产品入口生成，覆盖main／child、确认前后及线程池阶段取消；该矩阵不代表真实跨Gateway网络或Provider验收。完整候选归档分别还原旧输出DTO、目标封套及本地路由后，三个反例均有效失败；首次API补充命令误选不存在文件而未收集测试，修正路径后使用上述有效结果。
+- 协议生成一致性通过，六模型的序列化JSON Schema与完整HEAD相同，不修改Web生成物。Ruff27项和Pyright21项既有诊断逐条核规则、完整消息及最窄AST一致，零新增，不称全绿。准确命令、源码指纹、原始输出、实际退出码、反例及基线核验见`out/tests/temp/fork_response_uri_20261030/artifacts/verification.json`；测试保持进程外超时／4GiB及原集成独占闸门，临时完整源码副本核验后删除。
+- 本片未验证Web／Workbench、Windows实机、真实网络跨Gateway fork或进程硬重启，不代替全局不变量总门，2.2／7.2及整体51/53保持未完成。未修改另一会话的Web迁移、自动化、其暂存或共享debug服务；团队／协作及MCP显式持有继续延期。

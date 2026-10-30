@@ -468,7 +468,8 @@ async def test_remote_fork_classifies_malformed_response_identity_as_protocol_fa
     fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
     changed: dict[str, object],
 ) -> None:
-    published = SessionForkResultDTO.model_validate({**fork_result.model_dump(mode="json"), **changed})
+    # 故意绕过 wire DTO 校验，继续核验损坏的进程内 transport 不得伪报成功。
+    published = fork_result.model_copy(update=changed)
     fork_boundary.transport.reply = SessionForkTransferResultDTO(result=published)
 
     with pytest.raises(RuntimeError, match="fork_response_protocol_invalid") as caught:
