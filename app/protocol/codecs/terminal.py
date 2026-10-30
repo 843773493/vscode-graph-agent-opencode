@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from google.protobuf.descriptor import FieldDescriptor
+
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 
@@ -14,7 +16,7 @@ _TERMINAL_STATUS_ALIASES = {
 }
 
 
-def _status(value: object) -> int:
+def _status(value: object) -> terminal_pb2.TerminalStatus:
     if not isinstance(value, str) or not value:
         raise ValueError(f"Terminal 状态必须是非空字符串: {value!r}")
     enum_value = _TERMINAL_STATUS_ALIASES.get(value)
@@ -22,7 +24,7 @@ def _status(value: object) -> int:
         enum_value = getattr(terminal_pb2, f"TERMINAL_STATUS_{value.upper()}", None)
     if not isinstance(enum_value, int):
         raise TypeError(f"Terminal 状态不在协议范围内: {value}")
-    return enum_value
+    return cast(terminal_pb2.TerminalStatus, enum_value)
 
 
 def terminal_session_to_proto(value: Mapping[str, object]) -> terminal_pb2.TerminalSession:
@@ -35,24 +37,23 @@ def terminal_session_to_proto(value: Mapping[str, object]) -> terminal_pb2.Termi
         workspace_id=cast(str, value["workspace_id"]),
         status=_status(value["status"]),
     )
-    for field_name in ("title", "cwd_relative"):
-        field_value = value.get(field_name)
-        if field_value is not None:
+    # 同形标量及整数的符号由 descriptor 推导；必填身份和状态别名仍由此边界核定。
+    for field in message.DESCRIPTOR.fields:
+        field_value = value.get(field.name)
+        if field_value is None or field.name in required:
+            continue
+        if field.type == FieldDescriptor.TYPE_STRING:
             if not isinstance(field_value, str):
-                raise ValueError(f"Terminal 会话字段类型错误: {field_name}")
-            setattr(message, field_name, field_value)
-    for field_name in ("exit_code", "last_command_exit_code"):
-        field_value = value.get(field_name)
-        if field_value is not None:
+                raise ValueError(f"Terminal 会话字段类型错误: {field.name}")
+            setattr(message, field.name, field_value)
+        elif field.type == FieldDescriptor.TYPE_INT32:
             if not isinstance(field_value, int):
-                raise ValueError(f"Terminal 会话退出码必须是整数: {field_name}")
-            setattr(message, field_name, field_value)
-    for field_name in ("cols", "rows", "sequence", "transport_owner_revision", "command_start_sequence"):
-        field_value = value.get(field_name)
-        if field_value is not None:
+                raise ValueError(f"Terminal 会话退出码必须是整数: {field.name}")
+            setattr(message, field.name, field_value)
+        elif field.type in (FieldDescriptor.TYPE_UINT32, FieldDescriptor.TYPE_UINT64):
             if not isinstance(field_value, int) or field_value < 0:
-                raise ValueError(f"Terminal 会话字段必须是非负整数: {field_name}")
-            setattr(message, field_name, field_value)
+                raise ValueError(f"Terminal 会话字段必须是非负整数: {field.name}")
+            setattr(message, field.name, field_value)
     message.metadata.CopyFrom(struct_from_mapping({"raw": dict(value)}))
     return message
 
@@ -66,7 +67,7 @@ def terminal_session_to_json(value: terminal_pb2.TerminalSession) -> dict[str, o
     result = cast(dict[str, object], raw)
     # Struct 的 JSON 数值会解为 float；transport fence 使用官方 uint64 字段。
     result["transport_owner_revision"] = value.transport_owner_revision
-    for field_name in ("exit_code", "last_command_exit_code", "command_start_sequence"):
-        if value.HasField(field_name):
-            result[field_name] = getattr(value, field_name)
+    for field, field_value in value.ListFields():
+        if field.has_presence and field.type in (FieldDescriptor.TYPE_INT32, FieldDescriptor.TYPE_UINT32, FieldDescriptor.TYPE_UINT64):
+            result[field.name] = field_value
     return result
