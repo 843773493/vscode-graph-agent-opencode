@@ -24,6 +24,12 @@
 - **WHEN** arguments 含 properties 外的字段，且完整 schema 允许这些字段
 - **THEN** 校验接受合法字段并完整传给目标；schema 禁止时则在发送前返回配对的参数错误
 
+#### Scenario: 本地上下文工具禁止未知参数
+
+- **WHEN** 模型向 `read_context` 或 `search_context` 提交未声明的参数
+- **THEN** 工具公开 schema、发现定义和内置 Skill 均声明禁止额外字段，入口在调用业务 owner 前明确拒绝，不静默丢弃字段
+- **AND** 通过固定扩展入口调用时，错误与原 tool_call_id 配对；纠正参数后仍沿用既有默认值、类型转换和真实查询链路
+
 ### Requirement: 扩展工具的详细 schema 可选择暴露
 
 扩展工具执行能力开启时，固定入口 MUST 始终保留最小的调用 schema；`model_visible=true` SHALL 控制目标名称、描述及完整参数 schema 的自动上下文注入。仅因普通可见性设置产生的 `model_visible=false` SHALL 只关闭自动注入，不禁止模型通过 Skill、普通明确上下文或显式 search_tools 获得定义后调用固定入口。restrictions.model_hidden／model_visibility_locked MUST 继续阻止自动注入、显式发现、精确查询和定义恢复重新投递目标定义；不能只根据 model_visible=false 判断可发现。显式发现 MUST 不改变 selection，不把完整目标定义注入 Provider 原生 tools，不绕过执行策略。

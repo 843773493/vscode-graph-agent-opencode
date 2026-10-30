@@ -4,7 +4,7 @@ from collections.abc import Awaitable
 from typing import Literal, TypeVar
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.session_context import (
     SessionContextRevisionChangedError,
@@ -37,6 +37,8 @@ ResultModel = TypeVar("ResultModel", bound=BaseModel)
 
 
 class ReadContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     resource_identity: str = Field(description="目标上下文资源的稳定身份")
     uri: str = Field(description="目标上下文资源的 URI 地址")
     scope: Literal["workspace", "user", "gateway", "inline"] = Field(
@@ -60,6 +62,8 @@ class ReadContextInput(BaseModel):
 
 
 class SearchContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     resource_identity: str = Field(description="搜索范围的稳定身份")
     uri: str = Field(description="搜索范围的 URI 地址")
     scope: Literal["workspace", "user", "gateway", "inline"] = Field(

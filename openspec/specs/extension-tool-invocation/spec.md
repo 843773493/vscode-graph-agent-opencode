@@ -27,6 +27,12 @@
 - **WHEN** arguments 含 properties 外的字段，且完整 schema 允许这些字段
 - **THEN** 校验接受合法字段并完整传给目标；schema 禁止时则在发送前返回配对的参数错误
 
+#### Scenario: 本地上下文工具禁止未知参数
+
+- **WHEN** 模型向 `read_context` 或 `search_context` 提交未声明的参数
+- **THEN** 工具公开 schema、发现定义和内置 Skill 均声明禁止额外字段，入口在调用业务 owner 前明确拒绝，不静默丢弃字段
+- **AND** 通过固定扩展入口调用时，错误与原 tool_call_id 配对；纠正参数后仍沿用既有默认值、类型转换和真实查询链路
+
 ### Requirement: MCP 工具目录必须归入扩展工具组
 
 MCP 工具 MUST 作为 `kind="extension"` 出现在工具目录中；同一 MCP Server 的工具 MUST 归入 `group_id="mcp:{server_id}"`，组名 MUST 使用 `扩展工具 · MCP · {server_id}`，不得继续使用独立 MCP 顶层分类。

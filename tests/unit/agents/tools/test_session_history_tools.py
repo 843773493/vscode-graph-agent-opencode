@@ -7,9 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import ToolMessage
+from pydantic import ValidationError
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.abstractions.session_target import SessionTarget
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
@@ -100,7 +102,7 @@ def history_context(communication_probe, communication_invocation):
 
 async def test_session_read_uses_durable_communication_owner(history_context, communication_probe):
     arguments = _session_input()
-    communication_probe.read_result = SessionContextReadResultDTO(**arguments, view="overview", revision="frozen")
+    communication_probe.read_result = SessionContextReadResultDTO.model_validate({**arguments, "view": "overview", "revision": "frozen"})
     result = json.loads(await create_read_context_tool(history_context).ainvoke(arguments))
     assert result["revision"] == "frozen"
     operation, call = communication_probe.calls[0]
@@ -176,11 +178,58 @@ async def test_custom_invoker_exposes_observation_snapshot_error(history_context
     assert result.text == "read-snapshot-mismatch"
 
 
-async def test_custom_invoker_rejects_unknown_target_argument(history_context):
-    target = create_read_context_tool(history_context)
-    invoker = create_extension_tool_invoker_tool([target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]))
-    result = await invoker.ainvoke({"tool_name": target.name, "arguments": {**_session_input(), "query": "未知 read 参数"}})
-    assert result == "扩展工具 read_context 包含未知参数: query"
+@pytest.mark.parametrize("operation", ["read", "search"])
+@pytest.mark.parametrize("enveloped", [False, True])
+@pytest.mark.parametrize("unknown_key", [
+    "unexpected", "/private/context/argument.json", r"C:\private\context\argument.json",
+    r"\\server\context\argument.json",
+])
+async def test_context_tools_reject_unknown_arguments_before_owner_and_allow_correction(
+    history_context, communication_probe, operation: str, enveloped: bool, unknown_key: str,
+):
+    identity = _session_input()
+    communication_probe.read_result = SessionContextReadResultDTO.model_validate({**identity, "view": "overview", "revision": "frozen"})
+    target = (create_read_context_tool if operation == "read" else create_search_context_tool)(history_context)
+    tool = create_extension_tool_invoker_tool(
+        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+    ) if enveloped else target
+    # 合法参数继续沿用本地模型的数值转换与默认值，额外字段不应借此被丢弃。
+    valid = {**identity, **({"limit": "7"} if operation == "read" else {"query": "needle", "max_results": "7"})}
+    arguments = {**valid, unknown_key: "不得被静默忽略"}
+    call = {"type": "tool_call", "id": "invalid-context-arguments", "name": tool.name,
+            "args": {"tool_name": target.name, "arguments": arguments} if enveloped else arguments}
+    if enveloped:
+        rejected = await tool.ainvoke(call)
+        assert isinstance(rejected, ToolMessage) and rejected.status == "error"
+        assert (rejected.name, rejected.tool_call_id) == (tool.name, call["id"])
+        assert "参数校验失败" in rejected.text and "extra_forbidden" in rejected.text
+        issues = json.loads(rejected.text.split("issues=", 1)[1])
+        assert issues == [{"parameter": unknown_key if unknown_key.isidentifier() else None,
+                           "depth": 1, "rule": "extra_forbidden"}]
+        assert "private" not in rejected.text and "不得被静默忽略" not in rejected.text
+    else:
+        with pytest.raises(ValidationError) as rejected_error:
+            await tool.ainvoke(call)
+        issue, = rejected_error.value.errors()
+        assert (issue["loc"], issue["type"], issue["input"]) == ((unknown_key,), "extra_forbidden", arguments[unknown_key])
+    assert communication_probe.calls == history_context.session_context_query_service.calls == []
+    assert history_context.workspace_session_context_client.calls == history_context.session_target_resolver.calls == []
+    assert arguments == {**valid, unknown_key: "不得被静默忽略"}
+
+    call["id"] = "corrected-context-arguments"
+    call["args"] = {"tool_name": target.name, "arguments": valid} if enveloped else valid
+    corrected = await tool.ainvoke(call)
+    assert isinstance(corrected, ToolMessage) and corrected.status == "success"
+    assert (corrected.name, corrected.tool_call_id) == (tool.name, call["id"])
+    if operation == "read":
+        _, received = communication_probe.calls[0]
+        request = received["request"]
+        assert len(communication_probe.calls) == 1 and request.limit == 7
+        assert request.recent_rounds == 3 and request.include == ["visible_text", "tool_summary"]
+    else:
+        _, request = history_context.session_context_query_service.calls[0]
+        assert len(history_context.session_context_query_service.calls) == 1
+        assert request.max_results == 7 and request.sources == ["effective_context"]
 
 
 async def test_session_read_without_owner_fails_loudly(history_context):
@@ -190,7 +239,7 @@ async def test_session_read_without_owner_fails_loudly(history_context):
 
 
 def test_read_schema_contains_only_business_parameters(history_context):
-    schema = create_read_context_tool(history_context).args_schema.model_json_schema()["properties"]
+    schema = export_model_tool_json_schema(create_read_context_tool(history_context))["properties"]
     assert {"resource_identity", "uri", "scope", "cursor", "revision"} <= schema.keys()
     assert not {"resource", "workspace_id", "source_call_id", "thread_id", "observation_id"} & schema.keys()
 

@@ -36,6 +36,7 @@ allowed-tools: read_context, search_context
 {
   "tool_name": "read_context",
   "arguments_schema": {
+    "additionalProperties": false,
     "properties": {
       "resource_identity": {
         "description": "目标上下文资源的稳定身份",
@@ -172,6 +173,7 @@ allowed-tools: read_context, search_context
 {
   "tool_name": "search_context",
   "arguments_schema": {
+    "additionalProperties": false,
     "properties": {
       "resource_identity": {
         "description": "搜索范围的稳定身份",
