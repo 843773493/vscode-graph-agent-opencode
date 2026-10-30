@@ -96,6 +96,7 @@ from app.core.session_lifecycle_gate import (
     OperationHolderGate,
     SessionLifecycleGate,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.thread_creation import settle_thread_creations_for_deletion
 
 __all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult", "SubtreeDeleteWaitTimeout"]
@@ -253,39 +254,51 @@ class SessionSubtreeDeleteService:
 
     async def collect_expired_operation_replays(self, *, now: datetime) -> datetime | None:
         """唯一物理 GC：整节点所有观察/通信窗口结束且全部 lease 已终态才清理。"""
+        # TODO(5.4)：catalog清单仍同步读取；原生I/O结算不代表整个GC/shutdown已有硬期限。
         next_expiry = None
         for record in self._store.list_completed_subtree_deletes(self._workspace_id):
             journal_deadline = datetime.fromisoformat(record.record_updated_at) + timedelta(days=1, seconds=30)
             if now < journal_deadline:
                 next_expiry = journal_deadline if next_expiry is None else min(next_expiry, journal_deadline)
                 continue
-            for session_id, locator in record.frozen_session_locators.items():
+            for session_id in record.frozen_session_locators:
                 async with self._session_gate.exclusive(session_id):
-                    source = self._date_bucket_dir(locator)
-                    target = self._deleting_dir(record.subtree_delete_idempotency_key) / session_id
-                    if not target.exists() and not target.is_symlink():
-                        if source.exists() or source.is_symlink():
-                            raise RuntimeError("GC 后原 Session locator 重新出现")
-                        continue
-                    self._verify_isolated_target(source, target, session_id, stage="operation replay GC")
-                    control = SessionControlStore(target / CONTROL_DATABASE_NAME, read_only=True)
-                    try:
-                        if control.list_non_terminal_leases() or control.list_pending_thread_creations():
-                            raise RuntimeError("删除恢复 GC 仍有非终态 operation lease")
-                        retained_until = journal_deadline
-                        for row in control.list_remote_observations():
-                            retained_until = max(retained_until, datetime.fromisoformat(row.expires_at))
-                        communication_deadline = control.communication_recovery_deadline()
-                        if communication_deadline is not None:
-                            retained_until = max(retained_until, communication_deadline)
-                    finally:
-                        control.close()
-                    if now < retained_until:
-                        next_expiry = retained_until if next_expiry is None else min(next_expiry, retained_until)
-                        continue
-                    shutil.rmtree(target)
-                    _fsync_directory(target.parent)
+                    # 校验、删除及barrier均由同一worker完成，取消须先结算原I/O再归还gate。
+                    retained_until = await run_sync_shielded(
+                        self._collect_operation_replay, record, session_id, now, journal_deadline,
+                    )
+                if retained_until is not None:
+                    next_expiry = retained_until if next_expiry is None else min(next_expiry, retained_until)
         return next_expiry
+
+    def _collect_operation_replay(
+        self, record: SubtreeDeleteRecord, session_id: str,
+        now: datetime, journal_deadline: datetime,
+    ) -> datetime | None:
+        source = self._date_bucket_dir(record.frozen_session_locators[session_id])
+        target = self._deleting_dir(record.subtree_delete_idempotency_key) / session_id
+        if not target.exists() and not target.is_symlink():
+            if source.exists() or source.is_symlink():
+                raise RuntimeError("GC 后原 Session locator 重新出现")
+            return None
+        self._verify_isolated_target(source, target, session_id, stage="operation replay GC")
+        control = SessionControlStore(target / CONTROL_DATABASE_NAME, read_only=True)
+        try:
+            if control.list_non_terminal_leases() or control.list_pending_thread_creations():
+                raise RuntimeError("删除恢复 GC 仍有非终态 operation lease")
+            retained_until = journal_deadline
+            for row in control.list_remote_observations():
+                retained_until = max(retained_until, datetime.fromisoformat(row.expires_at))
+            communication_deadline = control.communication_recovery_deadline()
+            if communication_deadline is not None:
+                retained_until = max(retained_until, communication_deadline)
+        finally:
+            control.close()
+        if now < retained_until:
+            return retained_until
+        shutil.rmtree(target)
+        _fsync_directory(target.parent)
+        return None
 
     # ------------------------------------------------------------------
     # 公开入口

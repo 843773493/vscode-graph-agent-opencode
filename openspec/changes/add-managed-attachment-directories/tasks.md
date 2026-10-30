@@ -486,3 +486,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 修改前6项反例失败；最终六文件共67个不同单元用例通过，其中10项新增场景。首次66 passed/1 setup error来自该测试目录遗留schema10库（当前要求11），保留旧工作区后仅补跑该1项通过，不改schema或断言。真实双挂载lifespan/原生watchfiles验收1 passed/10.62秒，矩阵总17.26秒；暂停位置在真实原生退出后、原任务最终完成前，核peer关闭、原30秒观察到期、取消消息、原任务/scope/registry/维护锁保留及同owner继续排空。首次矩阵在另一会话Web测试占用名额时排队60秒TIMEOUT；确认持锁进程退出后重跑通过，未绕独占闸门或扩大期限。
 - Ruff、Pyright零诊断、compileall及本change strict通过；作者AST复核确认路径解析、事件分发、普通监听错误帧等原方法保持，非独立审查。准确命令、前后源码指纹、原始输出、退出码及旧库归档位置见`out/tests/temp/watch_shutdown_20261030/artifacts/verification.json`。未改Web实现/自动化或重启共享debug，不声称独立进程重启、Windows、任意原生线程终止或完整shutdown验收；5.2/5.4及21/23保持未完成，团队协作与MCP显式持有继续TODO。
 - 后续将故障点从监听任务外层移入原`awatch`迭代器的finally，发现取消后的清理异常原先只发错误帧后正常返回。4项shutdown/最后订阅、单错/多错反例均失败；现将该原错上抛给同一drain，失败任务和错误身份保持，普通运行时错误帧回归不变。最终69项单元及真实双挂载1项回归通过（10.34秒，矩阵16.79秒），原4条断言全部保留，Python净减4行。受控迭代器故障不代表真实Rust清理故障；真实生命周期回归仍只证明原生退出后的收尾。首轮矩阵等待Web名额60秒TIMEOUT、初轮Ruff的过期noqa拒绝均保留；持锁进程退出后按原期限补跑通过。静态与strict、指纹、raw及作者复核见`out/tests/temp/watch_native_cleanup_20261030/artifacts/verification.json`，5.2/5.4保持未勾。
+
+### 2026-10-30 删除恢复目录的同步回收（5.4 部分收口）
+
+- 原同步实现的删除/父目录同步暂停场景有2项有效反例；现将完整单节点校验、retention、lease/creation复核、删除和barrier迁入同一worker，原Session gate保持至线程池排队及原I/O结算。取消不提前释放gate，不新增schema、账本或兼容入口。
+- 74项单元通过，覆盖原删除回归、排队/原生等待、取消、期限和异常身份/同入口重试；2项产品ASGI集成通过（10.07秒，矩阵16.71秒），经创建/导航删除生成journal及隔离目录，验证暂停期间HTTP查询、request_id、peer节点、原gate与目录保全，放行后取消归属及不重复删除。首轮集成误用仅含版本的snapshot端点，改用roots及typed节点身份断言；未调整生产API或放宽断言。
+- Ruff、Pyright零诊断、compileall及本change strict通过；准确命令、源码指纹、原始输出、退出码和作者差异复核见`out/tests/temp/session_replay_gc_io_20261030/artifacts/verification.json`。catalog清单同步读取、任意原生I/O终止、独立进程重启、Windows、Gateway/Web和完整shutdown仍未验；5.2/5.4及21/23保持未完成。未改Web实现/自动化或重启共享debug，团队协作和MCP显式持有继续TODO。
