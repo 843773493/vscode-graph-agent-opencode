@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Collection
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ from app.core.failures import (
     failure_detail,
     mark_public_failure,
     public_failure_message,
+    report_failure,
 )
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 from app.services.business.workspace_resources.records import OwnedResourceRecord
@@ -26,7 +26,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 
 ORPHAN_GRACE_SECONDS = 30 * 60
 STOPPED_STATUSES = frozenset({"completed", "exited", "terminated", "closed", "deleted"})
-logger = logging.getLogger(__name__)
 
 
 def resource_target_facts(snapshot: ResourceSnapshot) -> ResourceTargetFacts:
@@ -56,8 +55,10 @@ def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
         not isinstance(relative, str) or PureWindowsPath(relative).anchor
     ):
         # Windows anchor 同时识别盘符、根路径和 UNC；也覆盖 POSIX 的斜杠根，不依赖中继平台。
-        logger.error("Node 运行时 工作目录拒绝: cwd_relative=%r", relative)
-        raise mark_public_failure(ValueError("Node 运行时 工作目录不是工作区内相对目录"))
+        error = mark_public_failure(ValueError("Node 运行时 工作目录不是工作区内相对目录"))
+        error.add_note(f"Node 运行时 工作目录拒绝: cwd_relative={relative!r}")
+        report_failure(error, detail="Node 运行时 工作目录拒绝")
+        raise error
     revision = runtime.get("transport_owner_revision")
     if type(revision) is not int or revision < 1:
         raise mark_public_failure(ValueError("Node 运行时 回执缺少有效传输版本"))
@@ -73,8 +74,10 @@ def index_resources(
         if rid in result or rid not in owned_ids:
             reason = "duplicate_identity" if rid in result else "unregistered_identity"
             # 外部身份可能夹带原生路径；原值只进诊断，普通错误发布可核验的拒绝事实。
-            logger.error("Node 运行清单身份拒绝: kind=%s reason=%s index=%s identity=%r", kind, reason, index, rid)
-            raise mark_public_failure(RuntimeError(f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index={index}"))
+            error = mark_public_failure(RuntimeError(f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index={index}"))
+            error.add_note(f"被拒绝的 Node 运行清单身份: identity={rid!r}")
+            report_failure(error, detail=str(error))
+            raise error
         result[rid] = item
     return result
 

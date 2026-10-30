@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from asyncio import timeout
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
@@ -21,6 +20,7 @@ from app.abstractions.workspace_resources import (
     ResourceTransportGrantRejected,
     RetentionScope,
 )
+from app.core.failures import report_failure
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -52,7 +52,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceTargetContext,
 )
 
-logger = logging.getLogger(__name__)
 
 class ResourceConflict(ValueError):
     """版本、关联或 operation lease 阻断；没有修改资源事实。"""
@@ -161,11 +160,11 @@ class WorkspaceResourceOwner:
                 lease_id = lease_refs[record.resource_id]
                 receipt = error.creation_receipt if isinstance(error, ResourceRequestError) else None
                 self._unknown(record, error, lease_id=lease_id)
-                self._record_creation_failure(record, receipt, lease_id)
+                self._record_creation_failure(record, receipt, lease_id, error)
                 raise
 
     def _record_creation_failure(
-        self, record: OwnedResourceRecord, receipt: object, lease_id: str,
+        self, record: OwnedResourceRecord, receipt: object, lease_id: str, error: BaseException,
     ) -> bool:
         if receipt is None:
             return False
@@ -174,7 +173,7 @@ class WorkspaceResourceOwner:
         if not isinstance(receipt, dict) or type(receipt.get("owner_revision")) is not int or (
             receipt.get("resource_id"), receipt.get("workspace_id"), receipt.get("owner_revision")
         ) != (record.resource_id, record.workspace_id, record.owner_revision):
-            logger.error("外部资源创建失败回执身份冲突: resource_id=%s", record.resource_id)
+            report_failure(error, detail=f"外部资源创建失败回执身份冲突: resource_id={record.resource_id}")
             return False
         outcome = receipt.get("outcome")
         if outcome == "not_created" and receipt.get("resource") is None:
@@ -188,11 +187,11 @@ class WorkspaceResourceOwner:
                 runtime.get("transport_owner_revision"), runtime.get("status"),
                 runtime.get("reconciliation_status"),
             ) != (record.resource_id, record.workspace_id, record.owner_revision, expected_status, "verified"):
-                logger.error("外部资源创建失败回执未核实: resource_id=%s", record.resource_id)
+                report_failure(error, detail=f"外部资源创建失败回执未核实: resource_id={record.resource_id}")
                 return False
             observe_resource(record, runtime, self.kind)
         else:
-            logger.error("外部资源创建失败回执无效: resource_id=%s", record.resource_id)
+            report_failure(error, detail=f"外部资源创建失败回执无效: resource_id={record.resource_id}")
             return False
         record.reconciliation_status = "verified"
         record.error = None

@@ -5,10 +5,13 @@ from __future__ import annotations
 import errno
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from app.abstractions.workspace_resources import ResourceRequestError
 from app.core.mounted_workspaces import MountedWorkspace
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -183,3 +186,95 @@ async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_d
             cold = ExternalResourceLeaseLedger(state_path=ledger_path)
             released = cold.get_lease(active.lease_id)
             assert released is not None and released.status == "released"
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("log_failure", [False, True], ids=["log-ok", "log-failed"])
+async def test_resource_creation_receipt_failure_preserves_origin_and_stop_reconciliation(
+    resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api,
+    kind: str, caplog: pytest.LogCaptureFixture, log_failure: bool,
+) -> None:
+    _browser, root, run = resource_workspace
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            create = cast(Callable[..., Awaitable[dict[str, object]]], getattr(owner._transport, f"create_{kind}"))
+            original_error = ResourceRequestError("创建响应无法核实 /private/create-receipt-original")
+            sink_error = OSError("日志输出失败 /private/create-receipt-log")
+            call_handlers = logging.Logger.callHandlers
+            snapshots: list[dict[str, object]] = []
+
+            async def corrupt_creation_receipt(**options: object) -> dict[str, object]:
+                # 先经真实Node完成创建，再注入损坏的失败回执；不替产品准备记录或lease。
+                snapshot = await create(**options)
+                snapshots.append(snapshot)
+                original_error.creation_receipt = {
+                    "resource_id": snapshot[f"{kind}_id"], "workspace_id": owner.workspace_id,
+                    "owner_revision": snapshot["transport_owner_revision"],
+                    "outcome": "failed", "resource": snapshot,
+                }
+                raise original_error
+
+            def fail_receipt_log(logger: logging.Logger, record: logging.LogRecord) -> None:
+                call_handlers(logger, record)
+                if record.getMessage().startswith("外部资源创建失败回执"):
+                    raise sink_error
+
+            request_id = f"creation-receipt-{kind}"
+            with monkeypatch.context() as patch:
+                patch.setattr(owner._transport, f"create_{kind}", corrupt_creation_receipt)
+                if log_failure:
+                    patch.setattr(logging.Logger, "callHandlers", fail_receipt_log)
+                failed = await client.post(f"/api/v1/resources/{kind}s", json={
+                    "session_id": sid, "title": "真实创建后的损坏回执",
+                }, headers={"X-Request-ID": request_id})
+            assert failed.status_code == 500, failed.text
+            assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
+            assert failed.json()["message"] == "请求处理失败: stage=http_request, error=ResourceRequestError"
+            assert str(root) not in failed.text and "/private/" not in failed.text
+            assert any(record.exc_info is not None and record.exc_info[1] is original_error
+                       and record.getMessage().startswith("请求处理失败") for record in caplog.records)
+            if log_failure:
+                assert any(str(sink_error) in note for note in original_error.__notes__)
+            snapshot, = snapshots
+            rid = str(snapshot[f"{kind}_id"])
+            record = owner._store.get(rid)
+            assert record is not None
+            assert (record.status, record.reconciliation_status, record.owner_revision) == ("creating", "unknown", 1)
+            assert record.thread_associations == [record.source_thread]
+            pending, = owner._leases.leases_for_resource(rid)
+            assert pending.status == "reconcile_required" and pending.operation_id == request_id
+            assert pending.turn_stream_id == f"request:{request_id}" and pending.resource_id == rid
+            assert pending.holder_session_id == sid and pending.holder_thread_id == record.source_thread.thread_id
+            ledger_path = root / ".boxteam/resources.json"
+            assert ExternalResourceLeaseLedger(state_path=ledger_path).get_lease(pending.lease_id) == pending
+            assert "/private/" not in owner._store.path.read_text()
+            found = await client.get(f"/api/v1/resources/{rid}")
+            assert found.status_code == 200, found.text
+            current = found.json()["data"]
+            assert current["resource_id"] == rid and current["reconciliation_status"] == "unknown"
+            assert current["owner_revision"] == 1 and current["available_actions"] == ["stop"]
+            assert owner._leases.leases_for_resource(rid) == [pending]
+            native = await owner._transport.get_resource(rid)
+            identity_key = "os_pid" if kind == "terminal" else "active_page_id"
+            assert native[identity_key] == snapshot[identity_key] and native["status"] == "running"
+            stopped = await client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": 1},
+                                        headers={"X-Request-ID": f"{request_id}-stop"})
+            assert stopped.status_code == 200, stopped.text
+            final = stopped.json()["data"]
+            assert final["status"] == ("terminated" if kind == "terminal" else "closed")
+            assert final["reconciliation_status"] == "verified" and final["owner_revision"] == 2
+            assert stopped.headers["X-Request-ID"] == stopped.json()["request_id"] == f"{request_id}-stop"
+            verified = await owner._transport.get_resource(rid)
+            assert verified["status"] == final["status"] and verified["reconciliation_status"] == "verified"
+            assert verified["transport_owner_revision"] == 2
+            assert not owner._leases.leases_for_resource(rid)
+            settled = ExternalResourceLeaseLedger(state_path=ledger_path).get_lease(pending.lease_id)
+            assert settled is not None and settled.status == "settled"
+            assert [item[f"{kind}_id"] for item in await owner._transport.list_resources()] == [rid]
+            (run.artifacts_dir / f"receipt-diagnostics-{kind}-{log_failure}.json").write_text(json.dumps({
+                "failure": failed.json(), "resource_id": rid, "original_lease_id": pending.lease_id,
+                "external_identity": snapshot[identity_key], "stopped": final,
+                "scope": "正式Session/ASGI API和真实PTY/Chromium/HTTP；创建后注入损坏回执与日志故障；非Gateway/Web或进程重启",
+            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

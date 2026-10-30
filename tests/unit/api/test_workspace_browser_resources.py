@@ -135,10 +135,11 @@ def test_runtime_inventory_rejection_publishes_facts_without_foreign_identity(
     )
     assert rejected_id not in message
     assert any(
-        record.name == "app.services.business.workspace_resources.facts"
-        and record.args == (kind, reason, 1, rejected_id)
+        record.name == "app.core.failures" and record.exc_info and record.exc_info[1]
+        and str(record.exc_info[1]) == f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index=1"
+        and f"被拒绝的 Node 运行清单身份: identity={rejected_id!r}" in record.exc_info[1].__notes__
         for record in caplog.records
-    ), "原始身份应完整留在诊断日志参数中"
+    ), "原始身份应完整留在原拒绝异常的诊断 notes 中"
     assert (owner_file.read_bytes(), lease_file.read_bytes()) == before
     assert bundle.transport.records[resource_id] == original
     assert bundle.transport.creates == 1 and bundle.transport.deleted == []
@@ -186,8 +187,10 @@ def test_runtime_working_directory_rejects_native_root_without_changing_owner(
     assert failed.headers["X-Request-ID"] == request_id
     assert failed.json()["detail"] == "ValueError: Node 运行时 工作目录不是工作区内相对目录"
     assert "runtime-cwd" not in failed.text
-    assert any(record.name == "app.services.business.workspace_resources.facts"
-               and record.args == (native_path,) for record in caplog.records)
+    assert any(record.name == "app.core.failures" and record.exc_info and record.exc_info[1]
+               and isinstance(record.exc_info[1], ValueError)
+               and f"Node 运行时 工作目录拒绝: cwd_relative={native_path!r}" in record.exc_info[1].__notes__
+               for record in caplog.records)
     assert (owner_file.read_bytes(), lease_file.read_bytes()) == before
     assert bundle.transport.records[resource_id] == original
     assert bundle.transport.creates == 1 and bundle.transport.deleted == []

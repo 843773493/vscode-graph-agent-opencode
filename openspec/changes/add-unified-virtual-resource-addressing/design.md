@@ -55,6 +55,8 @@ Node 调试启动的原生错误在原 catch 内复用 `failure_detail`，统一
 
 资源 lease 账本的原生访问和信封拒绝由原 owner 的单一抛错方法复用 `failure_detail`，阶段仍为 read／write／validate，明确字段规则保留，文件位置只附在原异常 notes。所有调用方迁齐后删除旧字符串出口与局部 logger，外部异常保留类别、系统错误码及直接 cause。结算／对账先提交后通知的顺序保持；通知 catch 复用同一原语，原有64条有界错误摘要仅记录资源身份、状态、resource-state-notify 阶段及类别。日志次错不替换原拒绝，也不让已提交的成功被当作业务失败或阻止后续资源通知；不持久化通知摘要、不重试通知、不改变资源终态或回收判定。
 
+Terminal／Browser 的外部清单身份、工作目录及创建失败回执拒绝复用 `report_failure`，删除两个局部 logger。清单拒绝保持原类别与已登记公开规则，被拒绝的完整输入只附在原异常 notes；日志失败不能发布候选清单或改变 owner／lease。创建失败回执不合法时，诊断继续携带同一个原创建异常及 cause，不以日志次错替换；原 unknown 与精确占用继续可发现，仅由正式管理停止回执核实后结清，不因存活查询、日志恢复或重启自动重放创建。
+
 ChatGPT／Codex凭据的原生访问与具名access_token／tokens拒绝复用同一 `failure_detail`，删除本地logger。原文件位置只附在原异常notes，字段规则、异常类别、直接cause及适用原生错误码保留；日志次错只公开类别并附到原异常，不替换主错、不进入Provider公开配置错误。文本采用统一出口的 `artifact=…: stage=…` 格式，适用原生错误码按实际字段公布，不额外复制缺省None；调用方不解析这段诊断文本，不保留第二格式。首次迁移、过期刷新、临时描述符归属、发布与清理双错、并发不覆盖和同入口显式重试仍由原唯一认证owner承担，不新增登录／刷新或诊断回退链。
 
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。

@@ -1631,3 +1631,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧生产20项有效反例均被日志错误覆盖；最终124项身份、挂载、错误出口和请求scope定向单测通过，含真实O_EXCL后fdopen失败／取消与关闭次错4种组合。Ruff、四文件Pyright零诊断及compileall通过。扩展身份扫描另发现原HEAD已有runtime_source_dispatcher._digest重复摘要助手，相关生产与测试逐字同HEAD；原失败保留，不改其源码或放宽断言。
 - 真实Gateway／受管Backend的原验收1 passed／53.18秒，核注册、stop、损坏后502、同request_id、精确Backend owner失败事实、SQLite及列表一致、冻结合同／UUID／desired_running不变，以及修复原件后原入口恢复ready。原2026-10-22证据中的公开CLI文本及“前置拒绝不记错误”已分别被7b3429593和444db1411的现行合同取代；本次仅迁齐旧测试，保留原身份／原件／顺序约束，并加强owner、generation及完整成员检查，未修改产品生命周期。另一次取得闸门后遇固定端口EADDRINUSE，待ss及真实bind确认释放后才复验，未终止未知进程或换端口。
 - 原始反例、过期断言与端口失败、源码指纹、准确命令／退出码和作者AST结构自查统一保留在`out/tests/temp/workspace_identity_diagnostics_20261030/artifacts/verification.json`；正式测试产物仍在其镜像目录。原独占闸门与进程外超时／4GiB保护保持，不修改Web、Workbench、其自动化或共享Debug服务。未验证Windows、全部原生错误出口或URI全局不变量，2.2／7.2仍未勾，整体51/53。
+
+### 2026-10-30 外部资源回执拒绝的诊断次错（2.2／7.2部分收口）
+
+- 外部清单的工作目录／身份拒绝与创建失败回执的三个拒绝分支共用既有`report_failure`，删除两个局部logger；原校验规则、公开说明、异常类别和创建异常实例／cause保持，被拒输入及日志次错原文只留原异常诊断。原unknown、精确lease和正式停止结算顺序不变，不增加恢复、重放或错误账本。
+- 原生产新增44项中22项正常日志通过、22项日志故障反例失败；修复后340项相关owner／API单测及4项正式Session／ASGI／真实PTY或Chromium／HTTP场景通过（后者36.63秒）。真实创建后仅注入损坏回执及日志故障，核HTTP类型／request_id、外部身份、可发现unknown和精确lease冷读；存活查询不结清，正式stop回执核实后settle。两处旧API测试只迁移诊断断言至完整原异常notes，原业务断言保留。
+- Ruff通过；Pyright的26条诊断均位于与HEAD逐函数AST相同的既有函数，新增测试及改动函数无诊断，未称类型全绿。最初集成4项在fixture端口49160的TIME_WAIT阶段失败；无监听且真实bind成功后才复验，不杀进程、不换端口。另一次单测选择器误指不存在文件，零用例运行；原始输出保留，不计通过。
+- 准确命令、源码指纹、原始输出及退出码见`out/tests/temp/resource_receipt_diagnostics_20261030/artifacts/verification.json`；测试有进程外超时／4GiB保护，真实集成沿原独占闸门，并额外监督取得名额后的90秒期限。未验证Gateway/Web、Windows、Backend硬重启或任意不合作操作终止，2.2／7.2及资源5.2／5.4总门仍未勾；不修改Web／Workbench、其自动化或共享Debug服务。
