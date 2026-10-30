@@ -1372,3 +1372,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 最终 suite 为1 passed/202.98秒，runner 211.71秒，固定300秒/4GiB及原跨worktree集成独占闸门；1112份 Python 产品源码及本片测试/装具/矩阵运行前后指纹一致。Ruff与矩阵注册检查通过；真实 Pyright 当前44条诊断逐项对应 HEAD 装具基线44条，零新增，新测试零诊断，不称类型全绿。作者结构自查不替代独立审查。
 - 首轮1 failed/150.45秒是测试未显式请求 history include，误把默认无活动正文当成完整详情；原 SQLite 证明摘要已归属 child 当前 Turn。修正为正式完整详情读取，保留摘要身份和工具配对断言；原输出保留，不作为产品缺陷红例。准确命令、退出码、源码/产物指纹、失败归因及作者审查见 `out/tests/temp/child_compaction_isolation_20261030/artifacts/verification.json`。
 - 本片不新增前端、真实外部 Provider、同步入口、Windows、删除/GC竞争或完整8.3组合门证据；7.5和8.3继续未勾，整体保持111/119。用户延期的团队/MCP持有项与前端实施边界保持，其他agent改动及共享暂存不纳入提交。
+
+### 2026-10-30 8.3 运行中的 child 与 main 回退隔离（部分）
+
+- 旧实现通过真实 Gateway 消息和公开 fork 生成 main/child 历史，将 child 停在 `model.response_ready` 后调用 main regenerate，返回409并错误列出 child Job；4种 child 非终态的局部反例同时失败，main自身8种非终态拒绝通过。回退入口现先解析唯一 main owner，空闲检查和原 checkpoint rewind 共用该 owner，只检查精确 Thread 的非终态 Job；不新增调度器、存储或回退旁路。
+- 25项单测通过；强化后的正式 `integration-thread-rewind-isolation` 为1 passed/105.71秒，runner114.36秒。真实入口验证 child 运行时 main 可重生成、main自身运行时仍返回409且两份完整SQLite/JSONL不变，随后保留硬重启、child续聊及5次原sealed请求的owner/hash审计。固定180秒/4GiB和原跨worktree独占闸门；旧实现失败原件保留。
+- 受改业务与测试Ruff通过；API仅更新过期方法名注释，AST未改变，该文件现有13条Depends默认参数B008未扩修。真实Pyright当前9条诊断与修改前原checkpoint方法逐项同规则/消息，新增集成逻辑零诊断，不称类型全绿。通过后的生产改动仅增加并发准入TODO，AST与受测版本一致。
+- 同Thread普通消息准入与回退的并发窗口尚未收口，已在代码登记TODO；本片只证明上述Thread隔离，不证明同Thread准入原子性、Web、Windows、同步入口或全部8.3。准确命令、源码指纹、原始输出、退出码和范围见 `out/tests/temp/replay_thread_idle_20261030/artifacts/verification.json`。7.5/8.3及整体111/119保持未关闭；前端、团队专项与他人共享暂存不纳入本片提交。

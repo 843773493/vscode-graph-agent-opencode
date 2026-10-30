@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 
@@ -75,25 +76,54 @@ async def test_main_regenerate_preserves_child_storage_request_and_restart(
 
     target = await complete(case, session, main, "main 专有的待重生成输入", "main 将被隐藏的旧回答")
     main_before_child = state(roots[main])
-    child_input = await complete(case, session, child, "child 专有的独立输入", "child 专有的独立回答")
-    assert state(roots[main]) == main_before_child
+    child_call, = await case.plan(session, [{"content": "child 专有的独立回答"}], thread_id=child)
+    replay_call, = await case.plan(session, [{"content": "main 重生成后的新回答"}], thread_id=main)
+    control = case.replay.control
+    phase = "model.response_ready"
+    for call in (child_call, replay_call):
+        control.arm(call, phase)
+    try:
+        response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+            "message": {"content": "child 专有的独立输入"},
+            "run": {"mode": "single_agent", "agent_id": "default"},
+        })
+        assert response.status_code == 200, response.text
+        child_input = MessageRunAccepted.model_validate(response.json()["data"])
+        assert child_input.thread_id == child_input.dispatch.thread_id == child
+        await asyncio.to_thread(control.acknowledged, child_call, phase, 30)
+        assert state(roots[main]) == main_before_child
+        active_child = state(roots[child])
+        active_child_history = await history(case, session, child)
+
+        replay_response = await case.client.post(f"/api/v1/sessions/{session}/turns/{target.turn_id}/replay", json={
+            "action": "regenerate", "acknowledge_context_only": True,
+        })
+        assert replay_response.status_code == 200, replay_response.text
+        assert replay_response.headers["X-Request-ID"] == replay_response.json()["request_id"]
+        replayed = MessageReplayAccepted.model_validate(replay_response.json()["data"])
+        assert replayed.thread_id == main and replayed.replaced_message_id == target.message_id
+        assert replayed.turn_id != target.turn_id and replayed.message_id != target.message_id
+        await asyncio.to_thread(control.acknowledged, replay_call, phase, 30)
+        assert state(roots[child]) == active_child
+        assert await history(case, session, child) == active_child_history
+
+        active_main = state(roots[main])
+        rejected = await case.client.post(f"/api/v1/sessions/{session}/turns/{replayed.turn_id}/replay", json={
+            "action": "edit_and_continue", "content": "运行中的 main 不得再次回退", "acknowledge_context_only": True,
+        })
+        assert rejected.status_code == 409, rejected.text
+        assert replayed.job_id in rejected.text and child_input.job_id not in rejected.text
+        assert state(roots[main]) == active_main
+        assert state(roots[child]) == active_child
+    finally:
+        for call in (child_call, replay_call):
+            control.release(call, phase)
+    await _completed(case.client, replayed.job_id)
+    await _completed(case.client, child_input.job_id)
     child_before = state(roots[child])
     child_history = await history(case, session, child)
     assert [turn.final_response for turn in child_history.items] == ["共同的冻结回答", "child 专有的独立回答"]
     assert [turn.turn_id for turn in child_history.items] == [initial.turn_id, child_input.turn_id]
-
-    replay_call, = await case.plan(session, [{"content": "main 重生成后的新回答"}], thread_id=main)
-    replay_response = await case.client.post(f"/api/v1/sessions/{session}/turns/{target.turn_id}/replay", json={
-        "action": "regenerate", "acknowledge_context_only": True,
-    })
-    assert replay_response.status_code == 200, replay_response.text
-    assert replay_response.headers["X-Request-ID"] == replay_response.json()["request_id"]
-    replayed = MessageReplayAccepted.model_validate(replay_response.json()["data"])
-    assert replayed.thread_id == main and replayed.replaced_message_id == target.message_id
-    assert replayed.turn_id != target.turn_id and replayed.message_id != target.message_id
-    await _completed(case.client, replayed.job_id)
-    assert state(roots[child]) == child_before
-    assert await history(case, session, child) == child_history
     assert (roots[main] / "rollout.jsonl").read_bytes().startswith(main_before_child.canonical)
     main_history = await history(case, session, main)
     assert [turn.final_response for turn in main_history.items] == ["共同的冻结回答", "main 重生成后的新回答"]
@@ -141,6 +171,8 @@ async def test_main_regenerate_preserves_child_storage_request_and_restart(
         "initial": initial.model_dump(mode="json"), "replaced": target.model_dump(mode="json"),
         "replayed": replayed.model_dump(mode="json"), "child_input": child_input.model_dump(mode="json"),
         "child_successor": successor.model_dump(mode="json"), "request_audit": proofs,
+        "active_child_did_not_block_main_replay": True,
+        "active_main_replay_rejection": rejected.json(),
         "scope": "真实 Gateway/Backend、消息/fork/main regenerate、完整 SQLite/JSONL、硬重启及 child 续聊；不代替 compaction、Web、Windows 或全部 8.3",
     })
 

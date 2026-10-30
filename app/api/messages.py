@@ -424,7 +424,7 @@ async def replay_message_turn(
     try:
         result = await replay_service.replay(session_id, message_id, payload)
     except (KeyError, NotFoundError) as exc:
-        # _assert_session_idle 先经 JobService.list 解析会话物理目录，缺失时抛 KeyError。
+        # 回退入口先解析权威 main thread，缺失时由 owner 查询抛出明确错误。
         raise not_found_http_error(exc) from exc
     except ValueError as exc:
         logger.exception(

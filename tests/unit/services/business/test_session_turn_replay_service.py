@@ -582,15 +582,20 @@ async def test_retry_requires_failed_or_timed_out_job(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [
+    JobStatus.accepted, JobStatus.queued, JobStatus.running, JobStatus.streaming,
+    JobStatus.waiting_input, JobStatus.paused, JobStatus.interrupt_pending, JobStatus.cancelling,
+])
 async def test_replay_rejects_running_job_before_mutating_checkpoint(
     tmp_path,
     session_bundle_factory,
     frozen_provider_prepare,
+    status: JobStatus,
 ) -> None:
     service, saver, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
-        [_job("msg_2", JobStatus.running)],
+        [_job("msg_2", status)],
     )
     before = await _read_latest(saver)
     assert before is not None
@@ -610,6 +615,27 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
     assert after is not None
     assert after.checkpoint["id"] == before.checkpoint["id"]
     assert dispatcher.dispatched_message_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [JobStatus.queued, JobStatus.running, JobStatus.waiting_input, JobStatus.cancelling])
+async def test_replay_does_not_treat_child_jobs_as_main_activity(
+    tmp_path, session_bundle_factory, frozen_provider_prepare, status: JobStatus,
+) -> None:
+    service, _saver, dispatcher = await _build_service(
+        frozen_provider_prepare, tmp_path, session_bundle_factory,
+        [_job("msg_2", JobStatus.completed)],
+    )
+    # 这里只核 Job owner 筛选；真实 child 由 Gateway/fork 集成用例创建。
+    service._job_service = FakeJobService([
+        JobDTO(thread_id=f"thr_{uuid4().hex}", **_job("child-input", status, job_id="child-job")),
+    ])
+    result = await service.replay(
+        "ses_019c205391bb7a4b81b6728df70f63e6", "msg_2",
+        MessageReplayRequest(action="regenerate", acknowledge_context_only=True),
+    )
+    assert result.action == "regenerate"
+    assert dispatcher.pre_dispatch_message_ids == ["msg_1", "assistant_1"]
 
 
 @pytest.mark.asyncio

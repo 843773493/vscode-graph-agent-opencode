@@ -104,7 +104,12 @@ class SessionTurnReplayService:
 
         session_lock = self._session_lock(session_id)
         async with session_lock, self._attachment_holder.lock_for(session_id, exclusive=False):
-            await self._assert_session_idle(session_id)
+            owner = MutationIntentOwner(
+                session_id=session_id,
+                thread_id=await self._session_service.resolve_main_thread(session_id),
+            )
+            # TODO：回退与普通消息准入需共享 Thread 临界区，不能跨 dispatch 持有其内部调度锁。
+            await self._assert_thread_idle(owner)
             session = await self._session_service.get(session_id)
             visible_messages = (
                 await self._message_service.list(session_id=session_id, limit=100_000)
@@ -147,10 +152,6 @@ class SessionTurnReplayService:
                         "replaced_message_id": target_message_id,
                     },
                 ),
-            )
-            owner = MutationIntentOwner(
-                session_id=session_id,
-                thread_id=await self._session_service.resolve_main_thread(session_id),
             )
             with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
                 removed_message_count = await self._append_replay_checkpoint(
@@ -201,15 +202,15 @@ class SessionTurnReplayService:
             request,
         )
 
-    async def _assert_session_idle(self, session_id: str) -> None:
+    async def _assert_thread_idle(self, owner: MutationIntentOwner) -> None:
         active = [
             job
-            for job in await self._job_service.list(session_id=session_id)
-            if job.status not in TERMINAL_JOB_STATUSES
+            for job in await self._job_service.list(session_id=owner.session_id)
+            if job.thread_id == owner.thread_id and job.status not in TERMINAL_JOB_STATUSES
         ]
         if active:
             details = ", ".join(f"{job.job_id}:{job.status.value}" for job in active)
-            raise ValueError(f"会话仍有运行中任务，不能回退上下文: {details}")
+            raise ValueError(f"会话主线程仍有运行中任务，不能回退上下文: {details}")
 
     async def _validate_action(
         self,
