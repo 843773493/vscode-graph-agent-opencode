@@ -6,6 +6,8 @@
 
 附件发送、预览失败、历史冷读、目录回收成本测量及其集成测试专用故障注入。
 
+`test_thread_isolation.py` 从真实消息及 fork 生成 main/child 历史，分别排队并完成工具循环，以独立 SQLite/JSONL、请求及重启历史核对隔离；外部模型复用 model_stream，工作区读取不应增加 Thread 保活关联。
+
 # 不可修改内容
 
 不预先写入 canonical 历史，不拼装独立 SSE 协议，不修改 fixture 源工作区。
