@@ -12,6 +12,7 @@ from app.abstractions.resource_file_content import ResourceFileContent
 from app.agents.policy.tool_capability import ToolCapabilityPolicy, ToolMetadata
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.core.execution_admission_context import require_current_execution_admission
+from app.core.failures import mark_public_failure
 from app.core.model_request_context import SummaryCandidateScope
 from app.core.resource_uri import parse_attachment_uri
 from app.core.sqlite_state import utc_now_text
@@ -476,7 +477,8 @@ class ContextDispatchOwnerMixin:
                    and parse_attachment_uri(ref["file_id"], local_gateway_id=get_current_gateway_id(), require_file=True).display_uri == target
                    for ref in attachments):
                 return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
-        raise PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")
+        error = PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")
+        raise mark_public_failure(error, str(error))
 
 
 __all__ = ["ContextDispatchOwnerMixin", "ContextDispatchPayload"]

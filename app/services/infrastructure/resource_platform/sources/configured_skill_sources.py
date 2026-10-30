@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Literal
 
 from app.abstractions.resource_file_content import ResourceFileContent
+from app.core.failures import mark_public_failure
 from app.core.lifecycle import LifetimeScope
 from app.core.resource_uri import parse_resource_uri
 from app.domain.itemized.hashing import sha256_jcs
@@ -209,7 +210,8 @@ class ConfiguredSkillSources:
     def read(self, uri: str, _max_bytes: int) -> ResourceFileContent:
         parsed = parse_resource_uri(uri)
         if parsed.gateway_authority is not None or parsed.scope != self._scope or parsed.scope_id != self.owner_id:
-            raise PermissionError("配置 Skill 来源 owner 不符")
+            error = PermissionError("配置 Skill 来源 owner 不符")
+            raise mark_public_failure(error, str(error))
         entry = next((entry for entry in self.entries() if entry.display_uri == parsed.display_uri), None)
         if entry is None or not entry.available:
             raise FileNotFoundError("配置 Skill 原始快照不存在或不可用")

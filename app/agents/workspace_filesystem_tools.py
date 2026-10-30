@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
-from app.core.failures import report_failure
+from app.core.failures import mark_public_failure, report_failure
 from app.core.resource_uri import (
     ParsedResourceUri,
     ResourceUriGrammarError,
@@ -281,7 +281,8 @@ def configure_workspace_filesystem_tools(
 
     if artifact_reader is None:
         def deny_artifact(_uri: str, _max_bytes: int):
-            raise PermissionError("产物读取缺少当前 SessionThread capability")
+            error = PermissionError("产物读取缺少当前 SessionThread capability")
+            raise mark_public_failure(error, str(error))
         artifact_reader = deny_artifact
 
     def sync_ls(

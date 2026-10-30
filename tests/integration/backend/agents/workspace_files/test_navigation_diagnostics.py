@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.resource_uri import resource_display_uri
+from app.core.resource_uri import parse_session_artifact_uri, resource_display_uri
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -156,4 +156,80 @@ async def test_file_read_failure_keeps_paired_history_and_same_thread_retry(
     case.write_actual(f"file-navigation-diagnostics-{log_fails}", {
         "results": results, "sealed_requests": proof, "diagnostic_sink_errors": len(sink_errors),
         "scope": "真实ASGI消息/Agent/model_stream/SQLite及新Saver冷读；不代Gateway/Web、独立Backend重启或fork验收",
+    })
+
+
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_generated_tool_output_native_permission_failure_keeps_error_owner_and_history(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = source_case
+    session = await create_session(case.client, "产物原生失败与原引用重试")
+    thread = await case.container.session_service.resolve_main_thread(session)
+    source = case.workspace / "large-owned-source.txt"
+    source.write_text(("产物原正文 Ω " + "a" * 1000 + "\n") * 52, encoding="utf-8")
+    source_bytes = source.read_bytes()
+    _seed, ready = await case.plan(session, [
+        _tool_reply("read_file", {"path": source.name}, "produce-owned-output"),
+        {"content": "大正文已经通过原工具发布"},
+    ])
+    accepted = await _send(case, session, "读取完整文件，保留原产物引用。")
+    await _job(case, str(accepted["job_id"]))
+    messages = case.request(ready)["messages"]
+    assert isinstance(messages, list)
+    seed_tool, = [message for message in messages if message["role"] == "tool" and message["tool_call_id"] == "produce-owned-output"]
+    uri, = [token for token in seed_tool["content"].split() if token.startswith("boxteam://")]
+    parsed = parse_session_artifact_uri(uri)
+    assert parsed.scope_id == case.container.workspace_id
+    assert parsed.tail_segments[:2] == (session, "tool-results")
+    session_root = case.container.session_service.path_resolver.resolve_session_node(session)
+    path = session_root / "tool-results" / parsed.tail_segments[-1]
+    original = path.read_bytes()
+    assert "产物原正文 Ω" in original.decode() and len(original) > 50 * 1024
+    saver = case.container.checkpointer
+    storage = saver._storage.storage
+    before = storage.jsonl_path(session, thread_id=thread).read_bytes()
+    items = canonical_json_bytes([item.to_dict() for item in storage.read_items(session, thread)])
+    frozen = {assembly.assembly_id: assembly.to_dict() for assembly in saver.list_context_assemblies(session, thread)}
+    native = PermissionError(f"无 errno 的原生读取拒绝: {path}")
+    open_file = Path.open
+    attempts: list[Path] = []
+
+    def fail_open(candidate: Path, *args, **kwargs):
+        if candidate == path and args == ("rb",):
+            attempts.append(candidate)
+            raise native
+        return open_file(candidate, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_open)
+        failed = await case.client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read", "max_lines": 1})
+    assert failed.status_code == 400, failed.text
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    assert failed.json()["detail"] == {"owner": "resource_navigation", "type": "PermissionError", "errno": None}
+    assert attempts == [path]
+    recovered = await case.client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read", "max_lines": 1})
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"]
+    assert "产物原正文 Ω" in recovered.json()["data"]["content"]
+    assert path.read_bytes() == original and source.read_bytes() == source_bytes
+    assert storage.jsonl_path(session, thread_id=thread).read_bytes() == before
+    assert canonical_json_bytes([item.to_dict() for item in storage.read_items(session, thread)]) == items
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        for identity, snapshot in frozen.items():
+            restored = cold.get_context_assembly(session, thread, assembly_id=identity)
+            assert restored.to_dict() == snapshot
+            restored.validate_hashes()
+    captures = {call: json.loads((case.model.artifacts / (call + ".json")).read_text()) for call in case.planned_calls}
+    proof = audit_sealed_requests(storage.index_path(session, "", thread_id=thread),
+        (session_root / "logs/llm_requests").glob("*.json"), captures)
+    with storage._connect(thread, session_id=session, read_only=True) as connection:
+        persisted = "\n".join(connection.iterdump())
+    assert str(case.workspace) not in json.dumps([failed.json(), recovered.json(), case.requests()], ensure_ascii=False)
+    assert str(case.workspace) not in persisted and str(case.workspace).encode() not in before
+    assert len(case.requests()) == 2
+    case.write_actual("owned-output-permission", {
+        "failed_http": failed.json(), "recovered_http": recovered.json(), "uri": uri,
+        "sealed_requests": proof,
+        "scope": "真实消息/Agent生成工具产物、ASGI导航、model_stream与冷Saver；不代Gateway/Web或独立Backend重启",
     })

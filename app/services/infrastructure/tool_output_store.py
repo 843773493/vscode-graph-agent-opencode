@@ -14,6 +14,7 @@ from pathlib import Path
 from langchain_core.messages import ToolMessage
 
 from app.abstractions.resource_file_content import ResourceFileContent
+from app.core.failures import mark_public_failure
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.trace_middleware import get_current_gateway_id
@@ -184,7 +185,8 @@ class ToolOutputStore:
         parsed = parse_session_artifact_uri(uri, local_gateway_id=get_current_gateway_id())
         if (parsed.gateway_authority is not None or parsed.scope_id != read_workspace_id(self._workspace_root)
                 or parsed.tail_segments[:2] != (session_id, "tool-results")):
-            raise PermissionError("工具结果引用不属于当前工作区会话")
+            error = PermissionError("工具结果引用不属于当前工作区会话")
+            raise mark_public_failure(error, str(error))
         try:
             session_node = self._path_resolver.resolve_session_node(session_id)
         except KeyError as error:
@@ -192,7 +194,8 @@ class ToolOutputStore:
         directory = session_node / "tool-results"
         path = directory / parsed.tail_segments[2]
         if directory.is_symlink() or path.is_symlink():
-            raise PermissionError("工具结果及其目录不能是符号链接")
+            error = PermissionError("工具结果及其目录不能是符号链接")
+            raise mark_public_failure(error, str(error))
         try:
             with path.open("rb") as stream:
                 data = stream.read(max_bytes + 1)

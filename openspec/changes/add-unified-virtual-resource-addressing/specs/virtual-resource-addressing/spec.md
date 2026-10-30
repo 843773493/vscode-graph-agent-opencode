@@ -104,6 +104,11 @@
 - **WHEN** 用户创建或设置更新的原 profile 写入已取得临时描述符，但 stream 构造失败，或随后关闭、临时文件清理和诊断输出也失败
 - **THEN** 原写入 owner 关闭未移交的描述符并继续定点清理，已成功移交的描述符只由原 stream 关闭；原异常实例、中断与全部收尾原因保持，不以次错覆盖。普通 HTTP 只发布用户、操作、异常类别及适用错误码，真实位置和完整原因只留诊断；未发布正文、账户回滚及原身份重试沿既有合同，不扫描清理其它文件或新增第二 writer
 
+#### Scenario: 文件 reader 的公开授权拒绝必须由原 owner 登记
+
+- **WHEN** 会话产物或配置 Skill 的原 reader 拒绝归属、assembly membership 或访问能力，或底层读取抛出没有 errno 的原生 PermissionError
+- **THEN** 仅在原拒绝构造处登记的公开说明可以映射为 capability_denied；未登记的原生 PermissionError 保留原错误及原因链，按既有文件系统失败合同公开类别和错误码，不能因 errno 缺失而发布原文。原授权说明、精确 capability、失败后不回退至容器 reader、同步/异步行为及同一引用重试保持，不新增错误账本、reader 或异常正文分类器
+
 #### Scenario: 工作区根绑定只在原生控制面持久化
 
 - **WHEN** 系统持久化已注册工作区的物理根

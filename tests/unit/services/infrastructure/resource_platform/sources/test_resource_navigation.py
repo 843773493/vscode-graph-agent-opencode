@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import threading
@@ -12,8 +13,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from app.core.failures import mark_public_failure
 from app.core.resource_uri import resource_display_uri
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationOperation,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
@@ -501,6 +504,57 @@ async def test_artifact_cursor_rejects_changed_bytes_and_query(artifact_case):
     assert stale.value.reason == "stale_cursor"
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("operation", ["describe", "read", "search"])
+@pytest.mark.parametrize("with_errno", [False, True])
+async def test_owned_reader_native_permission_failure_is_not_a_public_capability_rejection(
+    artifact_case, synchronous: bool, operation: ResourceNavigationOperation, with_errno: bool,
+):
+    owner, uri, _read, state = artifact_case
+    native = (PermissionError(errno.EACCES, "原生读取失败", "/private/owned-reader/secret") if with_errno
+              else PermissionError("原生读取失败: /private/owned-reader/secret"))
+    native.add_note("原始诊断包含 /private/owned-reader/native-note")
+
+    def denied(_uri, _maximum):
+        raise native
+
+    request = (ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit")
+               if operation == "search" else ResourceNavigationRequest(uri=uri, operation=operation))
+    with pytest.raises(PermissionError) as caught:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=GATEWAY_ID, artifact_reader=denied)
+        else:
+            await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=denied)
+    assert caught.value is native
+    assert not state["reads"]
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("operation", ["describe", "read", "search"])
+async def test_owned_reader_only_publishes_explicit_owner_rejection(
+    artifact_case, synchronous: bool, operation: ResourceNavigationOperation,
+):
+    owner, uri, fallback, state = artifact_case
+    owner._artifact_reader = fallback
+    original = PermissionError(errno.EACCES, "原生说明 /private/owned-reader/secret")
+    rejection = mark_public_failure(original, "缺少 emitting model-call 的精确 membership")
+
+    def denied(_uri, _maximum):
+        raise rejection
+
+    request = (ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit")
+               if operation == "search" else ResourceNavigationRequest(uri=uri, operation=operation))
+    with pytest.raises(ResourceUriResolveError) as caught:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=GATEWAY_ID, artifact_reader=denied)
+        else:
+            await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=denied)
+    assert caught.value.reason_code == "capability_denied"
+    assert str(caught.value) == "缺少 emitting model-call 的精确 membership"
+    assert caught.value.__cause__ is original is rejection
+    assert not state["reads"]
+
+
 @pytest.mark.asyncio
 async def test_artifact_media_uses_owner_mime_and_cannot_bypass_explicit_capability(artifact_case, navigation_case):
     from app.core.resource_uri import session_artifact_uri
@@ -514,7 +568,8 @@ async def test_artifact_media_uses_owner_mime_and_cannot_bypass_explicit_capabil
     assert base64.b64decode(result.content) == state["data"]
 
     def denied(uri, maximum):
-        raise PermissionError("缺少 emitting model-call 的精确 membership")
+        error = PermissionError("缺少 emitting model-call 的精确 membership")
+        raise mark_public_failure(error, str(error))
 
     with pytest.raises(resource_navigation.ResourceUriResolveError, match="membership") as denied_result:
         await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read", read_format="auto"), local_gateway_id=GATEWAY_ID, artifact_reader=denied)

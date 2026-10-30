@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-30 资源 reader 权限拒绝切片（2.2/7.2 部分收口）：领域拒绝在原 owner 构造处复用 mark_public_failure 登记说明；导航只消费明确登记，不再凭 PermissionError 缺少 errno 公开原文。未登记的原生错误保持原实例并走原 filesystem 出口，不回退 reader。260 项相关单测及 3 项 Agent／ASGI 集成通过，核产品入口生成的工具产物、失败后原引用恢复、canonical 字节、冷 Saver、owner 与 request_hash。Ruff 通过；Pyright 51 条诊断对应 HEAD 原语句 AST，无新增诊断，不代表类型全绿；另 4 项附件／路径单测在完整 HEAD 归档同样失败，未扩修。
+
+准确命令、源码指纹及原件见 `out/tests/temp/owned_file_rejection_20261030/artifacts/verification.json`。集成末轮 3 passed／180.43 秒（含排队），外部保护为 725 秒／4GiB；回执在 67.73 秒识别取得闸门，与正式装具首批文件时间一致，之后 118.86 秒内退出，另保留 120 秒执行预算监督。首轮超时原件保留。不代 Gateway／Web、真实网络或独立进程重启验收；2.2/7.2 保持未勾，不动共享 Web 自动化及调试服务。
+
 2026-10-30 激活URI文件段校验切片（2.2/7.2部分收口）：display_uri先由中央grammar判定合法性，领域形态检查只归类已拒绝输入的原错误码，内部identity校验不变。不再因合法文件名的编码、字面百分号或.boxteam／read_file_path字样而误拒；serde及SQLite新owner冷读保持原URI字节与原hash，不重新规范化冻结历史，不回读当前来源。原实现6项合法URI反例失败、9项原行为通过；修复后399项domain／SQLite／projection／grammar单测及4项原fork矩阵通过，共403项不同用例。新增7项合法URI、8项非法URI及4项冷存储场景，原测试函数／类AST不变。
 
 Ruff／compileall通过，Pyright9条原诊断的owner函数AST与HEAD相同，新测试零诊断；不是类型全绿。仅修改原_display_uri控制顺序，没有新parser、兼容层、schema、writer或owner。准确命令、指纹、红绿原件与范围见 `out/tests/temp/activation_uri_grammar_20261030/artifacts/verification.json`。本次未新增完整Agent执行／编码URI fork产品验收，也未重跑前一切片3项产品场景，不将局部单测当作Gateway／Web、真实网络、独立Backend重启或Windows验收；2.2／7.2及协作延期项保持未勾。

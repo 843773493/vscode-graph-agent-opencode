@@ -22,6 +22,7 @@ from wcmatch import glob as wcglob
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
+from app.core.failures import public_failure_message
 from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import (
     ParsedResourceUri,
@@ -321,10 +322,9 @@ class ResourceNavigation:
         except FileNotFoundError as error:
             raise ResourceUriResolveError("unknown_resource", "会话产物不存在或已不可用") from error
         except PermissionError as error:
-            if error.errno is not None:
+            if (message := public_failure_message(error)) is None:
                 raise
-            # 原 owner 的领域拒绝不含物理 locator；保留其授权归属说明。
-            raise ResourceUriResolveError("capability_denied", str(error)) from error
+            raise ResourceUriResolveError("capability_denied", message) from error
         self._check_deadline(deadline)
         if request.operation == "describe":
             return self._response(ResourceNavigationResultDTO(node=node), request, deadline)

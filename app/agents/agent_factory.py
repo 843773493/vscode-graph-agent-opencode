@@ -90,6 +90,7 @@ from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.core.failures import mark_public_failure
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
@@ -502,13 +503,16 @@ def create_my_deep_agent(
     def read_artifact(file_id: str, max_bytes: int) -> ResourceFileContent:
         binding = tool_invocation_context.thread_binding
         if not owns_thread or binding is None:
-            raise PermissionError("产物读取缺少当前 Agent SessionThread")
+            error = PermissionError("产物读取缺少当前 Agent SessionThread")
+            raise mark_public_failure(error, str(error))
         parsed = parse_session_artifact_uri(file_id)
         if parsed.tail_segments[0] != binding.session_id:
-            raise PermissionError("产物 URI 不属于当前 Agent SessionThread")
+            error = PermissionError("产物 URI 不属于当前 Agent SessionThread")
+            raise mark_public_failure(error, str(error))
         if parsed.session_artifact_kind == "attachments":
             if not isinstance(checkpointer, RolloutCheckpointSaver):
-                raise PermissionError("附件读取缺少原 checkpoint owner")
+                error = PermissionError("附件读取缺少原 checkpoint owner")
+                raise mark_public_failure(error, str(error))
             return checkpointer.read_tool_call_attachment(
                 binding.session_id, thread_id=binding.thread_id, file_id=file_id,
                 tool_call_id=tool_invocation_context.require_tool_call_id(),

@@ -12,6 +12,8 @@ import pytest
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
 from app.agents.workspace_backend import build_workspace_backend
+from app.core.resource_uri import session_artifact_uri
+from app.core.workspace_identity import read_workspace_id
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实日志写入故障。
@@ -82,3 +84,45 @@ async def test_navigation_rejection_survives_log_error_and_retries_same_tool(
     recovered = tool.invoke(call) if synchronous else await tool.ainvoke(call)
     assert recovered.status == "success", recovered.content
     assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("log_fails", [False, True])
+async def test_owned_reader_without_errno_keeps_filesystem_failure_and_same_reference_retry(
+    configure_filesystem_tools, tmp_path: Path, diagnostic_sink: DiagnosticFailure,
+    synchronous: bool, log_fails: bool,
+) -> None:
+    from app.abstractions.resource_file_content import ResourceFileContent
+
+    state = {"failing": True}
+    error = PermissionError("原生reader拒绝 /private/owned-reader/secret")
+    if log_fails:
+        diagnostic_sink.primary = error
+
+    def read(_uri: str, _maximum: int) -> ResourceFileContent:
+        if state["failing"]:
+            raise error
+        return ResourceFileContent(b"original owned content\n", "text/plain")
+
+    middleware = FilesystemMiddleware(backend=build_workspace_backend(tmp_path), tool_token_limit_before_evict=None)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path, artifact_reader=read)
+    uri = session_artifact_uri(read_workspace_id(tmp_path), "ses_019b781159d47374805bc4427d081a14",
+                               "tool-results", "tool_" + "a" * 24 + ".txt")
+    tool = next(tool for tool in middleware.tools if tool.name == "read_file")
+    call = {"name": "read_file", "args": {"path": uri, "runtime": SimpleNamespace(tool_call_id="owned-native")},
+            "id": "owned-native", "type": "tool_call"}
+    message = tool.invoke(call) if synchronous else await tool.ainvoke(call)
+    assert message.status == "error" and message.tool_call_id == "owned-native"
+    assert json.loads(message.content) == {
+        "owner": "resource_file_operations", "code": "execution_failed", "reason": "filesystem",
+        "type": "PermissionError", "errno": None, "message": "文件导航文件系统访问失败" + (
+            ", diagnostic_sink_error=NotADirectoryError" if log_fails else ""),
+    }
+    if log_fails:
+        record, = diagnostic_sink.records
+        assert record.exc_info is not None and record.exc_info[1] is error
+        assert len(diagnostic_sink.errors) == 1
+        assert any(str(diagnostic_sink.errors[0]) in note for note in error.__notes__)
+    state["failing"] = False
+    recovered = tool.invoke(call) if synchronous else await tool.ainvoke(call)
+    assert recovered.status == "success" and "original owned content" in recovered.content

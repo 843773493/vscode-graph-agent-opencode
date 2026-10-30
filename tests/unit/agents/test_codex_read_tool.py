@@ -15,6 +15,7 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from app.agents.workspace_backend import build_workspace_backend
+from app.core.failures import mark_public_failure
 from app.core.identifier import create_uuid_hex
 from app.core.resource_uri import parse_session_artifact_uri, resource_display_uri
 from app.core.trace_middleware import get_current_gateway_id
@@ -425,7 +426,8 @@ async def attachment_tools(configure_filesystem_tools, tmp_path: Path, session_b
 
     def read(file_id, max_bytes):
         if parse_session_artifact_uri(file_id).tail_segments[0] != session_id:
-            raise PermissionError("附件 URI 不属于当前 Agent SessionThread")
+            error = PermissionError("附件 URI 不属于当前 Agent SessionThread")
+            raise mark_public_failure(error, str(error))
         return store.read(session_id, file_id, owner_thread_id=store._path_resolver.main_thread_id(session_id))
 
     middleware = FilesystemMiddleware(
