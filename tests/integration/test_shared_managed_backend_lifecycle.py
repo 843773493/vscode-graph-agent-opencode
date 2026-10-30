@@ -115,6 +115,18 @@ class SharedBackendCase:
         assert any(item["role"] == "user" and item["content"] == message for item in messages)
         return call
 
+    async def restart_gateway(self) -> None:
+        previous = self.gateway
+        await asyncio.to_thread(close_gateway_process, previous)
+        self.gateway = await asyncio.to_thread(
+            start_gateway_process, workspace_root=self.roots[0], default_backend_url=None, port=previous.port,
+            boxteam_home=self.boxteam_home, artifacts_dir=self.context.artifacts_dir / "gateway-restarted",
+            asgi_app="tests.support.e2e_control.gateway_app:app",
+            extra_env={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
+        )
+        assert self.gateway.process.pid != previous.process.pid
+        await acquire_gateway_guest(self.client)
+
 
 @pytest.fixture
 async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[SharedBackendCase]:
@@ -426,17 +438,7 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
         return response.json()
 
     await read_bound_root()
-    gateway_pid = case.gateway.process.pid
-    port = case.gateway.port
-    await asyncio.to_thread(close_gateway_process, case.gateway)
-    case.gateway = await asyncio.to_thread(
-        start_gateway_process, workspace_root=case.roots[0], default_backend_url=None, port=port,
-        boxteam_home=case.boxteam_home, artifacts_dir=case.context.artifacts_dir / "gateway-restarted",
-        asgi_app="tests.support.e2e_control.gateway_app:app",
-        extra_env={**case.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
-    )
-    assert case.gateway.process.pid != gateway_pid
-    await acquire_gateway_guest(case.client)
+    await case.restart_gateway()
     restored = await case.data("GET", "/api/gateway/workspaces")
     restored_target = next(item for item in restored["items"] if item["workspace_id"] == target_id)
     assert restored_target["backend_workspace_id"] == backend_id
@@ -538,7 +540,10 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
 
 
 @pytest.mark.asyncio
-async def test_real_group_restart_restores_each_mount_history_and_execution(shared_backend_case: SharedBackendCase) -> None:
+@pytest.mark.parametrize("restart_surface", ["backend", "gateway"])
+async def test_real_group_restart_restores_each_mount_history_and_execution(
+    shared_backend_case: SharedBackendCase, restart_surface: str,
+) -> None:
     case = shared_backend_case
     primary, secondary, joined = await _join_group(case)
     ids = (primary, secondary)
@@ -558,13 +563,27 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(shar
         requests.append(case.request(call))
         histories.append(await case.data("POST", f"/api/v1/sessions/{session_id}/history", headers=headers, json={"direction": "tail"}))
 
-    restarted = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/restart-safe", json={
-        "expected_backend_generation": joined["backend_generation"], "expected_workspace_ids": list(ids),
-    })
-    assert restarted["status"] == "restarted"
-    assert set(restarted["affected_workspace_ids"]) == set(ids)
-    assert restarted["backend_generation"] != joined["backend_generation"]
-    assert all(item["status"] == "ready" for item in restarted["workspaces"]["items"])
+    if restart_surface == "backend":
+        restarted = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/restart-safe", json={
+            "expected_backend_generation": joined["backend_generation"], "expected_workspace_ids": list(ids),
+        })
+        assert restarted["status"] == "restarted"
+        assert set(restarted["affected_workspace_ids"]) == set(ids)
+        restored = restarted["workspaces"]
+    else:
+        # 完整关闭并新建Gateway进程，恢复只消费原产品公布的root/group合同。
+        await case.restart_gateway()
+        restored = await case.data("GET", "/api/gateway/workspaces")
+        restarted = restored
+    assert {item["workspace_id"] for item in restored["items"]} == set(ids)
+    generations = {item["backend_generation"] for item in restored["items"]}
+    assert len(generations) == 1 and joined["backend_generation"] not in generations
+    if restart_surface == "backend":
+        assert generations == {restarted["backend_generation"]}
+    assert all(item["status"] == "ready" and set(item["affected_workspace_ids"]) == set(ids)
+               for item in restored["items"])
+    artifacts = case.context.artifacts_dir / f"history-restart-{restart_surface}"
+    artifacts.mkdir(parents=True, exist_ok=True)
     restored_healths = []
     for index, identity in enumerate(ids):
         headers = {"X-BoxTeam-Workspace-Id": identity}
@@ -589,7 +608,7 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(shar
             {"role": "user", "content": f"继续 restart-mount-{index}"},
         ]
         history = await case.data("POST", f"/api/v1/sessions/{session_id}/history", headers=headers, json={"direction": "tail"})
-        (case.context.artifacts_dir / f"history-restart-mount-{index}.json").write_text(json.dumps({
+        (artifacts / f"mount-{index}.json").write_text(json.dumps({
             "before": histories[index], "continued": history,
         }, ensure_ascii=False, indent=2) + "\n")
         # 续轮后新页绑定本次读取快照；Turn、Job、消息正文及其顺序仍须逐项保持。
@@ -604,9 +623,9 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(shar
         wrong = await case.client.get(f"/api/v1/sessions/{session_id}", headers={"X-BoxTeam-Workspace-Id": ids[1 - index]})
         assert wrong.status_code == 404
     assert len({item["runtime"]["pid"] for item in restored_healths}) == 1
-    (case.context.artifacts_dir / "shared-owner-history-restart.json").write_text(json.dumps({
+    (artifacts / "shared-owner.json").write_text(json.dumps({
         "members": ids, "sessions": sessions, "threads": threads, "before": healths,
-        "after": restored_healths, "restart": restarted,
+        "after": restored_healths, "restart": restarted, "restart_surface": restart_surface,
     }, ensure_ascii=False, indent=2) + "\n")
 
 

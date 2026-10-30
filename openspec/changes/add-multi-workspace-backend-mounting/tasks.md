@@ -248,3 +248,9 @@
 - 2026-10-29 后续独立切片已解决上述附件12项 setup 版本衔接：固定旧产品原件保留，测试副本先沿现有 owner 升级 catalog10→11、rollout24→26，再做原附件迁移；删除原拟移除的无效 `WORKSPACE_ROOT` 准备。正式四文件 matrix 87 passed/275.43秒、exit0，详见 `verification-066.json` 与附件 change 同日记录。该通过只补附件回归，不补 Goal 的8秒 ready 屏障或4.3/8.2总门。
 
 - 2026-10-29 Session创建失败持久说明补核：原未发布分支复用`failure_detail`，不复制任意RuntimeError正文；原实例仍抛出、已发布事实不abort。真实创建/rename/catalog发布与原件/cold catalog回读共116项通过，三类位置文本旧实现未发布反例3项失败；Pyright20→20无新增，Ruff/compileall/strict通过。范围与准确原件见URI change同日记录及`verification-067.json`；不代替独立重启、Windows或4.3/8.2总门。
+
+### 2026-10-30 Gateway 冷重启后的双挂载历史与续轮（8.2 部分收口）
+
+- 原真实双挂载历史场景同时覆盖 Backend 整组重启和 Gateway 完整关闭后新进程启动。关键 Session／Job／历史均由产品入口产生；核完整成员集合、唯一新 generation、新 Backend PID、各 mount 原 UUID／thread／历史，以及续轮实际模型请求的完整有序前缀和跨工作区404。Gateway 恢复沿用原 BOXTEAM_HOME 与唯一 root binding，不手工准备恢复状态。模型复用 model_stream。
+- 正式 `integration-shared-backend-history-restart` 矩阵2 passed／273.64秒、exit0，固定360秒／4GiB及集成独占闸门；原单次执行期限不变。Ruff及本 change strict校验通过，Pyright原4项诊断的完整消息／规则与既有raw相同、相关函数AST不变，无新增诊断，不称类型全绿。提取的Gateway重启方法已由新场景实际调用，原root binding场景其余操作／断言及其余51个顶层符号AST保持，未重复运行该旧场景。
+- 准确命令、启动前修改文件指纹、raw／退出码、正式双mount历史原件索引及作者AST核对见 `out/tests/temp/mounted_gateway_restart_20261030/artifacts/verification.json`。1240文件的首次采样发生于运行开始后约34秒，随后内容无变化，且首次采样无mtime晚于运行开始的文件；不称严格启动前全量快照。本片无产品／前端改动，不代Web、Windows、异常强杀恢复或4.3／8.2总验收，两个总门仍未勾；协作和MCP显式持有继续延期。

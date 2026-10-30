@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-shared-backend-history-restart` 通过真实 Gateway／共享 Backend、双挂载 Session 和消息入口，分别验证 Backend 整组重启及 Gateway 冷重启后的完整组、原历史与续轮请求。模型复用 model_stream，固定360秒／4GiB和集成独占闸门；不代替Web、Windows、任意故障恢复或全部多工作区验收。
+
 `integration-sqlite-diagnostics` 经实际 Session 创建、工作区存储冲突／结构拒绝与冷 container 重试，核原件、原因链和真实日志 I/O 次错；固定60秒/4GiB，不代表独立进程重启、Gateway/Web或Windows实机。
 
 `integration-catalog-maintenance-errors` 经实际Session创建、导航worker、启动拒绝与只读备份验证维护错误及原件保全，复跑原完整性场景；原导航schema回归单列 `integration-catalog-maintenance-schema`。两组串行、各固定60秒/4GiB，显式恢复产品备份不代表自动修复或独立进程重启。
