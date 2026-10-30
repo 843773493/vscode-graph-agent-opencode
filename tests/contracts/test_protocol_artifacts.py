@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="故障注入使用 POSIX 可执行脚本；Windows 运行真实 check:protocol")
+
 _GENERATOR = Path.cwd() / "scripts/generate_protocol.mjs"
 _BINDINGS = (
     "app/protocol/generated/sample_pb2.py",
