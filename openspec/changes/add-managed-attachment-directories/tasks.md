@@ -523,3 +523,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原记录读取、写入及格式拒绝统一调用现有 `report_failure`，移除直接写日志分支；保留原公开说明、异常类别、errno/winerror 与直接 cause。日志故障只增加类别，位置与完整次错保存在原异常 notes，不改变唯一 save 的持久发布、原资源或 lease。
 - 原实现的两类资源替换＋日志双错反例均失败；最终共享资源、原账本错误与执行失败单测166项通过。正式 Session、ASGI 资源创建 API、真实 PTY/Chromium/HTTP 的4项正常日志/日志失败组合通过，原身份、字节、占用及显式重试断言全部保留；未手填资源状态。两次90秒矩阵在共享Web验收占用闸门时排队超时，随后取得名额的运行被既有端口容量400拦在装具；原HEAD已有404个集成文件。独立提交 `ba02bde06` 将容量扩至450，8项原端口测试及静态检查通过，范围邻接不重叠且不超过65535。最终资源运行沿原独占闸门等待87.84秒，取得名额后37.52秒；进程外保护覆盖排队、90秒执行及4GiB数据段，未并行运行产品测试。
 - Ruff、compileall及严格规范验证通过。Pyright保留2项既有诊断，完整HEAD归档实跑与最终源码逐项核对规则、消息和源语句，零新增，不称类型全绿。作者结构/AST复核确认三个领域记录、唯一save及全部既有断言未变，不新增目录或持久事实。准确命令、源码指纹、原始失败/通过与退出码在 `out/tests/temp/resource_record_diagnostics_20261030/artifacts/`，独立端口证据在 `out/tests/temp/integration_port_capacity_20261030/artifacts/`；临时归档已清理。未运行Gateway/Web、Windows或Backend硬重启，本片不补足5.2/5.4的终止与完整期限验收，两项继续未勾；Web/Workbench及其自动化由另一会话推进。
+
+
+### 2026-10-30 删除恢复的前序目标探测（5.4 部分收口）
+
+- 两项原实现反例证实 `exists/is_symlink` 前序探测阻塞事件循环；现同一次 worker 保留短路语义与原异常，不新增探测 owner 或恢复链。前序仅持同 key 锁与外层预算，Session gate、资源 holder 及 retention/drain 仍在后序；取消/到期结算原生等待或线程池队列后传播，不补做排空、fence、rename或进度。真实隔离后恢复不重复管理动作，断链 symlink 不覆盖原件。
+- 170项相关单元通过，含21项新增探测、排队、完成/取消/到期、原错和断链目标场景。首次168通过/2失败来自旧控制库打开装具提前占用线程池，现移到真实 retention 回调后，原28条断言AST全部保持。原17项产品ASGI/生命周期场景通过（49.72秒），新增两项产品导航入队、原 worker 停止及同 journal 恢复通过（10.01秒）；两组分别注册，保持各60秒/4GiB与集成独占闸门，未删旧场景或放宽业务期限。直接运行新增两项的10.16秒结果仅作先期验证，不重复计数。
+- Ruff、Pyright零诊断、compileall与strict通过；作者AST自查确认生产仅改 `_drain`，其余17个方法/函数及控制库原断言保持，不代表非作者独立审查。首次import/闭包绑定静态失败及误传重复 `--suite` 参数的零执行失败原件均保留。准确命令、源码指纹、原始输出、退出码和自查位于 `out/tests/temp/session_isolation_probe_20261030/artifacts/`。
+- 原创建准备、catalog同步事务、任意原生I/O终止、整个shutdown硬期限、Backend独立进程重启、Windows和Gateway/Web仍未完成本轮验证；5.2/5.4及整体21/23保持未完成。未修改Web/Workbench实现或其自动化，未重启共享debug；团队协作及MCP显式持有继续TODO。

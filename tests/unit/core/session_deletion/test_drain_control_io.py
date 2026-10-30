@@ -138,6 +138,12 @@ async def test_delete_waits_for_original_control_access(
         queued = loop.run_in_executor(None, pool_step.block)
         pool_queued.set()
 
+    async def before_control_open(_session_id: str) -> None:
+        if queued is None:
+            # 前序目标探测已结算，准确阻塞本场景要验证的控制库打开。
+            occupy_pool()
+            await _entered(pool_step)
+
     def pending(control: SessionControlStore) -> tuple[ThreadCreationRecord, ...]:
         result = list_pending(control)
         if wait_kind == "pool" and stage == "close" and queued is None:
@@ -150,8 +156,7 @@ async def test_delete_waits_for_original_control_access(
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="delete-control")
             loop.set_default_executor(executor)
             if stage == "open":
-                queued = loop.run_in_executor(None, pool_step.block)
-                pool_queued.set()
+                service.set_fork_retention_release_callback(before_control_open)
         deleting = asyncio.create_task(service.delete(idempotency_key=key, root_node_id=node.node_id))
         if wait_kind == "native":
             await _entered(probe.step)

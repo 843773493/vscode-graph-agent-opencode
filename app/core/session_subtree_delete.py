@@ -456,7 +456,8 @@ class SessionSubtreeDeleteService:
             if session_id in record.drained_session_ids:
                 continue
             target = self._deleting_dir(idempotency_key) / session_id
-            if target.exists() or target.is_symlink():
+            # 前序探测只持同key锁；取消仍先结算原worker，不提前进入排空。
+            if await run_sync_shielded(lambda path=target: path.exists() or path.is_symlink()):
                 # 恢复窗口（上次运行已隔离、进度未记）：隔离目标存在即证
                 # 明上次的运行时/资源排空回调已成功返回（回调严格前于
                 # fence CAS，fence 前于 rename）——否则 rename 根本不会

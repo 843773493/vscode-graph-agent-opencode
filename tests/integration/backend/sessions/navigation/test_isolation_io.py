@@ -37,7 +37,7 @@ from tests.unit.core.session_deletion.test_operation_replay_gc import (
 )
 
 
-@pytest.mark.parametrize("stage", ["rename", "source-barrier", "fence-sqlite"])
+@pytest.mark.parametrize("stage", ["rename", "source-barrier", "fence-sqlite", "target-probe"])
 @pytest.mark.parametrize("stop_worker", [False, True])
 async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
     navigation_api: tuple[AppContainer, httpx.AsyncClient, str],
@@ -55,6 +55,7 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
     target = resolver.sessions_root / ".deleting" / operation_id / session.session_id
     original_rename, original_barrier = deletion.os.rename, deletion._fsync_directory
     original_cas = SessionControlStore.cas_fence_transition
+    original_exists = Path.exists
     blockers: list[sqlite3.Connection] = []
     renames: list[tuple[Path, Path]] = []
     loop_thread = threading.get_ident()
@@ -80,9 +81,15 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
             native_step.entered.set()
         return original_cas(control, expected_generation, new_state)
 
+    def exists(path: Path) -> bool:
+        if stage == "target-probe" and path == target and not native_step.calls:
+            native_step.block()
+        return original_exists(path)
+
     monkeypatch.setattr(deletion.os, "rename", rename)
     monkeypatch.setattr(deletion, "_fsync_directory", barrier)
     monkeypatch.setattr(SessionControlStore, "cas_fence_transition", cas)
+    monkeypatch.setattr(Path, "exists", exists)
     worker = operations._worker_task
     assert worker is not None and not worker.done()
     stopping: asyncio.Task[None] | None = None
@@ -109,7 +116,9 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
             stopping = asyncio.create_task(operations.stop())
         gate_waiter = asyncio.create_task(same_gate())
         await _turns()
-        assert not worker.done() and not gate_entered.is_set()
+        assert not worker.done()
+        # 目标前序探测尚未取得Session gate；其它阶段的原gate继续覆盖I/O。
+        assert gate_entered.is_set() == (stage == "target-probe")
         assert stopping is None or not stopping.done()
         response = await client.get(
             "/api/v1/session-catalog/roots", headers={"X-Request-ID": "isolation-io-probe"},
@@ -123,10 +132,10 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
         record = resolver.catalog_store.get_subtree_delete_record(operation_id)
         assert record.state == "deleting" and record.drained_session_ids == ()
         assert set(record.frozen_session_locators) == {session.session_id}
-        physical = source if stage in ("rename", "fence-sqlite") else target
+        physical = source if stage in ("rename", "fence-sqlite", "target-probe") else target
         assert (physical / "session.json").read_bytes() == manifest
         with closing(SessionControlStore(physical / "session-control.sqlite", read_only=True)) as control:
-            assert control.get_fence() == (("active", 1) if stage == "fence-sqlite" else ("deleting", 2))
+            assert control.get_fence() == (("active", 1) if stage in ("fence-sqlite", "target-probe") else ("deleting", 2))
         native_step.release.set()
         for blocker in blockers:
             blocker.execute("ROLLBACK")
@@ -134,8 +143,8 @@ async def test_navigation_isolation_wait_preserves_original_owner_and_recovery(
             await stopping
             assert worker.cancelled() and operations.worker_state == "stopped"
             assert resolver.catalog_store.get_subtree_delete_record(operation_id) == record
-            stopped_physical = source if stage == "fence-sqlite" else target
-            assert source.exists() == (stage == "fence-sqlite")
+            stopped_physical = source if stage in ("fence-sqlite", "target-probe") else target
+            assert source.exists() == (stage in ("fence-sqlite", "target-probe"))
             assert (stopped_physical / "session.json").read_bytes() == manifest
             await operations.start()
         settled = await _settlement(client, operation_id, "settled")
