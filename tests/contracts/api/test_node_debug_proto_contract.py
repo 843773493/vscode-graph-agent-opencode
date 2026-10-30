@@ -1,118 +1,67 @@
-"""冻结 Pydantic 与公开 Proto 的 Node Debug 字段集合。"""
+"""由 descriptor 核对 Node Debug 公开结构，保留 REST 动作的业务外形。"""
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
+from typing import cast
 
 import pytest
+from google.protobuf.descriptor import Descriptor
+from pydantic import TypeAdapter
 
+from app.protocol.generated.boxteam.workspace.v2 import public_pb2
+from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2 import node_debug
 
-PUBLIC_PROTO = Path.cwd() / "proto/boxteam/workspace/v2/public.proto"
-
-PUBLIC_NODE_DEBUG_MODELS = (
-    "ExtensionCatalogBindingAuditDTO",
-    "NodeDebugActionRecordDTO",
-    "NodeDebugNoActionParams",
-    "NodeDebugSetBreakpointParams",
-    "NodeDebugUpdateBreakpointParams",
-    "NodeDebugClearBreakpointParams",
-    "NodeDebugEvaluateParams",
-    "NodeDebugBreakpointDTO",
-    "NodeDebugBreakpointRequest",
-    "NodeDebugCapabilitiesDTO",
-    "NodeDebugConfigurationActivateRequest",
-    "NodeDebugConfigurationBreakpointDTO",
-    "NodeDebugConfigurationCopyRequest",
-    "NodeDebugConfigurationCreateRequest",
-    "NodeDebugConfigurationDTO",
-    "NodeDebugConfigurationImportRequest",
-    "NodeDebugConfigurationSummaryDTO",
-    "NodeDebugConfigurationUpdateRequest",
-    "NodeDebugEvaluationDTO",
-    "NodeDebugLaunchProfileDTO",
-    "NodeDebugSessionManifestDTO",
-    "NodeDebugStackFrameDTO",
-    "NodeDebugStartRequest",
-    "NodeDebugStateDTO",
-    "NodeDebugVariableDTO",
+NODE_DEBUG_DESCRIPTORS = tuple(
+    descriptor
+    for name, descriptor in public_pb2.DESCRIPTOR.message_types_by_name.items()
+    if (name.startswith("NodeDebug") and name != "NodeDebugActionRequest")
+    or name == "ExtensionCatalogBindingAuditDTO"
 )
 
-NODE_DEBUG_ACTION_PROTO_FIELDS = {
-    "session_id",
-    "continue",
-    "pause",
-    "step_over",
-    "step_into",
-    "step_out",
-    "set_breakpoint",
-    "update_breakpoint",
-    "clear_breakpoint",
-    "evaluate",
-    "stop",
-    "thread_id",
-}
+
+@pytest.mark.parametrize("descriptor", NODE_DEBUG_DESCRIPTORS, ids=lambda value: value.name)
+def test_node_debug_public_schema_matches_proto(descriptor: Descriptor) -> None:
+    model = getattr(node_debug, descriptor.name)
+    assert_public_schema(model.model_json_schema(mode="serialization"), descriptor)
 
 
-def _message_fields(source: str, message_name: str) -> set[str]:
-    match = re.search(
-        rf"^message {re.escape(message_name)} (?:\{{\n(?P<body>.*?)^\}}|\{{[ \t]*\}})$",
-        source,
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    if match is None:
-        raise AssertionError(f"public.proto 缺少 {message_name}")
-    return {
-        field.group("name")
-        for field in re.finditer(
-            r"^\s*(?:optional\s+|repeated\s+)?[.\w<>]+\s+"
-            r"(?P<name>[a-z][a-z0-9_]*)\s*=\s*\d+\s*;",
-            match.group("body") or "",
-            flags=re.MULTILINE,
-        )
-    }
+def test_node_debug_action_request_matches_typed_proto_oneof() -> None:
+    descriptor = cast(Descriptor, public_pb2.NodeDebugActionRequest.DESCRIPTOR)
+    actions = {field.name: field for field in descriptor.oneofs_by_name["action"].fields}
+    common = set(descriptor.fields_by_name) - actions.keys()
+    schema = TypeAdapter(node_debug.NodeDebugActionRequest).json_schema(mode="serialization")
+    discriminator = schema["discriminator"]
+    assert discriminator["propertyName"] == "action"
+    assert discriminator["mapping"].keys() == actions.keys()
+    branches = []
+    for action, reference in discriminator["mapping"].items():
+        assert actions[action].message_type is not None
+        properties = schema["$defs"][reference.rsplit("/", 1)[1]]["properties"]
+        assert set(properties) == common | {"action", "params"}
+        # REST 的 action + params 对应 proto 的具名 oneof；只投影外形，正文仍由同一
+        # descriptor 校验链递归核对，不维护另一份动作或参数字段表。
+        branches.append({"type": "object", "properties": {
+            **{name: properties[name] for name in common}, action: properties["params"],
+        }})
+    assert_public_schema({"oneOf": branches, "$defs": schema["$defs"]}, descriptor)
 
 
-@pytest.mark.parametrize("model_name", PUBLIC_NODE_DEBUG_MODELS)
-def test_node_debug_pydantic_and_proto_fields_match(model_name: str) -> None:
-    proto_source = PUBLIC_PROTO.read_text(encoding="utf-8")
-    pydantic_fields = set(getattr(node_debug, model_name).model_fields)
-
-    assert _message_fields(proto_source, model_name) == pydantic_fields
-
-
-def test_node_debug_action_request_uses_typed_action_oneof() -> None:
-    proto_source = PUBLIC_PROTO.read_text(encoding="utf-8")
-    assert _message_fields(proto_source, "NodeDebugActionRequest") == (
-        NODE_DEBUG_ACTION_PROTO_FIELDS
-    )
-    assert re.search(
-        r"message NodeDebugActionRequest \{.*?oneof action \{",
-        proto_source,
-        flags=re.DOTALL,
-    )
-    assert not re.search(
-        r"^\s*string action\s*=",
-        re.search(
-            r"^message NodeDebugActionRequest \{\n(?P<body>.*?)^\}$",
-            proto_source,
-            flags=re.MULTILINE | re.DOTALL,
-        ).group("body"),
-        flags=re.DOTALL,
-    )
-    # REST JSON 将 action oneof 的具体 payload 统一投影为 action + params；每个 action 变体
-    # 仍由 discriminator="action" 严格约束，不能回退到动态字典。
-    for variant in (
-        node_debug.NodeDebugControlActionRequest,
-        node_debug.NodeDebugSetBreakpointActionRequest,
-        node_debug.NodeDebugUpdateBreakpointActionRequest,
-        node_debug.NodeDebugClearBreakpointActionRequest,
-        node_debug.NodeDebugEvaluateActionRequest,
-    ):
-        assert set(variant.model_fields) == {
-            "session_id",
-            "thread_id",
-            "action",
-            "params",
-        }
+@pytest.mark.parametrize(("mutation", "path"), [
+    ("scalar", "/thread_id"),
+    ("container", "/breakpoints"),
+    ("nested", "/call_stack/*/variables/*/value"),
+])
+def test_node_debug_contract_rejects_type_drift_with_unchanged_field_names(
+    mutation: str, path: str,
+) -> None:
+    schema = node_debug.NodeDebugStateDTO.model_json_schema(mode="serialization")
+    if mutation == "scalar":
+        schema["properties"]["thread_id"] = {"type": "integer"}
+    elif mutation == "container":
+        schema["properties"]["breakpoints"] = {"type": "object"}
+    else:
+        schema["$defs"]["NodeDebugVariableDTO"]["properties"]["value"] = {"type": "integer"}
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_schema(schema, cast(Descriptor, public_pb2.NodeDebugStateDTO.DESCRIPTOR))
+    assert path in str(error.value)
