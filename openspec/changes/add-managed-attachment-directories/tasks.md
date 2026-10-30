@@ -546,3 +546,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 正式`integration-fork-child-preparation-io`最终6项通过（86.88秒）：产品消息与真实Agent/model_stream生成来源历史，经fork服务创建child；核目录等待取消时原holder保护、冻结record不变、同key恢复及唯一child/零初始执行，来源和目标canonical原字节一致；同时复跑原三类发布确认/附件结算失败恢复。初轮新增3项已通过（48.80秒），不重复计数；最终批补验测试收尾的显式Awaitable类型，保持原60秒fork期限、180秒矩阵预算、4GiB保护和跨worktree集成独占闸门，未与另一会话的Web验收并跑。
 - Ruff、compileall及本change strict通过。Pyright仍为6项原诊断，在完整HEAD归档按规则、完整消息、最窄AST方法和源语句逐项相同，新增代码零诊断，不称全绿；初版两项测试收尾类型错误及import格式错误已修正，原件保留。作者AST复核只有create/最终确认两个方法改变、增加一个目录探测函数，原31个符号、物理写入/rename/核验函数及既有测试保持；原1517行模块和core直接49个Python文件的架构债务不据此关闭。
 - 准确命令、前后源码指纹、原始输出、实际退出码、类型对照和作者自查见 `out/tests/temp/child_creation_io_20261030/artifacts/verification.json` 及同目录原件。准入/发布的同步catalog/control、任意原生I/O终止、完整shutdown硬期限、Backend硬重启、Windows及Gateway/Web未补验；5.2/5.4及整体21/23仍未完成。Web迁移/自动化、共享debug、团队协作及MCP显式持有延期边界保持。
+
+### 2026-10-30 Child准入的同步核对与冻结（5.4 部分收口）
+
+- 准入catalog读取、owner/控制库绑定/main指针核对、路径预算及record/manifest冻结复用同一次shielded worker，原topology shared、Session exclusive、key锁和创建holder保持到真实结算，包括线程池排队。取消或外层到期后不进入prepared观察、目录准备或发布；已冻结record与清单供同key恢复，不新建事务、writer、schema或恢复链。发布事务及原业务回调仍在事件循环/原gate内。
+- 203项相关单测通过：创建及准备142项（13.47秒，含新增30项catalog/绑定/main/record/manifest × 完成/取消/到期 × 原生等待/排队），相邻创建收敛、Session gate与owner工厂61项（9.59秒）。完整旧生产归档加相同测试的catalog/SQLite两个反例均失败，复现事件循环被阻塞及真实SQLITE_BUSY，不以helper替代产品状态。
+- 最终原`integration-fork-child-preparation-io`共8项通过（107.52秒）：新增两项由产品消息/Agent/model_stream生成历史，实际fork在SQLite写锁或manifest冻结后取消；核原gate/holder、原child/locator/清单、唯一目标、零初始执行及来源/目标canonical字节不变。同批保留原三项目录等待及三项发布确认/附件结算恢复。新用例并入既有文件、移除临时新suite，fork目录直接Python文件保持20；迁移前首次8项通过（117.25秒），不重复计数。保留原60秒fork期限、180秒/4GiB矩阵及集成独占闸门。
+- Ruff、compileall通过；Pyright仍为原6项生产诊断，完整归档逐项核对规则、完整消息、原owner及源语句一致，新准入闭包只是原gate正文的完整AST迁移，新增测试零诊断。作者AST核对原gate上下文和全部其它模块AST不变；原1522行模块及core直接49文件的结构债务未解决，不据此关闭7.5-F。首轮import格式检查失败已修复并保留原件。
+- 准确命令、源码指纹、原始输出、实际退出码、类型对照和作者复核在`out/tests/temp/child_admission_io_20261030/artifacts/verification.json`及同目录原件。发布同步I/O、任意原生线程终止、完整shutdown硬期限、Backend硬重启、Windows及Gateway/Web仍TODO；5.2/5.4和整体21/23保持未完成。未触碰另一会话的Web迁移/自动化、共享debug、团队协作及MCP显式持有延期范围。

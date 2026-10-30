@@ -346,6 +346,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 工作区文件owner停止时，已有请求正在准备持久受理、等待受理锁，或原worker仍在线程中发布文件
 - **THEN** 停止入口先关闭新准入，锁内重核尚未接纳的请求并明确拒绝；已接纳的准备仍由原调用完成，原worker句柄保留到实际结束。取消停止等待只结束本次等待，不取消原worker；准备或写入未完成时拒绝关闭SQLite，Backend观察预算到期仍保留原关闭步骤、catalog与维护锁。原任务结束后沿同入口收敛，不重发写入；已持久受理但尚未执行的意图在下次启动按原ID恢复。此场景不证明任意线程可强制终止或同步阻塞可抢占
 
+#### Scenario: Child准入的同步核对和记录冻结尚未结算
+
+- **WHEN** child创建在原准入gate内核对catalog、控制库绑定和main指针，或建立creation record和冻结artifact清单时遇到原生I/O、SQLite锁等待或线程池排队，且调用被取消或外层期限到达
+- **THEN** 同一worker沿原顺序完成这次准入核对与冻结，不阻塞事件循环；原topology shared、Session exclusive、同key锁和创建holder保持至原调用结算，再传播取消或期限错误，不进入后续目录准备或发布。实际提交的原record和清单供同key恢复，既有冲突和失败原样暴露，不重复分配child、不新建事务或恢复链；不将worker结算视为原生线程可强制终止或完整shutdown有硬期限
+
 #### Scenario: Child目录准备或恢复的原生调用尚未结算
 
 - **WHEN** 已冻结的child创建正在探测目录、准备staging、rename及同步目录，或核验原final/已发布目标，且调用被取消或其外层期限到达

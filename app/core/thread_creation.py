@@ -784,8 +784,9 @@ class ThreadCreationService:
         async with self._key_lock(idempotency_key), self._holders.lock_for(f"{session_id}/{idempotency_key}"):
             # 步骤 1：准入 = topology shared → Session gate exclusive（2.3-A
             # 固定锁序），fresh 验证后冻结 record（等价 operation lease）。
-            # TODO(5.4)：准入/发布的同步catalog与control事务仍待收口；本轮只迁冻结后的目录I/O。
-            async with self._gate.shared(), self._session_gate.exclusive(session_id):
+            # 同一次worker完成准入核对和record/manifest冻结；取消先等原调用结算。
+            # TODO(5.4)：发布事务与完整shutdown硬期限仍须沿原owner继续收口。
+            def admit() -> tuple[Path, ThreadCreationRecord]:
                 node = self._store.get_node(session_id)
                 self._validate_owner_node(node)
                 session_dir = self._session_dir_for(node)
@@ -847,6 +848,10 @@ class ThreadCreationService:
                         session_id=session_id,
                         artifact_manifest=artifact_manifest,
                     )
+                return session_dir, record
+
+            async with self._gate.shared(), self._session_gate.exclusive(session_id):
+                session_dir, record = await run_sync_shielded(admit)
             await observe_phase(idempotency_key, "thread.creation.prepared")
             if record.state == "aborted":
                 raise ThreadCreationAbortedError(record)
