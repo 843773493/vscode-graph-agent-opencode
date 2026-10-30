@@ -12,6 +12,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.debug_redaction import redact_variable_value
+from app.core.failures import execution_failure_message, report_failure
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
     NodeDebugClearBreakpointActionRequest,
@@ -106,22 +107,10 @@ class DebuggingToolFactory:
                 ),
             )
         except Exception as error:  # noqa: BLE001 - 工具协议必须把运行时错误转成结构化结果
-            state = await self._safe_state()
-            await self._record_action(
+            return await self._failure_from_error(
                 tool_name,
-                "error",
-                str(error),
+                error,
                 tool_call_id=tool_call_id,
-            )
-            state = await self._safe_state() or state
-            return _failure(
-                self._error_code(error),
-                str(error),
-                state,
-                include_invalid_breakpoints=_include_invalid_breakpoints(
-                    tool_name,
-                    state,
-                ),
             )
 
     async def _record_action(
@@ -173,13 +162,22 @@ class DebuggingToolFactory:
         session_id, thread_id = self._owner
         return await self._node_debug_service.get_state(session_id, thread_id)
 
-    async def _failure_from_error(self, tool_name: str, error: Exception) -> str:
+    async def _failure_from_error(
+        self,
+        tool_name: str,
+        error: Exception,
+        *,
+        tool_call_id: str | None = None,
+    ) -> str:
+        message = report_failure(error, detail=execution_failure_message(error))
         state = await self._safe_state()
-        await self._record_action(tool_name, "error", str(error))
+        await self._record_action(
+            tool_name, "error", message, tool_call_id=tool_call_id
+        )
         state = await self._safe_state() or state
         return _failure(
             self._error_code(error),
-            str(error),
+            message,
             state,
             include_invalid_breakpoints=_include_invalid_breakpoints(
                 tool_name,

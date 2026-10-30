@@ -1588,3 +1588,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 真实日志写入产生ENOTDIR时，step、Job任务回调和自动命名的局部logger会打断原执行。14项新增单测复现；真实消息API还定位到工具错误callback先把原OSError替换为日志NotADirectoryError。沿该执行链复用既有`report_failure`，原业务说明、错误实例和终态owner保持，次错仅以类别进入普通响应，完整诊断附到原异常；删除两个只负责重复日志的模块logger，不新增失败存储或恢复链。
 - 179项Job／step／中断回归经正式矩阵通过，62项工具错误callback与并发工具回归通过；原日志正常场景和工具权威结果断言保留。真实ASGI消息入口、model_stream及Gateway Skill来源owner生成失败与同Thread后继状态，核对工具仅执行一次、unknown结果、execution／Turn／队列终态、消息流关闭、旧canonical字节不变、工具配对、来源归属和两次封存请求hash；SQLite普通持久正文与公开载体均不含原执行或诊断目标路径。该装具不是完整Gateway业务代理、真实Provider、Web或Backend硬重启验收。
 - Ruff及compileall通过；两组类型检查的18与9条既有诊断按文件、规则、完整消息、AST owner及原行逐项一致，新集成与诊断fixture无类型诊断。保留原始失败、集成揭示的遗漏、修复后结果及源码指纹，收据：`out/tests/temp/execution_failure_settlement_20261030/artifacts/verification.json`。正式suite保持进程外保护和独占闸门；本项不代替2.2／7.2全局盘点，也不声明复杂取消／清理诊断已完整收口。
+
+### 2026-10-30 Node 调试工具失败事实统一（2.2／7.2部分收口）
+
+- 通用动作删除重复失败编排，专用动作继续共用原 `_failure_from_error`；同一次公开原因同时写入工具结果和原动作 owner。复用 `execution_failure_message`／`report_failure`，原生 I/O 保留类别及 errno，既有业务说明、错误码和原 tool-call 身份保持；完整异常与日志次错只留诊断，不增加错误存储或恢复链。
+- 旧实现20项有效反例失败；另10项新测试漏传变量名，修正装具后最终49项工具单测通过。两项 ASGI 消息／真实 Agent／model_stream 集成通过，覆盖正常日志与真实 ENOTDIR 日志故障、canonical 配对、持久动作与 manifest、同 Thread 真实断点重试、旧 canonical 字节及 assembly owner／request hash；关键状态均由产品入口生成。NodeDebug 动作保存原 wire tool-call ID，canonical operation ID 由原模型调用身份派生，二者分别核对，不改写产品身份合同。
+- Ruff、三文件 Pyright 与 compileall 通过；作者 AST 核对只改原两方法，生产净删2行，无新增产品目录。矩阵按正常／失败日志分为两个60秒／4GiB suite；本轮矩阵尝试在其他测试占用闸门时超时，不计通过。最终定向运行保留原独占闸门及进程外700秒／4GiB保护（含最多600秒排队），2项94.48秒通过。准确命令、源码指纹、原始输出／退出码及失败归因见 `out/tests/temp/debug_tool_failures_20261030/artifacts/verification.json`；本片不代完整 Gateway 业务代理、真实 Provider、Web、独立 Backend 重启、Windows或全部原生错误出口，2.2／7.2总门及前端／协作延期边界保持。
