@@ -9,6 +9,7 @@ thread_id 拼路径；thread 维度缺省或非法时 fail closed。
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import sqlite3
@@ -20,6 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core import failures
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex, uuid7_datetime_from_hex
@@ -145,6 +147,73 @@ def test_frozen_fork_source_scope_is_private_to_storage_instance(
         with pytest.raises(RuntimeError, match="禁止可写 SQLite"):
             storage.storage._connect(main, session_id=SESSION_ID)
     assert storage.storage.root(SESSION_ID, thread_id=main) == original
+    assert storage.storage.fork_paths.source_snapshot(SESSION_ID) is None
+
+
+@pytest.mark.parametrize("fault", ["missing", "file", "loop", "inspection"])
+@pytest.mark.parametrize("broken_diagnostics", [False, True])
+def test_frozen_source_scope_failure_keeps_locator_private_and_resets_capability(
+    storage: RolloutContextStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, fault: str, broken_diagnostics: bool,
+) -> None:
+    main = storage.storage.main_thread_id(SESSION_ID)
+    original = storage.storage.root(SESSION_ID, thread_id=main)
+    captured = tmp_path / "private-captured-source"
+    if fault == "file":
+        captured.write_bytes(b"not-a-directory")
+    elif fault == "loop":
+        captured.symlink_to(captured)
+    elif fault == "inspection":
+        captured.mkdir()
+    error_type = {"missing": FileNotFoundError, "file": RuntimeError, "loop": RuntimeError,
+                  "inspection": PermissionError}[fault]
+    native = PermissionError(errno.EACCES, f"检查失败 {captured}", str(captured))
+    diagnostic = OSError(errno.EIO, f"诊断写入失败 {captured}", str(captured))
+    with monkeypatch.context() as patch:
+        if fault == "inspection":
+            is_dir = Path.is_dir
+
+            def fail_inspection(path: Path) -> bool:
+                if path == captured:
+                    raise native
+                return is_dir(path)
+
+            patch.setattr(Path, "is_dir", fail_inspection)
+        if broken_diagnostics:
+            def fail_log(*_args: object, **_kwargs: object) -> None:
+                raise diagnostic
+
+            patch.setattr(failures.logger, "error", fail_log)
+        with (
+            pytest.raises(error_type) as caught,
+            storage.storage.fork_paths.fork_source_snapshot_scope(
+                session_id=SESSION_ID, thread_id=main, captured_root=captured,
+            ),
+        ):
+            pytest.fail("损坏的私有来源不能取得路径能力")
+    error = caught.value
+    assert str(captured) not in str(error)
+    assert "stage=fork_source_snapshot" in str(error)
+    assert SESSION_ID in str(error) and main in str(error)
+    assert error.__cause__ is not None and str(captured) in str(error.__cause__)
+    if fault == "inspection":
+        assert isinstance(error, PermissionError)
+        assert error.__cause__ is native and error.errno == errno.EACCES
+        assert error.filename is None
+    if broken_diagnostics:
+        assert "diagnostic_sink_error=OSError" in str(error)
+        assert str(diagnostic) in "\n".join(error.__cause__.__notes__)
+    else:
+        assert str(captured) in caplog.text
+    assert storage.storage.fork_paths.source_snapshot(SESSION_ID) is None
+    assert storage.storage.root(SESSION_ID, thread_id=main) == original
+    if captured.is_symlink() or captured.is_file():
+        captured.unlink()
+    captured.mkdir(exist_ok=True)
+    with storage.storage.fork_paths.fork_source_snapshot_scope(
+        session_id=SESSION_ID, thread_id=main, captured_root=captured,
+    ):
+        assert storage.storage.root(SESSION_ID, thread_id=main) == captured / "rollout"
     assert storage.storage.fork_paths.source_snapshot(SESSION_ID) is None
 
 

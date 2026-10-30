@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import failure_detail
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -165,22 +166,29 @@ class ForkPathScope:
             raise TypeError("fork source snapshot captured_root 必须是 Path")
         if self._source_snapshot.get() is not None:
             raise RuntimeError("fork source snapshot scope 不能嵌套")
-        snapshot_node = captured_root.resolve(strict=True)
-        thread_node = snapshot_node
-        if (
-            native_io_path(snapshot_node).is_symlink()
-            or not native_io_path(snapshot_node).is_dir()
-        ):
-            raise RuntimeError(
-                "fork source Thread 的私有 snapshot captured_root 必须是普通目录: "
-                f"captured_root={snapshot_node}, thread_id={thread_id}"
-            )
+        try:
+            snapshot_node = captured_root.resolve(strict=True)
+            if (
+                native_io_path(snapshot_node).is_symlink()
+                or not native_io_path(snapshot_node).is_dir()
+            ):
+                raise RuntimeError(
+                    "fork source Thread 的私有 snapshot captured_root 必须是普通目录: "
+                    f"captured_root={snapshot_node}, thread_id={thread_id}"
+                )
+        except (OSError, RuntimeError) as error:
+            detail = failure_detail(error, stage="fork_source_snapshot", label=(
+                f"source-mismatch: fork 私有来源校验失败: session_id={session_id}, thread_id={thread_id}"
+            ))
+            if isinstance(error, OSError):
+                raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+            raise RuntimeError(detail) from error
         snapshot = ForkSourceSnapshot(session_id, thread_id, snapshot_node)
         token: Token[ForkSourceSnapshot | None] = self._source_snapshot.set(
             snapshot
         )
         try:
-            yield thread_node
+            yield snapshot_node
         finally:
             self._source_snapshot.reset(token)
 
