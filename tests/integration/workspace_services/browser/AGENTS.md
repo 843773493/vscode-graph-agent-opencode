@@ -44,6 +44,8 @@ browser/
 
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
+`browser_shutdown_operations.mjs`另经正式创建与交互生成两个真实页面，仅暂停其中一项原context释放：核整次关闭观察到期、peer的真实检查点和context终态、同Promise重入不重复释放、原执行结束后共享运行时关闭及两个原ID冷恢复表单。它验证协作式等待及关闭接管，不证明任意脚本可强制终止或生产进程退出；默认30秒与跨阶段预算由定向Manager单测核对。
+
 ## 可修改内容
 
 - 浏览器资源、性能、帧治理和失败恢复集成场景。

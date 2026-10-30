@@ -394,6 +394,94 @@ async function checkpointCleanupFailure() {
   }
 }
 
+async function shutdownOwnerObservation() {
+  const workspaceId = randomUUID();
+  const workspaceRoot = path.join(run.workspaceRoot, `shutdown-owner-${randomUUID()}`);
+  await cp(path.join(run.projectRoot, "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
+  await mkdir(path.join(workspaceRoot, ".boxteam"), { recursive: true });
+  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  const manager = new BrowserManager({ workspaceRoot, workspaceId });
+  const entered = barrier(), release = barrier(), peerDone = barrier();
+  let closing, restored;
+  const releasedContexts = [];
+  const releaseContext = manager.runtimePool.releaseContext.bind(manager.runtimePool);
+  try {
+    await manager.init();
+    const ids = Array.from({ length: 2 }, () => `browser_${randomUUID().replaceAll("-", "")}`);
+    for (const [index, browserId] of ids.entries()) {
+      await manager.create({ workspaceId, browserId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
+      const browser = manager.get(browserId);
+      await browser.runInteractiveOperation({ actor: "user", action: "edit_before_shutdown" },
+        () => browser.page.locator("#field").fill(`owner-value-${index}`));
+    }
+    const [first, peer] = ids.map((id) => manager.get(id));
+    const firstContext = first.context, peerContext = peer.context;
+    const runtime = manager.runtimePool.browser;
+    manager.runtimePool.releaseContext = async (context) => {
+      releasedContexts.push(context);
+      if (context === firstContext) { entered.release(); await release.promise; }
+      await releaseContext(context);
+    };
+    const peerCheckpoint = peer.checkpointForManagerShutdown.bind(peer);
+    peer.checkpointForManagerShutdown = async (...args) => {
+      const result = await peerCheckpoint(...args);
+      peerDone.release();
+      return result;
+    };
+    closing = manager.shutdown("integration_original_owner", { shutdownWaitTimeoutMs: 2000 });
+    closing.catch(() => undefined);
+    await entered.promise;
+    const owner = manager.shutdownPromise;
+    const failure = await closing.catch((error) => error);
+    assert.equal(failure.code, "browser_manager_shutdown_timeout");
+    assert.equal(failure.stage, "resources");
+    assert.deepEqual(failure.pending_browser_ids, [first.id]);
+    // 真正读取peer的磁盘检查点和context终态，不能只以已启动另一任务为成功。
+    await peerDone.promise;
+    assert.equal(peer.context, null);
+    assert.equal(peer.record.resource_state, "discarded");
+    assert.equal(peerContext.pages().length, 0);
+    assert.equal(first.context, firstContext);
+    assert.equal(firstContext.pages().length, 1);
+    assert.equal(manager.runtimePool.browser, runtime);
+    assert.equal(runtime.isConnected(), true);
+    assert.equal(manager.runtimePool.contexts.size, 1);
+    const checkpointBytes = await Promise.all(ids.map((id) => readFile(manager.stateStore.checkpointPath(id))));
+    await assert.rejects(manager.shutdown("different_reason", { shutdownWaitTimeoutMs: 10 }), { code: "browser_manager_shutdown_timeout", stage: "resources" });
+    assert.equal(manager.shutdownPromise, owner);
+    assert.equal(releasedContexts.filter((context) => context === firstContext).length, 1);
+    await assert.rejects(peer.runInteractiveOperation({ actor: "user", action: "late" }, async () => {
+      throw new Error("关闭后不应执行新操作");
+    }), { code: "browser_closing" });
+    release.release();
+    await manager.shutdown();
+    await manager.shutdown();
+    assert.equal(manager.shutdownPromise, owner);
+    assert.equal(manager.runtimePool.browser, null);
+    assert.equal(first.context, null);
+    assert.equal(first.record.release_reason, "integration_original_owner");
+    assert.equal(releasedContexts.length, 2);
+    for (const [index, id] of ids.entries()) assert.deepEqual(await readFile(manager.stateStore.checkpointPath(id)), checkpointBytes[index]);
+    restored = new BrowserManager({ workspaceRoot, workspaceId });
+    await restored.init();
+    const values = [];
+    for (const [index, id] of ids.entries()) {
+      const browser = restored.get(id);
+      assert.equal(browser.transportOwnerRevision, 1);
+      assert.equal(browser.record.resource_state, "discarded");
+      const response = await browser.runInteractiveOperation({ actor: "user", action: "read_after_shutdown" },
+        async () => ({ value: await browser.page.locator("#field").inputValue() }));
+      values.push(response.value);
+      assert.equal(values[index], `owner-value-${index}`);
+    }
+    return { browserIds: ids, stage: failure.stage, pendingBrowserIds: failure.pending_browser_ids, contextReleases: releasedContexts.length, restoredValues: values };
+  } finally {
+    release.release();
+    await Promise.allSettled([closing, manager.shutdownPromise].filter(Boolean));
+    try { if (restored) await restored.shutdown(); } finally { await manager.shutdown(); }
+  }
+}
+
 try {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   run.addCleanup("页面HTTP服务", () => new Promise((resolve, reject) => {
@@ -416,6 +504,8 @@ try {
     try { results.push({ phase, status: "passed", observations: await creationDuringShutdown(phase) }); }
     catch (error) { results.push({ phase, status: "failed", error: error.stack ?? String(error) }); }
   }
+  try { results.push({ phase: "shutdown_owner_observation", status: "passed", observations: await shutdownOwnerObservation() }); }
+  catch (error) { results.push({ phase: "shutdown_owner_observation", status: "failed", error: error.stack ?? String(error) }); }
   const failed = results.filter((result) => result.status === "failed");
   await run.writeResult(failed.length ? "failed" : "passed", {
     scenarios: results,

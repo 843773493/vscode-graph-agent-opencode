@@ -959,7 +959,7 @@ async function main() {
         return;
       }
     }
-    // TODO：检查点持久化和整个 shutdown 的总期限及挂起终止仍须原 owner 核实。
+    // TODO：生产进程退出、同步阻塞与挂起操作终止仍须原 owner 核实。
     let finalExitCode = exitCode;
     try {
       wss.close();

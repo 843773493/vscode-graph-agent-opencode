@@ -9,6 +9,7 @@ import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
 import { BrowserResourceGovernor } from "./resources/resourceGovernor.js";
+import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 import {
   DEFAULT_BROWSER_DEVICE_ORIENTATION,
   DEFAULT_BROWSER_DEVICE_PROFILE,
@@ -16,6 +17,7 @@ import {
 } from "./browserDeviceProfiles.js";
 
 export const DEFAULT_MAX_LOGICAL_BROWSERS_PER_WORKSPACE = 500;
+const logger = createRuntimeLogger("browser", "browser.browserManager");
 
 export class BrowserTransportGrantRejected extends Error {
   constructor(snapshot) {
@@ -97,6 +99,10 @@ export class BrowserManager {
     this.persistTimer = null;
     this.createAdmissionTail = Promise.resolve();
     this.closingRequested = false;
+    this.shutdownPromise = null;
+    this.shutdownStage = null;
+    this.shutdownBrowserIds = new Set();
+    this.runtimeShutdownComplete = false;
     this.pendingCreations = new Set();
     this.checkpointCaptureTail = Promise.resolve();
     this.runtimePool = runtimePool || new BrowserRuntimePool({
@@ -487,11 +493,48 @@ export class BrowserManager {
 
   async shutdown(reason = "browser_manager_shutdown", {
     operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
+    shutdownWaitTimeoutMs = 30_000,
   } = {}) {
     this.closingRequested = true;
     this.stopResourceGovernor();
-    const drainDeadline = performance.now() + operationDrainTimeoutMs;
     for (const session of this.browsersById.values()) session.closingRequested = true;
+    if (!this.shutdownPromise) {
+      // 唯一执行覆盖全部阶段；观察到期不取消原任务，也不启动第二批检查点或关闭。
+      const execution = Promise.resolve().then(() => this.drainShutdown(reason, operationDrainTimeoutMs)).catch((error) => {
+        this.shutdownPromise = null;
+        try {
+          logger.error("[browser-manager] 原关闭任务失败，保留未完成资源供显式重试", {
+            workspace_id: this.workspaceId, stage: this.shutdownStage,
+          }, error);
+        } catch (diagnosticError) {
+          throw new AggregateError([error, diagnosticError], "Browser关闭与诊断输出均失败", { cause: error });
+        }
+        throw error;
+      });
+      this.shutdownPromise = execution;
+      // 等待者可能已到期；原任务的失败仍在上面完整记录，不产生悬空rejection。
+      void execution.catch(() => undefined);
+    }
+    let timer;
+    try {
+      await Promise.race([this.shutdownPromise, new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const pendingBrowserIds = [...this.shutdownBrowserIds];
+          const error = new Error(`Browser Manager关闭尚未完成: workspace_id=${this.workspaceId}, stage=${this.shutdownStage}, browsers=${pendingBrowserIds.join(",")}`);
+          error.code = "browser_manager_shutdown_timeout";
+          error.stage = this.shutdownStage;
+          error.pending_browser_ids = pendingBrowserIds;
+          reject(error);
+        }, shutdownWaitTimeoutMs);
+      })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async drainShutdown(reason, operationDrainTimeoutMs) {
+    const drainDeadline = performance.now() + operationDrainTimeoutMs;
+    this.shutdownStage = "creations";
     if (!await drainBrowserExecutions(this.pendingCreations, Math.max(0, drainDeadline - performance.now()))) {
       const error = new Error(`Browser 创建尚未结束，不能关闭共享运行时: workspace_id=${this.workspaceId}, pending=${this.pendingCreations.size}`);
       error.code = "browser_shutdown_creation_drain_timeout";
@@ -506,12 +549,10 @@ export class BrowserManager {
     }
     const sessions = this.runningSessions();
     // 创建和交互共用本批单调预算；创建迟到完成也必须进入同一检查点链。
-    const checkpointFailures = [];
+    this.shutdownStage = "resources";
+    this.shutdownBrowserIds = new Set(sessions.map((session) => session.id));
     let canShutdownRuntime = true;
-    for (const session of sessions) {
-      if (session.status !== "running") {
-        continue;
-      }
+    const results = await Promise.allSettled(sessions.map(async (session) => {
       try {
         await session.checkpointForManagerShutdown(reason, {
           operationDrainTimeoutMs: Math.max(0, drainDeadline - performance.now()),
@@ -529,9 +570,13 @@ export class BrowserManager {
               `浏览器关闭检查点与失败收尾均失败: browser_id=${session.id}`, { cause: error });
           }
         }
-        checkpointFailures.push({ browserId: session.id, error: failure });
+        throw failure;
+      } finally {
+        this.shutdownBrowserIds.delete(session.id);
       }
-    }
+    }));
+    const checkpointFailures = results.flatMap((result, index) => result.status === "rejected"
+      ? [{ browserId: sessions[index].id, error: result.reason }] : []);
     const failure = checkpointFailures.length > 0
       ? new AggregateError(
         checkpointFailures.map((item) => item.error),
@@ -539,9 +584,15 @@ export class BrowserManager {
       ) : null;
     // 排空或失败收尾未核实完成时，原owner仍持有运行时，不能关闭共享池。
     if (!canShutdownRuntime) throw failure;
-    // TODO：统一整个shutdown期限和挂起操作终止核实，不能将排空预算当作取消。
-    await this.runtimePool.shutdown();
+    this.shutdownStage = "runtime";
+    if (!this.runtimeShutdownComplete) {
+      await this.runtimePool.shutdown();
+      this.runtimeShutdownComplete = true;
+    }
+    this.shutdownStage = "persist";
     await this.persist();
     if (failure) throw failure;
+    this.shutdownStage = "complete";
+    // TODO：同步阻塞、原生调用强制终止与生产进程退出仍须单独核实。
   }
 }
