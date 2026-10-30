@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import re
+import traceback
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ import pytest
 from app.domain.itemized.resource_activation import (
     RESOURCE_ACTIVATION_ERROR_CODES,
     ResourceActivationContractError,
+    ResourceActivationSnapshotRef,
 )
 
 # 固定的观测应然集合（独立于源码，供变异自检使用，非闭集的第二权威）。
@@ -70,3 +73,45 @@ def test_contract_error_rejects_codes_outside_resource_activation_allowlist() ->
 
     with pytest.raises(ValueError):
         ResourceActivationContractError("resource-activation-not-a-real-code", "x")
+
+
+@pytest.mark.parametrize("section,field,value,code", [
+    ("binding", "display_uri", "/private/activation/secret.json", "resource-activation-absolute-path-rejected"),
+    ("binding", "display_uri", r"C:\private\activation\secret.json", "resource-activation-absolute-path-rejected"),
+    ("binding", "display_uri", r"\\target\private\secret.json", "resource-activation-absolute-path-rejected"),
+    ("binding", "display_uri", "/private/.boxteam/secret.json", "resource-activation-legacy-field-rejected"),
+    ("binding", "display_uri", "https://provider.invalid/private/secret.json", "resource-activation-provider-locator-rejected"),
+    ("binding", "display_uri", "boxteam://secret@workspace/ws/resources/skills/demo/SKILL.md", "resource-activation-credential-rejected"),
+    ("binding", "display_uri", "boxteam://workspace/ws/resources/skills/demo/../secret.json", "resource-activation-schema-invalid"),
+    ("binding", "display_uri", "boxteam://workspace/ws/resources/skills/demo/%2Fsecret.json", "resource-activation-schema-invalid"),
+    ("binding", "display_uri", "relative/secret.json", "resource-activation-provider-locator-rejected"),
+    ("binding", "resource_id", "/private/activation/secret.json", "resource-activation-absolute-path-rejected"),
+    ("binding", "resource_id", r"private\secret.json", "resource-activation-absolute-path-rejected"),
+    ("binding", "resource_id", "private/secret.json", "resource-activation-provider-locator-rejected"),
+    ("binding", "resource_id", "private%secret", "resource-activation-schema-invalid"),
+    ("binding", "resource_kind", "/private/activation/secret.json", "resource-activation-schema-invalid"),
+    ("binding", "owner_scope", r"C:\private\secret.json", "resource-activation-schema-invalid"),
+    ("binding", "facet", "/private/activation/secret.json", "resource-activation-schema-invalid"),
+    ("binding", "availability", r"C:\private\secret.json", "resource-activation-schema-invalid"),
+    ("snapshot", "snapshot_kind", "/private/activation/secret.json", "resource-activation-schema-invalid"),
+    ("snapshot", "/private/unknown/secret.json", "unused", "resource-activation-schema-invalid"),
+    ("policy", r"C:\private\unknown\secret.json", "unused", None),
+])
+def test_rejected_activation_values_only_appear_in_diagnostics(
+    resource_activation_vectors, section: str, field: str, value: str, code: str | None,
+) -> None:
+    payload = deepcopy(resource_activation_vectors["scenario"]["execution"])
+    target = (payload["bindings"][0] if section == "binding"
+              else payload["activation_policy"] if section == "policy" else payload)
+    target[field] = value
+    with pytest.raises(ValueError) as caught:
+        ResourceActivationSnapshotRef.from_dict(payload)
+    error = caught.value
+    assert getattr(error, "code", None) == code
+    rejected = field if value == "unused" else value
+    assert rejected not in str(error)
+    assert repr(rejected) not in str(error)
+    assert rejected not in repr(error.args)
+    assert repr(rejected) in "".join(traceback.format_exception(error))
+    if value != "unused":
+        assert field in str(error)

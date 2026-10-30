@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-30 资源激活拒绝回显切片（2.2/7.2部分收口）：snapshot／binding／policy 在原拒绝点只公开字段、规则及原错误码，被拒绝值和未知字段名随异常 notes 保留完整诊断；不增加领域 I/O，不变校验接受范围、异常类别、schema、序列化及 hash。旧生产14项有效反例失败；最终147项不同单测通过，其中4项fork由原矩阵重验，临时命令中的装具初始化错误不计通过。新增真实Session／消息ASGI与model_stream场景1 passed／37.72秒：生成封存历史后逐次注入POSIX、Windows、UNC位置及未知policy字段，核冷读拒绝、诊断原值、原行与canonical字节不变，恢复原记录后冷读一致并由同会话续跑，总计两次模型请求。原空URI／seal／restart／fork回归由原矩阵2 passed／20.41秒。新拒绝场景独立注册，两个suite各选自身用例、各保留60秒／4GiB及原集成闸门；新增suite命令与已通过的定向命令逐项相同。
+
+本轮文件Ruff／compileall及本change strict通过；Pyright保留5条原诊断，对应语句或函数AST未变，新测试零诊断，不宣称类型全绿。最初Windows拒绝值的转义断言不足，最终补强repr检查；准确命令、源码指纹、所有失败与最终结果见 `out/tests/temp/resource_activation_rejection_20261030/artifacts/verification.json`。未验Gateway／Web、真实HTTP、独立Backend硬重启、Windows实机或执行失败持久化出口；2.2／7.2、前端与协作延期项保持未勾，不重启共享debug服务。
+
 2026-10-30 压缩活动失败结算切片（2.2/7.2部分收口）：原 awrap_model_call 异常出口复用 failure_detail，日志次错附于原错误，活动仍发布原 context.compaction 专属失败事件并原样抛出主错；公开 summary／detail／outcome 合同不变，不合并同步异步实现。旧生产单测真实日志 ENOTDIR 反例1 failed／正常日志1 passed；有效产品反例确认专属失败事件缺失、Job 主错被日志错替换。通用流结束原本会补结活动，未将问题夸大为永久运行态。
 
 最终73项相关单测及真实Agent／ASGI消息场景通过；产品入口生成六轮历史，真实目录／日志冲突后核原错误、活动事件、冷store按精确owner打开后的持久事件，再解除目录故障由原会话实际压缩及续跑，原失败事件不变，9次封存请求owner／canonical／hash审计通过。新suite独立180秒／4GiB，读取错误suite仍选原2场景、保留120秒／4GiB和集成闸门。首次装具遗漏usage未触发压缩、首个候选冷store未打开流均保留失败原件，不计产品通过；修正装具未改生产阈值或业务断言。Ruff／编译／矩阵注册通过，真实Pyright与HEAD逐项比较保留原产品3条及原单测10条诊断、新集成零诊断；他人已补Electron草案delta后全量strict54/54。准确命令、源码指纹、原始输出、失败归因及范围见 `out/tests/temp/compaction_activity_failure_20261030/artifacts/verification.json`。仅为新store冷读，不代独立Backend／Gateway／真实HTTP／Windows或整体URI验收；2.2/7.2、原SQLite关闭交接TODO及前端／协作延期项保持。

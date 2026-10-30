@@ -39,6 +39,8 @@
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
 - **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。原始诊断日志和 Browser 页面 URL 的两项具名例外仅按 D1c 与对应 spec requirements 生效，不改变资源引用的三层职责。
 
+资源激活领域校验在原拒绝点组织字段与规则说明，被拒绝的值和未知字段名只附于完整异常的诊断 notes，不进入公开异常正文或 args。该纯领域链不增加日志或 I/O，原校验规则、错误码、异常类别和原因链保持；恢复层继续传播同一拒绝，不修复或重建已封存记录，policy 的原 ValueError 也遵守同一正文边界。
+
 会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
 
 Gateway与Workspace的active快照解码catch在原恢复标记写入之前复用`failure_detail`，last_error保存config_domain、config-active-decode阶段和原异常类别，不复制可能含位置的转换错误正文。原异常与原因链只留诊断并原样重抛，日志sink失败仍完成原恢复事务。原读取/关闭顺序、SQL、state/last_error更新边界与其它快照字段保持；冷重开不重建损坏active，外部修复字段后也不自动清除recovery_required，离线诊断继续消费同一已提交记录。

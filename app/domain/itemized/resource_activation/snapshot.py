@@ -6,6 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
+from app.domain.itemized.resource_activation.provenance import (
+    ResourceProvenanceRef,
+    _ordered_bindings,
+    resource_bindings_hash,
+)
 from app.domain.itemized.resource_activation.shared_contract import (
     _CODE_HASH_MISMATCH,
     _CODE_PARENT_INVALID,
@@ -18,11 +23,6 @@ from app.domain.itemized.resource_activation.shared_contract import (
     _non_negative_int,
     _reject_forbidden_fields,
     _schema_error,
-)
-from app.domain.itemized.resource_activation.provenance import (
-    ResourceProvenanceRef,
-    _ordered_bindings,
-    resource_bindings_hash,
 )
 
 
@@ -95,7 +95,7 @@ class ResourceActivationSnapshotRef:
         )
         if self.snapshot_kind not in _SNAPSHOT_KINDS:
             raise _schema_error(
-                f"未知 snapshot_kind: {self.snapshot_kind!r}，必须是 execution|model_call"
+                "未知 snapshot_kind，必须是 execution|model_call", diagnostic=repr(self.snapshot_kind),
             )
         _non_empty_string(
             self.activation_policy_revision,

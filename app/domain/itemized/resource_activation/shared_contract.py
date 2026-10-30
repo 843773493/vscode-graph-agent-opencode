@@ -67,10 +67,13 @@ RESOURCE_ACTIVATION_ERROR_CODES: Final[frozenset[str]] = frozenset(
 class ResourceActivationContractError(CodeCarryingError, ItemSchemaError):
     """资源激活 snapshot/provenance 违反领域合同；code 是闭合集合。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, diagnostic: str | None = None) -> None:
         if code not in RESOURCE_ACTIVATION_ERROR_CODES:
             raise ValueError(f"未知 ResourceActivationContractError code: {code}")
         super().__init__(code, message)
+        if diagnostic is not None:
+            # 公开错误保留字段与规则，原输入仅随完整异常进入诊断。
+            self.add_note(f"被拒绝的资源激活输入: {diagnostic}")
 
 
 RESOURCE_ACTIVATION_SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -242,8 +245,8 @@ LEGACY_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
-def _schema_error(message: str) -> ResourceActivationContractError:
-    return ResourceActivationContractError(_CODE_SCHEMA_INVALID, message)
+def _schema_error(message: str, *, diagnostic: str | None = None) -> ResourceActivationContractError:
+    return ResourceActivationContractError(_CODE_SCHEMA_INVALID, message, diagnostic=diagnostic)
 
 
 def _non_empty_string(value: object, field_name: str) -> str:
@@ -272,7 +275,7 @@ def _token(value: object, field_name: str) -> str:
             for char in value
         )
     ):
-        raise _schema_error(f"{field_name} {_TOKEN_PATTERN_ERROR}: {value!r}")
+        raise _schema_error(f"{field_name} {_TOKEN_PATTERN_ERROR}", diagnostic=repr(value))
     return value
 
 
@@ -282,32 +285,37 @@ def _reject_path_or_credential_shape(value: str, field_name: str) -> None:
     if "read_file_path" in value or ".boxteam" in value:
         raise ResourceActivationContractError(
             _CODE_LEGACY_FIELD_REJECTED,
-            f"{field_name} 是旧路径形态，正常 runtime 不得读取: {value!r}",
+            f"{field_name} 是旧路径形态，正常 runtime 不得读取",
+            diagnostic=repr(value),
         )
     if value.startswith(("/", "\\")) or (
         len(value) >= 3 and value[1] == ":" and value[2] in "\\/"
     ):
         raise ResourceActivationContractError(
             _CODE_ABSOLUTE_PATH_REJECTED,
-            f"{field_name} 不得是绝对路径: {value!r}",
+            f"{field_name} 不得是绝对路径",
+            diagnostic=repr(value),
         )
     if "\\" in value:
         raise ResourceActivationContractError(
             _CODE_ABSOLUTE_PATH_REJECTED,
-            f"{field_name} 不得携带路径分隔符: {value!r}",
+            f"{field_name} 不得携带路径分隔符",
+            diagnostic=repr(value),
         )
     if value.find("://") > 0 and not value.startswith(_DISPLAY_URI_SCHEME):
         raise ResourceActivationContractError(
             _CODE_PROVIDER_LOCATOR_REJECTED,
-            f"{field_name} 不得是 provider locator/endpoint: {value!r}",
+            f"{field_name} 不得是 provider locator/endpoint",
+            diagnostic=repr(value),
         )
     if "@" in value:
         raise ResourceActivationContractError(
             _CODE_CREDENTIAL_REJECTED,
-            f"{field_name} 不得携带 userinfo/credential 形态: {value!r}",
+            f"{field_name} 不得携带 userinfo/credential 形态",
+            diagnostic=repr(value),
         )
     if "%" in value:
-        raise _schema_error(f"{field_name} 拒绝百分号编码: {value!r}")
+        raise _schema_error(f"{field_name} 拒绝百分号编码", diagnostic=repr(value))
 
 
 def _safe_identity(value: object, field_name: str) -> str:
@@ -316,7 +324,8 @@ def _safe_identity(value: object, field_name: str) -> str:
     if any(marker in text for marker in ("/", "\\", "?", "#", " ")):
         raise ResourceActivationContractError(
             _CODE_PROVIDER_LOCATOR_REJECTED,
-            f"{field_name} 是内部稳定 identity，不得携带路径/URI 形态: {text!r}",
+            f"{field_name} 是内部稳定 identity，不得携带路径/URI 形态",
+            diagnostic=repr(text),
         )
     if not text.isascii():
         raise _schema_error(f"{field_name} 必须是纯 ASCII")
@@ -339,12 +348,15 @@ def _display_uri(value: object, field_name: str) -> str | None:
     if not text.startswith(_DISPLAY_URI_SCHEME):
         raise ResourceActivationContractError(
             _CODE_PROVIDER_LOCATOR_REJECTED,
-            f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址: {text!r}",
+            f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址",
+            diagnostic=repr(text),
         )
     try:
         return parse_resource_uri(text).display_uri
     except ResourceUriGrammarError as error:
-        raise _schema_error(f"{field_name} 资源 URI 非法: {error.reason_code}: {error}") from error
+        raise _schema_error(
+            f"{field_name} 资源 URI 非法: {error.reason_code}", diagnostic=repr(text),
+        ) from error
 
 
 def _reject_forbidden_fields(
@@ -389,7 +401,7 @@ def _reject_forbidden_fields(
                 _CODE_FIELD_ALIAS_REJECTED,
                 f"{where} 不得使用别名字段 {key!r}，规范字段是 {aliases[key]!r}",
             )
-        raise _schema_error(f"{where} 含未登记字段: {key!r}")
+        raise _schema_error(f"{where} 含未登记字段", diagnostic=repr(key))
 
 
 def _require_pair(value: object) -> tuple[object, object]:
@@ -551,10 +563,9 @@ class ResourceActivationPolicySnapshot:
         if not isinstance(value, Mapping):
             raise TypeError("activation_policy 必须是对象")
         if set(value) != {"default_boundary", "overrides"}:
-            raise ValueError(
-                "activation_policy 字段必须为 default_boundary/overrides: "
-                f"{sorted(value)}"
-            )
+            error = ValueError("activation_policy 字段必须为 default_boundary/overrides")
+            error.add_note(f"被拒绝的 activation_policy 字段: {sorted(value)!r}")
+            raise error
         return cls(
             default_boundary=value["default_boundary"],
             boundaries=value["overrides"],

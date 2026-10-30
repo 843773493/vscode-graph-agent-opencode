@@ -110,7 +110,7 @@ class ResourceProvenanceRef:
         _non_empty_string(self.revision, "ResourceProvenanceRef.revision")
         if self.availability not in _AVAILABILITIES:
             raise _schema_error(
-                f"未知 ResourceProvenanceRef.availability: {self.availability!r}"
+                "未知 ResourceProvenanceRef.availability", diagnostic=repr(self.availability),
             )
         _non_negative_int(
             self.content_length, "ResourceProvenanceRef.content_length"
