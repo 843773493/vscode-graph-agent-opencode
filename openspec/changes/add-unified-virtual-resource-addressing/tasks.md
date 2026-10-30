@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-30 激活URI文件段校验切片（2.2/7.2部分收口）：display_uri先由中央grammar判定合法性，领域形态检查只归类已拒绝输入的原错误码，内部identity校验不变。不再因合法文件名的编码、字面百分号或.boxteam／read_file_path字样而误拒；serde及SQLite新owner冷读保持原URI字节与原hash，不重新规范化冻结历史，不回读当前来源。原实现6项合法URI反例失败、9项原行为通过；修复后399项domain／SQLite／projection／grammar单测及4项原fork矩阵通过，共403项不同用例。新增7项合法URI、8项非法URI及4项冷存储场景，原测试函数／类AST不变。
+
+Ruff／compileall通过，Pyright9条原诊断的owner函数AST与HEAD相同，新测试零诊断；不是类型全绿。仅修改原_display_uri控制顺序，没有新parser、兼容层、schema、writer或owner。准确命令、指纹、红绿原件与范围见 `out/tests/temp/activation_uri_grammar_20261030/artifacts/verification.json`。本次未新增完整Agent执行／编码URI fork产品验收，也未重跑前一切片3项产品场景，不将局部单测当作Gateway／Web、真实网络、独立Backend重启或Windows验收；2.2／7.2及协作延期项保持未勾。
+
 2026-10-30 资源激活拒绝回显切片（2.2/7.2部分收口）：snapshot／binding／policy 在原拒绝点只公开字段、规则及原错误码，被拒绝值和未知字段名随异常 notes 保留完整诊断；不增加领域 I/O，不变校验接受范围、异常类别、schema、序列化及 hash。旧生产14项有效反例失败；最终147项不同单测通过，其中4项fork由原矩阵重验，临时命令中的装具初始化错误不计通过。新增真实Session／消息ASGI与model_stream场景1 passed／37.72秒：生成封存历史后逐次注入POSIX、Windows、UNC位置及未知policy字段，核冷读拒绝、诊断原值、原行与canonical字节不变，恢复原记录后冷读一致并由同会话续跑，总计两次模型请求。原空URI／seal／restart／fork回归由原矩阵2 passed／20.41秒。新拒绝场景独立注册，两个suite各选自身用例、各保留60秒／4GiB及原集成闸门；新增suite命令与已通过的定向命令逐项相同。
 
 本轮文件Ruff／compileall及本change strict通过；Pyright保留5条原诊断，对应语句或函数AST未变，新测试零诊断，不宣称类型全绿。最初Windows拒绝值的转义断言不足，最终补强repr检查；准确命令、源码指纹、所有失败与最终结果见 `out/tests/temp/resource_activation_rejection_20261030/artifacts/verification.json`。未验Gateway／Web、真实HTTP、独立Backend硬重启、Windows实机或执行失败持久化出口；2.2／7.2、前端与协作延期项保持未勾，不重启共享debug服务。

@@ -729,6 +729,11 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 - **WHEN** 构造 `references/中文 文档.v2.md`、`scripts/run.py`、`100%.txt` 等文件的 URI
 - **THEN** 构造、解析和结果引用使用同一 UTF-8 分段编码；解码后逐字匹配文件名，规范 URI 可以再次访问同一目标
 
+#### Scenario: 资源激活消费者复用文件段语法
+
+- **WHEN** 合法文件 URI 进入资源激活 provenance、serde 或历史存储恢复
+- **THEN** 合法性只由中央 grammar 判定，不先套用内部 identity 的百分号限制，也不因文件名含 `.boxteam` 或 `read_file_path` 字样而拒绝；非法输入继续保留原领域错误码及诊断边界。新引用由原构造入口规范编码，已经冻结的合法 URI 则按原字节保存和恢复，不在读取时重新规范化、查询当前文件或改投目标
+
 #### Scenario: 非法 escape 和路径穿越在访问前失败
 
 - **WHEN** 文件段含残缺 escape、无效 UTF-8、编码分隔符，或解码后为 .、..、控制字符

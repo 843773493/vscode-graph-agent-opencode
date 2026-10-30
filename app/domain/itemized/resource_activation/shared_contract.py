@@ -342,18 +342,19 @@ def _display_uri(value: object, field_name: str) -> str | None:
     if value is None:
         return None
     text = _non_empty_string(value, field_name)
-    _reject_path_or_credential_shape(text, field_name)
-    if not text.isascii():
-        raise _schema_error(f"{field_name} 必须是纯 ASCII")
-    if not text.startswith(_DISPLAY_URI_SCHEME):
-        raise ResourceActivationContractError(
-            _CODE_PROVIDER_LOCATOR_REJECTED,
-            f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址",
-            diagnostic=repr(text),
-        )
     try:
         return parse_resource_uri(text).display_uri
     except ResourceUriGrammarError as error:
+        # 文件 child 的合法性只归中央 grammar；以下仅归类已拒绝输入的原错误码。
+        _reject_path_or_credential_shape(text, field_name)
+        if not text.isascii():
+            raise _schema_error(f"{field_name} 必须是纯 ASCII") from error
+        if not text.startswith(_DISPLAY_URI_SCHEME):
+            raise ResourceActivationContractError(
+                _CODE_PROVIDER_LOCATOR_REJECTED,
+                f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址",
+                diagnostic=repr(text),
+            ) from error
         raise _schema_error(
             f"{field_name} 资源 URI 非法: {error.reason_code}", diagnostic=repr(text),
         ) from error

@@ -41,6 +41,8 @@
 
 资源激活领域校验在原拒绝点组织字段与规则说明，被拒绝的值和未知字段名只附于完整异常的诊断 notes，不进入公开异常正文或 args。该纯领域链不增加日志或 I/O，原校验规则、错误码、异常类别和原因链保持；恢复层继续传播同一拒绝，不修复或重建已封存记录，policy 的原 ValueError 也遵守同一正文边界。
 
+`display_uri` 先交中央 grammar 判定合法性；仅在 parser 拒绝后，领域层按原路径／locator／credential／旧字段形态归类错误码。内部 identity 仍使用原严格校验，不能把其字符限制套在合法文件 child 上。provenance 只验证冻结 URI，不在反序列化时用 parser 返回的规范形式替换原字节；新引用仍由既有构造入口生成，历史恢复不取得当前文件或配置。
+
 会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
 
 Gateway与Workspace的active快照解码catch在原恢复标记写入之前复用`failure_detail`，last_error保存config_domain、config-active-decode阶段和原异常类别，不复制可能含位置的转换错误正文。原异常与原因链只留诊断并原样重抛，日志sink失败仍完成原恢复事务。原读取/关闭顺序、SQL、state/last_error更新边界与其它快照字段保持；冷重开不重建损坏active，外部修复字段后也不自动清除recovery_required，离线诊断继续消费同一已提交记录。

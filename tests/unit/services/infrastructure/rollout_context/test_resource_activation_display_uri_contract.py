@@ -90,6 +90,39 @@ def test_activation_sqlite_round_trip_preserves_explicit_null_display_uri(
     assert restored.bindings_hash == snapshot.bindings_hash
 
 
+@pytest.mark.parametrize("uri", [
+    "boxteam://workspace/ws/resources/files/root/%E6%8C%87%E5%8D%97%20%25%40.md",
+    "boxteam://workspace/ws/resources/files/root/%e6%8c%87%e5%8d%97.md",
+    "boxteam://workspace/ws/resources/files/root/.boxteam-notes.md",
+    "boxteam://workspace/ws/resources/skills/demo/references/read_file_path-%25.md",
+])
+def test_activation_cold_storage_keeps_legal_file_uri_and_frozen_bytes(
+    activation_store: ResourceActivationStore, storage: RolloutContextStore,
+    sessions_root: Path, uri: str,
+) -> None:
+    original = _execution_snapshot(storage=storage)
+    snapshot = replace(original, bindings=(replace(original.bindings[0], display_uri=uri),))
+    activation_store.save_snapshot(snapshot)
+    with closing(sqlite3.connect(storage.storage.index_path(snapshot.owner_session_id))) as connection:
+        assert connection.execute(
+            "SELECT display_uri FROM resource_activation_bindings WHERE activation_snapshot_id=?",
+            (snapshot.activation_snapshot_id,),
+        ).fetchall() == [(uri,)]
+    # 重建原存储 owner；悬空的展示 URI 不参与历史正文查找或重读当前来源。
+    cold_storage = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
+    cold = ResourceActivationStore(
+        cold_storage, ActivationLineageBodyStore(cold_storage, ContextPlanDetailStore(sessions_root)),
+    )
+    restored = cold.read_snapshot(
+        snapshot.owner_session_id, thread_id=snapshot.owner_thread_id,
+        activation_snapshot_id=snapshot.activation_snapshot_id,
+    )
+    assert restored.to_dict() == snapshot.to_dict()
+    assert restored.bindings[0].display_uri == uri
+    assert restored.bindings_hash == snapshot.bindings_hash
+    assert restored.activation_provenance_hash == snapshot.activation_provenance_hash
+
+
 def test_activation_sqlite_rejects_empty_display_uri_and_cold_read_rejects_tampering(
     activation_store: ResourceActivationStore,
     storage: RolloutContextStore,

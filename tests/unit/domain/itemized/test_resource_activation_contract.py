@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.core.resource_uri import parse_resource_uri
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
@@ -451,6 +452,41 @@ def test_provenance_restore_requires_explicit_nullable_display_uri() -> None:
     del raw["display_uri"]
     with pytest.raises(ResourceActivationContractError, match="缺少必填字段"):
         ResourceProvenanceRef.from_dict(raw)
+
+
+@pytest.mark.parametrize(("uri", "children"), [
+    ("boxteam://workspace/ws/resources/files/root/%E6%8C%87%E5%8D%97%20%25%40.md", ("指南 %@.md",)),
+    ("boxteam://workspace/ws/resources/skills/demo/references/read_file_path-%25.md", ("read_file_path-%.md",)),
+    ("boxteam://workspace/ws/resources/files/root/.boxteam-notes.md", (".boxteam-notes.md",)),
+    ("boxteam://gateway/gateway_00000000000070008000000000000002/resources/files/019c13b18bcc7288beace1cd3b7c4c84/note%40target.md", ("note@target.md",)),
+    ("boxteam://workspace/ws/resources/files/root/notes!draft.md", ("notes!draft.md",)),
+    ("boxteam://workspace/ws/resources/files/root/%e6%8c%87%e5%8d%97.md", ("指南.md",)),
+    ("boxteam://workspace/ws/resources/files/root/%252e%252e.txt", ("%2e%2e.txt",)),
+])
+def test_provenance_accepts_central_file_uri_grammar_without_rewriting_frozen_bytes(
+    uri: str, children: tuple[str, ...],
+) -> None:
+    assert parse_resource_uri(uri).tail_segments[-len(children):] == children
+    raw = binding(display_uri=uri).to_dict()
+    assert raw["display_uri"] == uri
+    assert ResourceProvenanceRef.from_dict(raw).to_dict() == raw
+
+
+@pytest.mark.parametrize("uri", [
+    "boxteam://workspace/ws/resources/files/root/%2Fetc",
+    "boxteam://workspace/ws/resources/files/root/%5Csecret",
+    "boxteam://workspace/ws/resources/files/root/%2E%2E/secret",
+    "boxteam://workspace/ws/resources/files/root/%00secret",
+    "boxteam://workspace/ws/resources/files/root/%ZZsecret",
+    "boxteam://workspace/%77s/resources/files/root/secret",
+    "boxteam://workspace/ws/resources/files/root/file?secret=1",
+    "boxteam://workspace/ws/resources/files/root/file#secret",
+])
+def test_provenance_keeps_unsafe_uri_rejections_and_original_codes(uri: str) -> None:
+    with pytest.raises(ResourceActivationContractError) as caught:
+        binding(display_uri=uri)
+    assert caught.value.code == "resource-activation-schema-invalid"
+    assert uri not in str(caught.value)
 
 
 def test_provenance_rejects_credential_shaped_identity_and_uri() -> None:
