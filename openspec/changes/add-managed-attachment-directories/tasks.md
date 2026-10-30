@@ -606,3 +606,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原ResourceRecovery排空本次任务后，按资源选择顺序保留已完成的原异常；预算到期与本次TimeoutError共同聚合，调用者取消保持原CancelledError/消息并以聚合cause保留此前失败。冻结版本、仅管理重试标记和原lease账本保持，成功项不回滚，后续普通恢复不重发已失败同步。
 - 424项相关单测通过（12.86秒），覆盖两类owner、多错逆序完成、取消/到期、原对象与pending分类；完整旧生产归档加相同新单测4项均在预期行为处失败。4项真实PTY/Chromium/HTTP集成通过（69.37秒），经正式Session、ASGI创建/授权及冷owner生成关键状态，核原未知lease冷读、外部身份/版本、健康项可读、不重发同步和显式停止后结算；串行使用原集成闸门，外部180秒/4GiB保护。Ruff、三文件Pyright零诊断及本change strict通过。
 - 准确命令、前后源码指纹、原始输出/实际退出码和作者AST自查见`out/tests/temp/resource_recovery_errors_20261030/artifacts/verification.json`。首轮import格式与fixture可空类型已修；误用Python入口的Pyright未执行，保留原件并改用现有Bun入口。只推进本次30秒截止，不代表真实等候30秒、独立Backend重启、Gateway/Web、Windows、任意脚本终止或完整shutdown期限；5.2/5.4与整体21/23保持未完成。未修改另一会话Web/Workbench、自动化或暂存，未重启共享debug。
+
+### 2026-10-30 孤儿回收中断保留此前失败（5.4部分收口）
+
+- 原sweep_orphans排空本次任务后按资源选择顺序保留已完成的原异常；到期追加带原cause的预算TimeoutError，取消保持原CancelledError/消息并以聚合cause保留此前失败。普通失败的原ExceptionGroup、成功结果顺序、未知记录/版本、精确lease与显式管理链保持，无新恢复账本或删除writer。
+- 388项相关单测通过（14.95秒，含24项定向子集），覆盖两类owner、多错逆序完成和到期/取消；完整旧生产归档加相同新单测的4个反例均在预期错误保留断言处失败。4项真实PTY/Chromium/HTTP集成通过（160.97秒，包含等待另一会话Web测试的独占名额；外层164.48秒），正式Session及ASGI创建/detach生成状态，只对本次回收推进时钟与截止，核原未知lease冷读、外部deleted/verified/版本、健康项可读及显式delete核实不重发。未绕过闸门或重启共享debug；外部180秒/4GiB保护保持。
+- Ruff、compileall和strict通过；Pyright保留4条与完整HEAD的规则、完整消息、位置及最窄语句AST相同的既有诊断，改动函数和新增测试零诊断，不称类型全绿。首轮ContextVar默认值的静态告警通过提前冻结不可变datetime修正，未改业务断言。命令、指纹、原始输出/实际退出码、类型对照和作者AST自查见`out/tests/temp/resource_orphan_errors_20261030/artifacts/verification.json`；临时完整源码归档删除，正式产物保留。未验证真实等候30秒、独立Backend重启、Gateway/Web、Windows、不合作操作终止或完整shutdown期限；5.2/5.4与整体21/23保持未完成，另一会话Web/Workbench、自动化和暂存保持。

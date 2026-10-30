@@ -783,6 +783,7 @@ class WorkspaceResourceOwner:
         # 一次回收的准备、恢复、锁及删除共用入口预算；取消不等于终止证明。
         # TODO：同步阻塞与不响应取消的外部操作仍须原owner终止核实。
         deadline = timeout(30)
+        errors: list[Exception] = []
         try:
             async with deadline:
                 await self.recover(())
@@ -792,19 +793,29 @@ class WorkspaceResourceOwner:
                 except BaseException:
                     for task in tasks:
                         task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    settled = await asyncio.gather(*tasks, return_exceptions=True)
+                    # 已完成的回收错误不能被另一项的超时或取消覆盖。
+                    errors = [result for result in settled if isinstance(result, Exception)]
                     raise
                 errors = [result for result in results if isinstance(result, Exception)]
                 if errors:
                     raise ExceptionGroup("外部资源 孤儿回收存在未收敛资源", errors)
                 return [result for result in results if isinstance(result, dict)]
+        except asyncio.CancelledError as error:
+            if errors:
+                raise error from ExceptionGroup("外部资源 孤儿回收存在未收敛资源", errors)
+            raise
         except TimeoutError as error:
             if not deadline.expired():
                 raise
-            raise TimeoutError(
+            expired = TimeoutError(
                 f"外部资源孤儿回收等待超过 30 秒: workspace_id={self.workspace_id} kind={self.kind}；"
                 "保留未核实记录与原占用，未确认外部操作停止"
-            ) from error
+            )
+            expired.__cause__ = error
+            if errors:
+                raise ExceptionGroup("外部资源 孤儿回收存在未收敛资源", [*errors, expired]) from error
+            raise expired from error
 
     async def transport_grant(
         self,
