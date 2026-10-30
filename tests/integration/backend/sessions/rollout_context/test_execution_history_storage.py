@@ -35,6 +35,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -86,6 +87,7 @@ def history_target(
 ) -> Iterator[HistoryTarget]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
+    terminal_port = ports.port(5)
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     provider = next(p for p in config["llm"]["providers"] if p["id"] == "primary")
@@ -97,13 +99,13 @@ def history_target(
         business_assertion="execution-history-storage-same-workload",
     ) as replay:
         workspace = Path(integration_workspace_root_path)
-        terminal = start_terminal_backend(backend_port=ports.port(2), workspace_root=str(workspace), artifacts_dir=context.artifacts_dir)
+        terminal = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=context.artifacts_dir)
         services.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(workspace_root=workspace, artifacts_dir=context.artifacts_dir,
                                                   backend_port=ports.port(3), frontend_port=ports.port(4), backend_host="127.0.0.1")
         services.callback(close_browser_manager_processes, browser)
         mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
-                                 terminal_backend_url=f"http://127.0.0.1:{ports.port(2)}",
+                                 terminal_backend_url=f"http://127.0.0.1:{terminal_port}",
                                  browser_backend_url=f"http://127.0.0.1:{ports.port(3)}")
         target = HistoryTarget(workspace, ports.port(0), ports.port(1), replay, mount)
         gateway = None
@@ -237,20 +239,29 @@ def _wire(target: HistoryTarget, sessions: set[str]) -> list[dict[str, object]]:
             if (record := json.loads(path.read_text()))["identity"]["session_id"] in sessions]
 
 
-async def _fork(client: httpx.AsyncClient, session: str, point: dict[str, object], *, mode: str, key: str) -> dict[str, object]:
-    response = await client.post(f"/api/v1/sessions/{session}/fork-context", json={
+async def _fork(
+    client: httpx.AsyncClient, session: str, point: dict[str, object],
+    fork_deadlines: ForkDeadlineRegistry, *, mode: str, key: str,
+) -> dict[str, object]:
+    deadline = fork_deadlines.for_operation(target=str(point["main_container_uri"]), operation_key=key)
+    response = await deadline.wait(client.post(f"/api/v1/sessions/{session}/fork-context", json={
         "idempotency_key": key, "source_uri": point["source_uri"],
         "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
         "anchor_item_id": point["anchor_item_id"] if mode == "view_prefix_fork" else None,
         "mode": mode, "creation_kind": "new_session_main", "target_container_uri": point["main_container_uri"],
-    })
-    assert response.status_code == 200, response.text
-    return response.json()["data"]
+    }), "综合历史工作负载 fork HTTP 发布")
+    try:
+        assert response.status_code == 200, response.text
+        return response.json()["data"]
+    finally:
+        # HTTP 已结束；业务失败仍由原断言报告，不留活动监督器遮蔽失败。
+        fork_deadlines.complete(deadline)
 
 
 @pytest.mark.asyncio
 async def test_same_workload_tools_restart_and_storage_measurements(
     history_target: HistoryTarget, request: pytest.FixtureRequest,
+    fork_deadlines: ForkDeadlineRegistry,
 ) -> None:
     target = history_target
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -312,13 +323,15 @@ async def test_same_workload_tools_restart_and_storage_measurements(
         })
         assert point.status_code == 200, point.text
         started = perf_counter_ns()
-        child = await _fork(client, session, point.json()["data"], mode="view_prefix_fork", key="history-deep-fork")
+        child = await _fork(client, session, point.json()["data"], fork_deadlines,
+                            mode="view_prefix_fork", key="history-deep-fork")
         child_session = child["session"]["session_id"]
         child_thread = child["thread_id"]
         child_index = resolver.resolve_thread_node(child_session, child_thread) / "rollout/index.sqlite"
         point = await client.get(f"/api/v1/sessions/{child_session}/fork-source-point", params={"mode": "full_rollout_copy"})
         assert point.status_code == 200, point.text
-        grandchild = await _fork(client, child_session, point.json()["data"], mode="full_rollout_copy", key="history-chain-fork")
+        grandchild = await _fork(client, child_session, point.json()["data"], fork_deadlines,
+                                 mode="full_rollout_copy", key="history-chain-fork")
         leaf_session = grandchild["session"]["session_id"]
         leaf_thread = grandchild["thread_id"]
         leaf_index = resolver.resolve_thread_node(leaf_session, leaf_thread) / "rollout/index.sqlite"

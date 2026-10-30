@@ -1394,3 +1394,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 定向线程准入／准备排空／删除期限／catalog 单测58 passed／20.77秒；真实 catalog、canonical acceptance、active/queued/unstarted Job 与准备窗口的删除排空集成3 passed／3.99秒。均保留进程外期限及4GiB保护，集成使用跨 worktree 独占闸门。首次集成命令误指定不存在的节点，退出4且零用例执行，修正为实际节点后才取得上述结果。
 - Ruff、compileall与本 change strict validation通过；Pyright完整HEAD归档加本轮开始前源码基线24条、最终24条，23条按文件／最窄AST owner／规则／完整消息／表达式一致，另一条仅为原不完整fake从 `_JobService` 复用 `_DeleteJobService` 的类型名称变化，底层协议缺项、位置归属和表达式一致，不称类型全绿。未新增架构抽象，既有Job聚合文件由1952降为1916行，不据本片关闭7.5-F整体门。
 - 准确命令、源码前后指纹、原始输出、实际退出码、AST审查及类型对照见 `out/tests/temp/job_storage_gate_cleanup_20261030/artifacts/verification.json`；完整临时源码与验证脚本在保留正式产物后清理。他人源码和共享暂存保留。无新增Web、Windows、真实Provider、Gateway代理或OS重启验收，7.5/8.3与整体111/119保持未关闭；前端和团队专项继续按用户要求暂缓。
+
+### 2026-10-30 7.5-C/E 综合历史工作负载的固定 fork 监督补验（部分）
+
+- 原综合历史测试的两次 fork 仅有 HTTP 超时，现接入既有 `fork_deadlines` fixture；每次公开 fork 从实际调用前开始固定60秒单调期限，并由原进程外监督器保护。新增独立 `integration-execution-history-workload` 矩阵入口，整套420秒／4GiB及跨worktree集成独占闸门保持；另以整组6GiB／零swap／4核限制运行，不新增模型协议桩、调度器或产品链路。原49条业务断言的AST完全不变。
+- 正式suite为1 passed／324.04秒，外层329.10秒、exit0。经真实Gateway、Backend和model_stream生成工具循环／并行工具、深历史两代fork、摘要、三次Backend进程重启、删除两代来源后的恢复、续聊与regenerate；20次模型请求逐项核对owner、工具配对与封存request_hash。两代fork及内容收集校验阶段合计7.02秒；8阶段原始表／索引／正文／写入与恢复测量保留，不据单次运行承诺固定收益。3154项受测源码及配置前后指纹一致。
+- 首轮在装具setup因19002被9月已运行的Docker服务占用而失败，尚未执行模型或fork；没有终止该服务。终端改用本测试独占端口块内固定offset5，并在启动与mount共用同一端口变量，未添加自动回退。Ruff和矩阵注册检查通过；完整HEAD归档加开始前测试源码的Pyright基线17条、最终17条，按文件、AST owner、规则、完整消息和表达式逐项一致，不称类型全绿。
+- 准确命令、退出码、原始输出、源码与测量hash及作者AST自查见 `out/tests/temp/history_workload_deadline_20261030/artifacts/verification.json`；临时完整基线及运行脚本清理，正式产物保留。不新增Web、Windows、同步入口、真实外部Provider或独立审查证据，7.5/8.3和整体111/119保持未关闭；前端、团队延期项及他人共享暂存不纳入本片提交。
