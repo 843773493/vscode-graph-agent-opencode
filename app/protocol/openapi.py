@@ -15,15 +15,15 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
     "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],
     "SseErrorDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["SseError"],
+    "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
+    "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
 }
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
-    # 这些 DTO 经具名 adapter 改变 JSON 外形，不能按同形结构直接核对。
+    # 此 DTO 经具名 adapter 改变 JSON 外形，不能按同形结构直接核对。
     # TODO: 后续逐条迁齐其公开结构；保留内部 Pydantic 的业务职责。
     "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
-    "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
-    "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
 }
 
 

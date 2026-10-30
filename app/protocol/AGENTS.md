@@ -5,7 +5,7 @@
 ## 可修改内容
 
 - 可以维护 Python 协议生成入口、JSON/SSE/WS codec 和边界适配器。
-- `schema.py` 从 descriptor 核对同形公开 JSON 的字段、嵌套结构和类型；业务约束仍属于内部 Pydantic。
+- `schema.py` 从 descriptor 核对同形公开 JSON 的字段、嵌套结构和类型；业务联合的各分支合计必须完整覆盖协议字段，只有具备 presence 的协议字段可因分支而省略。业务取值与字段间约束仍属于内部 Pydantic。
 
 ## 不可修改内容
 
