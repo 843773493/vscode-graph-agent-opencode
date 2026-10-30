@@ -16,4 +16,4 @@
 - 通过 pytest fixture 复用已有装配，使用同名正式测试工作区与产物目录。
 - 同时验证错误归属、持久副作用和原操作恢复；传输替身不作为真实网络验收。
 - 保留正式 matrix 的进程外保护与原 fork 期限，不覆盖 deadline 实现。
-- `test_thread_rewind.py` 经真实 Gateway 消息、fork 与 main regenerate 生成历史，对照独立 Thread 的完整 SQLite/JSONL、重启历史和后继请求；复用 model_stream 与既有只读封存请求审计，不手填 checkpoint、CSM 或视图。
+- `test_thread_rewind.py` 经真实 Gateway 消息、fork 与 main regenerate/手动摘要生成历史，对照独立 Thread 的完整 SQLite/JSONL、重启历史和后继请求；复用 model_stream 与既有只读封存请求审计，不手填 checkpoint、CSM 或视图。

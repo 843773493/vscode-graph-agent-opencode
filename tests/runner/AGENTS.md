@@ -4,6 +4,8 @@
 
 `integration-thread-rewind-isolation` 经真实 Gateway/Backend 消息、fork 与 main regenerate 验证 child 完整存储和请求隔离、硬重启后的历史及 child 续聊；只读核对原封存请求与 owner/hash。固定180秒/4GiB及原集成独占闸门，不代替 compaction、Web、Windows 或完整8.3。
 
+`integration-thread-compaction-isolation` 经真实 Gateway/Backend 消息生成六轮长历史和 child，再由手动摘要入口及后继执行生成摘要，核 child 完整存储不变、硬重启及未摘要历史续聊请求。两项 Thread 视图 suite 分别选择单个用例，串行运行，各保留180秒/4GiB及原集成独占闸门，不代替 Web、Windows 或完整8.3。
+
 `integration-resource-cold-sync-retry`经正式资源API、真实Node/PTY或Chromium/HTTP及冷owner验证同步失败后显式重试原版本、未知占用保护与终态结算，固定90秒/4GiB和原集成独占闸门；不代替Backend硬重启、Gateway/Web、Windows或全shutdown验收。
 
 `integration-shared-backend-history-restart` 通过真实 Gateway／共享 Backend、双挂载 Session 和消息入口，分别验证 Backend 整组重启及 Gateway 冷重启后的完整组、原历史与续轮请求。模型复用 model_stream，固定360秒／4GiB和集成独占闸门；不代替Web、Windows、任意故障恢复或全部多工作区验收。
