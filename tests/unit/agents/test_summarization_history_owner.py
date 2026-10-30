@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from deepagents.backends import CompositeBackend
@@ -17,6 +18,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables.config import var_child_runnable_config
 from langchain_core.tools import ToolException
+from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents.deep_agent_stack import (
     _build_summarization_middleware,
@@ -30,6 +32,10 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.orchestration.activity_runtime import (
+    ActivityHandlerRegistry,
+    ActivityRuntime,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -320,3 +326,77 @@ async def test_thread_without_archive_fails_without_reading_source_or_leaking_it
         assert any(str(failures[-1]) in note for note in notes)
     else:
         assert not notes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
+async def test_archive_write_failure_settles_compaction_activity_despite_log_failure(
+    archive_case: _HistoryArchiveCase,
+    archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    log_fails: bool,
+) -> None:
+    model = FakeListChatModel(responses=["归档失败前不得调用模型"])
+    middleware = CachePreservingSummarizationMiddleware(
+        model=model, backend=archive_case.backend, trigger=("messages", 4), keep=("messages", 2),
+        compaction_preflight=_ArchivePreflight(),
+    )
+    owner = archive_case.owners[0]
+    # 普通文件阻止真实 backend 创建归档，不替换被测压缩或活动结算。
+    blocker = archive_case.session_dir / "context"
+    blocker.write_text("保留无法作为目录的原件", encoding="utf-8")
+    writer = AsyncMock()
+    writer.turn_stream_id = "compaction-failure-stream"
+    writer.commit.side_effect = lambda kind, payload: {"type": kind, "payload": payload}
+    activity = ActivityRuntime(writer, ActivityHandlerRegistry())
+    monkeypatch.setattr("app.agents.summarization.middleware.current_activity_runtime", lambda: activity)
+    messages: list[AnyMessage] = []
+    for index in range(5):
+        messages.extend([HumanMessage(content=f"原始输入{index}"), AIMessage(content="原始回答" * 60)])
+    request = ModelRequest(
+        model=model, messages=messages, state={"messages": messages},
+        runtime=Runtime(execution_info=ExecutionInfo(
+            checkpoint_id="archive-failure-checkpoint", checkpoint_ns="", task_id="archive-failure-task",
+            thread_id=owner.thread_id,
+        )),
+    )
+    sink_blocker = tmp_path / "compaction-log-secret"
+    sink_blocker.write_text("保留日志冲突原件", encoding="utf-8")
+    destination = sink_blocker / "service.log"
+    capture = caplog.handler.emit
+    failures: list[OSError] = []
+
+    def emit(record: logging.LogRecord) -> None:
+        capture(record)
+        if log_fails and record.name in {"app.agents.summarization.middleware", "app.core.failures"}:
+            try:
+                destination.write_text(record.getMessage(), encoding="utf-8")
+            except OSError as error:
+                failures.append(error)
+                raise
+
+    monkeypatch.setattr(caplog.handler, "emit", emit)
+
+    async def handler(_request: ModelRequest) -> ModelResponse:
+        pytest.fail("归档没有保存成功时不得调用摘要模型")
+
+    with archive_scope(owner), pytest.raises(RuntimeError, match="缓存优先压缩无法保存") as caught:
+        await middleware.awrap_model_call(request, handler)
+    started, failed = writer.commit.await_args_list
+    assert started.args[0] == "activity.started" and failed.args[0] == "activity.failed"
+    initial, final = started.args[1], failed.args[1]
+    assert initial["activity_id"] == final["activity_id"] and final["kind"] == "context.compaction"
+    assert final["status"] == "failed" and final["outcome"] == "outcome_unknown"
+    assert final["summary"] == "活动处理失败: phase=context.compaction, error=RuntimeError"
+    assert final["detail"] == {"phase": "failed"}
+    assert any(record.exc_info and record.exc_info[1] is caught.value for record in caplog.records)
+    if log_fails:
+        assert len(failures) == 1 and failures[0].errno == errno.ENOTDIR
+        assert any(str(failures[0]) in note for note in caught.value.__notes__)
+    else:
+        assert not failures and not getattr(caught.value, "__notes__", [])
+    assert "compaction-log-secret" not in str(caught.value)
+    assert str(archive_case.session_dir) not in str(final)
+    assert blocker.read_text(encoding="utf-8") == "保留无法作为目录的原件"

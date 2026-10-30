@@ -1,5 +1,9 @@
 当前实施范围（2026-10-28）：51/53。目录根、Skill 包导航、文件与 Session/Thread 寻址、目标解析及具名例外已实施，具体边界和证据以各任务最新收据为准。剩余 2.2/7.2 是普通响应、持久化、解析与模型引用的整体不变量核验；下文早期“未实施”或 UNMET 只记录当时状态，不据此重复开发或补勾总门。
 
+2026-10-30 压缩活动失败结算切片（2.2/7.2部分收口）：原 awrap_model_call 异常出口复用 failure_detail，日志次错附于原错误，活动仍发布原 context.compaction 专属失败事件并原样抛出主错；公开 summary／detail／outcome 合同不变，不合并同步异步实现。旧生产单测真实日志 ENOTDIR 反例1 failed／正常日志1 passed；有效产品反例确认专属失败事件缺失、Job 主错被日志错替换。通用流结束原本会补结活动，未将问题夸大为永久运行态。
+
+最终73项相关单测及真实Agent／ASGI消息场景通过；产品入口生成六轮历史，真实目录／日志冲突后核原错误、活动事件、冷store按精确owner打开后的持久事件，再解除目录故障由原会话实际压缩及续跑，原失败事件不变，9次封存请求owner／canonical／hash审计通过。新suite独立180秒／4GiB，读取错误suite仍选原2场景、保留120秒／4GiB和集成闸门。首次装具遗漏usage未触发压缩、首个候选冷store未打开流均保留失败原件，不计产品通过；修正装具未改生产阈值或业务断言。Ruff／编译／矩阵注册通过，真实Pyright与HEAD逐项比较保留原产品3条及原单测10条诊断、新集成零诊断；他人已补Electron草案delta后全量strict54/54。准确命令、源码指纹、原始输出、失败归因及范围见 `out/tests/temp/compaction_activity_failure_20261030/artifacts/verification.json`。仅为新store冷读，不代独立Backend／Gateway／真实HTTP／Windows或整体URI验收；2.2/7.2、原SQLite关闭交接TODO及前端／协作延期项保持。
+
 2026-10-30 压缩归档读取失败切片（2.2/7.2部分收口）：原同步／异步工具共用出口复用 failure_detail，backend 错误正文留在诊断及直接 cause，真实日志 ENOTDIR 次错附于原 cause；公开 detail-unavailable 文本、精确 thread owner 和不回读其它 thread 的合同不变。旧生产4项单测失败，真实消息入口还复现日志次错使整个 Job 失败。修复后66项相关单测及2项 Agent／ASGI 集成通过，核 canonical 工具正文、canonical／协议调用配对、后继模型请求、同会话重试及4次封存请求的 owner/hash；不手填归档或执行状态，模型复用 model_stream。
 
 Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，末轮因他人新建的add-electron-history-cache草案未完成变为53通过／1失败，不介入前端草案。真实Pyright原单测10条诊断与HEAD逐项相同，产品及新集成文件零诊断。首次集成测试误把canonical调用ID用于协议配对，按保留请求原件更正后分别核对，未放宽身份断言；首次组合在60秒总上限退出124不计通过，两个场景分开保留60秒／4GiB及原集成闸门均正常退出。命令、指纹、红绿原件和限制见 `out/tests/temp/compaction_history_failure_20261030/artifacts/verification.json`。不代Gateway、真实HTTP、进程重启、Windows或全部归档故障验收，2.2/7.2保持未勾，前端及协作延期项不动。

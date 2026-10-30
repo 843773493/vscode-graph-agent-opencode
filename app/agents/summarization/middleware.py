@@ -5,7 +5,6 @@ awrap_model_call/_awrap_model_call_impl 是对等实现（语义差异只登记�
 
 from __future__ import annotations
 
-import logging
 from collections.abc import (
     Awaitable,
     Callable,
@@ -61,6 +60,7 @@ from app.agents.summarization.state import (
     SummaryTextError,
     SummaryToolCallError,
 )
+from app.core.failures import failure_detail
 from app.core.identifier import create_uuid_hex
 from app.core.model_request_context import (
     SummaryCandidateScope,
@@ -83,8 +83,6 @@ from app.services.orchestration.activity_runtime import (
     activity_failure_message,
     current_activity_runtime,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware):
@@ -662,7 +660,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 )
             )
         except Exception as error:
-            logger.exception("上下文压缩活动失败: activity_id=%s", activity_id)
+            failure_detail(error, stage="context.compaction", label=f"上下文压缩活动失败: activity_id={activity_id}")
             await activity_runtime.failed(
                 activity_id=activity_id,
                 kind="context.compaction",
