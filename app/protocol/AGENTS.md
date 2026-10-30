@@ -5,6 +5,7 @@
 ## 可修改内容
 
 - 可以维护 Python 协议生成入口、JSON/SSE/WS codec 和边界适配器。
+- `schema.py` 从 descriptor 核对同形公开 JSON 的字段、嵌套结构和类型；业务约束仍属于内部 Pydantic。
 
 ## 不可修改内容
 
@@ -15,3 +16,4 @@
 
 - codec 负责线格式转换，adapter 负责连接业务模型与协议模型。
 - 解析失败必须抛出带字段和边界信息的明确错误。
+- 能从 descriptor 推导的字段与枚举映射不逐项复制；具名业务别名和不同外形的 adapter 明确保留业务职责。

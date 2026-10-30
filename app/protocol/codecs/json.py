@@ -2,12 +2,53 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from functools import cache
 from typing import cast
 
 from google.protobuf import json_format
+from google.protobuf.descriptor import Descriptor, EnumDescriptor
 from google.protobuf.message import Message
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
+
+
+@cache
+def _enum_names(descriptor: EnumDescriptor, to_proto: bool) -> Mapping[str, str]:
+    """枚举值的公共小写名称由 proto 的零值前缀推导。"""
+    zero = descriptor.values_by_number[0].name
+    if not zero.endswith("_UNSPECIFIED"):
+        raise ValueError(f"公开枚举缺少 UNSPECIFIED 零值: {descriptor.full_name}")
+    prefix = zero.removesuffix("UNSPECIFIED")
+    names = {value.name.removeprefix(prefix).lower(): value.name
+             for value in descriptor.values if value.number != 0}
+    return names if to_proto else {value: key for key, value in names.items()}
+
+
+def map_enum_values(
+    payload: Mapping[str, object], descriptor: Descriptor, *, to_proto: bool,
+) -> dict[str, object]:
+    """按字段的真实枚举类型递归转换；Struct 正文和业务别名不参与推导。"""
+    result = dict(payload)
+    for field in descriptor.fields:
+        value = result.get(field.name)
+        if field.enum_type is not None:
+            names = _enum_names(field.enum_type, to_proto)
+            if field.is_repeated and isinstance(value, list):
+                result[field.name] = [names.get(item, item) if isinstance(item, str) else item for item in value]
+            elif isinstance(value, str):
+                result[field.name] = names.get(value, value)
+        elif field.message_type is not None and not field.message_type.full_name.startswith("google.protobuf."):
+            if field.message_type.GetOptions().map_entry:
+                item_type = field.message_type.fields_by_name["value"].message_type
+                if item_type is not None and isinstance(value, Mapping):
+                    result[field.name] = {key: map_enum_values(item, item_type, to_proto=to_proto)
+                                          if isinstance(item, Mapping) else item for key, item in value.items()}
+            elif field.is_repeated and isinstance(value, list):
+                result[field.name] = [map_enum_values(item, field.message_type, to_proto=to_proto)
+                                      if isinstance(item, Mapping) else item for item in value]
+            elif isinstance(value, Mapping):
+                result[field.name] = map_enum_values(value, field.message_type, to_proto=to_proto)
+    return result
 
 
 def message_to_json(message: Message) -> dict[str, object]:

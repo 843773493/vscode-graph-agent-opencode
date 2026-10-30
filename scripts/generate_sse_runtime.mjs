@@ -1,16 +1,20 @@
 // 该脚本生成 SSE JSON schema 与无运行时依赖的校验器。
-// SSE 的 Python Pydantic 模型仍用于后端运行时校验，但不再生成公开 TypeScript DTO。
-import { readFile, writeFile } from "node:fs/promises";
+// 同形公开结构由 proto 核对，Pydantic 提供业务约束。
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
 const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const arguments_ = process.argv.slice(2);
+const outputRootIndex = arguments_.indexOf("--output-root");
+const outputRoot = outputRootIndex < 0 ? projectRoot : path.resolve(arguments_[outputRootIndex + 1]);
+const descriptorIndex = arguments_.indexOf("--descriptor-set");
 const pythonExecutable = process.platform === "win32"
   ? path.join(projectRoot, ".venv", "Scripts", "python.exe")
   : path.join(projectRoot, ".venv", "bin", "python");
 const schemaPath = path.join(
-  projectRoot,
+  outputRoot,
   "src",
   "clients",
   "web",
@@ -61,8 +65,8 @@ async function generateValidators() {
     ajv.addSchema(schema, schemaId);
     exportsByName[`validate${name}`] = schemaId;
   }
-  const outputPath = path.join(projectRoot, "src", "shared", "sseRuntimeValidators.js");
-  const declarationPath = path.join(projectRoot, "src", "shared", "sseRuntimeValidators.d.ts");
+  const outputPath = path.join(outputRoot, "src", "shared", "sseRuntimeValidators.js");
+  const declarationPath = path.join(outputRoot, "src", "shared", "sseRuntimeValidators.d.ts");
   const validatorSource = standaloneCode(ajv, exportsByName)
     .replace(
       /const (\w+) = require\("([^"]+)"\)\.default;/g,
@@ -87,6 +91,7 @@ async function generateValidators() {
   if (validatorSource.includes("require(") || validatorSource.includes('from "ajv/')) {
     throw new Error("生成的 SSE runtime validator 仍依赖 Ajv runtime");
   }
+  await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `// 该文件由程序生成，请勿手写。\n${validatorSource}\n`, "utf8");
   await writeFile(
     declarationPath,
@@ -97,5 +102,6 @@ async function generateValidators() {
   );
 }
 
-await run(pythonExecutable, ["-m", "scripts.export_sse_runtime_schemas"]);
+await run(pythonExecutable, ["-m", "scripts.export_sse_runtime_schemas", "--output-root", outputRoot,
+  ...(descriptorIndex < 0 ? [] : ["--descriptor-set", arguments_[descriptorIndex + 1]])]);
 await generateValidators();

@@ -1,5 +1,5 @@
 // 该脚本负责从 proto/ 生成各运行时的公开协议绑定。
-import { access, cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -44,7 +44,11 @@ const generatedRoots = [
   },
   {
     directory: path.join(projectRoot, "src", "clients", "web", "src", "types", "protocol_generated"),
-    extensions: [".ts"],
+    extensions: [".ts", ".json"],
+  },
+  {
+    directory: path.join(projectRoot, "src", "shared"),
+    files: ["sseRuntimeValidators.js", "sseRuntimeValidators.d.ts"],
   },
 ];
 
@@ -70,7 +74,8 @@ function run(command, args) {
   });
 }
 
-async function removeGeneratedFiles(directory, extensions) {
+async function generatedFiles(directory, root, relative = "") {
+  const result = new Map();
   const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") {
       return [];
@@ -78,15 +83,17 @@ async function removeGeneratedFiles(directory, extensions) {
     throw error;
   });
   for (const entry of entries) {
+    const name = path.join(relative, entry.name);
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      await removeGeneratedFiles(entryPath, extensions);
+      for (const [key, value] of await generatedFiles(entryPath, root, name)) result.set(key, value);
       continue;
     }
-    if (extensions.some((extension) => entry.name.endsWith(extension))) {
-      await rm(entryPath, { force: true });
+    if (root.files ? root.files.includes(name) : root.extensions.some((extension) => entry.name.endsWith(extension))) {
+      result.set(name, await readFile(entryPath));
     }
   }
+  return result;
 }
 
 async function addPythonPackageMarkers(directory) {
@@ -111,24 +118,22 @@ async function main() {
   await requirePathExists(bufExecutable);
 
   await run(bufExecutable, ["lint"]);
-  await run(bufExecutable, ["build"]);
   if (breakingAgainst) {
     await run(bufExecutable, ["breaking", "--against", breakingAgainst]);
-  }
-
-  if (checkOnly) {
-    return;
   }
 
   await mkdir(stagingRoot, { recursive: true });
   const stagingDirectory = await mkdtemp(path.join(stagingRoot, "protocol-"));
   try {
+    const descriptorSet = path.join(stagingDirectory, "protocol.binpb");
+    await run(bufExecutable, ["build", "--as-file-descriptor-set", "--output", descriptorSet]);
     // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
     await run(bufExecutable, ["generate", "--output", stagingDirectory]);
     await addPythonPackageMarkers(
       path.join(stagingDirectory, path.relative(projectRoot, pythonOutputRoot)),
     );
-    await run(process.execPath, [path.join(projectRoot, "scripts", "generate_sse_runtime.mjs")]);
+    await run(process.execPath, [path.join(projectRoot, "scripts", "generate_sse_runtime.mjs"),
+      "--output-root", stagingDirectory, "--descriptor-set", descriptorSet]);
     const stagedRoots = generatedRoots.map((generatedRoot) => ({
       ...generatedRoot,
       generated: path.join(stagingDirectory, path.relative(projectRoot, generatedRoot.directory)),
@@ -136,10 +141,26 @@ async function main() {
     for (const { generated } of stagedRoots) {
       await access(generated, constants.R_OK);
     }
-    for (const { directory, extensions, generated } of stagedRoots) {
-      await mkdir(directory, { recursive: true });
-      await removeGeneratedFiles(directory, extensions);
-      await cp(generated, directory, { recursive: true });
+    const differences = [];
+    for (const root of stagedRoots) {
+      const expected = await generatedFiles(root.generated, root);
+      const actual = await generatedFiles(root.directory, root);
+      for (const name of new Set([...expected.keys(), ...actual.keys()])) {
+        const target = path.join(root.directory, name);
+        const content = expected.get(name);
+        if (content !== undefined && actual.has(name) && content.equals(actual.get(name))) continue;
+        differences.push(path.relative(projectRoot, target));
+        if (!checkOnly) {
+          if (content === undefined) await rm(target);
+          else {
+            await mkdir(path.dirname(target), { recursive: true });
+            await cp(path.join(root.generated, name), target);
+          }
+        }
+      }
+    }
+    if (checkOnly && differences.length) {
+      throw new Error(`协议生成产物不一致，请运行 bun run gen:protocol：\n${differences.join("\n")}`);
     }
   } finally {
     await rm(stagingDirectory, { recursive: true, force: true });

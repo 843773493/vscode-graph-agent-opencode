@@ -8,7 +8,11 @@ from google.protobuf import json_format
 from google.protobuf.message import Message
 
 from app.core.identifier import validate_session_id, validate_thread_id
-from app.protocol.codecs.json import message_to_json, timestamp_from_datetime
+from app.protocol.codecs.json import (
+    map_enum_values,
+    message_to_json,
+    timestamp_from_datetime,
+)
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
 _PAYLOAD_FIELDS: dict[str, str] = {
@@ -49,79 +53,6 @@ _IDENTITY_FIELDS = (
     "tool_attempt_id",
 )
 
-# encode 边界：内部小写枚举 -> 公共 protobuf 枚举名。
-_ENUM_MAPS: dict[str, dict[str, str]] = {
-    "status": {
-        "open": "STREAM_STATUS_OPEN",
-        "interrupting": "STREAM_STATUS_INTERRUPTING",
-        "completed": "STREAM_STATUS_COMPLETED",
-        "interrupted": "STREAM_STATUS_INTERRUPTED",
-        "failed": "STREAM_STATUS_FAILED",
-    },
-    "outcome": {
-        "accepted": "MODEL_CALL_OUTCOME_ACCEPTED",
-        "validation_failed": "MODEL_CALL_OUTCOME_VALIDATION_FAILED",
-        "upstream_error": "MODEL_CALL_OUTCOME_UPSTREAM_ERROR",
-        "execution_lost": "MODEL_CALL_OUTCOME_EXECUTION_LOST",
-        "user_interrupt": "MODEL_CALL_OUTCOME_USER_INTERRUPT",
-    },
-    "status_tool": {
-        "running": "TOOL_EXECUTION_STATUS_RUNNING",
-        "completed": "TOOL_EXECUTION_STATUS_COMPLETED",
-        # TODO: 仅为已有事件日志提供读取兼容；新写入统一使用 completed。
-        "succeeded": "TOOL_EXECUTION_STATUS_COMPLETED",
-        "failed": "TOOL_EXECUTION_STATUS_FAILED",
-    },
-    "outcome_tool": {
-        "success": "TOOL_EXECUTION_OUTCOME_SUCCESS",
-        "provider_error": "TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR",
-        "execution_lost": "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST",
-        "outcome_unknown": "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN",
-    },
-    "activity_status": {
-        "running": "ACTIVITY_STATUS_RUNNING",
-        "waiting": "ACTIVITY_STATUS_WAITING",
-        "stopping": "ACTIVITY_STATUS_STOPPING",
-        "completed": "ACTIVITY_STATUS_COMPLETED",
-        "failed": "ACTIVITY_STATUS_FAILED",
-        "unknown": "ACTIVITY_STATUS_UNKNOWN",
-    },
-    "activity_outcome": {
-        "success": "ACTIVITY_OUTCOME_SUCCESS",
-        "user_interrupt": "ACTIVITY_OUTCOME_USER_INTERRUPT",
-        "provider_error": "ACTIVITY_OUTCOME_PROVIDER_ERROR",
-        "execution_lost": "ACTIVITY_OUTCOME_EXECUTION_LOST",
-        "outcome_unknown": "ACTIVITY_OUTCOME_OUTCOME_UNKNOWN",
-    },
-    "operation": {
-        "append": "BLOCK_DELTA_OPERATION_APPEND",
-        "item_upsert": "BLOCK_DELTA_OPERATION_ITEM_UPSERT",
-        "item_patch": "BLOCK_DELTA_OPERATION_ITEM_PATCH",
-        "redacted": "BLOCK_DELTA_OPERATION_REDACTED",
-    },
-}
-
-# decode 边界：公共 protobuf 枚举名 -> 内部小写枚举。除 tool_status 外均为
-# _ENUM_MAPS 的反向投影，保持单一来源。
-_DENORM_MAPS: dict[str, dict[str, str]] = {
-    "status": {enum: name for name, enum in _ENUM_MAPS["status"].items()},
-    "outcome": {enum: name for name, enum in _ENUM_MAPS["outcome"].items()},
-    "operation": {enum: name for name, enum in _ENUM_MAPS["operation"].items()},
-    # succeeded 与 completed 在 encode 侧同值，反向投影不可逆，这里显式声明。
-    "tool_status": {
-        "TOOL_EXECUTION_STATUS_RUNNING": "running",
-        "TOOL_EXECUTION_STATUS_COMPLETED": "completed",
-        "TOOL_EXECUTION_STATUS_FAILED": "failed",
-    },
-    "tool_outcome": {enum: name for name, enum in _ENUM_MAPS["outcome_tool"].items()},
-    "activity_status": {
-        enum: name for name, enum in _ENUM_MAPS["activity_status"].items()
-    },
-    "activity_outcome": {
-        enum: name for name, enum in _ENUM_MAPS["activity_outcome"].items()
-    },
-}
-
 
 def message_stream_to_proto(
     value: Mapping[str, Any],
@@ -156,11 +87,6 @@ def message_stream_to_proto(
             if not isinstance(field_value, str) or not field_value:
                 raise TypeError(f"消息流 {field_name} 必须是非空字符串")
             setattr(event, field_name, field_value)
-    job_id = value.get("job_id")
-    if job_id is not None:
-        if not isinstance(job_id, str) or not job_id:
-            raise TypeError("消息流 job_id 必须是非空字符串")
-        event.job_id = job_id
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         raise TypeError(f"消息流 payload 必须是对象: type={event.type}")
@@ -191,7 +117,7 @@ def message_stream_to_proto(
     if event.type == "stream.snapshot" and isinstance(payload.get("snapshot"), Mapping):
         payload = cast(Mapping[str, Any], payload["snapshot"])
     json_format.ParseDict(
-        _normalize_payload(event.type, payload),
+        map_enum_values(_normalize_payload(event.type, payload), target.DESCRIPTOR, to_proto=True),
         target,
         ignore_unknown_fields=False,
     )
@@ -206,11 +132,9 @@ def message_stream_to_json(
     if payload_field is None:
         raise ValueError(f"消息流事件缺少 payload: type={value.type}")
     payload_message = cast(Message, getattr(value, payload_field))
-    payload = message_to_json(payload_message)
+    payload = map_enum_values(message_to_json(payload_message), payload_message.DESCRIPTOR, to_proto=False)
     if value.type == "stream.snapshot":
         payload = _denormalize_snapshot(payload)
-    else:
-        payload = _denormalize_payload(value.type, payload)
     result: dict[str, Any] = {
         "event_id": value.event_id,
         "session_id": value.session_id,
@@ -251,25 +175,6 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
         if event_type == "stream.snapshot"
         else dict(payload)
     )
-    enum_maps = _ENUM_MAPS
-    if (
-        event_type in {"stream.opened", "stream.completed", "stream.interrupted"}
-        and isinstance(normalized.get("status"), str)
-    ):
-        normalized["status"] = enum_maps["status"].get(
-            normalized["status"], normalized["status"]
-        )
-    if (
-        event_type in {"model.completed", "model.failed"}
-        and isinstance(normalized.get("outcome"), str)
-    ):
-        normalized["outcome"] = enum_maps["outcome"].get(
-            normalized["outcome"], normalized["outcome"]
-        )
-    if event_type == "block.delta" and isinstance(normalized.get("operation"), str):
-        normalized["operation"] = enum_maps["operation"].get(
-            normalized["operation"], normalized["operation"]
-        )
     # TODO: 公共 message.v1 schema 增加这些字段后再移除该边界投影。
     # status 属于内部 tool-call 聚合状态，ToolCallDelta 只承载参数增量。
     if event_type == "tool_call.delta":
@@ -278,53 +183,24 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
         # ToolCallCompleted 是参数生命周期事件，公共 message.v1 没有 error
         # 字段；失败原因由对应的 ToolCompleted/StreamFailure 承载。
         normalized.pop("error", None)
-    if event_type == "tool.completed" and isinstance(normalized.get("status"), str):
-        if normalized["status"] == "outcome_unknown":
-            normalized["status"] = "completed"
-            normalized.setdefault("outcome", "outcome_unknown")
-        normalized["status"] = enum_maps["status_tool"].get(
-            normalized["status"], normalized["status"]
-        )
-    if event_type == "tool.completed" and isinstance(normalized.get("outcome"), str):
-        normalized["outcome"] = enum_maps["outcome_tool"].get(
-            normalized["outcome"], normalized["outcome"]
-        )
+    if event_type == "tool.completed":
+        _normalize_tool_status(normalized)
     if event_type.startswith("activity."):
-        # Activity 的完成原因属于内部诊断字段，message.v1 公共 Activity
-        # 尚未声明该字段，不能把它交给严格 protobuf 解析。
+        # Activity 的完成原因属于内部诊断，公共 proto 未声明。
         normalized.pop("completion_reason", None)
-        if isinstance(normalized.get("status"), str):
-            normalized["status"] = enum_maps["activity_status"].get(
-                normalized["status"], normalized["status"]
-            )
-        if isinstance(normalized.get("outcome"), str):
-            normalized["outcome"] = enum_maps["activity_outcome"].get(
-                normalized["outcome"], normalized["outcome"]
-            )
     if event_type == "stream.snapshot":
         snapshot = normalized.get("snapshot", normalized)
         if isinstance(snapshot, dict):
             for envelope_field in ("session_id", "thread_id", "turn_id", "turn_stream_id", "job_id"):
                 snapshot.pop(envelope_field, None)
-            if isinstance(snapshot.get("stream_status"), str):
-                snapshot["stream_status"] = enum_maps["status"].get(
-                    snapshot["stream_status"], snapshot["stream_status"]
-                )
             failure = snapshot.get("failure")
             if isinstance(failure, dict):
                 # model.failed 事件历史上会把内部模型错误暂存到顶层
                 # failure；公共快照这里实际要求的是 StreamFailure，不能
                 # 把 model_call_id、attempt 等内部字段直接交给 protobuf。
-                public_failure = {
-                    key: failure[key]
-                    for key in (
-                        "code",
-                        "message",
-                        "after_interrupt_requested",
-                        "resumable",
-                    )
-                    if key in failure
-                }
+                public_failure = {field.name: failure[field.name]
+                                  for field in message_stream_pb2.StreamFailure.DESCRIPTOR.fields
+                                  if field.name in failure}
                 if "code" not in public_failure:
                     error_code = failure.get("error_code")
                     public_failure["code"] = (
@@ -348,17 +224,7 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                 # tool execution 聚合需要记录模型调用归属，但公共
                 # ToolExecutionSnapshot 没有该内部对账字段。
                 execution.pop("model_call_id", None)
-                if isinstance(execution.get("status"), str):
-                    if execution["status"] == "outcome_unknown":
-                        execution["status"] = "completed"
-                        execution.setdefault("outcome", "outcome_unknown")
-                    execution["status"] = enum_maps["status_tool"].get(
-                        execution["status"], execution["status"]
-                    )
-                if isinstance(execution.get("outcome"), str):
-                    execution["outcome"] = enum_maps["outcome_tool"].get(
-                        execution["outcome"], execution["outcome"]
-                    )
+                _normalize_tool_status(execution)
             # TODO: ModelCallSnapshot 只公开生命周期和结果状态；错误详情由
             # StreamFailure 承载，不能把 ModelFailed 的内部字段泄漏进 snapshot。
             for model_call in snapshot.get("model_calls", []):
@@ -382,14 +248,6 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     # Activity 的完成原因属于内部诊断字段，公共快照只投影
                     # schema 已声明的生命周期、结果和时间字段。
                     activity.pop("completion_reason", None)
-                    if isinstance(activity.get("status"), str):
-                        activity["status"] = enum_maps["activity_status"].get(
-                            activity["status"], activity["status"]
-                        )
-                    if isinstance(activity.get("outcome"), str):
-                        activity["outcome"] = enum_maps["activity_outcome"].get(
-                            activity["outcome"], activity["outcome"]
-                        )
             for block in snapshot.get("blocks", []):
                 if isinstance(block, dict):
                     # model_call_id 是内部 checkpoint 的对账字段，公共
@@ -412,56 +270,17 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
     return normalized
 
 
-def _denormalize_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    status_map = _DENORM_MAPS["status"]
-    outcome_map = _DENORM_MAPS["outcome"]
-    operation_map = _DENORM_MAPS["operation"]
-    tool_status_map = _DENORM_MAPS["tool_status"]
-    tool_outcome_map = _DENORM_MAPS["tool_outcome"]
-    if (
-        event_type in {"stream.opened", "stream.completed", "stream.interrupted"}
-        and isinstance(payload.get("status"), str)
-    ):
-        payload["status"] = status_map.get(payload["status"], payload["status"])
-    if (
-        event_type in {"model.completed", "model.failed"}
-        and isinstance(payload.get("outcome"), str)
-    ):
-        payload["outcome"] = outcome_map.get(
-            payload["outcome"], payload["outcome"]
-        )
-    if event_type == "block.delta" and isinstance(payload.get("operation"), str):
-        payload["operation"] = operation_map.get(
-            payload["operation"], payload["operation"]
-        )
-    if event_type == "tool.completed" and isinstance(payload.get("status"), str):
-        payload["status"] = tool_status_map.get(payload["status"], payload["status"])
-    if event_type == "tool.completed" and isinstance(payload.get("outcome"), str):
-        payload["outcome"] = tool_outcome_map.get(payload["outcome"], payload["outcome"])
-    if event_type.startswith("activity."):
-        activity_status_map = _DENORM_MAPS["activity_status"]
-        activity_outcome_map = _DENORM_MAPS["activity_outcome"]
-        if isinstance(payload.get("status"), str):
-            payload["status"] = activity_status_map.get(
-                payload["status"], payload["status"]
-            )
-        if isinstance(payload.get("outcome"), str):
-            payload["outcome"] = activity_outcome_map.get(
-                payload["outcome"], payload["outcome"]
-            )
-    return payload
+def _normalize_tool_status(payload: dict[str, Any]) -> None:
+    # outcome_unknown 的状态/结果拆分属于业务语义，不能从 enum 名称推导。
+    if payload.get("status") == "outcome_unknown":
+        payload["status"] = "completed"
+        payload.setdefault("outcome", "outcome_unknown")
+    # TODO: 仅为已有事件日志提供读取兼容；新写入统一使用 completed。
+    elif payload.get("status") == "succeeded":
+        payload["status"] = "completed"
 
 
 def _denormalize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    status_map = _DENORM_MAPS["status"]
-    tool_status_map = _DENORM_MAPS["tool_status"]
-    activity_status_map = _DENORM_MAPS["activity_status"]
-    activity_outcome_map = _DENORM_MAPS["activity_outcome"]
-    tool_outcome_map = _DENORM_MAPS["tool_outcome"]
-    if isinstance(payload.get("stream_status"), str):
-        payload["stream_status"] = status_map.get(
-            payload["stream_status"], payload["stream_status"]
-        )
     snapshot_seq = payload.get("snapshot_seq")
     if isinstance(snapshot_seq, str) and snapshot_seq.isdecimal():
         payload["snapshot_seq"] = int(snapshot_seq)
@@ -486,24 +305,4 @@ def _denormalize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
             "request_id": interrupt_request_id,
             "status": interrupt_status,
         }
-    for execution in payload.get("tool_executions", []):
-        if isinstance(execution, dict) and isinstance(execution.get("status"), str):
-            execution["status"] = tool_status_map.get(
-                execution["status"], execution["status"]
-            )
-        if isinstance(execution, dict) and isinstance(execution.get("outcome"), str):
-            execution["outcome"] = tool_outcome_map.get(
-                execution["outcome"], execution["outcome"]
-            )
-    for activity in payload.get("activities", []):
-        if not isinstance(activity, dict):
-            continue
-        if isinstance(activity.get("status"), str):
-            activity["status"] = activity_status_map.get(
-                activity["status"], activity["status"]
-            )
-        if isinstance(activity.get("outcome"), str):
-            activity["outcome"] = activity_outcome_map.get(
-                activity["outcome"], activity["outcome"]
-            )
     return payload
