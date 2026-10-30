@@ -16,26 +16,26 @@ from app.protocol.codecs.json import (
     timestamp_from_datetime,
 )
 from app.protocol.generated.boxteam.workspace.v2 import (
+    job_pb2,
     session_interaction_pb2,
     session_stream_pb2,
 )
 from app.schemas.internal_v2.session_interaction import (
     JobProgressDTO,
-    JobStatusChangedExecutionEventDTO,
-    JobStepUpdatedExecutionEventDTO,
-    JobUpdatedExecutionEventDTO,
-    MessageUpdatedExecutionEventDTO,
-    SessionCompletedExecutionEventDTO,
-    SessionErrorExecutionEventDTO,
     SessionExecutionEventBaseDTO,
     SessionExecutionSseDTO,
     SessionStatusChangedExecutionEventDTO,
-    TraceObservedExecutionEventDTO,
 )
 from app.schemas.internal_v2.session_status import (
     SessionObservationStateDTO,
     SessionStatusDTO,
 )
+
+# 事件名与 oneof 字段遵循同一命名合同，不再逐类维护派发表。
+_PAYLOAD_FIELDS = {
+    field.name.replace("_", "."): field.name
+    for field in session_interaction_pb2.SessionExecutionEvent.DESCRIPTOR.oneofs_by_name["payload"].fields
+}
 
 
 def _parse_model(model: BaseModel, target: Message) -> None:
@@ -98,24 +98,13 @@ def session_sse_to_proto(value: SessionExecutionSseDTO) -> session_stream_pb2.Se
         type=source_event.type,
         header=_header(source_event),
     )
-    if isinstance(source_event, MessageUpdatedExecutionEventDTO):
-        _parse_model(source_event.payload, event.message_updated)
-    elif isinstance(source_event, JobUpdatedExecutionEventDTO):
-        _parse_model(source_event.payload, event.job_updated)
-    elif isinstance(source_event, JobStepUpdatedExecutionEventDTO):
-        _parse_model(source_event.payload, event.job_step_updated)
-    elif isinstance(source_event, JobStatusChangedExecutionEventDTO):
-        _parse_model(source_event.payload, event.job_status_changed)
-    elif isinstance(source_event, SessionStatusChangedExecutionEventDTO):
-        event.session_status_changed.CopyFrom(_session_status(source_event.payload))
-    elif isinstance(source_event, SessionCompletedExecutionEventDTO):
-        _parse_model(source_event.payload, event.session_completed)
-    elif isinstance(source_event, SessionErrorExecutionEventDTO):
-        _parse_model(source_event.payload, event.session_error)
-    elif isinstance(source_event, TraceObservedExecutionEventDTO):
-        _parse_model(source_event.payload, event.trace_observed)
-    else:
+    payload_field = _PAYLOAD_FIELDS.get(source_event.type)
+    if payload_field is None:
         raise TypeError(f"未支持的 Workspace SSE 事件 DTO: {type(source_event).__name__}")
+    if isinstance(source_event, SessionStatusChangedExecutionEventDTO):
+        event.session_status_changed.CopyFrom(_session_status(source_event.payload))
+    else:
+        _parse_model(source_event.payload, getattr(event, payload_field))
 
     return session_stream_pb2.SessionExecutionSse(
         event=event,
@@ -128,13 +117,13 @@ def _event_payload_to_json(event: session_interaction_pb2.SessionExecutionEvent)
     payload_case = event.WhichOneof("payload")
     if payload_case is None:
         raise ValueError(f"Workspace SSE 事件缺少 payload: type={event.type}")
-    if payload_case in {"job_updated", "job_status_changed", "session_completed"}:
-        value = getattr(event, payload_case)
+    value = getattr(event, payload_case)
+    if isinstance(value, job_pb2.JobProgress):
         payload = json_format.MessageToDict(
             value, preserving_proto_field_name=True, always_print_fields_with_no_presence=True,
         )
         return JobProgressDTO.model_validate(
-            map_enum_values(payload, value.DESCRIPTOR, to_proto=False),
+            map_enum_values(payload, cast(Descriptor, value.DESCRIPTOR), to_proto=False),
         ).model_dump(mode="json")
     if payload_case == "session_status_changed":
         value = event.session_status_changed
@@ -158,11 +147,9 @@ def _event_payload_to_json(event: session_interaction_pb2.SessionExecutionEvent)
     payload = cast(dict[str, object], json_format.MessageToDict(
         payload_message,
         preserving_proto_field_name=True,
-        always_print_fields_with_no_presence=False,
+        always_print_fields_with_no_presence=True,
     ))
     if payload_case == "message_updated":
-        if "attachments" not in payload:
-            payload["attachments"] = []
         if "metadata" not in payload:
             payload["metadata"] = {}
     elif payload_case == "job_step_updated":

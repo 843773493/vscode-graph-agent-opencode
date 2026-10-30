@@ -18,6 +18,36 @@ from app.schemas.internal_v2.session_interaction import (
 )
 
 
+@pytest.mark.parametrize(("event_type", "payload", "payload_name"), [
+    ("job.step.updated", {}, "job_step_updated"),
+    ("job.step.updated", {"agent_id": "", "message": "进度 Ω", "phase": "tool"}, "job_step_updated"),
+    ("session.error", {"error": ""}, "session_error"),
+    ("session.error", {"error": "执行失败 Ω"}, "session_error"),
+    ("trace.observed", {"raw_type": ""}, "trace_observed"),
+    ("trace.observed", {"raw_type": "llm_request"}, "trace_observed"),
+    ("session.status.changed", {"session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea", "status": "idle"},
+     "session_status_changed"),
+    ("session.status.changed", {"session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea", "status": "retry",
+                                "message": "", "active_job_id": "job_1", "waiting": {
+                                    "id": "wait_1", "session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
+                                    "message": "等待网络", "restored": False, "created_at": "2026-10-30T00:00:00Z",
+                                }}, "session_status_changed"),
+    ("session.status.changed", {"session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
+                                "is_streaming": True, "is_idle": False}, "session_status_changed"),
+])
+def test_session_payload_wire_preserves_empty_messages_and_business_status(
+    event_type: str, payload: dict[str, object], payload_name: str,
+) -> None:
+    source = SessionExecutionSseDTO.model_validate({
+        "event": {"event_id": "evt_payload", "session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
+                  "time": "2026-10-30T00:00:00Z", "type": event_type, "payload": payload},
+        "raw_type": "原始事件", "raw_payload": {"nested": {"value": [False, None, "Ω"]}},
+    })
+    wire = session_stream_pb2.SessionExecutionSse.FromString(session_sse_to_proto(source).SerializeToString())
+    assert wire.event.WhichOneof("payload") == payload_name
+    assert session_sse_to_json(wire) == source.model_dump(mode="json")
+
+
 @pytest.mark.parametrize("event_type", ["job.updated", "job.status.changed", "session.completed"])
 @pytest.mark.parametrize("status", list(JobStatus))
 def test_job_progress_wire_preserves_status_defaults_and_optional_values(event_type: str, status: JobStatus) -> None:

@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import cast
 
+from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
 from google.protobuf.descriptor_pool import DescriptorPool
 
+from app.protocol.generated.boxteam.workspace.v2 import session_interaction_pb2
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
+from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 
 
@@ -32,6 +36,28 @@ def main() -> None:
     for model in SSE_EVENT_MODELS.values():
         schema = model.model_json_schema(mode="serialization")
         definitions = schema.get("$defs", {})
+        if model is SessionExecutionSseDTO:
+            event = cast(Descriptor, session_interaction_pb2.SessionExecutionEvent.DESCRIPTOR)
+            if pool is not None:
+                event = pool.FindMessageTypeByName(event.full_name)
+            payloads = {field.name.replace("_", "."): field
+                        for field in event.oneofs_by_name["payload"].fields}
+            branches = schema["properties"]["event"]["discriminator"]["mapping"]
+            if payloads.keys() != branches.keys():
+                raise ValueError(f"公开 SSE 事件与 proto 分支不一致: "
+                                 f"missing={sorted(payloads.keys() - branches.keys())}, "
+                                 f"extra={sorted(branches.keys() - payloads.keys())}")
+            for tag, reference in branches.items():
+                field = payloads[tag]
+                if field.message_type is None:
+                    raise ValueError(f"公开 SSE 事件 payload 必须为消息: {tag}")
+                # 状态联合仍经具名业务 adapter 转换，不按同形 JSON 校验。
+                if tag == "session.status.changed":
+                    if field.message_type.full_name != session_interaction_pb2.SessionStatus.DESCRIPTOR.full_name:
+                        raise ValueError(f"公开 SSE 事件 payload 与业务 adapter 类型不一致: {tag}")
+                    continue
+                branch = definitions[reference.rsplit("/", 1)[1]]
+                assert_public_schema({**branch["properties"]["payload"], "$defs": definitions}, field.message_type)
         for name, shape in [(model.__name__, schema), *definitions.items()]:
             descriptor = SSE_JSON_DESCRIPTORS.get(name)
             if descriptor is None:
