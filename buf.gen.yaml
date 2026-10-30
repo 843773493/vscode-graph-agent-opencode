@@ -3,6 +3,8 @@ version: v2
 plugins:
   - remote: buf.build/protocolbuffers/python:v36.2
     out: app/protocol/generated
+  - remote: buf.build/protocolbuffers/pyi:v36.2
+    out: app/protocol/generated
   - remote: buf.build/bufbuild/es:v2.15.0
     out: src/workspace-services/protocol/generated
     opt:

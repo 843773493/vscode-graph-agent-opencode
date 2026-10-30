@@ -1,6 +1,6 @@
 # 目录用途
 
-存放由 Buf 生成的 Python Protobuf 绑定。
+存放由 Buf 生成的 Python Protobuf 绑定及类型声明。
 
 ## 可修改内容
 
@@ -8,7 +8,7 @@
 
 ## 不可修改内容
 
-- 不得手工修改生成的 Python 文件。
+- 不得手工修改生成的 Python 文件或 `.pyi` 类型声明。
 
 ## 规范
 

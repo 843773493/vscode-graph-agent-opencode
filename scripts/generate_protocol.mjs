@@ -32,7 +32,7 @@ const pythonOutputRoot = path.join(projectRoot, "app", "protocol", "generated");
 const generatedRoots = [
   {
     directory: pythonOutputRoot,
-    extensions: [".py"],
+    extensions: [".py", ".pyi"],
   },
   {
     directory: path.join(projectRoot, "src", "workspace-services", "protocol", "generated"),

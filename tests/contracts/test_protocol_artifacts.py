@@ -13,6 +13,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="故障注入使用 POSI
 _GENERATOR = Path.cwd() / "scripts/generate_protocol.mjs"
 _BINDINGS = (
     "app/protocol/generated/sample_pb2.py",
+    "app/protocol/generated/sample_pb2.pyi",
     "src/workspace-services/protocol/generated/sample.js",
     "src/clients/web/src/types/protocol_buf_generated/sample.d.ts",
     "src/clients/web/src/types/protocol_generated/sample.ts",
@@ -75,25 +76,28 @@ def test_check_finds_changed_missing_and_extra_artifacts_without_repairing(gener
     result = _run(workspace, "--check")
     assert result.returncode == 0, result.stderr
 
-    changed = (*_BINDINGS[:1], *_RUNTIME)
-    missing = _BINDINGS[1:]
+    changed = (*_BINDINGS[:2], *_RUNTIME)
+    missing = _BINDINGS[2:]
     for name in changed:
         (workspace / name).write_bytes(b"stale generated output\n")
     for name in missing:
         (workspace / name).unlink()
-    orphan = "src/clients/web/src/types/protocol_generated/orphan.ts"
-    (workspace / orphan).write_bytes(b"orphan\n")
+    orphans = ("src/clients/web/src/types/protocol_generated/orphan.ts",
+               "app/protocol/generated/orphan_pb2.pyi")
+    for name in orphans:
+        (workspace / name).write_bytes(b"orphan\n")
     result = _run(workspace, "--check")
     assert result.returncode != 0 and "协议生成产物不一致" in result.stderr
-    assert all(name in result.stderr for name in (*_BINDINGS, *_RUNTIME, orphan))
+    assert all(name in result.stderr for name in (*_BINDINGS, *_RUNTIME, *orphans))
     assert all((workspace / name).read_bytes() == b"stale generated output\n" for name in changed)
     assert all(not (workspace / name).exists() for name in missing)
-    assert (workspace / orphan).read_bytes() == b"orphan\n"
+    assert all((workspace / name).read_bytes() == b"orphan\n" for name in orphans)
 
     result = _run(workspace)
     assert result.returncode == 0, result.stderr
     assert all((workspace / name).read_bytes() == content for name, content in original.items())
-    assert not (workspace / orphan).exists() and shared.read_bytes() == b"maintained source\n"
+    assert all(not (workspace / name).exists() for name in orphans)
+    assert shared.read_bytes() == b"maintained source\n"
     assert tuple((workspace / "artifacts/staging").iterdir()) == ()
 
 

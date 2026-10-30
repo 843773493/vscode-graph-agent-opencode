@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
 
 from google.protobuf import json_format
+from google.protobuf.descriptor import FieldDescriptor
 
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
@@ -11,6 +11,11 @@ from app.protocol.generated.boxteam.workspace.v2 import file_events_pb2, trace_p
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryRevisionDTO,
     WorkspaceFileListDTO,
+)
+
+# 字符串的必填、presence 与数组映射直接取自 descriptor，WKT 保留具名转换。
+_TRACE_STRING_FIELDS = tuple(
+    field for field in trace_pb2.TraceEvent.DESCRIPTOR.fields if field.type == FieldDescriptor.TYPE_STRING
 )
 
 
@@ -87,33 +92,25 @@ def sse_error_to_json(value: file_events_pb2.SseError) -> dict[str, object]:
 
 
 def trace_to_proto(value: Mapping[str, object]) -> trace_pb2.TraceEvent:
-    required = ("event_id", "session_id", "thread_id", "job_id", "type", "phase", "title", "content")
-    for field_name in required:
-        if not isinstance(value.get(field_name), str):
-            raise TypeError(f"Trace 事件缺少字段: {field_name}")
-    # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
-    validate_session_id(cast(str, value["session_id"]))
-    validate_thread_id(cast(str, value["thread_id"]))
-    result = trace_pb2.TraceEvent(
-        event_id=cast(str, value["event_id"]),
-        session_id=cast(str, value["session_id"]),
-        thread_id=cast(str, value["thread_id"]),
-        job_id=cast(str, value["job_id"]),
-        type=cast(str, value["type"]),
-        phase=cast(str, value["phase"]),
-        title=cast(str, value["title"]),
-        content=cast(str, value["content"]),
-    )
-    for field_name in ("part_id", "status", "tool_name", "step_id"):
-        field_value = value.get(field_name)
-        if field_value is not None:
+    result = trace_pb2.TraceEvent()
+    for field in _TRACE_STRING_FIELDS:
+        field_value = value.get(field.name, [] if field.is_repeated else None)
+        if field.is_repeated:
+            if not isinstance(field_value, list) or not all(isinstance(item, str) for item in field_value):
+                raise ValueError(f"Trace 事件 {field.name} 必须是字符串数组")
+            getattr(result, field.name).extend(field_value)
+        elif field.has_presence:
+            if field_value is not None:
+                if not isinstance(field_value, str):
+                    raise ValueError(f"Trace 事件字段类型错误: {field.name}")
+                setattr(result, field.name, field_value)
+        else:
             if not isinstance(field_value, str):
-                raise ValueError(f"Trace 事件字段类型错误: {field_name}")
-            setattr(result, field_name, field_value)
-    skill_names = value.get("skill_names", [])
-    if not isinstance(skill_names, list) or not all(isinstance(item, str) for item in skill_names):
-        raise ValueError("Trace 事件 skill_names 必须是字符串数组")
-    result.skill_names.extend(skill_names)
+                raise TypeError(f"Trace 事件缺少字段: {field.name}")
+            setattr(result, field.name, field_value)
+    # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
+    validate_session_id(result.session_id)
+    validate_thread_id(result.thread_id)
     raw = value.get("raw", {})
     if not isinstance(raw, Mapping):
         raise TypeError("Trace 事件 raw 必须是对象")
@@ -128,20 +125,16 @@ def trace_to_proto(value: Mapping[str, object]) -> trace_pb2.TraceEvent:
 def trace_to_json(value: object) -> dict[str, object]:
     if not isinstance(value, trace_pb2.TraceEvent):
         raise TypeError(f"Trace Protobuf 类型错误: {type(value).__name__}")
+    result: dict[str, object] = {}
+    for field in _TRACE_STRING_FIELDS:
+        if field.is_repeated:
+            result[field.name] = list(getattr(value, field.name))
+        elif field.has_presence and not value.HasField(field.name):
+            result[field.name] = None
+        else:
+            result[field.name] = getattr(value, field.name)
     return {
-        "event_id": value.event_id,
-        "part_id": value.part_id if value.HasField("part_id") else None,
-        "session_id": value.session_id,
-        "thread_id": value.thread_id,
-        "job_id": value.job_id,
-        "type": value.type,
-        "phase": value.phase,
-        "title": value.title,
-        "content": value.content,
-        "status": value.status if value.HasField("status") else None,
-        "tool_name": value.tool_name if value.HasField("tool_name") else None,
-        "skill_names": list(value.skill_names),
-        "step_id": value.step_id if value.HasField("step_id") else None,
+        **result,
         "timestamp": value.timestamp.ToJsonString(),
         "raw": struct_to_mapping(value.raw) if value.HasField("raw") else {},
     }
