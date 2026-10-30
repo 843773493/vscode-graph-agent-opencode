@@ -425,3 +425,9 @@ Terminal的Worker已经退出且记录非运行时，只要unknown记录仍有�
 删除 journal 到期后的单节点检查、保留窗口核对、物理删除及父目录同步由同一个 worker 执行，复用既有 `run_sync_shielded`，原 Session gate 覆盖线程池排队及 I/O 结算。取消等待者仍须等原 worker 完成再传播取消；同节点回收串行，无关节点及导航查询可独立推进。原 journal、冻结 locator、lease/creation 防护、观察/通信期限及删除顺序保持，不增加 writer、账本或 schema。
 
 单元验证覆盖线程池排队、原生删除/同步等待、取消、到期边界和原异常重试；ASGI 集成通过产品创建和导航删除生成真实隔离目录，核对暂停期间查询、原 gate 及放行后同入口不重复删除。catalog 清单读取仍同步；此切片不证明任意原生 I/O 可终止、独立进程重启、Windows、Gateway/Web 或完整 shutdown 期限，5.2/5.4 保持 TODO。
+
+### Session 删除的物理隔离等待（5.4 部分收口）
+
+物理隔离的 mkdir、rename 和三道目录屏障复用同一 worker，原错误映射与屏障顺序保持；fence 关闭与隔离完成的异步观察点仍在原位置。首次删除和已隔离目录的恢复均持原 Session gate 至 worker 结算，同 key 锁也不提前释放；取消或协作式截止到达不能中断原生 I/O、补记进度或把尚未结算的操作视为停止。失败或取消后的同 key 恢复核验原目标并重做屏障，不重复资源 drain 或 rename。
+
+实际导航删除、worker 停止及重新启动验证沿同一 journal 恢复；原目录扫描竞态与删除回执回归保持。目录/控制库预检和 catalog 事务仍同步；整个删除/关闭硬期限、任意线程终止、独立进程重启、Windows 与 Gateway/Web 继续 TODO，不以 worker 排队和结算成功勾选完整 5.4。

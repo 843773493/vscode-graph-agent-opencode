@@ -463,13 +463,14 @@ class SessionSubtreeDeleteService:
                 # 发生。此时源目录已消失，重新回调只会对已隔离的 session
                 # 再次 resolve 而 fail closed，从而阻断崩溃恢复。跳回
                 # 调，交由 _drain_session 校验目标一致性并补记进度。
-                await self._drain_session(
-                    idempotency_key=idempotency_key,
-                    session_id=session_id,
-                    storage_relative_locator=record.frozen_session_locators[
-                        session_id
-                    ],
-                )
+                async with self._session_gate.exclusive(session_id):
+                    await self._drain_session(
+                        idempotency_key=idempotency_key,
+                        session_id=session_id,
+                        storage_relative_locator=record.frozen_session_locators[
+                            session_id
+                        ],
+                    )
                 self._store.record_drain_progress(idempotency_key, session_id)
                 continue
             # 首次排空等待包含 retention/creation 的 holder 与 gate；
@@ -549,6 +550,19 @@ class SessionSubtreeDeleteService:
                 )
             self._cas_session_fence(source, session_id, stage=stage)
             await observe_phase(idempotency_key, "deletion.fence_closed/" + session_id)
+        await run_sync_shielded(
+            self._isolate_session_directory, source, target,
+            idempotency_key=idempotency_key, session_id=session_id,
+            already_isolated=already_isolated,
+        )
+        await observe_phase(idempotency_key, "deletion.renamed/" + session_id)
+
+    def _isolate_session_directory(
+        self, source: Path, target: Path, *,
+        idempotency_key: str, session_id: str, already_isolated: bool,
+    ) -> None:
+        """同一worker完成隔离和全部barrier，结算前不释放原删除锁。"""
+        stage = "子树删除 drain"
         io_stage = "mkdir-isolation"
         try:
             if not already_isolated:
@@ -575,7 +589,6 @@ class SessionSubtreeDeleteService:
                 f"artifact=session-directory, stage={io_stage}, "
                 f"error={type(error).__name__}, errno={error.errno}",
             ) from error
-        await observe_phase(idempotency_key, "deletion.renamed/" + session_id)
 
     def _cas_session_fence(
         self,

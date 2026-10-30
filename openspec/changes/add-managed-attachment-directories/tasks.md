@@ -492,3 +492,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原同步实现的删除/父目录同步暂停场景有2项有效反例；现将完整单节点校验、retention、lease/creation复核、删除和barrier迁入同一worker，原Session gate保持至线程池排队及原I/O结算。取消不提前释放gate，不新增schema、账本或兼容入口。
 - 74项单元通过，覆盖原删除回归、排队/原生等待、取消、期限和异常身份/同入口重试；2项产品ASGI集成通过（10.07秒，矩阵16.71秒），经创建/导航删除生成journal及隔离目录，验证暂停期间HTTP查询、request_id、peer节点、原gate与目录保全，放行后取消归属及不重复删除。首轮集成误用仅含版本的snapshot端点，改用roots及typed节点身份断言；未调整生产API或放宽断言。
 - Ruff、Pyright零诊断、compileall及本change strict通过；准确命令、源码指纹、原始输出、退出码和作者差异复核见`out/tests/temp/session_replay_gc_io_20261030/artifacts/verification.json`。catalog清单同步读取、任意原生I/O终止、独立进程重启、Windows、Gateway/Web和完整shutdown仍未验；5.2/5.4及21/23保持未完成。未改Web实现/自动化或重启共享debug，团队协作和MCP显式持有继续TODO。
+
+### 2026-10-30 Session 删除物理隔离的同步等待（5.4 部分收口）
+
+- 原同步rename/目录屏障各有1项有效反例。现将mkdir、rename及三道目录barrier迁入同一worker；原错误映射、操作顺序及两处异步phase观察保持。恢复分支也持原Session gate至原worker结算，取消/到期不提前释放原gate或同key锁，不补记尚未核实的进度、不重复drain/rename。
+- 101项相关单元通过，含27项首次/恢复、全部磁盘阶段、完成/取消/截止和线程池排队场景；15项产品ASGI/生命周期集成通过（44.77秒，矩阵51.25秒），经真实导航入队、删除、worker停止和重新启动核原journal、未提交进度、原件/fence、HTTP查询及同操作恢复，并保留原删除回执和目录扫描竞态回归。worker重启不等于Backend进程重启。
+- Ruff、Pyright零诊断、compileall、本change strict及作者AST复核通过；准确命令、指纹、原始输出、退出码及限定证据见`out/tests/temp/session_isolation_io_20261030/artifacts/verification.json`。初次新增测试locator类型收窄及import格式错误已修，原件保留。目录/控制库预检及catalog事务仍同步，任意原生I/O终止、独立进程重启、Windows、Gateway/Web与完整shutdown继续未验；5.2/5.4及整体21/23保持未完成。未改Web实现/自动化或重启共享debug，团队协作及MCP显式持有继续TODO。
