@@ -32,10 +32,8 @@ class BrowserOperations(ResourceOperations):
         if retention_scope not in {"thread", "workspace"}:
             raise ValueError(f"Browser 保留范围无效: {retention_scope}")
         return await self._owner._create(
-            ref=self._thread, retention_scope=retention_scope, title=title, url=url,
+            operation=self, retention_scope=retention_scope, title=title, url=url,
             viewport=viewport, device_profile=device_profile, device_orientation=device_orientation,
-            holder_id=self._holder_id, operation_id=self._operation_id,
-            created_by_turn_id=self._created_by_turn_id, lease_refs=self._lease_refs,
         )
 
     async def list_resources(self) -> list[ResourceSnapshot]:

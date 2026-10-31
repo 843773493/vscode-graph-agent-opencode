@@ -9,6 +9,7 @@ from app.abstractions.browser_resources import BrowserAction, BrowserTransport
 from app.abstractions.workspace_resources import ResourceSnapshot, RetentionScope
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.business.browser_resources.operations import BrowserOperations
+from app.services.business.workspace_resources.creation import create_resource
 from app.services.business.workspace_resources.owner import (
     ResourceConflict,
     WorkspaceResourceOwner,
@@ -38,15 +39,12 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
             )
 
     async def _create(
-        self, *, ref: ThreadRef, retention_scope: RetentionScope, title: str, url: str,
+        self, *, operation: BrowserOperations, retention_scope: RetentionScope, title: str, url: str,
         viewport: dict[str, int] | None, device_profile: str | None,
-        device_orientation: str | None, holder_id: str, operation_id: str,
-        created_by_turn_id: str | None, lease_refs: dict[str, str],
+        device_orientation: str | None,
     ) -> ResourceSnapshot:
-        return await self._create_record(
-            ref=ref, retention_scope=retention_scope, title=title,
-            holder_id=holder_id, operation_id=operation_id,
-            created_by_turn_id=created_by_turn_id, lease_refs=lease_refs,
+        return await create_resource(
+            self, operation=operation, retention_scope=retention_scope, title=title,
             create=lambda record: self._transport.create_browser(
                 browser_id=record.resource_id, owner_revision=record.owner_revision,
                 title=title, url=url, viewport=viewport, device_profile=device_profile,

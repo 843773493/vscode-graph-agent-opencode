@@ -23,6 +23,7 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.services.business.terminal_resources import owner as owner_module
+from app.services.business.terminal_resources.operations import TerminalOperations
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 保留原生诊断写入故障。
@@ -275,3 +276,35 @@ async def test_cancelled_queued_workdir_keeps_holder_without_creating_resources(
             if occupying is not None:
                 await occupying
             executor.shutdown(wait=True)
+
+
+async def test_operation_closed_during_workdir_resolution_rejects_late_creation(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case, entered, release = terminal_owner, asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    resolve = case.owner._resolve_workdir
+
+    def waiting(cwd: str | None) -> str:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "测试未释放原工作目录解析"
+        return resolve(cwd)
+
+    monkeypatch.setattr(case.owner, "_resolve_workdir", waiting)
+    async with case.owner.operation(
+        session_id=SESSION_A, thread_id=THREAD_A, holder_id="cwd-close-holder", operation_id="cwd-close",
+    ) as operation:
+        assert isinstance(operation, TerminalOperations)
+        creating = asyncio.create_task(operation.create_terminal(retention_scope="thread", title="迟到创建"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await operation.close()
+            assert not creating.done() and not case.owner._store.ids() and not case.leases._leases
+            release.set()
+            with pytest.raises(RuntimeError, match="operation 已关闭"):
+                await creating
+            assert not case.owner._store.ids() and not case.owner._resource_locks
+            assert not case.leases._leases and case.transport.creates == 0
+        finally:
+            release.set()
+            await asyncio.gather(creating, return_exceptions=True)

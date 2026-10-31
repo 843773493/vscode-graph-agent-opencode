@@ -6,6 +6,7 @@ Terminal 与 Browser 两个领域 owner 共用资源保留、Thread 关联、ope
 
 ```text
 workspace_resources/
+├── creation.py    原intent、创建派发与成功/失败回执的唯一结算链
 ├── owner.py       串联准入、资源状态转换、关联释放与授权核实
 ├── recovery.py    无共享网络等待的一次性版本冻结，资源锁内同步及取消排空
 ├── records.py     Thread 引用、持久 owner 记录及文件存储
@@ -31,7 +32,7 @@ workspace_resources/
 - operation关闭全批共用一次30秒协作式等待预算，逐资源取得原锁，沿既有shielded worker持久释放后再移除引用；原锁覆盖线程池排队、写盘及取消结算。到期排空本次锁等待，保留此前返回的原异常和精确引用供同operation显式重试，已提交释放不重写，不重建lease或在解锁后后台补做。普通released不表示资源已停止；账本共享writer仍须串行，原生I/O不能由预算抢占，其它同步写盘、不合作取消和外部终态核实仍TODO。
 - 单次工具方法的资源准入共用一次30秒协作式预算，覆盖所选资源冷恢复、原资源锁、校验及取得原lease。原lease获取与成功后的引用登记在同一shielded worker结算；线程池排队时取消或关闭不再开始新写入，已开始的写入保留原锁和holder直到结算。关闭同时覆盖尚未发布lease的原准入任务，取消保留原消息及迟到存储错误，关闭期间完成准入不得继续派发。到期只排空本次等待，保留已提交恢复及已有占用，未派发不补造unknown或新lease，不后台补做；底层TimeoutError和调用者取消保持归属。准入后原锁继续覆盖正式工具执行，此预算不是Thread准入、整个工具operation或shutdown总期限；其它同步writer、settle/reconcile通知的事件循环归属与不合作取消仍TODO。
 - owner 各自只核实自己的外部事实，不跨领域对账。
-- Terminal普通调用和Browser动作复用同一派发保护：原lease先持久进入`dispatching`，正式回执校验、owner记录和账本投影提交后才恢复`active`。`dispatching`只表示待核实派发，不证明外部动作已执行；普通release拒绝、Turn及operation收尾保留，冷恢复转入原reconcile链，只有原owner核实终态才settle。普通查询不能清掉该事实；unknown首步写盘失败也保留原占用。准备写失败不进入外部回调，排队取消/关闭不开始写入，已开始则持原锁结算；仍在场的原调用证明尚未派发时才可撤回准备，撤回失败保留保护及原错误。创建、版本管理、传输授权及完整旧代接管仍TODO，不据普通调用的验收扩大完成范围。
+- 创建、Terminal普通调用和Browser动作复用同一派发保护：原lease先持久进入`dispatching`，正式回执校验、owner记录和账本投影提交后才恢复`active`。`dispatching`只表示待核实派发，不证明外部动作已执行；普通release拒绝、Turn及operation收尾保留，冷恢复转入原reconcile链，只有原owner核实终态才settle。普通查询不能清掉该事实；unknown首步写盘失败也保留原占用。准备写失败不进入外部回调，排队取消/关闭不开始写入，已开始则持原锁结算；仍在场的原调用证明尚未派发时才可撤回准备，撤回失败保留保护及原错误。版本管理、传输授权及完整旧代接管仍TODO，不据本链验收扩大完成范围。
 - `_sync_ledger` 是唯一异步状态发布入口，全部调用方直接等待；owner记录先持久化，原shielded worker结算账本后才投影返回。资源锁覆盖排队、写盘与取消结算，重复取消保留原消息及迟到存储错误；Terminal终态目录lease的settle仍在原事件循环线程。冷恢复的外部版本同步成功后，原账本发布与删除原pending共用一个受保护提交，取消不导致再次派发；本地发布失败保留原版本供显式重试。其它同步writer、settle/reconcile通知及完整operation/shutdown期限仍TODO。
 - Thread准入先取得`workspace_resources` namespace的Session shared OS holder，再在短Session写准入内核定workspace/main或显式Thread；holder、Session锁和读取共用一次30秒协作式等待预算。active核验、Session目录及main/Thread locator读取复用原shielded worker，原gate/holder覆盖排队及同步结算；取消后不继续准入或后台补做。Session独占锁不跨真实工具执行，holder覆盖原operation及其受保护收尾；删除装配只登记该共享namespace一次，先等holder退出再取得Session锁并清理。超时/取消排空本次准入，原错误身份保持，不新增业务lease/unknown；deleting Session拒绝新准入。此预算不涵盖此前冷恢复、正式工具执行或整个shutdown；worker不能抢占原生I/O，其它同步存储和不合作取消继续TODO。
 - 冷恢复逐资源完成授权同步；单项失败保留原unknown，继续其它资源并在整批结束后上抛原单错或聚合多错。首次清单读取不持共享锁；并发调用可各自读取，首个成功结果在唯一准备锁内完成原记录写盘、lease对账、版本冻结及pending发布；准备开始后取消须等原任务完整结算，迟到清单不得覆盖或再次推进。后续访问不得重启已完成的整批恢复；针对资源的查询、授权、工具、关联及Thread/Session清理只等待所选资源的冻结版本。取消排空本次任务并保留未核实版本，单次恢复在入口取得一次30秒等待预算，清单、资源锁和同步共用；到期排空本调用的协作式等待，未开始同步不伪造unknown，已发送但未核实的同步保留原版本与unknown。中断不能丢弃此前失败，原异常按资源选择顺序保留；到期与预算错误共同聚合，取消保持原对象/消息并以聚合cause保留此前失败。同步阻塞、线程池排队及整个operation终止核实继续TODO。
@@ -50,5 +51,5 @@ workspace_resources/
 - 显式stop/delete的冷恢复只准备原清单与冻结版本；在原资源锁内先核expected_revision、有效lease和delete关联限制，再以停止意图同步尚未完成的同一版本。不等待依赖context关闭的旧执行，真实停止、终态提交与结清占用仍沿原链。普通访问继续普通排空；未完成版本不另建恢复事实，过期或有关联的拒绝不消耗pending、不派发撤权。
 - 本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。
 - unknown是原失败的收尾；账本update与owner记录save共用一次shielded cleanup，账本原写入复用shielded worker，原资源锁及holder覆盖线程池排队、写盘和结算。清理期间重复取消不能跳过第二步记录save或替换此前原异常，批量调用取消仍保留原错误cause；账本自身写入失败不表示unknown持久成功，旧代接管仍TODO。
-- 首条intent写盘取消后，仅仍在场且尚未进入创建回调的原调用可核定未派发；持原资源锁及准入完成deleted/verified、解除关联与原账本stopped投影，不补造operation lease或外部回执。重复取消不遗弃收尾；终态持久成功后才同步账本，收尾存储错误与原取消都须可见。旧代intent不能凭清单缺失或没有lease套用此证明。
+- 创建从首次intent写盘前登记原锁和operation在途资源；close冻结并等待原锁，即使尚无记录或lease也不能漏过。创建复用原operation身份与异步取得lease链，排队取消/关闭不迟到登记或派发；cwd解析返回后重核关闭状态。仅仍在场且尚未进入创建回调的原调用可核定未派发；持原锁及准入完成deleted/verified、解除关联与原账本stopped投影，再结清已取得的精确lease，不补造operation lease或外部回执。重复取消不遗弃收尾；收尾存储错误与原取消都须可见。只有原创建入口明确消费创建回执才能首次核实结果，普通存活清单不得凭creating状态消除未知事实。旧代intent不能凭清单缺失或没有lease套用未派发证明；整个cwd/operation/shutdown等待期限继续TODO。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

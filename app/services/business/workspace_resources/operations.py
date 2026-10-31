@@ -28,7 +28,7 @@ async def resource_operation_dispatch(
     *, operation: ResourceOperations | None,
 ) -> AsyncIterator[None]:
     """同一原lease覆盖派发、正式回执提交及失败写盘，不能靠finally猜测成功。"""
-    # TODO(5.2)：创建、版本管理及传输授权的派发仍须沿各自原入口迁齐，不能据此声明全部接管完成。
+    # TODO(5.2)：版本管理及传输授权的派发仍须沿各自原入口迁齐，不能据此声明全部接管完成。
     cancelled = Event()
 
     def prepare() -> None:
@@ -94,7 +94,7 @@ class ResourceOperations:
         self._operation_id = operation_id
         self._created_by_turn_id = created_by_turn_id
         self._lease_refs: dict[str, str] = {}
-        self._acquisitions: dict[str, asyncio.Task[None]] = {}
+        self._pending_resources: set[str] = set()
         self._closed = False
 
     @asynccontextmanager
@@ -114,7 +114,7 @@ class ResourceOperations:
                     if self._thread not in record.thread_associations:
                         raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
                     if resource_id not in self._lease_refs:
-                        await self._acquire_lease(record)
+                        await self._acquire_lease(record, creating=False)
                         self._assert_open()
             except TimeoutError as error:
                 if not budget.expired():
@@ -125,19 +125,27 @@ class ResourceOperations:
                 ) from error
             yield record
 
-    async def _acquire_lease(self, record: OwnedResourceRecord) -> None:
+    async def _acquire_lease(self, record: OwnedResourceRecord, *, creating: bool) -> None:
         cancelled = Event()
 
         def acquire() -> None:
             # 排队时取消或关闭不再开始新写入；开始后的原生调用必须真实结算。
             if cancelled.is_set() or self._closed:
                 return
+            if creating:
+                self._owner._leases.register_external(
+                    resource_id=record.resource_id, kind=self._owner.lease_kind,
+                    lifetime_scope=record.retention_scope, created_by_turn_id=self._created_by_turn_id,
+                )
+                if cancelled.is_set() or self._closed:
+                    return
             self._lease_refs[record.resource_id] = self._owner._acquire(
                 record, self._thread, self._holder_id, self._operation_id,
             )
 
         acquiring = asyncio.create_task(run_sync_shielded(acquire))
-        self._acquisitions[record.resource_id] = acquiring
+        already_pending = record.resource_id in self._pending_resources
+        self._pending_resources.add(record.resource_id)
         try:
             await asyncio.shield(acquiring)
         except asyncio.CancelledError as original:
@@ -148,10 +156,12 @@ class ResourceOperations:
                 raise original from failure
             raise
         finally:
-            del self._acquisitions[record.resource_id]
+            if not already_pending:
+                self._pending_resources.remove(record.resource_id)
 
-    async def _release(self, resource_id: str) -> None:
-        async with self._owner._resource_lock(resource_id):
+    async def _release(self, resource_id: str, lock: asyncio.Lock) -> None:
+        # 首条intent尚未发布时也等待创建者登记的原锁，不要求已有业务记录。
+        async with lock:
             lease_id = self._lease_refs.get(resource_id)
             if lease_id is not None:
                 def release() -> None:
@@ -166,8 +176,10 @@ class ResourceOperations:
         # 全批只取一次预算；取消只排空本次锁等待，原引用保留供同operation重试。
         # TODO(5.4)：worker 排队及写盘须结算，预算不能抢占原生 I/O；外部终态仍须 owner 核实。
         budget = asyncio.timeout(OPERATION_CLOSE_WAIT_SECONDS)
-        resources = dict.fromkeys((*self._lease_refs, *self._acquisitions))
-        tasks = [asyncio.create_task(self._release(resource_id)) for resource_id in resources]
+        resources = dict.fromkeys((*self._lease_refs, *sorted(self._pending_resources)))
+        # 在让出事件循环前冻结原锁；未发布intent失败后会删除其锁登记。
+        tasks = [asyncio.create_task(self._release(resource_id, self._owner._resource_locks[resource_id]))
+                 for resource_id in resources]
         batch = asyncio.gather(*tasks, return_exceptions=True)
 
         async def settle() -> None:

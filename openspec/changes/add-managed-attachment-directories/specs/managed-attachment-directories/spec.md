@@ -133,6 +133,18 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原资源记录的读取、写入或格式校验失败，记录该错误的日志出口也抛出异常
 - **THEN** 沿现有统一错误出口保留原存储或校验错误的类别、原生错误码及直接原因，不以日志错误替代；公开说明仅增加日志错误类别，原记录位置与日志错误正文只保留在原异常诊断中。失败不发布候选状态，原占用与外部资源保持，后续显式重试仍沿原 owner
 
+#### Scenario: 创建回执丢失后的失败收尾也无法写盘
+- **WHEN** Terminal或Browser已进入原创建回调，外部创建已发生但回执丢失，随后unknown的原账本或owner记录写入也失败
+- **THEN** 派发前持久化的同一原lease继续保护本次创建；operation与Turn收尾不得释放，普通查询不得凭creating记录和存活清单恢复verified。保留原创建错误、存储错误及原身份，原owner核实终态后才结清，不重复创建
+
+#### Scenario: 首次创建写盘期间关闭或取消
+- **WHEN** 原operation在首条intent、登记、取得lease或派发准备的排队/写入期间关闭或取消
+- **THEN** close等待创建前登记的原锁，即使业务记录或lease尚未发布；排队取消/关闭不开始新的登记、取得lease或外部创建，已开始的原写入持锁结算。仍在场的原调用证明未进入回调后提交原intent的deleted/verified和stopped投影，再结清已取得的精确lease；无已发布记录时不补造资源，原取消和迟到存储错误均可核验
+
+#### Scenario: 工作目录解析后不得迟到创建
+- **WHEN** Terminal工作目录仍由原worker解析而operation已关闭
+- **THEN** worker结算后拒绝迟到创建，不发布intent、lease或PTY；不能据此宣称close已等待整个解析阶段或核实了外部终态
+
 #### Scenario: 普通工具派发后的失败收尾也无法写盘
 
 - **WHEN** Terminal普通调用、workspace完成查询或Browser动作已进入外部回调，但未取得可提交的正式回执，随后原unknown账本或owner记录写入也失败

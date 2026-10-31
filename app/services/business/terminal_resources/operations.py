@@ -33,11 +33,8 @@ class TerminalOperations(ResourceOperations):
         if retention_scope not in {"thread", "workspace"}:
             raise ValueError(f"Terminal 保留范围无效: {retention_scope}")
         terminal = await self._owner._create(
-            ref=self._thread, retention_scope=retention_scope, title=title,
+            operation=self, retention_scope=retention_scope, title=title,
             agent_id=agent_id, cwd=cwd, cols=cols, rows=rows,
-            holder_id=self._holder_id, operation_id=self._operation_id,
-            created_by_turn_id=self._created_by_turn_id,
-            lease_refs=self._lease_refs,
         )
         return terminal
 

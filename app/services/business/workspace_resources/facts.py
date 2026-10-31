@@ -84,6 +84,7 @@ def index_resources(
 
 def observe_resource(
     record: OwnedResourceRecord, runtime: ResourceSnapshot | None, kind: ResourceKind,
+    *, creation_receipt: bool = False,
 ) -> None:
     if runtime is None:
         if record.status != "deleted":
@@ -93,11 +94,11 @@ def observe_resource(
     validate_runtime(runtime, record.workspace_id)
     if runtime.get(f"{kind}_id") != record.resource_id:
         raise mark_public_failure(ValueError(f"Node 运行时 身份与 外部资源 owner 冲突: {record.resource_id}"))
-    was_creating = record.status == "creating" and record.reconciliation_status != "unknown"
     record.status = str(runtime["status"])
     recovery = str(runtime.get("reconciliation_status", "unknown"))
     # 已持久化的未知动作结果跨重启保留，存活快照不能证明旧动作是否执行。
-    if record.reconciliation_status == "verified" or was_creating:
+    # 只有原创建回执能首次核实创建；普通清单不能替代丢失的回执。
+    if record.reconciliation_status == "verified" or creation_receipt:
         record.reconciliation_status = recovery
         record.error = None if recovery == "verified" else "Node 运行时 身份或连接尚待核实"
 

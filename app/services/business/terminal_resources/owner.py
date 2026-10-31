@@ -21,11 +21,11 @@ from app.core.failures import failure_detail
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.terminal_resources.operations import TerminalOperations
+from app.services.business.workspace_resources.creation import create_resource
 from app.services.business.workspace_resources.facts import STOPPED_STATUSES
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 from app.services.business.workspace_resources.records import (
     OwnedResourceRecord,
-    ThreadRef,
 )
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -110,20 +110,16 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
     async def _create(
         self,
         *,
-        ref: ThreadRef,
+        operation: TerminalOperations,
         retention_scope: RetentionScope,
         title: str,
         agent_id: str | None,
         cwd: str | None,
         cols: int,
         rows: int,
-        holder_id: str,
-        operation_id: str,
-        created_by_turn_id: str | None,
-        lease_refs: dict[str, str],
     ) -> TerminalSnapshot:
         # 原生路径及目录 URI 都可能等待文件系统或同机 Gateway；原 holder 覆盖 worker 结算。
-        # TODO(5.4)：lease 写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
+        # TODO(5.4)：目录lease写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
         resolved_cwd = await run_sync_shielded(self._resolve_workdir, cwd)
 
         async def create(record: OwnedResourceRecord) -> TerminalSnapshot:
@@ -138,17 +134,15 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
                         self._leases.acquire_operation(
                             resource_id=attachment_id, turn_stream_id=record.resource_id,
                             operation_id=record.resource_id, lease_id=self._directory_lease_id(record.resource_id, uri),
-                            holder_session_id=ref.session_id, holder_thread_id=ref.thread_id,
+                            holder_session_id=operation._thread.session_id, holder_thread_id=operation._thread.thread_id,
                         )
             return await self._transport.create_terminal(
                 terminal_id=record.resource_id, owner_revision=record.owner_revision,
                 title=title, agent_id=agent_id, cwd=resolved_cwd, cols=cols, rows=rows,
             )
 
-        return await self._create_record(
-            ref=ref, retention_scope=retention_scope, title=title,
-            holder_id=holder_id, operation_id=operation_id,
-            created_by_turn_id=created_by_turn_id, lease_refs=lease_refs,
+        return await create_resource(
+            self, operation=operation, retention_scope=retention_scope, title=title,
             create=create,
         )
 

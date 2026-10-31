@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import timeout
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -12,7 +12,6 @@ from pathlib import Path
 
 from app.abstractions.workspace_resources import (
     ResourceKind,
-    ResourceRequestError,
     ResourceSessionReader,
     ResourceSnapshot,
     ResourceThreadResolver,
@@ -20,7 +19,6 @@ from app.abstractions.workspace_resources import (
     ResourceTransportGrantRejected,
     RetentionScope,
 )
-from app.core.failures import report_failure
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -131,107 +129,6 @@ class WorkspaceResourceOwner:
 
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
         await self._recovery.recover(resource_ids)
-
-    async def _create_record(
-        self, *, ref: ThreadRef, retention_scope: RetentionScope, title: str,
-        holder_id: str, operation_id: str, created_by_turn_id: str | None,
-        lease_refs: dict[str, str],
-        create: Callable[[OwnedResourceRecord], Awaitable[ResourceSnapshot]],
-    ) -> ResourceSnapshot:
-        stamp = self._now()
-        prefix = "term" if self.kind == "terminal" else "browser"
-        record = OwnedResourceRecord(
-            resource_id=f"{prefix}_{create_uuid_hex()}",
-            workspace_id=self.workspace_id, source_thread=ref,
-            retention_scope=retention_scope, title=title,
-            created_at=stamp, updated_at=stamp, thread_associations=[ref],
-        )
-        lock = asyncio.Lock()
-        async with lock:
-            self._resource_locks[record.resource_id] = lock
-            try:
-                await self._store.save(record)
-            except BaseException:
-                saved = self._store.get(record.resource_id)
-                if saved is None:
-                    del self._resource_locks[record.resource_id]
-                else:
-                    # 原调用尚未进入创建回调；不能把已落盘的 intent 遗留为待停止资源。
-                    await run_cleanup_shielded(lambda: self._close_unstarted_creation(saved, created_by_turn_id))
-                raise
-            self._leases.register_external(
-                resource_id=record.resource_id, kind=self.lease_kind,
-                lifetime_scope=retention_scope, created_by_turn_id=created_by_turn_id,
-            )
-            lease_refs[record.resource_id] = self._acquire(record, ref, holder_id, operation_id)
-            try:
-                runtime = await create(record)
-                observe_resource(record, runtime, self.kind)
-                self._verified(record)
-                await self._store.save(record)
-                await self._sync_ledger(record)
-                return resource_projection(record, runtime, self.kind)
-            except BaseException as error:
-                lease_id = lease_refs[record.resource_id]
-                receipt = error.creation_receipt if isinstance(error, ResourceRequestError) else None
-                await self._unknown(record, error, lease_id=lease_id)
-                await self._record_creation_failure(record, receipt, lease_id, error)
-                raise
-
-    async def _close_unstarted_creation(
-        self, record: OwnedResourceRecord, created_by_turn_id: str | None,
-    ) -> None:
-        """只关闭原调用确认从未进入外部创建回调的 intent，不补造 operation lease。"""
-        # TODO(5.2)：原调用已随 Backend 退出的旧 intent 仍须接管；清单缺失不能证明未创建。
-        self._leases.register_external(
-            resource_id=record.resource_id, kind=self.lease_kind,
-            lifetime_scope=record.retention_scope, created_by_turn_id=created_by_turn_id,
-        )
-        record.status = "deleted"
-        record.thread_associations.clear()
-        record.reconciliation_status = "verified"
-        record.error = None
-        record.updated_at = self._now()
-        await self._store.save(record)
-        await self._sync_ledger(record)
-
-    async def _record_creation_failure(
-        self, record: OwnedResourceRecord, receipt: object, lease_id: str, error: BaseException,
-    ) -> bool:
-        if receipt is None:
-            return False
-        record = self._require_owned_resource_record(record.resource_id)
-        # 正式拒绝必须绑定本次创建 intent；HTTP 状态或任意资源快照都不能替代它。
-        if not isinstance(receipt, dict) or type(receipt.get("owner_revision")) is not int or (
-            receipt.get("resource_id"), receipt.get("workspace_id"), receipt.get("owner_revision")
-        ) != (record.resource_id, record.workspace_id, record.owner_revision):
-            report_failure(error, detail=f"外部资源创建失败回执身份冲突: resource_id={record.resource_id}")
-            return False
-        outcome = receipt.get("outcome")
-        if outcome == "not_created" and receipt.get("resource") is None:
-            record.status = "deleted"
-            record.thread_associations.clear()
-        elif outcome == "failed":
-            runtime = receipt.get("resource")
-            expected_status = "failed" if self.kind == "browser" else "terminated"
-            if not isinstance(runtime, dict) or type(runtime.get("transport_owner_revision")) is not int or (
-                runtime.get(f"{self.kind}_id"), runtime.get("workspace_id"),
-                runtime.get("transport_owner_revision"), runtime.get("status"),
-                runtime.get("reconciliation_status"),
-            ) != (record.resource_id, record.workspace_id, record.owner_revision, expected_status, "verified"):
-                report_failure(error, detail=f"外部资源创建失败回执未核实: resource_id={record.resource_id}")
-                return False
-            observe_resource(record, runtime, self.kind)
-        else:
-            report_failure(error, detail=f"外部资源创建失败回执无效: resource_id={record.resource_id}")
-            return False
-        record.reconciliation_status = "verified"
-        record.error = None
-        record.updated_at = self._now()
-        await self._store.save(record)
-        self._leases.settle(lease_id)
-        await self._sync_ledger(record)
-        return True
 
     async def list_resources(
         self,
@@ -1090,7 +987,7 @@ class WorkspaceResourceOwner:
         )
         record.updated_at = self._now()
         async def persist() -> None:
-            # TODO(5.2)：普通工具已有原dispatching保护，创建/管理/传输授权仍须迁齐；失败不能视为unknown持久成功。
+            # TODO(5.2)：创建和普通工具已有原dispatching保护，管理/传输授权仍须迁齐；失败不能视为unknown持久成功。
             # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
             await run_sync_shielded(
                 self._leases.update_external_state,

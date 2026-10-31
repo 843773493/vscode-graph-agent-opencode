@@ -805,3 +805,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整旧生产归档8项反例准确复现普通收尾将active改为released；完整候选归档仅放开Turn对dispatching的释放，8项变异反例失败；仅删除准备写盘后的operation准入重核，2项变异反例失败。Ruff、compileall与strict通过；最终Pyright和旧生产各19条既存诊断，规则、完整消息、文件、词法owner和最窄AST表达式逐项一致，新测试零诊断，不称类型全绿。
 - 同一资源/operation顺序100次读取的本机替身传输测量：Terminal中位1.66→3.96ms，Browser 2.35→6.11ms；每领域原owner仍写100次，账本新增200次快照写入，分别194500/196500字节。TODO(性能)：测量大账本重写和调度成本后再优化原writer，保留派发前及回执后两个持久边界；此小工作负载不代表真实HTTP/PTY/Chromium或全链路性能。
 - 原始输出、准确命令、源码指纹、退出码、反例/变异补丁、测量及作者结构自查见`out/tests/temp/operation_dispatch_receipt_20261031/artifacts/verification.json`。传输和Session定位使用既有替身，仅证明原owner/账本及协议入口单测；真实进程、Backend硬重启、Windows、创建/版本管理/传输授权的首步写失败保护及完整operation/shutdown仍TODO。5.2/5.4与本变更21/23保持未完成，未修改另一会话Web/Workbench、其自动化、共享暂存或debug。
+
+### 2026-10-31 创建派发与首条intent的原operation保护（5.2/5.4部分）
+
+- 两领域创建迁入唯一共享`creation.py`，移除原owner三个私有方法及逐层重复身份参数，复用同一operation、原lease获取和dispatching派发链。首条intent写盘前登记原锁及operation在途集合，close冻结并等待原锁；取消/关闭不迟到登记、取得lease或外部创建，已开始写盘必须结算。原调用证明未进入回调后才提交deleted/verified、stopped并结清已取得的精确lease。cwd解析后拒绝迟到创建，未声称close已等待整个cwd阶段。
+- 新增61项；相关回归1112 passed／59.88秒，采样源码前后稳定。随后仅修正新增测试的闭包类型收窄，并将派发状态断言移至外部创建和普通收尾之后，让反例直接证明真实释放窗口；修改后18项派发测试全部通过，其余回归按未变化源码复用，不称最终1112项整批重跑。
+- 完整旧生产归档叠加最终测试，8项反例核到回执丢失且unknown首步写失败后原active被普通close改成released；另外2项准确核到首条intent仍写盘时close提前返回。完整候选归档仅恢复creating清单隐式核实的两项变异反例失败于普通查询返回verified，最终生产只允许原创建入口明确消费创建回执完成首次核实。
+- 首轮12项失败中8项复现普通查询误核实创建结果，另4项为新增装具误判原记录writer的迟到错误链、查询尚未登记的资源；按原合同修正装具，保留精确错误、取消消息、原lease/Thread/holder/operation/Turn身份及调用次数。另一次初版红测在外部回调前先核派发状态，只证明缺少保护，未冒称已证明释放窗口；最终红测将检查移至实际创建和失败写盘之后，原件全部保留。
+- Ruff、compileall与OpenSpec strict通过；本轮Pyright范围原/新生产各12条既存诊断，按文件、规则、完整消息、词法owner和最窄AST逐项一致，新测试零诊断，不称类型全绿。原始命令、源码指纹、退出码、类型对照和作者结构自查见`out/tests/temp/resource_creation_dispatch_20261031/artifacts/verification.json`。使用原owner/账本和替身传输，不证明真实PTY/Chromium、Backend硬退出、旧代完整接管、Windows或完整operation/shutdown期限；版本管理与传输授权首步写失败保护继续TODO。5.2/5.4及整体21/23保持未完成，未修改另一会话Web/Workbench、其自动化、共享暂存或debug。
