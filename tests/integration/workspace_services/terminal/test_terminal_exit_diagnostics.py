@@ -27,8 +27,9 @@ TerminalService = tuple[TestRunContext, subprocess.Popen[str], str, str, Path, P
 
 
 @pytest.fixture
-def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[TerminalService]:
-    with TestRunContext.from_test_file(Path(__file__)) as run:
+def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
+                     request: pytest.FixtureRequest) -> Iterator[TerminalService]:
+    with TestRunContext.from_test_file(Path(request.node.path)) as run:
         root = prepare_default_test_workspace(
             workspace_root=run.workspace_root / uuid4().hex,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",

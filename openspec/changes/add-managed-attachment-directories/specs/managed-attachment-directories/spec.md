@@ -188,6 +188,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** PTY 自发退出并交付原退出观察，但隔离 Worker 尚未确认退出，或其关闭期限内未能退出
 - **THEN** 复用原 Worker 关闭入口等待确认，期间保留原句柄和 unknown；重叠关闭共享唯一在途任务，不能重复派发或提前成功，迟到退出处理不得覆盖原管理停止结果。关闭失败发布 exited/unknown 及原诊断，原 kill/delete 管理入口可重试同一执行，不重建 Worker 或将 PTY 退出当作宿主停止证明。已经确认退出的 Worker 才可移除句柄；正常自发退出确认后恢复原 verified 状态
 
+#### Scenario: Linux 旧代终端的执行根退出但原 SID 仍有后代
+
+- **WHEN** 原停止失败已保留完整进程身份和 unknown，Worker 已退出，随后 Linux PTY 根进程自行退出，同一 Manager 或冷 Manager 收到显式 kill/delete
+- **THEN** 原 PID、进程组与 SID 符合原 PTY 根身份时，根进程缺失不提前拒绝或签发停止成功；继续沿既有进程树停止链核实原 SID 的全部后代，真实终态及原记录落盘后才发布 verified。缺失身份、仍存在但身份不符的 PID 继续拒绝，不重建终端、不重放旧操作
+
 #### Scenario: POSIX 终端在停止快照后创建后代
 
 - **WHEN** 原停止链捕获的 PID 收到 SIGTERM 或 SIGKILL 后退出，但快照到信号生效之间创建了同一操作系统 session 的新后代

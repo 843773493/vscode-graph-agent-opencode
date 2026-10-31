@@ -394,6 +394,8 @@ Linux真实HTTP/PTY用例只在原就绪消息交付处注入失败，父子均�
 
 Terminal的Worker已经退出且记录非运行时，只要unknown记录仍有完整PID、系统会话和启动标记，显式kill/delete继续进入原`terminateForRelease`，而非依赖内存Worker句柄。无句柄仍由原核验检查当前PID、进程组、系统会话与启动标记，身份不匹配保留unknown且不发信号；同Manager与冷Manager均复用唯一停止、写盘和回执链，不重建执行。缺少完整原生身份的接管继续TODO。
 
+Linux 原根进程随后退出时，完整记录中的 PID、进程组与 SID 必须仍符合原 PTY 根的同一身份，才能将根缺失交给原进程树停止链继续核实。原 SID 下的后代仍可能执行，不能因根缺失提前拒绝管理或发布 verified；由既有 SID 枚举、信号、退出复查及原终态写盘决定结果。仍存在但身份不符的 PID 和不完整身份继续拒绝；不为冷恢复创建 Worker、第二停止算法或新的持有记录，其它平台及未知 native 创建接管继续 TODO。
+
 普通冷恢复取消时继续保留原pending与冻结版本；显式stop/delete只准备原清单，在原资源锁内核expected_revision、active lease和delete关联限制后，复用`ResourceRecovery`唯一锁内同步主体并携带停止意图。普通访问仍沿普通排空；管理停止不先等待只能由context关闭才能结束的旧执行。同步后重读原记录，再沿原接管、版本推进、停止回执、持久终态和lease结算链完成，不新增任务、账本、schema或另一个停止实现。过期版本及有关联的delete在派发前拒绝，不消耗pending或撤权。缺少外部身份、同步阻塞、不合作执行和整个shutdown期限继续TODO；不能把本片当作5.2/5.4全部完成。
 
 ### 消息准备窗口与关闭依赖（5.4 部分收口）

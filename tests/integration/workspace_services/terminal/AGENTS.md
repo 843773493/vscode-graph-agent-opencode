@@ -31,6 +31,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 自发退出场景仅在原Worker的process.exit和原ChildProcess.kill边界阻止退出，真实PTY经原命令自行退出。核原Worker仍存活且句柄保留，关闭确认到期后持久unknown，移除故障后经原HTTP kill/delete停止同一Worker；另有无故障正常退出回归。正式suite仍为60秒/4GiB，不替代无PID接管、Backend重启或Windows验收。
 
+`test_terminal_root_exit_recovery.py`复用上述真实PTY装具，装具输出位置按当前测试文件确定。原停止失败生成unknown后，真实命令自行退出根，保留原SID内忽略SIGTERM/SIGHUP的后代；同Manager及冷Manager各经原HTTP kill/delete核实后代停止、持久终态和重复请求，不预填状态或替换身份／停止算法。该证据限定Linux，不代Python lease、Gateway/Web或无PID创建接管。
+
 `test_terminal_process_diagnostics.py`经正式HTTP创建真实PTY，在原生stat读取/解析、session扫描或SIGTERM出口注入失败，并分别制造原日志writer的真实ENOTDIR；核普通响应、unknown持久记录、原进程身份仍存活及解除故障后同入口停止。fixture先执行HTTP资源清理再关闭client，并以冻结创建时间的psutil实例兜底回收。suite `integration-terminal-process-diagnostics`固定60秒/4GiB；原真实Linux/Windows进程树测试另由`integration-terminal-process-release`同样固定60秒/4GiB选择，平台skip不能计作原生通过。不代Python lease、Gateway/Web、Backend重启或其它平台实机。
 
 同文件的ps/taskkill与探测双错场景始终由真实Linux PTY创建资源，只在故障窗口显式替换平台选择、原生查询和存在性探测，故障解除后恢复Linux原停止链。核主错误码、两份原诊断、unknown/原身份及同入口停止；不能把这种HTTP/PTY组合证据称为Windows或Darwin实机验收。

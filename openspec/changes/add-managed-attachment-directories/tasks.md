@@ -642,3 +642,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整旧生产归档的真实 HTTP/PTY 反例精确失败于“Worker 仍存活但快照的 pty_worker_pid 已为空”。初版候选 8 项真实集成通过（53.53 秒）；随后补齐并发管理与唯一关闭任务，最终 124 项 Session／Worker／Manager／shutdown 单测通过。原诊断单测的旧 null 预期按真实反例修正为原句柄及 unknown，保留全部原日志、因果关系与发布顺序断言，不用装具补造退出确认。
 - 最终 9 项集成已补验：完整 `git archive 936c09c99` 经主仓共享闸门取得名额，在原 60 秒／4GiB 保护下全部通过（55.57 秒，外层 58.03 秒），源码前后指纹一致。覆盖正常自发退出及并发管理时保留原 Worker、唯一关闭和真实终态；证据见 `out/tests/temp/terminal_exit_worker_final_20261031/artifacts/`。此前等待满 600 秒的失败原件仍保留，pytest 当时未启动；较早定向排队只因源码修订取消自己的等待。未中断或绕过另一会话测试，初版 8 项不重复累加。
 - Ruff、Python 编译、Pyright 和 Node 语法检查通过；规范严格验证见同目录原件。准确命令、各阶段指纹、原始输出、退出码及作者差异复核见 `out/tests/temp/terminal_exit_worker_20261031/artifacts/verification.json`。无 PID 的 native 接管、冷重启后的未知 Worker、Windows 及完整 shutdown 硬期限继续 TODO，5.2／5.4 和整体 21/23 未关闭。未修改 Web/Workbench、其自动化或共享 debug。
+
+### 2026-10-31 Linux 执行根退出后的原 SID 清理（5.2 部分收口）
+
+- 原 Worker 错误及停止失败生成 exited/unknown 后，真实 PTY 根进程自行退出，原 SID 的后代仍在执行；旧实现显式 kill 返回500，未进入后代停止链。Linux 现仅在原 PID、进程组和 SID 符合原 PTY 根身份时，将根缺失继续交给既有进程树清理；仍存在但身份不符或身份不完整时继续拒绝，不创建 Worker 或第二停止实现。
+- 完整 HEAD 归档叠加本片改动，124 项 Session／Manager／进程生命周期单测通过；4 项真实 HTTP／PTY 场景通过（23.37 秒），覆盖同 Manager／冷 Manager × kill／delete，核原后代停止、持久终态、原身份及重复请求无新执行。复用装具仅将输出归属改为当前测试文件，不手填状态或替换身份／停止算法。旧生产反例精确失败于500且后代仍执行。
+- Ruff、两文件 Pyright 零诊断、Python 编译、Node 语法及本 change strict 通过。准确命令、三个改动源码的前后指纹、原始输出和退出码见 `out/tests/temp/terminal_root_recovery_20261031/artifacts/verification.json`。集成先沿主仓闸门等待221.25秒，取得名额后沿原90秒／4GiB保护执行；未绕过另一会话的测试。
+- 本片仅证明 Linux 已持久完整身份的原 SID 后代清理，不代无 PID 创建接管、未知 Worker 发现、Python lease、Windows、Gateway/Web 或完整 shutdown 期限；5.2／5.4 及整体21/23仍未完成。另一会话的 Web/Workbench、自动化、共享暂存和 debug 服务保持。

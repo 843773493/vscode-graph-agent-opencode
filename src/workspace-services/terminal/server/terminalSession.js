@@ -599,6 +599,10 @@ export class TerminalSession {
       );
     }
     const stat = await readProcessStat(pid);
+    // Linux 根退出后仍须沿原 SID 核实后代；缺根不能代替整棵进程树的停止证明。
+    if (!stat && process.platform === "linux" && this.processSessionId === pid && this.processGroupId === pid) {
+      return;
+    }
     if (
       !stat
       || stat.processSessionId !== this.processSessionId
