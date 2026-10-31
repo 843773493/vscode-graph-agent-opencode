@@ -1772,3 +1772,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 
 - 上片唯一失败已按itemized既定删除合同归因：`await_terminal`只确认整树deleting的逻辑committed，不能证明物理settlement完成。原测试现在用局部drain屏障明确观察pending与settled；保留原mark回执`before+3`和最终实际revision`before+6`断言，补核回执身份／版本稳定、最终目录为空并显式关闭原worker，不改变产品或删除期限。
 - 原失败运行及源码指纹保留；校准后该用例与两项相邻逻辑提交／恢复测试3 passed。其余测试顶层AST不变，复用上片140项通过，不重复整组运行、不将有重叠的通过数相加。Ruff与compileall通过，Pyright5条原诊断按规则、全文及最窄表达式AST无新增。证据：`out/tests/temp/delete_receipt_settlement_20261031/artifacts/verification.json`。本片不新增产品功能，URI整体51/53及未验范围保持，不触碰另一会话前端、自动化、暂存或共享debug。
+
+### 2026-10-31 Node Debug 内部校验与派生命名的错误归属（2.2／7.2部分收口）
+
+- 八个配置／启动入口复用原错误映射，内部 ValidationError 原样交 TraceMiddleware；动作入口同样重抛，普通响应保持安全500、原request_id和单次原异常诊断，不复制input_value。派生方案名称在原factory中单独复用DTO字段约束，只将该字段拒绝转换为原业务400／409；内部身份和后续校验不在输入捕获范围内。创建／更新的空白名称继续由原registry拒绝，未改请求schema、命名限制或持久化链路。
+- 原实现33项有效反例失败、53项通过；最终173项相关API／配置单测通过，覆盖POSIX／盘符／UNC、原404／403／400／409／422、原因链、隐式启动／断点命名写前拒绝、同registry修复后重试及日志次错。首轮绿测装具误用ForbiddenError构造参数导致收集失败，已修正并保留原件，不计产品结果。
+- Ruff、compileall及本change strict通过；Pyright保留3条原诊断，按规则、全文及最窄语句AST核无新增，新测试零诊断。准确命令、指纹、原始输出、实际退出码和自查见`out/tests/temp/node_debug_response_validation_20261031/artifacts/verification.json`。未运行真实Node进程、Gateway网络、Web／Workbench、Windows或完整执行恢复验收，2.2／7.2仍未勾、整体51/53；另一会话前端、自动化、暂存和共享debug保持。

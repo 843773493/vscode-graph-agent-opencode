@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
 from app.api.errors import forbidden_http_error, state_conflict_http_error
@@ -35,6 +36,9 @@ _CONFIGURATION_ERRORS = (FileNotFoundError, ForbiddenError, TypeError, ValueErro
 
 
 def _configuration_error(error: Exception) -> HTTPException:
+    if isinstance(error, ValidationError):
+        # 请求 DTO 已完成解析；内部结构损坏交统一诊断出口，不公开 input_value。
+        raise error
     if isinstance(error, FileNotFoundError):
         return HTTPException(status_code=404, detail=str(error))
     if isinstance(error, KeyError):
@@ -295,6 +299,8 @@ async def apply_node_debug_action(
         result = await node_debug_service.apply_action(
             command=payload,
         )
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ForbiddenError as error:

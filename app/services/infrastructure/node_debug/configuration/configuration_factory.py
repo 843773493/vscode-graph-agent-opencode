@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
+
+from pydantic import TypeAdapter, ValidationError
 
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
@@ -24,6 +28,7 @@ from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 _SUPPORTED_EXTENSIONS = {".cjs", ".js", ".mjs"}
+_CONFIGURATION_NAME = TypeAdapter[str](Annotated[str, NodeDebugConfigurationDTO.model_fields["name"]])
 
 
 class NodeDebugConfigurationFactory:
@@ -121,10 +126,19 @@ class NodeDebugConfigurationFactory:
         revision: int = 1,
         created_at: datetime | None = None,
     ) -> NodeDebugConfigurationDTO:
+        # 隐式方案的名称也可能来自文件名；只复用该字段的合同校验用户派生输入。
+        try:
+            normalized_name = _CONFIGURATION_NAME.validate_python(name.strip())
+        except ValidationError as error:
+            detail = failure_detail(
+                error, stage="node-debug-configuration-name", label="调试方案名称无效",
+            )
+            rule = error.errors(include_input=False, include_context=False, include_url=False)[0]["type"]
+            raise ValueError(f"{detail}, rules=name:{rule}") from error
         now = datetime.now(UTC)
         configuration = NodeDebugConfigurationDTO(
             configuration_id=configuration_id,
-            name=name.strip(),
+            name=normalized_name,
             revision=revision,
             script_path=script_path,
             working_directory=working_directory,
