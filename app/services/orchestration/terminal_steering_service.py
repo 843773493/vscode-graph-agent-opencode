@@ -16,6 +16,8 @@ from app.services.business.workspace_resources.owner import ResourceConflict
 
 logger = logging.getLogger(__name__)
 
+MONITOR_CLOSE_WAIT_SECONDS = 30.0
+
 
 class TerminalSteeringService:
     def __init__(
@@ -52,7 +54,12 @@ class TerminalSteeringService:
             task.cancel()
         # 只观察原监控；观察者取消不能再次打断正在结算的扫描。
         # TODO(5.4)：不合作扫描终止及整个 shutdown 硬期限仍须原执行 owner 核实。
-        await asyncio.wait((task,))
+        done, _pending = await asyncio.wait((task,), timeout=MONITOR_CLOSE_WAIT_SECONDS)
+        if not done:
+            raise TimeoutError(
+                f"终端完成监控关闭等待超过 {MONITOR_CLOSE_WAIT_SECONDS:g} 秒；"
+                f"原扫描仍由 owner 持有，尚未报告排空: task={task.get_name()}"
+            )
         if self._task is task:
             self._task = None
         if not task.cancelled():
@@ -158,6 +165,9 @@ class TerminalSteeringService:
                 ResourceConflict,
                 ExceptionGroup,
             ) as error:
+                # 关闭后没有下一轮；原扫描失败必须交回关闭方，不能按稍后重试结算成功。
+                if self._stop_requested:
+                    raise
                 logger.warning(
                     "终端 owner 监控存在未收敛操作，将重试: %s",
                     error,

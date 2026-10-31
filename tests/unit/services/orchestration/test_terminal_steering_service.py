@@ -9,6 +9,7 @@ import pytest
 
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.services.orchestration import terminal_steering_service as steering_module
 from app.services.orchestration.terminal_steering_service import (
     TerminalSteeringService,
 )
@@ -484,3 +485,54 @@ async def test_cancelled_shutdown_observer_keeps_original_monitor_for_retry(
     finally:
         release.set()
         await asyncio.gather(monitor, closing, return_exceptions=True)
+
+
+@pytest.mark.parametrize("failure_type", [None, OSError, TimeoutError, ConnectionError],
+                         ids=["success", "failure", "timeout", "connection"])
+async def test_shutdown_timeout_retains_original_monitor_and_late_result(
+    protected_scan_monitor: tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]],
+    terminal_client: _FakeTerminalClient,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception] | None,
+) -> None:
+    service, entered, release, calls = protected_scan_monitor
+    original_scan = terminal_client.sweep_orphans
+    failure = None if failure_type is None else failure_type("原监控迟到失败")
+
+    async def scan() -> list[dict[str, object]]:
+        result = await original_scan()
+        if failure is not None:
+            raise failure
+        return result
+
+    monkeypatch.setattr(terminal_client, "sweep_orphans", scan)
+    # 单测压缩观察时间；默认30秒另由真实Workspace生命周期验收。
+    monkeypatch.setattr(steering_module, "MONITOR_CLOSE_WAIT_SECONDS", 0.01, raising=False)
+    await service.start()
+    await asyncio.wait_for(entered.wait(), 1)
+    monitor = service._task
+    assert monitor is not None
+    closing: list[asyncio.Task[None]] = []
+    try:
+        for _ in range(2):
+            closing.append(asyncio.create_task(service.shutdown()))
+            with pytest.raises(TimeoutError, match="终端完成监控关闭等待超过"):
+                await asyncio.wait_for(asyncio.shield(closing[-1]), 0.5)
+            assert service._task is monitor and not monitor.done() and monitor.cancelling() == 1
+            assert calls == ["sweep"]
+            with pytest.raises(RuntimeError, match="已经启动"):
+                await service.start()
+        release.set()
+        await asyncio.wait((monitor,), timeout=1)
+        assert monitor.done() and service._task is monitor
+        if failure is None:
+            await service.shutdown()
+        else:
+            with pytest.raises(type(failure)) as caught:
+                await service.shutdown()
+            assert caught.value is failure and monitor.exception() is failure
+        assert service._task is None and calls == ["sweep"]
+        await service.shutdown()
+    finally:
+        release.set()
+        await asyncio.gather(monitor, *closing, return_exceptions=True)

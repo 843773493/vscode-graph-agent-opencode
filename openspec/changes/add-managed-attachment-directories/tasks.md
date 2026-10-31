@@ -749,3 +749,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - created 状态的 close/delete 在设置 closingRequested 前保持原 409/browser_creation_unverified；拒绝不改变磁盘、原创建 Promise 或后续交互准入。只移动原拒绝分支，不新增恢复链、状态或账本；无原 context 身份的旧代接管继续 TODO。
 - 相关 30 项单测通过；新增断言在原生产实现上精确红测（16 通过、1 失败）。2 项真实 Node HTTP/Chromium 集成通过（4.49 秒），沿主仓独占闸门串行：暂扣真实 context 回执后分别拒绝 close/delete，释放原回执后同一 ID/版本完成创建、正式 navigate 新增页面、正式关闭并释放 context；既有硬退出/冷启动场景继续保留原意图及未知身份保护。外部 900 秒期限包含排队，各进程保留 4GiB 数据段保护。
 - Ruff、Python 编译、定向 Pyright 零诊断、Node 语法、作者差异自查及 OpenSpec strict 通过；准确命令、源码指纹、原始输出及实际退出码见 `out/tests/temp/browser_creation_rejection_20261031/artifacts/verification.json`。这不代表 Python owner/lease、无身份接管、完整 operation/shutdown 期限、Windows 或 Gateway/主 Web 验收，5.2/5.4 与整体 21/23 保持未完成。未修改另一会话 Web/Workbench、自动化或共享暂存，未重启共享 debug。
+
+
+### 2026-10-31 Terminal 完成监控的关闭观察期限与原错传播（5.4 部分）
+
+- 原 shutdown 通过既有 asyncio.wait 每次最多观察同一任务30秒，到期保留原句柄、关闭准入及后续Workspace依赖；重入不再取消原扫描或重启监控。原轮询中的可重试错误在关闭期间直接交回原异常，正常轮询继续沿原周期重试；不新增状态、账本或调度链。
+- 17项相关单测通过；原无限等待反例红测失败，补齐预算后超时/连接错误被消耗的两项反例仍精确失败，补齐原错传播后全部通过。4项真实双Workspace生命周期集成通过（59.76秒），默认期限场景实际等待30秒，核首次关闭取消、重入不新增取消、原任务/Session locator/存储/维护锁保留、迟到原生错误及同一生命周期owner重试完成；关键Session与活动记录由产品入口生成，外设回执仅提供屏障与故障。
+- 初次集成在新测试的取消总数断言失败（3通过、1失败）：列表与恢复的两个原30秒预算也会取消同一监控。按源码和现场证据将“首次关闭仅一次取消”的精确断言移至其期限前，再核到期后重入不增加取消，未放宽资源身份、原错或截止断言。一次先前排队运行因补齐已发现的关闭期吞错而仅终止本次pytest，退出143且未进入测试体；未停止其它会话测试。原件均保留。
+- Ruff、compileall、OpenSpec strict与作者差异/AST自查通过；Pyright基线和最终各1条既有诊断，规则、完整消息、最窄AST owner和表达式一致，无新增，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、失败归因及类型对照见 `out/tests/temp/terminal_monitor_deadline_20261031/artifacts/verification.json`。
+- 集成沿原跨worktree独占闸门串行，进程外900秒包括排队且保留4GiB保护。未验证原生I/O抢占、无身份接管、整个operation/shutdown硬期限、Terminal进程终止、Windows或Gateway/主Web；5.2/5.4与整体21/23继续保持未完成。未修改另一会话Web/Workbench、自动化或共享暂存，未重启共享debug。

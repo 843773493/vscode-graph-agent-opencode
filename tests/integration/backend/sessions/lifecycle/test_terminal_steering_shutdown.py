@@ -30,17 +30,21 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 
 @pytest.fixture
 def terminal_snapshot_fault(
-    maintenance_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
-) -> tuple[asyncio.Event, asyncio.Event, list[IsADirectoryError], list[str]]:
+    maintenance_case: MountedCase, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> tuple[asyncio.Event, asyncio.Event, list[Exception], list[str]]:
     workspace_id, root = list(maintenance_case.roots.items())[-1]
     obstruction = root / "blocked-terminal-snapshot"
     obstruction.mkdir()
     entered, release = asyncio.Event(), asyncio.Event()
-    errors: list[IsADirectoryError] = []
+    errors: list[Exception] = []
     calls: list[str] = []
 
     async def settle() -> None:
         await release.wait()
+        failure: Exception | None = request.param if hasattr(request, "param") else None
+        if failure is not None:
+            errors.append(failure)
+            raise failure
         try:
             obstruction.read_text(encoding="utf-8")
         except IsADirectoryError as error:
@@ -63,10 +67,12 @@ def terminal_snapshot_fault(
     return entered, release, errors, calls
 
 
-@pytest.mark.parametrize("failed_before_close", [False, True], ids=["during-close", "already-failed"])
+@pytest.mark.parametrize(("failed_before_close", "terminal_snapshot_fault"),
+                         [(False, None), (True, None), (False, TimeoutError("原Terminal快照回执超时"))],
+                         indirect=["terminal_snapshot_fault"], ids=["during-close", "already-failed", "transport-timeout"])
 async def test_terminal_monitor_failure_blocks_dependencies_then_retries_same_workspace(
     maintenance_case: MountedCase,
-    terminal_snapshot_fault: tuple[asyncio.Event, asyncio.Event, list[IsADirectoryError], list[str]],
+    terminal_snapshot_fault: tuple[asyncio.Event, asyncio.Event, list[Exception], list[str]],
     failed_before_close: bool,
 ) -> None:
     entered, release, errors, calls = terminal_snapshot_fault
@@ -137,4 +143,85 @@ async def test_terminal_monitor_failure_blocks_dependencies_then_retries_same_wo
     finally:
         release.set()
         await asyncio.gather(*(task for task in (closing, observer) if task is not None), return_exceptions=True)
+        await lifetime.__aexit__(None, None, None)
+
+
+async def test_terminal_monitor_default_deadline_preserves_workspace_until_original_scan_settles(
+    maintenance_case: MountedCase,
+    terminal_snapshot_fault: tuple[asyncio.Event, asyncio.Event, list[Exception], list[str]],
+) -> None:
+    entered, release, errors, calls = terminal_snapshot_fault
+    lifetime = main.lifespan(main.app)
+    await lifetime.__aenter__()
+    closing = observer = None
+    try:
+        selected = maintenance_case.containers[-1]
+        backend = main.app.state.workspace_lifespan
+        workspace = next(item for item in backend.workspaces if item.container is selected)
+        workspace_owner = workspace._owner
+        steering = selected.terminal_steering_service
+        monitor = steering._task
+        assert monitor is not None
+        await asyncio.wait_for(entered.wait(), 3)
+        with workspace_context(selected.workspace_id, selected.workspace_root,
+                               session_catalog=selected.session_catalog):
+            session = await selected.session_service.create(SessionCreateRequest(title="终端监控关闭期限"))
+        record = await selected.workspace_activity_service.append(
+            event_id="terminal-monitor-deadline", session_id=session.session_id,
+            status="completed", summary="监控到期仍保留原存储与定位",
+        )
+        locator = selected.session_catalog.resolver.resolve_session_node(session.session_id)
+        started = asyncio.get_running_loop().time()
+        closing = asyncio.create_task(workspace.close())
+        async with asyncio.timeout(3):
+            while workspace.pending_close_stage != "terminal_steering.shutdown" or not monitor.cancelling():
+                await asyncio.sleep(0)
+        assert monitor.cancelling() == 1
+        with pytest.raises(TimeoutError, match="终端完成监控关闭等待超过 30 秒"):
+            # 不压缩产品期限；外层只防止回归成无限等待，取消不触碰原生命周期owner。
+            await asyncio.wait_for(asyncio.shield(closing), 35)
+        assert asyncio.get_running_loop().time() - started >= 30
+        assert steering._task is monitor and not monitor.done()
+        # 原列表/恢复期限也会取消本任务；重入不得在这些真实请求外新增取消。
+        cancellations = monitor.cancelling()
+        observer = asyncio.create_task(steering.shutdown())
+        await asyncio.sleep(0)
+        assert not observer.done() and monitor.cancelling() == cancellations
+        observer.cancel("取消到期后的监控观察")
+        with pytest.raises(asyncio.CancelledError, match="取消到期后的监控观察"):
+            await observer
+        assert steering._task is monitor and monitor.cancelling() == cancellations
+        assert workspace.pending_close_stage == "terminal_steering.shutdown" and not workspace.closed
+        assert workspace._owner is workspace_owner and calls == [selected.workspace_id] and not errors
+        assert main.app.state.workspace_container_registry is backend.registry and locator.is_dir()
+        activity = selected.workspace_activity_service
+        assert not activity.store._database._closed and record in activity.store.read_activity_page().records
+        with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+            selected.workspace_root / ".boxteam/attachments", exclusive=True,
+        ):
+            pytest.fail("原扫描尚未结算，不能释放维护锁")
+        # 只释放原外设回执；迟到原错必须交回Backend，不重启监控或重放通知。
+        release.set()
+        await asyncio.wait((monitor,), timeout=3)
+        assert monitor.done() and steering._task is monitor
+        failure, = errors
+        with pytest.raises(BaseExceptionGroup) as caught:
+            await backend.close()
+        assert caught.value.exceptions == (failure,) and monitor.exception() is failure
+        assert workspace.pending_close_stage == "terminal_steering.shutdown" and not workspace.closed
+        assert workspace._owner is workspace_owner and steering._task is None
+        await backend.close()
+        assert backend.closed and workspace.closed and calls == [selected.workspace_id]
+        assert main.app.state.workspace_container_registry is None
+        cold = WorkspaceActivityService(workspace_root=selected.workspace_root)
+        try:
+            assert record in cold.store.read_activity_page().records
+        finally:
+            cold.close()
+        with AttachmentMaintenanceLock(selected.workspace_root / ".boxteam/attachments", exclusive=True):
+            pass
+    finally:
+        release.set()
+        await asyncio.gather(*(task for task in (closing, observer) if task is not None), return_exceptions=True)
+        await asyncio.gather(maintenance_case.containers[-1].terminal_steering_service.shutdown(), return_exceptions=True)
         await lifetime.__aexit__(None, None, None)
