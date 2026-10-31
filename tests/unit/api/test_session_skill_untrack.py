@@ -16,6 +16,7 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionSkillUntrackRequest,
+    SessionSkillUntrackResultDTO,
 )
 from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
@@ -41,6 +42,43 @@ from tests.unit.services.infrastructure.rollout_context.conftest import SourceSe
 
 SKILL_NAME = "debugging"
 SKILL_CONTENT = "v1\n"
+
+
+@pytest.mark.parametrize("uri", [
+    None,
+    "boxteam://workspace/ws-dangling/resources/skills/debugging/SKILL.md",
+    "boxteam://gateway/gateway-missing/resources/skills/debugging/references/%E4%B8%AD%20note.md",
+])
+def test_untrack_response_preserves_nullable_and_dangling_uri_bytes(uri: str | None) -> None:
+    result = SessionSkillUntrackResultDTO(
+        session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea", thread_id="thr_00000000400070008000000000000002",
+        name=SKILL_NAME, mode="untrack", status="loaded", display_uri=uri,
+    )
+    assert result.model_dump(mode="json")["display_uri"] == uri
+
+
+@pytest.mark.parametrize("uri", ["/private/skills/debugging/SKILL.md", r"C:\private\skills\SKILL.md", r"\\host\share\SKILL.md"])
+def test_untrack_api_rejects_internal_path_response_with_request_identity(uri: str) -> None:
+    class InvalidReceiptService:
+        async def untrack(self, *, session_id: str, thread_id: str, name: str) -> SessionSkillUntrackResultDTO:
+            return SessionSkillUntrackResultDTO(
+                session_id=session_id, thread_id=thread_id, name=name, mode="untrack", status="loaded",
+                display_uri=uri,
+            )
+
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(router, prefix="/api/v1")
+    application.dependency_overrides[get_session_skill_tracking_service] = InvalidReceiptService
+    with TestClient(application, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/sessions/ses_019bef80066f7038ae8e88ccb2e5e2ea/threads/thr_00000000400070008000000000000002/skills/untrack",
+            json={"name": SKILL_NAME},
+            headers={"X-Local-Token": "local-dev-token", "X-Request-ID": "req-untrack-invalid-output"},
+        )
+    assert response.status_code == 500, response.text
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-untrack-invalid-output"
+    assert uri not in response.text and "display_uri" not in response.text
 
 
 @pytest.fixture()

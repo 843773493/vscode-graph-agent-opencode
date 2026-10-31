@@ -460,6 +460,8 @@ class SessionSkillUntrackResultDTO(BaseModel):
     boxteam:// 虚拟资源 URI。
     """
 
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     session_id: str
     thread_id: str
     name: str
@@ -467,7 +469,7 @@ class SessionSkillUntrackResultDTO(BaseModel):
     status: Literal[
         "loaded", "already_active", "not_tracked", "rebound", "error"
     ]
-    display_uri: str | None = None
+    display_uri: SessionContextURI | None = None
     revision: str | None = None
     content_hash: str | None = None
     append_status: Literal["appended", "already_active", "none"] = "none"

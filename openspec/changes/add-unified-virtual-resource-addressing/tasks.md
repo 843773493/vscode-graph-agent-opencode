@@ -1674,3 +1674,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 最终关联单元／合同397项通过，含五入口×三平台路径的15项新增HTTP错误验证；此前扩大HTTP检查109 passed／2 failed，与最终组重叠不相加。两项失败均为旧session-generations URL返回404，在完整旧HEAD也复现，未改其实现或断言。正式fork确认I/O矩阵6项通过（88.22秒），关键历史经原产品入口生成，覆盖main／child、确认前后及线程池阶段取消；该矩阵不代表真实跨Gateway网络或Provider验收。完整候选归档分别还原旧输出DTO、目标封套及本地路由后，三个反例均有效失败；首次API补充命令误选不存在文件而未收集测试，修正路径后使用上述有效结果。
 - 协议生成一致性通过，六模型的序列化JSON Schema与完整HEAD相同，不修改Web生成物。Ruff27项和Pyright21项既有诊断逐条核规则、完整消息及最窄AST一致，零新增，不称全绿。准确命令、源码指纹、原始输出、实际退出码、反例及基线核验见`out/tests/temp/fork_response_uri_20261030/artifacts/verification.json`；测试保持进程外超时／4GiB及原集成独占闸门，临时完整源码副本核验后删除。
 - 本片未验证Web／Workbench、Windows实机、真实网络跨Gateway fork或进程硬重启，不代替全局不变量总门，2.2／7.2及整体51/53保持未完成。未修改另一会话的Web迁移、自动化、其暂存或共享debug服务；团队／协作及MCP显式持有继续延期。
+
+
+### 2026-10-31 Skill untrack 回执地址（2.2／7.2 部分收口）
+
+- `SessionSkillUntrackResultDTO.display_uri` 复用既有 grammar 输出校验，保留 null、合法悬空 URI 与编码字节；路由将内部 DTO 校验错误交原 TraceMiddleware 返回 500，同一 request_id 保持，原输入留原异常诊断。普通输入 ValueError 的 400、权限与未知 Thread 行为保持；不增加 Skill mutation 或读取链路。
+- 原生产三平台路径均以 200 成功回包，三个定向反例有效失败；最终 10 项单元与 2 项集成通过。集成在完整 HEAD 归档叠加本片改动，经真实 Agent／ToolNode 与 model_stream 建立 tracked 状态后，仅破坏原 untrack 已完成后的回执；覆盖六类非法地址、原 mutation 只增加一次控制 revision、同入口重试、冷 Saver 状态及原 assembly/hash 字节。原 Skill 模式与回退恢复场景同批通过。新增场景已合入原注册测试文件，默认套件无需额外选择器即可运行两项；最终复验沿主仓独占闸门及原 240 秒 matrix，测试本身 130.09 秒，总 137.53 秒，排队 0.004 秒。
+- 序列化 JSON Schema 与完整 HEAD 相同，不修改 proto、Web 生成物或外部结构。新增／修改测试 Ruff 与 Pyright 通过；原 API 的 27 条 Ruff／6 条 Pyright 诊断与完整 HEAD 按规则、完整消息及最窄 AST 逐项相同，零新增，不称静态全绿。作者 AST 检查不代独立审查。准确命令、源码指纹、raw、退出码与比较收据在 `out/tests/temp/skill_untrack_uri_20261031/artifacts/verification.json`。
+- 本片不代替全局 URI 不变量、Gateway/Web、Windows 或进程重启验收；2.2／7.2 仍未勾，整体 51/53。未修改另一会话的 Web／Workbench、自动化、矩阵或共享 debug；团队协作及 MCP 显式持有继续按用户裁定延期。

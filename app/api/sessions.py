@@ -408,6 +408,8 @@ async def untrack_session_skill(
         )
     except NotFoundError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (RuntimeError, TimeoutError) as error:
