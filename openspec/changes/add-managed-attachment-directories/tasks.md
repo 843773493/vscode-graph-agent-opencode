@@ -640,5 +640,5 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - Session 收到 PTY 退出观察后，等待原 Worker 关闭确认，期间保留 unknown 和原句柄；原 kill/delete 可接管同一执行，迟到退出处理不覆盖管理结果。Worker 重叠关闭复用唯一在途任务，不重复 IPC／信号，失败结算后才允许重试；已确认退出才能移除句柄，正常退出确认后恢复原 verified。不增加停止算法、持久结构或公开 API。
 - 完整旧生产归档的真实 HTTP/PTY 反例精确失败于“Worker 仍存活但快照的 pty_worker_pid 已为空”。初版候选 8 项真实集成通过（53.53 秒）；随后补齐并发管理与唯一关闭任务，最终 124 项 Session／Worker／Manager／shutdown 单测通过。原诊断单测的旧 null 预期按真实反例修正为原句柄及 unknown，保留全部原日志、因果关系与发布顺序断言，不用装具补造退出确认。
-- 最终 9 项集成未运行：主仓共享闸门等待满原有 600 秒，外层脚本退出 1，pytest 未启动；另一会话 Web 迁移测试继续持有名额，未中断或绕过它。初版的 8 项结果不能代表最终源码已通过集成；下一项验证为带原 60 秒／4GiB 保护的同文件最终回归。较早正常退出定向等待仅因本片源码修订取消自己的排队，也未进入 pytest。
+- 最终 9 项集成已补验：完整 `git archive 936c09c99` 经主仓共享闸门取得名额，在原 60 秒／4GiB 保护下全部通过（55.57 秒，外层 58.03 秒），源码前后指纹一致。覆盖正常自发退出及并发管理时保留原 Worker、唯一关闭和真实终态；证据见 `out/tests/temp/terminal_exit_worker_final_20261031/artifacts/`。此前等待满 600 秒的失败原件仍保留，pytest 当时未启动；较早定向排队只因源码修订取消自己的等待。未中断或绕过另一会话测试，初版 8 项不重复累加。
 - Ruff、Python 编译、Pyright 和 Node 语法检查通过；规范严格验证见同目录原件。准确命令、各阶段指纹、原始输出、退出码及作者差异复核见 `out/tests/temp/terminal_exit_worker_20261031/artifacts/verification.json`。无 PID 的 native 接管、冷重启后的未知 Worker、Windows 及完整 shutdown 硬期限继续 TODO，5.2／5.4 和整体 21/23 未关闭。未修改 Web/Workbench、其自动化或共享 debug。
