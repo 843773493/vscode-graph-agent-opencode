@@ -12,9 +12,6 @@ from app.schemas.internal_v2.session import (
     SessionForkResourceChoice,
 )
 from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferResultDTO
-from tests.contracts.test_http_protocol_schema import (
-    http_openapi as http_openapi,  # noqa: PLC0414 - 复用真实应用的 OpenAPI fixture
-)
 
 
 def test_fork_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
