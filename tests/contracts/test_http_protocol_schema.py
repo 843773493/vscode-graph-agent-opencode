@@ -385,6 +385,7 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "WorkspaceResourceDTO", "ResourceThreadRef", "TerminalResourceCreateRequest",
     "BrowserResourceOperationRequest", "SessionResourceControlResultDTO",
     "JobDTO", "JobDispatchSnapshotDTO", "SessionGoalDTO",
+    "SessionForkRequest", "SessionForkResultDTO", "ForkSourceCaptureDTO", "SessionForkOwnerReference",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

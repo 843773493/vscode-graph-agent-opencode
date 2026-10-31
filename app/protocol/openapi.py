@@ -36,6 +36,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SessionResourceListDTO", "SessionResourceControlRequest", "SessionResourceControlResultDTO",
         "JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
         "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO",
+        "SessionForkRequest", "SessionForkSourcePointDTO", "SessionForkResultDTO",
+        "SessionForkTransferRequest", "SessionForkTransferResultDTO",
     )
 }
 
