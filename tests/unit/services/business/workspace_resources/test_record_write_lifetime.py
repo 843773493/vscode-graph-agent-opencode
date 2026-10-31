@@ -134,7 +134,7 @@ async def test_cancelled_owner_command_retains_original_lock_until_native_public
         await asyncio.gather(command, return_exceptions=True)
 
 
-async def test_initial_record_publication_keeps_registered_lock_when_creation_is_cancelled(
+async def test_initial_record_publication_keeps_original_lock_and_closes_unstarted_creation(
     resource_owner: OwnerFixture, write_barrier: WriteBarrier,
 ) -> None:
     owner = resource_owner.owner
@@ -154,10 +154,21 @@ async def test_initial_record_publication_keeps_registered_lock_when_creation_is
         with pytest.raises(asyncio.CancelledError, match="首条intent写入取消"):
             await asyncio.wait_for(creating, 3)
         record = owner._store.get(rid)
-        assert record is not None and record.status == "creating" and record.owner_revision == 1
+        assert record is not None and record.status == "deleted" and record.owner_revision == 1
+        assert record.reconciliation_status == "verified" and not record.thread_associations
         assert not owner._resource_lock(rid).locked() and resource_owner.transport.creates == 0
-        assert owner._leases.get(rid) is None
-        assert resource_owner.restart()._store.get(rid) == record
+        external = owner._leases.get(rid)
+        assert external is not None and external.status == "stopped"
+        assert not owner._leases.leases_for_resource(rid) and not owner._leases._leases
+        assert await owner.list_resources() == []
+        detail = await owner.get_resource(rid)
+        assert detail["status"] == "deleted" and detail["reconciliation_status"] == "verified"
+        cold = resource_owner.restart()
+        assert cold._store.get(rid) == record
+        assert await cold.list_resources() == []
+        detail = await cold.get_resource(rid)
+        assert detail["status"] == "deleted" and detail["owner_revision"] == 1
+        assert not cold._leases._leases and resource_owner.transport.creates == 0
     finally:
         release.set()
         await asyncio.gather(creating, return_exceptions=True)
@@ -207,6 +218,96 @@ async def test_cancellation_while_native_write_is_queued_keeps_original_locks_un
             release.set()
             await asyncio.gather(command, occupying, return_exceptions=True)
             executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("outcome", ["complete", "record_error", "ledger_error"])
+async def test_unstarted_creation_cleanup_survives_repeated_cancellation_and_exposes_storage_failure(
+    resource_owner: OwnerFixture, monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    owner = resource_owner.owner
+    assert owner is not None
+    pending = owner._store.path.with_suffix(".tmp")
+    loop = asyncio.get_running_loop()
+    entered = [asyncio.Event(), asyncio.Event()]
+    release = [threading.Event(), threading.Event()]
+    replace = Path.replace
+    writes = 0
+    storage_error = OSError(28, "未派发 intent 的收尾写入失败")
+
+    def publishing(path: Path, target: Path) -> Path:
+        nonlocal writes
+        if path == pending:
+            index = writes
+            writes += 1
+            if index < 2:
+                loop.call_soon_threadsafe(entered[index].set)
+                if not release[index].wait(5):
+                    raise TimeoutError("测试 intent 收尾写入屏障未释放")
+            if index == 1 and outcome == "record_error":
+                raise storage_error
+        return replace(path, target)
+
+    def fail_ledger(*_args: object, **_kwargs: object) -> None:
+        raise storage_error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", publishing)
+        if outcome == "ledger_error":
+            patch.setattr(owner._leases, "update_external_state", fail_ledger)
+        creating = asyncio.create_task(resource_owner.create())
+        try:
+            await asyncio.wait_for(entered[0].wait(), 2)
+            rid, = owner._resource_locks
+            creating.cancel("首条 intent 取消")
+            release[0].set()
+            await asyncio.wait_for(entered[1].wait(), 2)
+            assert owner._resource_lock(rid).locked() and not creating.done()
+            record = owner._store.get(rid)
+            assert record is not None and record.status == "creating"
+            assert not owner._leases._leases and resource_owner.transport.creates == 0
+            creating.cancel("收尾期间的再次取消")
+            await asyncio.sleep(0)
+            assert owner._resource_lock(rid).locked() and not creating.done()
+            release[1].set()
+            if outcome == "complete":
+                with pytest.raises(asyncio.CancelledError, match="首条 intent 取消"):
+                    await asyncio.wait_for(creating, 3)
+                record = owner._store.get(rid)
+                assert record is not None and record.status == "deleted"
+                external = owner._leases.get(rid)
+                assert external is not None and external.status == "stopped"
+            else:
+                with pytest.raises(OSError) as caught:
+                    await asyncio.wait_for(creating, 3)
+                assert caught.value.errno == 28
+                assert isinstance(caught.value.__context__, asyncio.CancelledError)
+                assert str(caught.value.__context__) == "首条 intent 取消"
+                if outcome == "record_error":
+                    assert caught.value.__cause__ is storage_error
+                else:
+                    assert caught.value is storage_error
+                record = owner._store.get(rid)
+                assert record is not None
+                assert record.status == ("creating" if outcome == "record_error" else "deleted")
+                external = owner._leases.get(rid)
+                assert external is not None and external.status == "running"
+            assert not owner._resource_lock(rid).locked()
+            assert not owner._leases._leases and resource_owner.transport.creates == 0
+        finally:
+            for barrier in release:
+                barrier.set()
+            await asyncio.gather(creating, return_exceptions=True)
+    cold = resource_owner.restart()
+    rows = await cold.list_resources()
+    if outcome == "record_error":
+        row, = rows
+        assert row["resource_id"] == rid and row["status"] == "creating"
+        assert row["reconciliation_status"] == "unknown" and not row["available_actions"]
+    else:
+        assert rows == []
+        detail = await cold.get_resource(rid)
+        assert detail["status"] == "deleted" and detail["reconciliation_status"] == "verified"
+    assert not cold._leases._leases and resource_owner.transport.creates == 0
 
 
 async def test_cancelled_cold_preparation_finishes_single_frozen_version_before_peer_recovery(

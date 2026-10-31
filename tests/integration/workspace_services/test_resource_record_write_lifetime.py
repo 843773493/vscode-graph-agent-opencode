@@ -11,6 +11,7 @@ import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import get_current_request_id
+from app.services.business.workspace_resources.records import ResourceRecordStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -132,3 +133,81 @@ async def test_native_record_write_preserves_real_identity_and_original_request_
                                        "peer_resource_id": peer, "original_lease_id": lease.lease_id,
                                        "writer_threads": writers, "event_loop_thread": event_thread,
                                        "scope": "Session/ASGI资源入口、真实Node与PTY/Chromium；非Gateway/Web、OS重启或原生I/O抢占"})
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_cancelled_initial_intent_is_closed_without_dispatching_a_real_resource(
+    resource_workspace: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, resource_api, kind: str,
+) -> None:
+    _browser, root, run = resource_workspace
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            endpoint = f"/api/v1/resources/{kind}s"
+            created = await client.post(endpoint, json={"session_id": sid, "title": "原生健康资源"})
+            assert created.status_code == 200, created.text
+            peer = created.json()["data"]["resource_id"]
+            external = await owner._transport.get_resource(peer)
+            pending = owner._store.path.with_suffix(".tmp")
+            entered, release = asyncio.Event(), threading.Event()
+            loop = asyncio.get_running_loop()
+            replace = Path.replace
+            request_id = f"unstarted-creation-{kind}"
+            writes = 0
+
+            def publishing(path: Path, target: Path) -> Path:
+                nonlocal writes
+                if path == pending and get_current_request_id() == request_id:
+                    writes += 1
+                    if writes == 1:
+                        loop.call_soon_threadsafe(entered.set)
+                        if not release.wait(5):
+                            raise TimeoutError("测试首条 intent 写入屏障未释放")
+                return replace(path, target)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(Path, "replace", publishing)
+                creating = asyncio.create_task(client.post(endpoint, json={"session_id": sid, "title": "不派发的创建"},
+                                                          headers={"X-Request-ID": request_id}))
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    rid, = set(owner._resource_locks) - {peer}
+                    assert owner._resource_locks[rid].locked() and owner._store.get(rid) is None
+                    creating.cancel("首条原生 intent 取消")
+                    await asyncio.sleep(0)
+                    assert not creating.done() and owner._resource_locks[rid].locked()
+                    assert owner._leases.get(rid) is None
+                    release.set()
+                    with pytest.raises(asyncio.CancelledError, match="首条原生 intent 取消"):
+                        await asyncio.wait_for(creating, 5)
+                finally:
+                    release.set()
+                    await asyncio.gather(creating, return_exceptions=True)
+            record = owner._store.get(rid)
+            assert record is not None and record.status == "deleted" and record.reconciliation_status == "verified"
+            assert record.owner_revision == 1 and not record.thread_associations
+            assert not owner._resource_lock(rid).locked() and not owner._leases.leases_for_resource(rid)
+            listing = await client.get("/api/v1/resources", params={"kind": kind})
+            assert listing.status_code == 200, listing.text
+            assert {row["resource_id"] for row in listing.json()["data"]["items"]} == {peer}
+            detail = await client.get(f"/api/v1/resources/{rid}")
+            assert detail.status_code == 200, detail.text
+            assert detail.headers["X-Request-ID"] == detail.json()["request_id"]
+            assert detail.json()["data"]["status"] == "deleted"
+            assert detail.json()["data"]["reconciliation_status"] == "verified"
+            assert [item[f"{kind}_id"] for item in await owner._transport.list_resources()] == [peer]
+            identity = "os_pid" if kind == "terminal" else "active_page_id"
+            current = await owner._transport.get_resource(peer)
+            assert current[identity] == external[identity] and current["transport_owner_revision"] == 1
+            cold_store = ResourceRecordStore(workspace_root=root, workspace_id=owner.workspace_id, kind=owner.kind)
+            assert cold_store.get(rid) == record
+            cold_ledger = ExternalResourceLeaseLedger(state_path=owner._leases._state_path)
+            registered = cold_ledger.get(rid)
+            assert registered is not None and registered.status == "stopped"
+            assert not cold_ledger.leases_for_resource(rid)
+            stopped = await client.post(f"/api/v1/resources/{peer}/stop", json={"expected_revision": 1})
+            assert stopped.status_code == 200, stopped.text
+            assert stopped.json()["data"]["status"] in {"terminated", "closed"}
+            run.write_result("passed", {"kind": kind, "unstarted_resource_id": rid, "peer_resource_id": peer,
+                                       "writes": writes, "scope": "正式Session/ASGI、真实Node/PTY/Chromium与存储冷读；非Backend重启、Gateway/Web或旧intent接管"})

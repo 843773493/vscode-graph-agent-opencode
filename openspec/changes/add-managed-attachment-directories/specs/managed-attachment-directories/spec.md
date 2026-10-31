@@ -133,6 +133,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal或Browser记录的序列化、fsync或replace在线程池排队或执行，另一个资源请求写入或原调用被取消
 - **THEN** 全部writer等待唯一异步save，文件写锁覆盖worker结算，后写合并此前已发布的资源记录；事件循环继续响应，原资源锁和准入不提前释放。取消不得遗弃worker或提前结清原lease，unknown写盘作为原失败的受保护收尾，后续取消不得丢失原错误；本地版本已发布但外部同步未核实则沿原pending等待显式stop/delete核实，不在普通查询重发；fork已持久committed回执仍为提交证明，未提交回执保留待核实身份。冷恢复用唯一准备锁覆盖版本冻结与pending发布，取消等原准备结算且重试不再推进版本；原生I/O不可抢占、同步lease账本及完整shutdown仍由后续任务验收
 
+#### Scenario: 首条创建 intent 写盘后原调用尚未派发即取消
+
+- **WHEN** 原调用在首条资源记录写盘时被取消，worker 已提交该 intent，但原调用尚未进入外部创建回调、登记 operation lease 或派发创建
+- **THEN** 原调用持有原资源锁和准入，将已持久 intent 沿同一 owner 记录链关闭为 deleted/verified，解除关联并将原账本身份同步为 stopped；不补造 operation lease 或外部创建/停止/删除回执。重复取消不得中断该收尾；记录持久成功后才发布账本终态，收尾失败须同时保留原取消及原生存储错误，不宣称已完成。成功后列表不再暴露活动资源，详情与冷重建保留同一终态和版本。此证明只来自仍在场的原调用，旧 intent、清单缺失或缺少 lease 本身不能推断未创建
+
 #### Scenario: 创建请求取消或回执丢失
 
 - **WHEN** 创建 intent 已登记原 operation lease，但创建 HTTP 请求被取消、超时或未收到正式结果

@@ -152,8 +152,12 @@ class WorkspaceResourceOwner:
             try:
                 await self._store.save(record)
             except BaseException:
-                if self._store.get(record.resource_id) is None:
+                saved = self._store.get(record.resource_id)
+                if saved is None:
                     del self._resource_locks[record.resource_id]
+                else:
+                    # 原调用尚未进入创建回调；不能把已落盘的 intent 遗留为待停止资源。
+                    await run_cleanup_shielded(lambda: self._close_unstarted_creation(saved, created_by_turn_id))
                 raise
             self._leases.register_external(
                 resource_id=record.resource_id, kind=self.lease_kind,
@@ -173,6 +177,23 @@ class WorkspaceResourceOwner:
                 await self._unknown(record, error, lease_id=lease_id)
                 await self._record_creation_failure(record, receipt, lease_id, error)
                 raise
+
+    async def _close_unstarted_creation(
+        self, record: OwnedResourceRecord, created_by_turn_id: str | None,
+    ) -> None:
+        """只关闭原调用确认从未进入外部创建回调的 intent，不补造 operation lease。"""
+        # TODO(5.2)：原调用已随 Backend 退出的旧 intent 仍须接管；清单缺失不能证明未创建。
+        self._leases.register_external(
+            resource_id=record.resource_id, kind=self.lease_kind,
+            lifetime_scope=record.retention_scope, created_by_turn_id=created_by_turn_id,
+        )
+        record.status = "deleted"
+        record.thread_associations.clear()
+        record.reconciliation_status = "verified"
+        record.error = None
+        record.updated_at = self._now()
+        await self._store.save(record)
+        self._sync_ledger(record)
 
     async def _record_creation_failure(
         self, record: OwnedResourceRecord, receipt: object, lease_id: str, error: BaseException,

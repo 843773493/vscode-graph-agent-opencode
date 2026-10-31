@@ -48,4 +48,5 @@ workspace_resources/
 - 显式stop/delete的冷恢复只准备原清单与冻结版本；在原资源锁内先核expected_revision、有效lease和delete关联限制，再以停止意图同步尚未完成的同一版本。不等待依赖context关闭的旧执行，真实停止、终态提交与结清占用仍沿原链。普通访问继续普通排空；未完成版本不另建恢复事实，过期或有关联的拒绝不消耗pending、不派发撤权。
 - 本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。
 - unknown是原失败的收尾；复用shielded cleanup等待写盘，包括等待文件锁。清理期间重复取消不能替换此前原异常，批量调用取消仍保留原错误cause。
+- 首条intent写盘取消后，仅仍在场且尚未进入创建回调的原调用可核定未派发；持原资源锁及准入完成deleted/verified、解除关联与原账本stopped投影，不补造operation lease或外部回执。重复取消不遗弃收尾；终态持久成功后才同步账本，收尾存储错误与原取消都须可见。旧代intent不能凭清单缺失或没有lease套用此证明。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
