@@ -34,6 +34,7 @@ scripts/
 - JavaScript 脚本使用 ESM，通过 `import`/`export` 或顶层脚本逻辑组织，不使用 CommonJS。
 - 脚本应从仓库根目录或显式传入路径解析文件，不通过脚本文件位置向上猜测项目根目录。
 - 长命令优先收敛到脚本中，脚本失败时直接抛出明确错误。
+- OpenAPI 导出在写入任何快照前核对 Workspace 与 Gateway 的已登记公开结构；协议生成传入本次 Buf descriptor，`--validate-only` 不发布产物，不启动服务 lifespan。
 - 开发启动和安装脚本统一尊重 `BOXTEAM_HOME`；用户配置通过 `python -m configs.boxteam` 生成到 `${BOXTEAM_HOME:-~/.boxteams}/config/`。
 - 默认工作区与开发专用资源的安装属于安装器或开发启动脚本职责，不得转嫁给工作区后端初始化。
 - 触发全局存储迁移前必须先停止可能写入旧目录的相关进程，避免迁移期间产生分叉状态。

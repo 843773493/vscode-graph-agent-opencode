@@ -6,6 +6,7 @@ from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pool import DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
+from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
     job_pb2,
@@ -52,6 +53,14 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     )
 }
 
+GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    name: gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]
+    for name in (
+        "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
+        "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
+    )
+}
+
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
     "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],
@@ -78,18 +87,32 @@ def protobuf_message_name_for_model(model_name: str) -> str | None:
     return descriptor.full_name if descriptor is not None else None
 
 
-def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
-    """核对真实 OpenAPI 组件，保留原模型的业务约束和 HTTP 外形。"""
+def _assert_http_schemas(
+    document: JsonSchemaValue, descriptors: Mapping[str, Descriptor], pool: DescriptorPool | None,
+) -> None:
+    """两类服务共用同一结构检查，嵌套字段仍由 descriptor 递归推导。"""
     components = document["components"]
     schemas = components["schemas"]
     # 先核对全部根，避免较早的嵌套引用将缺失模型误报成 KeyError。
-    for name in HTTP_JSON_DESCRIPTORS:
+    for name in descriptors:
         if name not in schemas:
             raise ValueError(f"公开 HTTP 结构未被导出: {name}")
-    for name, descriptor in HTTP_JSON_DESCRIPTORS.items():
+    for name, descriptor in descriptors.items():
         if pool is not None:
             descriptor = pool.FindMessageTypeByName(descriptor.full_name)
         assert_public_schema({**schemas[name], "components": components}, descriptor)
+
+
+def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
+    """核对 Gateway 控制面公开结构，保留原生目录输入及 URI 业务校验。"""
+    _assert_http_schemas(document, GATEWAY_HTTP_JSON_DESCRIPTORS, pool)
+
+
+def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
+    """核对真实 OpenAPI 组件，保留原模型的业务约束和 HTTP 外形。"""
+    _assert_http_schemas(document, HTTP_JSON_DESCRIPTORS, pool)
+    components = document["components"]
+    schemas = components["schemas"]
     # REST 的 action + params 是既有业务外形；只在此把外形投影到 proto oneof，
     # 动作成员、公共字段及嵌套参数仍由本次 descriptor 推导，不另维护字段表。
     descriptor = public_pb2.DESCRIPTOR.message_types_by_name["NodeDebugActionRequest"]

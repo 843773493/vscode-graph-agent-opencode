@@ -9,7 +9,6 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError as SchemaValidationError
 from jsonschema import validate
@@ -58,8 +57,7 @@ from app.schemas.internal_v2.workspace_resource import (
     TerminalResourceCreateRequest,
     WorkspaceResourceCommandRequest,
 )
-
-_SNAPSHOTS = ("src/clients/web/openapi.json", "src/clients/web/src/types/openapi/index.json")
+from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
 @pytest.fixture
@@ -67,23 +65,6 @@ def http_openapi() -> JsonSchemaValue:
     from app.main import app
 
     return deepcopy(app.openapi())
-
-
-@pytest.fixture
-def http_descriptor_bundle() -> FileDescriptorSet:
-    bundle = FileDescriptorSet()
-    seen: set[str] = set()
-
-    def collect(file: FileDescriptor) -> None:
-        if file.name in seen:
-            return
-        seen.add(file.name)
-        for dependency in file.dependencies:
-            collect(dependency)
-        file.CopyToProto(bundle.file.add())
-
-    collect(public_pb2.DESCRIPTOR)
-    return bundle
 
 
 def _export(output: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -748,14 +729,14 @@ def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     descriptor_set = tmp_path / "fresh.binpb"
     descriptor_set.write_bytes(http_descriptor_bundle.SerializeToString())
     output = tmp_path / "generated"
-    for name in _SNAPSHOTS:
+    for name in OPENAPI_SNAPSHOTS:
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"original snapshot\n")
     result = _export(output, "--descriptor-set", str(descriptor_set))
     assert result.returncode != 0, result.stdout + result.stderr
     assert "公开结构与 proto 字段不一致" in result.stderr and "new_public_field" in result.stderr
-    assert all((output / name).read_bytes() == b"original snapshot\n" for name in _SNAPSHOTS)
+    assert all((output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
 
 
 def test_openapi_export_and_validation_only_use_isolated_output(
@@ -769,6 +750,6 @@ def test_openapi_export_and_validation_only_use_isolated_output(
     assert not output.exists()
     result = _export(output, "--descriptor-set", str(descriptor_set))
     assert result.returncode == 0, result.stdout + result.stderr
-    contents = [(output / name).read_bytes() for name in _SNAPSHOTS]
+    contents = [(output / name).read_bytes() for name in OPENAPI_SNAPSHOTS]
     assert contents[0] == contents[1]
     assert json.loads(contents[0]) == http_openapi

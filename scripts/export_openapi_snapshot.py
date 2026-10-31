@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
+from app.gateway.main import app as gateway_app
 from app.main import app
-from app.protocol.openapi import assert_public_http_schemas
+from app.protocol.openapi import assert_gateway_http_schemas, assert_public_http_schemas
 from app.protocol.schema import descriptor_pool_from_set
 
 
@@ -24,6 +25,7 @@ def main() -> None:
     document = app.openapi()
     pool = descriptor_pool_from_set(args.descriptor_set.read_bytes()) if args.descriptor_set else None
     assert_public_http_schemas(document, pool)
+    assert_gateway_http_schemas(gateway_app.openapi(), pool)
     if args.validate_only:
         return
 
