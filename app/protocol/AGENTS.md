@@ -8,6 +8,7 @@
 - `schema.py` 从 descriptor 核对公开 JSON 的字段、嵌套结构和类型；异形消息仅由具名 adapter 投影或明确接管。业务联合的各分支合计必须完整覆盖协议字段，只有具备 presence 的协议字段可因分支而省略。业务取值与字段间约束仍属于内部 Pydantic。
 - Session SSE 的唯一生成投影从 wire descriptor 推导信封、展平 header、事件标签和 payload；状态联合保留既有业务 adapter，不能将这项具名接管扩为跳过其它结构。
 - `openapi.py` 只登记已迁齐的 HTTP 根模型；导出与协议生成均在发布产物前递归校验真实 OpenAPI，并可消费本次 Buf 编译的 descriptor。
+- 工作区信息、上下文和索引响应共用该检查；动态元数据仍按原 Struct 合同传递，其位置字段的序列化约束继续归 Pydantic 与原 owner。
 - Agent 目录、详情和默认 Agent／Provider 设置共用该检查，嵌套 Provider 由 descriptor 递归核对；默认值和配置可用性仍归 Pydantic 与原 owner。
 - Workspace 与 Gateway 的 HTTP 根复用同一个递归检查入口；Gateway 目录浏览、原生目录绑定及解析的结构从其 descriptor 核对，原生输入许可、目录 URI 和授权仍由既有 Pydantic／owner 负责。
 - Gateway 受管工作区的创建请求与列表响应共用该检查，列表成员从 descriptor 递归核对；原生目录输入、默认创建行为、名称与额外字段约束仍归 Pydantic，授权及生命周期仍归原 owner。

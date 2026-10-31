@@ -23,6 +23,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     for name in (
         "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
         "ResourceNavigationRequest", "ResourceNavigationResultDTO",
+        "WorkspaceDTO", "WorkspaceContextDTO", "WorkspaceIndexStatusDTO", "WorkspaceIndexRebuildDTO",
         "WorkspaceFileRootsDTO", "WorkspaceFileReferencesRequest", "WorkspaceFileReferencesDTO",
         "WorkspaceFileWatchRequest", "WorkspaceFileListDTO", "WorkspaceFileContentDTO",
         "WorkspaceFileUpdateRequest", "WorkspaceFileCreateRequest", "WorkspaceFilePasteRequest",
