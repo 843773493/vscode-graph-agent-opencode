@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from jsonpointer import JsonPointer, JsonPointerException
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,6 +29,15 @@ TaskLifecycle = Literal["active", "paused", "complete", "terminated", "needs_att
 TaskRunPhase = Literal["pending", "checking", "delivering", "delivered", "checked", "failed", "suppressed", "skipped"]
 
 
+def _require_thread_uri(value: str) -> str:
+    if parse_session_thread_uri(value)[2] is None:
+        raise ValueError("持久任务引用必须明确 Thread URI")
+    return value
+
+
+_TaskThreadURI = Annotated[str, AfterValidator(_require_thread_uri)]
+
+
 class TaskComponentDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -39,7 +49,7 @@ class TaskTriggerDTO(TaskComponentDTO):
     interval_seconds: int | None = Field(default=None, ge=1)
     expression: str | None = None
     timezone: str = "UTC"
-    source_uri: str | None = None
+    source_uri: _TaskThreadURI | None = None
 
     def schedule(self) -> TimeSchedule | None:
         if self.type_id in {"builtin.manual", "builtin.external", "builtin.execution_end"}:
@@ -53,8 +63,6 @@ class TaskTriggerDTO(TaskComponentDTO):
             raise ValueError("非时间触发不能配置时间计划")
         if (self.type_id == "builtin.execution_end") != (self.source_uri is not None):
             raise ValueError("只有execution_end触发必须配置source_uri")
-        if self.source_uri is not None and parse_session_thread_uri(self.source_uri)[2] is None:
-            raise ValueError("执行结束来源必须明确Thread URI")
         if self.type_id == "builtin.interval" and self.expression is not None:
             raise ValueError("interval trigger 不能配置 cron expression")
         if self.type_id == "builtin.cron" and self.interval_seconds is not None:
@@ -97,15 +105,8 @@ class TaskRuleCheckDTO(BaseModel):
 class TaskModelCheckDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    thread_uri: str
+    thread_uri: _TaskThreadURI
     instruction: str = Field(min_length=1)
-
-    @field_validator("thread_uri")
-    @classmethod
-    def require_thread(cls, value: str) -> str:
-        if parse_session_thread_uri(value)[2] is None:
-            raise ValueError("模型判断必须绑定明确Thread URI")
-        return value
 
 
 class TaskConditionDTO(TaskComponentDTO):
@@ -131,16 +132,9 @@ class TaskContextDTO(TaskComponentDTO):
 
 class RuntimeSourceActionDTO(TaskComponentDTO):
     type_id: Literal["builtin.runtime_source"]
-    target_uri: str
+    target_uri: _TaskThreadURI
     delivery_mode: Literal["context_only", "context_and_run"]
     delivery_policy: DeliveryPolicy = "after_turn"
-
-    @model_validator(mode="after")
-    def require_thread(self) -> RuntimeSourceActionDTO:
-        _resource, _session_id, thread_id = parse_session_thread_uri(self.target_uri)
-        if thread_id is None:
-            raise ValueError("持久任务动作必须指向明确 Thread URI")
-        return self
 
 
 class SessionGenerationActionDTO(TaskComponentDTO):
@@ -246,9 +240,9 @@ class TaskDeliveryDTO(BaseModel):
 
 
 class TaskEvaluationDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    thread_uri: str
+    thread_uri: _TaskThreadURI
     source_item_id: str
     job_id: str
     execution_id: str
@@ -276,9 +270,11 @@ class PersistentTaskRunDTO(BaseModel):
 
 
 class TaskThreadTargetDTO(BaseModel, frozen=True):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     session_id: str
     thread_id: str
-    uri: str
+    uri: _TaskThreadURI
 
 
 class TaskInputConsumptionDTO(BaseModel, frozen=True):
