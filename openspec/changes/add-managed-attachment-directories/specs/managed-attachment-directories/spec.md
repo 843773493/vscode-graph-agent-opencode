@@ -137,6 +137,14 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal或Browser已进入原创建回调，外部创建已发生但回执丢失，随后unknown的原账本或owner记录写入也失败
 - **THEN** 派发前持久化的同一原lease继续保护本次创建；operation与Turn收尾不得释放，普通查询不得凭creating记录和存活清单恢复verified。保留原创建错误、存储错误及原身份，原owner核实终态后才结清，不重复创建
 
+#### Scenario: 传输授权回执丢失后的失败收尾也无法写盘
+- **WHEN** 原授权入口已经签发但未取得回执，随后unknown的原账本或owner记录写盘失败
+- **THEN** 运行快照读取前持久保护的同一原lease继续待核实；管理finally和Turn收尾均不得释放、也不得以释放次错替换原授权失败。普通查询不结清未知授权，原owner核实终态后才结清，不后台补签
+
+#### Scenario: 明确拒绝签发的回执正常结算
+- **WHEN** 授权预检取得已核实的状态/版本冲突，或正式拒绝签发携带可核实的当前资源快照
+- **THEN** 沿原writer保存观察并确认同一原lease，再返回既有冲突及正式拒绝原因，不将明确未签发的结果保活为unknown；无效快照、投影或确认写盘失败仍保护原占用并明确报错
+
 #### Scenario: 首次创建写盘期间关闭或取消
 - **WHEN** 原operation在首条intent、登记、取得lease或派发准备的排队/写入期间关闭或取消
 - **THEN** close等待创建前登记的原锁，即使业务记录或lease尚未发布；排队取消/关闭不开始新的登记、取得lease或外部创建，已开始的原写入持锁结算。仍在场的原调用证明未进入回调后提交原intent的deleted/verified和stopped投影，再结清已取得的精确lease；无已发布记录时不补造资源，原取消和迟到存储错误均可核验

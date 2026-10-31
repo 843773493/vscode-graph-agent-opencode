@@ -33,6 +33,9 @@ from app.services.business.workspace_resources.facts import (
     resource_projection,
     resource_target_facts,
 )
+from app.services.business.workspace_resources.operations import (
+    resource_operation_dispatch,
+)
 from app.services.business.workspace_resources.records import (
     ForkAttachReceipt,
     OwnedResourceRecord,
@@ -811,36 +814,29 @@ class WorkspaceResourceOwner:
             if thread is not None and thread not in record.thread_associations:
                 raise ResourceConflict("Thread 尚未关联 外部资源")
             with self._management_lease(record, thread, holder_id, operation_id) as lease_id:
-                try:
+                result: ResourceSnapshot | None = None
+                rejection: ResourceTransportGrantRejected | None = None
+                async with resource_operation_dispatch(self, record, lease_id, operation=None):
                     runtime = await self._transport.get_resource(resource_id)
                     await self._observe_grant_snapshot(record, runtime)
-                except BaseException as error:
-                    await self._unknown(record, error, lease_id=lease_id)
-                    raise
-                if record.status != "running" or record.owner_revision != revision:
-                    raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源")
-                try:
-                    grant = await self._transport.issue_transport_grant(
-                        resource_id,
-                        owner_revision=revision,
-                        association=None
-                        if thread is None
-                        else f"{thread.session_id}/{thread.thread_id}",
-                    )
-                except ResourceTransportGrantRejected as rejection:
-                    try:
-                        snapshot = rejection.snapshot
-                        if snapshot.get("status") == "running" and snapshot.get("transport_owner_revision") == revision:
-                            raise ValueError("外部资源 传输拒绝快照没有状态或版本冲突")
-                        await self._observe_grant_snapshot(record, snapshot)
-                    except BaseException as error:
-                        await self._unknown(record, error, lease_id=lease_id)
-                        raise
+                    if record.status == "running" and record.owner_revision == revision:
+                        try:
+                            grant = await self._transport.issue_transport_grant(
+                                resource_id, owner_revision=revision,
+                                association=None if thread is None else f"{thread.session_id}/{thread.thread_id}",
+                            )
+                        except ResourceTransportGrantRejected as error:
+                            snapshot = error.snapshot
+                            if snapshot.get("status") == "running" and snapshot.get("transport_owner_revision") == revision:
+                                raise ValueError("外部资源 传输拒绝快照没有状态或版本冲突") from error
+                            await self._observe_grant_snapshot(record, snapshot)
+                            rejection = error
+                        else:
+                            result = {**grant, "resource": resource_projection(record, runtime, self.kind)}
+                # 核实未签发的冲突先提交同一原lease回执，不按未知授权保活。
+                if result is None:
                     raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源") from rejection
-                except BaseException as error:
-                    await self._unknown(record, error, lease_id=lease_id)
-                    raise
-                return {**grant, "resource": resource_projection(record, runtime, self.kind)}
+                return result
 
     async def _observe_grant_snapshot(
         self, record: OwnedResourceRecord, runtime: ResourceSnapshot,
@@ -987,7 +983,7 @@ class WorkspaceResourceOwner:
         )
         record.updated_at = self._now()
         async def persist() -> None:
-            # TODO(5.2)：创建和普通工具已有原dispatching保护，管理/传输授权仍须迁齐；失败不能视为unknown持久成功。
+            # TODO(5.2)：创建、普通工具和传输授权已有原dispatching保护，版本管理仍须迁齐；失败不能视为unknown持久成功。
             # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
             await run_sync_shielded(
                 self._leases.update_external_state,

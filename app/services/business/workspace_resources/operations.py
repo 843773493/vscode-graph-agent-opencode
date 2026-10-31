@@ -28,7 +28,7 @@ async def resource_operation_dispatch(
     *, operation: ResourceOperations | None,
 ) -> AsyncIterator[None]:
     """同一原lease覆盖派发、正式回执提交及失败写盘，不能靠finally猜测成功。"""
-    # TODO(5.2)：版本管理及传输授权的派发仍须沿各自原入口迁齐，不能据此声明全部接管完成。
+    # TODO(5.2)：版本管理的派发仍须沿原入口迁齐，不能据此声明全部接管完成。
     cancelled = Event()
 
     def prepare() -> None:

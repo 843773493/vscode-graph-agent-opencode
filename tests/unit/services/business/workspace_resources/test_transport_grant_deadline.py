@@ -161,7 +161,7 @@ async def test_dispatched_wait_keeps_exact_unknown_lease_until_owner_proves_stop
         try:
             await asyncio.wait_for(entered.wait(), 1)
             original_lease, = bundle.leases.leases_for_resource(rid)
-            assert original_lease.status == "active"
+            assert original_lease.status == "dispatching"
             assert (await asyncio.wait_for(grant(peer), 1))["resource"]["resource_id"] == peer
             if cancel:
                 pending.cancel("原授权调用取消")
