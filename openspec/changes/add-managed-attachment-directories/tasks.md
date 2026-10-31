@@ -775,3 +775,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 正式消息上传、Python Terminal 创建及真实 Node HTTP/PTY 生成目录和两份原占用；只在既有 IPC 故障边界丢弃停止证明。原 Node 与精确 Node 硬重启各一例，核 created/unknown、原生创建身份、原 operation 待核实及目录 lease 有效、独立进程观察与到期 GC 拒绝；不以进程已退出作为停止证明。
 - 原 Python 管理停止核实并持久发布终态后，冷读唯一账本确认两份精确 lease 结清，目录才被回收；原工作负载、来源身份及恢复记录保持，随后 detach/delete 完成原资源清理。2 passed／302.65秒（包含共享名额排队）、exit0；首轮120秒全部耗在排队、exit124，未进入测试体，不计业务失败或通过。两轮均保留4GiB进程外保护，不绕闸门、不停止另一会话进程。
 - 最终测试Ruff、Pyright零诊断及compileall通过，1217份采样源码在第二轮前后逐字一致。准确命令、原始输出、源码指纹与作者自查在`out/tests/temp/startup_directory_recovery_20261031/artifacts/verification.json`；通用integration-python自动发现新文件，未增加其它suite预算。没有修改产品实现、Web/Workbench、其自动化或共享debug；Python Backend硬重启、无原生身份接管、Windows、Gateway/Web与完整operation/shutdown期限仍未验证，5.2/5.4及21/23保持未完成。
+
+### 2026-10-31 工具operation准入写盘的原任务结算（5.4部分）
+
+- 原lease获取与成功后的引用登记交给同一shielded worker；排队时取消/关闭不开始新写入，已开始的写入持原锁结算。关闭覆盖尚无lease引用的原任务，取消保留原消息、迟到存储错误及已提交占用，关闭后不再派发工具。
+- 定向82项、相关owner回归569项通过，回归34份采样源码前后一致。完整旧生产归档的两项反例复现事件循环阻塞；仅移除关闭对在途准入的跟踪，两项变异反例均失败。Ruff、compileall、两文件Pyright及OpenSpec strict通过；准确命令、原始输出、退出码、指纹及作者AST自查见`out/tests/temp/operation_admission_io_20261031/artifacts/verification.json`。
+- 使用真实owner记录和lease、替身传输，不证明真实PTY/Chromium终态；其它同步writer、通知的事件循环归属、原生I/O抢占及完整operation/shutdown期限继续TODO。5.2/5.4与21/23保持未完成；未修改另一会话Web/Workbench、其自动化、共享暂存或debug。

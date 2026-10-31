@@ -6,6 +6,7 @@ import asyncio
 from asyncio import timeout
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from threading import Event
 from typing import TYPE_CHECKING
 
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
@@ -34,13 +35,14 @@ class ResourceOperations:
         self._operation_id = operation_id
         self._created_by_turn_id = created_by_turn_id
         self._lease_refs: dict[str, str] = {}
+        self._acquisitions: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
     @asynccontextmanager
     async def _resource(self, resource_id: str) -> AsyncIterator[OwnedResourceRecord]:
         self._assert_open()
         # 只限制本次资源准入；锁继续覆盖真实调用，不能把准入到期当作外部终止。
-        # TODO(5.4)：同步写盘、不合作取消与整个工具operation总期限仍须原owner核实。
+        # TODO(5.4)：其它同步 writer、不合作取消与整个工具operation总期限仍须原owner核实。
         async with AsyncExitStack() as access:
             budget = timeout(OPERATION_ADMISSION_WAIT_SECONDS)
             try:
@@ -53,9 +55,8 @@ class ResourceOperations:
                     if self._thread not in record.thread_associations:
                         raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
                     if resource_id not in self._lease_refs:
-                        self._lease_refs[resource_id] = self._owner._acquire(
-                            record, self._thread, self._holder_id, self._operation_id,
-                        )
+                        await self._acquire_lease(record)
+                        self._assert_open()
             except TimeoutError as error:
                 if not budget.expired():
                     raise
@@ -64,6 +65,31 @@ class ResourceOperations:
                     f"operation_id={self._operation_id}, holder_id={self._holder_id}, resource_id={resource_id}"
                 ) from error
             yield record
+
+    async def _acquire_lease(self, record: OwnedResourceRecord) -> None:
+        cancelled = Event()
+
+        def acquire() -> None:
+            # 排队时取消或关闭不再开始新写入；开始后的原生调用必须真实结算。
+            if cancelled.is_set() or self._closed:
+                return
+            self._lease_refs[record.resource_id] = self._owner._acquire(
+                record, self._thread, self._holder_id, self._operation_id,
+            )
+
+        acquiring = asyncio.create_task(run_sync_shielded(acquire))
+        self._acquisitions[record.resource_id] = acquiring
+        try:
+            await asyncio.shield(acquiring)
+        except asyncio.CancelledError as original:
+            cancelled.set()
+            try:
+                await run_cleanup_shielded(lambda: acquiring)
+            except BaseException as failure:  # 保留原取消及迟到写盘失败。
+                raise original from failure
+            raise
+        finally:
+            del self._acquisitions[record.resource_id]
 
     async def _release(self, resource_id: str) -> None:
         async with self._owner._resource_lock(resource_id):
@@ -81,7 +107,8 @@ class ResourceOperations:
         # 全批只取一次预算；取消只排空本次锁等待，原引用保留供同operation重试。
         # TODO(5.4)：worker 排队及写盘须结算，预算不能抢占原生 I/O；外部终态仍须 owner 核实。
         budget = asyncio.timeout(OPERATION_CLOSE_WAIT_SECONDS)
-        tasks = [asyncio.create_task(self._release(resource_id)) for resource_id in tuple(self._lease_refs)]
+        resources = dict.fromkeys((*self._lease_refs, *self._acquisitions))
+        tasks = [asyncio.create_task(self._release(resource_id)) for resource_id in resources]
         batch = asyncio.gather(*tasks, return_exceptions=True)
 
         async def settle() -> None:
