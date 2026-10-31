@@ -121,6 +121,7 @@ def message_stream_to_json(
     payload_message = cast(Message, getattr(value, payload_field))
     payload = map_enum_values(message_to_json(payload_message), cast(Descriptor, payload_message.DESCRIPTOR), to_proto=False)
     if value.type == "stream.snapshot":
+        _restore_snapshot_integers(payload, payload_message)
         payload = _denormalize_snapshot(payload)
     result: dict[str, Any] = {field.name: getattr(value, field.name)
                               for field in _required_envelope_fields(cast(Descriptor, value.DESCRIPTOR))}
@@ -260,24 +261,21 @@ def _normalize_tool_status(payload: dict[str, Any]) -> None:
         payload["status"] = "completed"
 
 
+def _restore_snapshot_integers(payload: dict[str, object], message: Message) -> None:
+    # Protobuf JSON 将64位整数转成字符串；只还原实际声明并出现的字段，不解释动态正文。
+    for field, value in message.ListFields():
+        if field.cpp_type in (FieldDescriptor.CPPTYPE_INT64, FieldDescriptor.CPPTYPE_UINT64):
+            payload[field.name] = list(value) if field.is_repeated else value
+        elif field.message_type is not None and not field.message_type.full_name.startswith("google.protobuf."):
+            if field.is_repeated:
+                items = cast(list[dict[str, object]], payload[field.name])
+                for item, source in zip(items, value, strict=True):
+                    _restore_snapshot_integers(item, source)
+            else:
+                _restore_snapshot_integers(cast(dict[str, object], payload[field.name]), value)
+
+
 def _denormalize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    snapshot_seq = payload.get("snapshot_seq")
-    if isinstance(snapshot_seq, str) and snapshot_seq.isdecimal():
-        payload["snapshot_seq"] = int(snapshot_seq)
-    for entity_collection in (
-        "blocks",
-        "tool_calls",
-        "tool_executions",
-        "model_calls",
-        "activities",
-    ):
-        for entity in payload.get(entity_collection, []):
-            if not isinstance(entity, dict):
-                continue
-            for field_name in ("started_seq", "last_event_seq", "completed_seq"):
-                sequence = entity.get(field_name)
-                if isinstance(sequence, str) and sequence.isdecimal():
-                    entity[field_name] = int(sequence)
     interrupt_request_id = payload.pop("interrupt_request_id", None)
     interrupt_status = payload.pop("interrupt_status", None)
     if interrupt_request_id is not None or interrupt_status is not None:

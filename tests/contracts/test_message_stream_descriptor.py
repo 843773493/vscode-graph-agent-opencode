@@ -311,3 +311,83 @@ def test_snapshot_recurses_into_enum_fields_without_touching_dynamic_body_or_sou
     assert decoded["tool_calls"][0]["status"] == "running"
     assert decoded["tool_calls"][0]["arguments"] == detail
     assert source == original
+
+
+@pytest.fixture
+def extended_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """新增的标量、数组和嵌套消息均由真实 protobuf 编译及编解码。"""
+    file = FileDescriptorProto()
+    message_stream_pb2.DESCRIPTOR.CopyToProto(file)
+    snapshot = next(message for message in file.message_type if message.name == "StreamSnapshot")
+    sample = file.message_type.add(name="SnapshotSample")
+    sample.field.add(name="position", number=1, type=FieldDescriptorProto.TYPE_INT64)
+    sample.field.add(name="label", number=2, type=FieldDescriptorProto.TYPE_STRING)
+    snapshot.field.add(name="source_offset", number=40, type=FieldDescriptorProto.TYPE_INT64)
+    snapshot.field.add(name="offsets", number=41, type=FieldDescriptorProto.TYPE_UINT64,
+                       label=FieldDescriptorProto.LABEL_REPEATED)
+    snapshot.field.add(name="sample", number=42, type=FieldDescriptorProto.TYPE_MESSAGE,
+                       type_name=".boxteam.workspace.message.v1.SnapshotSample")
+    snapshot.field.add(name="samples", number=43, type=FieldDescriptorProto.TYPE_MESSAGE,
+                       type_name=".boxteam.workspace.message.v1.SnapshotSample",
+                       label=FieldDescriptorProto.LABEL_REPEATED)
+    pool = DescriptorPool()
+    for dependency in (struct_pb2.DESCRIPTOR, timestamp_pb2.DESCRIPTOR):
+        pool.AddSerializedFile(dependency.serialized_pb)
+    pool.Add(file)
+    descriptor = pool.FindMessageTypeByName("boxteam.workspace.message.v1.MessageStreamEvent")
+    monkeypatch.setattr(message_stream_pb2, "MessageStreamEvent", message_factory.GetMessageClass(descriptor))
+
+
+@pytest.mark.usefixtures("extended_snapshot")
+@pytest.mark.parametrize("field", ["source_offset", "offsets", "sample", "samples"])
+def test_snapshot_new_integer_fields_keep_native_json_numbers(event: dict[str, object], field: str) -> None:
+    values: dict[str, object] = {
+        "source_offset": 2**53 + 1,
+        "offsets": [0, 2**64 - 1],
+        "sample": {"position": 2**63 - 1, "label": "9007199254740993"},
+        "samples": [{"position": 2**53 + 1}, {"position": -(2**63)}],
+    }
+    source = {**event, "type": "stream.snapshot", "payload": {field: values[field]}}
+    original = deepcopy(source)
+    encoded = message_stream_to_proto(source)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(encoded.SerializeToString()))
+    assert decoded["payload"][field] == values[field]
+    assert source == original
+
+
+@pytest.mark.parametrize("collection", ["blocks", "tool_calls", "tool_executions", "model_calls", "activities"])
+@pytest.mark.parametrize("number", [1, 2**53 + 1, 2**63 - 1])
+def test_snapshot_existing_sequence_fields_remain_exact_integers(
+    event: dict[str, object], collection: str, number: int,
+) -> None:
+    fields = {"started_seq": number, "last_event_seq": number, "completed_seq": number}
+    source = {**event, "type": "stream.snapshot", "payload": {"snapshot_seq": number, collection: [fields]}}
+    encoded = message_stream_to_proto(source)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(encoded.SerializeToString()))["payload"]
+    assert decoded["snapshot_seq"] == number and type(decoded["snapshot_seq"]) is int
+    assert decoded[collection][0] == fields
+    assert all(type(value) is int for value in decoded[collection][0].values())
+
+
+def test_snapshot_integer_conversion_preserves_presence_and_dynamic_json(event: dict[str, object]) -> None:
+    dynamic = {"snapshot_seq": "9007199254740993", "started_seq": "17", "completed_seq": 3,
+               "nested": {"last_event_seq": "19"}}
+    source = {**event, "type": "stream.snapshot", "payload": {
+        "snapshot_seq": 0, "blocks": [{"started_seq": 0, "completed_seq": 0, "items": [dynamic]},
+                                     {"block_id": "absent_sequence"}],
+        "tool_calls": [{"arguments": dynamic}], "activities": [{"detail": dynamic}],
+    }}
+    original = deepcopy(source)
+    encoded = message_stream_to_proto(source)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(encoded.SerializeToString()))["payload"]
+    # 非 presence 零值仍按原 protobuf JSON 合同省略；显式 optional 零值必须保留。
+    assert "snapshot_seq" not in decoded
+    assert "started_seq" not in decoded["blocks"][0]
+    assert decoded["blocks"][0]["completed_seq"] == 0
+    assert type(decoded["blocks"][0]["completed_seq"]) is int
+    assert decoded["blocks"][1] == {"block_id": "absent_sequence"}
+    assert decoded["blocks"][0]["items"] == [dynamic]
+    assert type(decoded["blocks"][0]["items"][0]["completed_seq"]) is float
+    assert decoded["tool_calls"][0]["arguments"] == dynamic
+    assert decoded["activities"][0]["detail"] == dynamic
+    assert source == original
