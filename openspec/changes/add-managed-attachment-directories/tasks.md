@@ -626,3 +626,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 来源导出和目标接收的原生文件I/O复用既有shielded worker；原key锁覆盖结算，打开后尚未交付的句柄先登记，写入者排空后才删除临时快照。保留分块、文件并发、marker、历史字节和hash；取消维持preparing，同key恢复复用完整创建身份与唯一目标。失败清理在线程中恢复原异常上下文，清理取消显式保留此前失败，不新增writer或账本。
 - 17项单测、完整独立候选的10个新ASGI产品场景及13个原传输故障回归通过（唯一40项）；另一次定向10项不重复累加。完整旧生产归档加相同新测试的2个反例，均在原同步I/O占用事件循环处失败。新增清理次错反例先检出上下文丢失，修复后保留原生cause与原传输异常。正式matrix、原60秒fork watchdog、主仓独占闸门和4GiB/进程外超时保持；最终新场景151.26秒、原回归202.34秒，旧反例65.94秒，准确命令、指纹和实际退出码见`out/tests/temp/fork_transfer_workers_20261030/artifacts/verification.json`。
 - Ruff、compileall和strict通过；Pyright的38条既有诊断已与完整HEAD逐项核对（含旧单测2条），本片无新增类型诊断，不称类型全绿。首轮正式runner前置缺失与一次主动中止自己的闸门等待均未进入测试体；测试误判取消为aborted、误限接收路径及watchdog外层取消观察已按原合同修正，原件保留。传输替身不是实际HTTP网络；原生调用边界屏障不证明OS真实阻塞或线程可终止。其它catalog同步读取、旧代接管、独立Backend重启、Gateway/Web、Windows及完整shutdown硬期限继续TODO，5.2/5.4与21/23保持未完成。未改另一会话Web/Workbench、自动化、共享暂存或重启debug。
+
+
+### 2026-10-31 Workspace 周期任务关闭保留原错误（5.4 部分收口）
+
+- 原周期任务结束即记录任务身份和完整原异常；关闭先取消全部周期任务再排空，按原登记顺序聚合非取消失败。原错误明确交回调用方，本次保留后续依赖与 Backend 维护锁；已结算任务从原集合移除，同一生命周期 owner 重试只继续后续步骤，不重放周期工作。普通取消与正常完成不报错，旧单任务吞错入口已删除，未引入新存储、账本或兼容层。
+- 15 项定向单测及 6 项真实双挂载生命周期集成通过（集成 42.60 秒；主仓共享闸门另排队 310.75 秒）。新反例在完整旧生产归档中精确失败于 Backend 关闭未抛异常；故障仅注入原活动 DELETE 边界，Session 和活动由正式入口生成，核对原错误身份、依赖保留、同一 owner 重试及冷读原记录。首次两份反例及候选因装具读取未配置的个人 Provider 凭据而失败，不能算行为反例；复用现有 maintenance_case 隔离配置后上述验证通过，原始失败保留。
+- 扩大正式 `integration-mounted-workspace-lifespan` 为 25 passed／4 failed（187.64 秒）；四个 Goal 场景均在原 `ready.wait()` 的 8 秒期限、进入本次关闭修改之前失败。当前完整 HEAD 基线代表项也在同一语句超时（22.36 秒），另外三项未逐项跑新基线；原测试已有 `29c7ec96` 性能 TODO，本轮不修改期限或展开该长尾优化。结合定向验证，共 46 个不同用例通过，不称扩大套件全绿。
+- Ruff、Python 编译与本 change strict 通过；Pyright 原有 4 项 JobServiceProtocol 诊断与完整 HEAD 基线的规则、完整消息和最窄语句 AST 一致，新增零项，不称类型全绿。作者 AST 复核确认除周期任务排空和完成回调外的生产逻辑保持，原模块 424→440 行，无新增源码目录。
+- 命令、源码指纹、原始输出和实际退出码见 `out/tests/temp/periodic_shutdown_failures_20261031/artifacts/verification.json` 及同目录原件。本片不证明同步阻塞可抢占、任意旧操作可终止、生产进程总期限、独立 Backend 重启、Windows 或 Gateway/Web 总验收；5.2／5.4 与整体 21/23 保持未完成。未修改另一会话的 Web/Workbench、自动化、暂存或共享 debug；团队协作与 MCP 显式持有继续延期。

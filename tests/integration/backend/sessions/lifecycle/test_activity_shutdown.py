@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import secrets
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, get_ident
 from typing import BinaryIO
@@ -12,7 +14,7 @@ from typing import BinaryIO
 import httpx
 import pytest
 
-from app import main
+from app import main, workspace_lifecycle
 from app.core import sqlite_state
 from app.core.path_utils import workspace_context
 from app.schemas.internal_v2.session import SessionCreateRequest
@@ -22,12 +24,17 @@ from app.services.infrastructure.attachment_blob_catalog.maintenance import (
 )
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
+from tests.integration.backend.sessions.test_attachment_maintenance import (
+    maintenance_case as maintenance_case,  # noqa: PLC0414
+)
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     MountedCase,
 )
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414
 )
+
+pytestmark = pytest.mark.usefixtures("maintenance_case")
 
 
 @pytest.mark.parametrize("phase", ["native", "pool"])
@@ -209,4 +216,80 @@ async def test_activity_native_close_failure_retries_original_stage(
         assert backend.closed and workspace._owner is owner and attempts == 1
     finally:
         monkeypatch.setattr(sqlite_state.portalocker, "unlock", original_unlock)
+        await lifetime.__aexit__(None, None, None)
+
+
+async def test_failed_periodic_prune_is_reported_and_blocks_dependency_release(
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    wake = asyncio.Event()
+    ticked: set[asyncio.Task[object]] = set()
+    original_sleep = asyncio.sleep
+
+    async def sleep(seconds: float) -> None:
+        task = asyncio.current_task()
+        if seconds == 3600 and task is not None and task not in ticked:
+            ticked.add(task)
+            await wake.wait()
+        else:
+            await original_sleep(seconds)
+
+    monkeypatch.setattr(workspace_lifecycle.asyncio, "sleep", sleep)
+    lifetime = main.lifespan(main.app)
+    await lifetime.__aenter__()
+    try:
+        selected = mounted_case.containers[-1]
+        backend = main.app.state.workspace_lifespan
+        workspace = next(item for item in backend.workspaces if item.container is selected)
+        owner = workspace._owner
+        activity = selected.workspace_activity_service
+        with workspace_context(selected.workspace_id, selected.workspace_root, session_catalog=selected.session_catalog):
+            session = await selected.session_service.create(SessionCreateRequest(title="周期清理失败"))
+        record = await activity.append(
+            event_id="periodic-prune-failure", session_id=session.session_id,
+            status="completed", summary="原清理失败不丢失活动事实",
+        )
+        failure = sqlite3.OperationalError("原DELETE执行失败")
+        calls = 0
+
+        def prune(*, retention_days: int) -> int:
+            nonlocal calls
+            assert retention_days == activity.retention_days
+            calls += 1
+            raise failure
+
+        monkeypatch.setattr(activity.store, "prune_activity", prune)
+        periodic = next(task for task in workspace._periodic_tasks
+                        if task.get_name() == f"workspace-activity-prune:{selected.workspace_id}")
+        with caplog.at_level(logging.ERROR, logger="app.workspace_lifecycle"):
+            wake.set()
+            with pytest.raises(sqlite3.OperationalError) as returned:
+                await asyncio.wait_for(asyncio.shield(periodic), 3)
+            assert returned.value is failure
+            with pytest.raises(BaseExceptionGroup) as closed:
+                await backend.close()
+            assert any(item.exc_info is not None and item.exc_info[1] is failure
+                       and periodic.get_name() in item.getMessage() for item in caplog.records)
+        periodic_errors, = closed.value.exceptions
+        assert isinstance(periodic_errors, BaseExceptionGroup)
+        assert periodic_errors.exceptions == (failure,)
+        assert calls == 1 and not workspace.closed and workspace._periodic_tasks == []
+        assert workspace.pending_close_stage == "navigation_operations.stop"
+        assert not activity.store._database._closed
+        assert record in activity.store.read_activity_page().records
+        assert main.app.state.workspace_container_registry is backend.registry
+        with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+            selected.workspace_root / ".boxteam/attachments", exclusive=True,
+        ):
+            pytest.fail("周期原错误尚未交回关闭调用方前不能释放依赖")
+        await backend.close()
+        assert backend.closed and workspace._owner is owner and calls == 1
+        cold = WorkspaceActivityService(workspace_root=selected.workspace_root)
+        try:
+            assert record in cold.store.read_activity_page().records
+        finally:
+            cold.close()
+        with AttachmentMaintenanceLock(selected.workspace_root / ".boxteam/attachments", exclusive=True):
+            pass
+    finally:
         await lifetime.__aexit__(None, None, None)

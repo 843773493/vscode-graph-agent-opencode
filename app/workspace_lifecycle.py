@@ -52,9 +52,25 @@ async def _prune_workspace_activity_periodically(container: AppContainer) -> Non
             logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
 
 
-async def _stop_activity_pruning(task: asyncio.Task[None]) -> None:
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+def _report_periodic_failure(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("Workspace周期任务失败: task=%s", task.get_name(),
+                     exc_info=(type(error), error, error.__traceback__))
+
+
+async def _stop_periodic_tasks(tasks: list[asyncio.Task[None]]) -> None:
+    # 先关闭全部周期准入，再排空原任务；清理失败不能被普通取消掩盖。
+    for task in tasks:
+        task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks.clear()
+    errors = [result for result in results
+              if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)]
+    if errors:
+        raise BaseExceptionGroup("Workspace周期任务关闭失败，保留后续依赖供重试", errors)
 
 
 
@@ -214,9 +230,7 @@ class WorkspaceLifespan:
         # TODO(5.4)：同步阻塞与外部终止核实仍待收口；Backend到期不取消原步骤。
         with workspace_context(self.container.workspace_id, self.container.workspace_root,
                                session_catalog=self.container.session_catalog):
-            while self._periodic_tasks:
-                await _stop_activity_pruning(self._periodic_tasks[-1])
-                self._periodic_tasks.pop()
+            await _stop_periodic_tasks(self._periodic_tasks)
             while self._steps:
                 stage, action = self._steps[0]
                 try:
@@ -422,3 +436,5 @@ class WorkspaceLifespan:
                 name=f"fork-export-cleanup:{container.workspace_id}",
             )
             self._periodic_tasks.append(fork_export_cleanup)
+            for periodic in self._periodic_tasks:
+                periodic.add_done_callback(_report_periodic_failure)
