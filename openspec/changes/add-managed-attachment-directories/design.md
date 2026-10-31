@@ -503,3 +503,7 @@ Session读写准入的active catalog查询、`SessionService.get`的单节点/�
 ### 同步 worker 完成后的取消传播（5.4 部分收口）
 
 `run_sync_shielded` 仅在原等待收到 `CancelledError` 时进入既有受保护结算，然后传播原取消。成功结果和原生失败已表明 worker 结束，直接返回或抛出，不再创建额外收尾任务；否则首次外部取消可能落入为既有取消设计的 cleanup shield，被吞掉后继续业务步骤或周期等待。原生执行期间的取消仍等待同一 worker，保持原锁、原异常身份及失败时的取消 context；不改 `run_cleanup_shielded` 的既有失败收尾合同，不新增 worker 或停止算法。此竞争的确定性复现不能单独证明此前 Browser 合并回归挂起的根因，完整 shutdown 与旧代接管继续按 5.2／5.4 验收。
+
+### Terminal steering 关闭的下一轮扫描准入（5.4 部分收口）
+
+关闭先登记原 service 的停止请求，再取消原监控一次并等待；句柄保留到原任务结算，重入关闭沿同一任务。即使依赖的受保护收尾消耗取消，原扫描返回后也先检查停止请求并退出，不再进入轮询 sleep。显式再次 start 在原任务结束后复位停止请求，沿原 service 创建一个新监控，不重放已完成通知或改变 completion claim。单次 scan_once 的显式调用和原失败记录行为保持；关闭观察者取消、不合作扫描的终止及原监控失败传播仍在代码标明 TODO，不据此关闭完整 5.4。

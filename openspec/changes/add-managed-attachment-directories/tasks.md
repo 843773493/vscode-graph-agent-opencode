@@ -676,3 +676,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 6 项正式 Session／ASGI／Node／真实 PTY 与 Chromium 记录写入集成在同一运行中全部通过（72.51 秒），覆盖管理写入完成／取消及未派发 intent 的两类 owner。原资源身份、版本、锁、精确 lease、冷读、列表／详情与同入口停止断言保持；集成沿原主仓闸门取得名额，不更改另一会话 Web／Workbench、其自动化或共享 debug。
 - 新源码下再次运行原25项回归并加载只读任务快照，5项通过后在 Browser 授权账本失败场景的收尾挂起。多轮快照一致定位 `WorkspaceLifespan._close → TerminalSteeringService.shutdown → await task`，原 `terminal-steering-monitor` 已有取消计数1却仍在 `_run` 的轮询 sleep；这证明本片通用 worker 修复尚未解决全部关闭链。保留原快照后仅对本会话 timeout 监督器发送 SIGTERM，实际退出143，非360秒预算耗尽，不计整组通过；监控停止准入另作纵向切片，不用本次观察倒推前次无栈挂起的精确根因。
 - 准确命令、完整归档及基线指纹、原始输出、实际退出码、只读插件身份和作者AST复核见 `out/tests/temp/shielded_worker_cancel_20261031/artifacts/`。Windows、Gateway/Web、旧代接管、不可抢占原生I/O及完整 shutdown 仍未验完，5.2／5.4和21/23保持；未解决的logger装具与端口错误亦不以本片通过项覆盖。
+
+### 2026-10-31 Terminal steering 关闭后停止下一轮扫描（5.4 部分收口）
+
+- 关闭先登记停止请求，再取消原监控一次并等待；保留原任务句柄到结算，重叠关闭等待同一任务。原扫描的受保护收尾即使消耗取消，返回后仍直接退出，不再进入轮询 sleep。显式重新 start 复位停止请求；单次扫描、完成通知、claim 和候选筛选 AST 保持不变。
+- 13 项定向单测通过，完整旧生产归档加相同最终测试的两个反例均因关闭仍等待原监控而失败。25 项资源记录错误／冷恢复／释放回归全部通过（275.08 秒），真实 PTY 完成及目录回收单项通过（21.18 秒）；均先取得主仓共享闸门，沿原进程外超时及 4GiB 保护执行。本次通过补齐该组回归，不倒推此前无栈挂起的精确根因。
+- Ruff、编译和 OpenSpec strict 通过；Pyright 保留一条与完整旧生产规则、完整消息及语句 AST 一致的既有 operator 诊断，新增测试零诊断。初版 fixture 的 Awaitable 返回类型已修正并集中重跑，原件保留。准确命令、源码指纹、退出码、类型对照、只读快照插件和作者审查见 `out/tests/temp/terminal_monitor_stop_20261031/artifacts/verification.json`。
+- 关闭观察者取消、不合作扫描终止及原监控失败传播仍有代码 TODO，旧代接管、完整 shutdown 期限、Windows 与 Gateway/Web 未验完，5.2／5.4 与整体 21/23 不勾选。未修改另一会话的 Web/Workbench、自动化或暂存，不重启共享 Debug。

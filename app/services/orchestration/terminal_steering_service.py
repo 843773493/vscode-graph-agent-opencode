@@ -31,10 +31,12 @@ class TerminalSteeringService:
         self._session_orchestrator = session_orchestrator
         self._poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task[None] | None = None
+        self._stop_requested = False
 
     async def start(self) -> None:
         if self._task is not None:
             raise RuntimeError("TerminalSteeringService 已经启动")
+        self._stop_requested = False
         self._task = asyncio.create_task(
             self._run(),
             name="terminal-steering-monitor",
@@ -43,10 +45,12 @@ class TerminalSteeringService:
 
     async def shutdown(self) -> None:
         task = self._task
-        self._task = None
         if task is None:
             return
-        task.cancel()
+        if not self._stop_requested:
+            self._stop_requested = True
+            task.cancel()
+        # TODO(5.4)：关闭观察者取消、非合作扫描终止和原监控失败传播仍须单独核实。
         try:
             await task
         except asyncio.CancelledError:
@@ -56,6 +60,9 @@ class TerminalSteeringService:
                 "终端 steering 监控任务关闭时发现未处理异常",
                 exc_info=(type(error), error, error.__traceback__),
             )
+        finally:
+            if task.done():
+                self._task = None
 
     async def scan_once(self) -> None:
         errors: list[Exception] = []
@@ -161,6 +168,9 @@ class TerminalSteeringService:
                     "终端 owner 监控存在未收敛操作，将重试: %s",
                     error,
                 )
+            # 原owner可能保护收尾并消耗取消；关闭请求不能因此接纳下一轮扫描。
+            if self._stop_requested:
+                return
             await asyncio.sleep(self._poll_interval_seconds)
 
     @staticmethod

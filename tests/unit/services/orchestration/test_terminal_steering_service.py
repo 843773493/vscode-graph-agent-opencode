@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.orchestration.terminal_steering_service import (
     TerminalSteeringService,
 )
@@ -331,3 +332,64 @@ async def test_source_session_delete_race_does_not_block_other_completion(
         "other-session"
     ]
     assert terminal_client.finished == [("term_other", True)]
+
+
+@pytest.fixture
+def protected_scan_monitor(
+    terminal_client: _FakeTerminalClient,
+    session_orchestrator: _FakeSessionOrchestrator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]]:
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls: list[str] = []
+    terminal_client.terminals.clear()
+
+    async def finish() -> None:
+        await release.wait()
+
+    async def scan() -> list[dict[str, object]]:
+        calls.append("sweep")
+        entered.set()
+        # 复用真实owner的结算原语：扫描可在完成清理后正常返回，消耗关闭取消。
+        await run_cleanup_shielded(finish)
+        return []
+
+    monkeypatch.setattr(terminal_client, "sweep_orphans", scan)
+    service = TerminalSteeringService(
+        terminal_client=terminal_client,
+        session_orchestrator=session_orchestrator,  # type: ignore[arg-type]
+        poll_interval_seconds=3600,
+    )
+    return service, entered, release, calls
+
+
+@pytest.mark.parametrize("close_count", [1, 2], ids=["single", "overlap"])
+async def test_shutdown_does_not_poll_again_after_protected_scan_consumes_cancellation(
+    protected_scan_monitor: tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]],
+    close_count: int,
+) -> None:
+    service, entered, release, calls = protected_scan_monitor
+    await service.start()
+    await asyncio.wait_for(entered.wait(), 1)
+    monitor = service._task
+    assert monitor is not None
+    closing = [asyncio.create_task(service.shutdown()) for _ in range(close_count)]
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not monitor.done() and monitor.cancelling() == 1
+        release.set()
+        done, _pending = await asyncio.wait(closing, timeout=1)
+        assert done == set(closing), "关闭取消已被扫描收尾消耗，原监控却继续轮询睡眠"
+        assert monitor.done() and service._task is None
+        assert calls == ["sweep"]
+        await service.shutdown()
+        # 仍沿原start/shutdown支持同一service重新启动，不遗留第二监控。
+        await service.start()
+        await service.shutdown()
+        assert service._task is None and calls == ["sweep"]
+    finally:
+        release.set()
+        if not monitor.done():
+            monitor.cancel()
+        await asyncio.gather(monitor, *closing, return_exceptions=True)
