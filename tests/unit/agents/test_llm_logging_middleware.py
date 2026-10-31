@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import ExecutionInfo, Runtime
 
@@ -28,6 +31,9 @@ from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from tests.support.diagnostic_failures import (
+    sqlite_failure as sqlite_failure,  # noqa: PLC0414
+)
 
 
 @pytest.fixture
@@ -392,3 +398,51 @@ def test_llm_log_persists_failed_upstream_attempt(
     assert payload["upstream"]["attempts"][0]["error"] == "upstream unavailable"
     assert payload["upstream"]["attempts"][0]["sealed_dispatch"]["assembly_id"] == reference.assembly_id
     assert payload["upstream"]["attempts"][0]["sealed_dispatch"]["callback_model_call_id"] == reference.callback_model_call_id
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_llm_log_sqlite_failure_keeps_native_path_out_of_both_error_records(
+    tmp_path: Path, log_session, log_dispatch_reference,
+    sqlite_failure: sqlite3.OperationalError, asynchronous: bool,
+) -> None:
+    session_id = "ses_019c47af8f1a75e08243db221ad02820"
+    session_dir = log_session(tmp_path, session_id)
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    runtime = Runtime(execution_info=ExecutionInfo(
+        checkpoint_id="checkpoint", checkpoint_ns="", task_id="task", thread_id=thread_id,
+    ))
+    request = ModelRequest(
+        model=FakeListChatModel(responses=["unused"]),
+        messages=[HumanMessage(content="hello")], runtime=runtime,
+    )
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+    reference = log_dispatch_reference(session_id, thread_id)
+    original = (sqlite_failure.args, sqlite_failure.sqlite_errorcode, sqlite_failure.sqlite_errorname)
+
+    def invoke(_: ModelRequest) -> ModelResponse:
+        record_upstream_request(
+            request={"model": "failed-model", "messages": [{"role": "user", "content": "hello"}]},
+            model="failed-model", provider="openai", api_base=None,
+            call_type="acompletion" if asynchronous else "completion", dispatch_ref=reference,
+        )
+        raise sqlite_failure
+
+    async def invoke_async(request: ModelRequest) -> ModelResponse:
+        return invoke(request)
+
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        if asynchronous:
+            asyncio.run(middleware.awrap_model_call(request, invoke_async))
+        else:
+            middleware.wrap_model_call(request, invoke)
+    assert caught.value is sqlite_failure
+    assert (sqlite_failure.args, sqlite_failure.sqlite_errorcode, sqlite_failure.sqlite_errorname) == original
+    log_file, = (session_dir / "logs/llm_requests").glob("*.json")
+    raw = log_file.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    assert payload["response"]["error"] == "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+    attempt, = payload["upstream"]["attempts"]
+    assert attempt["error"] == payload["response"]["error"]
+    assert attempt["sealed_dispatch"]["assembly_id"] == reference.assembly_id
+    assert attempt["sealed_dispatch"]["callback_model_call_id"] == reference.callback_model_call_id
+    assert str(sqlite_failure) not in raw and "sqlite-execution-private" not in raw

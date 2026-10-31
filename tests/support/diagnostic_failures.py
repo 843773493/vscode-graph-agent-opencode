@@ -1,12 +1,28 @@
-"""在真实日志分发后注入原生写入故障，按原异常实例限定边界。"""
+"""原生 SQLite 错误与真实日志写入故障的共享装具。"""
 
 from __future__ import annotations
 
 import logging
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def sqlite_failure(tmp_path: Path) -> sqlite3.OperationalError:
+    """从真实 SQLite 取得含原生位置的失败，供各公开错误消费者复用。"""
+    destination = tmp_path / "sqlite-execution-private" / "source.sqlite"
+    with closing(sqlite3.connect(":memory:")) as connection:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            connection.execute("ATTACH DATABASE ? AS original_native", (str(destination),))
+        assert caught.value.sqlite_errorcode == sqlite3.SQLITE_CANTOPEN
+        assert str(destination) in str(caught.value)
+        assert connection.execute("PRAGMA database_list").fetchall() == [(0, "main", "")]
+    assert not destination.parent.exists()
+    return caught.value
 
 
 @dataclass

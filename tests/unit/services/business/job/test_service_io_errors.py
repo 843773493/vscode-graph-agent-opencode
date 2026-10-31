@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import sqlite3
 
 import pytest
 
@@ -16,12 +17,17 @@ from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
 )
+from tests.support.diagnostic_failures import (
+    sqlite_failure as sqlite_failure,  # noqa: PLC0414
+)
 from tests.support.job_thread_fixture import job_fixture_thread_id
 from tests.unit.services.business.job.ports import enqueue_job
 
 
-@pytest.fixture(params=["missing", "rename", "strerror", "text_only", "text_only_subclass"])
-def native_error(request: pytest.FixtureRequest) -> OSError:
+@pytest.fixture(params=["missing", "rename", "strerror", "text_only", "text_only_subclass", "sqlite"])
+def native_error(request: pytest.FixtureRequest, sqlite_failure: sqlite3.OperationalError) -> OSError | sqlite3.Error:
+    if request.param == "sqlite":
+        return sqlite_failure
     if request.param == "missing":
         return FileNotFoundError(errno.ENOENT, "missing", "/private/job-source")
     if request.param == "rename":
@@ -43,7 +49,7 @@ class _RecordingBus:
 
 
 class _FailedExecutor:
-    def __init__(self, error: OSError) -> None:
+    def __init__(self, error: Exception) -> None:
         self.error = error
 
     async def run(self, _job: object) -> str:
@@ -53,7 +59,7 @@ class _FailedExecutor:
 @pytest.mark.parametrize("boundary", ["executor", "task_callback"])
 @pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_job_io_failure_has_public_reason_and_original_diagnostic(
-    job_service_factory, session_lifecycle_guard, native_error: OSError,
+    job_service_factory, session_lifecycle_guard, native_error: OSError | sqlite3.Error,
     boundary: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     sink_fails: bool, diagnostic_sink: DiagnosticFailure,
 ) -> None:
@@ -77,7 +83,7 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
             raise native_error
         monkeypatch.setattr(service, "_run_job_background", fail_before_body)
         service._start_job_task(job)
-        with pytest.raises(OSError) as raised:
+        with pytest.raises(type(native_error)) as raised:
             await job.task
         assert raised.value is native_error
         await service.drain_finalizations()
@@ -85,7 +91,11 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
         enqueue_job(service, job, "after_turn")
         assert await service._start_next_pending(session_id, thread_id=job.thread_id)
         await asyncio.wait_for(job.task, 2)
-    expected = f"执行系统 I/O 失败: error={type(native_error).__name__}, errno={native_error.errno}"
+    expected = (
+        f"执行数据库失败: error={type(native_error).__name__}, sqlite_errorcode={getattr(native_error, 'sqlite_errorcode', None)}"
+        if isinstance(native_error, sqlite3.Error)
+        else f"执行系统 I/O 失败: error={type(native_error).__name__}, errno={native_error.errno}"
+    )
     if sink_fails:
         expected += ", diagnostic_sink_error=NotADirectoryError"
         assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR

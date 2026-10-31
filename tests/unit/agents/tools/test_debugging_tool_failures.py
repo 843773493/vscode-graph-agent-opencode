@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -19,13 +20,18 @@ from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
 )
+from tests.support.diagnostic_failures import (
+    sqlite_failure as sqlite_failure,  # noqa: PLC0414
+)
 from tests.unit.agents.tools.test_debugging_tools import (
     debug_service_factory as debug_service_factory,  # noqa: PLC0414
 )
 
 
-@pytest.fixture(params=["missing", "permission", "rename", "business", "timeout"])
-def failure_case(request: pytest.FixtureRequest) -> tuple[Exception, str, str]:
+@pytest.fixture(params=["missing", "permission", "rename", "business", "timeout", "sqlite"])
+def failure_case(request: pytest.FixtureRequest, sqlite_failure: sqlite3.OperationalError) -> tuple[Exception, str, str]:
+    if request.param == "sqlite":
+        return sqlite_failure, "DEBUG_TOOL_FAILED", "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
     location = "/private/debug-tool-secret"
     if request.param == "missing":
         return (
@@ -122,7 +128,7 @@ async def test_debug_tool_failure_keeps_action_and_result_consistent(
     )
     assert "debug-tool-secret" not in json.dumps(
         result
-    ) and "diagnostic-log-secret" not in json.dumps(result)
+    ) and "diagnostic-log-secret" not in json.dumps(result) and "sqlite-execution-private" not in json.dumps(result)
     assert any(
         record.exc_info and record.exc_info[1] is original for record in caplog.records
     )

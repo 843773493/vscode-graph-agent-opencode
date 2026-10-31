@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,13 @@ from app.core.failures import (
     is_provider_failure,
     mark_provider_failure,
     report_failure,
+)
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
+)
+from tests.support.diagnostic_failures import (
+    sqlite_failure as sqlite_failure,  # noqa: PLC0414
 )
 
 
@@ -34,6 +42,54 @@ def test_system_io_failure_keeps_native_facts_without_filename(error: OSError) -
     assert execution_failure_message(error) == (
         f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
     )
+
+
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
+def test_sqlite_failure_keeps_code_and_original_diagnostic_without_database_path(
+    sqlite_failure: sqlite3.OperationalError, caplog: pytest.LogCaptureFixture,
+    diagnostic_sink: DiagnosticFailure, sink_fails: bool,
+) -> None:
+    error = sqlite_failure
+    original = (error.args, error.sqlite_errorcode, error.sqlite_errorname)
+    expected = "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+    if sink_fails:
+        diagnostic_sink.primary = error
+        expected += ", diagnostic_sink_error=NotADirectoryError"
+    with caplog.at_level(logging.ERROR):
+        message = execution_failure_message(error)
+        assert caplog.records == []
+        assert report_failure(error, detail=message) == expected
+    record, = caplog.records
+    assert record.exc_info is not None and record.exc_info[1] is error
+    assert str(error) in caplog.text and "sqlite-execution-private" not in expected
+    assert (error.args, error.sqlite_errorcode, error.sqlite_errorname) == original
+    if sink_fails:
+        sink_error, = diagnostic_sink.errors
+        assert str(sink_error) in "\n".join(error.__notes__)
+        assert str(diagnostic_sink.destination) not in expected
+
+
+@pytest.mark.parametrize("error", [
+    sqlite3.DatabaseError("database refused: /private/execution.sqlite"),
+    sqlite3.IntegrityError(r"database refused: C:\private\execution.sqlite"),
+    sqlite3.OperationalError(r"database refused: \\target\private\execution.sqlite"),
+])
+def test_sqlite_failure_without_native_code_does_not_copy_diagnostic_text(error: sqlite3.Error) -> None:
+    original = error.args
+    assert execution_failure_message(error) == f"执行数据库失败: error={type(error).__name__}, sqlite_errorcode=None"
+    assert error.args == original
+
+
+def test_provider_sqlite_failure_keeps_provider_ownership(
+    sqlite_failure: sqlite3.OperationalError, caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert mark_provider_failure(sqlite_failure) is sqlite_failure
+    with caplog.at_level(logging.ERROR):
+        message = execution_failure_message(sqlite_failure)
+    assert message == "模型执行失败: stage=execution-provider, error=OperationalError, sqlite_errorcode=14"
+    record, = caplog.records
+    assert record.exc_info is not None and record.exc_info[1] is sqlite_failure
+    assert str(sqlite_failure) in caplog.text
 
 
 def test_provider_failure_keeps_instance_and_full_diagnostics(caplog: pytest.LogCaptureFixture) -> None:

@@ -1810,3 +1810,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 独占名额释放窗口内，原版本经独立Backend真实HTTP通过1项（14.36秒）：产品文件／导航入口生成受理状态，16次非法query和8次非法body保持400／422及头体request_id，原生位置仅留诊断；合法未知ID、原回执、文件字节、导航快照和原命令重放合同保持。1431份采样源码前后逐字稳定，正式24条回执与准确命令、原输出／退出码见`out/tests/temp/operation_id_network_acceptance_20261031/artifacts/verification.json`。
 - 随后新增5行断言，进一步核对重放后的持久operation、文件字节及导航快照；该补强版本的Ruff、Pyright零诊断和compileall通过，真实补跑尚未进入业务：另一会话新Web长测持有共享锁，排队至进程外180秒期限退出124。原版本通过不能算作新增断言已执行；保留待闸门释放后的单项复跑，不绕锁、不停止另一会话进程、不重复无效排队。
 - 没有新增产品实现或修改Web／Workbench、其自动化、共享debug及既有暂存；本次仅为BackendHTTP证据，不代Gateway联邦、浏览器或Windows验收。2.2／7.2继续未勾，整体51/53保持。
+
+### 2026-10-31 执行 SQLite 失败的公开记录（2.2／7.2部分收口）
+
+- 唯一执行消息出口补齐 SQLite 原生错误：普通 Job／SSE、模型请求日志的两个错误载体及调试工具结果只保存原异常类别和适用 SQLite 错误码，不复制数据库位置。既有消费者仍记录同一原始异常，Provider 归属优先、业务说明、异常参数及原因链保持，不新增诊断链或修改调度逻辑。
+- 真实 SQLite ATTACH 复现旧实现路径外泄；旧生产17项新增反例失败，Provider 优先级1项通过。首次新增异步日志装具另有2项 teardown 错误，修正为原同步fixture内调用真实异步入口后，这2项在旧生产干净失败于路径断言，未放宽业务预期。候选286项关联回归通过；修正新增导入及模型类型后117项补验通过（与前批重叠），包括步骤结算、工具结果与正常日志／真实ENOTDIR日志次错。
+- Ruff、compileall及本change strict通过；Pyright保留8条诊断，规则、全文及所属最窄语句AST均对应HEAD原代码，新增零诊断，不称类型全绿。准确命令、源码指纹、红绿原件、实际退出码与作者AST自查见`out/tests/temp/execution_sqlite_failures_20261031/artifacts/verification.json`。286项运行期间1609份采样源码前后稳定；最后117项仅采样本片六份源码，不扩张为全树冻结。
+- 本片为真实SQLite及执行消费者的定向验证，不代完整产品执行／恢复、独立Backend网络、Gateway、浏览器或Windows验收；另一会话仍持有集成闸门，未绕锁或运行其Web／Workbench测试，未动共享debug及原暂存。2.2／7.2继续未勾，整体51/53，团队协作及MCP显式持有仍延期。
