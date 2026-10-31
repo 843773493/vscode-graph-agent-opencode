@@ -755,7 +755,7 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
         assert claim is not None
         identity = _lease_identity(claim.process_instance_id)
         # 外部把账本占用错误结清：进程与 claim 事实不变。
-        manager.settle(identity.lease_id)
+        await manager.settle(identity.lease_id)
         assert manager.get_lease(identity.lease_id).status == "settled"
 
         state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)

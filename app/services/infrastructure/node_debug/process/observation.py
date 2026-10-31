@@ -123,7 +123,7 @@ class NodeDebugRuntimeObserver:
             return
         return_code = await process.wait()
         # 进程句柄已报告终态：这是可核实的终结，结清本实例的 claim。
-        self._mark_claim_phase(
+        await self._mark_claim_phase(
             runtime, "settled", f"进程已退出，退出码: {return_code}"
         )
         if runtime.closing:

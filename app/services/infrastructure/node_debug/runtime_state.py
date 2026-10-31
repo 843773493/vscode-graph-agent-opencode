@@ -153,7 +153,7 @@ class NodeDebugLaunchClaimWriter(Protocol):
 
 
 class NodeDebugClaimPhaseMarker(Protocol):
-    def __call__(
+    async def __call__(
         self,
         runtime: NodeDebugRuntime,
         phase: Literal["stopping", "reconcile_required", "settled"],
@@ -162,7 +162,7 @@ class NodeDebugClaimPhaseMarker(Protocol):
 
 
 class NodeDebugProcessLeaseSettler(Protocol):
-    def __call__(
+    async def __call__(
         self,
         *,
         session_id: str,

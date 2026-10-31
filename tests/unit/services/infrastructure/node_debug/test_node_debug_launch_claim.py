@@ -1026,7 +1026,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
         process_instance_id="node-debug-proc_stale_generation",
     )
 
-    service._claim_runtime.mark_claim_phase(stale, "settled", "旧代际回调")
+    await service._claim_runtime.mark_claim_phase(stale, "settled", "旧代际回调")
     service._claim_runtime.mark_claim_running(stale)
 
     persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
@@ -1039,7 +1039,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
         configuration_id=_CONFIGURATION_ID,
         process_instance_id=current.process_instance_id,
     )
-    service._claim_runtime.mark_claim_phase(current_runtime, "settled", "本代际结清")
+    await service._claim_runtime.mark_claim_phase(current_runtime, "settled", "本代际结清")
     persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted_after is not None
     assert persisted_after.phase == "settled"

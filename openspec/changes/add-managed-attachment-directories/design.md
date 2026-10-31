@@ -68,7 +68,7 @@ Terminal完成监控关闭先禁止下一轮扫描，并仅对原任务发起一
 
 创建链独立放入共享`creation.py`，两领域迁齐后移除原owner的三个创建私有方法，不保留转接入口。原operation对象直接提供冻结Thread/holder/operation/Turn身份，首条intent写盘前登记原资源锁和既有operation在途集合；close在让出事件循环前冻结原锁，记录尚未发布或发布失败删锁也能等待同一次创建。登记与取得lease复用原shielded获取链，未进入回调的关闭/取消由原调用持锁提交deleted/verified、stopped投影，再结清已取得的精确lease；初始写盘失败而无记录时不补造资源。Terminal cwd解析返回后重核operation关闭，拒绝迟到创建；这不宣称close已等待整个cwd阶段或有整个operation/shutdown硬期限。创建结果首次核实仅在原创建回执入口显式发生，普通清单不能凭creating状态恢复verified。
 
-传输授权从运行快照读取前复用同一派发保护，删除原快照/签发/拒绝校验各自重复的unknown收尾；原owner锁覆盖准备、查询、签发和回执确认。准备排队/写入时取消不迟到签发；签发回执丢失后，短暂或持续存储失败均不能由管理finally释放或让次错替换原错误。已核实的预检冲突、正式未签发拒绝先保存原观察并确认同一lease，再抛原ResourceConflict及正式拒绝cause；无效拒绝快照和响应投影错误仍交同一unknown链。普通查询不能核实未知授权，管理停止后才结清；其它同步lease writer、通知归属和整个operation/shutdown期限仍TODO。
+传输授权从运行快照读取前复用同一派发保护，删除原快照/签发/拒绝校验各自重复的unknown收尾；原owner锁覆盖准备、查询、签发和回执确认。准备排队/写入时取消不迟到签发；签发回执丢失后，短暂或持续存储失败均不能由管理finally释放或让次错替换原错误。已核实的预检冲突、正式未签发拒绝先保存原观察并确认同一lease，再抛原ResourceConflict及正式拒绝cause；无效拒绝快照和响应投影错误仍交同一unknown链。普通查询不能核实未知授权，管理停止后才结清；其它同步lease writer和整个operation/shutdown期限仍TODO。
 
 版本管理、stop/delete和Thread/Session释放统一使用原dispatching保护，删除逐层重复unknown收尾；停止的首条状态保存也在同一保护内。正式终态仅settle此前待核实占用，本次连续工具恢复同一active lease供后续调用，仍由原operation收尾。fork提交后的取消沿共享派发链读取原持久committed回执，复用原释放入口核完整资源/holder/operation/Thread身份，再在唯一账本一次提交直接释放；身份冲突或写盘失败不经过active中间状态，不回滚原关联，保留原取消与清理cause。同key冷恢复消费原回执，不重复关联。完整旧代接管与整个operation/shutdown期限继续TODO。
 
@@ -559,3 +559,9 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 正式消息上传和 Python Terminal 创建生成原目录、创建 intent、operation lease 及持久目录 lease。原生创建失败后收到迟到身份，但正式停止证明丢失时，原 operation 保持待核实、目录占用保持有效；即使独立观察已没有执行中的进程，也不能凭此回收目录。原 Node 或硬重启读取原记录的 Node 继续公开同一 created/unknown 及完整创建身份。
 
 显式 Python 管理停止沿既有版本同步和原生身份核实链执行，外部终态与领域记录持久成功后，原 operation 与目录 lease 才结清；冷读原账本核对同一 lease 身份，最后零关联目录到期后才能 GC。不重放创建、不补写停止证明、不增加恢复入口或账本。本验收覆盖 Linux 的两种 Node 生命周期，Python Backend 进程硬重启、无原生身份接管、任意原生 I/O 终止和完整 shutdown 总期限继续 TODO，5.2／5.4 不据此勾选。
+
+### 原账本终态提交与通知线程（5.4 部分收口）
+
+`settle` 与 `reconcile` 统一为异步入口，Terminal／Browser 的停止、冷恢复、创建收尾和目录占用，以及 MCP 启动对账、Node 调试的进程结清全部直接等待。原 JSON writer 锁内由既有 worker 执行读改写，持久成功后在同一锁内按提交顺序将轻量通知排入调用者事件循环；事件循环完成原通知后调用才结算。事件通道及其 asyncio 队列不进入 worker，不增加通知账本、后台重试或另一套 writer。通知失败仍按原规则显式记录，不回滚持久事实。
+
+资源锁及调用方已有准入覆盖线程池排队、写盘和通知；首次取消保留原消息，重复取消不能提前解锁或丢失迟到写盘错误。结清只消费原 owner 已核实的终态，不把取消、超时或文件提交当作外部进程已停止的证明。其它同步 writer、旧代完整接管、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 不据此勾选。

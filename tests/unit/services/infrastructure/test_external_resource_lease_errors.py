@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import logging
@@ -9,7 +10,7 @@ import os
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from threading import Event, get_ident
+from threading import Event
 
 import pytest
 from pydantic import ValidationError
@@ -188,7 +189,6 @@ def competing_writes(
 
     def run(first_action: Callable[[], object], second_action: Callable[[], object]) -> tuple[object, object]:
         entered, release_first, second_started, second_finished = (Event() for _ in range(4))
-        first_thread: int | None = None
 
         def read_published() -> object:
             return owner.get("terminal_original"), owner.leases_for_turn("holder"), owner.get("browser_first")
@@ -196,15 +196,10 @@ def competing_writes(
         original = read_published()
 
         def pause_first_replace(current: Path, target: Path) -> Path:
-            if current == path.with_suffix(".tmp") and get_ident() == first_thread:
+            if current == path.with_suffix(".tmp") and not entered.is_set():
                 entered.set()
                 assert release_first.wait(5), "测试未放行原账本写入"
             return replace(current, target)
-
-        def first_write() -> object:
-            nonlocal first_thread
-            first_thread = get_ident()
-            return first_action()
 
         def second_write() -> object:
             second_started.set()
@@ -215,7 +210,7 @@ def competing_writes(
 
         monkeypatch.setattr(Path, "replace", pause_first_replace)
         with ThreadPoolExecutor(max_workers=3) as pool:
-            first = pool.submit(first_write)
+            first = pool.submit(first_action)
             second: Future[object] | None = None
             try:
                 assert entered.wait(2)
@@ -253,9 +248,9 @@ def test_competing_writers_preserve_both_mutations_and_published_reads(
         "register": lambda: owner.register_external(resource_id="terminal_peer", kind="terminal", lifetime_scope="workspace"),
         "acquire": lambda: owner.acquire_operation(resource_id="terminal_original", turn_stream_id="parallel", operation_id="new"),
         "release": lambda: owner.release(original_lease.lease_id),
-        "settle": lambda: owner.settle(original_lease.lease_id),
+        "settle": lambda: asyncio.run(owner.settle(original_lease.lease_id)),
         "release_turn": lambda: owner.release_turn_leases("holder"),
-        "reconcile": lambda: owner.reconcile({"terminal_original": "running", "browser_first": "running"}),
+        "reconcile": lambda: asyncio.run(owner.reconcile({"terminal_original": "running", "browser_first": "running"})),
         "update": lambda: owner.update_external_state(
             "terminal_original", lifetime_scope="thread", status="unknown", unresolved_lease_id=original_lease.lease_id,
         ),
@@ -300,12 +295,12 @@ def test_competing_mutations_recheck_state_after_previous_commit(
             "terminal_original", lifetime_scope="thread", status="unknown", unresolved_lease_id=original_lease.lease_id,
         )
     else:
-        first = lambda: owner.settle(original_lease.lease_id)
+        first = lambda: asyncio.run(owner.settle(original_lease.lease_id))
     mutations: dict[str, Callable[[], object]] = {
         "register": lambda: owner.register_external(resource_id="terminal_original", kind="terminal", lifetime_scope="workspace"),
         "acquire": lambda: owner.acquire_operation(resource_id="terminal_original", turn_stream_id="parallel", operation_id="new"),
         "release_turn": lambda: owner.release_turn_leases("holder"),
-        "reconcile": lambda: owner.reconcile({"terminal_original": "running"}),
+        "reconcile": lambda: asyncio.run(owner.reconcile({"terminal_original": "running"})),
         "update": lambda: owner.update_external_state(
             "terminal_original", lifetime_scope="thread", status="unknown", unresolved_lease_id=original_lease.lease_id,
         ),

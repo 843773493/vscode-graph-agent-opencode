@@ -59,7 +59,7 @@ class _Recorder:
     def append_action(self, runtime, action, message, *, actor="human", tool_name=None, tool_call_id=None, extension_catalog_binding=None, result="success"):
         self.actions.append((action, message, result))
 
-    def mark_claim_phase(self, runtime, phase, reason=None):
+    async def mark_claim_phase(self, runtime, phase, reason=None):
         self.claim_phases.append((phase, reason or ""))
 
     def clear_stop_snapshot(self, runtime) -> None:

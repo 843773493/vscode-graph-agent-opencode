@@ -183,7 +183,7 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
         operation_id="call_1",
     )
     restarted = ExternalResourceLeaseLedger(state_path=resource_state_path)
-    records = restarted.reconcile({"browser_1": "stopped", "mcp_1": "running"})
+    records = await restarted.reconcile({"browser_1": "stopped", "mcp_1": "running"})
     statuses = {record.resource_id: record.status for record in records}
     assert statuses["mcp_1"] == "recovered"
     assert restarted.leases_for_turn("stream_crashed")[0].status == "reconcile_required"

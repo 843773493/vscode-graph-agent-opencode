@@ -9,26 +9,29 @@ owner 恢复与对账。它不猜测工具参数、不保存 cleanup_policy、�
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections import deque
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import ClassVar, Literal, Never
+from typing import ClassVar, Literal, Never, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter
 
 from app.core.failures import failure_detail
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
     ResourceStateEventPublisher,
 )
 
 _UNSETTLED_LEASE_STATUSES = frozenset({"active", "dispatching", "reconcile_required"})
+_ResultT = TypeVar("_ResultT")
 
 
 @dataclass(slots=True)
@@ -94,7 +97,8 @@ class ExternalResourceLeaseLedger:
         #: 通知失败时显式记录的错误摘要（有界）；durable 事实已先行落盘，不回滚。
         self._notification_errors: deque[str] = deque(maxlen=64)
         # 各领域线程共用同一读改写锁；查询仍读取最后持久成功的快照。
-        # TODO(5.4)：异步写盘与通知线程归属须整体迁齐，本锁不提供可取消的 I/O 等待。
+        # 终态写盘由worker执行，通知交回原循环；其它同步writer仍复用此锁。
+        # TODO(5.4)：其它同步入口和原生I/O抢占仍须分别处理。
         self._write_lock = RLock()
         self._records: dict[str, ResourceRecord] = {}
         self._leases: dict[str, ResourceLease] = {}
@@ -260,7 +264,7 @@ class ExternalResourceLeaseLedger:
             self._commit(leases=(lease,))
             return self._copy_lease(lease)
 
-    def settle(self, lease_id: str) -> ResourceLease:
+    async def settle(self, lease_id: str) -> ResourceLease:
         """结清由资源 owner 核实终态后释放的跨 Turn 占用 lease。
 
         与 release 的区别：release 表达“某次 Turn/操作结束”，settle 表达
@@ -268,14 +272,15 @@ class ExternalResourceLeaseLedger:
         后续消费方不能把一次 Turn 取消当成资源已终结，也不能把 owner 的结清
         当成普通操作完成。lease 不存在时显式抛错，绝不静默当作已结清。
         """
-        with self._write_lock:
+        def commit() -> tuple[ResourceLease, list[tuple[str, str]]]:
             lease = self._leases.get(lease_id)
             if lease is None:
                 raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
             lease = replace(lease, status="settled", updated_at=self._now())
             self._commit(leases=(lease,))
-            self._notify(resource_id=lease.resource_id, state="released")
-            return self._copy_lease(lease)
+            return self._copy_lease(lease), [(lease.resource_id, "released")]
+
+        return await self._commit_notified(commit)
 
     def get_lease(self, lease_id: str) -> ResourceLease | None:
         """按 lease_id 读取占用状态；不存在时返回 None。"""
@@ -294,7 +299,7 @@ class ExternalResourceLeaseLedger:
                 self._commit(leases=released)
             return [self._copy_lease(lease) for lease in released]
 
-    def reconcile(
+    async def reconcile(
         self,
         observed_status: Mapping[str, str],
         *,
@@ -306,7 +311,7 @@ class ExternalResourceLeaseLedger:
         的资源标记为 orphaned，其 active lease 进入 reconcile_required，
         绝不虚报为已停止。
         """
-        with self._write_lock:
+        def commit() -> tuple[list[ResourceRecord], list[tuple[str, str]]]:
             reconciled: list[ResourceRecord] = []
             for record in self._records.values():
                 if kind is not None and record.kind != kind:
@@ -325,6 +330,7 @@ class ExternalResourceLeaseLedger:
                 if lease.status in {"active", "dispatching"} and (kind is None or record.kind == kind):
                     changed_leases.append(replace(lease, status="reconcile_required", updated_at=self._now()))
             self._commit(records=reconciled, leases=changed_leases)
+            notifications: list[tuple[str, str]] = []
             for record in reconciled:
                 if record.status == "stopped":
                     state = "released"
@@ -333,8 +339,51 @@ class ExternalResourceLeaseLedger:
                     state = "unavailable"
                 else:
                     state = "unknown"
-                self._notify(resource_id=record.resource_id, state=state)
-            return [self._copy_record(record) for record in reconciled]
+                notifications.append((record.resource_id, state))
+            return [self._copy_record(record) for record in reconciled], notifications
+
+        return await self._commit_notified(commit)
+
+    async def _commit_notified(
+        self, change: Callable[[], tuple[_ResultT, list[tuple[str, str]]]],
+    ) -> _ResultT:
+        """原writer提交后按提交顺序交回原事件循环；取消等待整次写入及通知。"""
+        loop = asyncio.get_running_loop()
+        notified: asyncio.Future[None] = loop.create_future()
+
+        def notify(events: list[tuple[str, str]]) -> None:
+            try:
+                for resource_id, state in events:
+                    self._notify(resource_id=resource_id, state=state)
+            except BaseException as error:  # noqa: BLE001 - 仅搬运原通知错误，不改变已提交事实。
+                notified.set_exception(error)
+            else:
+                notified.set_result(None)
+
+        def commit() -> _ResultT:
+            with self._write_lock:
+                result, events = change()
+                # 在原writer锁内排入原循环，跨资源提交也不能交换通知顺序。
+                loop.call_soon_threadsafe(notify, events)
+                return result
+
+        async def finish() -> _ResultT:
+            result = await run_sync_shielded(commit)
+            await notified
+            return result
+
+        committing = asyncio.create_task(finish())
+        try:
+            return await asyncio.shield(committing)
+        except asyncio.CancelledError as original:
+            async def settle() -> None:
+                await committing
+
+            try:
+                await run_cleanup_shielded(settle)
+            except BaseException as failure:
+                raise original from failure
+            raise
 
     @property
     def notification_errors(self) -> tuple[str, ...]:

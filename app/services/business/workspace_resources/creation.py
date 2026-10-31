@@ -98,7 +98,7 @@ async def _close_unstarted_creation(
     await owner._store.save(record)
     await owner._sync_ledger(record)
     if lease_id is not None:
-        owner._leases.settle(lease_id)
+        await owner._leases.settle(lease_id)
 
 
 async def _record_creation_failure(
@@ -135,6 +135,6 @@ async def _record_creation_failure(
     record.error = None
     record.updated_at = owner._now()
     await owner._store.save(record)
-    owner._leases.settle(lease_id)
+    await owner._leases.settle(lease_id)
     await owner._sync_ledger(record)
     return True

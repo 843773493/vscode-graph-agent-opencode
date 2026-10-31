@@ -311,7 +311,7 @@ class McpCatalogOwner:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
         self.execution_handles.reconcile_lost_handles()
         # 只保留已核实关闭的旧连接；旧 socket 与未完成操作不能随新连接复活。
-        self._leases.reconcile({
+        await self._leases.reconcile({
             record.resource_id: "stopped"
             for record in self._leases.records_by_kind("mcp_connection")
             if record.status == "stopped"

@@ -138,7 +138,7 @@ class NodeDebugProcessLifecycle:
                 )
         # 已核实旧实例不存在（或已按 owner 策略定点停止）：结清账本占用后才写
         # claim 终态；没有任何登记时账本保持原样、不重复 acquire。
-        self._settle_process_lease(
+        await self._settle_process_lease(
             session_id=claim.session_id,
             thread_id=claim.thread_id,
             process_instance_id=claim.process_instance_id,
@@ -262,7 +262,7 @@ class NodeDebugProcessLifecycle:
             if runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES:
                 runtime.status = "stopping"
             runtime.closing = True
-        self._mark_claim_phase(runtime, "stopping", "收到停止请求，等待进程终结")
+        await self._mark_claim_phase(runtime, "stopping", "收到停止请求，等待进程终结")
         socket = runtime.inspector.socket
         if socket is not None:
             await socket.close()
@@ -286,12 +286,12 @@ class NodeDebugProcessLifecycle:
         async with runtime.state_lock:
             self._clear_stop_snapshot(runtime)
         if failure_reason is None:
-            self._mark_claim_phase(runtime, "settled", "已核实进程终结并结清")
+            await self._mark_claim_phase(runtime, "settled", "已核实进程终结并结清")
             async with runtime.state_lock:
                 if clear_error:
                     runtime.error_message = None
             return "stopped"
-        self._mark_claim_phase(runtime, "reconcile_required", failure_reason)
+        await self._mark_claim_phase(runtime, "reconcile_required", failure_reason)
         async with runtime.state_lock:
             runtime.status = "reconcile_required"
             runtime.error_message = (

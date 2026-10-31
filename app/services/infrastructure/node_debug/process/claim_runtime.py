@@ -117,7 +117,7 @@ class NodeDebugClaimRuntime:
             operation_id=identity.operation_id,
         )
 
-    def settle_process_lease(
+    async def settle_process_lease(
         self,
         *,
         session_id: str,
@@ -131,7 +131,7 @@ class NodeDebugClaimRuntime:
         )
         if self._external_resource_leases.get_lease(identity.lease_id) is None:
             return
-        self._external_resource_leases.settle(identity.lease_id)
+        await self._external_resource_leases.settle(identity.lease_id)
 
     def write_launch_claim(self, claim: NodeDebugLaunchClaimDTO) -> None:
         if self._session_store is None:
@@ -223,7 +223,7 @@ class NodeDebugClaimRuntime:
                 return port
         return runtime.inspector_port
 
-    def mark_claim_phase(
+    async def mark_claim_phase(
         self,
         runtime: NodeDebugRuntime,
         phase: Literal["stopping", "reconcile_required", "settled"],
@@ -239,7 +239,7 @@ class NodeDebugClaimRuntime:
                 process_instance_id=claim.process_instance_id,
             )
         if phase == "settled":
-            self.settle_process_lease(
+            await self.settle_process_lease(
                 session_id=claim.session_id,
                 thread_id=claim.thread_id,
                 process_instance_id=claim.process_instance_id,

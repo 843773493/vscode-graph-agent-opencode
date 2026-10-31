@@ -835,3 +835,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增52项：40项跨Terminal/Browser命令、授权及Browser动作的获取/释放原生replace屏障，覆盖重复取消、迟到原错、精确身份、原锁和独立Session删除holder；4项冲突后释放覆盖后续取消/写盘失败不覆盖原ResourceConflict；8项单线程池排队覆盖原30秒预算/取消、原件零变更及零迟到lease/派发。定向52项及相关377项通过，最终完整相关后端回归1461 passed／80.26秒；采样源码前后稳定。
 - 完整旧生产归档2项在原同步写盘屏障中触发2秒事件循环观察超时，原生屏障自带5秒释放上限；完整候选只删除排队取消检查，2项反例检出迟到新增lease导致原账本字节变化。Ruff、compileall与OpenSpec strict通过；Pyright本轮生产/新测试范围原新各6条既存诊断，按文件、规则、完整消息、词法owner与最窄AST逐项一致，新测试零诊断。准确命令、指纹、原始输出/退出码、变异补丁、类型对照与作者AST审查见`out/tests/temp/management_lease_io_20261031/artifacts/verification.json`。
 - 原JSON账本仍串行发布，不承诺无关写请求可绕过原生慢盘；原生I/O不可抢占，其它同步writer/通知归属、完整旧代接管及整个operation/shutdown硬期限继续TODO。验证使用原owner/账本和既有传输替身，不证明真实HTTP/PTY/Chromium、Backend硬退出或Windows。5.2/5.4及整体21/23保持未完成；未修改另一会话Web/Workbench、其自动化或共享debug，未纳入其改动及暂存。
+
+### 2026-10-31 终态账本与原循环通知（5.4部分）
+
+- `settle`／`reconcile` 唯一异步入口迁齐 Terminal、Browser、创建、冷恢复、MCP 和 Node 调试；原 writer 串行落盘后按提交顺序在原循环通知。取消等待原写入及通知，保留原锁、首次取消和迟到错误，不新增账本或通知重试链。
+- 新增19项。扩大后端回归1855 passed、1 failed，原失败为旧Node调试测试漏await；修复后该项与全部新增用例共20 passed，其余通过结果按未变化生产AST复用。作者新增停止测试曾误将工作区管理stop当作Thread holder持有期，已按原入口改为核真实资源锁；未改变产品准入。补await时一处缩进导致收集失败，修正后编译及定向通过；原输出全部保留。
+- 完整旧生产归档的两个反例在同步写盘中触发2秒循环观察超时（原生屏障5秒上限）；Ruff、compileall、strict通过，最终Pyright原新各54条既存诊断按文件、规则、完整消息、词法owner和最窄AST一致，新测试零诊断。证据见`out/tests/temp/lease_terminal_notify_20261031/artifacts/verification.json`。本轮为原owner／持久账本及既有传输替身验证，不代真实HTTP、PTY、Chromium、Backend硬退出或Windows验收；5.2／5.4及21/23保持未完成，Web／Workbench、其自动化和共享debug未动。

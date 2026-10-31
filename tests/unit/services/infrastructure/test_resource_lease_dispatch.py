@@ -58,7 +58,7 @@ def test_dispatch_publication_failure_keeps_exact_durable_phase_until_explicit_r
     assert retained.lease_id == "original" and retained.operation_id == "operation"
 
 
-def test_dispatch_rejects_replay_and_plain_release_but_remains_visible_to_all_lease_queries(
+async def test_dispatch_rejects_replay_and_plain_release_but_remains_visible_to_all_lease_queries(
     dispatch_ledger: tuple[Path, ExternalResourceLeaseLedger],
 ) -> None:
     path, ledger = dispatch_ledger
@@ -75,7 +75,7 @@ def test_dispatch_rejects_replay_and_plain_release_but_remains_visible_to_all_le
     assert cold.leases_for_resource("terminal") == [lease]
     assert cold.leases_for_resources(["terminal"]) == {"terminal": [lease]}
     assert cold.leases_for_turn("holder") == [lease]
-    cold.reconcile({"terminal": "running"}, kind="terminal")
+    await cold.reconcile({"terminal": "running"}, kind="terminal")
     pending = cold.get_lease("original")
     assert pending is not None and pending.status == "reconcile_required"
     assert cold.release_turn_leases("holder") == []

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,7 @@ def test_optional_lease_expiry_reads_legacy_rows_and_round_trips_deadline(tmp_pa
 
 
 @pytest.fixture(params=["register", "refresh", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
-def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], object]]:
+async def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], Awaitable[object]]]:
     mutations: dict[str, Callable[[ExternalResourceLeaseLedger], object]] = {
         "register": lambda ledger: ledger.register_external(resource_id="new", kind="terminal", lifetime_scope="workspace"),
         "refresh": lambda ledger: ledger.register_external(resource_id="a", kind="terminal", lifetime_scope="workspace"),
@@ -56,11 +57,15 @@ def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[Extern
         "reconcile": lambda ledger: ledger.reconcile({"a": "stopped", "b": "running"}),
         "unknown": lambda ledger: ledger.update_external_state("a", lifetime_scope="thread", status="unknown", unresolved_lease_id="a1"),
     }
-    return request.param, mutations[request.param]
+    async def mutate(ledger: ExternalResourceLeaseLedger) -> object:
+        result = mutations[request.param](ledger)
+        return await result if inspect.isawaitable(result) else result
+
+    return request.param, mutate
 
 
 @pytest.mark.parametrize("fault", ["fsync", "replace"])
-def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation_retries(
+async def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ledger_change, fault: str,
 ) -> None:
     name, mutate = ledger_change
@@ -92,7 +97,7 @@ def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation
                 return replace(source, target)
             io_fault.setattr(Path, "replace", fail_replace)
         with pytest.raises(OSError) as raised:
-            mutate(ledger)
+            await mutate(ledger)
         assert raised.value.__cause__ is failure
         assert type(raised.value) is type(failure) and raised.value.errno == failure.errno
         assert str(path) not in str(raised.value)
@@ -100,7 +105,7 @@ def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation
     assert view(ledger) == before
     assert view(ExternalResourceLeaseLedger(state_path=path)) == before
     # 相同登记/operation 重试不能因内存已前进而直接返回未持久的成功回执。
-    mutate(ledger)
+    await mutate(ledger)
     assert view(ledger) == view(ExternalResourceLeaseLedger(state_path=path))
     if name == "register":
         assert ledger.get("new").status == "running"
@@ -142,7 +147,7 @@ def test_management_lease_can_occupy_unverified_resource_without_changing_origin
 
 @pytest.mark.parametrize("status", ["unknown", "orphaned"])
 @pytest.mark.parametrize("unresolved_lease_id", [None, "pending"])
-def test_external_state_retains_only_the_explicit_unresolved_operation(
+async def test_external_state_retains_only_the_explicit_unresolved_operation(
     tmp_path: Path, status: str, unresolved_lease_id: str | None,
 ) -> None:
     path = tmp_path / "resources.json"
@@ -152,7 +157,7 @@ def test_external_state_retains_only_the_explicit_unresolved_operation(
     for lease_id in ("pending", "released", "settled", "same-resource"):
         ledger.acquire_operation(resource_id="terminal_a", turn_stream_id="turn-a", operation_id=lease_id, lease_id=lease_id)
     ledger.release("released")
-    ledger.settle("settled")
+    await ledger.settle("settled")
     ledger.acquire_operation(resource_id="terminal_b", turn_stream_id="turn-a", operation_id="other", lease_id="other")
 
     ledger.update_external_state("terminal_a", lifetime_scope="workspace", status=status, unresolved_lease_id=unresolved_lease_id)
@@ -212,7 +217,7 @@ async def test_holder_settle_publishes_released_but_turn_release_does_not(
     )
     ledger.release("lease_1")
     assert subscription.pending() == ()
-    settled = ledger.settle("lease_2")
+    settled = await ledger.settle("lease_2")
     assert settled.status == "settled"
     deliveries = subscription.pending()
     assert [delivery.event.state for delivery in deliveries] == ["released"]
@@ -243,7 +248,7 @@ async def test_reconcile_required_publishes_unavailable_never_released(
         lease_id="lease_1",
         operation_id="op_1",
     )
-    reconciled = ledger.reconcile({})
+    reconciled = await ledger.reconcile({})
     assert reconciled[0].status == "orphaned"
     assert ledger.get_lease("lease_1").status == "reconcile_required"
     deliveries = subscription.pending()
@@ -312,10 +317,10 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
     ):
         monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
         if mutation == "settle":
-            settled = ledger.settle("lease_1")
+            settled = await ledger.settle("lease_1")
             assert settled.status == "settled"
         else:
-            reconciled = ledger.reconcile({"terminal_1": "stopped", "browser_1": "running"})
+            reconciled = await ledger.reconcile({"terminal_1": "stopped", "browser_1": "running"})
             assert [record.status for record in reconciled] == ["stopped", "recovered"]
     # durable 事实已经落盘，通知失败绝不回滚。
     status = "settled" if mutation == "settle" else "reconcile_required"
@@ -409,7 +414,7 @@ async def test_reconcile_never_assumes_missing_external_resource_is_safe(
         operation_id="op_1",
     )
 
-    records = manager.reconcile({})
+    records = await manager.reconcile({})
     assert records[0].status == "orphaned"
     assert manager.leases_for_turn("stream_1")[0].status == "reconcile_required"
 
@@ -436,7 +441,7 @@ def test_external_resource_registration_requires_explicit_supported_kind(
         )
 
 
-def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
+async def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
     tmp_path: Path,
 ) -> None:
     """typed ``node_debug_process`` 占用由 owner 结清，Turn 收尾不得误释放。"""
@@ -460,7 +465,7 @@ def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
     assert still_active is not None
     assert still_active.status == "active"
 
-    settled = manager.settle(lease.lease_id)
+    settled = await manager.settle(lease.lease_id)
     assert settled.status == "settled"
     # 结清结果 durable 落盘，backend 重启后仍可读到。
     restored = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
@@ -471,7 +476,7 @@ def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
     # 缺失 lease 绝不静默当作已结清。
     assert manager.get_lease("node_debug_process:ses_1:main:missing") is None
     with pytest.raises(KeyError, match="资源 lease 不存在"):
-        manager.settle("node_debug_process:ses_1:main:missing")
+        await manager.settle("node_debug_process:ses_1:main:missing")
 
 
 def test_two_holders_share_resource_without_interference(tmp_path: Path) -> None:
@@ -507,7 +512,7 @@ def test_two_holders_share_resource_without_interference(tmp_path: Path) -> None
     assert record.status == "running"
 
 
-def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> None:
+async def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> None:
     """重启后账本没有内存 stopper：缺失证据只能进入 reconcile_required。
 
     进程重启后 in-process stopper 必然不存在，账本绝不会替 owner 宣称
@@ -529,7 +534,7 @@ def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> None:
     restarted = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     assert restarted.get_lease("lease_crash") is not None
     # 不提供任何 owner 证据时对账：资源 orphaned、lease reconcile_required。
-    records = restarted.reconcile({})
+    records = await restarted.reconcile({})
     assert records[0].status == "orphaned"
     lease = restarted.get_lease("lease_crash")
     assert lease is not None
@@ -539,7 +544,7 @@ def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> None:
     assert not hasattr(restarted, "stopper")
 
 
-def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None:
+async def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None:
     """provider 不可达时对账不产生 stopped 语义，只标记 unknown。"""
     ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     ledger.register_external(
@@ -556,7 +561,7 @@ def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None
 
     # owner 无法核实 provider 状态（如网络不可达）时，传入非闭合集合的
     # 观察值：账本保守标记 unknown，绝不推断为 stopped。
-    records = ledger.reconcile({"mcp_1": "unreachable"})
+    records = await ledger.reconcile({"mcp_1": "unreachable"})
     assert records[0].status == "unknown"
     lease = ledger.get_lease("lease_x")
     assert lease is not None
@@ -564,13 +569,13 @@ def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None
 
     # 只有 owner 明确核实到 stopped 才允许记录 stopped；此时 lease 仍
     # 保持 reconcile_required，结清必须走 owner 的 settle。
-    records = ledger.reconcile({"mcp_1": "stopped"})
+    records = await ledger.reconcile({"mcp_1": "stopped"})
     assert records[0].status == "stopped"
     lease = ledger.get_lease("lease_x")
     assert lease is not None
     assert lease.status == "reconcile_required"
     with pytest.raises(KeyError, match="资源 lease 不存在"):
-        ledger.settle("mcp_1:missing")
+        await ledger.settle("mcp_1:missing")
 
 
 def test_load_rejects_non_array_records_or_leases(tmp_path: Path) -> None:
@@ -627,7 +632,7 @@ def test_load_rejects_non_object_entries(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
+async def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
     path = tmp_path / "resources.json"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="terminal_a", kind="terminal", lifetime_scope="workspace")
@@ -640,7 +645,7 @@ def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseL
         if status == "released":
             ledger.release(status)
         elif status == "settled":
-            ledger.settle(status)
+            await ledger.settle(status)
         elif status == "reconcile_required":
             ledger.update_external_state(
                 "terminal_a", lifetime_scope="workspace", status="unknown", unresolved_lease_id=status,

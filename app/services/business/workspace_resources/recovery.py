@@ -115,7 +115,7 @@ class ResourceRecovery:
             statuses[record.resource_id] = lease_status(record)
         await owner._store.save(*records)
         # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
-        owner._leases.reconcile(statuses, kind=owner.lease_kind)
+        await owner._leases.reconcile(statuses, kind=owner.lease_kind)
         for record in records:
             owner._release_committed_fork_leases(record)
         pending_by_resource = owner._leases.leases_for_resources(owner._store.ids())

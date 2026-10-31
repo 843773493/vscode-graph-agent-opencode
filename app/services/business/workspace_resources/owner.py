@@ -538,7 +538,7 @@ class WorkspaceResourceOwner:
             await self._sync_ledger(record)
             for pending in self._leases.leases_for_resource(record.resource_id):
                 if pending.lease_id != lease_id and pending.status in {"dispatching", "reconcile_required"}:
-                    self._leases.settle(pending.lease_id)
+                    await self._leases.settle(pending.lease_id)
             return resource_projection(record, runtime, self.kind)
 
     async def release_thread(
@@ -870,7 +870,7 @@ class WorkspaceResourceOwner:
         record.error = None
         await self._store.save(record)
         for lease in pending:
-            self._leases.settle(lease.lease_id)
+            await self._leases.settle(lease.lease_id)
         await self._sync_ledger(record)
         return []
 
