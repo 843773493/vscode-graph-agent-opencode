@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from functools import cache
 from typing import Any, cast
 
 from google.protobuf import json_format
-from google.protobuf.descriptor import Descriptor
+from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from google.protobuf.message import Message
 
 from app.core.identifier import validate_session_id, validate_thread_id
@@ -27,16 +28,12 @@ _PAYLOAD_FIELDS = event_payload_fields(
 )
 
 
-# 公共信封身份字段闭集：encode 侧写入与 decode 侧还原共用同一来源。
-_IDENTITY_FIELDS = (
-    "model_call_id",
-    "block_id",
-    "tool_execution_id",
-    "workspace_id",
-    "tool_call_id",
-    "tool_invocation_id",
-    "tool_attempt_id",
-)
+@cache
+def _identity_fields(descriptor: Descriptor) -> tuple[str, ...]:
+    # 可选字符串是信封关联身份；job_id 沿既有合同独立传输，不从 payload 补齐或核冲突。
+    return tuple(field.name for field in descriptor.fields
+                 if field.type == FieldDescriptor.TYPE_STRING and field.has_presence
+                 and field.name != "job_id" and field not in descriptor.oneofs_by_name["payload"].fields)
 
 
 def message_stream_to_proto(
@@ -66,7 +63,8 @@ def message_stream_to_proto(
 
         parsed = datetime.fromisoformat(emitted_at)
         event.emitted_at.CopyFrom(timestamp_from_datetime(parsed))
-    for field_name in (*_IDENTITY_FIELDS, "job_id"):
+    identity_fields = _identity_fields(cast(Descriptor, event.DESCRIPTOR))
+    for field_name in (*identity_fields, "job_id"):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, str) or not field_value:
@@ -75,7 +73,7 @@ def message_stream_to_proto(
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         raise TypeError(f"消息流 payload 必须是对象: type={event.type}")
-    for field_name in _IDENTITY_FIELDS:
+    for field_name in identity_fields:
         envelope_value = value.get(field_name)
         payload_value = payload.get(field_name)
         for field_value, source in (
@@ -137,7 +135,7 @@ def message_stream_to_json(
         result["emitted_at"] = value.emitted_at.ToDatetime().isoformat().replace(
             "+00:00", "Z"
         )
-    for field_name in (*_IDENTITY_FIELDS, "job_id"):
+    for field_name in (*_identity_fields(cast(Descriptor, value.DESCRIPTOR)), "job_id"):
         if value.HasField(field_name):
             result[field_name] = getattr(value, field_name)
     return result
