@@ -1791,3 +1791,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 文件与会话目录继续使用唯一operation ID校验器；严格格式和异常类别保持，公开说明只包含类型或格式，原值留在异常notes。两个状态查询的原400映射复用report_failure，原request_id、日志次错及原因保持；原请求体422、合法未知ID、队列受理与恢复没有新增校验链。
 - 14项非法输入反例在原实现失败，2项合法输入通过；候选128项定向、77项文件／导航队列回归及16项HTTP错误／日志次错通过，共221项不同用例。Ruff原39条、Pyright原2条按规则、全文、所属函数和最窄表达式AST无新增，新测试零诊断；compileall与本change strict通过。
 - 准确命令、源码指纹、原始输出、退出码及作者AST自查见`out/tests/temp/operation_id_errors_20261031/artifacts/verification.json`。新增真实后端验收尚未执行：另一会话Web测试占用独占名额，本方等待进程在补强测试后主动终止（143），不能计作网络通过。未运行Web／Workbench、Gateway联邦或Windows；2.2／7.2继续未勾、整体51/53，不代全局验收。另一会话源码、自动化、共享暂存和debug进程未改。
+
+### 2026-10-31 SSH Include 路径展开与诊断次错（2.2／7.2部分收口）
+
+- 原 SSH 配置来源的主文件／Include 读取与路径展开共用一个错误出口；循环符号链接、权限及展开失败只公开阶段、原错误类别和适用系统错误码，完整位置留原异常原因及诊断。日志次错附在原异常，不能替换原读取失败；不把失败当成空连接清单，不增加解析器或路由回退。
+- 原实现12项来源反例和1项真实路由反例失败；路由500明确回显实际符号链接环路径。修复后48项不同用例通过，覆盖真实POSIX符号链接、三平台原生错误文本、原读取／解析行为、原cause、日志次错、同配置修复后的显式重试及request_id。首轮46通过／2失败的原因是测试直接比较Windows文件名与OSError格式化文本；改为核对原异常对象和其完整格式化文本后，受影响6项通过，其余42项结果按源码依赖复用，不重复计数。
+- Ruff、真实Pyright和compileall通过；准确命令、指纹、红绿原件、实际退出码及作者AST审查见`out/tests/temp/ssh_include_diagnostics_20261031/artifacts/verification.json`。HTTP为真实FastAPI路由／TraceMiddleware与配置读取链的进程内请求，配置来源由fixture注入，不是独立Gateway网络、实际SSH连接或Windows实机验收；未改另一会话Web／自动化、共享暂存或debug，2.2／7.2及整体51/53保持未完成。

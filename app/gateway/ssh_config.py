@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.failures import report_failure
+
 _MAX_SSH_CONFIG_RESOLUTION_WORKERS = 8
 logger = logging.getLogger(__name__)
 
@@ -32,10 +34,30 @@ def _split_config_line(raw_line: str) -> list[str]:
 
 
 def _included_config_paths(raw_pattern: str) -> list[Path]:
-    expanded = Path(raw_pattern).expanduser()
-    if not expanded.is_absolute():
-        expanded = Path.home() / ".ssh" / expanded
-    return [Path(path).resolve() for path in sorted(glob.glob(str(expanded)))]
+    try:
+        expanded = Path(raw_pattern).expanduser()
+        if not expanded.is_absolute():
+            expanded = Path.home() / ".ssh" / expanded
+        return [Path(path).resolve() for path in sorted(glob.glob(str(expanded)))]
+    except (OSError, RuntimeError) as error:
+        raise _config_file_error(error, stage="include_expand", label="展开 SSH Include 失败") from error
+
+
+def _config_file_error(
+    error: OSError | UnicodeError | RuntimeError, *, stage: str, label: str,
+) -> OSError | UnicodeError | RuntimeError:
+    """原生位置只留诊断；同一出口保留读取与展开阶段、错误类别及原因。"""
+    detail = f"{label}: stage={stage}, type={type(error).__name__}"
+    if isinstance(error, OSError):
+        detail += f", errno={error.errno}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+        detail = report_failure(error, detail=detail)
+        if winerror is not None:
+            return type(error)(error.errno, detail, None, winerror)
+        return type(error)(error.errno, detail)
+    detail = report_failure(error, detail=detail)
+    return UnicodeError(detail) if isinstance(error, UnicodeError) else RuntimeError(detail)
 
 
 def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
@@ -47,14 +69,7 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
         config_text = resolved_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         # 主文件与 Include 共用读取边界；原始位置和正文只留诊断。
-        logger.exception("SSH 配置读取失败: stage=config_read")
-        detail = f"读取 SSH Host 配置失败: stage=config_read, type={type(error).__name__}"
-        if isinstance(error, OSError):
-            detail += f", errno={error.errno}"
-            if (winerror := getattr(error, "winerror", None)) is not None:
-                raise type(error)(error.errno, f"{detail}, winerror={winerror}", None, winerror) from error
-            raise type(error)(error.errno, detail) from error
-        raise UnicodeError(detail) from error
+        raise _config_file_error(error, stage="config_read", label="读取 SSH Host 配置失败") from error
     aliases: list[str] = []
     for raw_line in config_text.splitlines():
         config_tokens = _split_config_line(raw_line)

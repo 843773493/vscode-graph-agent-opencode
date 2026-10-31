@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import errno
+import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.core.trace_middleware import TraceMiddleware
 from app.gateway import ssh_config
+from app.gateway.auth import verify_gateway_token
 from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes import workspaces_lifecycle
+from app.gateway.routes._shared import get_registry
 from app.gateway.ssh_command import build_ssh_command
 from app.gateway.ssh_config import (
     UserSshHost,
@@ -322,3 +330,126 @@ def test_ssh_config_selection_uses_pairing_command_from_gateway_config(
     assert resolved.port == 22022
     assert resolved.username == "Administrator"
     assert resolved.remote_pair_command == "python -m app.gateway.federation_pairing"
+
+
+@pytest.fixture
+def looping_include(tmp_path: Path) -> tuple[Path, Path]:
+    config = tmp_path / "config"
+    included = tmp_path / "native-include-location-marker"
+    included.symlink_to(included.name)
+    config.write_text(f"Include {included}\n", encoding="utf-8")
+    return config, included
+
+
+@pytest.mark.skipif(os.name == "nt", reason="真实符号链接环在 POSIX 验证")
+@pytest.mark.parametrize("entry", ["list", "resolve"])
+def test_ssh_include_loop_keeps_native_location_only_in_diagnostics(
+    looping_include: tuple[Path, Path], entry: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    config, included = looping_include
+    with pytest.raises(RuntimeError) as caught:
+        if entry == "list":
+            list_user_ssh_hosts(config)
+        else:
+            resolve_user_ssh_host("dev", config)
+    assert str(caught.value).startswith("展开 SSH Include 失败: stage=include_expand, type=RuntimeError")
+    assert str(included) not in str(caught.value)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(included) in str(caught.value.__cause__)
+    assert str(included) in caplog.text
+    included.unlink()
+    included.write_text("# repaired\n", encoding="utf-8")
+    assert list_user_ssh_hosts(config) == []
+
+
+@pytest.mark.parametrize("native_path", [
+    "/private/include-location-marker", r"C:\Users\include-location-marker", r"\\host\include-location-marker",
+])
+@pytest.mark.parametrize("error_kind", ["permission", "runtime"])
+def test_ssh_include_expansion_failure_preserves_cause_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    native_path: str, error_kind: str,
+) -> None:
+    config = tmp_path / "config"
+    included = tmp_path / "included.conf"
+    included.write_text("# repaired\n", encoding="utf-8")
+    config.write_text(f"Include {included}\n", encoding="utf-8")
+    original = PermissionError(errno.EACCES, "include", native_path) if error_kind == "permission" else RuntimeError(native_path)
+    resolve = Path.resolve
+
+    def fail_expansion(path: Path, *args, **kwargs):
+        if path == included:
+            raise original
+        return resolve(path, *args, **kwargs)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(Path, "resolve", fail_expansion)
+        with pytest.raises(type(original)) as caught:
+            list_user_ssh_hosts(config)
+    assert "stage=include_expand" in str(caught.value)
+    assert "include-location-marker" not in str(caught.value)
+    assert caught.value.__cause__ is original
+    if isinstance(original, OSError):
+        assert isinstance(caught.value, OSError)
+        assert caught.value.errno == original.errno and caught.value.filename is None
+    record, = [record for record in caplog.records if "stage=include_expand" in record.getMessage()]
+    assert record.exc_info is not None and record.exc_info[1] is original
+    assert str(original) in caplog.text
+    assert list_user_ssh_hosts(config) == []
+
+
+@pytest.mark.parametrize("unreadable_ssh_config", [
+    (location, kind, "/private/ssh-read-location-marker/config")
+    for location in ("root", "include") for kind in ("permission", "encoding")
+], indirect=True)
+def test_ssh_config_diagnostic_failure_does_not_replace_read_error(
+    unreadable_ssh_config: tuple[Path, OSError | UnicodeError, Mock], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, original, _ = unreadable_ssh_config
+    sink = OSError(errno.ENOSPC, "log sink", "/private/ssh-log-location-marker/log")
+    emit = Mock(side_effect=sink)
+    monkeypatch.setattr("app.core.failures.logger.error", emit)
+    monkeypatch.setattr("app.gateway.ssh_config.logger.exception", emit)
+    with pytest.raises((OSError, UnicodeError)) as caught:
+        list_user_ssh_hosts(config)
+    assert caught.value.__cause__ is original
+    assert "diagnostic_sink_error=OSError" in str(caught.value)
+    assert "location-marker" not in str(caught.value)
+    assert any("ssh-log-location-marker" in note for note in original.__notes__)
+    emit.assert_called_once()
+
+
+@pytest.fixture
+def ssh_include_client(
+    looping_include: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[TestClient]:
+    config, _ = looping_include
+    monkeypatch.setattr("app.gateway.ssh_connections.list_user_ssh_hosts", lambda: list_user_ssh_hosts(config))
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry.targets.return_value = ()
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(workspaces_lifecycle.router)
+    application.dependency_overrides[get_registry] = lambda: registry
+    application.dependency_overrides[verify_gateway_token] = lambda: "test-token"
+    with TestClient(application) as client:
+        yield client
+
+
+@pytest.mark.skipif(os.name == "nt", reason="真实符号链接环在 POSIX 验证")
+def test_ssh_connection_list_does_not_publish_include_location(
+    ssh_include_client: TestClient, looping_include: tuple[Path, Path], caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, included = looping_include
+    response = ssh_include_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-request"})
+    assert response.status_code == 500
+    assert response.headers["X-Request-ID"] == "ssh-include-request"
+    assert "展开 SSH Include 失败: stage=include_expand, type=RuntimeError" in response.json()["detail"]
+    assert str(included) not in response.text
+    assert str(included) in caplog.text
+    included.unlink()
+    included.write_text("# repaired\n", encoding="utf-8")
+    retried = ssh_include_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-retry"})
+    assert retried.status_code == 200
+    assert retried.json()["data"] == {"items": []}
+    assert retried.json()["request_id"] == retried.headers["X-Request-ID"] == "ssh-include-retry"
