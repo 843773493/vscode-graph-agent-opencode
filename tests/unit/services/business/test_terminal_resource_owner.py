@@ -555,8 +555,8 @@ async def test_new_management_stop_settles_old_operation_only_with_current_verif
         assert (original.turn_stream_id, original.operation_id, original.status) == (
             "crashed-holder", "crashed-operation", "reconcile_required",
         )
-        active, = [lease for lease in terminal_owner.leases.leases_for_resource(rid) if lease.status == "active"]
-        assert (active.turn_stream_id, active.operation_id) == ("request:new-stop", "new-stop")
+        dispatched, = [lease for lease in terminal_owner.leases.leases_for_resource(rid) if lease.status == "dispatching"]
+        assert (dispatched.turn_stream_id, dispatched.operation_id) == ("request:new-stop", "new-stop")
         runtime = dict(terminal_owner.transport.records[resource_id])
         runtime["status"] = "terminated"
         if receipt == "running":

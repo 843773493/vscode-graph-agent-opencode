@@ -142,7 +142,7 @@ async def test_sweep_deadline_covers_all_phases_without_false_release_or_automat
         assert len(deadlines) == 1 and deadlines[0].when() is not None
         if phase in {"revision", "delete"}:
             original_lease, = bundle.leases.leases_for_resource(rid)
-            assert original_lease.status == "active"
+            assert original_lease.status == "dispatching"
         deadlines[0].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(TimeoutError, match="孤儿回收等待超过 30 秒"):
             await asyncio.wait_for(sweeping, 2)

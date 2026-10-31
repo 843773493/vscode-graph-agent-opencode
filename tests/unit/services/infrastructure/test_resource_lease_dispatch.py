@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -22,17 +23,17 @@ def dispatch_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
 
 
 @pytest.mark.parametrize("fault", ["fsync", "replace"])
-@pytest.mark.parametrize("stage", ["dispatch", "confirm"])
+@pytest.mark.parametrize("stage", ["dispatch", "confirm", "release"])
 def test_dispatch_publication_failure_keeps_exact_durable_phase_until_explicit_retry(
     dispatch_ledger: tuple[Path, ExternalResourceLeaseLedger], monkeypatch: pytest.MonkeyPatch,
     fault: str, stage: str,
 ) -> None:
     path, ledger = dispatch_ledger
-    if stage == "confirm":
+    if stage != "dispatch":
         ledger.mark_operation_dispatched("original")
     before, lease = path.read_bytes(), ledger.get_lease("original")
     native = OSError(28, "派发阶段原生写盘失败", str(path))
-    change = ledger.mark_operation_dispatched if stage == "dispatch" else ledger.finish_operation_dispatch
+    change = ledger.mark_operation_dispatched if stage == "dispatch" else partial(ledger.finish_operation_dispatch, release=stage == "release")
     with monkeypatch.context() as io_fault:
         if fault == "fsync":
             def fail(_descriptor: int) -> None:
@@ -53,7 +54,7 @@ def test_dispatch_publication_failure_keeps_exact_durable_phase_until_explicit_r
     assert ExternalResourceLeaseLedger(state_path=path).get_lease("original") == lease
     change("original")
     retained = ExternalResourceLeaseLedger(state_path=path).get_lease("original")
-    assert retained is not None and retained.status == ("dispatching" if stage == "dispatch" else "active")
+    assert retained is not None and retained.status == {"dispatch": "dispatching", "confirm": "active", "release": "released"}[stage]
     assert retained.lease_id == "original" and retained.operation_id == "operation"
 
 

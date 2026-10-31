@@ -239,15 +239,15 @@ class ExternalResourceLeaseLedger:
                 raise RuntimeError(f"原 operation 尚未核实或已结束，拒绝再次派发: lease_id={lease_id} status={lease.status}")
             self._commit(leases=(replace(lease, status="dispatching", updated_at=self._now()),))
 
-    def finish_operation_dispatch(self, lease_id: str) -> None:
-        """原owner已提交正式回执，或原调用证明尚未派发时，恢复普通占用。"""
+    def finish_operation_dispatch(self, lease_id: str, *, release: bool = False) -> None:
+        """核实回执后恢复连续占用；已完成的独立操作直接原子释放。"""
         with self._write_lock:
             lease = self._leases.get(lease_id)
             if lease is None:
                 raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
             if lease.status != "dispatching":
                 raise RuntimeError(f"operation 缺少本次待核实派发: lease_id={lease_id} status={lease.status}")
-            self._commit(leases=(replace(lease, status="active", updated_at=self._now()),))
+            self._commit(leases=(replace(lease, status="released" if release else "active", updated_at=self._now()),))
 
     def release(self, lease_id: str) -> ResourceLease:
         with self._write_lock:

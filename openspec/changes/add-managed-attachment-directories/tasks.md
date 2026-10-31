@@ -820,3 +820,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增64项；定向130项及最终相关回归1176项通过（61.26秒），采样源码前后稳定。覆盖单次/持续原生replace故障、原错误/取消消息、原lease/Thread/holder/operation身份、同owner与冷重建后显式停止、正常签发、预检冲突、正式拒绝/六类无效快照、准备写入取消/失败及线程池排队不迟到签发。既有期限测试只将外部回调阶段的原lease断言由active改为dispatching，其余身份、期限、冷读和终态断言保持。
 - 完整旧生产归档叠加最终测试的8项反例，准确复现正式签发回执丢失且unknown首步写盘短暂失败后原lease已released。初版持续故障红测先失败于finally释放的次错替换原异常，仅证明错误链窗口；补齐单次故障后直接核到误释放，原件均保留。完整候选仅把正式拒绝冲突放回unknown保护体内的变异，核正式拒绝不得误标unknown。
 - Ruff、compileall与OpenSpec strict通过。Pyright本轮选定生产及既有期限测试原/新各38条既存诊断，按文件、规则、完整消息、词法owner和最窄AST逐项一致；新增三份测试零诊断，不称类型全绿。准确命令、指纹、原始输出、退出码、类型对照、反例及作者结构自查见`out/tests/temp/resource_grant_dispatch_20261031/artifacts/verification.json`。传输使用既有替身，不代表真实HTTP/PTY/Chromium、Backend硬退出或Windows验收；同步管理lease获取/释放、版本管理首步失败保护、完整旧代接管与整个operation/shutdown期限仍TODO。5.2/5.4及整体21/23保持未完成；另一会话Web/Workbench、自动化、共享暂存与debug未动。
+
+### 2026-10-31 管理版本与停止的原lease派发保护（5.2/5.4部分）
+
+- promote/attach/detach、fork关联、stop/delete及Thread/Session释放统一复用原dispatching保护，删除逐层重复unknown收尾；停止首条状态保存也受保护。原版本已发布或外部已更新但回执未知时，即使unknown账本/owner写盘持续失败，管理finally与Turn也不误释放原占用；同owner及冷恢复由新管理身份沿原链核实。
+- fork提交后取消由共享派发链读取原committed回执，复用原完整资源/holder/operation/Thread身份校验，再沿唯一账本一次提交直接释放；不经过active中间写入，确认失败保留原取消及cause、原lease与提交版本。同key冷恢复不重复关联。正式停止只settle此前未知占用，本次连续工具恢复同一active lease直到原operation收尾。
+- 新增115项管理链和4项原账本故障用例；最终相关后端回归1409 passed／77.48秒，采样源码前后稳定。既有期限/原生fork写盘/停止/回收测试仅迁移派发阶段active→dispatching；原线程池排队测试明确在记录writer入队时占池，继续核原锁、取消、版本和终态。初轮扩大回归1398 passed、11 failed均据原输出完成此阶段迁移，未放宽期限、身份或终态断言。
+- 完整旧生产归档4项反例重现失败收尾后管理finally再次尝试释放并覆盖原失败；完整候选定点变异在身份校验前恢复active，2项反例检出原lease被误释放。Ruff、compileall、OpenSpec strict通过；选定生产及受影响测试Pyright原/新各36条既存诊断，按文件、规则、完整消息、词法owner及最窄AST逐项一致，新管理测试零诊断。准确命令、指纹、原始输出/退出码、类型对照、变异补丁和作者AST自查见`out/tests/temp/resource_management_dispatch_20261031/artifacts/verification.json`。
+- 本轮使用原owner/账本和既有传输替身，不证明真实HTTP/PTY/Chromium、Backend硬退出或Windows行为；同步管理lease获取/释放、完整旧代接管、原生I/O抢占及整个operation/shutdown期限仍TODO。5.2/5.4及整体21/23保持未完成；未修改Web/Workbench、其自动化或共享debug，不纳入另一会话的改动及暂存。

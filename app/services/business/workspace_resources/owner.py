@@ -279,7 +279,10 @@ class WorkspaceResourceOwner:
                 receipt.target_thread.session_id, receipt.target_thread.thread_id,
             ):
                 raise RuntimeError("fork attach 回执与原 operation lease 身份冲突")
-            if lease.status in {"active", "reconcile_required"}:
+            if lease.status == "dispatching":
+                # 原持久回执核完完整身份后才解除派发保护，损坏回执不得触发普通finally释放。
+                self._leases.finish_operation_dispatch(lease.lease_id, release=True)
+            elif lease.status in {"active", "reconcile_required"}:
                 # 只完成这一条已提交的操作；资源本身仍存活，不使用资源终态 settle。
                 self._leases.release(lease.lease_id)
 
@@ -444,7 +447,9 @@ class WorkspaceResourceOwner:
         with self._management_lease(
             record, thread, holder_id, operation_id, lease_id, allow_unverified=takeover,
         ) as acquired_lease_id:
-            try:
+            if action in {"stop", "delete"}:
+                return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason, lease_id=acquired_lease_id)
+            async with resource_operation_dispatch(self, record, acquired_lease_id, operation=None):
                 if fork_attachment is not None:
                     fork_attachment.state = "dispatching"
                     fork_attachment.lease_id = acquired_lease_id
@@ -452,8 +457,6 @@ class WorkspaceResourceOwner:
                     await self._store.save(record)
                 if fork_attachment is not None:
                     await observe_phase(fork_attachment.creation_key, f"fork.live.dispatched.{self.kind}")
-                if action in {"stop", "delete"}:
-                    return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason, lease_id=acquired_lease_id)
                 await self._advance_revision(record)
                 runtime = await self._transport.get_resource(resource_id)
                 observe_resource(record, runtime, self.kind)
@@ -483,17 +486,6 @@ class WorkspaceResourceOwner:
                     await observe_phase(fork_attachment.creation_key, f"fork.live.committed.{self.kind}")
                 await self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
-            except BaseException as error:
-                if fork_attachment is not None:
-                    # 取消可能发生在 worker 已提交、await 尚未返回时；以原持久回执核实。
-                    saved = self._require_owned_resource_record(resource_id)
-                    receipt = saved.fork_attachments.get(fork_attachment.creation_key)
-                    if receipt is not None and receipt.state == "committed":
-                        await self._sync_ledger(saved)
-                        self._release_committed_fork_leases(saved)
-                        raise
-                await self._unknown(record, error, lease_id=acquired_lease_id)
-                raise
 
     async def _advance_revision(self, record: OwnedResourceRecord, *, for_stop: bool = False) -> None:
         record.owner_revision += 1
@@ -513,10 +505,10 @@ class WorkspaceResourceOwner:
     async def _stop_or_delete(
         self, record: OwnedResourceRecord, *, delete: bool, lease_id: str, reason: str | None = None,
     ) -> ResourceSnapshot:
-        record.status = "deleting" if delete else "stopping"
-        record.updated_at = self._now()
-        await self._store.save(record)
-        try:
+        async with resource_operation_dispatch(self, record, lease_id, operation=None):
+            record.status = "deleting" if delete else "stopping"
+            record.updated_at = self._now()
+            await self._store.save(record)
             # 停止先撤销旧授权；真实执行的排空由外部owner在关闭运行时后核实。
             await self._advance_revision(record, for_stop=True)
             details = {"workspace_id": self.workspace_id, "resource_id": record.resource_id,
@@ -544,12 +536,9 @@ class WorkspaceResourceOwner:
             await self._store.save(record)
             await self._sync_ledger(record)
             for pending in self._leases.leases_for_resource(record.resource_id):
-                if pending.status in {"dispatching", "reconcile_required"}:
+                if pending.lease_id != lease_id and pending.status in {"dispatching", "reconcile_required"}:
                     self._leases.settle(pending.lease_id)
             return resource_projection(record, runtime, self.kind)
-        except BaseException as error:
-            await self._unknown(record, error, lease_id=lease_id)
-            raise
 
     async def release_thread(
         self, session_id: str, thread_id: str, generation: int
@@ -594,20 +583,17 @@ class WorkspaceResourceOwner:
                 if record.status == "deleted":
                     return
                 with self._management_lease(record, None, holder_id, operation_id) as lease_id:
-                    try:
-                        if record.retention_scope == "thread":
-                            record.thread_associations = []
-                            await self._stop_or_delete(record, delete=True, lease_id=lease_id)
-                        else:
+                    if record.retention_scope == "thread":
+                        record.thread_associations = []
+                        await self._stop_or_delete(record, delete=True, lease_id=lease_id)
+                    else:
+                        async with resource_operation_dispatch(self, record, lease_id, operation=None):
                             await self._advance_revision(record)
                             record.thread_associations = [
                                 ref for ref in record.thread_associations if not matches(ref)
                             ]
                             record.updated_at = self._now()
                             await self._store.save(record)
-                    except BaseException as error:
-                        await self._unknown(record, error, lease_id=lease_id)
-                        raise
             finally:
                 # 完整preflight后各任务接管自己的原锁，成功项不等其它网络回执。
                 locked.pop(record.resource_id).release()
@@ -983,7 +969,7 @@ class WorkspaceResourceOwner:
         )
         record.updated_at = self._now()
         async def persist() -> None:
-            # TODO(5.2)：创建、普通工具和传输授权已有原dispatching保护，版本管理仍须迁齐；失败不能视为unknown持久成功。
+            # TODO(5.2)：派发已有原dispatching保护；失败不能视为unknown持久成功，完整旧代接管仍须核实。
             # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
             await run_sync_shielded(
                 self._leases.update_external_state,

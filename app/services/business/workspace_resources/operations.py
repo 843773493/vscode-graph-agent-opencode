@@ -28,7 +28,7 @@ async def resource_operation_dispatch(
     *, operation: ResourceOperations | None,
 ) -> AsyncIterator[None]:
     """同一原lease覆盖派发、正式回执提交及失败写盘，不能靠finally猜测成功。"""
-    # TODO(5.2)：版本管理的派发仍须沿原入口迁齐，不能据此声明全部接管完成。
+    # TODO(5.2)：完整旧代接管仍须沿原owner核实，不能据此声明全部接管完成。
     cancelled = Event()
 
     def prepare() -> None:
@@ -67,7 +67,22 @@ async def resource_operation_dispatch(
     try:
         yield
     except BaseException as error:
-        await owner._unknown(record, error, lease_id=lease_id)
+        saved = owner._store.get(record.resource_id)
+        if saved is not None and any(
+            receipt.state == "committed" and receipt.lease_id == lease_id
+            for receipt in saved.fork_attachments.values()
+        ):
+            async def confirm_committed() -> None:
+                # 原writer可能已提交fork回执、await尚未返回；只有精确原lease可消费此证明。
+                await owner._sync_ledger(saved)
+                await run_sync_shielded(owner._release_committed_fork_leases, saved)
+
+            try:
+                await run_cleanup_shielded(confirm_committed)
+            except BaseException as failure:
+                raise error from failure
+        else:
+            await owner._unknown(record, error, lease_id=lease_id)
         raise
     else:
         confirming = asyncio.create_task(run_sync_shielded(owner._leases.finish_operation_dispatch, lease_id))

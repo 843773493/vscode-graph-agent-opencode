@@ -124,7 +124,7 @@ async def test_cold_recovery_and_dispatched_command_share_one_deadline_and_keep_
             # 本场景会推进20秒，观察者预算不参与被测命令的30秒合同。
             await asyncio.wait_for(entered.wait(), 60)
             lease, = bundle.leases.leases_for_resource(rid)
-            assert lease.status == "active"
+            assert lease.status == "dispatching"
             advance_clock(11)
             with pytest.raises(TimeoutError, match="管理命令等待超过 30 秒"):
                 await asyncio.wait_for(asyncio.shield(pending), 1)

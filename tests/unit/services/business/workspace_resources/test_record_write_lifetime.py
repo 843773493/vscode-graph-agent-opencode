@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from app.services.business.workspace_resources import records as records_module
 from app.services.business.workspace_resources.records import ThreadRef
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
@@ -182,22 +183,32 @@ async def test_cancellation_while_native_write_is_queued_keeps_original_locks_un
     assert owner is not None
     loop = asyncio.get_running_loop()
     entered, release = asyncio.Event(), threading.Event()
+    queued = asyncio.Event()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="resource-record-write")
+    occupying: asyncio.Future[None] | None = None
+    run = records_module.run_sync_shielded
 
     def occupy() -> None:
         loop.call_soon_threadsafe(entered.set)
         if not release.wait(5):
             raise TimeoutError("测试线程池屏障未释放")
 
+    async def writing(function: Callable[[], None]) -> None:
+        nonlocal occupying
+        if occupying is None:
+            # 派发准备先正常完成；只阻塞本测试原本要覆盖的owner记录writer。
+            occupying = loop.run_in_executor(None, occupy)
+            await entered.wait()
+            loop.call_soon(queued.set)
+        await run(function)
+
     with monkeypatch.context() as patch:
         patch.setattr(loop, "_default_executor", executor)
-        occupying = loop.run_in_executor(None, occupy)
-        await asyncio.wait_for(entered.wait(), 2)
+        patch.setattr(records_module, "run_sync_shielded", writing)
         before = owner._store.path.read_bytes()
         command = asyncio.create_task(resource_owner.command(rid, action="promote", expected_revision=1))
         try:
-            for _ in range(10):
-                await asyncio.sleep(0)
+            await asyncio.wait_for(queued.wait(), 2)
             assert owner._store._write_lock.locked() and owner._resource_lock(rid).locked()
             command.cancel("排队时取消")
             await asyncio.sleep(0)
@@ -216,7 +227,7 @@ async def test_cancellation_while_native_write_is_queued_keeps_original_locks_un
             assert resource_owner.transport.records[rid]["transport_owner_revision"] == 1
         finally:
             release.set()
-            await asyncio.gather(command, occupying, return_exceptions=True)
+            await asyncio.gather(command, *([] if occupying is None else [occupying]), return_exceptions=True)
             executor.shutdown(wait=True)
 
 
@@ -365,7 +376,7 @@ async def test_cancelled_fork_publication_preserves_exact_persistent_receipt(
         await asyncio.sleep(0)
         assert not command.done() and owner._resource_lock(rid).locked()
         lease, = owner._leases.leases_for_resource(rid)
-        assert lease.status == "active"
+        assert lease.status == "dispatching"
         release.set()
         with pytest.raises(asyncio.CancelledError, match="fork原生写入期间取消"):
             await asyncio.wait_for(command, 3)
