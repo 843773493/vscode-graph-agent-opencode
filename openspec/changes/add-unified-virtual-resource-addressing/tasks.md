@@ -1720,3 +1720,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - read/search 不再将服务内部的 Pydantic ValidationError 翻译成输入错误并复制完整正文；原异常交唯一 TraceMiddleware 返回 500、同一 request_id 和公开失败事实，完整输入、动态字段位置及原异常实例保留在诊断。普通 ValueError 的 400、请求校验的 422、原资源拒绝和查询业务保持，不增加异常包装、查询链路或结构映射。
 - 旧路由六个 POSIX／盘符／UNC 反例均失败，另六项原请求与业务拒绝通过；最终 99 项定向单测通过，含实际 FastAPI 路由、统一中间件和生产异常处理器下的六项内部拒绝、两项普通业务拒绝及两项请求前置校验。查询服务由 fixture 替代以精确注入内部 DTO 错误，不将该 HTTP 边界单测当作真实会话执行或恢复验收。
 - 两个路由在移除本次异常分支后与原源码 AST 相同，原测试 16 个顶层符号 AST 保持；Ruff、compileall 和本 change strict 通过。Pyright 的 8 条既存诊断按规则、完整消息及最窄语句 AST 全部相同，新增 0，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/context_response_validation_20261031/artifacts/verification.json`。未运行 Web／Workbench 或其自动化、未改他人暂存及共享服务；产品补验仍受另一会话的真实集成进程占用。全局 2.2／7.2 仍未勾，整体 51/53；团队协作与 MCP 显式持有继续延期。
+
+### 2026-10-31 远端文件导航未登记 HTTP 错误（2.2／7.2部分收口）
+
+- 同步／异步导航及 API 共用原失败出口，普通错误只公布目标 URI、原 request_id、HTTP 状态、阶段和异常类别；原响应正文、request/response 对象及直接 cause 保留在诊断链中，重复适配不重复日志。日志 sink 再次失败仅补次错类别；已登记的文件、解析及联邦业务拒绝、正常文件正文和路径输入语义保持。
+- 旧生产的 25 项路径外泄反例均有效失败；最终 63 项定向单测、171 项关联资源回归通过。新增单测沿真实 FastAPI 路由／中间件／异常处理器序列化，以显式 HTTP 替身覆盖 302／404／500、POSIX／盘符／UNC、传输直接抛错及日志失败，不冒充真实网络。既有三 Gateway／Backend、星型通道及 HTTP 导航回归 1 passed／103.78秒（含共享闸门排队），覆盖固定 owner、未注册目录、读取／列表／搜索／分页、业务拒绝及 request_id；不将该正常及登记拒绝回归当作未知远端 HTTP 故障注入验收。
+- Ruff、compileall 和本 change strict 通过；Pyright 3 条既有诊断与完整 HEAD 归档按规则、完整消息及最窄语句 AST 相同，新增 0，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/navigation_http_failure_20261031/artifacts/verification.json`。非 JSON 错误的既有解析顺序不在本片改变范围；未验 Windows、Web／Workbench、独立进程硬重启或全局 URI 不变量，2.2／7.2及整体51/53保持。未修改另一会话 Web 迁移／自动化、其暂存或共享 debug，团队协作及 MCP 显式持有继续延期。

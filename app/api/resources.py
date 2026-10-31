@@ -58,6 +58,9 @@ from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
     ConfiguredSkillSources,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+    navigation_http_error,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
@@ -113,7 +116,8 @@ async def navigate_resource(
     except FederationError as error:
         raise HTTPException(409, detail=error.to_wire()) from error
     except httpx.HTTPStatusError as error:
-        raise HTTPException(error.response.status_code, detail=error.response.json()["detail"]) from error
+        failure = navigation_http_error(error, uri=body.uri, request_id=request_id)
+        raise HTTPException(error.response.status_code, detail=str(failure)) from failure
     except httpx.RequestError as error:
         raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
     except (OSError, UnicodeError) as error:

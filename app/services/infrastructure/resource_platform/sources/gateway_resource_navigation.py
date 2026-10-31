@@ -11,6 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 from pydantic import ValidationError
 
+from app.core.failures import (
+    failure_detail,
+    mark_public_failure,
+    public_failure_message,
+)
 from app.core.resource_uri import (
     ResourceUriGrammarError,
     parse_resource_uri,
@@ -39,6 +44,19 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
     resource_navigation_node,
 )
+
+
+def navigation_http_error(error: httpx.HTTPStatusError, *, uri: str, request_id: str) -> httpx.HTTPStatusError:
+    """工具与 HTTP 入口共用同一次失败投影，原响应及完整诊断只留原因链。"""
+    if public_failure_message(error) is not None:
+        return error
+    error.add_note(f"Gateway 文件导航原始响应: {error.response.text}")
+    detail = failure_detail(error, stage="gateway_navigation_http", label=(
+        f"Gateway 文件导航失败: uri={uri}, request_id={request_id}, status={error.response.status_code}"
+    ))
+    failure = httpx.HTTPStatusError(detail, request=error.request, response=error.response)
+    failure.__cause__ = error
+    return mark_public_failure(failure, detail)
 
 
 async def send_navigation_request(outgoing: httpx.Request, *, deadline: float) -> httpx.Response:
@@ -146,7 +164,10 @@ class GatewayResourceNavigation:
                     raise ResourceUriResolveError(detail["code"], detail["message"])
                 if detail.get("code") in FEDERATION_ERROR_CODES:
                     raise FederationError(detail["code"], detail["message"], detail=detail.get("detail"))
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise navigation_http_error(error, uri=request.uri, request_id=request_id) from error
         try:
             envelope = APIResponse[ResourceNavigationResultDTO].model_validate(payload)
         except ValidationError as error:

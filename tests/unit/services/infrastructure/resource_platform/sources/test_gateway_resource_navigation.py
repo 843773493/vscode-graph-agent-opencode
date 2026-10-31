@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from app.core.failures import public_failure_message
 from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.federation.errors import (
@@ -26,6 +27,7 @@ from app.services.infrastructure.resource_platform.sources import (
 )
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     GatewayResourceNavigation,
+    navigation_http_error,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     NAVIGATION_DEADLINE_HEADER,
@@ -234,3 +236,43 @@ async def test_remote_file_body_and_match_text_keep_native_paths(routed_case):
     result = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read"), local_gateway_id=SOURCE_GATEWAY)
     assert result.content == result.matches[0].text == text
     assert result.node.uri == result.entries[0].uri == result.matches[0].uri == uri
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("status", [302, 404, 500])
+async def test_unrecognized_http_failure_keeps_status_and_diagnostics_without_publishing_body(
+    routed_case, synchronous: bool, status: int, caplog: pytest.LogCaptureFixture,
+) -> None:
+    owner, uri, received, reply, workspace = routed_case
+    detail = {"message": "/private/navigation-http-sentinel"}
+    reply.update(status=status, change=detail)
+    request = ResourceNavigationRequest(uri=uri, operation="read")
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=SOURCE_GATEWAY)
+        else:
+            await owner.navigate(request, local_gateway_id=SOURCE_GATEWAY)
+    error = caught.value
+    assert error.response.status_code == status and error.response.json()["detail"] == detail
+    assert public_failure_message(error) == str(error)
+    assert uri in str(error) and f"status={status}" in str(error)
+    assert "navigation-http-sentinel" not in str(error) and "source-gateway.test" not in str(error)
+    assert isinstance(error.__cause__, httpx.HTTPStatusError) and error.__cause__.response is error.response
+    assert "navigation-http-sentinel" in caplog.text
+    assert len(received) == 1 and (workspace / "file.txt").read_text() == "SOURCE DECOY"
+
+
+def test_http_failure_adaptation_preserves_original_exception_and_is_not_logged_twice(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    response = httpx.Response(500, request=httpx.Request("POST", "http://gateway.test/navigation"),
+                              json={"detail": "/private/navigation-http-sentinel"})
+    original = httpx.HTTPStatusError("目标诊断", request=response.request, response=response)
+    original.add_note("原始附注")
+    uri = f"boxteam://workspace/{SOURCE_WORKSPACE}/resources/files/root"
+    failure = navigation_http_error(original, uri=uri, request_id="req-projection")
+    assert failure.__cause__ is original and failure.response is response and failure.request is original.request
+    assert original.__notes__[0] == "原始附注" and "navigation-http-sentinel" in original.__notes__[1]
+    assert navigation_http_error(failure, uri=uri, request_id="req-projection") is failure
+    record, = caplog.records
+    assert record.exc_info is not None and record.exc_info[1] is original
