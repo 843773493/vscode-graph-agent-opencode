@@ -50,19 +50,13 @@ class TerminalSteeringService:
         if not self._stop_requested:
             self._stop_requested = True
             task.cancel()
-        # TODO(5.4)：关闭观察者取消、非合作扫描终止和原监控失败传播仍须单独核实。
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception as error:
-            logger.error(
-                "终端 steering 监控任务关闭时发现未处理异常",
-                exc_info=(type(error), error, error.__traceback__),
-            )
-        finally:
-            if task.done():
-                self._task = None
+        # 只观察原监控；观察者取消不能再次打断正在结算的扫描。
+        # TODO(5.4)：不合作扫描终止及整个 shutdown 硬期限仍须原执行 owner 核实。
+        await asyncio.wait((task,))
+        if self._task is task:
+            self._task = None
+        if not task.cancelled():
+            task.result()
 
     async def scan_once(self) -> None:
         errors: list[Exception] = []

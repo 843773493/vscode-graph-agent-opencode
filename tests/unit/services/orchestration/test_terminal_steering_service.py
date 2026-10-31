@@ -393,3 +393,94 @@ async def test_shutdown_does_not_poll_again_after_protected_scan_consumes_cancel
         if not monitor.done():
             monitor.cancel()
         await asyncio.gather(monitor, *closing, return_exceptions=True)
+
+
+@pytest.mark.parametrize("failed_before_close", [False, True], ids=["during-close", "already-failed"])
+async def test_shutdown_propagates_original_monitor_failure_once(
+    protected_scan_monitor: tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]],
+    terminal_client: _FakeTerminalClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failed_before_close: bool,
+) -> None:
+    service, entered, release, calls = protected_scan_monitor
+    original_scan = terminal_client.sweep_orphans
+    failure = OSError(5, "原终端扫描失败")
+
+    async def scan() -> list[dict[str, object]]:
+        await original_scan()
+        raise failure
+
+    monkeypatch.setattr(terminal_client, "sweep_orphans", scan)
+    await service.start()
+    await asyncio.wait_for(entered.wait(), 1)
+    monitor = service._task
+    assert monitor is not None
+    closing = None
+    try:
+        if failed_before_close:
+            release.set()
+            done, _pending = await asyncio.wait((monitor,), timeout=1)
+            assert done == {monitor}
+        closing = asyncio.create_task(service.shutdown())
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(OSError) as caught:
+            await asyncio.wait_for(asyncio.shield(closing), 1)
+        assert caught.value is failure and monitor.exception() is failure
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert service._task is None and calls == ["sweep"]
+        await service.shutdown()
+        assert calls == ["sweep"]
+    finally:
+        release.set()
+        await asyncio.gather(monitor, *([closing] if closing is not None else []), return_exceptions=True)
+
+
+@pytest.mark.parametrize("late_failure", [False, True], ids=["success", "late-failure"])
+async def test_cancelled_shutdown_observer_keeps_original_monitor_for_retry(
+    protected_scan_monitor: tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]],
+    terminal_client: _FakeTerminalClient,
+    monkeypatch: pytest.MonkeyPatch,
+    late_failure: bool,
+) -> None:
+    service, entered, release, calls = protected_scan_monitor
+    original_scan = terminal_client.sweep_orphans
+    failure = OSError(5, "原监控迟到失败")
+
+    async def scan() -> list[dict[str, object]]:
+        result = await original_scan()
+        if late_failure:
+            raise failure
+        return result
+
+    monkeypatch.setattr(terminal_client, "sweep_orphans", scan)
+    await service.start()
+    await asyncio.wait_for(entered.wait(), 1)
+    monitor = service._task
+    assert monitor is not None
+    closing = asyncio.create_task(service.shutdown())
+    try:
+        await asyncio.sleep(0)
+        assert monitor.cancelling() == 1
+        closing.cancel("取消关闭观察")
+        done, _pending = await asyncio.wait((closing,), timeout=1)
+        assert done == {closing}, "关闭观察取消不应等待或再次取消原监控"
+        with pytest.raises(asyncio.CancelledError, match="取消关闭观察"):
+            await closing
+        assert service._task is monitor and not monitor.done() and monitor.cancelling() == 1
+        with pytest.raises(RuntimeError, match="已经启动"):
+            await service.start()
+        release.set()
+        done, _pending = await asyncio.wait((monitor,), timeout=1)
+        assert done == {monitor} and service._task is monitor
+        if late_failure:
+            with pytest.raises(OSError) as caught:
+                await service.shutdown()
+            assert caught.value is failure
+        else:
+            await service.shutdown()
+        assert service._task is None and calls == ["sweep"]
+    finally:
+        release.set()
+        await asyncio.gather(monitor, closing, return_exceptions=True)

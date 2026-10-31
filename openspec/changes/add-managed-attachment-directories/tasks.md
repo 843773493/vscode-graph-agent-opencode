@@ -688,3 +688,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 删除装具对已不存在的 `workspace_owner.logger` 的引用及唯一无用 import，继续将故障 handler 装到现有 fork service 与统一 failures logger。生产正文、真实日志写入故障、原错误身份／次数／注释、unknown lease、已提交关联和同 key 恢复断言均保持，不为测试恢复已删除的生产接口。
 - 正式 `integration-fork-live-diagnostics` 全部 8 项通过（111.92 秒），保留原 180 秒／4GiB、fork watchdog 及主仓共享闸门。Ruff、编译、该文件 Pyright 零诊断及 OpenSpec strict 通过；准确命令、完整独立归档指纹、原始输出与退出码见 `out/tests/temp/fork_diagnostic_logger_20261031/artifacts/verification.json`。首条类型检查命令因 uv 环境无 pyright 而未启动检查器，改用既有 `bun x pyright`，未更改依赖。此前四项 fixture 错误已由本次补验收口，5.2／5.4 和 21/23 仍未关闭；未改另一会话 Web/Workbench、自动化、暂存或共享 Debug。
+
+### 2026-10-31 Terminal 关闭观察取消与原失败交付（5.4 部分收口）
+
+- 原 shutdown 只观察唯一监控任务，观察者取消直接交回并保留句柄，不再向扫描转发取消或吞掉观察取消。原任务结算后按身份移除句柄，非取消失败保持原异常身份交回 Workspace／Backend，后续依赖与维护锁保留；同一关闭入口重试继续后续阶段，不重跑失败监控。只修改原 shutdown，净减 6 行，扫描、通知、claim、筛选及原失败日志回调 AST 保持。
+- 17 项单测、2 项新增双挂载 Backend 集成和 2 项既有回归通过。新集成由正式入口创建 Session／活动，核原异常身份、peer 完成、原 owner、关闭阶段、依赖／维护锁保留、重试及冷读；外设清单使用明确传输替身，真实目录读取产生原生错误，不据此声称新故障已完成真实 HTTP／PTY 验收。完整旧生产归档叠加相同测试，4 项单测和 1 项集成反例分别精确失败于吞错及观察取消不及时结束。既有回归包含真实 PTY 完成／目录释放；全部测试保留进程外期限、4GiB 与主仓共享闸门。
+- Ruff、编译及 OpenSpec strict 通过；Pyright 原有 1 条 operator 诊断与完整基线的规则、完整消息和语句 AST 相同，新增测试零诊断。首轮集成 1 通过／1 装具失败，原因是 shield 转发已取消任务时丢失取消消息，改为先观察原任务结束再直接取得结果，保留原消息和 3 秒期限；最终 2 项重跑通过。首次旧生产集成因主仓名额等待满 600 秒而未启动，后续真实反例已补验，不能将排队失败当行为红测；没有中断其他会话或本片已取得名额的回归。命令、源码指纹、原始输出、实际退出码及差异复核见 `out/tests/temp/terminal_shutdown_observers_20261031/artifacts/verification.json`。不合作扫描终止、完整 shutdown 硬期限、旧代接管、Windows 及 Gateway/Web 仍未验完，5.2／5.4 与 21/23 保持；未修改另一会话 Web/Workbench、自动化、共享暂存或 Debug。
