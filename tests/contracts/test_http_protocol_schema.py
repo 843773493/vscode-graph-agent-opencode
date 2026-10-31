@@ -34,7 +34,17 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
 )
-from app.schemas.internal_v2.session import SessionDTO, SessionInformationSessionDTO
+from app.schemas.internal_v2.session import (
+    SessionDTO,
+    SessionInformationSessionDTO,
+    SessionSkillUntrackRequest,
+    SessionSkillUntrackResultDTO,
+)
+from app.schemas.internal_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextResourceDTO,
+    SessionContextSearchRequest,
+)
 from app.schemas.internal_v2.text_mutation import (
     CreateText,
     TextMutationReceiptDTO,
@@ -645,6 +655,72 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     assert f"/{field}" in str(error.value)
 
 
+@pytest.mark.parametrize(("path", "expected"), [
+    ("/context/read", {"SessionContextReadRequest", "SessionContextReadResultDTO"}),
+    ("/context/search", {"SessionContextSearchRequest", "SessionContextSearchResultDTO"}),
+    ("/sessions/{session_id}/threads/{thread_id}/skills/untrack", {"SessionSkillUntrackRequest", "SessionSkillUntrackResultDTO"}),
+])
+def test_context_http_routes_check_actual_request_and_response_roots(
+    http_openapi: JsonSchemaValue, path: str, expected: set[str],
+) -> None:
+    operation = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}" + path]["post"]
+    roots = _public_roots(http_openapi, [
+        operation["requestBody"]["content"]["application/json"]["schema"],
+        operation["responses"]["200"]["content"]["application/json"]["schema"],
+    ])
+    assert roots == expected
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"上下文入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("SessionContextReadRequest", "include", {"type": "array", "items": {"type": "integer"}}),
+    ("SessionContextItemDTO", "resource_refs", {"type": "object"}),
+    ("SessionContextProvenanceRefDTO", "token", {"type": "integer"}),
+    ("SessionContextReadResultDTO", "returned_chars", {"type": "string"}),
+    ("SessionContextSearchMatchDTO", "match_start", {"type": "string"}),
+    ("SessionContextSearchResultDTO", "partial_errors", {"type": "array", "items": {"type": "string"}}),
+    ("SessionSkillUntrackErrorDTO", "code", {"type": "integer"}),
+    ("SessionSkillUntrackResultDTO", "queued", {"type": "string"}),
+])
+def test_context_http_schema_rejects_nested_source_search_and_untrack_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_context_http_structure_checks_preserve_identity_uri_budget_and_skill_rules(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    request = {"resource_identity": "context-resource", "uri": "selected-resource", "scope": "workspace"}
+    # 请求定位和授权仍交原 owner；结构检查不替代业务约束或解析当前资源。
+    assert SessionContextReadRequest.model_validate(request).uri == "selected-resource"
+    with pytest.raises(ValidationError, match="resource_identity"):
+        SessionContextReadRequest.model_validate({**request, "resource_identity": "/private/context"})
+    with pytest.raises(ValidationError, match="max_chars"):
+        SessionContextReadRequest.model_validate({**request, "max_chars": 255})
+    with pytest.raises(ValidationError, match="query"):
+        SessionContextSearchRequest.model_validate({**request, "query": ""})
+    digest = "sha256:jcs:v1:" + "a" * 64
+    resource = {"display_uri": None, "resource_kind": "skills", "owner_scope": "workspace", "facet": "content",
+                "revision": digest, "availability": "available", "provenance_ref": {"token": digest}}
+    assert SessionContextResourceDTO.model_validate(resource).model_dump(mode="json")["display_uri"] is None
+    with pytest.raises(ValidationError, match="display_uri"):
+        SessionContextResourceDTO.model_validate({**resource, "display_uri": "/private/context"})
+    with pytest.raises(ValidationError, match="name"):
+        SessionSkillUntrackRequest(name="")
+    result = {"session_id": "session-1", "thread_id": "thread-1", "name": "demo", "mode": "untrack", "status": "not_tracked"}
+    assert SessionSkillUntrackResultDTO.model_validate(result).display_uri is None
+    with pytest.raises(ValidationError, match="mode"):
+        SessionSkillUntrackResultDTO.model_validate({**result, "mode": "track"})
+
+
 @pytest.mark.parametrize("message_name", [
     "ResourceNavigationRequest", "ResourceNavigationResultDTO", "ResourceNavigationNodeDTO", "ResourceNavigationMatchDTO",
     "WorkspaceFileCreateRequest", "WorkspaceDirectoryKeyDTO", "WorkspaceFileMutationIntentDTO",
@@ -660,6 +736,8 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "PersistentTaskCreateRequest", "TaskInputConsumptionDTO", "TaskActionDTO", "SessionGeneratorImportRequest",
     "TextMutationRequest", "CreateText", "EditText", "PatchText",
     "TextMutationTransferDTO", "TextMutationReceiptDTO", "TextMutationFileDTO", "TextMutationSnapshotDTO",
+    "SessionContextReadRequest", "SessionContextResourceDTO", "SessionContextProvenanceRefDTO",
+    "SessionContextSearchMatchDTO", "SessionSkillUntrackResultDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
