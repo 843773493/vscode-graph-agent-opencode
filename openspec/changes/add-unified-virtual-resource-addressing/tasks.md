@@ -1690,3 +1690,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 663项领域／投影单测、79项目录owner回归、16项真实消息／目录／跨工作区fork入口及8项运行时生命周期回归通过；三种输入的新场景均覆盖接受、历史、fork、使用查询与结算。正式matrix产品流程1项通过（124.21秒），经真实Gateway、model_stream、PTY、产品fork及独立Backend硬重启验证混合附件执行、引用再使用、冷读取、canonical原字节和全部已封存请求hash；测试补齐已有fork_deadlines装具，不绕过原进程外期限监督。
 - Ruff、compileall与本change strict通过；Pyright对同一11文件的完整HEAD归档基线为162条、候选157条，按文件／规则／完整消息／重复次数比对无新增，消除产品测试原有5条，仍非类型全绿。原生输入authority断言修正、旧fork helper漏传fixture、直接pytest触发正式matrix装具拒绝等失败原件均保留，不计产品通过。
 - 准确命令、源码指纹、红绿原件和收据见`out/tests/temp/attachment_projection_uri_20261031/artifacts/verification.json`。完整源码归档隔离验证，集成串行沿主仓独占闸门与4GiB数据段／硬超时，不修改Web／Workbench、其自动化／矩阵、共享debug或他人暂存。未验证Windows、真实Provider及跨Gateway真实网络，不代URI全局不变量，2.2／7.2保持未勾，整体51/53；协作及显式MCP持有继续延期。
+
+
+### 2026-10-31 附件预览失败的诊断次错（2.2／7.2部分收口）
+
+- 图片／视频预览统一复用既有 `report_failure`，移除局部 logger；原 URI、阶段、异常类别及系统码保持，日志真实 ENOTDIR 只追加次错类别，完整原错和次错留诊断及原异常附注。原图片／视频处理、metadata 和内容构造 AST 保持，不增加预览重试、内容 writer 或错误账本。
+- 旧生产的5项日志故障反例均有效失败；最终25项内容／预览单测通过。集成迁到既有完整应用 lifespan 与 model_stream，经真实 ASGI Session／消息入口覆盖图片、视频×正常／失败日志4项，全部通过（55.27秒、54.22秒）；核原件 API 字节、URI、预览失败标记、canonical、冷 Saver 及封存请求 hash，失败日志后同 Thread 第二轮执行保持原 canonical 前缀与 assembly。直接 pytest 的正式 runner 拒绝、误复用单次执行装具的后继失败、脱离请求上下文直读带 authority URI 的拒绝原件均保留，修正测试调用方式，未改变产品关闭或授权。两项图片用例完成正文后曾在60秒整组清理预算超时，不计通过；两次完整应用生命周期的 suite 总保护改为120秒／4GiB，原 Job 45秒期限保持。套件仅配置在隔离完整源码归档，沿主仓独占闸门串行运行，共享矩阵不改。
+- Ruff、compileall与strict通过；Pyright保留单测12项既有诊断，逐条与完整 HEAD 基线核 AST／规则／完整消息，生产与集成测试零诊断、新增0，不称类型全绿。生产和单测字节与已通过25项的候选一致；后续仅迁移集成装具。准确命令、指纹、原始输出、实际退出码及自查见 `out/tests/temp/attachment_preview_diagnostics_20261031/artifacts/verification.json`。本片不代真实 Gateway 业务代理、独立 Backend 重启、Windows、真实 Provider或全局 URI 验收，2.2／7.2仍未勾、整体51/53；Web／Workbench及其自动化由另一会话推进，协作与MCP显式持有继续延期。

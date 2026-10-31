@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import shutil
 from io import BytesIO
 from pathlib import Path
@@ -15,6 +16,10 @@ from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.user_content_builder import UserContentBuilder
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 原预览异常触发真实 ENOTDIR。
+)
 
 
 def _image_bytes(format_name: str, size: tuple[int, int] = (80, 60)) -> bytes:
@@ -294,8 +299,10 @@ def test_user_content_builder_reports_preview_failure_without_losing_path(empty_
     ("image", "native"), ("image", "invalid"),
     ("video", "native"), ("video", "invalid"), ("video", "runtime"),
 ])
+@pytest.mark.parametrize("failed_log", [False, True], ids=["normal-log", "failed-log"])
 def test_preview_diagnostics_keep_uri_and_original_error_in_logs(
     empty_workspace_scope, monkeypatch, caplog, media, error_kind,
+    diagnostic_sink: DiagnosticFailure, failed_log: bool,
 ):
     from app.services.infrastructure.attachment_content_service import (
         AttachmentContentService,
@@ -309,6 +316,8 @@ def test_preview_diagnostics_keep_uri_and_original_error_in_logs(
         error.winerror = 5
     else:
         error = (ValueError if error_kind == "invalid" else RuntimeError)(f"预览失败 {private}")
+    if failed_log:
+        diagnostic_sink.primary = error
 
     def fail_preview(_service, _attachment):
         raise error
@@ -321,12 +330,20 @@ def test_preview_diagnostics_keep_uri_and_original_error_in_logs(
     (diagnostic,) = built.diagnostics
     uri = built.attachments[0].file_id
     detail = diagnostic["detail"]
+    assert isinstance(detail, str)
     assert diagnostic == {"kind": "preview_generation_failed", "file_id": uri, "detail": detail}
     assert f"file_id={uri}" in detail and f"stage={media}_preview" in detail
     assert f"error={type(error).__name__}" in detail
     if error_kind == "native":
         assert "errno=13" in detail and "winerror=5" in detail
     assert "private" not in str(built)
-    (log,) = [record for record in caplog.records if record.name == "app.services.business.user_content_builder"]
+    (log,) = [record for record in caplog.records if record.exc_info and record.exc_info[1] is error]
     assert log.exc_info and log.exc_info[1] is error and private in str(log.exc_info[1])
     assert log.exc_text and private in log.exc_text
+    if failed_log:
+        assert detail.endswith(", diagnostic_sink_error=NotADirectoryError")
+        assert diagnostic_sink.errors and all(item.errno == errno.ENOTDIR for item in diagnostic_sink.errors)
+        assert any(str(diagnostic_sink.errors[0]) in note for note in error.__notes__)
+        assert "diagnostic-log-secret" not in str(built)
+    else:
+        assert not diagnostic_sink.errors and "diagnostic_sink_error" not in detail

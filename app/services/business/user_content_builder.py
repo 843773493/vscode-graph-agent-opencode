@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
+from app.core.failures import report_failure
 from app.core.resource_uri import file_uri_child
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_content_service import (
@@ -15,7 +15,6 @@ from app.services.infrastructure.attachment_content_service import (
 )
 
 ATTACHMENT_BLOCK_SCHEMA_VERSION = 1
-logger = logging.getLogger(__name__)
 
 
 def _preview_failure(attachment: AttachmentRef, stage: str, error: Exception) -> str:
@@ -29,8 +28,7 @@ def _preview_failure(attachment: AttachmentRef, stage: str, error: Exception) ->
             if isinstance(value, int):
                 detail += f", {name}={value}"
     # 原生位置和预览程序输出只进原始诊断，不复制到 canonical 内容及模型输入。
-    logger.error("%s", detail, exc_info=error)
-    return detail
+    return report_failure(error, detail=detail)
 
 
 def build_human_response_metadata(
