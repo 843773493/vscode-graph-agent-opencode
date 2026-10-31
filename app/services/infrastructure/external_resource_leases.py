@@ -405,12 +405,22 @@ class ExternalResourceLeaseLedger:
                 return
         if not isinstance(raw, dict):
             self._raise_failure("validate", "资源状态文件必须是对象")
-        for value in self._load_rows(raw, "records"):
+        records: dict[str, ResourceRecord] = {}
+        leases: dict[str, ResourceLease] = {}
+        for index, value in enumerate(self._load_rows(raw, "records")):
             record = _RESOURCE_RECORD.validate_python(value)
-            self._records[record.resource_id] = record
-        for value in self._load_rows(raw, "leases"):
+            if record.resource_id in records:
+                self._raise_failure("validate", f"资源状态文件 records[{index}] resource_id 重复")
+            records[record.resource_id] = record
+        for index, value in enumerate(self._load_rows(raw, "leases")):
             lease = _RESOURCE_LEASE.validate_python(value)
-            self._leases[lease.lease_id] = lease
+            if lease.lease_id in leases:
+                self._raise_failure("validate", f"资源状态文件 leases[{index}] lease_id 重复")
+            if lease.resource_id not in records:
+                self._raise_failure("validate", f"资源状态文件 leases[{index}] resource_id 未登记")
+            leases[lease.lease_id] = lease
+        # 完整核对唯一身份与引用后才发布；不能用覆盖或忽略来修复原占用事实。
+        self._records, self._leases = records, leases
 
     def _load_rows(
         self,

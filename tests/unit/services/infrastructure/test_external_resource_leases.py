@@ -624,3 +624,91 @@ def test_load_rejects_non_object_entries(tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="records\\[1\\] 必须是对象"):
         ExternalResourceLeaseLedger(state_path=state_path)
+
+
+@pytest.fixture
+def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    ledger.register_external(resource_id="terminal_a", kind="terminal", lifetime_scope="workspace")
+    ledger.register_external(resource_id="browser_b", kind="browser_context", lifetime_scope="thread")
+    for status in ("active", "released", "settled", "reconcile_required"):
+        ledger.acquire_operation(
+            resource_id="terminal_a", turn_stream_id="terminal_a", operation_id=status, lease_id=status,
+            holder_session_id="session_a", holder_thread_id="thread_a",
+        )
+        if status == "released":
+            ledger.release(status)
+        elif status == "settled":
+            ledger.settle(status)
+        elif status == "reconcile_required":
+            ledger.update_external_state(
+                "terminal_a", lifetime_scope="workspace", status="unknown", unresolved_lease_id=status,
+            )
+    ledger.acquire_operation(resource_id="browser_b", turn_stream_id="browser_b", operation_id="peer", lease_id="peer")
+    return path, ledger
+
+
+@pytest.mark.parametrize("section", ["records", "leases"])
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_load_rejects_duplicate_identity_without_replacing_occupancy(
+    persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger], section: str, conflicting: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path, _ledger = persisted_lease_ledger
+    original = path.read_bytes()
+    payload = json.loads(original)
+    duplicate = dict(payload[section][0])
+    if conflicting:
+        duplicate.update({"kind": "browser_context"} if section == "records" else {
+            "resource_id": "browser_b", "holder_thread_id": "thread_b",
+        })
+    index = len(payload[section])
+    payload[section].append(duplicate)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    damaged = path.read_bytes()
+    field = "resource_id" if section == "records" else "lease_id"
+    with pytest.raises(TypeError, match=rf"{section}\[{index}\] {field} 重复") as caught:
+        ExternalResourceLeaseLedger(state_path=path)
+    assert path.read_bytes() == damaged
+    assert str(path) not in str(caught.value)
+    assert caught.value.__cause__ is not None
+    assert any(record.exc_info and record.exc_info[1] is caught.value.__cause__ for record in caplog.records)
+    assert str(path) in caplog.text
+    path.write_bytes(original)
+    repaired = ExternalResourceLeaseLedger(state_path=path)
+    active = repaired.get_lease("active")
+    assert active is not None and active.resource_id == "terminal_a" and active.holder_thread_id == "thread_a"
+    assert [lease.lease_id for lease in repaired.leases_for_resource("terminal_a")] == ["active", "reconcile_required"]
+
+
+@pytest.mark.parametrize("status", ["active", "released", "settled", "reconcile_required"])
+def test_load_rejects_missing_resource_even_for_finished_lease(
+    persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger], status: str,
+) -> None:
+    path, _ledger = persisted_lease_ledger
+    payload = json.loads(path.read_bytes())
+    payload["records"] = [record for record in payload["records"] if record["resource_id"] != "terminal_a"]
+    payload["leases"] = [lease for lease in payload["leases"] if lease["lease_id"] in {status, "peer"}]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    damaged = path.read_bytes()
+    with pytest.raises(TypeError, match=r"leases\[0\] resource_id 未登记") as caught:
+        ExternalResourceLeaseLedger(state_path=path)
+    assert str(path) not in str(caught.value)
+    assert path.read_bytes() == damaged
+
+
+def test_load_preserves_all_valid_lease_states_and_original_owner(
+    persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger],
+) -> None:
+    path, ledger = persisted_lease_ledger
+    original = path.read_bytes()
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    assert cold.get("terminal_a") == ledger.get("terminal_a")
+    for status in ("active", "released", "settled", "reconcile_required"):
+        lease = cold.get_lease(status)
+        assert lease is not None and lease == ledger.get_lease(status) and lease.status == status
+        assert (lease.resource_id, lease.holder_session_id, lease.holder_thread_id) == ("terminal_a", "session_a", "thread_a")
+    assert cold.leases_for_resource("terminal_a") == ledger.leases_for_resource("terminal_a")
+    assert cold.get_lease("peer") == ledger.get_lease("peer")
+    assert path.read_bytes() == original
