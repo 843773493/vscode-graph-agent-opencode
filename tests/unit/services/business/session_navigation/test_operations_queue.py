@@ -1387,6 +1387,7 @@ async def test_create_folder_intent_uses_durable_queue(
 
 async def test_delete_receipt_uses_revision_after_all_node_updates(
     navigation_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """递归删除回执读取同一 mark 事务中多行触发器推进后的实际 revision。"""
     stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
@@ -1418,13 +1419,38 @@ async def test_delete_receipt_uses_revision_after_all_node_updates(
         target_node_id=root_id,
         recursive=True,
     )
-    await stack.enqueue(
-        NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
-    )
-    record = await stack.service.await_terminal(
-        deletion.client_operation_id, stack.scope
-    )
+    delete_service = stack.resolver._delete_service
+    drain = delete_service._drain
+    drain_started, release_drain = asyncio.Event(), asyncio.Event()
 
-    assert record.state == "committed"
-    assert record.committed_catalog_revision == before_delete + 3
-    assert stack.resolver.revision == before_delete + 6
+    async def blocked_drain(record: SubtreeDeleteRecord, key: str) -> None:
+        drain_started.set()
+        await release_drain.wait()
+        await drain(record, key)
+
+    monkeypatch.setattr(delete_service, "_drain", blocked_drain)
+    try:
+        await stack.enqueue(
+            NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
+        )
+        await asyncio.wait_for(drain_started.wait(), 3)
+        record = await stack.service.await_terminal(
+            deletion.client_operation_id, stack.scope
+        )
+        assert record.state == "committed" and record.settlement == "pending"
+        assert record.committed_catalog_revision == before_delete + 3
+        assert stack.resolver.revision == before_delete + 3
+
+        # 逻辑终态不等待物理清理；只在原回执确认settled后核最终revision。
+        release_drain.set()
+        async with asyncio.timeout(3):
+            while (settled := stack.service.record(deletion.client_operation_id, stack.scope)).pending_settlement:
+                await asyncio.sleep(0.01)
+        assert settled.state == "committed" and settled.settlement == "settled"
+        assert settled.committed_catalog_revision == record.committed_catalog_revision
+        assert settled.queue_seq == record.queue_seq and settled.result_node_id == root_id
+        assert stack.resolver.revision == before_delete + 6
+        assert stack.resolver.list_nodes() == []
+    finally:
+        release_drain.set()
+        await stack.service.stop()

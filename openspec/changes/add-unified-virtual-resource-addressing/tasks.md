@@ -1767,3 +1767,8 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 生产改动前30个三平台路径反例有效失败，含9个真实目录读服务装配响应反例；7个业务拒绝保持。初始装具的cursor被HTTPX显式params覆盖，已修正请求构造，只补跑受影响4例并保留两次原件，不把装具失败计入生产反例。最终关联检查140 passed／1 failed；新增37项均通过，真实读服务修复同一来源后自动重建快照并沿原入口恢复，不改清缓存行为。HTTP使用真实路由、中间件及生产异常处理器，resolver元数据由fixture注入，不代替真实网络或产品执行验收。
 - 未通过项为既有 `test_delete_receipt_uses_revision_after_all_node_updates`：回执committed时最终清理的revision尚未到预期。该用例直接调用service，未经过本片API，运行前后相关源码指纹稳定；保留失败待独立核删除终态／pending_settlement合同，不重复长跑或修改断言。两文件Pyright、compileall和本change strict通过，Ruff12条原诊断按规则／全文／最窄表达式AST无新增；移除六处重抛后生产AST与固定基线 `79ef44964` 相同。证据：`out/tests/temp/catalog_response_validation_20261031/artifacts/verification.json`。
 - 未修改或运行另一会话Web／Workbench、自动化、共享debug或暂存；不代全局URI、Windows、真实Gateway、模型执行或重启验收，2.2／7.2及整体51/53保持。
+
+### 2026-10-31 关联删除测试的阶段校准
+
+- 上片唯一失败已按itemized既定删除合同归因：`await_terminal`只确认整树deleting的逻辑committed，不能证明物理settlement完成。原测试现在用局部drain屏障明确观察pending与settled；保留原mark回执`before+3`和最终实际revision`before+6`断言，补核回执身份／版本稳定、最终目录为空并显式关闭原worker，不改变产品或删除期限。
+- 原失败运行及源码指纹保留；校准后该用例与两项相邻逻辑提交／恢复测试3 passed。其余测试顶层AST不变，复用上片140项通过，不重复整组运行、不将有重叠的通过数相加。Ruff与compileall通过，Pyright5条原诊断按规则、全文及最窄表达式AST无新增。证据：`out/tests/temp/delete_receipt_settlement_20261031/artifacts/verification.json`。本片不新增产品功能，URI整体51/53及未验范围保持，不触碰另一会话前端、自动化、暂存或共享debug。
