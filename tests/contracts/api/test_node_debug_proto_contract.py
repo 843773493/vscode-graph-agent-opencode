@@ -6,9 +6,9 @@ from typing import cast
 
 import pytest
 from google.protobuf.descriptor import Descriptor
-from pydantic import TypeAdapter
 
 from app.protocol.generated.boxteam.workspace.v2 import public_pb2
+from app.protocol.openapi import assert_public_http_schemas
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2 import node_debug
 
@@ -27,24 +27,10 @@ def test_node_debug_public_schema_matches_proto(descriptor: Descriptor) -> None:
 
 
 def test_node_debug_action_request_matches_typed_proto_oneof() -> None:
-    descriptor = cast(Descriptor, public_pb2.NodeDebugActionRequest.DESCRIPTOR)
-    actions = {field.name: field for field in descriptor.oneofs_by_name["action"].fields}
-    common = set(descriptor.fields_by_name) - actions.keys()
-    schema = TypeAdapter(node_debug.NodeDebugActionRequest).json_schema(mode="serialization")
-    discriminator = schema["discriminator"]
-    assert discriminator["propertyName"] == "action"
-    assert discriminator["mapping"].keys() == actions.keys()
-    branches = []
-    for action, reference in discriminator["mapping"].items():
-        assert actions[action].message_type is not None
-        properties = schema["$defs"][reference.rsplit("/", 1)[1]]["properties"]
-        assert set(properties) == common | {"action", "params"}
-        # REST 的 action + params 对应 proto 的具名 oneof；只投影外形，正文仍由同一
-        # descriptor 校验链递归核对，不维护另一份动作或参数字段表。
-        branches.append({"type": "object", "properties": {
-            **{name: properties[name] for name in common}, action: properties["params"],
-        }})
-    assert_public_schema({"oneOf": branches, "$defs": schema["$defs"]}, descriptor)
+    from app.main import app
+
+    # 直接验证实际HTTP入口；映射只留在导出/生成共享的同一检查链。
+    assert_public_http_schemas(app.openapi())
 
 
 @pytest.mark.parametrize(("mutation", "path"), [

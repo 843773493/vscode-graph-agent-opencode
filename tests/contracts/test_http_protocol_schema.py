@@ -125,6 +125,74 @@ def test_file_http_routes_register_their_actual_public_json_roots(http_openapi: 
     assert_public_http_schemas(http_openapi)
 
 
+def test_node_debug_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
+    schemas = http_openapi["components"]["schemas"]
+    roots: set[str] = set()
+    pending: list[JsonSchemaValue] = []
+    for path, operations in http_openapi["paths"].items():
+        if not path.startswith("/api/v1/workspaces/{workspace_id}/debug/node"):
+            continue
+        for operation in operations.values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            # action+params的既有业务联合由唯一oneof投影核对。
+            if request is not None and not path.endswith("/action"):
+                pending.append(request["schema"])
+            for status, response in operation["responses"].items():
+                body = response.get("content", {}).get("application/json")
+                if status.startswith("2") and body is not None:
+                    pending.append(body["schema"])
+    while pending:
+        node = pending.pop()
+        if "$ref" in node:
+            name = node["$ref"].rsplit("/", 1)[1]
+            if name.startswith("NodeDebug"):
+                roots.add(name)
+            else:
+                pending.append(schemas[name])
+        else:
+            for value in node.values():
+                if isinstance(value, dict):
+                    pending.append(value)
+                elif isinstance(value, list):
+                    pending.extend(branch for branch in value if isinstance(branch, dict))
+    assert {"NodeDebugCapabilitiesDTO", "NodeDebugStateDTO", "NodeDebugConfigurationDTO"} <= roots
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"调试入口缺少proto结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("NodeDebugStartRequest", "path", {"type": "integer"}),
+    ("NodeDebugStateDTO", "call_stack", {"type": "object"}),
+    ("NodeDebugVariableDTO", "value", {"type": "integer"}),
+    ("NodeDebugSetBreakpointParams", "line", {"type": "string"}),
+])
+def test_node_debug_http_schema_rejects_request_state_and_action_parameter_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+@pytest.mark.parametrize("mutation", ["member", "label", "branch", "common"])
+def test_node_debug_http_action_rejects_union_mapping_drift(http_openapi: JsonSchemaValue, mutation: str) -> None:
+    action = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/debug/node/action"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    mapping = action["discriminator"]["mapping"]
+    if mutation == "member":
+        del mapping["stop"]
+    elif mutation == "branch":
+        action["oneOf"].pop()
+    else:
+        properties = http_openapi["components"]["schemas"][mapping["evaluate"].rsplit("/", 1)[1]]["properties"]
+        if mutation == "label":
+            properties["action"] = {"type": "string", "const": "stop"}
+        else:
+            del properties["thread_id"]
+    with pytest.raises(ValueError, match="Node Debug HTTP 动作"):
+        assert_public_http_schemas(http_openapi)
+
+
 def test_file_http_schema_keeps_native_inputs_and_business_constraints(http_openapi: JsonSchemaValue) -> None:
     components = http_openapi["components"]
     schemas = components["schemas"]
@@ -164,6 +232,7 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "ResourceNavigationRequest", "ResourceNavigationResultDTO", "ResourceNavigationNodeDTO", "ResourceNavigationMatchDTO",
     "WorkspaceFileCreateRequest", "WorkspaceDirectoryKeyDTO", "WorkspaceFileMutationIntentDTO",
     "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationItemDTO", "WorkspaceFileNodeDTO", "FileTreeShortcutDTO",
+    "NodeDebugStateDTO", "NodeDebugConfigurationDTO", "NodeDebugVariableDTO", "NodeDebugSetBreakpointParams",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

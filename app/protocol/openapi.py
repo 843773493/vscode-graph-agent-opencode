@@ -26,6 +26,10 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "WorkspaceFileUpdateRequest", "WorkspaceFileCreateRequest", "WorkspaceFilePasteRequest",
         "WorkspaceFileCopyRequest", "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationStatusDTO",
         "WorkspaceFileRevealDTO", "FileTreeShortcutRequest", "SessionFileTreeSettingsDTO",
+        "NodeDebugCapabilitiesDTO", "NodeDebugStateDTO", "NodeDebugConfigurationDTO",
+        "NodeDebugConfigurationCreateRequest", "NodeDebugConfigurationUpdateRequest",
+        "NodeDebugConfigurationActivateRequest", "NodeDebugConfigurationImportRequest",
+        "NodeDebugConfigurationCopyRequest", "NodeDebugStartRequest",
     )
 }
 
@@ -66,3 +70,31 @@ def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool |
         if pool is not None:
             descriptor = pool.FindMessageTypeByName(descriptor.full_name)
         assert_public_schema({**schemas[name], "components": components}, descriptor)
+    # REST 的 action + params 是既有业务外形；只在此把外形投影到 proto oneof，
+    # 动作成员、公共字段及嵌套参数仍由本次 descriptor 推导，不另维护字段表。
+    descriptor = public_pb2.DESCRIPTOR.message_types_by_name["NodeDebugActionRequest"]
+    if pool is not None:
+        descriptor = pool.FindMessageTypeByName(descriptor.full_name)
+    actions = {field.name for field in descriptor.oneofs_by_name["action"].fields}
+    common = set(descriptor.fields_by_name) - actions
+    action_operation = document["paths"]["/api/v1/workspaces/{workspace_id}/debug/node/action"]["post"]
+    action_schema = action_operation["requestBody"]["content"]["application/json"]["schema"]
+    discriminator = action_schema["discriminator"]
+    mapping = discriminator["mapping"]
+    if discriminator["propertyName"] != "action" or mapping.keys() != actions:
+        raise ValueError("Node Debug HTTP 动作与 proto oneof 成员不一致")
+    if {branch["$ref"] for branch in action_schema["oneOf"]} != set(mapping.values()):
+        raise ValueError("Node Debug HTTP 动作分支与 discriminator 不一致")
+    branches = []
+    for action, reference in mapping.items():
+        properties = schemas[reference.rsplit("/", 1)[1]]["properties"]
+        if set(properties) != common | {"action", "params"}:
+            raise ValueError(f"Node Debug HTTP 动作字段与 proto 不一致: {action}")
+        declared = properties["action"]
+        labels = declared.get("enum", [declared["const"]] if "const" in declared else [])
+        if set(labels) != {name for name, target in mapping.items() if target == reference}:
+            raise ValueError(f"Node Debug HTTP 动作标签与 discriminator 不一致: {action}")
+        branches.append({"type": "object", "properties": {
+            **{name: properties[name] for name in common}, action: properties["params"],
+        }})
+    assert_public_schema({"oneOf": branches, "components": components}, descriptor)
