@@ -123,6 +123,22 @@ def _assert_http_schemas(
 def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
     """核对 Gateway 控制面公开结构，保留原生目录输入及 URI 业务校验。"""
     _assert_http_schemas(document, GATEWAY_HTTP_JSON_DESCRIPTORS, pool)
+    name = "GatewayRuntimeGroupRequest"
+    components = document["components"]
+    schemas = components["schemas"]
+    if name not in schemas:
+        raise ValueError(f"公开 HTTP 结构未被导出: {name}")
+    descriptor = gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]
+    if pool is not None:
+        descriptor = pool.FindMessageTypeByName(descriptor.full_name)
+    # HTTP 的可空数组保留原外形；仅在此投影到保留 presence 的 proto 包装消息。
+    # 不忽略根或包装消息的成员，其余字段仍由 descriptor 递归核对。
+    properties = {
+        field: {"type": "object", "properties": {"workspace_ids": value}}
+        if field == "desired_workspace_ids" else value
+        for field, value in schemas[name]["properties"].items()
+    }
+    assert_public_schema({**schemas[name], "properties": properties, "components": components}, descriptor)
 
 
 def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:

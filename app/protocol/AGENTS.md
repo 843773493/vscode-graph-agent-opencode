@@ -17,6 +17,7 @@
 - Gateway 用户列表、创建及访问租约的请求和响应共用该检查，用户及租约成员由 descriptor 递归核对；名称、跟踪值、租约互斥和授权仍归 Pydantic 与原 owner。
 - Gateway 健康、诊断及开发重启回执共用该检查，诊断工作区、日志、进程和日志文件身份由 descriptor 递归核对；进程与计数范围、状态、管理授权及原始日志入口例外仍归 Pydantic 与原 owner。
 - Gateway 联邦工作区、入站访问范围、资源目录与会话搜索共用该检查，工作区、peer、目录条目及搜索错误由 descriptor 递归核对；后端身份、服务集合、查询状态和管理授权仍归 Pydantic 与原 owner。资源条目的 Struct 快照边界沿用原合同，内部资源结构由工作区协议负责。
+- Gateway 运行组请求的 `desired_workspace_ids` 仅在结构检查时由 HTTP 可空数组投影到 proto 的具名 presence 包装消息，根及包装成员仍由同一 descriptor 检查；HTTP 未指定、清空和非空集合的原语义、完整组前置条件及去重约束仍归 Pydantic 与生命周期 owner。
 - 文件 HTTP 的请求、目录、内容、操作回执和快捷目录共用该检查；正文修改的命令、版本字典、回执及前后件快照也从 proto 递归核对，不另列字段映射。原生路径输入、传输封套的固定 URI、版本和命令互斥校验继续由对应业务模型负责。
 - Terminal／Browser 的资源创建、管理、传输授权和会话资源 HTTP 共用该检查；嵌套 Thread 身份、资源引用和列表成员由 descriptor 递归核对，版本与业务动作约束仍属于 Pydantic 和资源 owner。
 - Job 详情、步骤、控制、派发快照及 Session Goal 共用该检查；原时间字段、控制目标、队列计数和预算约束继续归 Pydantic，不将任意 JSON 正文当作具名 proto 消息。
