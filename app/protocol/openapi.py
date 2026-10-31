@@ -53,6 +53,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "PersistentTaskRunListDTO", "PersistentTaskRunDetailDTO",
         "SessionGenerationPreviewRequest", "SessionGenerationPreviewDTO",
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
+        "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
     )
 }
 
