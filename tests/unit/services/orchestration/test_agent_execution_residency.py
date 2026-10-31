@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.orchestration.agent_execution_service import AgentExecutionService
@@ -58,8 +59,8 @@ async def test_idle_worker_retries_failed_owner_on_original_interval_and_shuts_d
         if attempts == 1:
             raise ConnectionError("模拟资源 owner 暂时不可达")
 
-    def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
-        scopes.append(scope)
+    def build(session_id: str, thread_id: str, lifetime_scope: LifetimeScope) -> object:
+        scopes.append(lifetime_scope)
         return object()
 
     tracker.add_unload_listener(release)
@@ -117,3 +118,167 @@ async def test_idle_worker_retries_failed_owner_on_original_interval_and_shuts_d
         await residency_service.shutdown()
     assert worker is not None and worker.cancelled()
     assert residency_service._sweep_task is None
+
+
+@pytest.fixture
+def held_residency_scan(
+    residency_service: AgentExecutionService, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[asyncio.Event, asyncio.Event, list[Exception], list[int]]:
+    entered, finish, wake = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    failures: list[Exception] = []
+    calls: list[int] = []
+    sleep = asyncio.sleep
+
+    async def controlled_sleep(delay: float) -> None:
+        if delay == 60 and asyncio.current_task() is residency_service._sweep_task:
+            await wake.wait()
+            wake.clear()
+        else:
+            await sleep(delay)
+
+    async def settle() -> None:
+        await finish.wait()
+        if failures:
+            raise failures[0]
+
+    async def scan() -> None:
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            return
+        entered.set()
+        await run_cleanup_shielded(settle)
+
+    monkeypatch.setattr(asyncio, "sleep", controlled_sleep)
+    monkeypatch.setattr(residency_service._residency_tracker, "sweep", scan)
+    wake.set()
+    return entered, finish, failures, calls
+
+
+@pytest.mark.parametrize("late_failure", [False, True])
+async def test_shutdown_observer_cancel_keeps_original_scan_and_delivers_late_result(
+    residency_service: AgentExecutionService,
+    held_residency_scan: tuple[asyncio.Event, asyncio.Event, list[Exception], list[int]],
+    late_failure: bool,
+) -> None:
+    service = residency_service
+    entered, finish, failures, calls = held_residency_scan
+    failure = TimeoutError("原驻留扫描的迟到失败")
+    if late_failure:
+        failures.append(failure)
+    await service.start()
+    worker = service._sweep_task
+    assert worker is not None
+    await asyncio.wait_for(entered.wait(), 3)
+    service._tool_face_cache[("retained",)] = []
+    observer = asyncio.create_task(service.shutdown())
+    try:
+        async with asyncio.timeout(3):
+            while not worker.cancelling():
+                await asyncio.sleep(0)
+        assert service._sweep_task is worker, "扫描结算前不能丢失原句柄"
+        closing = service._shutdown_task
+        assert closing is not None and not closing.done()
+        observer.cancel("取消驻留关闭观察")
+        done, _pending = await asyncio.wait((observer,), timeout=1)
+        assert done == {observer}, "观察者取消不能等待或取消原关闭"
+        with pytest.raises(asyncio.CancelledError, match="取消驻留关闭观察"):
+            await observer
+        assert not closing.done() and not worker.done() and worker.cancelling() == 1
+        assert ("retained",) in service._tool_face_cache
+        assert not service._residency_tracker._closing
+        with pytest.raises(RuntimeError, match="正在关闭"):
+            await service.start()
+        finish.set()
+        await asyncio.wait((closing,), timeout=3)
+        assert closing.done() and calls == [1, 2] and service._sweep_task is None
+        if late_failure:
+            with pytest.raises(ExceptionGroup) as caught:
+                await service.shutdown()
+            assert caught.value.exceptions == (failure,)
+            assert worker.exception() is failure
+            # 只有失败交付后才允许显式重试，不复活 worker 或重发扫描。
+            await service.shutdown()
+            assert service._shutdown_task is not closing
+        else:
+            await service.shutdown()
+            assert service._shutdown_task is closing
+        assert not service._tool_face_cache and service._residency_tracker._closing
+        await service.shutdown()
+        assert calls == [1, 2]
+    finally:
+        finish.set()
+        await asyncio.wait((worker,), timeout=3)
+        if not worker.done():
+            worker.cancel()
+        await asyncio.gather(worker, observer, return_exceptions=True)
+        await asyncio.gather(service.shutdown(), return_exceptions=True)
+
+
+@pytest.mark.parametrize("phase", ["scan", "scope"])
+async def test_shutdown_deadline_keeps_one_owner_until_scan_or_scope_settles(
+    residency_service: AgentExecutionService,
+    held_residency_scan: tuple[asyncio.Event, asyncio.Event, list[Exception], list[int]],
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    from app.services.orchestration import agent_execution_service as module
+
+    service = residency_service
+    entered, finish, _failures, calls = held_residency_scan
+    scope_entered, scope_finish = asyncio.Event(), asyncio.Event()
+    scopes: list[LifetimeScope] = []
+
+    async def release() -> None:
+        scope_entered.set()
+        await scope_finish.wait()
+
+    def build(session_id: str, thread_id: str, lifetime_scope: LifetimeScope) -> object:
+        scopes.append(lifetime_scope)
+        lifetime_scope.register(release, label="原 generation scope")
+        return object()
+
+    if phase == "scope":
+        lease = await service._residency_tracker.acquire(
+            MutationIntentOwner("session", "thread"), ExecutionAdmission(
+                session_id="session", thread_id="thread", execution_id="execution",
+                job_id="job", admission_idempotency_key="admission",
+                execution_origin="user_turn", turn_id="turn",
+            ), "v1", build,
+        )
+        lease.release()
+        finish.set()
+    await service.start()
+    worker = service._sweep_task
+    assert worker is not None
+    await asyncio.wait_for(entered.wait(), 3)
+    monkeypatch.setattr(module, "RUNTIME_SHUTDOWN_WAIT_SECONDS", 0.02)
+    try:
+        with pytest.raises(TimeoutError, match="ThreadRuntime关闭等待超过"):
+            await service.shutdown()
+        closing = service._shutdown_task
+        assert closing is not None and not closing.done()
+        if phase == "scan":
+            assert service._sweep_task is worker and not worker.done()
+        else:
+            assert scope_entered.is_set() and scopes[0].state == "closing"
+            assert service._sweep_task is None and service._residency_tracker._closing
+        cancellations = worker.cancelling()
+        with pytest.raises(TimeoutError, match="ThreadRuntime关闭等待超过"):
+            await service.shutdown()
+        assert service._shutdown_task is closing and worker.cancelling() == cancellations
+        with pytest.raises(RuntimeError, match="正在关闭"):
+            service._check_sweeper()
+        finish.set()
+        scope_finish.set()
+        await asyncio.wait((closing,), timeout=3)
+        await service.shutdown()
+        assert service._shutdown_task is closing and calls == [1, 2]
+        if scopes:
+            assert scopes[0].is_closed
+    finally:
+        finish.set()
+        scope_finish.set()
+        await asyncio.wait((worker,), timeout=3)
+        if not worker.done():
+            worker.cancel()
+        await asyncio.gather(worker, service.shutdown(), return_exceptions=True)

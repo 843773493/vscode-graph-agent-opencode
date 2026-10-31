@@ -396,6 +396,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成
 - **THEN** 事件循环可正常调度时，其它选中 Thread 独立推进原排空链；同一 Thread 的重入关闭复用原 build/unload，单次 Session 或全局 runtime 关闭全批共用原 30 秒等待预算。取消仅排空本次等待者，原任务与 scope/generation 继续由原 owner 持有；各 Thread 的原异常按输入 owner 顺序汇总，重试沿原 owner 继续，不重发已完成清理。Backend按以下整批观察预算与依赖关闭规则保留原存储；生产进程退出及不合作操作的终止仍须单独核实，不把其它Thread排空成功视为整体关闭完成
 
+#### Scenario: 驻留扫描关闭观察取消或到期
+
+- **WHEN** Agent驻留服务关闭时，原扫描或generation scope尚未结算，关闭观察被取消或本次30秒观察到期
+- **THEN** 保留唯一关闭任务及新准入关闭状态，扫描结算前不丢失其句柄、不提前清缓存；取消观察者不再次取消原扫描，重入复用原任务。扫描的受保护收尾返回后不再开启下一轮；关闭期间的普通原错不得作为周期重试消耗。迟到失败先交付观察者，后续显式调用才重试剩余tracker排空，成功重复关闭不产生新副作用；Workspace保留失败步骤、后续存储及Backend维护锁，其它挂载独立关闭。原生I/O抢占、外部停止证明和整个shutdown硬期限仍分别验收
+
 #### Scenario: Backend 关闭失败后保留依赖并重试
 
 - **WHEN** Backend 关闭时，某挂载的 writer、runtime、附件或 catalog 尚未完成或返回失败

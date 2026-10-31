@@ -758,3 +758,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 初次集成在新测试的取消总数断言失败（3通过、1失败）：列表与恢复的两个原30秒预算也会取消同一监控。按源码和现场证据将“首次关闭仅一次取消”的精确断言移至其期限前，再核到期后重入不增加取消，未放宽资源身份、原错或截止断言。一次先前排队运行因补齐已发现的关闭期吞错而仅终止本次pytest，退出143且未进入测试体；未停止其它会话测试。原件均保留。
 - Ruff、compileall、OpenSpec strict与作者差异/AST自查通过；Pyright基线和最终各1条既有诊断，规则、完整消息、最窄AST owner和表达式一致，无新增，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、失败归因及类型对照见 `out/tests/temp/terminal_monitor_deadline_20261031/artifacts/verification.json`。
 - 集成沿原跨worktree独占闸门串行，进程外900秒包括排队且保留4GiB保护。未验证原生I/O抢占、无身份接管、整个operation/shutdown硬期限、Terminal进程终止、Windows或Gateway/主Web；5.2/5.4与整体21/23继续保持未完成。未修改另一会话Web/Workbench、自动化或共享暂存，未重启共享debug。
+
+### 2026-10-31 Agent驻留扫描关闭的原任务持有（5.4部分）
+
+- 唯一关闭任务持有原扫描与tracker排空，每次调用最多观察30秒；取消观察或到期不丢句柄、不再次取消扫描、不重开准入。扫描结算后才清缓存，关闭期原错不按周期重试消耗，迟到失败先交付后再允许显式重试剩余关闭。原实现的两项红测准确失败于扫描句柄提前清空；最终28项相关单测通过，覆盖观察取消、迟到原错和扫描/scope等待到期。单元到期场景缩短常量，只证明等待机制，不冒充默认30秒实测。
+- 新增3项真实双Workspace生命周期场景及8项既有执行/runtime回归共11项已收集；沿原独占闸门等待600秒后全部fixture失败（exit1，618.65秒），未进入测试体。默认30秒、Backend原错交付、Session locator/存储/维护锁和真实scope回归仍须取得名额后补验，不能声称集成通过。另一会话Web测试持有名额，未绕锁或停止对方进程；修正测试类型后仅终止过本片尚在排队的旧进程（exit143），不计为业务结果。最终运行期间2451个采样源码文件未变化，不立即重复同一失败检查。
+- Ruff、compileall及OpenSpec strict通过；Pyright的4条生产诊断与原基线的规则、完整消息和语句AST一致，两份测试零诊断。准确命令、源码指纹、原始输出/退出码及作者差异自查见`out/tests/temp/residency_shutdown_owner_20261031/artifacts/verification.json`。上述集成补验、原生I/O抢占、外部停止、完整shutdown硬期限、Windows及Gateway/主Web继续TODO，5.2/5.4与21/23不勾选；未修改Web/Workbench、其自动化、共享暂存或debug。
