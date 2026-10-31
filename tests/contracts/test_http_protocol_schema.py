@@ -19,6 +19,8 @@ from pydantic.json_schema import JsonSchemaValue
 from app.core.identifier import create_prefixed_id
 from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
+from app.schemas.internal_v2.goal import SessionGoalSetRequest
+from app.schemas.internal_v2.job import JobControlRequest, JobDispatchSnapshotDTO
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
@@ -229,6 +231,84 @@ def test_resource_structure_checks_preserve_pydantic_identity_revision_and_actio
         BrowserResourceOperationRequest.model_validate({"expected_revision": 1, "action": "unknown_action"})
 
 
+def test_execution_http_routes_check_actual_job_and_goal_roots(http_openapi: JsonSchemaValue) -> None:
+    schemas = http_openapi["components"]["schemas"]
+    pending: list[JsonSchemaValue] = []
+    prefix = "/api/v1/workspaces/{workspace_id}"
+    for path in ("/jobs/{job_id}", "/jobs/{job_id}/steps",
+                 "/jobs/{job_id}/control", "/sessions/{session_id}/goal"):
+        for operation in http_openapi["paths"][prefix + path].values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                pending.append(request["schema"])
+            for status, response in operation["responses"].items():
+                body = response.get("content", {}).get("application/json")
+                if status.startswith("2") and body is not None:
+                    pending.append(body["schema"])
+    # 派发快照由真实消息接受回执嵌套暴露，并非独立 HTTP 回包。
+    pending.append(schemas["MessageRunAccepted"]["properties"]["dispatch"])
+    roots: set[str] = set()
+    while pending:
+        node = pending.pop()
+        if "$ref" in node:
+            name = node["$ref"].rsplit("/", 1)[1]
+            if name in public_pb2.DESCRIPTOR.message_types_by_name:
+                roots.add(name)
+            else:
+                pending.append(schemas[name])
+        else:
+            for value in node.values():
+                if isinstance(value, dict):
+                    pending.append(value)
+                elif isinstance(value, list):
+                    pending.extend(branch for branch in value if isinstance(branch, dict))
+    assert roots == {"JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
+                     "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO"}
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"执行入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("JobDTO", "thread_id", {"type": "integer"}),
+    ("JobDTO", "created_at", {"type": "integer"}),
+    ("StepDTO", "input_payload", {"type": "array", "items": {}}),
+    ("JobControlRequest", "params", {"type": "array", "items": {}}),
+    ("JobControlResponseDTO", "session_id", {"type": "integer"}),
+    ("JobDispatchSnapshotDTO", "queued_job_count", {"type": "string"}),
+    ("SessionGoalDTO", "token_budget", {"type": "string"}),
+    ("SessionGoalClearResultDTO", "cleared", {"type": "string"}),
+])
+def test_execution_http_schema_rejects_identity_time_control_queue_and_budget_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_execution_structure_checks_preserve_pydantic_control_queue_and_goal_rules(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    with pytest.raises(ValidationError, match="agent scope requires agent_id"):
+        JobControlRequest.model_validate({"scope": "agent", "action": "cancel"})
+    with pytest.raises(ValidationError, match="instruction action requires message"):
+        JobControlRequest.model_validate({"action": "replace_instruction"})
+    with pytest.raises(ValidationError, match="queued_job_count"):
+        JobDispatchSnapshotDTO.model_validate({
+            "session_id": "session", "thread_id": "thread", "job_id": "job", "job_status": "queued",
+            "queued_jobs_ahead": 0, "queued_job_count": -1, "pending_job_count": 0,
+        })
+    with pytest.raises(ValidationError, match="token_budget"):
+        SessionGoalSetRequest(token_budget=0)
+    with pytest.raises(ValidationError, match="objective"):
+        SessionGoalSetRequest(objective="")
+    assert SessionGoalSetRequest(token_budget=None).token_budget is None
+
+
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("NodeDebugStartRequest", "path", {"type": "integer"}),
     ("NodeDebugStateDTO", "call_stack", {"type": "object"}),
@@ -304,6 +384,7 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "NodeDebugStateDTO", "NodeDebugConfigurationDTO", "NodeDebugVariableDTO", "NodeDebugSetBreakpointParams",
     "WorkspaceResourceDTO", "ResourceThreadRef", "TerminalResourceCreateRequest",
     "BrowserResourceOperationRequest", "SessionResourceControlResultDTO",
+    "JobDTO", "JobDispatchSnapshotDTO", "SessionGoalDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

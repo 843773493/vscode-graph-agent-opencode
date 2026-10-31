@@ -34,6 +34,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "BrowserResourceCreateRequest", "BrowserResourceOperationRequest",
         "WorkspaceResourceCommandRequest", "ResourceTransportGrantDTO",
         "SessionResourceListDTO", "SessionResourceControlRequest", "SessionResourceControlResultDTO",
+        "JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
+        "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO",
     )
 }
 
