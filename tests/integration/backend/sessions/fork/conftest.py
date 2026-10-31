@@ -11,7 +11,6 @@ import pytest
 from app.container import AppContainer
 from app.core import failures
 from app.services.business import session_context_fork_service
-from app.services.business.workspace_resources import owner as workspace_owner
 
 
 @pytest.fixture(params=[False, True], ids=["logging", "broken-logging"])
@@ -33,7 +32,7 @@ def fork_diagnostic_sink(
                 pass
 
     handler = FailingHandler(level=logging.ERROR)
-    loggers = (session_context_fork_service.logger, workspace_owner.logger, failures.logger)
+    loggers = (session_context_fork_service.logger, failures.logger)
     for logger in loggers:
         logger.addHandler(handler)
     try:

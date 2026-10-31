@@ -683,3 +683,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 13 项定向单测通过，完整旧生产归档加相同最终测试的两个反例均因关闭仍等待原监控而失败。25 项资源记录错误／冷恢复／释放回归全部通过（275.08 秒），真实 PTY 完成及目录回收单项通过（21.18 秒）；均先取得主仓共享闸门，沿原进程外超时及 4GiB 保护执行。本次通过补齐该组回归，不倒推此前无栈挂起的精确根因。
 - Ruff、编译和 OpenSpec strict 通过；Pyright 保留一条与完整旧生产规则、完整消息及语句 AST 一致的既有 operator 诊断，新增测试零诊断。初版 fixture 的 Awaitable 返回类型已修正并集中重跑，原件保留。准确命令、源码指纹、退出码、类型对照、只读快照插件和作者审查见 `out/tests/temp/terminal_monitor_stop_20261031/artifacts/verification.json`。
 - 关闭观察者取消、不合作扫描终止及原监控失败传播仍有代码 TODO，旧代接管、完整 shutdown 期限、Windows 与 Gateway/Web 未验完，5.2／5.4 与整体 21/23 不勾选。未修改另一会话的 Web/Workbench、自动化或暂存，不重启共享 Debug。
+
+### 2026-10-31 Fork 诊断装具迁齐现有日志 owner
+
+- 删除装具对已不存在的 `workspace_owner.logger` 的引用及唯一无用 import，继续将故障 handler 装到现有 fork service 与统一 failures logger。生产正文、真实日志写入故障、原错误身份／次数／注释、unknown lease、已提交关联和同 key 恢复断言均保持，不为测试恢复已删除的生产接口。
+- 正式 `integration-fork-live-diagnostics` 全部 8 项通过（111.92 秒），保留原 180 秒／4GiB、fork watchdog 及主仓共享闸门。Ruff、编译、该文件 Pyright 零诊断及 OpenSpec strict 通过；准确命令、完整独立归档指纹、原始输出与退出码见 `out/tests/temp/fork_diagnostic_logger_20261031/artifacts/verification.json`。首条类型检查命令因 uv 环境无 pyright 而未启动检查器，改用既有 `bun x pyright`，未更改依赖。此前四项 fixture 错误已由本次补验收口，5.2／5.4 和 21/23 仍未关闭；未改另一会话 Web/Workbench、自动化、暂存或共享 Debug。
