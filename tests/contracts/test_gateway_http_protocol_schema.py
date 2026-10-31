@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from copy import deepcopy
@@ -94,9 +95,24 @@ def test_gateway_managed_workspace_schema_uses_actual_routes_and_keeps_business_
                 model.model_validate(invalid)
 
 
+def test_gateway_ssh_schema_follows_actual_connection_routes(gateway_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(gateway_openapi)
+    components = gateway_openapi["components"]["schemas"]
+    connections = gateway_openapi["paths"]["/api/gateway/ssh-connections"]["get"]
+    response = connections["responses"]["200"]["content"]["application/json"]["schema"]
+    envelope = components[response["$ref"].rsplit("/", 1)[1]]
+    assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/SshConnectionOptionListDTO")
+    remote = gateway_openapi["paths"]["/api/gateway/remote-gateways"]["post"]
+    assert remote["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/AddRemoteGatewayRequest")
+    assert {"SshConnectionOptionListDTO", "AddRemoteGatewayRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
+    "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -117,6 +133,10 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("GatewayManagedWorkspaceDTO", "removable", {"type": "string"}),
     ("CreateGatewayManagedWorkspaceRequest", "root_path", {"type": "integer"}),
     ("CreateFederationManagedWorkspaceRequest", "root_path", {"type": "integer"}),
+    ("SshConnectionOptionListDTO", "items", {"type": "object"}),
+    ("SshConnectionOptionDTO", "host", {"type": "integer"}),
+    ("SshConnectionOptionDTO", "port", {"type": "string"}),
+    ("AddRemoteGatewayRequest", "private_key_path", {"type": "integer"}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -131,6 +151,7 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "GatewayManagedWorkspaceDTO",
     "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
+    "SshConnectionOptionListDTO", "SshConnectionOptionDTO", "AddRemoteGatewayRequest",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
@@ -145,11 +166,12 @@ def test_export_rejects_gateway_proto_drift_before_publishing(
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"original snapshot\n")
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.export_openapi_snapshot", "--output-root", str(output),
-         "--descriptor-set", str(descriptor_set)],
-        capture_output=True, text=True, timeout=30, check=False,
-    )
+    command = [sys.executable, "-m", "scripts.export_openapi_snapshot", "--output-root", str(output),
+               "--descriptor-set", str(descriptor_set)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    (tmp_path / "export.stdout.log").write_text(result.stdout)
+    (tmp_path / "export.stderr.log").write_text(result.stderr)
+    (tmp_path / "export.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2) + "\n")
     assert result.returncode != 0, result.stdout + result.stderr
     assert "公开结构与 proto 字段不一致" in result.stderr and "new_public_field" in result.stderr
     assert message_name in result.stderr

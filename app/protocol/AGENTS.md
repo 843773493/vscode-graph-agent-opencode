@@ -12,6 +12,7 @@
 - Agent 目录、详情和默认 Agent／Provider 设置共用该检查，嵌套 Provider 由 descriptor 递归核对；默认值和配置可用性仍归 Pydantic 与原 owner。
 - Workspace 与 Gateway 的 HTTP 根复用同一个递归检查入口；Gateway 目录浏览、原生目录绑定及解析的结构从其 descriptor 核对，原生输入许可、目录 URI 和授权仍由既有 Pydantic／owner 负责。
 - Gateway 受管工作区的创建请求与列表响应共用该检查，列表成员从 descriptor 递归核对；原生目录输入、默认创建行为、名称与额外字段约束仍归 Pydantic，授权及生命周期仍归原 owner。
+- Gateway SSH 连接选项列表与远端连接请求共用该检查，选项成员由 descriptor 递归核对；连接来源互斥、端口和原生凭据路径输入仍由 Pydantic 与既有连接 owner 校验。
 - 文件 HTTP 的请求、目录、内容、操作回执和快捷目录共用该检查；正文修改的命令、版本字典、回执及前后件快照也从 proto 递归核对，不另列字段映射。原生路径输入、传输封套的固定 URI、版本和命令互斥校验继续由对应业务模型负责。
 - Terminal／Browser 的资源创建、管理、传输授权和会话资源 HTTP 共用该检查；嵌套 Thread 身份、资源引用和列表成员由 descriptor 递归核对，版本与业务动作约束仍属于 Pydantic 和资源 owner。
 - Job 详情、步骤、控制、派发快照及 Session Goal 共用该检查；原时间字段、控制目标、队列计数和预算约束继续归 Pydantic，不将任意 JSON 正文当作具名 proto 消息。
