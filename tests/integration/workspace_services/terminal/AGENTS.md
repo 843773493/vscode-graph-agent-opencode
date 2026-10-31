@@ -44,6 +44,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 
 `test_terminal_startup_recovery.py`复用启动失败装具，输出按当前测试文件归属。真实创建在PID/身份交付前失败、收到迟到身份并丢弃停止证明后，持久保持created/unknown；同Manager和精确Node硬重启后的原HTTP kill/delete均沿原生启动标记核实终态、持久发布并重复请求，不补写恢复状态或重新执行命令。Linux定向验证保留60秒/4GiB及共享闸门，不代Python lease、未知native无身份、Windows或Gateway/Web。
 
+`test_startup_directory_recovery.py`沿正式消息上传、Python Terminal 创建与管理入口复用同一启动故障装具。停止证明丢失时，核原 operation lease 和附件目录 lease 继续阻止到期 GC；原 Node 与硬重启后的 Node 均须由原管理停止核实并持久结清两份精确占用，再允许目录回收。独立核对原生身份、停止观察、恢复文件和冷读账本，不手填终态或重放创建；通过通用 `integration-python` 发现并沿共用闸门运行，不扩大原 suite 预算，不代 Python Backend 硬重启、无原生身份接管、Windows 或 Gateway/Web。
+
 ## 可修改内容
 
 - Terminal 模块与受控子进程组成的集成测试及专用 fixture。

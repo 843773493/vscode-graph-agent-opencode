@@ -543,3 +543,9 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 `AttachmentBlobStore.admit_working_directory` 的来源识别和目录 holder 内复核交给既有 `run_sync_shielded`，继续使用同一 catalog、稳定 locator、符号链接边界、可用性及目录判断。catalog 沿用各真实线程独立连接；请求的 Gateway／request ContextVar 随 worker 传递，URI 仍由原 owner 规范化。复核 helper 是原判断的唯一实现，未引入第二解析或写入链。
 
 原 Terminal Thread 准入覆盖整个调用；目录 holder 覆盖复核的线程池排队、执行及取消结算，重复取消不能提前交给 GC。此时已存在原 Terminal intent 和 operation lease，取消只阻止后续目录占用发布与 PTY 创建，现有创建失败链继续处理原记录及 lease。成功后的记录保存、持久目录占用与外部创建顺序不变。普通路径仍返回原未受管结果，不吸收未知目录；原生 I/O 不能被该 worker 强行中断，不能将此切片等同整个操作或关闭的有界等待。lease writer 仍须整体协调，禁止仅把部分写入放进线程与原 writer 竞争；5.2／5.4 保持未完成。
+
+### 启动停止证明丢失后的 Python 目录占用结算（5.2 部分验收）
+
+正式消息上传和 Python Terminal 创建生成原目录、创建 intent、operation lease 及持久目录 lease。原生创建失败后收到迟到身份，但正式停止证明丢失时，原 operation 保持待核实、目录占用保持有效；即使独立观察已没有执行中的进程，也不能凭此回收目录。原 Node 或硬重启读取原记录的 Node 继续公开同一 created/unknown 及完整创建身份。
+
+显式 Python 管理停止沿既有版本同步和原生身份核实链执行，外部终态与领域记录持久成功后，原 operation 与目录 lease 才结清；冷读原账本核对同一 lease 身份，最后零关联目录到期后才能 GC。不重放创建、不补写停止证明、不增加恢复入口或账本。本验收覆盖 Linux 的两种 Node 生命周期，Python Backend 进程硬重启、无原生身份接管、任意原生 I/O 终止和完整 shutdown 总期限继续 TODO，5.2／5.4 不据此勾选。

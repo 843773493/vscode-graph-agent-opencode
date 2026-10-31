@@ -765,3 +765,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 首次11项集成因独占名额等待600秒全部fixture失败，未进入测试体；更早本片排队进程exit143也不计业务结果。实际名额释放后补验为10 passed／1 failed（155.24秒）：新增3项双Workspace场景均通过，真实默认30秒、观察取消、迟到原错、Backend归属、Session locator/存储/维护锁保留及同owner重试已有实测。唯一失败首错是原lifespan装具替换配置启动，导致编译前Skill source未激活，后续scope断言因未编译再次失败；相关7份源码与驻留修复前HEAD逐字相同，此为静态归因，未冒称旧生产动态复现。
 - 仅在该lifespan用例恢复真实配置启动/关闭，让产品入口激活Skill source；不手工预激活、不改产品、不放宽冷启动/释放顺序断言。补跑此项1 passed／13.80秒，其余10项按未变化源码复用，不称最终11项整批重跑。两次业务运行各2451份采样源码保持；沿原跨worktree闸门串行，未绕锁或停止另一会话进程。
 - Ruff、compileall及OpenSpec strict通过；原生产4条Pyright诊断与基线规则、完整消息和语句AST一致，两份原测试零诊断；本次修正的runner测试78条既存诊断前后同规则/消息/语句AST，无新增，不称类型全绿。准确命令、源码指纹、原始输出/退出码及差异自查见`out/tests/temp/residency_shutdown_owner_20261031/artifacts/verification.json`。原生I/O抢占、外部停止、完整shutdown硬期限、Windows及Gateway/主Web继续TODO，5.2/5.4与21/23不勾选；未修改Web/Workbench、其自动化、共享暂存或debug。
+
+### 2026-10-31 启动停止证明丢失后的 Python 目录占用（5.2部分验收）
+
+- 正式消息上传、Python Terminal 创建及真实 Node HTTP/PTY 生成目录和两份原占用；只在既有 IPC 故障边界丢弃停止证明。原 Node 与精确 Node 硬重启各一例，核 created/unknown、原生创建身份、原 operation 待核实及目录 lease 有效、独立进程观察与到期 GC 拒绝；不以进程已退出作为停止证明。
+- 原 Python 管理停止核实并持久发布终态后，冷读唯一账本确认两份精确 lease 结清，目录才被回收；原工作负载、来源身份及恢复记录保持，随后 detach/delete 完成原资源清理。2 passed／302.65秒（包含共享名额排队）、exit0；首轮120秒全部耗在排队、exit124，未进入测试体，不计业务失败或通过。两轮均保留4GiB进程外保护，不绕闸门、不停止另一会话进程。
+- 最终测试Ruff、Pyright零诊断及compileall通过，1217份采样源码在第二轮前后逐字一致。准确命令、原始输出、源码指纹与作者自查在`out/tests/temp/startup_directory_recovery_20261031/artifacts/verification.json`；通用integration-python自动发现新文件，未增加其它suite预算。没有修改产品实现、Web/Workbench、其自动化或共享debug；Python Backend硬重启、无原生身份接管、Windows、Gateway/Web与完整operation/shutdown期限仍未验证，5.2/5.4及21/23保持未完成。
