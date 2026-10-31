@@ -1804,3 +1804,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 六个进程错误＋日志故障反例在原生产实现全部失败；最终54个不同用例通过，涵盖列表／显式选择、POSIX／盘符／UNC诊断样本、原始输出、直接原因、修复后同入口重试及既有配置来源／路由合同。首次全54项通过后只补强新六例的 cause 类型断言，定向六项再通过，其余48项复用，不重复计数。
 - Ruff、真实Pyright和compileall通过；首次Pyright指出新测试未收窄可空cause，补强类型及身份断言后零诊断。命令、前后指纹、红绿原件、退出码及作者AST自查见`out/tests/temp/ssh_process_diagnostics_20261031/artifacts/verification.json`。除非零退出分支及必要导入外，生产函数、subprocess调用和成功解析AST保持；既有测试仅删无消费者logger注入。
 - 配置进程由fixture注入，不代实际SSH连接、Windows实机或独立Gateway网络验收；另一会话长测仍占集成闸门，未运行Web／Workbench及其自动化，未动共享debug或既有暂存。2.2／7.2仍未勾、整体51/53保持，显式MCP持有及团队协作继续延期。
+
+### 2026-10-31 操作 ID 真实 Backend 网络补验（2.2／7.2有限证据）
+
+- 独占名额释放窗口内，原版本经独立Backend真实HTTP通过1项（14.36秒）：产品文件／导航入口生成受理状态，16次非法query和8次非法body保持400／422及头体request_id，原生位置仅留诊断；合法未知ID、原回执、文件字节、导航快照和原命令重放合同保持。1431份采样源码前后逐字稳定，正式24条回执与准确命令、原输出／退出码见`out/tests/temp/operation_id_network_acceptance_20261031/artifacts/verification.json`。
+- 随后新增5行断言，进一步核对重放后的持久operation、文件字节及导航快照；该补强版本的Ruff、Pyright零诊断和compileall通过，真实补跑尚未进入业务：另一会话新Web长测持有共享锁，排队至进程外180秒期限退出124。原版本通过不能算作新增断言已执行；保留待闸门释放后的单项复跑，不绕锁、不停止另一会话进程、不重复无效排队。
+- 没有新增产品实现或修改Web／Workbench、其自动化、共享debug及既有暂存；本次仅为BackendHTTP证据，不代Gateway联邦、浏览器或Windows验收。2.2／7.2继续未勾，整体51/53保持。

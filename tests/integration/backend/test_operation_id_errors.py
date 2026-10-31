@@ -141,6 +141,11 @@ async def test_operation_id_rejection_keeps_original_status_and_accepted_history
         assert replay.status_code == 202, replay.text
         data = replay.json()["data"]
         assert (data if base.startswith(file_base) else data["receipts"][0]) == receipt
+    assert operations() == before
+    assert (workspace / "operation-id-target.txt").read_bytes() == original
+    replayed_snapshot = await client.get(catalog_base + "/snapshot")
+    assert replayed_snapshot.status_code == 200, replayed_snapshot.text
+    assert replayed_snapshot.json()["data"] == settled_snapshot.json()["data"]
     logs = (workspace / ".boxteam/logs/operation-id-backend.stderr.log").read_text()
     for item in evidence:
         assert item["request_id"] in logs
