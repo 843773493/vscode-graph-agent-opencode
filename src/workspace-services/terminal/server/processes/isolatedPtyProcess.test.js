@@ -39,6 +39,24 @@ test("worker在宽限期内退出，关闭才完成且不发送强杀", async t 
   assert.equal(worker.kill.mock.callCount(), 0);
 });
 
+test("重叠关闭等待原Worker任务，失败结算后才能重试", async t => {
+  const { isolated, worker } = await createReadyWorker(t);
+  const sendsBefore = worker.send.mock.callCount();
+  const failures = Promise.allSettled([isolated.shutdown(), isolated.shutdown({ terminatePty: false })]);
+  assert.equal(worker.send.mock.callCount(), sendsBefore + 1);
+  t.mock.timers.tick(3000);
+  t.mock.timers.tick(3000);
+  const outcomes = await failures;
+  assert.equal(outcomes[0].status, "rejected");
+  assert.equal(outcomes[1].status, "rejected");
+  assert.equal(outcomes[0].reason, outcomes[1].reason);
+  assert.equal(worker.kill.mock.callCount(), 1);
+  const retry = isolated.shutdown({ terminatePty: false });
+  assert.equal(worker.send.mock.callCount(), sendsBefore + 2);
+  worker.emit("exit", 0, null);
+  await retry;
+});
+
 test("发送SIGKILL后仍等待worker退出事件，不能提前报告关闭成功", async t => {
   const { isolated, worker } = await createReadyWorker(t);
   let resolved = false;

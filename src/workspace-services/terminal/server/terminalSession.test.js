@@ -429,6 +429,93 @@ async function startedExitCallback(t, session) {
   return onExit;
 }
 
+test("PTY自发退出等待原Worker确认后才释放句柄", async (t) => {
+  const session = completedSession(t);
+  const onExit = await startedExitCallback(t, session);
+  const worker = session.ptyProcess;
+  worker.workerState = "running";
+  const entered = Promise.withResolvers();
+  const exit = Promise.withResolvers();
+  const shutdown = t.mock.method(worker, "shutdown", async (options) => {
+    assert.deepEqual(options, { terminatePty: false });
+    entered.resolve();
+    await exit.promise;
+    worker.workerState = "exited";
+  });
+  let finished = false;
+  const pending = onExit({ exitCode: 0, signal: 0, workerExit: false })
+    .then(() => { finished = true; });
+  try {
+    await entered.promise;
+    assert.equal(finished, false);
+    assert.equal(session.ptyProcess, worker);
+  } finally {
+    exit.resolve();
+    await pending;
+  }
+  assert.equal(shutdown.mock.callCount(), 1);
+  assert.equal(session.ptyProcess, null);
+});
+
+for (const action of ["kill", "delete"]) {
+  test(`PTY退出等待Worker期间${action}不得提前成功或被迟到退出覆盖`, async (t) => {
+    const session = completedSession(t);
+    const onExit = await startedExitCallback(t, session);
+    const worker = session.ptyProcess;
+    worker.workerState = "running";
+    const entered = Promise.withResolvers();
+    const exit = Promise.withResolvers();
+    t.mock.method(worker, "shutdown", async () => {
+      entered.resolve();
+      await exit.promise;
+      worker.workerState = "exited";
+    });
+    const pendingExit = onExit({ exitCode: 0, signal: 0, workerExit: false });
+    await entered.promise;
+    let finished = false;
+    const pendingManagement = session[action]().then(() => { finished = true; });
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(finished, false);
+      assert.equal(session.reconciliationStatus, "unknown");
+      assert.equal(session.ptyProcess, worker);
+    } finally {
+      exit.resolve();
+      await Promise.all([pendingExit, pendingManagement]);
+    }
+    assert.equal(session.ptyProcess, null);
+    assert.equal(session.reconciliationStatus, "verified");
+    assert.equal(session.status, action === "kill" ? "terminated" : "deleted");
+    assert.equal(session.releaseReason, action === "kill" ? "terminal_cancel" : "terminal_delete");
+  });
+}
+
+test("PTY自发退出后Worker停止失败保留unknown及原句柄，同一管理链可重试", async (t) => {
+  const session = completedSession(t);
+  const onExit = await startedExitCallback(t, session);
+  const worker = session.ptyProcess;
+  worker.workerState = "running";
+  const failure = new Error("原Worker退出未确认");
+  const diagnostic = t.mock.method(process.stderr, "write", () => {});
+  let attempts = 0;
+  const shutdown = t.mock.method(worker, "shutdown", async (options) => {
+    assert.deepEqual(options, { terminatePty: false });
+    if (++attempts === 1) throw failure;
+    worker.workerState = "exited";
+  });
+  await onExit({ exitCode: 0, signal: 0, workerExit: false });
+  assert.equal(session.status, "exited");
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.releaseReason, "pty_exit_cleanup_failed");
+  assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(failure)));
+  assert.equal(await session.kill(), true);
+  assert.equal(shutdown.mock.callCount(), 2);
+  assert.equal(session.ptyProcess, null);
+  assert.equal(session.status, "terminated");
+  assert.equal(session.reconciliationStatus, "verified");
+});
+
 for (const [failPrimaryLog, failPersist, failPersistLog] of [
   [false, false, false], [true, false, false], [false, true, false],
   [true, true, false], [false, true, true], [true, true, true],
@@ -440,6 +527,7 @@ for (const [failPrimaryLog, failPersist, failPersistLog] of [
     const primaryLogError = new Error(`原退出诊断失败: ${session.cwd}/private-log`);
     const persistLogError = new Error(`原存储诊断失败: ${session.cwd}/private-log`);
     const onExit = await startedExitCallback(t, session);
+    const worker = session.ptyProcess;
     t.mock.method(session, "handlePtyExit", async () => { throw original; });
     const diagnostics = t.mock.method(process.stderr, "write", (chunk) => {
       if (chunk.includes("退出清理失败") && failPrimaryLog) throw primaryLogError;
@@ -462,7 +550,8 @@ for (const [failPrimaryLog, failPersist, failPersistLog] of [
       assert.equal(finished, false, "状态发布完成前不能提前结算退出失败");
       assert.equal(session.status, "exited");
       assert.equal(session.lastCommandStatus, "exited");
-      assert.equal(session.ptyProcess, null);
+      assert.equal(session.ptyProcess, worker, "未取得Worker退出确认不能因诊断失败丢弃句柄");
+      assert.equal(session.reconciliationStatus, "unknown");
       assert.equal(events.length, 1);
       assert.equal(events[0].error, "pty_exit_cleanup_failed");
       assert.equal(events[0].exitCode, -1);

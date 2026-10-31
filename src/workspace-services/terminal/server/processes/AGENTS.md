@@ -30,6 +30,8 @@ ps/taskkill失败后的存在性探测也失败时，原操作仍是主拒绝，
 
 `shutdown()`只有观察到worker的`exit`事件才成功：先给关闭IPC三秒宽限，再发SIGKILL并等待最多三秒确认。未确认或发送失败须明确拒绝，并释放本次监听和定时器；该确认只涉及隔离worker，不替代PTY进程树的独立核验。
 
+重叠关闭共用唯一在途Promise和原关闭策略，不重复IPC、信号或计时器；结算失败后才允许原入口重试。Session在此之前按原进程树入口完成PTY终止，不能将共享Worker关闭当作PTY停止证明。
+
 启动的首条IPC发送、worker错误、就绪前退出和十秒超时共用同一个就绪Promise。失败先清除启动计时器，再请求停止尚未退出的worker；停止请求也失败时，以`AggregateError.errors`按顺序保留启动和信号两份原始异常，不能让信号错误越过Promise或留下永不结束的启动。`stopping`只表示已经进入停止流程，不能当作退出确认；相关单测用显式IPC/信号替身检查这条控制流，不冒充真实进程树回收证据。
 
 worker的`outputPacketId`（IPC字段仍为`messageId`）逐包计费，宿主结束本次分发后逐包回执；它不是Session的输出sequence或聊天消息ID。`ptyOutputPaused`只暂停node-pty输出读取，未确认UTF-8字节超过高水位时暂停、低于低水位时恢复，不表示OS进程或Job暂停。重复或未知包回执不重复释放额度。

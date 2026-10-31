@@ -183,6 +183,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原 PTY 进程树已进入停止链，但 Worker 退出未确认或最终终态写盘失败
 - **THEN** 保留原 Worker 句柄和未知状态，不提前发布停止完成事件；显式重试复用原执行及唯一停止链，只有进程树停止、Worker 退出确认与终态写盘均成功后才清除句柄和返回成功；未知状态写盘也失败时保留两份原异常及因果关系
 
+#### Scenario: Terminal 自发退出后隔离 Worker 仍未退出
+
+- **WHEN** PTY 自发退出并交付原退出观察，但隔离 Worker 尚未确认退出，或其关闭期限内未能退出
+- **THEN** 复用原 Worker 关闭入口等待确认，期间保留原句柄和 unknown；重叠关闭共享唯一在途任务，不能重复派发或提前成功，迟到退出处理不得覆盖原管理停止结果。关闭失败发布 exited/unknown 及原诊断，原 kill/delete 管理入口可重试同一执行，不重建 Worker 或将 PTY 退出当作宿主停止证明。已经确认退出的 Worker 才可移除句柄；正常自发退出确认后恢复原 verified 状态
+
 #### Scenario: POSIX 终端在停止快照后创建后代
 
 - **WHEN** 原停止链捕获的 PID 收到 SIGTERM 或 SIGKILL 后退出，但快照到信号生效之间创建了同一操作系统 session 的新后代

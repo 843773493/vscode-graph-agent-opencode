@@ -16,6 +16,8 @@ export class IsolatedPtyProcess {
     this.pid = null;
     /** @type {string|null} 只记录本次就绪前 PTY 退出的正式进程树清理结果。 */
     this.startupCleanupResult = null;
+    /** @type {Promise<void>|null} 唯一在途宿主关闭任务，失败结算后允许原入口重试。 */
+    this.shutdownPromise = null;
     this.ptyOutputHandlers = new Set();
     this.exitObservationHandlers = new Set();
     /** @type {"created"|"starting"|"running"|"stopping"|"exited"} worker生命周期，不是终端业务状态。 */
@@ -200,13 +202,14 @@ export class IsolatedPtyProcess {
   }
 
   async shutdown({ terminatePty = true } = {}) {
+    if (this.shutdownPromise) return await this.shutdownPromise;
     const workerProcess = this.workerProcess;
     if (!workerProcess || this.workerState === "exited") {
       return;
     }
     this.workerShutdownExpected = true;
     this.workerState = "stopping";
-    await new Promise((resolve, reject) => {
+    const shutdown = new Promise((resolve, reject) => {
       let exitConfirmationTimeout;
       const cleanup = () => {
         clearTimeout(forceKillTimeout);
@@ -239,6 +242,12 @@ export class IsolatedPtyProcess {
         fail(error);
       }
     });
+    this.shutdownPromise = shutdown;
+    try {
+      await shutdown;
+    } finally {
+      if (this.shutdownPromise === shutdown) this.shutdownPromise = null;
+    }
   }
 
   _send(message) {

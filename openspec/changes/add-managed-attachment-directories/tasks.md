@@ -635,3 +635,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 扩大正式 `integration-mounted-workspace-lifespan` 为 25 passed／4 failed（187.64 秒）；四个 Goal 场景均在原 `ready.wait()` 的 8 秒期限、进入本次关闭修改之前失败。当前完整 HEAD 基线代表项也在同一语句超时（22.36 秒），另外三项未逐项跑新基线；原测试已有 `29c7ec96` 性能 TODO，本轮不修改期限或展开该长尾优化。结合定向验证，共 46 个不同用例通过，不称扩大套件全绿。
 - Ruff、Python 编译与本 change strict 通过；Pyright 原有 4 项 JobServiceProtocol 诊断与完整 HEAD 基线的规则、完整消息和最窄语句 AST 一致，新增零项，不称类型全绿。作者 AST 复核确认除周期任务排空和完成回调外的生产逻辑保持，原模块 424→440 行，无新增源码目录。
 - 命令、源码指纹、原始输出和实际退出码见 `out/tests/temp/periodic_shutdown_failures_20261031/artifacts/verification.json` 及同目录原件。本片不证明同步阻塞可抢占、任意旧操作可终止、生产进程总期限、独立 Backend 重启、Windows 或 Gateway/Web 总验收；5.2／5.4 与整体 21/23 保持未完成。未修改另一会话的 Web/Workbench、自动化、暂存或共享 debug；团队协作与 MCP 显式持有继续延期。
+
+### 2026-10-31 PTY 自发退出保留未确认的 Worker（5.2／5.4 部分收口）
+
+- Session 收到 PTY 退出观察后，等待原 Worker 关闭确认，期间保留 unknown 和原句柄；原 kill/delete 可接管同一执行，迟到退出处理不覆盖管理结果。Worker 重叠关闭复用唯一在途任务，不重复 IPC／信号，失败结算后才允许重试；已确认退出才能移除句柄，正常退出确认后恢复原 verified。不增加停止算法、持久结构或公开 API。
+- 完整旧生产归档的真实 HTTP/PTY 反例精确失败于“Worker 仍存活但快照的 pty_worker_pid 已为空”。初版候选 8 项真实集成通过（53.53 秒）；随后补齐并发管理与唯一关闭任务，最终 124 项 Session／Worker／Manager／shutdown 单测通过。原诊断单测的旧 null 预期按真实反例修正为原句柄及 unknown，保留全部原日志、因果关系与发布顺序断言，不用装具补造退出确认。
+- 最终 9 项集成未运行：主仓共享闸门等待满原有 600 秒，外层脚本退出 1，pytest 未启动；另一会话 Web 迁移测试继续持有名额，未中断或绕过它。初版的 8 项结果不能代表最终源码已通过集成；下一项验证为带原 60 秒／4GiB 保护的同文件最终回归。较早正常退出定向等待仅因本片源码修订取消自己的排队，也未进入 pytest。
+- Ruff、Python 编译、Pyright 和 Node 语法检查通过；规范严格验证见同目录原件。准确命令、各阶段指纹、原始输出、退出码及作者差异复核见 `out/tests/temp/terminal_exit_worker_20261031/artifacts/verification.json`。无 PID 的 native 接管、冷重启后的未知 Worker、Windows 及完整 shutdown 硬期限继续 TODO，5.2／5.4 和整体 21/23 未关闭。未修改 Web/Workbench、其自动化或共享 debug。

@@ -234,7 +234,8 @@ export class TerminalSession {
     isolatedPty.onExit((event) => this.handlePtyExit(event).catch(async (error) => {
       this.status = "exited";
       this.endedAt = nowIso();
-      this.ptyProcess = null;
+      this.markReconciliationStatus("unknown");
+      if (this.ptyProcess?.workerState === "exited") this.ptyProcess = null;
       this.releaseReason = "pty_exit_cleanup_failed";
       if (this.lastCommandStatus === "running") {
         this.lastCommandStatus = "exited";
@@ -369,6 +370,12 @@ export class TerminalSession {
       }
       if (diagnosticFailure) throw diagnosticFailure;
     }
+    // PTY退出观察不证明隔离宿主已退出；失败时仍由原管理停止链持有句柄。
+    const reconciliationStatus = this.reconciliationStatus;
+    this.markReconciliationStatus("unknown");
+    await this.ptyProcess?.shutdown({ terminatePty: false });
+    if (this.releasePromise) return;
+    this.markReconciliationStatus(reconciliationStatus);
     this.ptyProcess = null;
     if (this.lastCommandStatus === "running") {
       this.lastCommandStatus = this.status === "terminated" ? "terminated" : "exited";

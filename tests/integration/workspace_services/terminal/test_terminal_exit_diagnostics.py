@@ -42,9 +42,19 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-// 故障仅在真实Worker错误事件及原诊断writer；不替换停止、持久化或进程身份。
+// 故障仅在原生退出、信号、真实Worker错误事件及诊断writer；不替换停止算法或状态。
+const control = process.env.BOXTEAM_TEST_TERMINAL_EXIT_CONTROL;
+if (path.basename(process.argv[1] || "") === "ptyWorker.js") {
+  const exit = process.exit.bind(process);
+  process.exit = code => {
+    if (existsSync(path.join(control, "retain-worker"))) {
+      appendFileSync(path.join(control, "worker-exit-attempts.jsonl"), JSON.stringify({ pid: process.pid, code }) + "\\n");
+      return;
+    }
+    exit(code);
+  };
+}
 if (path.basename(process.argv[1] || "") === "backend.js") {
-  const control = process.env.BOXTEAM_TEST_TERMINAL_EXIT_CONTROL;
   const root = process.env.BOXTEAM_TEST_PROJECT_ROOT;
   process.on("unhandledRejection", reason => {
     // 只观察原致命处理器开始前的产品文件，不处理或改变拒绝。
@@ -68,6 +78,14 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
   IsolatedPtyProcess.prototype.start = async function (options) {
     const ready = await start.call(this, options);
     const worker = this.workerProcess;
+    const killWorker = worker.kill.bind(worker);
+    worker.kill = signal => {
+      if (existsSync(path.join(control, "retain-worker"))) {
+        appendFileSync(path.join(control, "worker-signal-attempts.jsonl"), JSON.stringify({ pid: worker.pid, signal }) + "\\n");
+        return false;
+      }
+      return killWorker(signal);
+    };
     appendFileSync(path.join(control, "starts.jsonl"), JSON.stringify({ pid: ready.pid, worker_pid: worker.pid }) + "\\n");
     const kill = process.kill.bind(process);
     let rejectedStop = false;
@@ -290,3 +308,111 @@ while True: signal.pause()
         finally:
             if cold:
                 terminate_process(active_backend)
+
+
+@pytest.mark.parametrize("action", ["kill", "delete"])
+async def test_pty_exit_retains_unconfirmed_worker_for_management_retry(
+    terminal_service: TerminalService, action: str,
+) -> None:
+    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    terminal_id = f"term_{uuid4().hex}"
+    (control / "retain-worker").touch()
+    workload = f"""
+import time
+from pathlib import Path
+while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
+"""
+    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
+        created = await client.post("/api/terminals", json={
+            "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
+            "command": sys.executable, "args": ["-c", workload],
+        })
+        assert created.status_code == 200, created.text
+        original = created.json()["data"]
+        pty, worker = psutil.Process(original["os_pid"]), psutil.Process(original["pty_worker_pid"])
+        tracked.extend([pty, worker])
+        identities = [{"pid": process.pid, "created_at": process.create_time()} for process in tracked]
+        (control / "exit-pty").touch()
+        try:
+            async with asyncio.timeout(8):
+                while not (control / "worker-exit-attempts.jsonl").is_file() or executing(pty):
+                    await asyncio.sleep(0.02)
+            assert executing(worker), "PTY退出不能代替原Worker的退出证明"
+            observed = await client.get(f"/api/terminals/{terminal_id}")
+            assert observed.status_code == 200, observed.text
+            assert observed.json()["data"]["pty_worker_pid"] == worker.pid, "退出未确认时必须保留原Worker句柄"
+            state_file = root / ".boxteam/terminal-manager/terminals.json"
+            async with asyncio.timeout(8):
+                while True:
+                    record = json.loads(state_file.read_text())["terminals"][0]
+                    if record["release_reason"] == "pty_exit_cleanup_failed":
+                        break
+                    await asyncio.sleep(0.02)
+            assert record["status"] == "exited" and record["reconciliation_status"] == "unknown"
+            observed = await client.get(f"/api/terminals/{terminal_id}")
+            retained = observed.json()["data"]
+            assert retained["pty_worker_pid"] == worker.pid and executing(worker)
+            assert all(retained[key] == original[key] for key in (
+                "os_pid", "process_session_id", "process_start_time", "transport_owner_revision", "created_at",
+            ))
+            attempts = [json.loads(line) for line in (control / "worker-signal-attempts.jsonl").read_text().splitlines()]
+            assert attempts == [{"pid": worker.pid, "signal": "SIGKILL"}]
+            diagnostics = (control / "attempts.jsonl").read_text()
+            assert "隔离 PTY Worker 退出未确认" in diagnostics and f"worker_pid={worker.pid}" in diagnostics
+            assert backend.poll() is None
+            (control / "retain-worker").unlink()
+            stopped = await (client.post(f"/api/terminals/{terminal_id}/kill", json={}) if action == "kill"
+                             else client.delete(f"/api/terminals/{terminal_id}"))
+            assert stopped.status_code == 200, stopped.text
+            snapshot = stopped.json()["data"]["terminal"]
+            assert snapshot["status"] == ("terminated" if action == "kill" else "deleted")
+            assert snapshot["reconciliation_status"] == "verified" and snapshot["pty_worker_pid"] is None
+            assert all(not executing(process) for process in tracked)
+            record = json.loads(state_file.read_text())["terminals"][0]
+            assert all(snapshot[key] == value for key, value in record.items())
+            assert len((control / "starts.jsonl").read_text().splitlines()) == 1
+            run.write_result("passed", {"action": action, "identities": identities,
+                                       "scope": "真实HTTP/PTY自发退出、Worker原生退出/信号未成功及原管理重试；不代无PID接管、Backend重启或Windows"})
+        finally:
+            (control / "retain-worker").unlink(missing_ok=True)
+
+
+async def test_normal_pty_exit_confirms_original_worker_and_preserves_verified_state(
+    terminal_service: TerminalService,
+) -> None:
+    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    terminal_id = f"term_{uuid4().hex}"
+    workload = f"""
+import time
+from pathlib import Path
+while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
+"""
+    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
+        created = await client.post("/api/terminals", json={
+            "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
+            "command": sys.executable, "args": ["-c", workload],
+        })
+        assert created.status_code == 200, created.text
+        original = created.json()["data"]
+        tracked.extend([psutil.Process(original["os_pid"]), psutil.Process(original["pty_worker_pid"])])
+        identities = [{"pid": process.pid, "created_at": process.create_time()} for process in tracked]
+        (control / "exit-pty").touch()
+        async with asyncio.timeout(8):
+            while True:
+                observed = await client.get(f"/api/terminals/{terminal_id}")
+                assert observed.status_code == 200, observed.text
+                snapshot = observed.json()["data"]
+                if snapshot["status"] == "exited" and snapshot["pty_worker_pid"] is None:
+                    break
+                await asyncio.sleep(0.02)
+        assert all(not executing(process) for process in tracked)
+        assert snapshot["reconciliation_status"] == "verified" and snapshot["release_reason"] is None
+        assert all(snapshot[key] == original[key] for key in (
+            "os_pid", "process_session_id", "process_start_time", "transport_owner_revision", "created_at",
+        ))
+        record = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())["terminals"][0]
+        assert all(snapshot[key] == value for key, value in record.items())
+        assert backend.poll() is None
+        run.write_result("passed", {"identities": identities, "scope": "真实HTTP/PTY和原Worker正常自发退出；不代Gateway/Web或Windows"})

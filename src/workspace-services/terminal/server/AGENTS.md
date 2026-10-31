@@ -86,6 +86,8 @@ Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；
 
 Worker退出后，非运行unknown记录保留完整PID、系统会话与启动标记时，原管理kill/delete仍可进入同一停止链；无句柄时必须先核对当前PID、进程组、系统会话和启动标记，核验失败不发送信号，保留unknown与原身份。Backend重启不补造Worker或重建执行，缺少身份的记录也不借此获得停止许可。
 
+PTY自发退出也须经原Worker关闭入口确认宿主退出后才清除句柄，等待期间保留unknown；重叠kill/delete共享原Worker关闭任务，迟到退出处理不覆盖管理结果。退出处理失败统一标unknown，仅移除已确认退出的Worker；仍存活或未确认的原句柄交由既有停止链重试，正常退出确认后恢复verified，不用PTY退出观察替代Worker停止证明。
+
 ## 测试工作区
 
 `terminalManager.test.js`的工作目录场景只使用本次正式输出根下的目录：工作区内子目录、工作区外的兄弟目录和移动后的新根均由fixture创建，不依赖宿主`/etc`等目录。目录链接在Windows用junction、Linux/macOS用dir符号链接；断言仍核对链接路径保留、越出工作区后的相对表达及缺失目录明确失败。链接类型选择不等于对应平台已经原生验收。
