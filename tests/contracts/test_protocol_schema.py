@@ -11,15 +11,79 @@ import pytest
 from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError, validate
+from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.workspace.v2 import (
     public_pb2,
     session_interaction_pb2,
+    session_stream_pb2,
 )
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2.persistent_task import TaskConditionDTO
 from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
+from scripts import export_sse_runtime_schemas as exporter
+
+
+@pytest.fixture
+def session_sse_schema() -> JsonSchemaValue:
+    return SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
+
+
+def test_session_sse_checks_actual_envelope_and_flattened_header_without_rewriting_schema(
+    session_sse_schema: JsonSchemaValue,
+) -> None:
+    original = deepcopy(session_sse_schema)
+    exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
+    assert session_sse_schema == original
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "type", "raw_payload"])
+def test_session_sse_rejects_envelope_drift(session_sse_schema: JsonSchemaValue, mutation: str) -> None:
+    properties = session_sse_schema["properties"]
+    if mutation == "missing":
+        del properties["raw_type"]
+    elif mutation == "extra":
+        properties["unexpected"] = {"type": "string"}
+    elif mutation == "type":
+        properties["raw_type"] = {"type": "integer"}
+    else:
+        properties["raw_payload"] = {"type": "array", "items": {"type": "string"}}
+    with pytest.raises(ValueError, match="公开结构与 proto"):
+        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "event_id", "job_id", "time"])
+@pytest.mark.parametrize("tag", ["message.updated", "session.status.changed"])
+def test_session_sse_rejects_header_drift_in_every_business_branch(session_sse_schema: JsonSchemaValue, mutation: str, tag: str) -> None:
+    reference = session_sse_schema["properties"]["event"]["discriminator"]["mapping"][tag]
+    properties = session_sse_schema["$defs"][reference.rsplit("/", 1)[1]]["properties"]
+    if mutation == "missing":
+        del properties["job_id"]
+    elif mutation == "extra":
+        properties["unexpected"] = {"type": "string"}
+    else:
+        properties[mutation] = {"type": "integer"}
+    with pytest.raises(ValueError, match="公开结构与 proto"):
+        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
+
+
+@pytest.mark.parametrize("mutation", ["property", "label", "branch", "mapping"])
+def test_session_sse_rejects_discriminator_and_union_disagreement(session_sse_schema: JsonSchemaValue, mutation: str) -> None:
+    event = session_sse_schema["properties"]["event"]
+    discriminator = event["discriminator"]
+    mapping = discriminator["mapping"]
+    if mutation == "property":
+        discriminator["propertyName"] = "raw_type"
+    elif mutation == "branch":
+        event["oneOf"].pop()
+    elif mutation == "mapping":
+        mapping["session.error"], mapping["message.updated"] = mapping["message.updated"], mapping["session.error"]
+    else:
+        properties = session_sse_schema["$defs"][mapping["trace.observed"].rsplit("/", 1)[1]]["properties"]
+        properties["type"] = {"type": "string", "const": "session.error"}
+    with pytest.raises(ValueError, match="公开 SSE 事件"):
+        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
 
 
 @pytest.mark.parametrize("name", SSE_JSON_DESCRIPTORS)
@@ -149,6 +213,7 @@ def test_export_rejects_fresh_proto_enum_drift_before_publishing(
     "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO", "JobProgress",
     "JobStepProgress", "MessageObservation", "SessionError", "TraceObserved",
     "WorkspaceFileChangeBatch", "WorkspaceDirectoryKeyDTO", "WorkspaceFileNodeDTO",
+    "SessionExecutionSse", "SessionExecutionEventHeader", "SessionExecutionEvent",
 ])
 def test_export_checks_fresh_proto_descriptor_before_publishing(
     tmp_path: Path, message_name: str, protocol_descriptor_bundle: FileDescriptorSet,
@@ -186,6 +251,7 @@ def protocol_descriptor_bundle() -> FileDescriptorSet:
     for descriptor in SSE_JSON_DESCRIPTORS.values():
         collect(descriptor.file)
     collect(session_interaction_pb2.DESCRIPTOR)
+    collect(session_stream_pb2.DESCRIPTOR)
     return bundle
 
 
@@ -228,4 +294,24 @@ def test_export_rejects_event_union_drift_before_publishing(
     )
     assert result.returncode != 0, result.stdout + result.stderr
     assert error in result.stderr
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("replacement", ["google.protobuf.Struct", "boxteam.workspace.v2.TraceObserved"])
+def test_export_rejects_untyped_or_wrong_sse_envelope_event(
+    tmp_path: Path, protocol_descriptor_bundle: FileDescriptorSet, replacement: str,
+) -> None:
+    message = next(message for file in protocol_descriptor_bundle.file for message in file.message_type
+                   if message.name == "SessionExecutionSse")
+    next(field for field in message.field if field.name == "event").type_name = "." + replacement
+    descriptor_set = tmp_path / "fresh.binpb"
+    descriptor_set.write_bytes(protocol_descriptor_bundle.SerializeToString())
+    output = tmp_path / "generated"
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.export_sse_runtime_schemas", "--output-root", str(output),
+         "--descriptor-set", str(descriptor_set)],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "公开 SSE 信封 event 必须对应 SessionExecutionEvent" in result.stderr
     assert not output.exists()

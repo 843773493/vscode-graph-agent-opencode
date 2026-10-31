@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
 from google.protobuf.descriptor_pool import DescriptorPool
@@ -19,8 +21,11 @@ def descriptor_pool_from_set(data: bytes) -> DescriptorPool:
     return pool
 
 
-def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> None:
-    """检查同形 JSON 的字段、容器和类型，允许业务模型收紧取值与 required。"""
+def assert_public_schema(
+    schema: JsonSchemaValue, descriptor: Descriptor, *,
+    message_adapter: Callable[[JsonSchemaValue, Descriptor], JsonSchemaValue | None] | None = None,
+) -> None:
+    """核对结构；具名 adapter 可投影外形或接管异形消息，业务约束仍由模型负责。"""
     visited: set[tuple[str, int]] = set()
 
     def concrete(node: JsonSchemaValue, path: str) -> JsonSchemaValue:
@@ -89,6 +94,11 @@ def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> Non
             require_type(node, "integer", path)
 
     def message_shape(node: JsonSchemaValue, message: Descriptor, path: str) -> None:
+        if message_adapter is not None:
+            adapted = message_adapter(concrete(node, path), message)
+            if adapted is None:
+                return
+            node = adapted
         values = variants(node, path)
         for value in values:
             require_type(value, "object", path)
@@ -96,7 +106,7 @@ def assert_public_schema(schema: JsonSchemaValue, descriptor: Descriptor) -> Non
         missing = sorted(set(message.fields_by_name) - public_fields)
         extra = sorted(public_fields - set(message.fields_by_name))
         if missing or extra:
-            raise ValueError(f"公开结构与 proto 字段不一致: {path}, missing={missing}, extra={extra}")
+            raise ValueError(f"公开结构与 proto 字段不一致: {path}, message={message.full_name}, missing={missing}, extra={extra}")
         for value in values:
             key = (message.full_name, id(value))
             if key in visited:

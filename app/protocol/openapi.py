@@ -49,8 +49,7 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
-    # 此 DTO 经具名 adapter 改变 JSON 外形，不能按同形结构直接核对。
-    # TODO: 后续逐条迁齐其公开结构；保留内部 Pydantic 的业务职责。
+    # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
     "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }
 
