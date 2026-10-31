@@ -249,6 +249,38 @@ test("未取得原生PID的创建不能经管理停止伪造已终止", async t 
   assert.equal(shutdowns, 0);
 });
 
+for (const cleanupResult of ["force_killed", "still_running", null]) {
+  test(`原生身份在启动收尾期间到达仍按真实停止回执结算：${cleanupResult}`, async t => {
+    const session = completedSession(t, { status: "created" });
+    const original = new Error("原启动在身份交付前失败");
+    const shutdown = Promise.withResolvers();
+    const worker = { pid: null, startupCleanupResult: null, shutdown: () => shutdown.promise };
+    session.ptyProcess = worker;
+    const states = [];
+    session.manager.persist = async () => { states.push(session.toRecord()); };
+    const rejected = assert.rejects(session.failStartup(original), error => error === original);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(states[0].os_pid, null);
+    assert.equal(states[0].reconciliation_status, "unknown");
+    assert.equal(original.creationReceipt, undefined);
+    worker.pid = 42002;
+    worker.startupCleanupResult = cleanupResult;
+    shutdown.resolve();
+    await rejected;
+    assert.equal(session.osPid, 42002);
+    assert.equal(states.at(-1).os_pid, 42002);
+    assert.equal(session.ptyProcess, null);
+    const stopped = cleanupResult === "force_killed";
+    assert.equal(session.status, stopped ? "terminated" : "created");
+    assert.equal(session.reconciliationStatus, stopped ? "verified" : "unknown");
+    if (stopped) assert.deepEqual(original.creationReceipt, {
+      resource_id: session.id, workspace_id: session.workspaceId, owner_revision: 1,
+      outcome: "failed", resource: session.snapshot(),
+    });
+    else assert.equal(original.creationReceipt, undefined);
+  });
+}
+
 test("未实际执行停止时不能把原未知记录签为创建失败回执", async t => {
   const session = completedSession(t, { status: "exited", reconciliation_status: "unknown", os_pid: 42002 });
   const original = new Error("原Worker已丢失");

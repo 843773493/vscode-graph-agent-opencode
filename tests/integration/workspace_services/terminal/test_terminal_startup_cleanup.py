@@ -88,12 +88,12 @@ async def wait_observed(control: Path) -> dict[str, dict[str, int | str]]:
     return json.loads((control / "observed.json").read_text())
 
 
-def workload(control: Path) -> str:
+def workload(control: Path, *, ignore_sigterm: bool = True) -> str:
     return f"""# gated-terminal-startup-cleanup
 import json, os, signal
 from pathlib import Path
 control = Path({str(control)!r})
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
+{"signal.signal(signal.SIGTERM, signal.SIG_IGN)" if ignore_sigterm else ""}
 read_fd, write_fd = os.pipe()
 child = os.fork()
 if child == 0:
@@ -247,3 +247,54 @@ async def test_cwd_rejection_keeps_not_created_receipt_and_same_target_retry(
         assert not is_executing({"pid": snapshot["os_pid"], "processStartTime": snapshot["process_start_time"]})
         assert process_identity(snapshot["pty_worker_pid"]) is None
         service.run.write_result("passed", {"fail_sink": fail_sink, "terminal_id": terminal_id, "scope": "原HTTP/cwd/Manager准入、真实PTY重试和停止；不代表Gateway/Web或Windows"})
+
+
+@pytest.mark.parametrize("lose_proof", [False, True], ids=["late-stop-proof", "missing-stop-proof"])
+async def test_late_native_identity_and_verified_worker_receipt_settle_original_creation(
+    terminal_service: TerminalService, lose_proof: bool,
+) -> None:
+    service = terminal_service
+    terminal_id = f"term_{uuid4().hex}"
+    (service.control / "mode").write_text("late-native-identity")
+    (service.control / "late-native-identity").touch()
+    if lose_proof:
+        (service.control / "drop-stop-proof").touch()
+    headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15, trust_env=False) as client:
+        failed = await client.post("/api/terminals", json={
+            "terminal_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
+            "command": sys.executable, "args": ["-c", workload(service.control, ignore_sigterm=False)],
+        })
+        assert failed.status_code == 500, failed.text
+        observed = await wait_observed(service.control)
+        before, = [json.loads(line) for line in (service.control / "shutdown-observations.jsonl").read_text().splitlines()]
+        assert before["pid"] is None
+        original, = before["state"]["terminals"]
+        assert original["terminal_id"] == terminal_id and original["os_pid"] is None
+        assert original["status"] == "created" and original["reconciliation_status"] == "unknown"
+        response = await client.get(f"/api/terminals/{terminal_id}")
+        assert response.status_code == 200, response.text
+        snapshot = response.json()["data"]
+        assert snapshot["os_pid"] == observed["root"]["pid"]
+        assert snapshot["transport_owner_revision"] == 7 and snapshot["pty_worker_pid"] is None
+        assert snapshot["status"] == ("created" if lose_proof else "terminated")
+        assert snapshot["reconciliation_status"] == ("unknown" if lose_proof else "verified")
+        receipts_file = service.control / "stop-receipts.jsonl"
+        assert receipts_file.is_file(), "真实进程树停止后必须交付绑定原生身份的正式结果"
+        receipts, = [json.loads(line) for line in receipts_file.read_text().splitlines()]
+        assert receipts["pid"] == observed["root"]["pid"] and receipts["cleanupResult"] == "terminated"
+        async with asyncio.timeout(3):
+            while any(is_executing(identity) for identity in observed.values()):
+                await asyncio.sleep(0.02)
+        if lose_proof:
+            assert "creation_receipt" not in failed.json(), "Worker退出不能替代丢失的停止证明"
+        else:
+            assert failed.json()["creation_receipt"] == {
+                "resource_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
+                "outcome": "failed", "resource": snapshot,
+            }
+        record, = json.loads((service.root / ".boxteam/terminal-manager/terminals.json").read_text())["terminals"]
+        assert all(snapshot[key] == value for key, value in record.items())
+        service.run.write_result("passed", {"lose_proof": lose_proof, "observed": observed,
+                                           "before_shutdown": before, "receipt": receipts, "after": snapshot,
+                                           "scope": "Linux真实HTTP/PTY与原Worker IPC延迟/丢回执；不代native阻塞、冷接管、Windows或Gateway/Web"})

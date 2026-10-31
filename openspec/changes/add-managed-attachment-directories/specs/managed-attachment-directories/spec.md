@@ -168,6 +168,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 已接纳的 Terminal 在就绪前退出，原 Worker 沿唯一进程树终止链核实停止，宿主确认 Worker 退出且终态持久化成功
 - **THEN** 外部 owner 保留原资源身份与恢复记录，返回绑定本次 intent 的正式失败回执和 verified 终态快照；Python owner 核对身份、整数版本及终态后结清本次 lease 和受管工作目录占用，回执丢失后可从原终态记录恢复对账，不重放创建
 
+#### Scenario: Terminal 启动失败后原生身份及停止回执迟到
+
+- **WHEN** 原启动已失败或超时，同一仍在收尾的 Worker 随后首次交付合法原生 PID，并沿原停止链返回绑定该 PID 的真实进程树结果
+- **THEN** 宿主保留原身份和正式停止结果，不恢复就绪、不替换已有 PID，也不重放创建或停止信号；Session 等待原 Worker 退出，取得原停止证明并持久化终态后才签创建失败回执。没有停止证明或结果未核实，仍保留原身份及 created/unknown，不以 Worker 退出代替进程树停止。该规则不证明始终没有原生身份、Backend 已退出或停止回执丢失后的操作已经接管
+
 #### Scenario: 启动异常尚无进程树停止证明
 
 - **WHEN** native 启动抛错、Worker 异常退出或清理失败，尚未取得本次 PTY 进程树的正式停止证明

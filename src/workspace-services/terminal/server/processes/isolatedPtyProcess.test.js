@@ -237,14 +237,50 @@ test("普通Worker退出与无效PID不能提供PTY停止证明", async t => {
   assert.equal(isolated.startupCleanupResult, null);
 });
 
+for (const trigger of ["error", "timeout"]) {
+  test(`启动${trigger}后仍接收同一Worker迟到的身份与停止回执`, async t => {
+    const { isolated, worker, start } = createStartingWorker(t);
+    const rejected = assert.rejects(start());
+    if (trigger === "error") worker.emit("error", new Error("原生身份尚未交付"));
+    else t.mock.timers.tick(10_000);
+    await rejected;
+    worker.emit("message", { type: "stopped", pid: 43003, cleanupResult: "terminated" });
+    assert.equal(isolated.startupCleanupResult, null, "身份到达前不能签停止证明");
+    worker.emit("message", { type: "spawned", pid: 42002 });
+    worker.emit("message", { type: "spawned", pid: 43003 });
+    worker.emit("message", { type: "ready", pid: 42002 });
+    worker.emit("message", { type: "startupError", pid: 43003, cleanupResult: "terminated" });
+    assert.equal(isolated.pid, 42002);
+    assert.equal(isolated.workerState, "stopping");
+    assert.equal(isolated.startupCleanupResult, null);
+    worker.emit("message", { type: "stopped", pid: 42002, cleanupResult: "force_killed" });
+    assert.equal(isolated.startupCleanupResult, "force_killed");
+    assert.equal(worker.kill.mock.callCount(), 1, "迟到回执不能重放启动或停止信号");
+  });
+}
+
 test("成功就绪后迟到的启动消息不能污染运行身份", async t => {
   const { isolated, worker } = await createReadyWorker(t);
   worker.emit("message", { type: "spawned", pid: 43003 });
   worker.emit("message", { type: "startupError", pid: 44004, cleanupResult: "missing" });
+  worker.emit("message", { type: "stopped", pid: 42001, cleanupResult: "force_killed" });
   worker.emit("message", { type: "ready", pid: 45005 });
   assert.equal(isolated.pid, 42001);
   assert.equal(isolated.startupCleanupResult, null);
   assert.equal(isolated.workerState, "running");
+});
+
+test("失败Worker已退出时不能再吸收迟到的原生身份", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start());
+  worker.emit("exit", 1, null);
+  await rejected;
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "stopped", pid: 42002, cleanupResult: "terminated" });
+  assert.equal(isolated.workerState, "exited");
+  assert.equal(isolated.pid, null);
+  assert.equal(isolated.startupCleanupResult, null);
+  assert.equal(worker.kill.mock.callCount(), 0);
 });
 
 for (const trigger of ["error", "timeout", "exit"]) {

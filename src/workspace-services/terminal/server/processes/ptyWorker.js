@@ -63,6 +63,13 @@ async function shutdown({ orphaned = false, terminatePty = true } = {}) {
       processSessionId: metadata?.processSessionId ?? null,
       processStartTime: metadata?.processStartTime ?? null,
     });
+    if (process.connected && process.send) {
+      // 原启动失败仍需收到进程树结果；Worker退出本身不能代替这个证明。
+      process.send({ type: "stopped", pid: activePty.pid, cleanupResult: result }, (error) => {
+        process.exit(error || result === "still_running" ? 1 : 0);
+      });
+      return;
+    }
     if (result === "still_running") {
       process.exit(1);
       return;

@@ -690,6 +690,11 @@ export class TerminalSession {
         });
       } else {
         await this.dispose();
+        // 收尾期间可取得同一Worker迟到的原生身份和正式停止回执。
+        this.osPid = isolatedPty?.pid ?? this.osPid;
+        if (process.platform === "linux" && this.osPid) this.processSessionId ||= this.osPid;
+        stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
+          .has(isolatedPty.startupCleanupResult);
       }
     } catch (cleanupError) {
       const failure = new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });

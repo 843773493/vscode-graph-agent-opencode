@@ -1,6 +1,6 @@
 // 只在真实Worker就绪IPC交付前注入错误，不代填PTY、Session、进程身份或终态。
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -34,13 +34,34 @@ IsolatedPtyProcess.prototype.start = async function (options) {
   }
   const worker = this.workerProcess;
   const emit = worker.emit.bind(worker);
+  const send = worker.send.bind(worker);
   const kill = worker.kill.bind(worker);
+  const lateIdentity = existsSync(path.join(controlRoot, "late-native-identity"));
+  let spawned;
+  worker.send = (...arguments_) => {
+    if (lateIdentity && arguments_[0]?.type === "shutdown") {
+      const state = JSON.parse(readFileSync(path.join(process.env.WORKSPACE_ROOT,
+        ".boxteam/terminal-manager/terminals.json"), "utf8"));
+      appendFileSync(path.join(controlRoot, "shutdown-observations.jsonl"),
+        `${JSON.stringify({ pid: this.pid, state })}\n`);
+      emit("message", spawned);
+    }
+    return send(...arguments_);
+  };
   worker.kill = signal => {
     if (signal === "SIGTERM") throw new Error("测试屏障拒绝启动失败时的Worker信号");
     return kill(signal);
   };
   worker.emit = (event, ...arguments_) => {
     const [message] = arguments_;
+    if (lateIdentity && event === "message" && message?.type === "spawned") {
+      spawned = message;
+      return true;
+    }
+    if (lateIdentity && event === "message" && message?.type === "stopped") {
+      appendFileSync(path.join(controlRoot, "stop-receipts.jsonl"), `${JSON.stringify(message)}\n`);
+      if (existsSync(path.join(controlRoot, "drop-stop-proof"))) return true;
+    }
     if (event !== "message" || message?.type !== "ready") return emit(event, ...arguments_);
     void (async () => {
       let workload;

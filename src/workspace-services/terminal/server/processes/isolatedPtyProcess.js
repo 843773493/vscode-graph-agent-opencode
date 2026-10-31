@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 
 const WORKER_START_TIMEOUT_MS = 10_000;
+// TODO（5.4）：实测大 /proc 扫描会耗尽此宽限并丢失停止证明；统一总截止时间与未知接管后再收口。
 const WORKER_SHUTDOWN_GRACE_MS = 3_000;
 const WORKER_EXIT_CONFIRMATION_TIMEOUT_MS = 3_000;
 
@@ -96,7 +97,8 @@ export class IsolatedPtyProcess {
           return;
         }
         if (message.type === "spawned") {
-          if (readySettled) return;
+          // 启动已失败也保留同一Worker首次迟到的身份，不能因此恢复就绪。
+          if (readySettled && (readyReceived || this.workerState === "exited" || this.pid !== null)) return;
           if (!Number.isSafeInteger(message.pid) || message.pid <= 0 || this.pid !== null) {
             failStart(new Error("隔离 PTY Worker 原生创建身份非法或重复"));
             return;
@@ -136,11 +138,11 @@ export class IsolatedPtyProcess {
           });
           return;
         }
-        if (message.type === "startupError") {
-          if (readySettled) return;
-          if (this.pid !== null && message.pid === this.pid) {
+        if (message.type === "startupError" || message.type === "stopped") {
+          if (!readyReceived && this.pid !== null && message.pid === this.pid) {
             this.startupCleanupResult = message.cleanupResult ?? null;
           }
+          if (readySettled || message.type === "stopped") return;
           failStart(new Error(`隔离 PTY Worker 错误: ${message.message}`));
           return;
         }
