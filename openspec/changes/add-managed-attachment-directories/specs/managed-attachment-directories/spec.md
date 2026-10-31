@@ -163,6 +163,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** fork关联已持久提交但原调用取消，或连续工具已收到核实的停止回执
 - **THEN** fork沿同一派发收尾读取原committed回执，核资源、holder、operation和目标Thread完整身份后，在原账本一次提交直接释放精确占用；身份损坏或确认写失败保留原dispatching及取消原因，不经过active中间写入，不回滚关联或重发attach。停止只settle此前未知占用，本次工具恢复同一active身份供后续调用，直到原operation正常收尾
 
+#### Scenario: 管理lease原生获取及释放仍未结算
+
+- **WHEN** 原管理命令、授权、Browser动作、Thread/Session释放或回收的管理lease正在排队或写盘，而入口取消、到期或返回业务错误
+- **THEN** 唯一异步管理lease入口持原资源锁及适用Thread holder等待原worker结算；排队取消不迟到取得占用，已开始的获取由原调用结算并释放精确lease，不继续派发。连续工具传入的原lease不重新取得或代为释放。错误收尾中的重复取消保留原业务错误，正常释放取消保留首次取消及迟到写盘cause；释放失败保留原active占用，不重发业务动作，不假报已释放。事件循环可继续调度，不承诺原生I/O可抢占、共享账本写入可并行或整个operation/shutdown已有硬期限
+
 #### Scenario: 资源记录原生写入尚未结算
 
 - **WHEN** Terminal或Browser记录的序列化、fsync或replace在线程池排队或执行，另一个资源请求写入或原调用被取消

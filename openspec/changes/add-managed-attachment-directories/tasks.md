@@ -828,3 +828,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增115项管理链和4项原账本故障用例；最终相关后端回归1409 passed／77.48秒，采样源码前后稳定。既有期限/原生fork写盘/停止/回收测试仅迁移派发阶段active→dispatching；原线程池排队测试明确在记录writer入队时占池，继续核原锁、取消、版本和终态。初轮扩大回归1398 passed、11 failed均据原输出完成此阶段迁移，未放宽期限、身份或终态断言。
 - 完整旧生产归档4项反例重现失败收尾后管理finally再次尝试释放并覆盖原失败；完整候选定点变异在身份校验前恢复active，2项反例检出原lease被误释放。Ruff、compileall、OpenSpec strict通过；选定生产及受影响测试Pyright原/新各36条既存诊断，按文件、规则、完整消息、词法owner及最窄AST逐项一致，新管理测试零诊断。准确命令、指纹、原始输出/退出码、类型对照、变异补丁和作者AST自查见`out/tests/temp/resource_management_dispatch_20261031/artifacts/verification.json`。
 - 本轮使用原owner/账本和既有传输替身，不证明真实HTTP/PTY/Chromium、Backend硬退出或Windows行为；同步管理lease获取/释放、完整旧代接管、原生I/O抢占及整个operation/shutdown期限仍TODO。5.2/5.4及整体21/23保持未完成；未修改Web/Workbench、其自动化或共享debug，不纳入另一会话的改动及暂存。
+
+### 2026-10-31 管理lease获取/释放的原worker结算（5.4部分）
+
+- 原管理lease入口统一改为异步上下文，五组命令/授权/Browser动作/Thread和Session释放/回收调用方迁齐，删除同步入口。原资源锁及适用Thread holder覆盖worker排队、原生获取和释放；排队取消不迟到取得或派发，已开始获取由原调用结算后释放精确lease。连续工具传入的原lease保持自身operation收尾，不重取、不代释放。业务错误收尾屏蔽后续取消，正常释放取消保留首次消息及迟到写盘cause；释放失败保留原active占用，不重发业务动作补做。
+- 新增52项：40项跨Terminal/Browser命令、授权及Browser动作的获取/释放原生replace屏障，覆盖重复取消、迟到原错、精确身份、原锁和独立Session删除holder；4项冲突后释放覆盖后续取消/写盘失败不覆盖原ResourceConflict；8项单线程池排队覆盖原30秒预算/取消、原件零变更及零迟到lease/派发。定向52项及相关377项通过，最终完整相关后端回归1461 passed／80.26秒；采样源码前后稳定。
+- 完整旧生产归档2项在原同步写盘屏障中触发2秒事件循环观察超时，原生屏障自带5秒释放上限；完整候选只删除排队取消检查，2项反例检出迟到新增lease导致原账本字节变化。Ruff、compileall与OpenSpec strict通过；Pyright本轮生产/新测试范围原新各6条既存诊断，按文件、规则、完整消息、词法owner与最窄AST逐项一致，新测试零诊断。准确命令、指纹、原始输出/退出码、变异补丁、类型对照与作者AST审查见`out/tests/temp/management_lease_io_20261031/artifacts/verification.json`。
+- 原JSON账本仍串行发布，不承诺无关写请求可绕过原生慢盘；原生I/O不可抢占，其它同步writer/通知归属、完整旧代接管及整个operation/shutdown硬期限继续TODO。验证使用原owner/账本和既有传输替身，不证明真实HTTP/PTY/Chromium、Backend硬退出或Windows。5.2/5.4及整体21/23保持未完成；未修改另一会话Web/Workbench、其自动化或共享debug，未纳入其改动及暂存。

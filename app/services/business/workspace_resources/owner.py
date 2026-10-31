@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import timeout
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 from app.abstractions.workspace_resources import (
     ResourceKind,
@@ -444,7 +445,7 @@ class WorkspaceResourceOwner:
             )
         if action not in {"promote", "attach", "detach", "stop", "delete"}:
             raise ValueError(f"外部资源 不支持操作: {action}")
-        with self._management_lease(
+        async with self._management_lease(
             record, thread, holder_id, operation_id, lease_id, allow_unverified=takeover,
         ) as acquired_lease_id:
             if action in {"stop", "delete"}:
@@ -582,7 +583,7 @@ class WorkspaceResourceOwner:
             try:
                 if record.status == "deleted":
                     return
-                with self._management_lease(record, None, holder_id, operation_id) as lease_id:
+                async with self._management_lease(record, None, holder_id, operation_id) as lease_id:
                     if record.retention_scope == "thread":
                         record.thread_associations = []
                         await self._stop_or_delete(record, delete=True, lease_id=lease_id)
@@ -695,7 +696,7 @@ class WorkspaceResourceOwner:
                     ):
                         return None
                     self._verified(record)
-                    with self._management_lease(
+                    async with self._management_lease(
                         record, None, f"orphan-reclaim:{record.resource_id}",
                         f"reclaim:{record.unattached_since}",
                     ) as lease_id:
@@ -799,7 +800,7 @@ class WorkspaceResourceOwner:
                 )
             if thread is not None and thread not in record.thread_associations:
                 raise ResourceConflict("Thread 尚未关联 外部资源")
-            with self._management_lease(record, thread, holder_id, operation_id) as lease_id:
+            async with self._management_lease(record, thread, holder_id, operation_id) as lease_id:
                 result: ResourceSnapshot | None = None
                 rejection: ResourceTransportGrantRejected | None = None
                 async with resource_operation_dispatch(self, record, lease_id, operation=None):
@@ -913,8 +914,8 @@ class WorkspaceResourceOwner:
             allow_unverified=allow_unverified,
         ).lease_id
 
-    @contextmanager
-    def _management_lease(
+    @asynccontextmanager
+    async def _management_lease(
         self,
         record: OwnedResourceRecord,
         ref: ThreadRef | None,
@@ -923,7 +924,7 @@ class WorkspaceResourceOwner:
         lease_id: str | None = None,
         *,
         allow_unverified: bool = False,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         if lease_id is not None:
             lease = self._leases.get_lease(lease_id)
             if (
@@ -933,14 +934,58 @@ class WorkspaceResourceOwner:
                 != (record.resource_id, holder_id, operation_id)
             ):
                 raise ResourceConflict("外部资源 操作引用不是当前有效 lease")
-        acquired = lease_id or self._acquire(
-            record, ref, holder_id, operation_id, allow_unverified=allow_unverified,
-        )
+            # 连续工具沿自己的原operation收尾，管理入口不重新取得或释放。
+            yield lease_id
+            return
+        cancelled = Event()
+        acquired: str | None = None
+
+        def acquire() -> None:
+            nonlocal acquired
+            if not cancelled.is_set():
+                acquired = self._acquire(
+                    record, ref, holder_id, operation_id, allow_unverified=allow_unverified,
+                )
+
+        async def release() -> None:
+            if acquired is not None:
+                await run_sync_shielded(self._release_operation_lease, acquired)
+
+        acquiring = asyncio.create_task(run_sync_shielded(acquire))
+        try:
+            await asyncio.shield(acquiring)
+        except asyncio.CancelledError as original:
+            cancelled.set()
+
+            async def settle_unstarted() -> None:
+                await acquiring
+                # 原调用尚未派发；已开始的获取须先结算，再释放精确原占用。
+                await release()
+
+            try:
+                await run_cleanup_shielded(settle_unstarted)
+            except BaseException as failure:
+                raise original from failure
+            raise
+        assert acquired is not None
         try:
             yield acquired
-        finally:
-            if lease_id is None:
-                self._release_operation_lease(acquired)
+        except BaseException as original:
+            try:
+                await run_cleanup_shielded(release)
+            except BaseException as failure:
+                raise original from failure
+            raise
+        else:
+            releasing = asyncio.create_task(release())
+            try:
+                await asyncio.shield(releasing)
+            except asyncio.CancelledError as original:
+                try:
+                    await run_cleanup_shielded(lambda: releasing)
+                except BaseException as failure:
+                    raise original from failure
+                raise
 
     def _release_operation_lease(self, lease_id: str) -> None:
         lease = self._leases.get_lease(lease_id)
