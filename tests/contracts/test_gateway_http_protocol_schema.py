@@ -14,6 +14,11 @@ from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol import openapi
+from app.schemas.gateway.diagnostics import (
+    DevelopmentRuntimeRestartDTO,
+    GatewayDiagnosticLogDTO,
+    GatewayHealthDTO,
+)
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
 from app.schemas.gateway.port_forwarding import (
@@ -194,6 +199,43 @@ def test_gateway_user_access_schema_follows_control_routes_and_keeps_business_ru
             model.model_validate(invalid)
 
 
+def test_gateway_diagnostic_schema_follows_management_routes_and_keeps_business_rules(gateway_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(gateway_openapi)
+    components = gateway_openapi["components"]["schemas"]
+    for path, method, model in (
+        ("/api/gateway/health", "get", "GatewayHealthDTO"),
+        ("/api/gateway/diagnostics", "get", "GatewayDiagnosticsDTO"),
+        ("/api/gateway/federation/diagnostics", "get", "GatewayDiagnosticsDTO"),
+        ("/api/gateway/runtime/restart-development", "post", "DevelopmentRuntimeRestartDTO"),
+    ):
+        operation = gateway_openapi["paths"][path][method]
+        response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        envelope = components[response["$ref"].rsplit("/", 1)[1]]
+        assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/" + model)
+        assert model in openapi.GATEWAY_HTTP_JSON_DESCRIPTORS
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    assert GatewayHealthDTO(gateway_id="gateway_test", process_id=1).status == "ok"
+    restart = DevelopmentRuntimeRestartDTO(previous_process_id=1, helper_process_id=2, delay_ms=0)
+    assert restart.status == "scheduled"
+    raw_log = "本地异常 /private/source.py; C:\\用户\\source.py; \\\\server\\share\\source.py"
+    log = GatewayDiagnosticLogDTO(
+        log_id="gateway:stderr", source="gateway", service="gateway", label="原始日志",
+        status="available", tail=raw_log,
+    )
+    assert log.model_dump(mode="json")["tail"] == raw_log
+    for model, invalid in (
+        (GatewayHealthDTO, {"gateway_id": "gateway_test", "process_id": 0}),
+        (GatewayHealthDTO, {"gateway_id": "gateway_test", "process_id": 1, "status": "ready"}),
+        (DevelopmentRuntimeRestartDTO, {**restart.model_dump(), "helper_process_id": 0}),
+        (DevelopmentRuntimeRestartDTO, {**restart.model_dump(), "delay_ms": -1}),
+        (DevelopmentRuntimeRestartDTO, {**restart.model_dump(), "status": "running"}),
+        (GatewayDiagnosticLogDTO, {**log.model_dump(), "line_count": -1}),
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate(invalid)
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
@@ -201,6 +243,7 @@ def test_gateway_user_access_schema_follows_control_routes_and_keeps_business_ru
     "PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
     "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO", "CreateGatewayUserRequest",
     "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
+    "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -238,6 +281,15 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("CreateGatewayUserRequest", "display_name", {"type": "integer"}),
     ("AcquireGatewayUserRequest", "client_label", {"type": "integer"}),
     ("CreateGatewayGuestRequest", "tracking", {"type": "array"}),
+    ("GatewayHealthDTO", "process_id", {"type": "string"}),
+    ("DevelopmentRuntimeRestartDTO", "delay_ms", {"type": "string"}),
+    ("GatewayDiagnosticsDTO", "logs", {"type": "object"}),
+    ("GatewayDiagnosticsDTO", "status", {"type": "integer"}),
+    ("GatewayDiagnosticLogDTO", "line_count", {"type": "string"}),
+    ("GatewayDiagnosticWorkspaceDTO", "managed", {"type": "string"}),
+    ("GatewayDiagnosticProcessDTO", "workspace_ids", {"type": "object"}),
+    ("GatewayDiagnosticLoggingStateDTO", "pid", {"type": "string"}),
+    ("GatewayDiagnosticLogSinkDTO", "inode", {"type": "integer"}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -257,6 +309,9 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
     "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserLeaseDTO", "GatewayUserAccessDTO",
     "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
+    "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+    "GatewayDiagnosticLogDTO", "GatewayDiagnosticWorkspaceDTO", "GatewayDiagnosticProcessDTO",
+    "GatewayDiagnosticLoggingStateDTO", "GatewayDiagnosticLogSinkDTO",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

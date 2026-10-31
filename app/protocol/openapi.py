@@ -72,6 +72,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
         "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
         "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
+        "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
     )
 }
 
