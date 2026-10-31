@@ -24,7 +24,7 @@ from app.api.sse_heartbeat import (
 )
 from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, report_failure
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
@@ -568,7 +568,7 @@ async def get_workspace_file_operations(
     except KeyError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except (TypeError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=report_failure(error, detail=file_access_error_detail(error))) from error
     return APIResponse(data=result, request_id=request_id)
 
 

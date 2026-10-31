@@ -1784,3 +1784,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 文件引用、列表／预览、原件／下载、正文保存、四类集合操作、状态查询、reveal及SSE预检的内部ValidationError原样交TraceMiddleware，安全500保持原request_id和单次原异常诊断。上传仍复用原model_validate_json解析同一intent，但在调用服务前单独转换为400，仅公布固定规则类别；未知字段名、原输入及validator上下文不回显，日志次错保留在原原因链。原普通400、文件状态映射、请求schema、URI解析、写入与恢复链保持。
 - 有效反例55项：首轮52项加修正装具后的完整HEAD归档3项；首轮另3项因装具漏配二进制采样长度而未触及目标，不计产品反例。关联检查150项通过，补齐装具后3项真实文件响应／原件不变／同入口重试通过，共153项不同用例，不重复长跑已通过场景。覆盖POSIX／盘符／UNC、multipart四种拒绝、写前阻断、日志次错和原文件操作／恢复回归；真实读取采用原WorkspaceService与文件访问链，外部依赖仍由fixture隔离，不代完整产品执行。
 - compileall及本change strict通过；Ruff27条、Pyright2条既有诊断按规则、全文、所属函数和最窄表达式AST无新增，新测试两项检查均零诊断。准确命令、指纹、红绿原件、退出码和作者自查见`out/tests/temp/workspace_file_response_validation_20261031/artifacts/verification.json`。未验发头后的SSE错误、真实Gateway网络、Web／Workbench、Windows或独立Backend重启，不代全局URI总门，2.2／7.2仍未勾、整体51/53；未动另一会话前端、自动化、暂存和共享debug。
+
+
+### 2026-10-31 操作 ID 输入拒绝与原始诊断（2.2／7.2部分收口）
+
+- 文件与会话目录继续使用唯一operation ID校验器；严格格式和异常类别保持，公开说明只包含类型或格式，原值留在异常notes。两个状态查询的原400映射复用report_failure，原request_id、日志次错及原因保持；原请求体422、合法未知ID、队列受理与恢复没有新增校验链。
+- 14项非法输入反例在原实现失败，2项合法输入通过；候选128项定向、77项文件／导航队列回归及16项HTTP错误／日志次错通过，共221项不同用例。Ruff原39条、Pyright原2条按规则、全文、所属函数和最窄表达式AST无新增，新测试零诊断；compileall与本change strict通过。
+- 准确命令、源码指纹、原始输出、退出码及作者AST自查见`out/tests/temp/operation_id_errors_20261031/artifacts/verification.json`。新增真实后端验收尚未执行：另一会话Web测试占用独占名额，本方等待进程在补强测试后主动终止（143），不能计作网络通过。未运行Web／Workbench、Gateway联邦或Windows；2.2／7.2继续未勾、整体51/53，不代全局验收。另一会话源码、自动化、共享暂存和debug进程未改。

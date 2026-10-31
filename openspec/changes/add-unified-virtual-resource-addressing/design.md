@@ -41,6 +41,8 @@
 
 资源激活领域校验在原拒绝点组织字段与规则说明，被拒绝的值和未知字段名只附于完整异常的诊断 notes，不进入公开异常正文或 args。该纯领域链不增加日志或 I/O，原校验规则、错误码、异常类别和原因链保持；恢复层继续传播同一拒绝，不修复或重建已封存记录，policy 的原 ValueError 也遵守同一正文边界。
 
+文件和会话目录继续共用原 operation ID 校验器，类型或格式拒绝只公布对应纠错说明，非法值附于原异常notes。两个状态查询的原400映射复用`report_failure`记录完整诊断，不在schema中增加日志I/O；请求体继续由原422处理器校验，不增加参数校验层。原异常类别、原因链、严格格式及合法未知ID语义保持。
+
 `display_uri` 先交中央 grammar 判定合法性；仅在 parser 拒绝后，领域层按原路径／locator／credential／旧字段形态归类错误码。内部 identity 仍使用原严格校验，不能把其字符限制套在合法文件 child 上。provenance 只验证冻结 URI，不在反序列化时用 parser 返回的规范形式替换原字节；新引用仍由既有构造入口生成，历史恢复不取得当前文件或配置。
 
 会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。

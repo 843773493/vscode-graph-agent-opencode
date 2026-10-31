@@ -16,6 +16,7 @@ from app.api.errors import (
     not_found_http_error,
     state_conflict_http_error,
 )
+from app.core.failures import report_failure
 from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_navigation_actor,
@@ -109,7 +110,7 @@ async def get_session_catalog_operation_status(
     except ValidationError:
         raise
     except (KeyError, ValueError, TypeError) as error:
-        raise HTTPException(status_code=400, detail=client_error_message(error)) from error
+        raise HTTPException(status_code=400, detail=report_failure(error, detail=client_error_message(error))) from error
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -43,9 +43,14 @@ def validate_operation_id(value: object) -> None:
     与 canonical session/thread ID 同款纪律：不做清洗、截断或大小写折叠。
     """
     if not isinstance(value, str):
-        raise TypeError(f"operation_id 必须是字符串: {value!r}")
-    if _OPERATION_ID_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"operation_id 形态非法: {value!r}")
+        error = TypeError("operation_id 必须是字符串")
+    elif _OPERATION_ID_PATTERN.fullmatch(value) is None:
+        error = ValueError("operation_id 形态非法：必须为 op_ 加 32 位小写十六进制字符")
+    else:
+        return
+    # 非法值可能是原生路径；仅诊断保留原值，普通拒绝消息只公开格式。
+    error.add_note(f"原始 operation_id={value!r}")
+    raise error
 
 
 # operation 状态闭集（除 dependency_failed 外与设计文档一致）。
