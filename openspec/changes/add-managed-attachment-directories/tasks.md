@@ -762,5 +762,6 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 ### 2026-10-31 Agent驻留扫描关闭的原任务持有（5.4部分）
 
 - 唯一关闭任务持有原扫描与tracker排空，每次调用最多观察30秒；取消观察或到期不丢句柄、不再次取消扫描、不重开准入。扫描结算后才清缓存，关闭期原错不按周期重试消耗，迟到失败先交付后再允许显式重试剩余关闭。原实现的两项红测准确失败于扫描句柄提前清空；最终28项相关单测通过，覆盖观察取消、迟到原错和扫描/scope等待到期。单元到期场景缩短常量，只证明等待机制，不冒充默认30秒实测。
-- 新增3项真实双Workspace生命周期场景及8项既有执行/runtime回归共11项已收集；沿原独占闸门等待600秒后全部fixture失败（exit1，618.65秒），未进入测试体。默认30秒、Backend原错交付、Session locator/存储/维护锁和真实scope回归仍须取得名额后补验，不能声称集成通过。另一会话Web测试持有名额，未绕锁或停止对方进程；修正测试类型后仅终止过本片尚在排队的旧进程（exit143），不计为业务结果。最终运行期间2451个采样源码文件未变化，不立即重复同一失败检查。
-- Ruff、compileall及OpenSpec strict通过；Pyright的4条生产诊断与原基线的规则、完整消息和语句AST一致，两份测试零诊断。准确命令、源码指纹、原始输出/退出码及作者差异自查见`out/tests/temp/residency_shutdown_owner_20261031/artifacts/verification.json`。上述集成补验、原生I/O抢占、外部停止、完整shutdown硬期限、Windows及Gateway/主Web继续TODO，5.2/5.4与21/23不勾选；未修改Web/Workbench、其自动化、共享暂存或debug。
+- 首次11项集成因独占名额等待600秒全部fixture失败，未进入测试体；更早本片排队进程exit143也不计业务结果。实际名额释放后补验为10 passed／1 failed（155.24秒）：新增3项双Workspace场景均通过，真实默认30秒、观察取消、迟到原错、Backend归属、Session locator/存储/维护锁保留及同owner重试已有实测。唯一失败首错是原lifespan装具替换配置启动，导致编译前Skill source未激活，后续scope断言因未编译再次失败；相关7份源码与驻留修复前HEAD逐字相同，此为静态归因，未冒称旧生产动态复现。
+- 仅在该lifespan用例恢复真实配置启动/关闭，让产品入口激活Skill source；不手工预激活、不改产品、不放宽冷启动/释放顺序断言。补跑此项1 passed／13.80秒，其余10项按未变化源码复用，不称最终11项整批重跑。两次业务运行各2451份采样源码保持；沿原跨worktree闸门串行，未绕锁或停止另一会话进程。
+- Ruff、compileall及OpenSpec strict通过；原生产4条Pyright诊断与基线规则、完整消息和语句AST一致，两份原测试零诊断；本次修正的runner测试78条既存诊断前后同规则/消息/语句AST，无新增，不称类型全绿。准确命令、源码指纹、原始输出/退出码及差异自查见`out/tests/temp/residency_shutdown_owner_20261031/artifacts/verification.json`。原生I/O抢占、外部停止、完整shutdown硬期限、Windows及Gateway/主Web继续TODO，5.2/5.4与21/23不勾选；未修改Web/Workbench、其自动化、共享暂存或debug。

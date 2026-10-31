@@ -2189,6 +2189,7 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
     start, shutdown = service.start, service.shutdown
     mcp_start, mcp_shutdown = container.mcp_catalog_owner.start, container.mcp_catalog_owner.shutdown
     registry_start = container.workspace_file_resource_registry.start
+    config_start, config_close = container.config_service.start_watching, container.config_service.close
     platform_type = type(container.resource_platform)
     close_resources = platform_type.close
     job_drain = container.job_service.drain_finalizations
@@ -2223,7 +2224,9 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         lifespan_patch.setattr(service, "shutdown", close_runtime)
         lifespan_patch.setattr(container.job_service, "drain_finalizations", drain_jobs)
         lifespan_patch.setattr(container.team_fanout_service, "stop", stop_fanout)
-        # 生命周期用例由同一个 lifespan task 真实启动并关闭 MCP 和文件 registry。
+        # 生命周期用例由同一 lifespan 初始化配置资源并收尾，不能跳过 Skill source 激活。
+        lifespan_patch.setattr(container.config_service, "start_watching", config_start)
+        lifespan_patch.setattr(container.config_service, "close", config_close)
         lifespan_patch.setattr(container.mcp_catalog_owner, "start", mcp_start)
         lifespan_patch.setattr(container.mcp_catalog_owner, "shutdown", mcp_shutdown)
         lifespan_patch.setattr(container.workspace_file_resource_registry, "start", registry_start)
