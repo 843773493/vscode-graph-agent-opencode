@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import InvalidStateError
 from typing import TypeVar
 
 import pytest
@@ -72,13 +73,15 @@ async def test_successful_worker_cannot_swallow_an_accepted_cancellation(
         await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("native_failure", [False, True])
-async def test_cancelled_waiter_keeps_original_lock_until_native_worker_settles(native_failure: bool) -> None:
+@pytest.mark.parametrize("failure_type", [None, OSError, TimeoutError])
+async def test_cancelled_waiter_keeps_original_lock_until_native_worker_settles(
+    failure_type: type[OSError] | None,
+) -> None:
     loop = asyncio.get_running_loop()
     entered = asyncio.Event()
     release = threading.Event()
     lock = asyncio.Lock()
-    native = OSError(28, "原生worker写盘失败")
+    native = failure_type(28, "原生worker写盘失败") if failure_type is not None else None
     calls: list[int] = []
 
     def operation() -> int:
@@ -86,7 +89,7 @@ async def test_cancelled_waiter_keeps_original_lock_until_native_worker_settles(
         loop.call_soon_threadsafe(entered.set)
         if not release.wait(3):
             raise TimeoutError("测试worker屏障未释放")
-        if native_failure:
+        if native is not None:
             raise native
         return 42
 
@@ -106,7 +109,7 @@ async def test_cancelled_waiter_keeps_original_lock_until_native_worker_settles(
         release.set()
         done, _pending = await asyncio.wait({task}, timeout=1)
         assert done == {task}
-        if native_failure:
+        if native is not None:
             with pytest.raises(OSError) as caught:
                 await task
             assert caught.value is native and native.errno == 28
@@ -139,3 +142,21 @@ async def test_worker_preserves_arguments_result_and_native_failure() -> None:
         await run_sync_shielded(operation, 7, mode="fail")
     assert caught.value is native
     assert calls == [(21, "return"), (7, "fail")]
+
+
+@pytest.mark.parametrize("error_type", [OSError, TimeoutError, InvalidStateError, RuntimeError, asyncio.CancelledError])
+async def test_worker_preserves_exception_identity_cause_notes_and_exception_values(
+    error_type: type[BaseException],
+) -> None:
+    cause = OSError(5, "原生错误正文")
+    original = error_type("worker 原异常")
+    original.add_note("原生诊断日志次错")
+
+    def operation() -> None:
+        raise original from cause
+
+    with pytest.raises(error_type) as caught:
+        await run_sync_shielded(operation)
+    assert caught.value is original and caught.value.__cause__ is cause
+    assert caught.value.__notes__ == ["原生诊断日志次错"]
+    assert await run_sync_shielded(lambda: original) is original

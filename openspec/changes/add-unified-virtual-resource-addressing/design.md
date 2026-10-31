@@ -124,6 +124,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 两项只豁免具名入口及列明字段，不为整个 Browser、Gateway diagnostics DTO、日志摘要、普通业务响应或其它持久记录提供路径许可，不新增 URI kind、解析器、文件操作链路或授权方式。普通文件的相对路径、绝对路径和资源 URI 继续按 D1a 在目标端统一解析并复用同一 owner。终端 cwd 的相对路径规范化合同保持。
 
+Terminal 的相对路径、原生绝对路径与目录 URI 解析共用 owner 的 `terminal_workdir` 失败出口；沿 `failure_detail` 保留原生诊断和日志次错，公开说明只带工作区身份或目标 URI、阶段、类别和系统错误码。原生路径保留 OSError 子类及 errno／winerror，URI 保持原 RuntimeError 分类；解析失败发生在资源 intent／lease／PTY 创建之前，Job 与恢复链消费同一公开异常，不另建错误扫描或脱敏链。修复用户原目录后的显式重试不改写旧执行和已封存请求。
+
 辅助服务WebSocket的访问、路由及上游失败也复用`failure_detail`保留完整诊断，关闭原因只使用固定阶段说明；不再截取原异常，避免原生位置外泄和多字节说明超过123字节。沿用1008/1011分类、既有鉴权与目标检查、取消和路由引用回收，不增加错误数据帧或重试链。
 
 已建立的联邦channel在收帧、心跳发送和未知方法处理异常处复用`failure_detail`，分别报告federation-channel-receive、federation-channel-heartbeat与federation-method阶段；原异常全文只留诊断，传输失败继续保留直接cause与cause_type。方法失败沿原错误码和correlation回包，既有FederationError及取消语义保持，后续请求仍可在原channel执行。channel关闭帧只发送已登记的稳定错误码，不截取完整说明；本地失败对象、原关闭分类与in-flight结算及任务回收保持。

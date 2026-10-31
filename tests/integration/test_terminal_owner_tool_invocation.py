@@ -387,8 +387,12 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
             assert "Terminal 目录 URI 解析失败" in str(rejected.value)
             assert str(owner.workspace_root) not in str(rejected.value)
             assert isinstance(rejected.value.__cause__, RuntimeError)
-            assert str(loop) in str(rejected.value.__cause__)
-            diagnostic = next(record for record in caplog.records if record.msg == "Terminal 目录 URI 解析失败: uri=%s")
+            assert "stage=native-path-resolution" in str(rejected.value.__cause__)
+            assert str(owner.workspace_root) not in str(rejected.value.__cause__)
+            native_error = rejected.value.__cause__.__cause__
+            assert isinstance(native_error, RuntimeError) and str(loop) in str(native_error)
+            diagnostic = next(record for record in caplog.records if record.name == "app.core.failures"
+                              and "stage=terminal_workdir" in record.getMessage())
             assert diagnostic.exc_info is not None
             assert diagnostic.exc_info[1] is rejected.value.__cause__
             assert {path: path.read_bytes() for path in state_files} == before

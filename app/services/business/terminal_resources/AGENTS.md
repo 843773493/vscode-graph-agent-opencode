@@ -26,6 +26,7 @@ terminal_resources/
 
 - 显式绑定工作区 UUID 与根目录；真实 SessionThread 必须经过 catalog 和生命周期准入。
 - 创建依赖已装配的 `WorkspaceFilePaths`；所有 Terminal 创建入口在 owner 内解析 cwd。目录 URI 复用该文件 owner 的目标/权限校验，原生 Shell 路径继续允许工作区外和私有目录；不改写命令正文。工具回执直接使用真实 PTY 的 `cwd_relative`，不另建 cwd 投影或按工具参数猜测执行位置。
+- 三种 cwd 输入共用原生错误出口，公开说明只保留目标 URI 或工作区身份、阶段、类别和系统错误码；原生位置及日志次错留原诊断与异常链。原生路径保留原 OSError 子类与系统码，目录 URI 保留原 RuntimeError 分类，不能让日志失败替换解析失败或进入资源 intent／PTY 创建。
 - cwd 解析的原生文件／同机 Gateway 访问统一交原 shielded worker，复制请求上下文；原 Thread holder 覆盖线程池排队与结算。取消须等原解析结束后继续传播，不能提前创建资源 intent／lease／PTY，也不在后台补做；原错误、目标平台和输入语义保持。该 worker 不保证原生 I/O 可抢占或整个 operation／shutdown 的硬期限。
 - 受管 cwd 准入由 `TerminalWorkingDirectories` 提供；在准入临界区内先保存目录根 URI，并在既有账本发布绑定终端身份的持久目录 lease，再启动 PTY。工具/Turn 返回不释放该 lease；只在原 owner 核实真实终态后结清，冷恢复沿同一规则处理，不能把缺失或未知回执当作停止。
 - 外部结果未知时保留可发现记录并显式报错；停止/删除只在核实后结清。

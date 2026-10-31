@@ -37,7 +37,20 @@ async def run_cleanup_shielded(cleanup: Callable[[], Awaitable[None]]) -> None:
 
 async def run_sync_shielded(operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
     """同步 I/O 交给 worker；取消须等 worker 结算后再释放调用方的准入。"""
-    worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    def invoke() -> tuple[T] | BaseException:
+        try:
+            return (operation(*args, **kwargs),)
+        except BaseException as error:  # noqa: BLE001 - 仅搬运原异常，异步任务仍原样抛出。
+            # 线程桥接会重建 TimeoutError 等异常；原实例须连同 cause、notes 一起交还。
+            return error
+
+    async def execute() -> T:
+        outcome = await asyncio.to_thread(invoke)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome[0]
+
+    worker = asyncio.create_task(execute())
 
     try:
         return await asyncio.shield(worker)

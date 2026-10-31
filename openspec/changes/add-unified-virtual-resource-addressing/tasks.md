@@ -1705,3 +1705,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 128 项关联单元回归通过；旧生产的两项内部校验反例有效失败。原两项 I/O 集成通过，新增场景最终 1 passed／37.78秒，经真实 ASGI Session／消息入口及 model_stream 生成执行，核 Job／事件／冷消息流身份、SQLite 与 LLM 日志无原生位置、完整诊断、封存请求 hash，以及同 Thread 后续执行不改旧 canonical 前缀和失败快照。相同新增场景在完整旧生产归档中精确失败于 Job 公开原校验正文；首次新增场景的审计装具漏传 capture identity 已修正，未放宽断言。集成沿主仓独占闸门与外部180秒／4GiB运行，最终候选排队228.91秒后才开始独立测试预算。
 - Ruff、compileall、本change strict通过；Pyright两条既有 _jobs 诊断与原git源码指纹、规则、完整消息及最窄AST相同，零新增，不称类型全绿。作者结构自查不代独立审查。准确命令、源码指纹、原始输出／退出码与核验见 `out/tests/temp/execution_validation_facts_20261031/artifacts/verification.json`。另有全量规范合法性54/0的只读结果，运行前后另一会话Workbench任务有变更，不将其当固定候选或实施完成证据。
 - 本片未验真实Gateway／Web、独立Backend硬重启、Windows或真实Provider，不代全局URI不变量；2.2／7.2及51/53保持。未修改另一会话Web／Workbench、自动化、其暂存或共享Debug，协作与MCP显式持有继续延期。
+
+### 2026-10-31 Terminal 原生 cwd 失败与原因链（2.2／7.2部分收口）
+
+- 相对路径、原生绝对路径和目录 URI 继续由同一 Terminal owner 解析；原生解析失败统一发布工作区身份或目标 URI、阶段、类别与系统码，原始位置和日志次错留在完整诊断及原异常链。保留原生路径的 OSError 子类、errno／winerror和 URI 的 RuntimeError 分类，失败不创建资源 intent、lease 或 PTY，不改变 Shell 的目标平台及工作区外路径语义。
+- 修复 Python 3.12 线程桥接重建 TimeoutError 等异常、丢失身份／cause／notes 的缺陷；既有 shielded worker 传回原异常后在异步任务抛出，正常返回的异常对象仍是返回值，取消继续等待原 worker 结算。保留5.4有关不可抢占原生 I/O和整个 operation／shutdown 总期限的既有 TODO。
+- 400项定向单测通过（168项 Terminal／worker，232项 Session 创建删除、Thread 准入和 Browser 消费者）；最终51项为前述子集补验，不重复计数。2项集成沿共享独占闸门通过：真实 FastAPI 消息入口（进程内 ASGI）、现有 model_stream、受管 Gateway 根绑定及真实 Node HTTP／PTY，核符号链接循环失败的 Job、canonical 结果、消息流、checkpoint 与 SQLite 无原生根路径；修复原目录后同一 Thread 执行成功，旧失败记录、流、canonical 正文和所有 assembly 请求 preimage／hash保持。另一项覆盖三种 cwd 输入及真实 URI 失败原因链。
+- Ruff、compileall与本 change strict通过；Pyright保留14条既有诊断，与完整HEAD归档按规则、完整消息及最窄AST逐项相同，零新增，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、单测复用核验及产物坐标见 `out/tests/temp/terminal_native_workdir_errors_20261031/artifacts/verification.json`；主动取消的排队记录未进入测试体，不算产品证据。
+- 本片未验Web／Workbench、完整Gateway业务代理、独立Backend重启、Windows或真实Provider，不替代全局URI不变量，2.2／7.2仍未勾，整体51/53。未修改另一会话的Web迁移／自动化、矩阵、暂存或共享debug；团队协作与MCP显式持有继续延期。

@@ -47,6 +47,7 @@ app/core/
 
 ## 共享原语与专用子包说明
 
+- `shielded_cleanup.py`：同步 worker 结算前保留调用方准入；线程桥接以结果值传递原异常，再在原异步任务抛出，保留异常身份、cause 与 notes，避免标准库重建 TimeoutError 等异常。正常返回的异常对象仍为返回值；取消继续等待 worker 结算。
 - `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供core registry与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
 - `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，原生 I/O、内部 Pydantic 校验及上游异常正文不进入普通记录，明确的本地业务说明保持原合同。内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。

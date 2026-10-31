@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +23,10 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.services.business.terminal_resources import owner as owner_module
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 保留原生诊断写入故障。
+)
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A, WORKSPACE_ID
 from tests.support.resource_owners.terminal import (
     TerminalOwnerFixture,
@@ -32,6 +37,78 @@ from tests.support.resource_owners.terminal import (
 @pytest.fixture
 def terminal_owner(tmp_path: Path) -> TerminalOwnerFixture:
     return build_terminal_owner_fixture(tmp_path)
+
+
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+@pytest.mark.parametrize("error_kind", ["io", "permission", "timeout", "runtime"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+async def test_workdir_failure_preserves_native_cause_without_publishing_location(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, diagnostic_sink: DiagnosticFailure,
+    input_kind: str, error_kind: str, sink_fails: bool,
+) -> None:
+    case = terminal_owner
+    peer = await case.create(scope="workspace")
+    target = case.root / "private-native-cwd"
+    target.mkdir()
+    raw = {
+        "io": OSError(5, "原生目录访问失败", str(target)),
+        "permission": PermissionError(13, "原生目录权限拒绝", str(target)),
+        "timeout": TimeoutError(110, "原生目录访问超时", str(target)),
+        "runtime": RuntimeError(f"符号链接解析失败: {target}"),
+    }[error_kind]
+    diagnostic_sink.primary = raw if sink_fails else None
+    cwd = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files",
+                               tail_segments=("root", target.name)) if input_kind == "uri" else (
+        target.name if input_kind == "relative" else str(target)
+    )
+    ledger_path = case.leases._state_path
+    assert ledger_path is not None
+    before = case.owner._store.path.read_bytes(), ledger_path.read_bytes()
+    resolve = Path.resolve
+
+    def failing(path: Path, strict: bool = False) -> Path:
+        if path == target:
+            raise raw
+        return resolve(path, strict=strict)
+
+    with monkeypatch.context() as patch, caplog.at_level(logging.ERROR):
+        patch.setattr(Path, "resolve", failing)
+        with pytest.raises(RuntimeError if input_kind == "uri" else type(raw)) as caught:
+            await case.owner.create_terminal(session_id=SESSION_A, thread_id=THREAD_A,
+                holder_id="request:cwd-error", operation_id="cwd-error", cwd=cwd)
+    assert "stage=terminal_workdir" in str(caught.value)
+    assert f"error={type(raw).__name__}" in str(caught.value)
+    assert str(case.root) not in str(caught.value)
+    cause = caught.value.__cause__
+    if input_kind == "uri":
+        assert f"uri={cwd}" in str(caught.value)
+        assert cause is not None and isinstance(cause, type(raw))
+        assert cause.__cause__ is raw
+        source_stage = "native-path-resolution" if error_kind == "runtime" else "目标解析"
+        assert f"stage={source_stage}" in str(cause)
+        assert str(case.root) not in str(cause)
+    else:
+        assert "private-native-cwd" not in str(caught.value)
+        assert cause is raw
+    if isinstance(raw, OSError) and input_kind != "uri":
+        assert isinstance(caught.value, OSError)
+        assert caught.value.errno == raw.errno
+    assert any(record.name == "app.core.failures" and record.exc_info and record.exc_info[1] is raw
+               for record in caplog.records)
+    assert str(target) in caplog.text
+    if sink_fails:
+        assert diagnostic_sink.errors
+        assert "diagnostic_sink_error=NotADirectoryError" in str(cause if input_kind == "uri" else caught.value)
+        assert "diagnostic-log-secret" not in str(caught.value)
+        assert any("diagnostic-log-secret" in note for note in raw.__notes__)
+    assert (case.owner._store.path.read_bytes(), ledger_path.read_bytes()) == before
+    assert tuple(case.owner._store.ids()) == (peer["resource_id"],) and case.transport.creates == 1
+    async with case.owner.deletion_holder.lock_for(SESSION_A, wait=False) as probe:
+        assert probe.acquired
+    recovered = await case.owner.create_terminal(session_id=SESSION_A, thread_id=THREAD_A,
+        holder_id="request:cwd-error", operation_id="cwd-error", cwd=cwd)
+    assert recovered["cwd_relative"] == target.name and case.transport.creates == 2
 
 
 @pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri", "gateway_uri", "external"])

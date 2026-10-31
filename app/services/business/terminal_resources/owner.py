@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -18,6 +17,7 @@ from app.abstractions.workspace_resources import (
     ResourceTransport,
     RetentionScope,
 )
+from app.core.failures import failure_detail
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.terminal_resources.operations import TerminalOperations
@@ -31,8 +31,6 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
-
-logger = logging.getLogger(__name__)
 
 
 class TerminalResourceOwner(WorkspaceResourceOwner):
@@ -57,19 +55,24 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
 
     def _resolve_workdir(self, cwd: str | None) -> str:
         """目录 URI 复用固定文件 owner；原生 Shell 路径保持目标平台语义。"""
-        if cwd and cwd.startswith("boxteam://"):
-            try:
-                return str(self._file_paths.native(cwd))
-            except (OSError, RuntimeError) as error:
-                # resolve 的系统异常和符号链接环可携带本机路径；只在具名诊断日志保留。
-                logger.exception("Terminal 目录 URI 解析失败: uri=%s", cwd)
-                raise RuntimeError(
-                    f"Terminal 目录 URI 解析失败: uri={cwd}, type={type(error).__name__}；"
-                    "请查看工作区服务日志"
-                ) from error
-        # Shell 不施加普通文件树的私有目录/containment 限制；相对路径固定锚定工作区。
-        requested = Path(cwd).expanduser() if cwd else self.workspace_root
-        return str((requested if requested.is_absolute() else self.workspace_root / requested).resolve())
+        uri_input = cwd if cwd and cwd.startswith("boxteam://") else None
+        try:
+            if uri_input is not None:
+                return str(self._file_paths.native(uri_input))
+            # Shell 不施加普通文件树的私有目录/containment 限制；相对路径固定锚定工作区。
+            requested = Path(cwd).expanduser() if cwd else self.workspace_root
+            return str((requested if requested.is_absolute() else self.workspace_root / requested).resolve())
+        except (OSError, RuntimeError) as error:
+            # 三种输入共享原生失败出口，不能将 resolve 的路径写入 Job 等执行记录。
+            label = f"Terminal 目录 URI 解析失败: uri={uri_input}" if uri_input is not None else (
+                f"Terminal 工作目录解析失败: workspace_id={self.workspace_id}"
+            )
+            detail = failure_detail(error, stage="terminal_workdir", label=label)
+            if uri_input is None and isinstance(error, OSError):
+                if (winerror := getattr(error, "winerror", None)) is not None:
+                    raise type(error)(error.errno, detail, None, winerror) from error
+                raise type(error)(error.errno, detail) from error
+            raise RuntimeError(detail) from error
 
     async def create_terminal(
         self,
