@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.api import resources as resource_api_module
 from app.api.deps import (
@@ -20,6 +20,7 @@ from app.api.deps import (
 from app.api.resources import router
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import TraceMiddleware
+from app.main import workspace_http_exception_handler
 from app.services.business.workspace_resources import owner as owner_module
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -41,6 +42,7 @@ def resource_api():
     def client(container, kind: str) -> httpx.AsyncClient:
         app = FastAPI()
         app.add_middleware(TraceMiddleware)
+        app.exception_handler(HTTPException)(workspace_http_exception_handler)
         app.include_router(router, prefix="/api/v1")
         app.dependency_overrides[verify_local_token] = lambda: "authenticated-test"
         app.dependency_overrides[get_terminal_resource_owner] = lambda: container.terminal_resource_owner

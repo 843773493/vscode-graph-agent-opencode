@@ -120,10 +120,10 @@ class TerminalOperations(ResourceOperations):
                 raise ValueError("Terminal operation 回执版本与本次操作不一致")
             observe_resource(record, runtime, self._owner.kind)
             self._owner._verified(record)
-            self._owner._store.save(record)
+            await self._owner._store.save(record)
             self._owner._sync_ledger(record)
             projection = resource_projection(record, runtime, self._owner.kind)
             return {**result, "terminal": projection} if "terminal" in result else projection
         except BaseException as error:
-            self._owner._unknown(record, error, lease_id=self._lease_refs[record.resource_id])
+            await self._owner._unknown(record, error, lease_id=self._lease_refs[record.resource_id])
             raise

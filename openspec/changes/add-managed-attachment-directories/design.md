@@ -488,3 +488,12 @@ Session读写准入的active catalog查询、`SessionService.get`的单节点/�
 来源文件清单和分块读取、目标位置检查和文件打开/写入/同步/关闭、目录同步及完整快照核验、失败删除统一调用既有 `run_sync_shielded`。原导出/创建 key 锁覆盖线程池排队及实际 I/O 结算，分块网络请求保持可取消，正文块和文件并发上限、hash/长度、marker 最后接收及来源冻结坐标不变。打开句柄在 worker 内先登记到本次调用的 ExitStack，再交付返回值；取消发生在打开后但交付前也由同一栈关闭。原异常随退出信息交给原文件 contextmanager，正文失败与关闭次错保留原 cause/context。失败清理的 worker 显式恢复此前失败的异常上下文，保留原生清理次错的 cause；清理等待被取消时，将此前失败链接到原取消，不因跨线程和任务边界丢失错误。
 
 失败仍先取消并排空本次文件任务，再由 worker 删除接收中的临时快照，不留锁外后台补写，不回读 live 来源。取消保持原 preparing 与冻结创建身份，显式同 key 恢复沿原产品入口复制并核唯一目标、冷恢复字节与请求 hash；普通失败已中止的身份仍不得复活。其它 fork/catalog 同步访问、任意原生线程终止、完整 shutdown 硬期限及独立 Backend/Windows/Gateway/Web 验收继续 TODO；不据本切片勾选 5.2/5.4。
+
+
+### Terminal／Browser 资源记录写入的异步结算（5.4 部分收口）
+
+原 ResourceRecordStore 的全部 writer 统一等待异步 save，文件写锁内将候选合并、校验、JSON 序列化、fsync 和 replace 交给既有 run_sync_shielded。写入成功后才整体发布同一份记录；后续资源写入合并已发布状态，不共写临时文件。原资源锁和准入覆盖线程池排队及实际结算，取消不遗弃 worker 或提前释放占用。新建记录发布前先登记原锁；fork 取消以原持久回执判断是否 committed，已提交关联不转为 unknown，只沿精确原 lease 收尾。
+
+冷恢复的网络清单仍在共享锁外；首个成功清单取得唯一准备锁，由同一次受保护任务完成原记录观察、lease 对账、版本冻结和 pending 发布。准备开始后取消须等该任务结算，迟到清单或并发恢复不会重冻版本。同步冷加载及 lease 账本仍保持原执行入口，不能仅将部分 lease writer 丢入线程而与其它 writer 竞争；原生 I/O 抢占、这些同步访问及完整 shutdown 硬期限继续 TODO，5.2／5.4 保持未完成。
+
+本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。

@@ -649,3 +649,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整 HEAD 归档叠加本片改动，124 项 Session／Manager／进程生命周期单测通过；4 项真实 HTTP／PTY 场景通过（23.37 秒），覆盖同 Manager／冷 Manager × kill／delete，核原后代停止、持久终态、原身份及重复请求无新执行。复用装具仅将输出归属改为当前测试文件，不手填状态或替换身份／停止算法。旧生产反例精确失败于500且后代仍执行。
 - Ruff、两文件 Pyright 零诊断、Python 编译、Node 语法及本 change strict 通过。准确命令、三个改动源码的前后指纹、原始输出和退出码见 `out/tests/temp/terminal_root_recovery_20261031/artifacts/verification.json`。集成先沿主仓闸门等待221.25秒，取得名额后沿原90秒／4GiB保护执行；未绕过另一会话的测试。
 - 本片仅证明 Linux 已持久完整身份的原 SID 后代清理，不代无 PID 创建接管、未知 Worker 发现、Python lease、Windows、Gateway/Web 或完整 shutdown 期限；5.2／5.4 及整体21/23仍未完成。另一会话的 Web/Workbench、自动化、共享暂存和 debug 服务保持。
+
+### 2026-10-31 Terminal／Browser 资源记录写入的异步结算（5.4 部分收口）
+
+- 全部资源记录 writer 迁到唯一异步 `ResourceRecordStore.save`；文件写锁内复用原 shielded worker 完成候选合并、校验、JSON、fsync 和 replace，成功后才整体发布。原资源锁覆盖线程池排队和真实结算；新建 intent 发布前先登记原锁，冷恢复准备以唯一锁完成观察、原 lease 对账、版本冻结及 pending 发布。已落盘但外部同步未核实的版本复用原 pending，仅由显式 stop/delete 重试；fork 取消以原持久 committed 回执判断提交，unknown 收尾保留原失败。不增加 writer、schema、恢复账本或同步兼容入口。
+- 656 项受影响单测通过（23.66 秒），其中新增 16 项覆盖两类 owner、并发合并、取消和重复取消、线程池排队、初始 intent、冷恢复准备、fork dispatching/committed 及失败收尾。完整旧生产归档加公开 owner 并发场景，精确因事件循环同步阻塞失败；未用直接 await 新接口的不兼容测试充当反例。
+- 最终 4 项真实资源集成通过（55.48 秒，`run-e66c3374d582`），经正式 Session／ASGI 创建真实 PTY／Chromium，覆盖两类资源 × 完成／取消，核 peer 409 仍响应、request_id、worker 线程、原资源锁与 lease、外部身份／版本及同 owner 显式停止结算。共享 ASGI 装具补装正式 HTTPException handler，故障屏障用原 TraceMiddleware 的 request_id 区分管理请求和后台观察；原身份、版本和 lease 断言保持。既有单测以原锁释放确认 owner 提交，不把传输替身返回当作提交完成。
+- Ruff、Python 编译及新增单测／ASGI 测试类型检查通过；扩大类型检查与完整 HEAD 基线按规则、完整消息和最窄语句 AST 比对，178 项均在原 188 项内，新增零项；共享装具的原 46 项诊断逐项相同，不称全量类型全绿。初版装具缺 request_id、故障屏障误拦后台观察、180 秒合并回归预算不足以及独占名额等待失败的原件保留，不放宽业务期限或绕过另一会话测试。
+- 最后追加的记录错误／冷恢复／释放 25 项合并回归，按已测单项耗时将临时外层预算从 180 秒调整为 420 秒，但再次等待主仓独占名额满 600 秒，pytest 未启动；后续 fork／离线备份回归也未启动。前次 180 秒运行只保留已完成 11 项及退出 124 的原件，不计作全组通过。当前另一会话 Web 产品测试仍持闸门，停止同条件重复排队，以上两组保持未验证；`queue-regression-final-exit.json` 记录实际退出和待补命令，不用本批局部结果关闭完整验收。
+- 准确命令、前后源码指纹、原始输出、实际退出码、类型对照与作者 AST 自查保存在 `out/tests/temp/resource_record_async_20261031/artifacts/`。同步冷加载、lease 写盘、不可抢占原生 I/O、旧代完整接管、独立 Backend 重启、Windows、Gateway/Web 及完整 shutdown 仍 TODO；初始 intent 写盘后取消仅证明保留 creating／原身份／原锁且无 lease 或外部创建，不证明该 intent 的完整接管。5.2／5.4 与整体 21/23 保持未完成。未修改另一会话的 Web/Workbench、自动化或暂存，不重启共享 debug；团队协作及 MCP 显式持有继续延期。

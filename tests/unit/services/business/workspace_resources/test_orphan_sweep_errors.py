@@ -69,6 +69,9 @@ async def test_interrupted_orphan_sweep_retains_ordered_failures_and_exact_origi
         try:
             for barrier in (first_failed, peer_done, entered):
                 await asyncio.wait_for(barrier.wait(), 2)
+            # 外部回执返回不等于 owner 提交；等健康项原锁释放后才中断其它资源。
+            async with asyncio.timeout(2), owner._resource_lock(healthy):
+                assert not bundle.leases.leases_for_resource(healthy)
             leases = {rid: bundle.leases.leases_for_resource(rid)[0].lease_id for rid in (first, second, blocked)}
             ledger_ids = set(bundle.leases._leases)
             assert len(deadlines) == 1 and not sweeping.done()

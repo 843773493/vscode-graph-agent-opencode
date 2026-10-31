@@ -301,8 +301,8 @@ async def test_list_deadline_retains_already_committed_observations(
     lock = owner._resource_lock(last.resource_id)
     acquired = False
 
-    def saving(*records):
-        save(*records)
+    async def saving(*records):
+        await save(*records)
         if any(record.resource_id == first.resource_id for record in records):
             published.set()
 

@@ -83,11 +83,11 @@ class BrowserOperations(ResourceOperations):
                 # 正式失败仍可能报告未核实的页面转换；保留其原HTTP错误和待核实占用。
                 raise failure
             owner._verified(record)
-            owner._store.save(record)
+            await owner._store.save(record)
             owner._sync_ledger(record)
             projected = {**result, "browser": resource_projection(record, runtime, owner.kind)}
         except BaseException as error:
-            owner._unknown(record, error, lease_id=lease_id)
+            await owner._unknown(record, error, lease_id=lease_id)
             if failure is not None and error is not failure:
                 raise error from failure
             raise

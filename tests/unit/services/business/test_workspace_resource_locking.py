@@ -626,7 +626,7 @@ async def test_record_snapshots_do_not_share_mutable_associations_or_receipts(
     owner, rid = bundle.owner, str(resource["resource_id"])
     await owner.attach_for_fork(rid, creation_key="snapshot", expected_revision=1, thread=ThreadRef(SESSION_A, CHILD_THREAD_A))
     record = owner._store.get(rid)
-    owner._store.save(record)
+    await owner._store.save(record)
     expected = owner._store.path.read_bytes()
     for snapshot in (record, owner._store.get(rid), owner._store.all()[0]):
         snapshot.thread_associations.clear()

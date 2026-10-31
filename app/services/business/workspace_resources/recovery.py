@@ -8,6 +8,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from app.abstractions.workspace_resources import ResourceSnapshot
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.business.workspace_resources.facts import (
     index_resources,
     lease_status,
@@ -30,6 +32,12 @@ class ResourceRecovery:
         self._owner = owner
         # 只协调本进程尚未同步的冻结版本；持久资源与占用仍分别由原 owner/lease 账本保存。
         self._pending: dict[str, RecoveryVersion] | None = None
+        self._prepare_lock = asyncio.Lock()
+
+    def retain_revision(self, resource_id: str, revision: int) -> None:
+        """本地已提交而外部同步未核实，沿原冻结版本等待显式管理重试。"""
+        assert self._pending is not None
+        self._pending[resource_id] = RecoveryVersion(revision, management_only=True)
 
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
         # 一个调用只取得一次预算，清单、准备锁和各资源同步共同消耗。
@@ -77,10 +85,18 @@ class ResourceRecovery:
         owner = self._owner
         # 清单读取不持共享锁；一个回执挂起不能阻断其它调用自行核实同一 owner。
         items = await owner._transport.list_resources()
-        if self._pending is not None:
-            return
-        # 从此处到发布 pending 不让出事件循环，首个成功清单只冻结一次版本。
-        # TODO：同步阻塞/线程池与整个 operation 的终止核实仍需原 owner 收口。
+        # 网络不占准备锁；首个成功清单持有完整写盘与版本冻结，取消不能留下半次准备。
+        async with self._prepare_lock:
+            if self._pending is not None:
+                return
+            preparing = asyncio.create_task(self._prepare_records(items))
+            try:
+                await asyncio.shield(preparing)
+            finally:
+                await run_cleanup_shielded(lambda: preparing)
+
+    async def _prepare_records(self, items: list[ResourceSnapshot]) -> None:
+        owner = self._owner
         observed = index_resources(items, owner.workspace_id, owner._store.ids(), owner.kind)
         records = owner._store.all()
         unknown_results = {
@@ -97,14 +113,14 @@ class ResourceRecovery:
             runtime = observed.get(record.resource_id)
             observe_resource(record, runtime, owner.kind)
             statuses[record.resource_id] = lease_status(record)
-        owner._store.save(*records)
+        await owner._store.save(*records)
         # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
         owner._leases.reconcile(statuses, kind=owner.lease_kind)
         for record in records:
             owner._release_committed_fork_leases(record)
         pending_by_resource = owner._leases.leases_for_resources(owner._store.ids())
         for record in records:
-            outstanding_leases = owner._reconcile_stopped_record(
+            outstanding_leases = await owner._reconcile_stopped_record(
                 record, observed.get(record.resource_id),
                 pending_leases=pending_by_resource[record.resource_id],
             )
@@ -122,7 +138,7 @@ class ResourceRecovery:
                     + 1
                 )
         if owner._store.ids():
-            owner._store.save(*records)
+            await owner._store.save(*records)
         self._pending = {
             record.resource_id: RecoveryVersion(record.owner_revision if record.resource_id in observed else None)
             for record in records
@@ -148,7 +164,7 @@ class ResourceRecovery:
         except BaseException as error:
             if isinstance(error, Exception):
                 pending.management_only = True
-            owner._unknown(record, error)
+            await owner._unknown(record, error)
             if not isinstance(error, Exception):
                 raise
             return error

@@ -160,6 +160,9 @@ async def test_release_preserves_completed_errors_when_another_receipt_is_interr
         await asyncio.wait_for(entered.wait(), 2)
         await asyncio.wait_for(failed[0].wait(), 2)
         await asyncio.wait_for(peer_done.wait(), 2)
+        # 等待真实 owner 提交与原锁释放，而非仅等待传输替身交付回执。
+        async with asyncio.timeout(2), owner._resource_lock(ids[3]):
+            assert not bundle.leases.leases_for_resource(ids[3])
         pending = {rid: bundle.leases.leases_for_resource(rid)[0].lease_id for rid in ids[:3]}
         assert len(deadlines) == 1
         if interruption == "deadline":
@@ -223,6 +226,7 @@ async def test_release_deadline_covers_preflight_and_dispatch_without_false_rele
     if phase == "recovery":
         bundle.restart()
     owner = bundle.owner
+    assert owner is not None
     original_recover, original_get, original_sync = owner.recover, bundle.transport.get_resource, bundle.transport.sync_owner_revision
 
     async def recovering(resource_ids=None) -> None:
@@ -271,6 +275,8 @@ async def test_release_deadline_covers_preflight_and_dispatch_without_false_rele
                     await asyncio.sleep(0)
         if phase in {"revision", "delete"}:
             await asyncio.wait_for(peer_done.wait(), 2)
+            async with asyncio.timeout(2), owner._resource_lock(peer):
+                assert not bundle.leases.leases_for_resource(peer)
         assert len(deadlines) == 1
         pending = bundle.leases.leases_for_resource(rid)
         deadlines[0].reschedule(asyncio.get_running_loop().time())

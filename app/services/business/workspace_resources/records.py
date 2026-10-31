@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Iterator, KeysView
@@ -16,6 +17,7 @@ from app.abstractions.workspace_resources import ResourceKind, RetentionScope
 from app.core.failures import report_failure
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.resource_uri import parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 
 
@@ -122,6 +124,7 @@ class ResourceRecordStore:
         self.workspace_id = validate_workspace_id(workspace_id)
         self.path = workspace_root / ".boxteam" / f"{kind}-resources.json"
         self._records: dict[str, OwnedResourceRecord] = {}
+        self._write_lock = asyncio.Lock()
         with self._io("read"):
             if not self.path.exists():
                 return
@@ -180,23 +183,28 @@ class ResourceRecordStore:
     def all(self) -> tuple[OwnedResourceRecord, ...]:
         return tuple(deepcopy(record) for record in self._records.values())
 
-    def save(self, *records: OwnedResourceRecord) -> None:
-        """调用方持有原资源锁；仅在唯一写盘链成功后发布隔离副本。"""
+    async def save(self, *records: OwnedResourceRecord) -> None:
+        """原资源锁覆盖 worker 结算；所有资源共用同一原子文件写入顺序。"""
         if not records:
             return
-        candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
-        for record in candidate.values():
-            record.validate(self.workspace_id, self.kind)
-        with self._io("write"):
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            pending = self.path.with_suffix(".tmp")
-            with pending.open("w", encoding="utf-8") as stream:
-                json.dump({
-                    "schema_version": 1,
-                    "workspace_id": self.workspace_id,
-                    "records": [asdict(record) for record in candidate.values()],
-                }, stream, ensure_ascii=False, separators=(",", ":"))
-                stream.flush()
-                os.fsync(stream.fileno())
-            pending.replace(self.path)
-        self._records = candidate
+        async with self._write_lock:
+            def publish() -> None:
+                candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
+                for record in candidate.values():
+                    record.validate(self.workspace_id, self.kind)
+                with self._io("write"):
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    pending = self.path.with_suffix(".tmp")
+                    with pending.open("w", encoding="utf-8") as stream:
+                        json.dump({
+                            "schema_version": 1,
+                            "workspace_id": self.workspace_id,
+                            "records": [asdict(record) for record in candidate.values()],
+                        }, stream, ensure_ascii=False, separators=(",", ":"))
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    pending.replace(self.path)
+                self._records = candidate
+
+            # TODO(5.4)：worker 不可抢占原生 I/O；同步冷加载、lease 写盘和整次关闭仍须分别核实。
+            await run_sync_shielded(publish)

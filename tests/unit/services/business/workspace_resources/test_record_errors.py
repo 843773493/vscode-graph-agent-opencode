@@ -132,7 +132,7 @@ async def test_native_owner_store_failure_preserves_cause_and_unpublished_state(
             if stage == "read":
                 resource_owner.restart()
             else:
-                store.save(record)
+                await store.save(record)
     error = raised.value
     detail = str(error)
     assert error.__cause__ is native_error and error.errno == errno.EACCES
@@ -148,7 +148,7 @@ async def test_native_owner_store_failure_preserves_cause_and_unpublished_state(
         assert "diagnostic_sink_error" not in detail
     assert store.all() == before and path.read_bytes() == original
     # 同一 writer 显式重试，冷 owner 读回同一身份与版本，不重复外部创建。
-    store.save(record)
+    await store.save(record)
     owner = resource_owner.restart()
     assert owner._store.get(rid) == record
     restored = await owner.get_resource(rid)
