@@ -32,6 +32,11 @@
 - **WHEN** Shell 绑定的工作区与工作目录 URI 的目标不同
 - **THEN** 在启动命令前明确拒绝，不能转换为本机相对路径或静默切换目标
 
+#### Scenario: 附件工作目录的来源识别或复核等待原生访问
+
+- **WHEN** Terminal 创建已进入附件目录准入，catalog 来源识别、可用性或原生目录检查仍在执行或在线程池排队
+- **THEN** 复用原受保护 worker 并传递请求上下文，同一服务的其它资源请求仍能推进；原 Thread 准入覆盖结算，目录 holder 从复核前取得并覆盖排队及 worker 结束。调用者取消后等待同一 worker 结算并传播原取消，不继续发布目录占用或创建 PTY；原 intent 与 operation lease 仍由原创建失败链处理，不据此宣称没有创建意图。成功后沿原链保存目录 URI、发布绑定持久终端身份的目录 lease 并创建真实 PTY，不新增解析或文件操作链路；原生 I/O 抢占、同步 lease 写盘和整个 operation／shutdown 期限仍单独验收
+
 ### Requirement: 最后解除关联后默认保留附件目录三十天
 
 上传 SHALL 经现有接受边界自动关联发起 Thread，Thread runtime 卸载、Thread 删除或 Session 删除 SHALL 由后端通知附件 owner 幂等解除精确关联。最后一个关联解除时 SHALL 持久记录零关联起点与默认 30 天回收期限；重新 attach SHALL 取消该期限，下一次归零重新计时。上传、排队输入、fork 和文件处理的有效操作占用 SHALL 阻止回收。周期检查 SHALL 使用低频到期查询，普通重启 MUST NOT 重置期限，也不要求精确到秒触发。删除前 SHALL 与新关联/占用互斥复核并登记可恢复删除状态，失败明确可见且可重试。Shell/Browser 原有临时资源的 30 分钟或 unload 立即清理规则 MUST NOT 扩张为附件规则。

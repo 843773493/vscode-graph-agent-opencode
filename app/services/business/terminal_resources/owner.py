@@ -120,7 +120,7 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         lease_refs: dict[str, str],
     ) -> TerminalSnapshot:
         # 原生路径及目录 URI 都可能等待文件系统或同机 Gateway；原 holder 覆盖 worker 结算。
-        # TODO(5.4)：受管目录复核及 lease 写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
+        # TODO(5.4)：lease 写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
         resolved_cwd = await run_sync_shielded(self._resolve_workdir, cwd)
 
         async def create(record: OwnedResourceRecord) -> TerminalSnapshot:

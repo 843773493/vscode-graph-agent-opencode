@@ -380,17 +380,21 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
     @asynccontextmanager
     async def admit_working_directory(self, target: Path) -> AsyncIterator[str | None]:
         """短时保护准入；真实进程的持久 lease 由 Terminal owner 在此边界内发布。"""
-        reference = self.reference_for_path(target)
+        reference = await run_sync_shielded(self.reference_for_path, target)
         if reference is None:
             yield None
             return
         attachment_id = parse_resource_uri(reference).tail_segments[0]
         async with self._directory_operations.lock_for(attachment_id):
-            self._catalog.require_available_directory(attachment_id)
-            if self.reference_for_path(target) != reference or not target.is_dir():
-                raise FileNotFoundError("Shell 工作目录的附件版本不可用")
-            # 公开引用带当前 Gateway 身份，持久终端 intent 保存同一目标的本机规范 URI。
-            yield parse_resource_uri(self.directory_uri(attachment_id), local_gateway_id=get_current_gateway_id()).display_uri
+            # holder 覆盖排队和原生访问结算；取消不能提前允许 GC。
+            yield await run_sync_shielded(self._require_working_directory, target, reference, attachment_id)
+
+    def _require_working_directory(self, target: Path, reference: str, attachment_id: str) -> str:
+        self._catalog.require_available_directory(attachment_id)
+        if self.reference_for_path(target) != reference or not target.is_dir():
+            raise FileNotFoundError("Shell 工作目录的附件版本不可用")
+        # 公开引用带当前 Gateway 身份，持久终端 intent 保存同一目标的本机规范 URI。
+        return parse_resource_uri(self.directory_uri(attachment_id), local_gateway_id=get_current_gateway_id()).display_uri
 
     async def collect_garbage(self, *, leases: ExternalResourceLeaseLedger) -> tuple[str, ...]:
         await self.collect_fork_import_staging()

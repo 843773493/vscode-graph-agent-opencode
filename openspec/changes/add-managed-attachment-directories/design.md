@@ -531,3 +531,9 @@ Worker 复用创建时原有的进程元数据读取，先交付 spawned PID，�
 Session 正常启动与失败收尾共用原身份捕获，将这些既有字段写入唯一恢复记录；删除正常启动后重新读取当前进程作为创建身份的旧路径。停止证明丢失后仍保持 created/unknown、完整原身份和无失败回执；Node 硬重启读取该记录也不自动结清。用户显式 kill/delete 才沿既有 verifyPersistedProcessIdentity 与 terminateTerminalProcessTree 核实当前实例及原系统 session，成功持久化终态后返回管理结果；不重新执行命令、补发创建失败回执或改写原 transport owner revision。缺少完整原生身份仍明确拒绝停止并保留 unknown。此切片限已有原生身份的 Node 管理恢复，Python operation/目录 lease、native 永不交付身份和整个 shutdown 接管仍须后续验收。
 
 原停止失败写入 unknown 前也捕获收尾期间到达的同一身份；若无PID分支的 Worker 关闭本身报错，只有身份字段确实发生变化时才追加原 writer 的持久化。身份保存再次失败时按发生顺序保留启动、关闭与存储的原错误，原 Worker 句柄和 unknown 不被释放或改成已停止；不重放清理，也不让后来的写盘错误替换原失败。
+
+### 附件工作目录准入的原生访问结算（5.4 部分收口）
+
+`AttachmentBlobStore.admit_working_directory` 的来源识别和目录 holder 内复核交给既有 `run_sync_shielded`，继续使用同一 catalog、稳定 locator、符号链接边界、可用性及目录判断。catalog 沿用各真实线程独立连接；请求的 Gateway／request ContextVar 随 worker 传递，URI 仍由原 owner 规范化。复核 helper 是原判断的唯一实现，未引入第二解析或写入链。
+
+原 Terminal Thread 准入覆盖整个调用；目录 holder 覆盖复核的线程池排队、执行及取消结算，重复取消不能提前交给 GC。此时已存在原 Terminal intent 和 operation lease，取消只阻止后续目录占用发布与 PTY 创建，现有创建失败链继续处理原记录及 lease。成功后的记录保存、持久目录占用与外部创建顺序不变。普通路径仍返回原未受管结果，不吸收未知目录；原生 I/O 不能被该 worker 强行中断，不能将此切片等同整个操作或关闭的有界等待。lease writer 仍须整体协调，禁止仅把部分写入放进线程与原 writer 竞争；5.2／5.4 保持未完成。

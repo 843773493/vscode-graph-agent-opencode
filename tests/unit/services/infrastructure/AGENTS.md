@@ -9,6 +9,7 @@
 ```text
 infrastructure/
 ├── conftest.py            # 每项测试隔离的 EventChannelService
+├── attachment_blob_catalog/ # 附件目录准入、worker、holder 与取消结算
 ├── config/                # 配置策略、路径差异、监听、快照与 shadow lifecycle
 ├── events/                # typed 事件与 channel 生命周期/重放
 ├── file_tree_settings/    # 会话和工作区文件树快捷方式设置

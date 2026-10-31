@@ -735,3 +735,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原Manager在Session.start前沿唯一writer发布created/unknown，首次导航完成后才核实。未派发的意图保存失败复用原failStartup/close，持久保存failed/verified后才签not_created；收尾失败保留unknown、原错误链和无回执。created的close/delete明确409，不用空context伪报终态。创建测试迁入独立文件，原Manager测试1016→775行；既有迁移测试正文经AST核对，仅原收尾写入故障调整为允许新的首条意图保存，原错误/cause/无回执断言保持。
 - 官方Node/Bun分流runner分别305/469项通过（整组12.39秒）；真实HTTP/Chromium硬退出恢复1项、原启动诊断2项及原关闭/超时/冷恢复脚本10场景通过（4.04/6.28/32.87秒）。完整旧生产叠相同最终测试，5项单测与1项真实HTTP反例精确失败；后者在真实context已创建时核到空恢复列表，未进入后续SIGKILL步骤。集成均沿主仓闸门串行并保留原进程外期限与4GiB。
 - 首轮误用Bun直接运行混合目录，触发现有node:test的t.mock不支持，另有新测试把尚未出现的started_at误写为null；修正新预期并改用已有分流runner后全部通过，不修改既有Node测试。Ruff、Python编译/Pyright零诊断、Node语法、作者AST自查及OpenSpec strict通过；准确命令、固定完整归档与源码指纹、原输出/退出码及失败归因见 `out/tests/temp/browser_creation_intent_20261031/artifacts/verification.json`。原context身份的旧代接管、其它冷unknown窗口、Python lease、完整operation/shutdown期限、Windows与Gateway/主Web仍未验完，5.2/5.4与21/23保持。未修改另一会话Web/Workbench、自动化、共享暂存或Debug。
+
+### 2026-10-31 附件工作目录准入的原生访问结算（5.4 部分）
+
+- 来源识别和目录 holder 内的可用性／locator／原生目录检查统一复用原 shielded worker，保留 Gateway／request 上下文及原判断；holder 覆盖线程池排队、执行及重复取消结算。取消不继续发布目录占用或创建 PTY，但此阶段已有原 Terminal intent 和 operation lease，仍由原创建失败链处理；不把前一 cwd 解析切片的“零 intent”证明扩大到本阶段。不新增解析链、writer、schema 或账本。
+- 214 项相关单测通过（31.15 秒，含新增 11 项），覆盖识别／可用性／目录检查、成功／原失败／重复取消及两处线程池排队。完整旧生产归档叠加相同新增测试，来源识别反例精确失败于同步阻塞事件循环。3 项原准入真实集成通过；最终独立附件场景 2 项通过（36.65 秒），从正式消息上传生成目录，经 ASGI 资源入口和真实 Node HTTP／PTY 验 peer 可读、原 intent／lease／holder、真实 cwd、持久目录占用及正式 detach/delete 结清。原准入文件逐字节恢复，不增加既有 90 秒 suite 预算；新增文件由 integration-python 发现。
+- 初版附件集成因测试查询尚未登记的资源而失败；按原账本合同改验未登记身份后通过，不修改产品语义或原身份断言。一次补验仅等待另一会话共享闸门，主动终止本会话监督器并保留退出 143，未进入测试体；最终先等待同一闸门释放，再由原 fixture 准入串行执行，仍有进程外 180 秒／4GiB 保护。拆分装具时一次末尾空行保护断言拒绝覆盖，后续静态检查因文件尚未生成退出，未进入测试；修正装具后最终检查通过，失败原件保留。
+- Ruff、compileall 和 OpenSpec strict 通过；Pyright 的 2 条生产诊断与完整旧生产逐项一致，无新增类型诊断，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、类型对照及作者 AST 自查见 `out/tests/temp/attachment_cwd_admission_20261031/artifacts/verification.json`；完整旧源码临时副本已清理，其测试产物和指纹保留。同步 lease 写盘、原生 I/O 抢占、旧代完整接管、整个 operation／shutdown 期限及 Windows／Gateway／主 Web 未验，5.2／5.4 和整体 21/23 保持未完成；未修改另一会话的 Web／Workbench、自动化或共享暂存，不重启共享 debug。

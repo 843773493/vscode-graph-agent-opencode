@@ -23,6 +23,7 @@
 - 上传顺序为 topology shared → Session gate 内冻结 pin → 原 holder 内写 staging/durable → 短 gate 内复核 pin/fence/thread → 同 catalog 事务发布目录、版本、关联与 ingest。失败只清理本 intent；writer 未退出不得释放 holder。
 - 运行时关联包含 tracker 实例与 generation。冷上传、fork 和 queued 输入由原持久事实保活；旧代解绑不得移除新代关联。最后一次零关联才起算 30 天，重关联取消期限，重启不延长已提交期限。
 - GC 复用原文件 mutation lock、目录 holder 和唯一外部 lease 账本；删除前事务复核关联、ingest 与 fork claim，先标 deleting 再删物理目录，失败保留 locator 并幂等重试。
+- Shell 工作目录的来源识别与 holder 内复核复用既有受保护 worker，保留请求上下文及原 catalog/locator 校验；holder 覆盖线程池排队与原生访问结算，取消后不进入占用发布或 PTY 创建。worker 不抢占原生 I/O，持久 lease 写入和整个 operation/shutdown 期限仍单独验收。
 - fork 同工作区保留目录关联，跨工作区只复制冻结 manifest。网络统一使用原 files/chunk；新目录快照显式版本，旧 v2 blob 载荷只解码。alias 按精确消费 Session/Thread 与已提交 claim 解析，未映射 URI 不猜测归属。
 - `maintenance.py` 的共享/独占跨进程锁保护线上与离线切换；关闭失败保留未关闭连接和锁。schema 3 须显式离线迁移，未知版本或损坏结构直接报错，不能初始化空库掩盖丢失。
 - Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，暂缓实现与专项验证。
