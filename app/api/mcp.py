@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import ValidationError
 
 from app.api.deps import (
     get_mcp_catalog_owner,
@@ -69,6 +70,8 @@ def _connection_errors():
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except TimeoutError as error:

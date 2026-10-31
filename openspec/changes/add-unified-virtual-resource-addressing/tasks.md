@@ -1740,3 +1740,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧源码18项三平台路径边界反例和3项真实 AgentService DTO 装配反例均失败，实际为400／404并回显校验输入；最终60项关联单测通过，包括修正同一catalog后沿原入口恢复。HTTP边界使用真实FastAPI路由、中间件及生产异常处理器，服务故障由fixture注入；真实服务反例只破坏测试配置，不代替产品模型执行或网络验收。
 - 三文件Pyright与compileall通过；Ruff仅剩10项原有Depends B008，按规则、完整消息及最窄表达式AST比较无新增。移除新增导入和六个原样重抛分支后，两份生产模块AST与固定基线 `97d5d0f44` 相同。准确命令、源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/agent_tool_response_validation_20261031/artifacts/verification.json`。
 - 本片只关闭六入口的错误分类缺口，2.2／7.2及整体51/53保持；未运行真实Gateway网络、Web／Workbench、Windows、模型执行或进程重启验收，未修改另一会话前端、自动化或共享debug。
+
+### 2026-10-31 MCP 连接管理内部校验错误的响应归属（2.2／7.2部分收口）
+
+- 连接意图提交、状态、取消、授权地址及回调的公共错误出口不再将内部 Pydantic ValidationError 当作请求 ValueError 返回400。原异常交既有 TraceMiddleware 返回500和同一request_id，完整校验输入只留原日志；原业务400／404／409／503与请求422保持，不改连接、租约或授权生命周期。
+- 旧源码15项三平台路径边界反例和3项真实 McpConnectionService／原操作存储读侧反例均为400并回显输入；最终42项关联单测通过。真实存储反例核对失败不改原操作及幂等别名，修复同一stage后原状态入口及列表恢复；仅为查询和错误分类准备局部操作记录，不代替通过产品入口创建连接、真实HTTP／SDK、OAuth、执行或重启验收。
+- 两文件Pyright、Ruff、compileall和本change strict通过；移除新增导入及一处原样重抛后，生产AST与固定基线 `be8359118` 相同。命令、前后源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/mcp_response_validation_20261031/artifacts/verification.json`。
+- 本片不代全局URI不变量，2.2／7.2及整体51/53保持。未修改另一会话Web／Workbench、其自动化或共享debug；显式MCP持有继续延期。
