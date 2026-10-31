@@ -717,3 +717,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 正式 Gateway/Backend 消息入口及 model_stream 生成附件和 canonical 历史，原管理创建启动真实 PTY 父子；沿原 SHELL 配置复用启动故障装具，只丢停止证明。两次 Backend 硬重启、到期和普通查询均保留 created/unknown、原 operation 与目录 lease；原管理停止核实后才结清，后续重启回收目录，原身份、历史字节和执行次数保持。新集成 1 passed（90.16 秒），原启动失败完整 8 passed（46.73 秒）；主仓共享闸门串行，保留进程外 180/60 秒及 4GiB。
 - Ruff、Pyright 零诊断及 Node 语法通过。固定 HEAD 完整归档、源码指纹、原输出和退出码见 `out/tests/temp/terminal_startup_backend_recovery_20261031/artifacts/verification.json`。没有新产品实现或第二套故障/持久化链；native 始终无身份、原调用未派发即消失、不合作操作总期限、Windows 和 Web 仍未验完，5.2/5.4 与 21/23 保持。未修改另一会话 Web/Workbench、其自动化、共享暂存或 Debug。
+
+### 2026-10-31 Terminal 原生创建前发布恢复意图（5.2 部分）
+
+- 原 Manager 在 Session.start 前沿唯一 writer 发布 created/unknown，原就绪及身份到达后再核实；写入失败只有仍在场的原调用证明未派发，才持久关闭同一身份并签 not_created。收尾再次失败保留 created/unknown、按发生顺序的两份原错及无回执，不新增 schema、账本或恢复链。
+- 180 项 Node 单测、真实 HTTP/PTY 硬退出恢复 1 项、原信号/致命错误 6 项及原启动失败完整 8 项通过（9.27/12.07/57.57/47.51 秒）。完整旧生产叠加同一最终测试的 4 项单测反例及 1 项真实 HTTP 反例明确失败；真实反例在已创建 PTY 后核到空恢复列表，未执行后续硬退出步骤。原信号装具将方法重入计数改为真实 Worker shutdown IPC 计数，保持每个原 PID 一次、共两次及保留 PTY 的原断言；旧生产复现原装具失败，改正观测后同一旧生产 SIGTERM 通过。
+- Ruff、Python 编译/类型、Node 语法、作者 AST 自查及 OpenSpec strict 通过；命令、源码指纹、原输出/退出码、装具归因和取消排队说明见 `out/tests/temp/terminal_creation_intent_20261031/artifacts/verification.json`。集成沿原主仓共享闸门串行运行，保留进程外期限与 4GiB；未修改另一会话 Web/Workbench、自动化、暂存或共享 Debug。无原生身份接管、原 Backend 调用消失、完整 operation/shutdown 硬期限及 Windows 仍未验完，5.2/5.4 与 21/23 保持。

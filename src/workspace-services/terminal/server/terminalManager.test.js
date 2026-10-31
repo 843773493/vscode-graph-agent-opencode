@@ -29,6 +29,95 @@ function createTerminalTestWorkspace() {
   return root;
 }
 
+test("原生创建之前必须等待同一unknown意图发布", async (t) => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+  const published = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const write = manager.stateStore.write.bind(manager.stateStore);
+  let starts = 0;
+  let writes = 0;
+  t.mock.method(manager.stateStore, "write", async snapshot => {
+    await write(snapshot);
+    if (++writes === 1) {
+      published.resolve();
+      await release.promise;
+    }
+  });
+  t.mock.method(TerminalSession.prototype, "start", async function () {
+    starts += 1;
+    this.status = "running";
+    this.markReconciliationStatus("verified");
+  });
+  const creating = manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 });
+  try {
+    await published.promise;
+    assert.equal(starts, 0);
+    const record = JSON.parse(await readFile(manager.stateFile, "utf8")).terminals[0];
+    assert.equal(record.terminal_id, terminalId);
+    assert.equal(record.transport_owner_revision, 7);
+    assert.equal(record.status, "created");
+    assert.equal(record.reconciliation_status, "unknown");
+    assert.equal(record.os_pid, null);
+  } finally {
+    release.resolve();
+    await creating;
+  }
+  assert.equal(starts, 1);
+  assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "verified");
+});
+
+for (const afterPublish of [false, true]) {
+  test(`未派发的意图写入${afterPublish ? "发布后" : "发布前"}失败不启动PTY并关闭原身份`, async (t) => {
+    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+    const original = new Error("原意图写入失败");
+    const write = manager.stateStore.write.bind(manager.stateStore);
+    let writes = 0;
+    const start = t.mock.method(TerminalSession.prototype, "start", async () => {});
+    t.mock.method(manager.stateStore, "write", async snapshot => {
+      if (++writes === 1) {
+        if (afterPublish) await write(snapshot);
+        throw original;
+      }
+      await write(snapshot);
+    });
+    await assert.rejects(manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 }), error => error === original);
+    assert.equal(start.mock.callCount(), 0);
+    assert.deepEqual(original.creationReceipt, {
+      resource_id: terminalId, workspace_id: manager.workspaceId, owner_revision: 7, outcome: "not_created",
+    });
+    const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+    await cold.init();
+    const record = cold.get(terminalId).snapshot();
+    assert.equal(record.status, "deleted");
+    assert.equal(record.reconciliation_status, "verified");
+    assert.equal(record.os_pid, null);
+    assert.equal(record.release_reason, "terminal_creation_not_dispatched");
+  });
+}
+
+test("未派发意图的关闭写入再失败保留两份原错且不签回执", async (t) => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+  const failures = [new Error("意图写入失败"), new Error("未派发收尾写入失败")];
+  let writes = 0;
+  const start = t.mock.method(TerminalSession.prototype, "start", async () => {});
+  t.mock.method(manager.stateStore, "write", async () => { throw failures[writes++]; });
+  await assert.rejects(manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 }), error => {
+    assert(error instanceof AggregateError);
+    assert.deepEqual(error.errors, failures);
+    assert.equal(error.cause, failures[0]);
+    assert.equal(error.creationReceipt, undefined);
+    return true;
+  });
+  assert.equal(start.mock.callCount(), 0);
+  assert.equal(writes, 2);
+  assert.equal(failures[0].creationReceipt, undefined);
+  assert.equal(manager.get(terminalId).snapshot().status, "created");
+  assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "unknown");
+});
+
 test("终端的持久相对路径覆盖相对子目录、越界绝对路径、工作区移动与符号链接四类场景", async () => {
   const root = createTerminalTestWorkspace();
   mkdirSync(path.join(root, "sub", "deep"), { recursive: true });

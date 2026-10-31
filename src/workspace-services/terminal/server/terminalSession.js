@@ -304,6 +304,7 @@ export class TerminalSession {
     this.status = "running";
     this.startedAt = this.startedAt || nowIso();
     this.capturePtyIdentity(isolatedPty);
+    this.markReconciliationStatus("verified");
     this.touch();
     await this.manager.persist();
   }
@@ -678,7 +679,28 @@ export class TerminalSession {
     return changed;
   }
 
-  async failStartup(error) {
+  async failStartup(error, { notCreated = false } = {}) {
+    if (notCreated) {
+      // 只有仍在场的创建调用能证明尚未调用start；冷记录缺少PID不能套用此结论。
+      this.status = "deleted";
+      this.endedAt = nowIso();
+      this.releaseReason = "terminal_creation_not_dispatched";
+      this.markReconciliationStatus("verified");
+      try {
+        await this.manager.persist();
+      } catch (persistError) {
+        this.status = "created";
+        this.endedAt = null;
+        this.markReconciliationStatus("unknown");
+        throw new AggregateError([error, persistError],
+          `终端未派发创建的收尾持久化失败: terminal_id=${this.id}`, { cause: error });
+      }
+      error.creationReceipt = {
+        resource_id: this.id, workspace_id: this.workspaceId,
+        owner_revision: this.transportOwnerRevision, outcome: "not_created",
+      };
+      throw error;
+    }
     const isolatedPty = this.ptyProcess;
     // TODO（5.2）：native 尚未交付 PID 的阻塞仍须由原 owner 接管，不能凭 Worker 退出结清。
     let stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])

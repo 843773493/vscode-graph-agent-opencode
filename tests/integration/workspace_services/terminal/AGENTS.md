@@ -13,6 +13,10 @@ terminal/
 
 Linux 僵尸断言只描述 Linux 的回收语义；Windows 用原生 `taskkill /T` 终止并分别核对进程根与子进程退出。两类验证使用各自平台的操作系统证据，不以模拟 `taskkill` 或 `/proc` 状态替代原生验证。
 
+`test_terminal_creation_intent.py`复用原真实PTY就绪屏障，在就绪尚未交付时核对先前发布的created/unknown意图，再SIGKILL本fixture的Node并从原磁盘启动新Manager。公开查询必须保留同一身份，缺PID的kill/delete不能伪报核实停止，迟到创建不能替换意图；测试不补写记录或原生身份，不代表无身份接管、Python lease、Windows或Web。正式产物镜像本测试路径；原信号fixture按request.node.path确定输出归属。
+
+原就绪屏障的`shutdowns.jsonl`在Worker真实关闭IPC发送处记录次数与策略；等待同一关闭Promise的重入不算另一份派发。原信号场景仍要求两个Worker各派发一次，不放宽身份、次数或保留PTY的断言。
+
 Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，同session后代忽略SIGTERM；停止返回后独立枚举进程表核对没有仍在执行的成员。测试父进程以subreaper回收自己产生的根与后代，失败收尾只操作本例隔离的进程组，不把该边界测试称为完整PTY或Backend重启验收。
 
 `test_operation_receipts.py`通过正式Session、消息附件上传、Terminal创建及原工具operation生成真实Node/PTY/HTTP状态，明确注入回执版本／核实状态或账本通知／日志故障。读、真实命令写入及workspace完成的错误回执保留精确原lease和目录占用；显式管理停止核实后才结清并允许到期GC。独立终态场景暂停steering轮询，由完成查询独占提交真实外部停止事实，仍保留workspace记录与关联；通知或日志故障不改变已提交的结算，核对冷账本和真实目录回收。suite `integration-terminal-operation-receipts`显式选择原7场景，固定90秒/4GiB；`integration-terminal-lease-notifications`选择通知失败及通知／日志双重故障2场景，固定60秒/4GiB，两组复用同一场景实现并串行运行。支持Linux和Windows，实机结论以各平台原始结果为准；原生PTY以回车提交命令，不替代Gateway/Web、独立Backend重启或完整旧代接管验收。

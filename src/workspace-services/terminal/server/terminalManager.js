@@ -266,7 +266,7 @@ export class TerminalManager {
         terminal_id: id,
         workspace_id: this.workspaceId,
         transport_owner_revision: ownerRevision,
-        reconciliation_status: "verified",
+        reconciliation_status: "unknown",
         owner_agent_id: agentId || null,
         title,
         command,
@@ -280,11 +280,15 @@ export class TerminalManager {
       },
     });
     this.terminalsById.set(id, session);
+    let startDispatched = false;
     try {
+      // 原生创建前先发布原恢复记录；硬退出后不能留下没有资源身份的PTY。
+      await this.persist();
+      startDispatched = true;
       await session.start();
     } catch (error) {
       // 保留原身份与恢复记录；原owner核实进程树、Worker退出及终态落盘后才结清创建。
-      await session.failStartup(error);
+      await session.failStartup(error, { notCreated: !startDispatched });
     }
     await this.persist();
     return session.snapshot();

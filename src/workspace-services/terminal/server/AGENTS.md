@@ -84,6 +84,8 @@ Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；
 
 就绪前失败已取得原生PID时，Session先保留unknown和原身份，再复用`terminateForRelease`核实整棵进程树、worker退出及终态持久化；全部成功才签正式failed创建回执。停止失败保留原句柄，created/unknown可由原管理kill入口重试；没有PID的created不能伪报已终止，native未交付身份的接管仍为TODO。
 
+Manager在调用Session.start前先经原writer发布created/unknown意图；就绪后沿原身份捕获和持久化链转为verified。首条意图写入失败时，只有原创建调用确认start尚未派发，才能将同一身份关闭为deleted/verified并签not_created；收尾也写入失败保留unknown与两份原错、不签回执。冷Manager缺少PID不能使用该原调用证明，也不能因缺少就绪记录将资源判为不存在。
+
 Worker退出后，非运行unknown记录保留完整PID、系统会话与启动标记时，原管理kill/delete仍可进入同一停止链；无句柄时必须先核对当前PID、进程组、系统会话和启动标记，核验失败不发送信号，保留unknown与原身份。Backend重启不补造Worker或重建执行，缺少身份的记录也不借此获得停止许可。
 
 Linux原根已退出且持久PID、进程组与SID保持原PTY根的同一身份时，继续交原进程树链核实整个SID；根缺失不代表后代停止。仍存在的PID身份不符或原身份不完整继续拒绝，不放宽其它平台的冷停止边界。

@@ -1,5 +1,6 @@
 // 测试专用就绪回执屏障：保留真实PTY/IPC，仅延迟向Session交付原就绪结果。
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -21,7 +22,17 @@ async function readControl(name) {
 
 const start = IsolatedPtyProcess.prototype.start;
 IsolatedPtyProcess.prototype.start = async function (options) {
-  const ready = await start.call(this, options);
+  const pending = start.call(this, options);
+  const worker = this.workerProcess;
+  const send = worker.send.bind(worker);
+  worker.send = (message, ...args) => {
+    if (message.type === "shutdown") {
+      // 观察真实关闭派发，重入同一关闭Promise不应被计作另一份副作用。
+      appendFileSync(path.join(controlRoot, "shutdowns.jsonl"), `${JSON.stringify({ pid: this.pid, terminatePty: message.terminatePty })}\n`);
+    }
+    return send(message, ...args);
+  };
+  const ready = await pending;
   const identity = await readProcessStat(ready.pid);
   await appendFile(path.join(controlRoot, "starts.jsonl"), `${JSON.stringify({ ...identity, worker_pid: this.workerPid })}\n`);
   if (!options.args.some((arg) => arg.includes("gated-terminal-start"))) return ready;
@@ -39,10 +50,4 @@ IsolatedPtyProcess.prototype.start = async function (options) {
     await delay(10);
   }
   return ready;
-};
-
-const shutdown = IsolatedPtyProcess.prototype.shutdown;
-IsolatedPtyProcess.prototype.shutdown = async function (options) {
-  await appendFile(path.join(controlRoot, "shutdowns.jsonl"), `${JSON.stringify({ pid: this.pid, ...options })}\n`);
-  return await shutdown.call(this, options);
 };

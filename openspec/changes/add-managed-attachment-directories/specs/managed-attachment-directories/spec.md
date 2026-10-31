@@ -183,6 +183,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** native 启动抛错、Worker 异常退出或清理失败，尚未取得本次 PTY 进程树的正式停止证明
 - **THEN** 外部 owner 保留已取得的原身份与未知记录，不签发未创建或已停止回执；Python 保留本次待核实 lease，Worker 退出、已发送信号及普通 HTTP 错误均不能代替停止证明
 
+#### Scenario: Terminal 原生创建前发布恢复意图
+
+- **WHEN** Node接纳具有合法资源、工作区及版本身份的Terminal创建
+- **THEN** 在调用原生启动前先经既有writer发布同一资源的created/unknown恢复记录；就绪后沿原身份和记录链核实。首条意图写入失败时，只有仍在场且确认尚未调用启动的原调用，才能持久关闭该身份并返回绑定本次intent的not_created回执；收尾再次失败保留unknown和按发生顺序的两份原错，不签未创建回执。Node在就绪交付前硬退出后，冷Manager仍可发现原意图，不能用缺少PID、Worker退出或原进程已消失替代停止证明，也不允许迟到创建覆盖该身份；没有原生身份的终止接管仍须另行核实
+
 #### Scenario: Terminal 原生创建后就绪交付失败
 
 - **WHEN** 原生PTY已创建并交付唯一PID，但就绪前发生错误、超时或Worker退出
