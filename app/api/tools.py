@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from app.api.deps import (
     get_request_id,
@@ -38,6 +39,8 @@ async def list_tools(
 ):
     try:
         result = await tool_service.list(agent_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         # agent_id 来自查询参数：不存在的 agent 属于客户端输入错误，不能报成 500。
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -110,6 +113,8 @@ async def start_tool_test(
 ):
     try:
         result = await test_service.start(tool_name=tool_id, request=payload)
+    except ValidationError:
+        raise
     except ValueError as error:
         # 不支持的工具、无可用 provider 等均来自请求输入。
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -129,6 +134,8 @@ async def get_tool(
 ):
     try:
         result = await tool_service.get(tool_id, agent_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except ToolNotFoundError as error:

@@ -1733,3 +1733,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧路由21项三平台路径边界反例与真实 JobService 装配DTO的3项反例均有效失败；最终73项关联单测通过，覆盖原404／409／501、422先于服务访问、诊断一次及原任务状态保持。HTTP边界使用真实FastAPI路由、中间件及生产异常处理器，服务故障由fixture注入；真实JobService反例只破坏原内存状态，不代表产品执行、真实网络或恢复验收。
 - compileall与本change strict通过；Ruff6项和Pyright5项既有诊断按规则、完整消息及对应表达式AST比较无新增，不称静态全绿。移除新增的六个异常分支及导入后，生产AST与HEAD一致；原测试顶层符号保持。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/job_response_validation_20261031/artifacts/verification.json`。
 - 本片不代全局URI不变量、Windows实机、Gateway／Web、模型执行或Backend重启验收，2.2／7.2仍未勾、整体51/53。未修改另一会话Web／Workbench、其自动化、共享debug或既有暂存；团队协作及显式MCP持有继续延期。
+
+### 2026-10-31 Agent／Tool 内部校验错误的响应归属（2.2／7.2部分收口）
+
+- Agent 查询、工作区默认 Agent／Provider 设置，以及 Tool 列表、详情和测试启动的六处入口，不再将内部 Pydantic ValidationError 当作请求 ValueError 返回400／404。原异常交既有 TraceMiddleware 返回500和同一 request_id，完整输入及诊断只留原日志；业务 ValueError、具名404／409和请求422保持，不新增错误处理链路。
+- 旧源码18项三平台路径边界反例和3项真实 AgentService DTO 装配反例均失败，实际为400／404并回显校验输入；最终60项关联单测通过，包括修正同一catalog后沿原入口恢复。HTTP边界使用真实FastAPI路由、中间件及生产异常处理器，服务故障由fixture注入；真实服务反例只破坏测试配置，不代替产品模型执行或网络验收。
+- 三文件Pyright与compileall通过；Ruff仅剩10项原有Depends B008，按规则、完整消息及最窄表达式AST比较无新增。移除新增导入和六个原样重抛分支后，两份生产模块AST与固定基线 `97d5d0f44` 相同。准确命令、源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/agent_tool_response_validation_20261031/artifacts/verification.json`。
+- 本片只关闭六入口的错误分类缺口，2.2／7.2及整体51/53保持；未运行真实Gateway网络、Web／Workbench、Windows、模型执行或进程重启验收，未修改另一会话前端、自动化或共享debug。

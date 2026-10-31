@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from app.api.deps import get_agent_service, get_request_id, verify_local_token
 from app.api.errors import state_conflict_http_error
@@ -38,6 +39,8 @@ async def set_workspace_default_agent(
 ):
     try:
         result = await agent_service.set_workspace_default_agent(payload.agent_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         # 不存在的 agent 属于客户端输入错误，不能报成 500。
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -61,6 +64,8 @@ async def set_workspace_default_provider(
             agent_id,
             payload.provider_id,
         )
+    except ValidationError:
+        raise
     except ValueError as error:
         # agent 或 provider 不存在/不可用均来自请求输入。
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -79,6 +84,8 @@ async def get_agent(
 ):
     try:
         result = await agent_service.get(agent_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
