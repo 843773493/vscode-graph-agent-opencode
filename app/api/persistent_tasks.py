@@ -7,6 +7,7 @@ from typing import Annotated, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import get_persistent_task_service, get_request_id, verify_local_token
@@ -50,6 +51,8 @@ async def _apply(operation: Callable[[], Awaitable[Result]]) -> Result:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -125,6 +128,8 @@ async def task_runs(task_id: str, request_id: RequestId,
         return APIResponse(data=PersistentTaskRunListDTO(items=service.runs(task_id)), request_id=request_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

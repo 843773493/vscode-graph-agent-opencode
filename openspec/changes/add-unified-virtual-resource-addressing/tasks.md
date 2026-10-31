@@ -1747,3 +1747,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧源码15项三平台路径边界反例和3项真实 McpConnectionService／原操作存储读侧反例均为400并回显输入；最终42项关联单测通过。真实存储反例核对失败不改原操作及幂等别名，修复同一stage后原状态入口及列表恢复；仅为查询和错误分类准备局部操作记录，不代替通过产品入口创建连接、真实HTTP／SDK、OAuth、执行或重启验收。
 - 两文件Pyright、Ruff、compileall和本change strict通过；移除新增导入及一处原样重抛后，生产AST与固定基线 `be8359118` 相同。命令、前后源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/mcp_response_validation_20261031/artifacts/verification.json`。
 - 本片不代全局URI不变量，2.2／7.2及整体51/53保持。未修改另一会话Web／Workbench、其自动化或共享debug；显式MCP持有继续延期。
+
+### 2026-10-31 持久任务管理内部校验错误的响应归属（2.2／7.2部分收口）
+
+- 创建、更新、控制、检查、通知、运行详情及旧生成器导入共用的异步出口，以及独立运行列表出口，不再把内部 Pydantic ValidationError 翻译成400。原异常沿既有 TraceMiddleware 返回500及同一request_id，完整校验输入只留原日志；普通ValueError、KeyError、具名NotFound／状态冲突与请求422保持，不改任务调度、导入或持久化。
+- 旧源码24项三平台路径边界反例及3项原 PersistentTaskStore 冻结判断读侧反例均为400并回显输入；最终116项API／任务引用单测通过。真实存储反例核对失败不改任务或运行行，修复同一decision后读回原运行；创建和触发记录仅为局部查询准备，不代替产品入口生成、执行、fork或恢复的完整验收。
+- Ruff、compileall与本change strict通过；Pyright保留1项既有SSE responses参数注解诊断，按规则、完整消息和最窄表达式AST比较无新增，不称静态全绿。新增测试中不合签名的NotFoundError构造已改正，并在改生产前确认14项具名业务拒绝仍通过。移除新增导入及两处原样重抛后，生产AST与固定基线 `b0109bfa8` 相同；准确命令、源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/persistent_task_response_validation_20261031/artifacts/verification.json`。
+- 本片不代全局URI、真实Gateway网络、Web／Workbench、Windows、模型执行或进程重启验收，2.2／7.2及整体51/53保持；另一会话前端、自动化和共享debug未改动。
