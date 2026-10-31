@@ -668,3 +668,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 上一边界追加的 25 项记录错误／冷恢复／释放回归在取得原共享闸门后运行，7 项通过，随后 Browser 损坏创建回执场景的业务结果文件、deleted/verified 与 lease 结清已完成，但后续收尾挂起，最终由原 420 秒进程外保护以 124 终止；不再以合并运行预算不足解释，也不计作整组通过。相同单项在完整旧生产和候选分别通过（15.17／13.35 秒），未复现且未取得挂起任务栈，gdb 被 ptrace 权限拒绝；不能据此判断为旧问题或本片回归。最小探针另确认 `run_sync_shielded` 成功 worker 后的收尾等待可能吞取消，留后续独立切片修复，不把它直接认定为上述挂起根因。
 - 拆开的冷恢复／释放为 12 passed、3 装具错误（141.87 秒），Terminal 原始日志明确 EADDRINUSE，后两项也在启动前因占用被拒绝，不终止未知进程。fork 正式期限 suite 两项通过（38.55 秒）；正式诊断 suite 四项通过、四项在 fixture 读取已删除的 `workspace_owner.logger` 时出错（108.21 秒），不算整组通过。离线备份记录的 14 项定向验证通过（48.53 秒）。初次临时 pytest 调用被 fork 正式 watchdog 前置条件拒绝，旧产品备份输入也因归档未加载仓库 `.env` 失败；原件保留，修正为正式 matrix 与 `uv --env-file .env` 读取既有测试环境，不改配置或保存凭据内容。
 - 本片命令、前后源码指纹、原始输出／实际退出码、旧生产反例、复用依据与类型对照保存在 `out/tests/temp/resource_unstarted_intent_20261031/artifacts/`。旧代接管、取消传播与收尾挂起、上述未通过验收、同步 lease I/O、原生线程中断、Backend 硬重启、Windows、Gateway/Web 和完整 shutdown 仍未验完；5.2／5.4 及整体 21/23 不勾选。未修改另一会话的 Web/Workbench、自动化或暂存，不重启共享 debug。
+
+### 2026-10-31 同步 worker 已完成后的取消传播（5.4 部分收口）
+
+- 确定性复现表明原 `run_sync_shielded` 在成功 worker 之后仍创建并等待 cleanup task，首次外部取消可能被用于既有取消收尾的 shield 吞掉：任务接受取消却返回42，或继续等待后续工作。现只在原等待收到取消时沿既有原语等待同一 worker 并重抛；正常结果／原生失败不再建立收尾 task 或额外 await。签名、同步操作、原锁和原生异常身份保持，`run_cleanup_shielded` AST 不变，不新建 worker、writer 或停止链。
+- 606 项相关单测通过（49.94 秒，含新增5项），覆盖结果交付时取消、继续等待、原生执行期间重复取消、原锁持有、原生错误与原取消 context、参数及结果。完整旧生产归档加相同公开原语用例，两项反例均精确失败于已接受取消被吞，不以新私有接口缺失充当红测。Ruff、两文件 Pyright 零诊断和编译检查通过。
+- 6 项正式 Session／ASGI／Node／真实 PTY 与 Chromium 记录写入集成在同一运行中全部通过（72.51 秒），覆盖管理写入完成／取消及未派发 intent 的两类 owner。原资源身份、版本、锁、精确 lease、冷读、列表／详情与同入口停止断言保持；集成沿原主仓闸门取得名额，不更改另一会话 Web／Workbench、其自动化或共享 debug。
+- 新源码下再次运行原25项回归并加载只读任务快照，5项通过后在 Browser 授权账本失败场景的收尾挂起。多轮快照一致定位 `WorkspaceLifespan._close → TerminalSteeringService.shutdown → await task`，原 `terminal-steering-monitor` 已有取消计数1却仍在 `_run` 的轮询 sleep；这证明本片通用 worker 修复尚未解决全部关闭链。保留原快照后仅对本会话 timeout 监督器发送 SIGTERM，实际退出143，非360秒预算耗尽，不计整组通过；监控停止准入另作纵向切片，不用本次观察倒推前次无栈挂起的精确根因。
+- 准确命令、完整归档及基线指纹、原始输出、实际退出码、只读插件身份和作者AST复核见 `out/tests/temp/shielded_worker_cancel_20261031/artifacts/`。Windows、Gateway/Web、旧代接管、不可抢占原生I/O及完整 shutdown 仍未验完，5.2／5.4和21/23保持；未解决的logger装具与端口错误亦不以本片通过项覆盖。

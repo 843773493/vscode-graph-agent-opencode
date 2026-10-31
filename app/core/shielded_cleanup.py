@@ -39,10 +39,12 @@ async def run_sync_shielded(operation: Callable[P, T], *args: P.args, **kwargs: 
     """同步 I/O 交给 worker；取消须等 worker 结算后再释放调用方的准入。"""
     worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
 
-    async def settle() -> None:
-        await worker
-
     try:
         return await asyncio.shield(worker)
-    finally:
+    except asyncio.CancelledError:
+        async def settle() -> None:
+            await worker
+
+        # 正常结果已证明worker结束；再等待收尾task会新增吞掉首次取消的窗口。
         await run_cleanup_shielded(settle)
+        raise

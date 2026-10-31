@@ -499,3 +499,7 @@ Session读写准入的active catalog查询、`SessionService.get`的单节点/�
 本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。
 
 首条创建 intent 写盘的取消由原调用单独核实：尚未进入外部创建回调、登记 operation lease 或派发创建，worker 已提交的 intent 在原锁与 Thread 准入内受保护地关闭为 deleted/verified，解除关联，随后才同步原账本的 stopped 投影。只登记原资源身份，不补造占用或外部回执；重复取消不能遗弃收尾。写盘或账本同步失败保留原取消与原存储错误，后续冷读取不凭清单缺失改写未核实 intent。原调用随 Backend 退出的接管仍是 5.2 TODO，不将本地未派发证明推广到旧代操作。
+
+### 同步 worker 完成后的取消传播（5.4 部分收口）
+
+`run_sync_shielded` 仅在原等待收到 `CancelledError` 时进入既有受保护结算，然后传播原取消。成功结果和原生失败已表明 worker 结束，直接返回或抛出，不再创建额外收尾任务；否则首次外部取消可能落入为既有取消设计的 cleanup shield，被吞掉后继续业务步骤或周期等待。原生执行期间的取消仍等待同一 worker，保持原锁、原异常身份及失败时的取消 context；不改 `run_cleanup_shielded` 的既有失败收尾合同，不新增 worker 或停止算法。此竞争的确定性复现不能单独证明此前 Browser 合并回归挂起的根因，完整 shutdown 与旧代接管继续按 5.2／5.4 验收。
