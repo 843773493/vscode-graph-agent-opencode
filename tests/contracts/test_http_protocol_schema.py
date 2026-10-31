@@ -25,6 +25,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
 )
+from app.schemas.internal_v2.session import SessionDTO, SessionInformationSessionDTO
 from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceOperationRequest,
     TerminalResourceCreateRequest,
@@ -63,6 +64,29 @@ def _export(output: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         [sys.executable, "-m", "scripts.export_openapi_snapshot", "--output-root", str(output), *arguments],
         capture_output=True, text=True, timeout=30, check=False,
     )
+
+
+def _public_roots(document: JsonSchemaValue, pending: list[JsonSchemaValue]) -> set[str]:
+    """穿过 HTTP 信封、分页与数组，具名 proto 根的成员交给正式检查递归处理。"""
+    schemas = document["components"]["schemas"]
+    roots: set[str] = set()
+    visited: set[str] = set()
+    while pending:
+        node = pending.pop()
+        if "$ref" in node:
+            name = node["$ref"].rsplit("/", 1)[1]
+            if name in public_pb2.DESCRIPTOR.message_types_by_name:
+                roots.add(name)
+            elif name not in visited:
+                visited.add(name)
+                pending.append(schemas[name])
+        else:
+            for value in node.values():
+                if isinstance(value, dict):
+                    pending.append(value)
+                elif isinstance(value, list):
+                    pending.extend(branch for branch in value if isinstance(branch, dict))
+    return roots
 
 
 def test_http_schema_checks_real_request_and_response_and_preserves_business_constraints(
@@ -134,8 +158,6 @@ def test_file_http_routes_register_their_actual_public_json_roots(http_openapi: 
 
 
 def test_node_debug_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
-    schemas = http_openapi["components"]["schemas"]
-    roots: set[str] = set()
     pending: list[JsonSchemaValue] = []
     for path, operations in http_openapi["paths"].items():
         if not path.startswith("/api/v1/workspaces/{workspace_id}/debug/node"):
@@ -149,20 +171,7 @@ def test_node_debug_routes_register_their_actual_public_json_roots(http_openapi:
                 body = response.get("content", {}).get("application/json")
                 if status.startswith("2") and body is not None:
                     pending.append(body["schema"])
-    while pending:
-        node = pending.pop()
-        if "$ref" in node:
-            name = node["$ref"].rsplit("/", 1)[1]
-            if name.startswith("NodeDebug"):
-                roots.add(name)
-            else:
-                pending.append(schemas[name])
-        else:
-            for value in node.values():
-                if isinstance(value, dict):
-                    pending.append(value)
-                elif isinstance(value, list):
-                    pending.extend(branch for branch in value if isinstance(branch, dict))
+    roots = _public_roots(http_openapi, pending)
     assert {"NodeDebugCapabilitiesDTO", "NodeDebugStateDTO", "NodeDebugConfigurationDTO"} <= roots
     assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"调试入口缺少proto结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
     assert_public_http_schemas(http_openapi)
@@ -247,21 +256,7 @@ def test_execution_http_routes_check_actual_job_and_goal_roots(http_openapi: Jso
                     pending.append(body["schema"])
     # 派发快照由真实消息接受回执嵌套暴露，并非独立 HTTP 回包。
     pending.append(schemas["MessageRunAccepted"]["properties"]["dispatch"])
-    roots: set[str] = set()
-    while pending:
-        node = pending.pop()
-        if "$ref" in node:
-            name = node["$ref"].rsplit("/", 1)[1]
-            if name in public_pb2.DESCRIPTOR.message_types_by_name:
-                roots.add(name)
-            else:
-                pending.append(schemas[name])
-        else:
-            for value in node.values():
-                if isinstance(value, dict):
-                    pending.append(value)
-                elif isinstance(value, list):
-                    pending.extend(branch for branch in value if isinstance(branch, dict))
+    roots = _public_roots(http_openapi, pending)
     assert roots == {"JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
                      "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO"}
     assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"执行入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
@@ -307,6 +302,62 @@ def test_execution_structure_checks_preserve_pydantic_control_queue_and_goal_rul
     with pytest.raises(ValidationError, match="objective"):
         SessionGoalSetRequest(objective="")
     assert SessionGoalSetRequest(token_budget=None).token_budget is None
+
+
+def test_session_http_routes_check_create_update_list_detail_and_information_roots(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    prefix = "/api/v1/workspaces/{workspace_id}/sessions"
+    pending: list[JsonSchemaValue] = []
+    for path, methods in ((prefix, ("post", "get")), (prefix + "/{session_id}", ("get", "patch")),
+                          (prefix + "/{session_id}/information", ("get",))):
+        for method in methods:
+            operation = http_openapi["paths"][path][method]
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                pending.append(request["schema"])
+            pending.append(operation["responses"]["200"]["content"]["application/json"]["schema"])
+    roots = _public_roots(http_openapi, pending)
+    assert roots == {"SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO"}
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"会话入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("SessionCreateRequest", "folder_id", {"type": "integer"}),
+    ("SessionUpdateRequest", "provider_id", {"type": "integer"}),
+    ("SessionDTO", "created_at", {"type": "integer"}),
+    ("SessionGenerationOriginDTO", "generator_id", {"type": "integer"}),
+    ("SessionInformationResourceSummaryDTO", "active", {"type": "object"}),
+    ("SessionInformationResourceDTO", "updated_at", {"type": "integer"}),
+    ("SessionInformationRelationsDTO", "child_ids", {"type": "object"}),
+    ("SessionInformationErrorDTO", "timestamp", {"type": "integer"}),
+])
+def test_session_http_schema_rejects_request_identity_time_origin_and_nested_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_session_structure_checks_keep_pydantic_uri_origin_and_length_rules(http_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    session = {
+        "session_id": create_prefixed_id("ses"), "workspace_id": "workspace", "resource_identity": "session:identity",
+        "uri": "boxteam://workspace/workspace/resources/session/session", "scope": "workspace", "title": "会话",
+        "current_agent_id": "agent", "created_at": "2026-10-31T00:00:00Z", "updated_at": "2026-10-31T00:00:00Z",
+    }
+    assert SessionDTO.model_validate(session).uri == session["uri"]
+    with pytest.raises(ValidationError, match="context_fork 会话缺少 context_source_session_id"):
+        SessionDTO.model_validate({**session, "kind": "context_fork"})
+    with pytest.raises(ValidationError, match="URI"):
+        SessionDTO.model_validate({**session, "uri": "/etc/hosts"})
+    with pytest.raises(ValidationError, match="title"):
+        SessionInformationSessionDTO.model_validate({**session, "title": "长" * 513, "kind": "normal"})
 
 
 @pytest.mark.parametrize(("model", "field", "shape"), [
@@ -386,6 +437,8 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "BrowserResourceOperationRequest", "SessionResourceControlResultDTO",
     "JobDTO", "JobDispatchSnapshotDTO", "SessionGoalDTO",
     "SessionForkRequest", "SessionForkResultDTO", "ForkSourceCaptureDTO", "SessionForkOwnerReference",
+    "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
+    "SessionGenerationOriginDTO", "SessionInformationResourceDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

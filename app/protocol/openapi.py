@@ -38,6 +38,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO",
         "SessionForkRequest", "SessionForkSourcePointDTO", "SessionForkResultDTO",
         "SessionForkTransferRequest", "SessionForkTransferResultDTO",
+        "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
     )
 }
 
@@ -71,9 +72,11 @@ def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool |
     """核对真实 OpenAPI 组件，保留原模型的业务约束和 HTTP 外形。"""
     components = document["components"]
     schemas = components["schemas"]
-    for name, descriptor in HTTP_JSON_DESCRIPTORS.items():
+    # 先核对全部根，避免较早的嵌套引用将缺失模型误报成 KeyError。
+    for name in HTTP_JSON_DESCRIPTORS:
         if name not in schemas:
             raise ValueError(f"公开 HTTP 结构未被导出: {name}")
+    for name, descriptor in HTTP_JSON_DESCRIPTORS.items():
         if pool is not None:
             descriptor = pool.FindMessageTypeByName(descriptor.full_name)
         assert_public_schema({**schemas[name], "components": components}, descriptor)
