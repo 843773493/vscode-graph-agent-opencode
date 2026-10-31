@@ -339,6 +339,72 @@ async def test_real_upload_staging_collision_keeps_409_original_state_and_same_i
     }, ensure_ascii=False, indent=2) + "\n")
 
 
+@pytest.mark.parametrize("number", [errno.EIO, None])
+async def test_upload_staging_error_without_filename_preserves_original_and_same_id_retry(
+    file_case, monkeypatch: pytest.MonkeyPatch, native_control_sink, caplog: pytest.LogCaptureFixture, number,
+):
+    case = file_case
+    operation_id = "op_" + uuid4().hex
+    fixed = uuid4()
+    staging = case.root / ".boxteam/navigation/workspace-files-staging" / (operation_id + "-" + fixed.hex)
+    original = OSError(number, f"private-strerror: {staging}")
+    assert original.filename is None and original.filename2 is None
+    intent = {"client_operation_id": operation_id, "client_sequence": 1,
+              "directory_key": case.listing["directory_key"],
+              "expected_directory_revision": case.listing["directory_revision"]}
+    before = file_rows(case)
+    mkdir = Path.mkdir
+    physical_staging = filesystem.native_io_path(staging)
+
+    def fail(path, *args, **kwargs):
+        if path == physical_staging:
+            raise original
+        return mkdir(path, *args, **kwargs)
+
+    async def upload():
+        return await case.client.post("/api/v1/workspace/files/upload", params={"path": case.listing["path"]},
+            data={"intent": json.dumps(intent), "relative_paths": "uploaded.txt"},
+            files={"files": ("uploaded.txt", b"payload\n", "text/plain")},
+            headers={"X-Request-ID": "req-upload-staging"})
+
+    with monkeypatch.context() as patch:
+        patch.setattr(operations, "uuid4", lambda: fixed)
+        patch.setattr(Path, "mkdir", fail)
+        failed = await upload()
+    assert failed.status_code == 500, failed.text
+    body = failed.json()
+    assert body["request_id"] == failed.headers["X-Request-ID"] == "req-upload-staging"
+    assert "OSError" in body["detail"] and f"errno={number}" in body["detail"]
+    assert str(case.root) not in failed.text and "private-strerror" not in failed.text
+    assert original.args == (number, f"private-strerror: {staging}")
+    assert file_rows(case) == before and not staging.exists()
+    assert not (case.directory / "uploaded.txt").exists()
+    assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+    if native_control_sink is None:
+        assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+        assert str(staging) in caplog.text and "private-strerror" in caplog.text
+    else:
+        assert native_control_sink.errors == [original]
+        assert "diagnostic_sink_error=NotADirectoryError" in body["detail"]
+        assert any(str(native_control_sink.blocked) in note for note in original.__notes__)
+    accepted = await upload()
+    assert accepted.status_code == 202, accepted.text
+    async with asyncio.timeout(10):
+        while True:
+            result = await case.client.get("/api/v1/workspace/files/operations", params={
+                "operation_id": operation_id, "expected_workspace_id": case.service.workspace_id,
+            })
+            assert result.status_code == 200, result.text
+            receipt = result.json()["data"]["operations"][0]
+            assert receipt["state"] in {"queued", "running", "committed"}, receipt
+            if receipt["state"] == "committed":
+                break
+            await asyncio.sleep(0.02)
+    assert receipt["effect"] == "complete"
+    assert (case.directory / "uploaded.txt").read_bytes() == b"payload\n"
+    assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+
+
 @pytest.mark.parametrize("filename_field", ["first", "second", "none"])
 async def test_text_preflight_uses_shared_error_and_creates_nothing_until_retry(
     file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,

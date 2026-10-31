@@ -93,6 +93,7 @@ def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, nu
     assert error.__cause__ is original
     assert error.filename is None and error.filename2 is None
     assert uri in str(error) and f"errno={number}" in str(error)
+    assert filesystem.file_access_error_detail(error) == str(error)
     assert str(target.parent) not in str(error)
     assert original.filename == str(target)
     assert target.read_bytes() == b"original\r\n"
@@ -139,6 +140,7 @@ def test_publication_failures_leave_original_and_remove_temporary(source, monkey
     assert error.__cause__ is original
     assert error.filename is None and error.filename2 is None
     assert uri in str(error) and f"errno={number}" in str(error)
+    assert filesystem.file_access_error_detail(error) == str(error)
     assert str(target.parent) not in str(error)
     assert original.filename == str(target) and original.filename2 == str(target.with_suffix(".tmp"))
     assert target.read_bytes() == before.content
@@ -181,14 +183,31 @@ def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch, 
         assert any(str(diagnostic_sink) in note for note in original.__notes__)
 
 
-@pytest.mark.parametrize("filename_field", ["first", "second"])
-def test_raw_file_error_keeps_public_facts_when_diagnostics_fail(source, diagnostic_sink, filename_field):
+@pytest.mark.parametrize("filename_field", ["first", "second", "none"])
+@pytest.mark.parametrize("number", [errno.EACCES, None])
+def test_raw_file_error_keeps_public_facts_when_diagnostics_fail(source, diagnostic_sink, filename_field, number):
     target, _ = source
-    original = PermissionError(errno.EACCES, f"private-strerror: {target}")
-    setattr(original, "filename" if filename_field == "first" else "filename2", str(target))
+    original = PermissionError(number, f"private-strerror: {target}")
+    if filename_field != "none":
+        setattr(original, "filename" if filename_field == "first" else "filename2", str(target))
     detail = filesystem.file_access_error_detail(original)
-    assert "PermissionError" in detail and f"errno={errno.EACCES}" in detail
+    assert "PermissionError" in detail and f"errno={number}" in detail
     assert str(target.parent) not in detail and "private-strerror" not in detail
     if diagnostic_sink is not None:
         assert "diagnostic_sink_error=NotADirectoryError" in detail
         assert any(str(diagnostic_sink) in note for note in original.__notes__)
+
+
+def test_directory_rejection_preserves_existing_uri_detail(source):
+    target, uri = source
+    with pytest.raises(IsADirectoryError) as caught:
+        text_publication.read_file_preimage(target.parent, reference=uri)
+    assert filesystem.file_access_error_detail(caught.value) == f"目标不是文件: {uri}"
+
+
+def test_unregistered_error_cannot_publish_even_when_it_looks_like_file_access(source, diagnostic_sink):
+    target, uri = source
+    original = OSError(f"文件访问失败: uri={uri}: stage=read, private-strerror: {target}")
+    detail = filesystem.file_access_error_detail(original)
+    assert "error=OSError" in detail and "errno=None" in detail
+    assert uri not in detail and str(target.parent) not in detail and "private-strerror" not in detail

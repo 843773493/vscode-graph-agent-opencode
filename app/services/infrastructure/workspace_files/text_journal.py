@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from stat import S_ISREG
 
+from app.core.failures import mark_public_failure
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver, get_workspace_root
 from app.core.session_thread_context import current_session_thread_owner
@@ -99,9 +100,10 @@ def _journal_access(stage: str) -> Iterator[None]:
     try:
         yield
     except OSError as error:
-        raise type(error)(error.errno, (
+        public = type(error)(error.errno, (
             f"{identity}, error={type(error).__name__}, errno={error.errno}"
-        )) from error
+        ))
+        raise mark_public_failure(public, str(public)) from error
     except json.JSONDecodeError as error:
         raise RuntimeError(
             f"text mutation journal 损坏: {identity}, "

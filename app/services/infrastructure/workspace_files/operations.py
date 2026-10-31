@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.exceptions import ForbiddenError
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, mark_public_failure
 from app.core.path_utils import is_resource_uri_input, safe_join
 from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -252,7 +252,8 @@ class WorkspaceFileOperations:
                       uploads: list[tuple[str, BinaryIO]] | None = None) -> WorkspaceFileOperationReceiptDTO:
         self.require_ready()
         if actor != "local":
-            raise PermissionError("文件 operation 必须使用原 local-token 认证 scope")
+            error = PermissionError("文件 operation 必须使用原 local-token 认证 scope")
+            raise mark_public_failure(error, str(error))
         async with self._accept_lock:
             self.require_ready()
             key, target = await asyncio.to_thread(self._target, directory_path, scope, intent, actor)
@@ -271,7 +272,8 @@ class WorkspaceFileOperations:
                                 or any(part in ("", ".", "..") for part in normalized.split("/"))):
                             raise ValueError("上传文件相对路径无效：必须是目标目录下的非空相对文件路径")
                         if normalized in paths:
-                            raise FileExistsError("上传内容包含重复相对路径")
+                            error = FileExistsError("上传内容包含重复相对路径")
+                            raise mark_public_failure(error, str(error))
                         paths.append(normalized)
                     if not paths:
                         raise ValueError("上传内容不能为空")
@@ -316,9 +318,11 @@ class WorkspaceFileOperations:
                  incoming: Path | None, request_hash: str) -> dict:
         if intent.created_by_operation_id is None:
             if not native_io_path(target).exists():
-                raise FileNotFoundError(f"目标目录不存在: {key.path or '.'}")
+                error = FileNotFoundError(f"目标目录不存在: {key.path or '.'}")
+                raise mark_public_failure(error, str(error))
             if not native_io_path(target).is_dir():
-                raise NotADirectoryError(f"目标路径不是目录: {key.path or '.'}")
+                error = NotADirectoryError(f"目标路径不是目录: {key.path or '.'}")
+                raise mark_public_failure(error, str(error))
         entries = []
         preconditions = []
         if native_io_path(target).is_dir():
@@ -375,9 +379,11 @@ class WorkspaceFileOperations:
             manifest = entry["source_proof"]["manifest"] if entry["source_proof"] is not None else {}
             self._validate_destination(destination, manifest, root_uri=key.path)
             if destination in destinations:
-                raise FileExistsError(f"多个来源具有相同名称: {destination.name}")
+                error = FileExistsError(f"多个来源具有相同名称: {destination.name}")
+                raise mark_public_failure(error, str(error))
             if native_io_path(destination).exists() or native_io_path(destination).is_symlink():
-                raise FileExistsError(f"目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
+                error = FileExistsError(f"目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
+                raise mark_public_failure(error, str(error))
             destinations.add(destination)
         payload = {"workspace_id": self.workspace_id, "actor": actor, "directory_key": key.model_dump(),
                    "target": key.path, "intent": intent.model_dump(), "entries": entries,

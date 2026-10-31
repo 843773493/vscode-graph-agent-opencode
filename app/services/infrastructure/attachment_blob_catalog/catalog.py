@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import mark_public_failure
 from app.core.sqlite_state import (
     SQLITE_BUSY_TIMEOUT_MS,
     sqlite_file_uri,
@@ -165,7 +166,8 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
     def require_available_directory(self, attachment_id: str) -> AttachmentDirectoryRecord:
         record = self.get_directory(attachment_id)
         if record is None or record.availability != "available":
-            raise FileNotFoundError(f"附件目录不可用：attachment_id={attachment_id}")
+            error = FileNotFoundError(f"附件目录不可用：attachment_id={attachment_id}")
+            raise mark_public_failure(error, str(error))
         return record
 
     def file_version(self, attachment_id: str, relative_path: str) -> AttachmentFileVersion | None:

@@ -12,6 +12,8 @@ from typing import BinaryIO
 
 import portalocker
 
+from app.core.failures import mark_public_failure
+
 logger = logging.getLogger(__name__)
 
 _workspace_locks_guard = threading.Lock()
@@ -36,10 +38,11 @@ def workspace_file_mutation_lock(workspace_root: Path) -> Iterator[None]:
     thread_lock = _get_workspace_lock(workspace_root)
     acquired = thread_lock.acquire(timeout=MUTATION_LOCK_TIMEOUT_SECONDS)
     if not acquired:
-        raise TimeoutError(
+        error = TimeoutError(
             "文件写入进程内锁获取超时: "
             f"timeout_seconds={MUTATION_LOCK_TIMEOUT_SECONDS:g}"
         )
+        raise mark_public_failure(error, str(error))
     try:
         lock_path = workspace_root / _LOCK_PATH
         with _lock_access("prepare"):
@@ -78,10 +81,11 @@ def _acquire_workspace_file_lock(lock_file: BinaryIO) -> None:
         except portalocker.AlreadyLocked as error:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
+                public = TimeoutError(
                     "文件写入跨进程锁获取超时: "
                     f"timeout_seconds={MUTATION_LOCK_TIMEOUT_SECONDS:g}"
-                ) from error
+                )
+                raise mark_public_failure(public, str(public)) from error
             time.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
         else:
             return
@@ -105,5 +109,6 @@ def _lock_access(stage: str) -> Iterator[None]:
                   f"error={type(error).__name__}, errno={getattr(error, 'errno', None)}, "
                   f"winerror={getattr(error, 'winerror', None)}")
         if isinstance(error, OSError):
-            raise type(error)(error.errno, detail) from error
+            public = type(error)(error.errno, detail)
+            raise mark_public_failure(public, str(public)) from error
         raise RuntimeError(detail) from error

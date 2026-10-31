@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import httpx
 
+from app.core.failures import mark_public_failure
 from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import (
     file_uri_child,
@@ -192,7 +193,8 @@ def _create(request: CreateText, before: FilePreimage | None) -> bytes:
 
 def _edit(request: EditText, before: FilePreimage | None) -> bytes:
     if before is None:
-        raise FileNotFoundError("精确编辑的目标文件不存在")
+        error = FileNotFoundError("精确编辑的目标文件不存在")
+        raise mark_public_failure(error, str(error))
     if not request.old_string or request.old_string == request.new_string:
         raise ValueError("old_string 必须非空且与 new_string 不同")
     original = before.content.decode("utf-8")

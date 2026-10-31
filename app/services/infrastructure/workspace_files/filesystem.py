@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
-from app.core.failures import failure_detail
+from app.core.failures import (
+    failure_detail,
+    mark_public_failure,
+    public_failure_message,
+)
 from app.services.infrastructure.workspace_files.runtime import (
     rename_entry_exclusive,
 )
@@ -21,7 +25,9 @@ from app.services.infrastructure.workspace_files.store import canonical_json, di
 
 def file_access_error_detail(error: BaseException) -> str:
     """原生文件名与系统原文只进入诊断，业务错误保留既有 URI 消息。"""
-    if isinstance(error, OSError) and (error.filename is not None or error.filename2 is not None):
+    if isinstance(error, OSError):
+        if (detail := public_failure_message(error)) is not None:
+            return detail
         return failure_detail(error, stage="file-access", label="目标文件系统访问失败")
     return str(error)
 
@@ -42,10 +48,11 @@ def file_access(reference: str | None, stage: str) -> Iterator[None]:
     try:
         yield
     except OSError as error:
-        raise type(error)(
+        public = type(error)(
             error.errno,
             failure_detail(error, stage=stage, label=f"文件访问失败: uri={reference}"),
-        ) from error
+        )
+        raise mark_public_failure(public, str(public)) from error
 
 
 class FileEffectUnverifiedError(RuntimeError):
@@ -67,7 +74,8 @@ def content_manifest(path: Path, *, validate: Callable[[Path], None] | None = No
                 size += len(chunk)
         return {"kind": "file", "size": size, "hash": hasher.hexdigest()}
     if not physical.is_dir():
-        raise FileNotFoundError(f"复制来源不是文件或目录: {path.name}")
+        error = FileNotFoundError(f"复制来源不是文件或目录: {path.name}")
+        raise mark_public_failure(error, str(error))
     children = {}
     for child in sorted(physical.iterdir(), key=lambda item: item.name):
         children[child.name] = content_manifest(path / child.name, validate=validate)

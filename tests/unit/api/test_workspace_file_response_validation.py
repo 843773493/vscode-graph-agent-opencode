@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from collections.abc import Iterator
@@ -99,6 +100,35 @@ def _operation(service: Mock, watcher: Mock, operation: str) -> Mock:
     if operation == "status":
         return service.file_operations.status
     return getattr(service, operation)
+
+
+@pytest.mark.parametrize(("method", "suffix", "payload", "operation"), ENDPOINTS[7:11])
+@pytest.mark.parametrize(("number", "status"), [
+    (errno.ENOENT, 404), (errno.EEXIST, 409), (errno.EACCES, 403), (errno.ENOTDIR, 400), (None, 500),
+])
+@pytest.mark.parametrize("native", NATIVE_PATHS)
+def test_collection_native_error_without_filename_keeps_status_and_diagnostic(
+    boundary_client: tuple[TestClient, Mock, Mock], method: str, suffix: str,
+    payload: dict[str, object] | None, operation: str, number: int | None, status: int, native: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, service, watcher = boundary_client
+    failure = OSError(number, "private-strerror: " + native)
+    original_args = failure.args
+    assert failure.filename is None and failure.filename2 is None
+    target = _operation(service, watcher, operation)
+    target.side_effect = failure
+    response = _request(client, method, suffix, payload)
+    assert response.status_code == status, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == REQUEST_ID
+    assert f"error={type(failure).__name__}" in response.json()["detail"]
+    assert f"errno={number}" in response.json()["detail"]
+    assert native not in response.text and "file-validation-secret" not in response.text
+    assert "private-strerror" not in response.text
+    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is failure]
+    assert len(diagnostics) == 1 and native in diagnostics[0].getMessage() + caplog.text
+    assert failure.args == original_args and failure.__cause__ is None
+    target.assert_called_once()
 
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation"), ENDPOINTS)

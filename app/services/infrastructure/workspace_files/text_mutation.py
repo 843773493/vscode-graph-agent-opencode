@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 from app.core.exceptions import ForbiddenError
+from app.core.failures import mark_public_failure
 from app.core.hashing import sha256_hex
 from app.core.path_utils import is_resource_uri_input, resolve_native_file_path
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
@@ -86,7 +87,8 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
     workspace = paths.workspace
     root, root_uri = resolve_text_target(paths, target)
     if not root.is_dir():
-        raise NotADirectoryError("文本修改目标必须是已存在的目录根")
+        error = NotADirectoryError("文本修改目标必须是已存在的目录根")
+        raise mark_public_failure(error, str(error))
     result: dict[str, object] | None = None
     try:
         with workspace_file_mutation_lock(workspace):

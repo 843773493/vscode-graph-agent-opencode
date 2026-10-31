@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import mark_public_failure
 from app.core.hashing import sha256_hex
 from app.services.infrastructure.workspace_files.filesystem import file_access
 from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
@@ -50,7 +51,8 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
     if stat.S_ISLNK(before.st_mode):
         raise ValueError(f"不允许编辑符号链接: {reference}")
     if stat.S_ISDIR(before.st_mode):
-        raise IsADirectoryError(f"目标不是文件: {reference}")
+        error = IsADirectoryError(f"目标不是文件: {reference}")
+        raise mark_public_failure(error, str(error))
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"目标不是普通文件: {reference}")
     if max_bytes is not None and before.st_size > max_bytes:

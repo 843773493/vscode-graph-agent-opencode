@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import mark_public_failure
 from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_user_workspace_root,
@@ -204,9 +205,11 @@ class WorkspaceService:
         )
         physical = native_io_path(target_path)
         if not physical.exists():
-            raise FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
+            error = FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
+            raise mark_public_failure(error, str(error))
         if not physical.is_dir():
-            raise NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
+            error = NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
+            raise mark_public_failure(error, str(error))
 
         owner = self.file_operations
         key, _ = await asyncio.to_thread(owner.directory_key, display_path, scope)
@@ -455,7 +458,8 @@ class WorkspaceService:
             return PreparedFileDownload(target, display_path, target.name,
                                         media_type or "application/octet-stream", metadata)
         if not archive_directory:
-            raise IsADirectoryError(f"工作区路径不是文件: {display_path}")
+            error = IsADirectoryError(f"工作区路径不是文件: {display_path}")
+            raise mark_public_failure(error, str(error))
         if not stat.S_ISDIR(metadata.st_mode):
             raise ValueError(f"下载路径不是文件或目录: {display_path}")
 
@@ -511,7 +515,8 @@ class WorkspaceService:
             allow_empty=True,
         )
         if not target.exists():
-            raise FileNotFoundError(f"系统定位路径不存在: {display_path or '.'}")
+            error = FileNotFoundError(f"系统定位路径不存在: {display_path or '.'}")
+            raise mark_public_failure(error, str(error))
 
         if sys.platform == "darwin":
             command = ["open", "-R", str(target)] if target.is_file() else ["open", str(target)]

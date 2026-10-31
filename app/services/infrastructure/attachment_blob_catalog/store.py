@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.atomic_fs import fsync_directory
+from app.core.failures import mark_public_failure
 from app.core.file_permissions import restrict_private_path_access
 from app.core.path_utils import get_session_path_resolver
 from app.core.phase_observer import observe_phase, observe_phase_sync
@@ -300,10 +301,12 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         record = self._catalog.require_available_directory(parsed.tail_segments[0])
         children = parsed.tail_segments[1:]
         if for_write and (not children or children[0] != "derived"):
-            raise PermissionError("附件原件和预览只读，处理结果必须写入 derived 目录")
+            error = PermissionError("附件原件和预览只读，处理结果必须写入 derived 目录")
+            raise mark_public_failure(error, str(error))
         root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
         if not root.is_dir():
-            raise FileNotFoundError("附件目录的物理正文缺失")
+            error = FileNotFoundError("附件目录的物理正文缺失")
+            raise mark_public_failure(error, str(error))
         return resolve_attachment_file(root, children)
 
     def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
