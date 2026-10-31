@@ -9,17 +9,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import NoReturn
+
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.api import agents as agents_api
 from app.api import context as context_api
 from app.api import runtime as runtime_api
 from app.api import tools as tools_api
+from app.api.deps import get_session_context_query_service
+from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.agent import WorkspaceDefaultAgentUpdateRequest
 from app.schemas.internal_v2.runtime import UiSnapshotResultDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
+    SessionContextResourceDTO,
     SessionContextSearchRequest,
 )
 from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
@@ -146,6 +155,90 @@ async def test_read_context_maps_bad_resource_to_400() -> None:
         )
 
     assert captured.value.status_code == 400
+
+
+class _ContextBoundaryService:
+    def __init__(self) -> None:
+        self.error: Exception = ValueError("上下文资源 URI 不符合规范")
+        self.calls = 0
+
+    async def read_context(self, payload: SessionContextReadRequest) -> NoReturn:
+        self.calls += 1
+        raise self.error
+
+    async def search_context(self, payload: SessionContextSearchRequest) -> NoReturn:
+        self.calls += 1
+        raise self.error
+
+
+@pytest.fixture
+def context_boundary_client() -> Iterator[tuple[TestClient, _ContextBoundaryService]]:
+    from app.main import app as workspace_app
+
+    service = _ContextBoundaryService()
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(context_api.router, prefix="/api/v1")
+    for error_type in (HTTPException, RequestValidationError):
+        application.add_exception_handler(error_type, workspace_app.exception_handlers[error_type])
+    application.dependency_overrides[get_session_context_query_service] = lambda: service
+    with TestClient(application, raise_server_exceptions=False,
+                    headers={"X-Request-ID": "req-context-boundary"}) as client:
+        yield client, service
+
+
+def _context_body(operation: str) -> dict[str, object]:
+    return {"resource_identity": session_resource_identity(WORKSPACE_ID, TARGET_SESSION),
+            "uri": "!!bad!!", "scope": "workspace", **({"query": "needle"} if operation == "search" else {})}
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+@pytest.mark.parametrize("native", ["/private/context-response-sentinel", r"C:\private\context-response-sentinel", r"\\target\private\context-response-sentinel"])
+def test_context_internal_validation_is_server_failure_without_echo(
+    context_boundary_client: tuple[TestClient, _ContextBoundaryService], operation: str, native: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, service = context_boundary_client
+    digest = "sha256:jcs:v1:" + "a" * 64
+    with pytest.raises(ValidationError) as captured:
+        SessionContextResourceDTO.model_validate({
+            "display_uri": native, "resource_kind": "skills", "owner_scope": "workspace", "facet": "content",
+            "revision": digest, "availability": "available", "provenance_ref": {"token": digest}, native: "unexpected",
+        })
+    service.error = captured.value
+    response = client.post(f"/api/v1/context/{operation}", json=_context_body(operation))
+    assert response.status_code == 500, response.text
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError",
+                               "data": None, "request_id": "req-context-boundary"}
+    assert response.headers["X-Request-ID"] == "req-context-boundary"
+    assert "context-response-sentinel" not in response.text and "display_uri" not in response.text
+    assert service.calls == 1
+    # 路由不改写内部校验正文，原异常实例及动态字段位置只进入统一诊断。
+    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
+    assert len(diagnostics) == 1 and "context-response-sentinel" in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+def test_context_business_rejection_keeps_http_400_and_request_identity(
+    context_boundary_client: tuple[TestClient, _ContextBoundaryService], operation: str,
+) -> None:
+    client, service = context_boundary_client
+    response = client.post(f"/api/v1/context/{operation}", json=_context_body(operation))
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": str(service.error), "request_id": "req-context-boundary"}
+    assert response.headers["X-Request-ID"] == "req-context-boundary" and service.calls == 1
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+def test_context_invalid_request_is_rejected_before_service(
+    context_boundary_client: tuple[TestClient, _ContextBoundaryService], operation: str,
+) -> None:
+    client, service = context_boundary_client
+    response = client.post(f"/api/v1/context/{operation}", json={**_context_body(operation), "max_chars": 255})
+    assert response.status_code == 422, response.text
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-context-boundary"
+    assert response.json()["detail"][0]["loc"] == ["body", "max_chars"]
+    assert service.calls == 0
 
 
 @pytest.mark.asyncio

@@ -1714,3 +1714,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 400项定向单测通过（168项 Terminal／worker，232项 Session 创建删除、Thread 准入和 Browser 消费者）；最终51项为前述子集补验，不重复计数。2项集成沿共享独占闸门通过：真实 FastAPI 消息入口（进程内 ASGI）、现有 model_stream、受管 Gateway 根绑定及真实 Node HTTP／PTY，核符号链接循环失败的 Job、canonical 结果、消息流、checkpoint 与 SQLite 无原生根路径；修复原目录后同一 Thread 执行成功，旧失败记录、流、canonical 正文和所有 assembly 请求 preimage／hash保持。另一项覆盖三种 cwd 输入及真实 URI 失败原因链。
 - Ruff、compileall与本 change strict通过；Pyright保留14条既有诊断，与完整HEAD归档按规则、完整消息及最窄AST逐项相同，零新增，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、单测复用核验及产物坐标见 `out/tests/temp/terminal_native_workdir_errors_20261031/artifacts/verification.json`；主动取消的排队记录未进入测试体，不算产品证据。
 - 本片未验Web／Workbench、完整Gateway业务代理、独立Backend重启、Windows或真实Provider，不替代全局URI不变量，2.2／7.2仍未勾，整体51/53。未修改另一会话的Web迁移／自动化、矩阵、暂存或共享debug；团队协作与MCP显式持有继续延期。
+
+### 2026-10-31 上下文查询内部校验错误的响应归属（2.2／7.2部分收口）
+
+- read/search 不再将服务内部的 Pydantic ValidationError 翻译成输入错误并复制完整正文；原异常交唯一 TraceMiddleware 返回 500、同一 request_id 和公开失败事实，完整输入、动态字段位置及原异常实例保留在诊断。普通 ValueError 的 400、请求校验的 422、原资源拒绝和查询业务保持，不增加异常包装、查询链路或结构映射。
+- 旧路由六个 POSIX／盘符／UNC 反例均失败，另六项原请求与业务拒绝通过；最终 99 项定向单测通过，含实际 FastAPI 路由、统一中间件和生产异常处理器下的六项内部拒绝、两项普通业务拒绝及两项请求前置校验。查询服务由 fixture 替代以精确注入内部 DTO 错误，不将该 HTTP 边界单测当作真实会话执行或恢复验收。
+- 两个路由在移除本次异常分支后与原源码 AST 相同，原测试 16 个顶层符号 AST 保持；Ruff、compileall 和本 change strict 通过。Pyright 的 8 条既存诊断按规则、完整消息及最窄语句 AST 全部相同，新增 0，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/context_response_validation_20261031/artifacts/verification.json`。未运行 Web／Workbench 或其自动化、未改他人暂存及共享服务；产品补验仍受另一会话的真实集成进程占用。全局 2.2／7.2 仍未勾，整体 51/53；团队协作与 MCP 显式持有继续延期。

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
@@ -64,6 +65,8 @@ async def read_context(
             status_code=400,
             detail={"code": error.reason_code, "message": str(error)},
         ) from error
+    except ValidationError:
+        raise
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except SessionDeletionPendingError as error:
@@ -105,6 +108,8 @@ async def search_context(
             status_code=400,
             detail={"code": error.reason_code, "message": str(error)},
         ) from error
+    except ValidationError:
+        raise
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except SessionDeletionPendingError as error:
