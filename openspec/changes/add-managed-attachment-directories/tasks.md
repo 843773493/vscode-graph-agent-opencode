@@ -781,3 +781,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原lease获取与成功后的引用登记交给同一shielded worker；排队时取消/关闭不开始新写入，已开始的写入持原锁结算。关闭覆盖尚无lease引用的原任务，取消保留原消息、迟到存储错误及已提交占用，关闭后不再派发工具。
 - 定向82项、相关owner回归569项通过，回归34份采样源码前后一致。完整旧生产归档的两项反例复现事件循环阻塞；仅移除关闭对在途准入的跟踪，两项变异反例均失败。Ruff、compileall、两文件Pyright及OpenSpec strict通过；准确命令、原始输出、退出码、指纹及作者AST自查见`out/tests/temp/operation_admission_io_20261031/artifacts/verification.json`。
 - 使用真实owner记录和lease、替身传输，不证明真实PTY/Chromium终态；其它同步writer、通知的事件循环归属、原生I/O抢占及完整operation/shutdown期限继续TODO。5.2/5.4与21/23保持未完成；未修改另一会话Web/Workbench、其自动化、共享暂存或debug。
+
+### 2026-10-31 工具失败的账本及owner记录收尾（5.4部分）
+
+- 原unknown账本写入改用shielded worker，与后续原owner记录save共用一次取消保护；原资源锁和holder覆盖排队与结算，后续重复取消不割裂两步、不替换原工具错误或取消。不新增writer、账本或状态格式。
+- 新增20项、连同记录收尾42项及相关owner589项通过，回归35份源码前后一致。完整旧生产归档的两项反例复现同步阻塞；移除整段收尾保护的两项变异反例精确失败于原错误被新取消替换。Ruff、compileall、strict通过；生产原4条Pyright诊断的规则、完整消息、文件归属和最窄AST表达式逐项相同，新增测试零诊断。首轮20项均因新测试误用冷store构造参数失败，修正装具后通过，未修改产品合同或放宽原错误/lease断言。
+- 准确命令、原始输出、退出码、指纹与作者AST自查见`out/tests/temp/operation_unknown_io_20261031/artifacts/verification.json`。传输使用替身，账本自身写盘失败只验原错、原件及显式重试，不证明旧代接管；真实PTY/Chromium终态、其它同步writer与完整关闭期限继续TODO。5.2/5.4及21/23未完成，另一会话Web/Workbench、其自动化、共享暂存和debug未动。

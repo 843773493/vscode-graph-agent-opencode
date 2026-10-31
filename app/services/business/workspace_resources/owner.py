@@ -1084,13 +1084,18 @@ class WorkspaceResourceOwner:
                    + (f"；{error}" if isinstance(error, ResourceConflict) else "")),
         )
         record.updated_at = self._now()
-        # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
-        self._leases.update_external_state(
-            record.resource_id, lifetime_scope=record.retention_scope,
-            status="unknown", unresolved_lease_id=lease_id,
-        )
-        # 正在处理的原异常不能被清理期间的新取消覆盖；原占用和资源锁等本次写入结算。
-        await run_cleanup_shielded(lambda: self._store.save(record))
+        async def persist() -> None:
+            # TODO(5.2)：账本自身写入失败后的旧代接管未收口，不能视为unknown持久成功。
+            # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
+            await run_sync_shielded(
+                self._leases.update_external_state,
+                record.resource_id, lifetime_scope=record.retention_scope,
+                status="unknown", unresolved_lease_id=lease_id,
+            )
+            await self._store.save(record)
+
+        # 原错误的两步收尾共用一次保护；排队和写盘期间的新取消不能跳过记录保存。
+        await run_cleanup_shielded(persist)
 
     def _sync_ledger(self, record: OwnedResourceRecord) -> None:
         self._leases.update_external_state(
