@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -150,3 +151,26 @@ def test_memory_and_not_yet_created_ledgers_keep_their_contract(tmp_path: Path) 
     owner = ExternalResourceLeaseLedger()
     owner.register_external(resource_id="memory", kind="mcp_connection", lifetime_scope="workspace")
     assert owner.get("memory") is not None
+
+
+@pytest.mark.parametrize("invalid_status", ["", "unknown", "running", "stopped", "active ", "/private/lease-status"])
+def test_cold_load_rejects_invalid_lease_status_without_losing_occupancy(
+    ledger: tuple[ExternalResourceLeaseLedger, Path], invalid_status: str,
+) -> None:
+    owner, path = ledger
+    original = path.read_bytes()
+    payload = json.loads(original)
+    payload["leases"][0]["status"] = invalid_status
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    damaged = path.read_bytes()
+    with pytest.raises(ValidationError) as caught:
+        ExternalResourceLeaseLedger(state_path=path)
+    assert path.read_bytes() == damaged
+    assert caught.value.errors(include_input=False)[0]["loc"] == (0, "status")
+    assert caught.value.errors(include_input=False)[0]["type"] == "literal_error"
+    assert "input_value" not in str(caught.value) and "/private/lease-status" not in str(caught.value)
+    assert str(path) not in str(caught.value)
+    path.write_bytes(original)
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    assert cold.leases_for_resource("terminal_original") == owner.leases_for_resource("terminal_original")
+    assert cold.get("terminal_original") == owner.get("terminal_original")

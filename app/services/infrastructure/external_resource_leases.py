@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, Never
+from typing import ClassVar, Literal, Never
 
 from pydantic import ConfigDict, TypeAdapter
 
@@ -50,7 +50,8 @@ class ResourceLease:
     resource_id: str
     turn_stream_id: str
     operation_id: str
-    status: str = "active"
+    # 冷恢复必须拒绝非法状态，不能将未识别的占用当作已释放。
+    status: Literal["active", "released", "settled", "reconcile_required"] = "active"
     updated_at: str = ""
     holder_session_id: str | None = None
     holder_thread_id: str | None = None
@@ -59,7 +60,7 @@ class ResourceLease:
 
 
 _RESOURCE_RECORD = TypeAdapter(ResourceRecord)
-_RESOURCE_LEASE = TypeAdapter(ResourceLease)
+_RESOURCE_LEASES = TypeAdapter(list[ResourceLease], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ExternalResourceLeaseLedger:
@@ -412,8 +413,7 @@ class ExternalResourceLeaseLedger:
             if record.resource_id in records:
                 self._raise_failure("validate", f"资源状态文件 records[{index}] resource_id 重复")
             records[record.resource_id] = record
-        for index, value in enumerate(self._load_rows(raw, "leases")):
-            lease = _RESOURCE_LEASE.validate_python(value)
+        for index, lease in enumerate(_RESOURCE_LEASES.validate_python(self._load_rows(raw, "leases"))):
             if lease.lease_id in leases:
                 self._raise_failure("validate", f"资源状态文件 leases[{index}] lease_id 重复")
             if lease.resource_id not in records:
