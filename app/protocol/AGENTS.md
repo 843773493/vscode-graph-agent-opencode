@@ -19,6 +19,7 @@
 - 上下文读取、搜索及 Skill 停止跟踪共用该检查；嵌套资源来源、搜索坐标、部分错误和回执从 descriptor 递归核对，身份、URI、内容预算及 Skill 状态约束仍由原 Pydantic 与 owner 负责。
 - MCP 连接管理、授权、工具目录、开关与测试记录共用该检查；工具成员、选择变更、测试样本与 provider 结果从 descriptor 递归核对，操作状态、敏感字段及重复工具等业务约束仍归原 Pydantic 和 owner。
 - 持久任务的定义、控制、通知、运行详情和生成器导入共用该检查；动作联合、运行输入消费与嵌套组件由 descriptor 递归核对，时间计划、组件配对、Thread 隔离和版本约束仍归原 Pydantic 与 owner。
+- 会话生成器的命名预览与定义校验共用该检查，嵌套策略、挂载及上下文来源从 descriptor 递归核对；命名长度、目标配对及 provider 可用性与原因的关系仍归原 Pydantic 和 owner。
 - Node Debug 的配置、状态与请求共用同一检查；既有 `action + params` 仅在此投影到 proto oneof，成员和参数结构从 descriptor 推导，不另维护动作映射。
 
 ## 不可修改内容

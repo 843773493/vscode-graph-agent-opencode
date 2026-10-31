@@ -60,13 +60,6 @@ from app.schemas.internal_v2.workspace_resource import (
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
-@pytest.fixture
-def http_openapi() -> JsonSchemaValue:
-    from app.main import app
-
-    return deepcopy(app.openapi())
-
-
 def _export(output: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "scripts.export_openapi_snapshot", "--output-root", str(output), *arguments],

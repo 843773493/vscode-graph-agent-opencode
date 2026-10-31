@@ -1,13 +1,22 @@
 from collections.abc import Sequence
+from copy import deepcopy
 
 import pytest
 from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
+from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     public_pb2 as workspace_public_pb2,
 )
+
+
+@pytest.fixture
+def http_openapi() -> JsonSchemaValue:
+    from app.main import app
+
+    return deepcopy(app.openapi())
 
 
 @pytest.fixture
