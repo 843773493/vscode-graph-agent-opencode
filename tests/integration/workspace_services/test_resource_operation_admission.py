@@ -213,11 +213,26 @@ async def test_terminal_cwd_resolution_does_not_block_peer_http_or_change_native
                 assert isinstance(pid, (int, float)) and not isinstance(pid, bool)
                 assert pid > 0 and pid == int(pid)
                 assert Path(psutil.Process(int(pid)).cwd()).resolve() == target
-                assert runtime["cwd_relative"] == created["cwd_relative"] == target.name
+                assert runtime["cwd_relative"] == created["metadata"]["cwd_relative"] == target.name
                 assert created["source_thread"]["session_id"] == sid
                 assert not owner._leases.leases_for_resource(created["resource_id"])
                 assert str(root) not in owner._store.path.read_text(encoding="utf-8")
                 proofs.append({"input": cwd, "resource": created, "runtime": runtime})
+                # 用完经正式入口结清，本场景始终只需 peer 和当前 PTY。
+                # TODO(5.4)：另验四个运行 PTY 并发 Session 清理的原 10 秒 HTTP 超时，失败原件已保留。
+                detached = await client.post(f"/api/v1/resources/{created['resource_id']}/detach", json={
+                    "expected_revision": created["owner_revision"], "thread": created["source_thread"],
+                })
+                assert detached.status_code == 200, detached.text
+                detached_resource = detached.json()["data"]
+                assert detached_resource["thread_associations"] == []
+                deleted = await client.post(f"/api/v1/resources/{created['resource_id']}/delete", json={
+                    "expected_revision": detached_resource["owner_revision"],
+                })
+                assert deleted.status_code == 200, deleted.text
+                assert deleted.json()["data"]["resource_id"] == created["resource_id"]
+                assert deleted.json()["data"]["status"] == "deleted"
+                assert deleted.json()["data"]["reconciliation_status"] == "verified"
         (run.artifacts_dir / "cwd-worker.json").write_text(json.dumps({
             "peer": original, "created": proofs,
             "scope": "ASGI Session资源入口、真实Node HTTP及PTY；慢解析时同服务详情可读，三种输入均在同一原生目录执行；非Gateway/Web或进程重启验收",
