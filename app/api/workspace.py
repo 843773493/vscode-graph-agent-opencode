@@ -8,6 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import ValidationError
 
 from app.api.deps import (
     get_request_id,
@@ -23,6 +24,7 @@ from app.api.sse_heartbeat import (
 )
 from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
+from app.core.failures import failure_detail
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
@@ -82,6 +84,9 @@ def _file_operation_error(error: Exception) -> HTTPException:
     create/paste/copy/upload 四个入口逐字重复同一套映射，这里收敛为唯一实现；
     判定顺序与原有 except 子句顺序一致（子类优先，OSError 兜底落 500）。
     """
+    if isinstance(error, ValidationError):
+        # 内部结构损坏不能落成参数400或将input_value复制到普通错误。
+        raise error
     if isinstance(error, FileNotFoundError):
         return HTTPException(status_code=404, detail=file_access_error_detail(error))
     if isinstance(error, FileExistsError):
@@ -159,6 +164,8 @@ def open_workspace_file_sse(
             native, uri = workspace_service.file_paths.resolve(value)
             references[native] = uri
         roots = watch_service.resolve_watch_roots(str(path) for path in references)
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except PermissionError as error:
@@ -295,6 +302,8 @@ async def list_workspace_files(
         )
     except WorkspaceFileOperationConflictError as error:
         raise state_conflict_http_error(error) from error
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
@@ -320,6 +329,8 @@ async def get_workspace_file_content(
 ):
     try:
         result = await workspace_service.get_file_content(path=path, scope=scope)
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
@@ -346,6 +357,8 @@ async def get_workspace_raw_file(
             scope=scope,
             archive_directory=False,
         )
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
@@ -368,6 +381,8 @@ async def download_workspace_file_entry(
 ):
     try:
         download = await asyncio.to_thread(workspace_service.prepare_file_download, path=path, scope=scope)
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
@@ -397,6 +412,8 @@ async def update_workspace_file_content(
             expected_revision=payload.expected_revision,
             scope=scope,
         )
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except WorkspaceFileConflictError as error:
@@ -510,10 +527,19 @@ async def upload_workspace_file_entries(
     if len(files) != len(relative_paths):
         raise HTTPException(status_code=400, detail="上传文件与相对路径数量不一致")
     try:
+        parsed_intent = WorkspaceFileMutationIntentDTO.model_validate_json(intent)
+    except ValidationError as error:
+        detail = failure_detail(error, stage="file-upload-intent", label="上传文件操作意图无效")
+        # extra字段名及validator上下文也可能是原生位置；只公布固定规则类别。
+        rules = ",".join(sorted({item["type"] for item in error.errors(
+            include_input=False, include_context=False, include_url=False,
+        )}))
+        raise HTTPException(status_code=400, detail=f"{detail}, rules={rules}") from error
+    try:
         result = await workspace_service.upload_file_entries(
             directory_path=path,
             scope=scope,
-            intent=WorkspaceFileMutationIntentDTO.model_validate_json(intent),
+            intent=parsed_intent,
             actor=local_navigation_scope(workspace_service.workspace_id).actor,
             entries=[
                 (relative_path, upload.file)
@@ -537,6 +563,8 @@ async def get_workspace_file_operations(
         raise HTTPException(status_code=409, detail="原文件 operation 的工作区 owner 与当前 route 不一致，禁止改投")
     try:
         result = workspace_service.file_operations.status(operation_id, actor=local_navigation_scope(workspace_service.workspace_id).actor)
+    except ValidationError:
+        raise
     except KeyError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except (TypeError, ValueError) as error:
@@ -558,6 +586,8 @@ async def reveal_workspace_file_entry(
 ):
     try:
         result = await asyncio.to_thread(workspace_service.reveal_file_entry, path=path, scope=scope)
+    except ValidationError:
+        raise
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except PermissionError as error:

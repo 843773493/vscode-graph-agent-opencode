@@ -1778,3 +1778,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 八个配置／启动入口复用原错误映射，内部 ValidationError 原样交 TraceMiddleware；动作入口同样重抛，普通响应保持安全500、原request_id和单次原异常诊断，不复制input_value。派生方案名称在原factory中单独复用DTO字段约束，只将该字段拒绝转换为原业务400／409；内部身份和后续校验不在输入捕获范围内。创建／更新的空白名称继续由原registry拒绝，未改请求schema、命名限制或持久化链路。
 - 原实现33项有效反例失败、53项通过；最终173项相关API／配置单测通过，覆盖POSIX／盘符／UNC、原404／403／400／409／422、原因链、隐式启动／断点命名写前拒绝、同registry修复后重试及日志次错。首轮绿测装具误用ForbiddenError构造参数导致收集失败，已修正并保留原件，不计产品结果。
 - Ruff、compileall及本change strict通过；Pyright保留3条原诊断，按规则、全文及最窄语句AST核无新增，新测试零诊断。准确命令、指纹、原始输出、实际退出码和自查见`out/tests/temp/node_debug_response_validation_20261031/artifacts/verification.json`。未运行真实Node进程、Gateway网络、Web／Workbench、Windows或完整执行恢复验收，2.2／7.2仍未勾、整体51/53；另一会话前端、自动化、暂存和共享debug保持。
+
+### 2026-10-31 文件HTTP内部校验与multipart意图拒绝（2.2／7.2部分收口）
+
+- 文件引用、列表／预览、原件／下载、正文保存、四类集合操作、状态查询、reveal及SSE预检的内部ValidationError原样交TraceMiddleware，安全500保持原request_id和单次原异常诊断。上传仍复用原model_validate_json解析同一intent，但在调用服务前单独转换为400，仅公布固定规则类别；未知字段名、原输入及validator上下文不回显，日志次错保留在原原因链。原普通400、文件状态映射、请求schema、URI解析、写入与恢复链保持。
+- 有效反例55项：首轮52项加修正装具后的完整HEAD归档3项；首轮另3项因装具漏配二进制采样长度而未触及目标，不计产品反例。关联检查150项通过，补齐装具后3项真实文件响应／原件不变／同入口重试通过，共153项不同用例，不重复长跑已通过场景。覆盖POSIX／盘符／UNC、multipart四种拒绝、写前阻断、日志次错和原文件操作／恢复回归；真实读取采用原WorkspaceService与文件访问链，外部依赖仍由fixture隔离，不代完整产品执行。
+- compileall及本change strict通过；Ruff27条、Pyright2条既有诊断按规则、全文、所属函数和最窄表达式AST无新增，新测试两项检查均零诊断。准确命令、指纹、红绿原件、退出码和作者自查见`out/tests/temp/workspace_file_response_validation_20261031/artifacts/verification.json`。未验发头后的SSE错误、真实Gateway网络、Web／Workbench、Windows或独立Backend重启，不代全局URI总门，2.2／7.2仍未勾、整体51/53；未动另一会话前端、自动化、暂存和共享debug。
