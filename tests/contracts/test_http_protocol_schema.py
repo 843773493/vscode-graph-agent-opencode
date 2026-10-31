@@ -25,6 +25,11 @@ from app.schemas.internal_v2.mcp import (
     McpAuthorizationCallbackDTO,
     McpConnectionRequestDTO,
 )
+from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskControlRequest,
+    TaskConditionDTO,
+    TaskTriggerDTO,
+)
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
@@ -441,6 +446,67 @@ def test_tool_structure_checks_preserve_pydantic_operation_secret_and_selection_
         ToolTestStartRequest(repetitions=21)
 
 
+def test_persistent_task_http_routes_check_definition_control_run_and_import_roots(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    prefix = "/api/v1/workspaces/{workspace_id}/persistent-tasks"
+    pending: list[JsonSchemaValue] = []
+    for path, operations in http_openapi["paths"].items():
+        if path != prefix and not path.startswith(prefix + "/"):
+            continue
+        for operation in operations.values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                pending.append(request["schema"])
+            for status, response in operation["responses"].items():
+                body = response.get("content", {}).get("application/json")
+                if status.startswith("2") and body is not None:
+                    pending.append(body["schema"])
+    roots = _public_roots(http_openapi, pending)
+    assert roots == {
+        "PersistentTaskCreateRequest", "PersistentTaskUpdateRequest", "PersistentTaskControlRequest",
+        "PersistentTaskCheckRequest", "PersistentTaskNotificationRequest", "SessionGeneratorImportRequest",
+        "PersistentTaskDTO", "PersistentTaskListDTO", "PersistentTaskRunDTO",
+        "PersistentTaskRunListDTO", "PersistentTaskRunDetailDTO",
+    }
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"持久任务入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("PersistentTaskControlRequest", "expected_revision", {"type": "string"}),
+    ("PersistentTaskDTO", "application_type", {"type": "integer"}),
+    ("TaskTriggerDTO", "interval_seconds", {"type": "string"}),
+    ("RuntimeSourceActionDTO", "target_uri", {"type": "integer"}),
+    ("SessionGenerationActionDTO", "generation", {"type": "string"}),
+    ("TaskInputConsumptionDTO", "request_hash", {"type": "integer"}),
+    ("TaskRuntimeStatusDTO", "recovering_tasks", {"type": "string"}),
+    ("TaskScriptCheckDTO", "command", {"type": "object"}),
+    ("SessionGeneratorImportRequest", "workspace_ids", {"type": "array", "items": {}}),
+])
+def test_persistent_task_http_schema_rejects_definition_union_run_and_import_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_persistent_task_structure_checks_preserve_pydantic_schedule_component_and_revision_rules(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    with pytest.raises(ValidationError, match="非时间触发不能配置时间计划"):
+        TaskTriggerDTO(version="1", type_id="builtin.manual", interval_seconds=10)
+    with pytest.raises(ValidationError, match="判断器必须配置对应参数"):
+        TaskConditionDTO(version="1", type_id="builtin.script")
+    with pytest.raises(ValidationError, match="expected_revision"):
+        PersistentTaskControlRequest(expected_revision=0, action="pause")
+
+
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("NodeDebugStartRequest", "path", {"type": "integer"}),
     ("NodeDebugStateDTO", "call_stack", {"type": "object"}),
@@ -521,6 +587,7 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
     "SessionGenerationOriginDTO", "SessionInformationResourceDTO",
     "McpToolDTO", "ToolTestAttemptDTO",
+    "PersistentTaskCreateRequest", "TaskInputConsumptionDTO", "TaskActionDTO", "SessionGeneratorImportRequest",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

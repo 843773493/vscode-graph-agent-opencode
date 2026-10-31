@@ -14,6 +14,7 @@
 - Fork 的来源点、创建及跨 Gateway 传输共用该检查；冻结 capture、资源 owner、发布结果和分块成员从 descriptor 递归核对，锚点、资源选择、授权角色及分块边界仍由原 Pydantic 和业务 owner 校验。
 - Session 创建、更新、查询与信息快照共用该检查；时间、来源、资源汇总及错误成员由 descriptor 递归核对，URI、fork 来源和展示长度约束仍由原 Pydantic 与 owner 负责。
 - MCP 连接管理、授权、工具目录、开关与测试记录共用该检查；工具成员、选择变更、测试样本与 provider 结果从 descriptor 递归核对，操作状态、敏感字段及重复工具等业务约束仍归原 Pydantic 和 owner。
+- 持久任务的定义、控制、通知、运行详情和生成器导入共用该检查；动作联合、运行输入消费与嵌套组件由 descriptor 递归核对，时间计划、组件配对、Thread 隔离和版本约束仍归原 Pydantic 与 owner。
 - Node Debug 的配置、状态与请求共用同一检查；既有 `action + params` 仅在此投影到 proto oneof，成员和参数结构从 descriptor 推导，不另维护动作映射。
 
 ## 不可修改内容
