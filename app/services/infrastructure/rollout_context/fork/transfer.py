@@ -6,15 +6,19 @@ import asyncio
 import base64
 import hashlib
 import os
+import sys
 from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from itertools import islice
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 from app.abstractions.session_context import SessionForkTransportProtocol
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.grants import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest
@@ -155,8 +159,7 @@ async def import_captured_artifact(
     root = capture_directory(sessions_root, record)
 
     async def receive_file(file: ForkTransferFileDTO) -> None:
-        with _storage_io(root, "fork artifact 接收位置检查失败", "receive_path", artifact="fork_transfer"):
-            path = _artifact_file(root, record, file.name)
+        path = await run_sync_shielded(_received_file_path, root, record, file.name)
         await receive_transfer_file(transport, request, frozen, path=path, size_bytes=file.size_bytes,
                                     file_name=file.name)
 
@@ -192,13 +195,60 @@ async def import_captured_artifact(
         if marker is None:
             raise RuntimeError("fork artifact 缺少 captured marker")
         await receive_file(marker)
-        with _storage_io(root, "fork artifact 接收目录发布失败", "receive_publish", artifact="fork_transfer"):
-            fsync_directory(root)
-        snapshot, marker_hash = read_captured_snapshot(sessions_root, frozen)
-        return snapshot, marker_hash
-    except BaseException:
-        remove_captured_snapshot(sessions_root, record)
+        return await run_sync_shielded(_publish_received_snapshot, sessions_root, frozen)
+    except BaseException as error:
+        try:
+            await run_sync_shielded(_discard_failed_snapshot, sessions_root, record, error)
+        except asyncio.CancelledError as interrupted:
+            # await传入的取消没有隐式异常链，仍须保留导致本次清理的原失败。
+            raise interrupted from error
         raise
+
+
+def _discard_failed_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord, error: BaseException) -> None:
+    # 在线程内恢复原失败上下文，清理次错的原生cause和此前传输失败才能同时保留。
+    try:
+        raise error
+    except BaseException:  # noqa: BLE001 - 这里只恢复worker异常上下文；原调用重抛同一错误。
+        remove_captured_snapshot(sessions_root, record)
+
+
+def _received_file_path(root: Path, record: ForkSourceCaptureRecord, name: str) -> Path:
+    with _storage_io(root, "fork artifact 接收位置检查失败", "receive_path", artifact="fork_transfer"):
+        return _artifact_file(root, record, name)
+
+
+@contextmanager
+def _received_stream(path: Path) -> Iterator[BinaryIO]:
+    with _storage_io(path, "fork artifact 接收文件准备失败", "receive_open", artifact="fork_transfer"):
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stream = path.open("xb")
+    try:
+        yield stream
+    finally:
+        with _storage_io(path, "fork artifact 接收文件关闭失败", "receive_close", artifact="fork_transfer"):
+            stream.close()
+
+
+def _write_received_chunk(path: Path, stream: BinaryIO, payload: bytes) -> None:
+    with _storage_io(path, "fork artifact 接收文件写入失败", "receive_write", artifact="fork_transfer"):
+        stream.write(payload)
+
+
+def _flush_received_file(path: Path, stream: BinaryIO) -> None:
+    with _storage_io(path, "fork artifact 接收文件同步失败", "receive_flush", artifact="fork_transfer"):
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _sync_received_directory(path: Path) -> None:
+    with _storage_io(path, "fork artifact 接收目录发布失败", "receive_publish", artifact="fork_transfer"):
+        fsync_directory(path)
+
+
+def _publish_received_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> tuple[ForkSourceSnapshot, str]:
+    _sync_received_directory(capture_directory(sessions_root, record))
+    return read_captured_snapshot(sessions_root, record)
 
 
 async def receive_transfer_file(
@@ -207,10 +257,10 @@ async def receive_transfer_file(
 ) -> None:
     """全部冻结文件共用固定块 reader；正文总长度不影响单次内存。"""
     path = native_io_path(path)
-    with _storage_io(path, "fork artifact 接收文件准备失败", "receive_open", artifact="fork_transfer"):
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        stream = path.open("xb")
+    lifetime = ExitStack()
     try:
+        # worker 先将句柄登记到原调用；打开后取消但尚未交付返回值也不能泄漏句柄。
+        stream = await run_sync_shielded(lifetime.enter_context, _received_stream(path))
         offset = 0
         while offset < size_bytes:
             chunk = await transport.fork_transfer(source_transfer_request(
@@ -222,14 +272,10 @@ async def receive_transfer_file(
             payload = base64.b64decode(chunk.chunk_base64, validate=True)
             if not payload or len(payload) > min(FORK_TRANSFER_CHUNK_BYTES, size_bytes - offset) or hashlib.sha256(payload).hexdigest() != chunk.chunk_sha256:
                 raise RuntimeError("fork transport 分块 hash/长度不一致")
-            with _storage_io(path, "fork artifact 接收文件写入失败", "receive_write", artifact="fork_transfer"):
-                stream.write(payload)
+            await run_sync_shielded(_write_received_chunk, path, stream, payload)
             offset += len(payload)
-        with _storage_io(path, "fork artifact 接收文件同步失败", "receive_flush", artifact="fork_transfer"):
-            stream.flush()
-            os.fsync(stream.fileno())
+        await run_sync_shielded(_flush_received_file, path, stream)
     finally:
-        with _storage_io(path, "fork artifact 接收文件关闭失败", "receive_close", artifact="fork_transfer"):
-            stream.close()
-    with _storage_io(path.parent, "fork artifact 接收目录发布失败", "receive_publish", artifact="fork_transfer"):
-        fsync_directory(path.parent)
+        # 将原异常交给同一 contextmanager，保持正文失败与关闭次错的原 cause/context。
+        await run_sync_shielded(lifetime.__exit__, *sys.exc_info())
+    await run_sync_shielded(_sync_received_directory, path.parent)

@@ -19,3 +19,4 @@
 - 静态结构与迁移SQL唯一定义在 `sql/`；Python显式加载并保留事务、条件、版本与参数协调。
 
 - `path_scope.py` 持有每个 storage 实例的私有 ContextVar，并唯一解析受其约束的 Thread 身份和 Session/Thread 节点；普通节点交 catalog resolver，冻结来源只读，目标 capability 仅授予冻结 creation record 的节点。
+- 冻结文件传输的原生读取、写入、同步、关闭、完整核验与失败清理统一经原 shielded worker 结算；接收句柄在 worker 内先登记到本次调用，打开后取消但未交付也须关闭。原导出/创建锁持有至结算，先排空分块写入者再删除临时快照，保留原错误链、字节和 marker 合同，不回读 live 来源。

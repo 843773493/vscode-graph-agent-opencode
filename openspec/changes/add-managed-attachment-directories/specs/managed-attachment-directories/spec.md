@@ -311,6 +311,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** fork已发布目标，原Terminal或Browser资源关联仍等待恢复、回执查询锁、Thread准入、提交锁或原attach回执
 - **THEN** 单次关联从入口共用一次30秒协作式预算，阶段不重置；到期保留已发布目标与已提交恢复事实，关联尚未派发不创建该关联回执或lease，派发未核实保留原dispatching/unknown及精确占用，已提交的关联和committed回执不回滚。公开fork沿原逐资源结算合同返回不可用原因与实际operation状态；释放原锁后不后台补做，同key显式重试复用原目标与回执，不重发未知动作或重复关联。原取消及底层异常保持归属；本预算不替代整个fork期限，也不证明同步存储可抢占或外部操作已停止
 
+#### Scenario: Fork 冻结文件传输的原生 I/O 尚未结算
+
+- **WHEN** 来源导出或目标接收在原生文件读取、写入、同步、关闭、核验或清理中等待，或尚在线程池排队，此时调用取消或外层等待截止到达
+- **THEN** 原调用与导出/创建锁覆盖原 worker 的实际结算，未返回的打开句柄也有明确归属并最终关闭；接收任务先排空原写入者再清理临时快照，不遗弃后台写入、不重放或提前发布。冻结字节、长度/hash、marker 顺序和正文/关闭原错误链保持，不能读取 live 来源补造历史或把等待截止当作原生 I/O 已停止
+
 #### Scenario: 批量 runtime 关闭中一个 Thread 挂起或失败
 
 - **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成

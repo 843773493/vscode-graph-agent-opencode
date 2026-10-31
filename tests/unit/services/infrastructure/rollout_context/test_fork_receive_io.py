@@ -12,7 +12,7 @@ import pytest
 from app.core.resource_uri import resource_display_uri, thread_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import SessionForkRequest
-from app.services.infrastructure.rollout_context.fork import transfer
+from app.services.infrastructure.rollout_context.fork import source_capture, transfer
 from tests.unit.services.infrastructure.rollout_context.test_capture_io_errors import (
     capture_files,
     frozen,
@@ -47,7 +47,7 @@ def receive_case(frozen, tmp_path):
 
     token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     try:
-        yield SimpleNamespace(path=path, original=original, source=frozen.root / name,
+        yield SimpleNamespace(request=request, path=path, original=original, source=frozen.root / name,
                               receive=receive, transport=transport, calls=calls)
     finally:
         reset_current_gateway_id(token)
@@ -146,3 +146,33 @@ async def test_transport_error_is_not_relabelled_as_local_file_io(receive_case, 
     assert opened and all(stream.closed for stream in opened)
     assert "artifact=fork_transfer" not in caplog.text
     assert case.source.read_bytes() == case.original
+
+
+async def test_import_cleanup_failure_keeps_native_cause_and_original_transport(
+    receive_case, frozen, tmp_path, monkeypatch,
+):
+    sessions = tmp_path / "target/sessions"
+    root = transfer.capture_directory(sessions, frozen.record)
+    root.mkdir(parents=True)
+    partial = root / "partial"
+    partial.write_bytes(b"unpublished transfer")
+    upstream = ConnectionError("来源传输失败")
+    native = PermissionError(errno.EACCES, "快照清理失败", str(root))
+    original_remove = source_capture.shutil.rmtree
+
+    async def failed_transfer(_payload):
+        raise upstream
+
+    def failed_remove(path, *args, **kwargs):
+        if Path(path) == root:
+            raise native
+        return original_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(receive_case.transport, "fork_transfer", failed_transfer)
+    monkeypatch.setattr(source_capture.shutil, "rmtree", failed_remove)
+    with pytest.raises(PermissionError) as caught:
+        await transfer.import_captured_artifact(receive_case.transport, receive_case.request, sessions, frozen.record)
+    assert caught.value.__cause__ is native and caught.value.errno == errno.EACCES
+    assert native.__context__ is upstream
+    assert partial.read_bytes() == b"unpublished transfer"
+    assert receive_case.source.read_bytes() == receive_case.original

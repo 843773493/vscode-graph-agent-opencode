@@ -480,3 +480,9 @@ Session读写准入的active catalog查询、`SessionService.get`的单节点/�
 ### 活动记录库关闭沿原Workspace任务等待worker
 
 `WorkspaceLifespan`的`activity.close`与已有文件/附件存储关闭共用`run_sync_shielded`，仅将原同步关闭交给worker；MCP/AnyIO scope仍在原生命周期任务执行。线程池排队及原生句柄释放均受Backend同一次观察预算约束，观察到期或取消不取消原关闭任务，不提前移除当前步骤或归还后续catalog与维护锁。原关闭错误保持归属，重试仍从未完成步骤继续；不改SQLite关闭语义或增加关闭writer。配置source owner不持有连接，其空关闭入口保持原行为。其它同步I/O、不合作操作终止及整个shutdown硬期限仍属5.4未完成范围。
+
+### Fork 冻结文件传输的原生 I/O 结算（5.4 部分收口）
+
+来源文件清单和分块读取、目标位置检查和文件打开/写入/同步/关闭、目录同步及完整快照核验、失败删除统一调用既有 `run_sync_shielded`。原导出/创建 key 锁覆盖线程池排队及实际 I/O 结算，分块网络请求保持可取消，正文块和文件并发上限、hash/长度、marker 最后接收及来源冻结坐标不变。打开句柄在 worker 内先登记到本次调用的 ExitStack，再交付返回值；取消发生在打开后但交付前也由同一栈关闭。原异常随退出信息交给原文件 contextmanager，正文失败与关闭次错保留原 cause/context。失败清理的 worker 显式恢复此前失败的异常上下文，保留原生清理次错的 cause；清理等待被取消时，将此前失败链接到原取消，不因跨线程和任务边界丢失错误。
+
+失败仍先取消并排空本次文件任务，再由 worker 删除接收中的临时快照，不留锁外后台补写，不回读 live 来源。取消保持原 preparing 与冻结创建身份，显式同 key 恢复沿原产品入口复制并核唯一目标、冷恢复字节与请求 hash；普通失败已中止的身份仍不得复活。其它 fork/catalog 同步访问、任意原生线程终止、完整 shutdown 硬期限及独立 Backend/Windows/Gateway/Web 验收继续 TODO；不据本切片勾选 5.2/5.4。

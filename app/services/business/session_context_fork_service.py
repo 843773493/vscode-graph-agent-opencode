@@ -36,6 +36,7 @@ from app.core.session_catalog_store.creation_envelope import (
     validate_session_creation_envelope,
 )
 from app.core.session_control_store import ThreadCreationRecord
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.thread_creation import (
     ThreadCreationAbortedError,
     ThreadCreationResult,
@@ -513,9 +514,9 @@ class SessionContextForkService:
                     verify_capture_receipt(expected, ForkSourceCaptureDTO.from_record(capture))
                     sessions_root = self._checkpointer._storage.storage.sessions_dir
                     if payload.action == "files":
-                        return export_file_batch(sessions_root, capture, payload.cursor)
+                        return await run_sync_shielded(export_file_batch, sessions_root, capture, payload.cursor)
                     if payload.action == "chunk":
-                        return export_file_chunk(sessions_root, capture, payload.file_name, payload.offset)
+                        return await run_sync_shielded(export_file_chunk, sessions_root, capture, payload.file_name, payload.offset)
                     raise ValueError("fork transfer action 未派发")
             return SessionForkTransferResultDTO(capture=ForkSourceCaptureDTO.from_record(capture))
 

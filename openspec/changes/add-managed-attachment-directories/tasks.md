@@ -618,3 +618,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原Workspace的`activity.close`仅改为复用既有`run_sync_shielded`，线程池排队和原生句柄释放由同一关闭任务持有；Backend观察到期/取消不丢弃原步骤、catalog或维护锁，原失败沿同入口重试，MCP/AnyIO仍由原任务关闭。配置source owner的空关闭保持；未新增关闭writer或改变SQLite释放语义。
 - 31项相关单测通过（6.30秒），5项双挂载集成通过（133.34秒，含等待另一会话Web测试名额）；排队/原生释放与取消/到期四组合及原生错误重试均核对原任务、步骤、ASGI诊断、request_id、维护锁、冷读活动与Session locator。完整旧生产归档加同样测试的2个反例均失败（35.58秒）；最终完整独立候选同样5项通过（32.26秒），不依赖其他会话未提交改动、不重复计数。释放屏障位于真实原生解锁调用前，不声称OS已实际发生解锁阻塞。候选首次只在独占闸门等待，236秒后主动中断自己的等待（exit2、no tests ran），按600秒闸门上限重设外层保护后完成；未绕过闸门、终止另一会话测试或重启共享debug。
 - Ruff、compileall与strict通过；Pyright的4条既有诊断在完整旧生产上规则、完整消息、位置及对应表达式AST完全一致，新增测试零诊断，不称类型全绿。首轮导入和事件循环私有属性类型已修正，测试恢复原池的反射访问附具名Ruff说明，未改变可执行AST或断言。原始命令、源码指纹、退出码、完整候选patch和作者AST核对见`out/tests/temp/activity_shutdown_20261030/artifacts/verification.json`；正式输出保留，临时源码清理。未验证真实等待默认30秒、独立Backend重启、Gateway/Web、Windows、任意线程终止或完整shutdown硬期限；5.2/5.4及整体21/23保持未完成，另一会话Web/Workbench、自动化和暂存保持。
+
+
+### 2026-10-31 Fork冻结文件传输的原生等待与失败结算（5.4部分收口）
+
+- 来源导出和目标接收的原生文件I/O复用既有shielded worker；原key锁覆盖结算，打开后尚未交付的句柄先登记，写入者排空后才删除临时快照。保留分块、文件并发、marker、历史字节和hash；取消维持preparing，同key恢复复用完整创建身份与唯一目标。失败清理在线程中恢复原异常上下文，清理取消显式保留此前失败，不新增writer或账本。
+- 17项单测、完整独立候选的10个新ASGI产品场景及13个原传输故障回归通过（唯一40项）；另一次定向10项不重复累加。完整旧生产归档加相同新测试的2个反例，均在原同步I/O占用事件循环处失败。新增清理次错反例先检出上下文丢失，修复后保留原生cause与原传输异常。正式matrix、原60秒fork watchdog、主仓独占闸门和4GiB/进程外超时保持；最终新场景151.26秒、原回归202.34秒，旧反例65.94秒，准确命令、指纹和实际退出码见`out/tests/temp/fork_transfer_workers_20261030/artifacts/verification.json`。
+- Ruff、compileall和strict通过；Pyright的38条既有诊断已与完整HEAD逐项核对（含旧单测2条），本片无新增类型诊断，不称类型全绿。首轮正式runner前置缺失与一次主动中止自己的闸门等待均未进入测试体；测试误判取消为aborted、误限接收路径及watchdog外层取消观察已按原合同修正，原件保留。传输替身不是实际HTTP网络；原生调用边界屏障不证明OS真实阻塞或线程可终止。其它catalog同步读取、旧代接管、独立Backend重启、Gateway/Web、Windows及完整shutdown硬期限继续TODO，5.2/5.4与21/23保持未完成。未改另一会话Web/Workbench、自动化、共享暂存或重启debug。
