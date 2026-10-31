@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.workspace_resources.records import (
     OwnedResourceRecord,
     ThreadRef,
@@ -68,19 +69,34 @@ class ResourceOperations:
         async with self._owner._resource_lock(resource_id):
             lease_id = self._lease_refs.get(resource_id)
             if lease_id is not None:
-                self._owner._release_operation_lease(lease_id)
-                # 原账本持久释放成功后才遗忘引用，失败沿同一 operation 重试。
-                del self._lease_refs[resource_id]
+                def release() -> None:
+                    self._owner._release_operation_lease(lease_id)
+                    # 原账本持久释放成功后才遗忘引用，失败沿同一 operation 重试。
+                    del self._lease_refs[resource_id]
+
+                await run_sync_shielded(release)
 
     async def close(self) -> None:
         self._closed = True
         # 全批只取一次预算；取消只排空本次锁等待，原引用保留供同operation重试。
-        # TODO(5.4)：同步账本写盘与不合作取消不能由此预算抢占，外部终态仍须owner核实。
+        # TODO(5.4)：worker 排队及写盘须结算，预算不能抢占原生 I/O；外部终态仍须 owner 核实。
         budget = asyncio.timeout(OPERATION_CLOSE_WAIT_SECONDS)
         tasks = [asyncio.create_task(self._release(resource_id)) for resource_id in tuple(self._lease_refs)]
+        batch = asyncio.gather(*tasks, return_exceptions=True)
+
+        async def settle() -> None:
+            await batch
+
         try:
             async with budget:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                try:
+                    results = await asyncio.shield(batch)
+                except asyncio.CancelledError:
+                    # 先取得原取消，再排空本批；迟到写盘失败不能让 gather 丢失原取消消息。
+                    for task in tasks:
+                        task.cancel()
+                    await run_cleanup_shielded(settle)
+                    raise
             errors = [result for result in results if isinstance(result, BaseException)]
         except (TimeoutError, asyncio.CancelledError) as failure:
             if isinstance(failure, TimeoutError) and not budget.expired():

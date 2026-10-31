@@ -28,7 +28,7 @@ workspace_resources/
 # 规范
 
 - 记录读取返回隔离草稿，所有 writer 等待唯一异步 `save`，文件写锁覆盖原 JSON/fsync/replace 的 shielded worker 结算，成功后才发布；后写合并此前已发布记录，新建资源的原锁须先于记录发布登记；取消不得提前释放原资源锁、准入或原占用。等资源锁后重新读取，禁止用等待前的草稿覆盖当前状态。终态记录持久成功后才结清 lease；unknown 写盘前先保护原占用，重试同时核原 lease 与外部终态，不引入第二账本或回滚旧共享对象。
-- operation关闭全批共用一次30秒协作式等待预算，逐资源取得原锁、持久释放后再移除引用；单项挂起或失败不阻断其它占用释放。到期排空本次锁等待，保留此前返回的原异常和精确未释放引用供同operation显式重试，不重建lease或在解锁后后台补做释放。普通released不表示资源已停止；同步写盘、不合作取消和外部终态核实仍TODO。
+- operation关闭全批共用一次30秒协作式等待预算，逐资源取得原锁，沿既有shielded worker持久释放后再移除引用；原锁覆盖线程池排队、写盘及取消结算。到期排空本次锁等待，保留此前返回的原异常和精确引用供同operation显式重试，已提交释放不重写，不重建lease或在解锁后后台补做。普通released不表示资源已停止；账本共享writer仍须串行，原生I/O不能由预算抢占，其它同步写盘、不合作取消和外部终态核实仍TODO。
 - 单次工具方法的资源准入共用一次30秒协作式预算，覆盖所选资源冷恢复、原资源锁、校验及取得原lease。到期只排空本次等待，保留已提交恢复及已有占用，未派发不补造unknown或新lease，不后台补做；底层TimeoutError和调用者取消保持归属。准入后原锁继续覆盖正式工具执行，此预算不是Thread准入、整个工具operation或shutdown总期限；同步写盘与不合作取消仍TODO。
 - owner 各自只核实自己的外部事实，不跨领域对账。
 - Thread准入先取得`workspace_resources` namespace的Session shared OS holder，再在短Session写准入内核定workspace/main或显式Thread；holder、Session锁和读取共用一次30秒协作式等待预算。active核验、Session目录及main/Thread locator读取复用原shielded worker，原gate/holder覆盖排队及同步结算；取消后不继续准入或后台补做。Session独占锁不跨真实工具执行，holder覆盖原operation及其受保护收尾；删除装配只登记该共享namespace一次，先等holder退出再取得Session锁并清理。超时/取消排空本次准入，原错误身份保持，不新增业务lease/unknown；deleting Session拒绝新准入。此预算不涵盖此前冷恢复、正式工具执行或整个shutdown；worker不能抢占原生I/O，其它同步存储和不合作取消继续TODO。
