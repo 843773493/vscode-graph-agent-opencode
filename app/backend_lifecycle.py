@@ -42,7 +42,7 @@ class BackendLifespan:
         self._steps: deque[tuple[str, CloseAction]] = deque([
             ("workspaces", self._close_workspaces),
             ("catalog", self._close_registry),
-            ("maintenance", self._access.close),
+            ("maintenance", self._close_access),
             ("model_stream", self._close_model_stream),
         ])
 
@@ -123,3 +123,8 @@ class BackendLifespan:
     async def _close_model_stream(self) -> None:
         if self._model_stream is not None:
             await self._model_stream.aclose()
+
+    async def _close_access(self) -> None:
+        # 原栈在线程中结算；观察到期不能遗弃解锁或提前关闭模型传输。
+        # TODO(5.4)：原生释放仍不可抢占，完整进程退出期限另行核实。
+        await run_sync_shielded(self._access.close)

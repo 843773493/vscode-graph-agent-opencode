@@ -258,8 +258,9 @@ async def test_original_close_timeout_keeps_its_identity(case: Case) -> None:
 
 
 @pytest.mark.parametrize("queued", [False, True])
-async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
-    case: Case, monkeypatch: pytest.MonkeyPatch, queued: bool,
+@pytest.mark.parametrize("stage", ["catalog", "maintenance"])
+async def test_sync_close_worker_and_executor_queue_preserve_budget_and_one_owner(
+    case: Case, monkeypatch: pytest.MonkeyPatch, queued: bool, stage: str,
 ) -> None:
     loop = asyncio.get_running_loop()
     entered, release = Event(), Event()
@@ -269,8 +270,9 @@ async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
     def blocked_close() -> None:
         entered.set()
         if not release.wait(5):
-            raise RuntimeError("测试catalog关闭屏障未释放")
-        registry_close()
+            raise RuntimeError("测试同步关闭屏障未释放")
+        if stage == "catalog":
+            registry_close()
 
     def occupy_executor() -> None:
         occupied.set()
@@ -279,19 +281,31 @@ async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
 
     for workspace in case.workspaces:
         workspace.release.set()
-    monkeypatch.setattr(case.registry, "close", blocked_close)
+    if stage == "catalog":
+        monkeypatch.setattr(case.registry, "close", blocked_close)
+    else:
+        case.backend._access.callback(blocked_close)
     with ThreadPoolExecutor(max_workers=1) as executor, monkeypatch.context() as patch:
         patch.setattr(loop, "_default_executor", executor)
-        filler = executor.submit(occupy_executor) if queued else None
+        filler = executor.submit(occupy_executor) if queued and stage == "catalog" else None
+        if queued and stage == "maintenance":
+            def close_catalog_before_queue() -> None:
+                nonlocal filler
+                registry_close()
+                filler = executor.submit(occupy_executor)
+
+            patch.setattr(case.registry, "close", close_catalog_before_queue)
         waiting = None
         try:
-            if queued:
+            if queued and stage == "catalog":
                 async with asyncio.timeout(2):
                     while not occupied.is_set():
                         await asyncio.sleep(0.001)
             waiting = asyncio.create_task(case.backend.close())
             async with asyncio.timeout(2):
-                while (executor._work_queue.qsize() == 0 if queued else not entered.is_set()):
+                while case.backend._steps[0][0] != stage or (
+                    executor._work_queue.qsize() == 0 if queued else not entered.is_set()
+                ):
                     await asyncio.sleep(0.001)
             owner = case.backend._close_owner
             assert owner is not None and not owner.done()
@@ -299,10 +313,11 @@ async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
             assert case.registry.admission_closed, "同步关闭尚在线程池排队时也必须撤销装配准入"
             assert len(case.deadlines) == 1
             case.deadlines[0].reschedule(loop.time())
-            with pytest.raises(TimeoutError, match="stage=catalog"):
+            with pytest.raises(TimeoutError, match=f"stage={stage}"):
                 await asyncio.wait_for(waiting, 2)
             assert not owner.done() and not owner.cancelled()
-            assert case.registry.closes == case.stream.closes == 0
+            assert case.registry.closes == (1 if stage == "maintenance" else 0)
+            assert case.stream.closes == 0
             assert case.released_access == []
             assert case.application.state.workspace_lifespan is case.backend
             retry = asyncio.create_task(case.backend.close())
@@ -328,3 +343,27 @@ async def test_catalog_worker_and_executor_queue_preserve_budget_and_one_owner(
                 filler.result(timeout=2)
             if case.backend._close_owner is not None:
                 await asyncio.gather(case.backend._close_owner, return_exceptions=True)
+
+
+async def test_maintenance_stack_failure_preserves_error_and_consumed_callbacks(case: Case) -> None:
+    for workspace in case.workspaces:
+        workspace.release.set()
+    attempts: list[int] = []
+    failure = OSError("维护锁原生释放失败")
+
+    def failed_release() -> None:
+        attempts.append(1)
+        raise failure
+
+    case.backend._access.callback(failed_release)
+    with pytest.raises(OSError) as caught:
+        await case.backend.close()
+    assert caught.value is failure
+    assert case.registry.closes == 1 and case.stream.closes == 0
+    assert case.released_access == [True] and attempts == [1]
+    assert not case.backend.closed and case.backend._steps[0][0] == "maintenance"
+    owner = case.backend._close_owner
+    await case.backend.close()
+    assert case.backend.closed and case.backend._close_owner is not owner
+    assert case.registry.closes == case.stream.closes == 1
+    assert case.released_access == [True] and attempts == [1]

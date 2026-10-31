@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
+import secrets
 from pathlib import Path
+from threading import Event, get_ident
+from typing import BinaryIO
 
+import httpx
 import pytest
 
 from app import container as container_module
 from app import main
 from app.container import AppContainer
+from app.core.path_utils import workspace_context
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.infrastructure.attachment_blob_catalog import (
+    maintenance as maintenance_module,
+)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
@@ -32,7 +42,10 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414
 )
-from tests.support.workspaces import prepare_test_workspace
+from tests.support.workspaces import (
+    prepare_test_workspace,
+    render_test_workspace_config,
+)
 
 
 @pytest.fixture
@@ -152,3 +165,124 @@ async def test_real_double_mount_holds_access_through_writer_shutdown(
     for root in case.roots.values():
         with AttachmentMaintenanceLock(root / ".boxteam/attachments", exclusive=True):
             pass
+
+
+@pytest.fixture
+def maintenance_case(mounted_case: MountedCase) -> MountedCase:
+    # 关闭验收只创建Session，不调用模型或读取个人Provider凭据。
+    config = json.loads(render_test_workspace_config(
+        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
+    ))
+    for provider in config["llm"]["providers"]:
+        provider["api_key"] = "maintenance-contract-unused-key"
+        provider.pop("auth", None)
+    for root in mounted_case.roots.values():
+        (root / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n")
+    return mounted_case
+
+
+@pytest.mark.parametrize("interruption", ["deadline", "cancel"])
+async def test_maintenance_native_release_keeps_close_owner_and_diagnostics_responsive(
+    maintenance_case: MountedCase, monkeypatch: pytest.MonkeyPatch, interruption: str,
+) -> None:
+    deadlines: list[asyncio.Timeout] = []
+    acquired: list[AttachmentMaintenanceLock] = []
+    acquire = AttachmentMaintenanceLock.acquire
+
+    def capture_acquire(lock: AttachmentMaintenanceLock) -> None:
+        acquire(lock)
+        if lock not in acquired:
+            acquired.append(lock)
+
+    def capture_deadline(seconds: float) -> asyncio.Timeout:
+        assert seconds == 30
+        deadline = asyncio.timeout(seconds)
+        deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr(AttachmentMaintenanceLock, "acquire", capture_acquire)
+    monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", capture_deadline)
+    token = secrets.token_hex(32)
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
+    lifetime = main.lifespan(main.app)
+    await lifetime.__aenter__()
+    backend = main.app.state.workspace_lifespan
+    registry = backend.registry
+    selected = maintenance_case.containers[-1]
+    # Backend先取得全部维护锁，再初始化各挂载的业务owner。
+    access = acquired[:len(maintenance_case.containers)]
+    selected_access = next(lock for lock in access if lock.path == (
+        selected.workspace_root / ".boxteam/.attachments-maintenance.lock"
+    ))
+    fd = selected_access._fd
+    assert fd is not None
+    entered, release = Event(), Event()
+    attempts: list[int] = []
+    event_loop_thread = get_ident()
+    original_unlock = maintenance_module.portalocker.unlock
+
+    def unlock(current: int | BinaryIO) -> None:
+        if current == fd:
+            attempts.append(get_ident())
+            entered.set()
+            if not release.wait(8):
+                raise RuntimeError("维护锁原生释放阻塞事件循环，测试保护期限已到")
+        original_unlock(current)
+
+    closing = None
+    try:
+        with workspace_context(selected.workspace_id, selected.workspace_root, session_catalog=selected.session_catalog):
+            session = await selected.session_service.create(SessionCreateRequest(title="维护锁关闭"))
+        locator = selected.session_catalog.resolver.resolve_session_node(session.session_id)
+        manifest = (locator / "session.json").read_bytes()
+        monkeypatch.setattr(maintenance_module.portalocker, "unlock", unlock)
+        closing = asyncio.create_task(backend.close())
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        owner = backend._close_owner
+        assert owner is not None and not owner.done() and len(deadlines) == 1
+        assert all(workspace.closed for workspace in backend.workspaces)
+        assert backend._steps[0][0] == "maintenance"
+        assert len(attempts) == 1 and attempts[0] != event_loop_thread
+        if interruption == "deadline":
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
+            with pytest.raises(TimeoutError, match="stage=maintenance"):
+                await asyncio.wait_for(closing, 2)
+        else:
+            closing.cancel("取消维护锁关闭观察")
+            with pytest.raises(asyncio.CancelledError, match="取消维护锁关闭观察"):
+                await asyncio.wait_for(closing, 2)
+        assert not owner.done() and backend._close_owner is owner
+        assert main.app.state.workspace_container_registry is registry
+        assert main.app.state.workspace_lifespan is backend
+        # 原生unlock尚未执行，实际跨进程锁仍排斥离线维护。
+        for container in maintenance_case.containers:
+            with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+                container.workspace_root / ".boxteam/attachments", exclusive=True,
+            ):
+                pytest.fail("原维护锁释放未结算时不应允许离线维护")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test") as client:
+            response = await asyncio.wait_for(client.get(
+                "/api/v1/internal/runtime-logging", headers={"X-Local-Token": token},
+            ), 2)
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        retry = asyncio.create_task(backend.close())
+        await asyncio.sleep(0)
+        assert backend._close_owner is owner and not retry.done()
+        release.set()
+        await asyncio.wait_for(retry, 5)
+        assert backend.closed and backend._close_owner is owner
+        assert len(attempts) == 1 and attempts[0] != event_loop_thread
+        assert main.app.state.workspace_lifespan is None
+        assert (locator / "session.json").read_bytes() == manifest
+        for container in maintenance_case.containers:
+            with AttachmentMaintenanceLock(container.workspace_root / ".boxteam/attachments", exclusive=True):
+                pass
+    finally:
+        release.set()
+        monkeypatch.setattr(maintenance_module.portalocker, "unlock", original_unlock)
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await lifetime.__aexit__(None, None, None)
