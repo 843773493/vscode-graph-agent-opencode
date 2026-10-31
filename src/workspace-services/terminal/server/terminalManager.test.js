@@ -317,6 +317,7 @@ test("终端管理器只保留有界的近期终态历史", async () => {
     manager.terminalsById.set(id, {
       id,
       status: "deleted",
+      reconciliationStatus: "verified",
       updatedAt: new Date(index * 1_000).toISOString(),
       async dispose() {
         disposed.push(id);
@@ -332,6 +333,47 @@ test("终端管理器只保留有界的近期终态历史", async () => {
   assert.equal(manager.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY);
   assert.deepEqual(disposed, ["term_1", "term_0"]);
 });
+
+for (const reconciliationStatus of ["unknown", "reconcile_required"]) {
+  test(`删除仍待核实的记录不参与历史配额且冷启动继续保留: ${reconciliationStatus}`, async () => {
+    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const heldId = `term_${randomUUID().replaceAll("-", "")}`;
+    const held = new TerminalSession({ manager, record: {
+      terminal_id: heldId, workspace_id: manager.workspaceId, transport_owner_revision: 7,
+      status: "deleted", reconciliation_status: reconciliationStatus, cwd_relative: ".",
+      created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(),
+    } });
+    manager.terminalsById.set(heldId, held);
+    const original = held.toRecord();
+    const verifiedIds = [];
+    for (let index = 1; index <= MAX_RETAINED_TERMINAL_HISTORY + 1; index += 1) {
+      const id = `term_${randomUUID().replaceAll("-", "")}`;
+      verifiedIds.push(id);
+      manager.terminalsById.set(id, new TerminalSession({ manager, record: {
+        terminal_id: id, workspace_id: manager.workspaceId, transport_owner_revision: 1,
+        status: "deleted", reconciliation_status: "verified", cwd_relative: ".",
+        created_at: new Date(index * 1_000).toISOString(), updated_at: new Date(index * 1_000).toISOString(),
+      } }));
+    }
+    await manager.persist();
+    // 冷启动本身会调用原裁剪入口，不能先由测试筛掉历史或补回未知记录。
+    const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+    await cold.init();
+    assert.deepEqual(cold.get(heldId).toRecord(), original);
+    assert.equal(cold.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY + 1);
+    assert.throws(() => cold.get(verifiedIds[0]), /终端不存在/);
+    for (const id of verifiedIds.slice(1)) assert.equal(cold.get(id).reconciliationStatus, "verified");
+    await assert.rejects(cold.create({ workspaceId: manager.workspaceId, terminalId: heldId, ownerRevision: 8 }), error => {
+      assert.match(error.message, /身份冲突/);
+      assert.equal(error.creationReceipt, undefined);
+      return true;
+    });
+    await cold.pruneTerminalHistory();
+    const records = JSON.parse(await readFile(cold.stateFile, "utf8")).terminals;
+    assert.deepEqual(records.find(record => record.terminal_id === heldId), original);
+    assert.equal(records.length, MAX_RETAINED_TERMINAL_HISTORY + 1);
+  });
+}
 
 test("完成 steering 返回统一的终端信封", async () => {
   const manager = new TerminalManager({

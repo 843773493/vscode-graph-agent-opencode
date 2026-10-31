@@ -386,7 +386,7 @@ export class TerminalManager {
 
   async pruneTerminalHistory() {
     const historical = [...this.terminalsById.values()]
-      .filter((session) => session.status === "deleted")
+      .filter((session) => session.status === "deleted" && session.reconciliationStatus === "verified")
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const removed = historical.slice(MAX_RETAINED_TERMINAL_HISTORY);
     for (const session of removed) {

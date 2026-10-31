@@ -188,6 +188,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Node接纳具有合法资源、工作区及版本身份的Terminal创建
 - **THEN** 在调用原生启动前先经既有writer发布同一资源的created/unknown恢复记录；就绪后沿原身份和记录链核实。首条意图写入失败时，只有仍在场且确认尚未调用启动的原调用，才能持久关闭该身份并返回绑定本次intent的not_created回执；收尾再次失败保留unknown和按发生顺序的两份原错，不签未创建回执。Node在就绪交付前硬退出后，冷Manager仍可发现原意图，不能用缺少PID、Worker退出或原进程已消失替代停止证明，也不允许迟到创建覆盖该身份；没有原生身份的终止接管仍须另行核实
 
+#### Scenario: Terminal 待核实删除不受历史配额裁剪
+
+- **WHEN** Terminal在冷启动或接纳新建前裁剪已删除历史
+- **THEN** 仅deleted/verified记录参与原256条历史配额及排序；deleted/unknown和deleted/reconcile_required保持原恢复记录、资源身份与版本，不占已核实历史配额，也不能被迟到创建覆盖。裁剪不能作为原操作已停止或已核实的证明
+
 #### Scenario: Terminal 原生创建后就绪交付失败
 
 - **WHEN** 原生PTY已创建并交付唯一PID，但就绪前发生错误、超时或Worker退出

@@ -48,6 +48,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 Terminal在原生启动前先通过原Manager writer发布created/unknown意图，避免真实PTY已存在而恢复文件尚无资源身份。Session收到原就绪和创建身份后再沿原写盘链核实。若首条意图写入失败，仍在场的原创建调用可证明Session.start未派发：同一记录持久关闭为deleted/verified后签not_created；收尾写入再次失败保留unknown、原错误及收尾错误，不签回执。该证明不从冷记录或清单缺失推导；Node硬退出后的无PID意图保持可发现和未核实，无身份终止接管继续TODO。沿用原record/schema/原子发布语义，不新增另一份intent文件或账本，也不将进程崩溃验收扩大为断电持久性证明。
 
+Terminal历史裁剪仅将deleted/verified纳入既有256条配额；deleted/unknown和deleted/reconcile_required继续保留原恢复身份及版本，不能因历史积累在启动或新建时自动消失，也不能据此重新接纳同一资源身份。该规则不改变已核实历史的排序、保留数量或原writer。
+
 Browser Manager关闭由唯一Promise持有创建排空、逐资源检查点与失败收尾、共享运行时关闭和最终状态写入。每次调用从入口取得默认30秒观察预算，重入只等待原执行；到期报告阶段与仍执行的Browser身份，保留原句柄、检查点及准入关闭。资源关闭并行推进，正文捕获仍复用原串行队列；整批收齐结果后才重试，错误按原资源顺序保留并记录迟到失败。已成功的共享运行时关闭不因末次写盘失败再次执行；原任务成功后重复调用直接返回。此为协作式观察期限，不能抢占同步阻塞、证明任意脚本终止或替代生产进程退出核实。
 
 不为每个附件发送心跳；复用后端启动代次、Thread runtime generation、durable admission/operation 和真实任务终态识别持有者。进程仍存活时，由统一执行 finally、取消保护和卸载通知收敛；重启时对照权威 Thread/任务事实处理旧代关联，不能仅看数据库里还有 Thread ID 就无限保留，也不能把 cold Thread 或排队输入当作已失效。迟到的旧代 detach 不得移除新代 attach。
