@@ -18,5 +18,6 @@
 - 会话生成器 HTTP 结构核对实际预览／定义校验的请求和响应、字段漂移及候选 descriptor 的发布前拒绝；与其它 Workspace HTTP 契约共用独立 OpenAPI 副本 fixture，产物按本测试文件写入 `out/tests/`，保留 Pydantic 命名与策略约束。
 - 运行时 HTTP 结构核对状态、排空／取消／强制中断及快照回执的实际响应，覆盖阻塞资源的嵌套字段与候选 descriptor 漂移，保留生命周期业务约束。
 - 失败必须明确指出不兼容字段或行为。
+- 会话文件变更核对实际列表、详情及审查路由，递归检查汇总和文件成员，并验证候选 descriptor 的根或嵌套漂移在发布快照前拒绝；导出只写隔离产物，保留 URI 和业务校验。
 - HTTP 结构测试共享包含 Workspace／Gateway 及其依赖的 descriptor fixture；Gateway 目录链的测试核实际路由、递归结构、保留的业务校验和发布前失败，不读取或改写客户端源码中的快照。
 - Gateway 受管工作区链覆盖本机与联邦的真实 OpenAPI 请求／响应引用、嵌套成员及候选 descriptor 漂移；以隔离输出验证发布前拒绝，不启动 Gateway 或工作区生命周期。
