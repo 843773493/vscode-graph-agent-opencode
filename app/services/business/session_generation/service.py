@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
+from app.core.failures import failure_detail
 from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
@@ -108,14 +110,26 @@ class SessionGenerationService:
             resolve_generation_provider(self._providers, payload)
         except GenerationProviderUnavailable as error:
             return SessionGenerationValidationDTO(workspace_id=workspace_id, provider_available=False, reason=str(error))
-        await self.preview(SessionGenerationPreviewRequest(
-            name=payload.name, title_template=payload.title_template, path_template=payload.path_template,
-            session_title=str(payload.config.get("session_title") or payload.name),
-            placement_kind=payload.placement.kind,
-            placement_node_id=payload.placement.session_id or payload.placement.folder_id,
-            session_strategy=payload.session_strategy.mode,
-            target_session_id=payload.session_strategy.target.session_id if payload.session_strategy.target is not None else None,
-        ))
+        try:
+            preview_request = SessionGenerationPreviewRequest(
+                name=payload.name, title_template=payload.title_template, path_template=payload.path_template,
+                session_title=str(payload.config.get("session_title") or payload.name),
+                placement_kind=payload.placement.kind,
+                placement_node_id=payload.placement.session_id or payload.placement.folder_id,
+                session_strategy=payload.session_strategy.mode,
+                target_session_id=payload.session_strategy.target.session_id if payload.session_strategy.target is not None else None,
+            )
+        except ValidationError as error:
+            detail = failure_detail(
+                error, stage="session-generation-naming", label="会话生成器命名参数无效",
+            )
+            # 这里只有固定命名字段；输入正文与校验器上下文留在原始诊断。
+            rules = ",".join(
+                f"{'.'.join(map(str, item['loc']))}:{item['type']}"
+                for item in error.errors(include_input=False, include_context=False, include_url=False)
+            )
+            raise ValueError(f"{detail}, rules={rules}") from error
+        await self.preview(preview_request)
         threads: set[tuple[str, str]] = set()
         if payload.session_strategy.target is not None:
             target = payload.session_strategy.target

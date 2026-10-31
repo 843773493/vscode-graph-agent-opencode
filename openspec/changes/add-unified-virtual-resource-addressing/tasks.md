@@ -1754,3 +1754,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 旧源码24项三平台路径边界反例及3项原 PersistentTaskStore 冻结判断读侧反例均为400并回显输入；最终116项API／任务引用单测通过。真实存储反例核对失败不改任务或运行行，修复同一decision后读回原运行；创建和触发记录仅为局部查询准备，不代替产品入口生成、执行、fork或恢复的完整验收。
 - Ruff、compileall与本change strict通过；Pyright保留1项既有SSE responses参数注解诊断，按规则、完整消息和最窄表达式AST比较无新增，不称静态全绿。新增测试中不合签名的NotFoundError构造已改正，并在改生产前确认14项具名业务拒绝仍通过。移除新增导入及两处原样重抛后，生产AST与固定基线 `b0109bfa8` 相同；准确命令、源码指纹、原始输出、实际退出码及作者自查见 `out/tests/temp/persistent_task_response_validation_20261031/artifacts/verification.json`。
 - 本片不代全局URI、真实Gateway网络、Web／Workbench、Windows、模型执行或进程重启验收，2.2／7.2及整体51/53保持；另一会话前端、自动化和共享debug未改动。
+
+### 2026-10-31 生成器命名输入与内部响应校验的错误归属（2.2／7.2部分收口）
+
+- 生成器定义校验和位置预览不再把内部 Pydantic ValidationError 返回400及原文；原异常交既有 TraceMiddleware 返回安全500和同一request_id。定义中的命名参数仍在原预览请求构造处校验，明确转换为业务400，只公开固定字段与规则，原输入、cause及日志故障留在原始诊断；实际预览调用在该输入校验捕获范围之外。补齐上一片持久任务创建／更新对延后命名拒绝误报500的回归，不改变公开请求schema或命名限制。
+- 改生产前29项中25项失败、4项原业务分支通过；失败分别为9项内部响应误报400、7项延后输入拒绝回显正文、8项持久任务输入误报500及1项日志故障边界。最终146项定向后端单测通过，含新增32项生成器API验证、原命名／provider／创建规则和持久任务API回归；验证使用真实FastAPI路由、中间件、生产异常处理器及生成器／任务服务，隔离外部runtime，不代替完整产品执行、fork或恢复。
+- 三文件Pyright、compileall及本change strict通过；Ruff12条既有诊断按规则、完整消息与最窄表达式AST无新增。命令、源码指纹、原始输出、退出码和差异审查见 `out/tests/temp/generation_response_validation_20261031/artifacts/verification.json`。未修改另一会话Web／Workbench、其自动化、共享debug或暂存；2.2／7.2仍未勾，整体51/53保持。

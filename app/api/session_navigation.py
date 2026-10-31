@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from app.api.deps import (
     get_request_id,
@@ -174,6 +175,8 @@ async def validate_session_generation_definition(
         result = await service.validate_definition(payload)
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -193,6 +196,8 @@ async def preview_session_generation(
         result = await service.preview(payload)
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
