@@ -131,6 +131,12 @@ def test_http_schema_requires_registered_root_in_real_openapi(http_openapi: Json
     ("ResourceNavigationRequest", "operation", {"type": "integer"}),
     ("ResourceNavigationNodeDTO", "operations", {"type": "object"}),
     ("ResourceNavigationMatchDTO", "line", {"type": "string"}),
+    ("AgentDTO", "tools", {"type": "object"}),
+    ("AgentDTO", "providers", {"type": "object"}),
+    ("AgentProviderDTO", "available", {"type": "string"}),
+    ("AgentProviderDTO", "configuration_error", {"type": "integer"}),
+    ("WorkspaceDefaultAgentUpdateRequest", "agent_id", {"type": "integer"}),
+    ("WorkspaceDefaultProviderUpdateRequest", "provider_id", {"type": "integer"}),
 ])
 def test_http_schema_recursively_rejects_real_component_drift(
     http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -139,6 +145,34 @@ def test_http_schema_recursively_rejects_real_component_drift(
     with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
         assert_public_http_schemas(http_openapi)
     assert f"/{field}" in str(error.value)
+
+
+def test_agent_http_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(http_openapi)
+    schemas = http_openapi["components"]["schemas"]
+    pending: list[JsonSchemaValue] = []
+    prefix = "/api/v1/workspaces/{workspace_id}/agents"
+    for path, method, request_model in (
+        (prefix, "get", None),
+        (prefix + "/{agent_id}", "get", None),
+        (prefix + "/workspace-default", "put", "WorkspaceDefaultAgentUpdateRequest"),
+        (prefix + "/{agent_id}/workspace-default-provider", "put", "WorkspaceDefaultProviderUpdateRequest"),
+    ):
+        operation = http_openapi["paths"][path][method]
+        if request_model is not None:
+            request = operation["requestBody"]["content"]["application/json"]["schema"]
+            assert request["$ref"].endswith("/" + request_model)
+            pending.append(request)
+        response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        envelope = schemas[response["$ref"].rsplit("/", 1)[1]]
+        data = envelope["properties"]["data"]["anyOf"][0]
+        assert (data if path.endswith("/{agent_id}") else data["items"])["$ref"].endswith("/AgentDTO")
+        pending.append(response)
+    roots = _public_roots(http_openapi, pending)
+    assert roots == {"AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest"}
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"Agent 入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
 
 
 def test_file_http_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
@@ -719,6 +753,7 @@ def test_context_http_structure_checks_preserve_identity_uri_budget_and_skill_ru
     "TextMutationTransferDTO", "TextMutationReceiptDTO", "TextMutationFileDTO", "TextMutationSnapshotDTO",
     "SessionContextReadRequest", "SessionContextResourceDTO", "SessionContextProvenanceRefDTO",
     "SessionContextSearchMatchDTO", "SessionSkillUntrackResultDTO",
+    "AgentDTO", "AgentProviderDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

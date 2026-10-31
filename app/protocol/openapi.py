@@ -21,6 +21,7 @@ from app.protocol.schema import assert_public_schema
 HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: public_pb2.DESCRIPTOR.message_types_by_name[name]
     for name in (
+        "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
         "ResourceNavigationRequest", "ResourceNavigationResultDTO",
         "WorkspaceFileRootsDTO", "WorkspaceFileReferencesRequest", "WorkspaceFileReferencesDTO",
         "WorkspaceFileWatchRequest", "WorkspaceFileListDTO", "WorkspaceFileContentDTO",
