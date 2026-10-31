@@ -58,6 +58,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     for name in (
         "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
         "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
+        "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest",
+        "CreateFederationManagedWorkspaceRequest",
     )
 }
 

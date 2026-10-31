@@ -1,4 +1,4 @@
-"""Gateway 目录 HTTP 复用 descriptor 校验，结构漂移时不得发布生成物。"""
+"""Gateway 控制面 HTTP 复用 descriptor 校验，结构漂移时不得发布生成物。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ from pydantic.json_schema import JsonSchemaValue
 from app.protocol import openapi
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
+from app.schemas.gateway.workspaces import (
+    CreateFederationManagedWorkspaceRequest,
+    CreateGatewayManagedWorkspaceRequest,
+)
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
@@ -58,8 +62,41 @@ def test_gateway_directory_schema_uses_actual_routes_and_keeps_business_validati
         NativeDirectoryBindRequest.model_validate({"native_root": native, "unexpected": True})
 
 
+def test_gateway_managed_workspace_schema_uses_actual_routes_and_keeps_business_validation(
+    gateway_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(gateway_openapi)
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    roots = {"GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest",
+             "CreateFederationManagedWorkspaceRequest"}
+    assert roots <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    components = gateway_openapi["components"]["schemas"]
+    for base, request_model in (
+        ("/api/gateway/managed-workspaces", "CreateGatewayManagedWorkspaceRequest"),
+        ("/api/gateway/federation/managed-workspaces", "CreateFederationManagedWorkspaceRequest"),
+    ):
+        for path, method in ((base, "get"), (base, "post"), (base + "/{workspace_id}", "delete")):
+            operation = gateway_openapi["paths"][path][method]
+            response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+            envelope = components[response["$ref"].rsplit("/", 1)[1]]
+            assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/GatewayManagedWorkspaceListDTO")
+        creation = gateway_openapi["paths"][base]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        assert creation["$ref"].endswith("/" + request_model)
+    for model in (CreateGatewayManagedWorkspaceRequest, CreateFederationManagedWorkspaceRequest):
+        for root in ("/private/native-workspace", r"C:\用户\原生工作区",
+                     "boxteam://gateway/gateway_" + "a" * 32 + "/resources/files/01900000000070008000000000000001"):
+            request = model(root_path=root)
+            assert request.root_path == root and request.create_directory is True
+        for invalid in ({"root_path": ""}, {"root_path": "/native", "name": ""},
+                        {"root_path": "/native", "unexpected": True}):
+            with pytest.raises(ValidationError):
+                model.model_validate(invalid)
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
+    "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -74,6 +111,12 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("NativeDirectoryBindRequest", "native_root", {"type": "integer"}),
     ("NativeDirectoryBindingDTO", "uri", {"type": "integer"}),
     ("NativeDirectoryResolveDTO", "native_root", {"type": "integer"}),
+    ("GatewayManagedWorkspaceListDTO", "gateway_id", {"type": "integer"}),
+    ("GatewayManagedWorkspaceListDTO", "items", {"type": "object"}),
+    ("GatewayManagedWorkspaceDTO", "workspace_id", {"type": "integer"}),
+    ("GatewayManagedWorkspaceDTO", "removable", {"type": "string"}),
+    ("CreateGatewayManagedWorkspaceRequest", "root_path", {"type": "integer"}),
+    ("CreateFederationManagedWorkspaceRequest", "root_path", {"type": "integer"}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -86,6 +129,8 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
 @pytest.mark.parametrize("message_name", [
     "GatewayDirectoryListDTO", "GatewayDirectoryEntryDTO", "NativeDirectoryBindRequest",
     "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
+    "GatewayManagedWorkspaceListDTO", "GatewayManagedWorkspaceDTO",
+    "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
