@@ -1726,3 +1726,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 同步／异步导航及 API 共用原失败出口，普通错误只公布目标 URI、原 request_id、HTTP 状态、阶段和异常类别；原响应正文、request/response 对象及直接 cause 保留在诊断链中，重复适配不重复日志。日志 sink 再次失败仅补次错类别；已登记的文件、解析及联邦业务拒绝、正常文件正文和路径输入语义保持。
 - 旧生产的 25 项路径外泄反例均有效失败；最终 63 项定向单测、171 项关联资源回归通过。新增单测沿真实 FastAPI 路由／中间件／异常处理器序列化，以显式 HTTP 替身覆盖 302／404／500、POSIX／盘符／UNC、传输直接抛错及日志失败，不冒充真实网络。既有三 Gateway／Backend、星型通道及 HTTP 导航回归 1 passed／103.78秒（含共享闸门排队），覆盖固定 owner、未注册目录、读取／列表／搜索／分页、业务拒绝及 request_id；不将该正常及登记拒绝回归当作未知远端 HTTP 故障注入验收。
 - Ruff、compileall 和本 change strict 通过；Pyright 3 条既有诊断与完整 HEAD 归档按规则、完整消息及最窄语句 AST 相同，新增 0，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/navigation_http_failure_20261031/artifacts/verification.json`。非 JSON 错误的既有解析顺序不在本片改变范围；未验 Windows、Web／Workbench、独立进程硬重启或全局 URI 不变量，2.2／7.2及整体51/53保持。未修改另一会话 Web 迁移／自动化、其暂存或共享 debug，团队协作及 MCP 显式持有继续延期。
+
+### 2026-10-31 Job／工具审批内部校验错误的响应归属（2.2／7.2部分收口）
+
+- Job 详情、步骤、审批的前置查询／提交及控制不再将内部 Pydantic ValidationError 翻译成404／409／501；原异常交既有 TraceMiddleware 返回500和同一 request_id，完整输入及动态字段名仅留同一异常诊断。原业务 ValueError、控制状态冲突及请求422保持，不改任务、审批或调度逻辑。
+- 旧路由21项三平台路径边界反例与真实 JobService 装配DTO的3项反例均有效失败；最终73项关联单测通过，覆盖原404／409／501、422先于服务访问、诊断一次及原任务状态保持。HTTP边界使用真实FastAPI路由、中间件及生产异常处理器，服务故障由fixture注入；真实JobService反例只破坏原内存状态，不代表产品执行、真实网络或恢复验收。
+- compileall与本change strict通过；Ruff6项和Pyright5项既有诊断按规则、完整消息及对应表达式AST比较无新增，不称静态全绿。移除新增的六个异常分支及导入后，生产AST与HEAD一致；原测试顶层符号保持。准确命令、源码指纹、原始输出、实际退出码和作者自查见 `out/tests/temp/job_response_validation_20261031/artifacts/verification.json`。
+- 本片不代全局URI不变量、Windows实机、Gateway／Web、模型执行或Backend重启验收，2.2／7.2仍未勾、整体51/53。未修改另一会话Web／Workbench、其自动化、共享debug或既有暂存；团队协作及显式MCP持有继续延期。

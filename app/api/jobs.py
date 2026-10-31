@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
@@ -106,6 +107,8 @@ async def get_job(
 ):
     try:
         result = await job_service.get(job_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -122,6 +125,8 @@ async def list_job_steps(
 ):
     try:
         result = await job_service.list_steps(job_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -140,6 +145,8 @@ async def list_tool_approvals(
 ):
     try:
         await job_service.get(job_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=approvals.list(job_id), request_id=request_id)
@@ -159,10 +166,14 @@ async def submit_tool_approvals(
 ):
     try:
         await job_service.get(job_id)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     try:
         result = approvals.submit(job_id, payload)
+    except ValidationError:
+        raise
     except ValueError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -263,6 +274,8 @@ async def control_job(
 ):
     try:
         result = await job_service.control(job_id, payload)
+    except ValidationError:
+        raise
     except (ValueError, JobControlRuntimeError) as error:
         raise _job_control_http_error(job_id, payload, error) from error
     return APIResponse(data=result, request_id=request_id)

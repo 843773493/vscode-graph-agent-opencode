@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.api.deps import get_job_service, verify_local_token, workspace_container_scope
 from app.core.identifier import create_prefixed_id
@@ -153,3 +154,31 @@ def test_unknown_job_still_maps_to_404(job_service: JobService, tmp_path: Path) 
         "detail": f"Job {job_id} not found",
         "request_id": "req_missing",
     }
+
+
+@pytest.mark.parametrize("native", ["/private/job-state-sentinel", r"C:\private\job-state-sentinel",
+                                    r"\\target\private\job-state-sentinel"])
+def test_job_dto_failure_keeps_internal_state_in_diagnostics(
+    job_service: JobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    native: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """真实 JobService 装配 DTO 失败时不得将原状态当作「任务不存在」返回。"""
+    job_id = create_prefixed_id("job")
+    state = _job(job_id, "ses_corrupted", JobStatus.running)
+    job_service._jobs[job_id] = state
+    monkeypatch.setattr(state, "agent_id", {native: native})
+    client = _client(job_service, tmp_path)
+    try:
+        response = client.get(f"/api/v1/jobs/{job_id}", headers={"X-Request-ID": "req_job_dto"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500, response.text
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError",
+                               "data": None, "request_id": "req_job_dto"}
+    assert response.headers["X-Request-ID"] == "req_job_dto"
+    assert "job-state-sentinel" not in response.text
+    assert job_service._jobs[job_id] is state and state.status == JobStatus.running
+    assert state.agent_id == {native: native}
+    diagnostics = [record for record in caplog.records if record.exc_info and isinstance(record.exc_info[1], ValidationError)]
+    assert len(diagnostics) == 1 and "job-state-sentinel" in caplog.text
