@@ -6,7 +6,7 @@ Terminal 与 Browser 两个领域 owner 共用资源保留、Thread 关联、ope
 
 ```text
 workspace_resources/
-├── creation.py    原intent、创建派发与成功/失败回执的唯一结算链
+├── creation.py    原intent、本地准备、创建派发与成功/失败回执的唯一结算链
 ├── owner.py       串联准入、资源状态转换、关联释放与授权核实
 ├── recovery.py    无共享网络等待的一次性版本冻结，资源锁内同步及取消排空
 ├── records.py     Thread 引用、持久 owner 记录及文件存储
@@ -54,4 +54,5 @@ workspace_resources/
 - 本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。
 - unknown是原失败的收尾；账本update与owner记录save共用一次shielded cleanup，账本原写入复用shielded worker，原资源锁及holder覆盖线程池排队、写盘和结算。清理期间重复取消不能跳过第二步记录save或替换此前原异常，批量调用取消仍保留原错误cause；账本自身写入失败不表示unknown持久成功，旧代接管仍TODO。
 - 创建从首次intent写盘前登记原锁和operation在途资源；close冻结并等待原锁，即使尚无记录或lease也不能漏过。创建复用原operation身份与异步取得lease链，排队取消/关闭不迟到登记或派发；cwd解析返回后重核关闭状态。仅仍在场且尚未进入创建回调的原调用可核定未派发；持原锁及准入完成deleted/verified、解除关联与原账本stopped投影，再结清已取得的精确lease，不补造operation lease或外部回执。重复取消不遗弃收尾；收尾存储错误与原取消都须可见。只有原创建入口明确消费创建回执才能首次核实结果，普通存活清单不得凭creating状态消除未知事实。旧代intent不能凭清单缺失或没有lease套用未派发证明；整个cwd/operation/shutdown等待期限继续TODO。
+- 创建的领域本地准备在原intent与operation lease发布后、dispatching前执行；准备结算后重核operation关闭状态。准备失败或取消复用原未派发收尾，不标unknown；进入外部回调后缺回执仍须保留原未知占用，不将本地证明套用到Backend硬退出的旧intent。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

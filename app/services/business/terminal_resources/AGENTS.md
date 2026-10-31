@@ -29,6 +29,7 @@ terminal_resources/
 - 三种 cwd 输入共用原生错误出口，公开说明只保留目标 URI 或工作区身份、阶段、类别和系统错误码；原生位置及日志次错留原诊断与异常链。原生路径保留原 OSError 子类与系统码，目录 URI 保留原 RuntimeError 分类，不能让日志失败替换解析失败或进入资源 intent／PTY 创建。
 - cwd 解析的原生文件／同机 Gateway 访问统一交原 shielded worker，复制请求上下文；原 Thread holder 覆盖线程池排队与结算。取消须等原解析结束后继续传播，不能提前创建资源 intent／lease／PTY，也不在后台补做；原错误、目标平台和输入语义保持。该 worker 不保证原生 I/O 可抢占或整个 operation／shutdown 的硬期限。
 - 受管 cwd 准入由 `TerminalWorkingDirectories` 提供；在准入临界区内先保存目录根 URI，并在既有账本发布绑定终端身份的持久目录 lease，再启动 PTY。工具/Turn 返回不释放该 lease；只在原 owner 核实真实终态后结清，冷恢复沿同一规则处理，不能把缺失或未知回执当作停止。
+- cwd准入、目录URI保存及目录lease获取属于外部派发前的本地准备；目录holder、原资源锁和Thread准入覆盖原shielded worker的排队、写盘与取消结算，账本继续使用原writer锁。准备失败或关闭后拒绝迟到PTY创建，原调用核未派发后结清目录lease；已派发缺回执仍保留占用。其它同步writer及整个operation/shutdown期限继续TODO。
 - 外部结果未知时保留可发现记录并显式报错；停止/删除只在核实后结清。
 - 普通工具调用与 workspace 命令完成查询共用原锁内的回执链，核对资源、工作区、本次整数版本及 verified 后才提交和投影。错误或未知回执保留本次精确 operation lease；真实终态提交后才结清受管 cwd 占用，workspace 记录与关联继续保留。
 - 持久化不包含绝对真实路径，客户端连接不隐式建立 Thread 关联。

@@ -841,3 +841,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - `settle`／`reconcile` 唯一异步入口迁齐 Terminal、Browser、创建、冷恢复、MCP 和 Node 调试；原 writer 串行落盘后按提交顺序在原循环通知。取消等待原写入及通知，保留原锁、首次取消和迟到错误，不新增账本或通知重试链。
 - 新增19项。扩大后端回归1855 passed、1 failed，原失败为旧Node调试测试漏await；修复后该项与全部新增用例共20 passed，其余通过结果按未变化生产AST复用。作者新增停止测试曾误将工作区管理stop当作Thread holder持有期，已按原入口改为核真实资源锁；未改变产品准入。补await时一处缩进导致收集失败，修正后编译及定向通过；原输出全部保留。
 - 完整旧生产归档的两个反例在同步写盘中触发2秒循环观察超时（原生屏障5秒上限）；Ruff、compileall、strict通过，最终Pyright原新各54条既存诊断按文件、规则、完整消息、词法owner和最窄AST一致，新测试零诊断。证据见`out/tests/temp/lease_terminal_notify_20261031/artifacts/verification.json`。本轮为原owner／持久账本及既有传输替身验证，不代真实HTTP、PTY、Chromium、Backend硬退出或Windows验收；5.2／5.4及21/23保持未完成，Web／Workbench、其自动化和共享debug未动。
+
+### 2026-10-31 Terminal本地准备与外部派发分界（5.2／5.4部分）
+
+- 受管cwd准入、目录URI保存和目录lease获取移至共享创建链的外部派发前；原资源锁、目录holder及Thread准入覆盖原writer的worker结算。准备失败或取消沿原未派发收尾，关闭后不迟到创建；真正派发丢回执仍保留unknown及目录占用，不新增账本或恢复入口。
+- 新增16项，相关后端回归910 passed／40.77秒，采样源码前后一致。完整旧生产归档叠加最终测试的四个准备故障均复现未结清intent，正常与丢回执两个控制通过；Ruff、compileall通过。Pyright原新各一条既存ResourceTransport属性诊断，文件、规则、完整消息和原Attribute表达式一致，新测试零诊断。原始输出、命令、指纹、类型对照及作者结构审查见`out/tests/temp/terminal_pre_dispatch_20261031/artifacts/verification.json`。
+- 本轮使用原owner、文件writer及lease账本和替身目录准入／外部transport，不证明真实PTY、GC、HTTP、Backend硬退出或Windows；完整旧代接管、原生I/O抢占和整个operation/shutdown期限仍TODO，5.2／5.4及21/23保持未完成。未修改Web／Workbench、其自动化或共享debug。

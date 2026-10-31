@@ -119,31 +119,35 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         rows: int,
     ) -> TerminalSnapshot:
         # 原生路径及目录 URI 都可能等待文件系统或同机 Gateway；原 holder 覆盖 worker 结算。
-        # TODO(5.4)：目录lease写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
+        # TODO(5.4)：原生 I/O 抢占与整个 operation／shutdown 期限仍须分别核实。
         resolved_cwd = await run_sync_shielded(self._resolve_workdir, cwd)
 
-        async def create(record: OwnedResourceRecord) -> TerminalSnapshot:
+        async def prepare(record: OwnedResourceRecord) -> None:
             if self._working_directories is not None:
                 async with self._working_directories.admit_working_directory(Path(resolved_cwd)) as uri:
                     if uri is not None:
                         record.working_directory_uri = uri
                         await self._store.save(record)
                         attachment_id = parse_resource_uri(uri).tail_segments[0]
-                        self._leases.register(resource_id=attachment_id, kind="attachment_directory", lifetime_scope="workspace")
-                        # 绑定持久终端身份，工具调用/Turn 收尾不能释放此占用。
-                        self._leases.acquire_operation(
-                            resource_id=attachment_id, turn_stream_id=record.resource_id,
-                            operation_id=record.resource_id, lease_id=self._directory_lease_id(record.resource_id, uri),
-                            holder_session_id=operation._thread.session_id, holder_thread_id=operation._thread.thread_id,
-                        )
-            return await self._transport.create_terminal(
-                terminal_id=record.resource_id, owner_revision=record.owner_revision,
-                title=title, agent_id=agent_id, cwd=resolved_cwd, cols=cols, rows=rows,
-            )
+
+                        def acquire_directory() -> None:
+                            self._leases.register(resource_id=attachment_id, kind="attachment_directory", lifetime_scope="workspace")
+                            # 绑定持久终端身份，工具调用/Turn 收尾不能释放此占用。
+                            self._leases.acquire_operation(
+                                resource_id=attachment_id, turn_stream_id=record.resource_id,
+                                operation_id=record.resource_id, lease_id=self._directory_lease_id(record.resource_id, uri),
+                                holder_session_id=operation._thread.session_id, holder_thread_id=operation._thread.thread_id,
+                            )
+
+                        # 原目录holder与资源锁覆盖排队、写盘和取消结算，不先标为外部已派发。
+                        await run_sync_shielded(acquire_directory)
 
         return await create_resource(
-            self, operation=operation, retention_scope=retention_scope, title=title,
-            create=create,
+            self, operation=operation, retention_scope=retention_scope, title=title, prepare=prepare,
+            create=lambda record: self._transport.create_terminal(
+                terminal_id=record.resource_id, owner_revision=record.owner_revision,
+                title=title, agent_id=agent_id, cwd=resolved_cwd, cols=cols, rows=rows,
+            ),
         )
 
     @staticmethod

@@ -552,7 +552,7 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 
 `AttachmentBlobStore.admit_working_directory` 的来源识别和目录 holder 内复核交给既有 `run_sync_shielded`，继续使用同一 catalog、稳定 locator、符号链接边界、可用性及目录判断。catalog 沿用各真实线程独立连接；请求的 Gateway／request ContextVar 随 worker 传递，URI 仍由原 owner 规范化。复核 helper 是原判断的唯一实现，未引入第二解析或写入链。
 
-原 Terminal Thread 准入覆盖整个调用；目录 holder 覆盖复核的线程池排队、执行及取消结算，重复取消不能提前交给 GC。此时已存在原 Terminal intent 和 operation lease，取消只阻止后续目录占用发布与 PTY 创建，现有创建失败链继续处理原记录及 lease。成功后的记录保存、持久目录占用与外部创建顺序不变。普通路径仍返回原未受管结果，不吸收未知目录；原生 I/O 不能被该 worker 强行中断，不能将此切片等同整个操作或关闭的有界等待。lease writer 仍须整体协调，禁止仅把部分写入放进线程与原 writer 竞争；5.2／5.4 保持未完成。
+原 Terminal Thread 准入覆盖整个调用；目录 holder 覆盖复核的线程池排队、执行及取消结算，重复取消不能提前交给 GC。此时已存在原 Terminal intent 和 operation lease，取消阻止后续 PTY 创建，本地准备由共享创建链的未派发收尾处理。成功后的记录保存、持久目录占用与外部创建顺序不变。普通路径仍返回原未受管结果，不吸收未知目录；原生 I/O 不能被该 worker 强行中断，不能将此切片等同整个操作或关闭的有界等待。目录lease写入的worker仍使用原账本writer锁，不新增并行writer；其它同步入口及完整期限继续TODO，5.2／5.4 保持未完成。
 
 ### 启动停止证明丢失后的 Python 目录占用结算（5.2 部分验收）
 
@@ -565,3 +565,9 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 `settle` 与 `reconcile` 统一为异步入口，Terminal／Browser 的停止、冷恢复、创建收尾和目录占用，以及 MCP 启动对账、Node 调试的进程结清全部直接等待。原 JSON writer 锁内由既有 worker 执行读改写，持久成功后在同一锁内按提交顺序将轻量通知排入调用者事件循环；事件循环完成原通知后调用才结算。事件通道及其 asyncio 队列不进入 worker，不增加通知账本、后台重试或另一套 writer。通知失败仍按原规则显式记录，不回滚持久事实。
 
 资源锁及调用方已有准入覆盖线程池排队、写盘和通知；首次取消保留原消息，重复取消不能提前解锁或丢失迟到写盘错误。结清只消费原 owner 已核实的终态，不把取消、超时或文件提交当作外部进程已停止的证明。其它同步 writer、旧代完整接管、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 不据此勾选。
+
+### Terminal本地准备与外部创建的派发边界（5.2／5.4部分收口）
+
+共享创建链先持久保存原intent并取得原operation lease，再执行领域本地准备。Terminal在此阶段完成受管cwd准入、目录URI保存和绑定原终端身份的目录lease获取；最后才将原operation标为dispatching并调用外部创建。目录登记与lease获取复用原shielded worker和账本writer锁，目录holder、资源锁及Thread准入一直覆盖排队、原生写盘与取消结算，不增加账本或第二创建链。
+
+准备失败或取消时，仍在场的原调用能够证明从未调用外部创建，沿原未派发收尾持久提交deleted/verified、解除关联、结清已发布的目录lease及原operation。关闭等待同一准备结算，准备返回后重新核准入，禁止迟到创建。准备成功后真正派发而回执丢失，仍保留unknown、待核实operation和目录占用；不把本地准备的证明推广到Backend硬退出、旧调用消失或原生创建已派发的情况。原生I/O抢占及整个operation/shutdown总期限继续TODO，5.2／5.4保持未完成。

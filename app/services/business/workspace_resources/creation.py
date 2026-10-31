@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 async def create_resource(
     owner: WorkspaceResourceOwner, *, operation: ResourceOperations, retention_scope: RetentionScope, title: str,
     create: Callable[[OwnedResourceRecord], Awaitable[ResourceSnapshot]],
+    prepare: Callable[[OwnedResourceRecord], Awaitable[None]] | None = None,
 ) -> ResourceSnapshot:
     operation._assert_open()
     ref = operation._thread
@@ -53,6 +54,10 @@ async def create_resource(
                 operation._assert_open()
                 await operation._acquire_lease(record, creating=True)
                 operation._assert_open()
+                if prepare is not None:
+                    # 本地目录与占用准备尚未调用外部owner；失败沿原未派发证明收尾。
+                    await prepare(record)
+                    operation._assert_open()
                 lease_id = operation._lease_refs[record.resource_id]
                 async with resource_operation_dispatch(owner, record, lease_id, operation=operation):
                     callback_entered = True

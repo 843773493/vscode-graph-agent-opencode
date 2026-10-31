@@ -586,3 +586,13 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 
 - **WHEN** 原 owner 核实终态后结清旧占用或执行冷恢复对账，原账本仍在线程池排队、写盘，或尚未完成资源通知
 - **THEN** 所有调用方等待唯一异步结清／对账入口；原 writer 串行持久成功后按提交顺序在调用者事件循环发布轻量通知，不在 worker 操作 asyncio 队列。原资源锁及已有准入保持至本次写入与通知结算，重复取消不能提前释放；取消保留首次消息及迟到写盘错误。写盘失败不发布成功通知或改变原持久事实，通知失败仍显式记录且不回滚已提交状态。此结算不能替代外部终态核实、原生 I/O 抢占或整个 shutdown 的期限验收
+
+#### Scenario: Terminal受管cwd本地准备失败或被关闭
+
+- **WHEN** 原Terminal intent及operation lease已保存，但受管cwd准入、目录URI保存、目录登记或目录lease获取失败、取消，或者operation在准备期间关闭
+- **THEN** 这些步骤在外部创建派发前执行；目录holder、原资源锁和Thread准入覆盖同一worker的排队及写盘结算。仍在场的原调用证明尚未调用外部创建后，复用未派发收尾提交deleted/verified、解除关联并结清已发布的目录lease和原operation，不伪造unknown。准备结算后重核关闭状态，不迟到创建；关闭等待原准备，重复取消保留首次消息。故障消除后原入口可创建新资源，原终态身份不复活
+
+#### Scenario: cwd准备完成后真正创建缺少回执
+
+- **WHEN** 原目录URI及目录lease均已持久发布，原operation进入dispatching并调用外部Terminal，但创建回执丢失
+- **THEN** 原记录仍为unknown，原operation保持待核实，目录占用继续有效；冷读取不重放创建或套用本地未派发证明。Backend硬退出且原调用不在场的intent，仍由原owner接管规则核实，不能凭清单缺失推断未派发
