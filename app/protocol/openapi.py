@@ -70,6 +70,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
         "PortForwardListDTO", "CreatePortForwardRequest",
         "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
+        "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
+        "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
     )
 }
 

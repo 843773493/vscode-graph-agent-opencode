@@ -21,6 +21,12 @@ from app.schemas.gateway.port_forwarding import (
     ChangePortForwardLocalPortRequest,
     CreatePortForwardRequest,
 )
+from app.schemas.gateway.users import (
+    AcquireGatewayUserRequest,
+    CreateGatewayGuestRequest,
+    CreateGatewayUserRequest,
+    GatewayUserAccessDTO,
+)
 from app.schemas.gateway.workspaces import (
     CreateFederationManagedWorkspaceRequest,
     CreateGatewayManagedWorkspaceRequest,
@@ -148,11 +154,53 @@ def test_gateway_port_forward_schema_follows_control_routes_and_keeps_business_r
             model.model_validate(invalid)
 
 
+def test_gateway_user_access_schema_follows_control_routes_and_keeps_business_rules(gateway_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(gateway_openapi)
+    components = gateway_openapi["components"]["schemas"]
+    for suffix, method, model in (
+        ("", "get", "GatewayUserListDTO"), ("", "post", "GatewayUserDTO"),
+        ("/{user_id}/access", "post", "GatewayUserAccessDTO"),
+        ("/{user_id}/takeover", "post", "GatewayUserAccessDTO"),
+        ("/guest", "post", "GatewayUserAccessDTO"),
+        ("/current", "get", "GatewayUserAccessDTO"),
+        ("/current/heartbeat", "post", "GatewayUserAccessDTO"),
+    ):
+        operation = gateway_openapi["paths"]["/api/gateway/users" + suffix][method]
+        response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        envelope = components[response["$ref"].rsplit("/", 1)[1]]
+        assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/" + model)
+    for suffix, model in (("", "CreateGatewayUserRequest"), ("/{user_id}/access", "AcquireGatewayUserRequest"),
+                          ("/{user_id}/takeover", "AcquireGatewayUserRequest"), ("/guest", "CreateGatewayGuestRequest")):
+        body = gateway_openapi["paths"]["/api/gateway/users" + suffix]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        assert body["$ref"].endswith("/" + model)
+    assert {"GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO", "CreateGatewayUserRequest",
+            "AcquireGatewayUserRequest", "CreateGatewayGuestRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    assert CreateGatewayUserRequest(display_name="  用户  ").display_name == "用户"
+    assert AcquireGatewayUserRequest(client_label="  本机  ").client_label == "本机"
+    assert CreateGatewayGuestRequest(tracking={"source": "local", "attempt": 1, "active": True}).tracking == {
+        "source": "local", "attempt": 1, "active": True,
+    }
+    for model, invalid in (
+        (CreateGatewayUserRequest, {"display_name": "  "}),
+        (CreateGatewayUserRequest, {"display_name": "用户", "user_id": "x" * 65}),
+        (AcquireGatewayUserRequest, {"client_label": "x" * 121}),
+        (AcquireGatewayUserRequest, {"unexpected": True}),
+        (CreateGatewayGuestRequest, {"tracking": {"source": []}}),
+        (GatewayUserAccessDTO, {"kind": "invented", "lease_generation": 1}),
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate(invalid)
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
     "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
     "PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
+    "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO", "CreateGatewayUserRequest",
+    "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -183,6 +231,13 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("CreatePortForwardRequest", "remote_port", {"type": "string"}),
     ("ChangePortForwardLocalPortRequest", "local_port", {"type": "string"}),
     ("ChangePortForwardLabelRequest", "label", {"type": "integer"}),
+    ("GatewayUserListDTO", "items", {"type": "object"}),
+    ("GatewayUserDTO", "user_id", {"type": "integer"}),
+    ("GatewayUserLeaseDTO", "occupied", {"type": "string"}),
+    ("GatewayUserAccessDTO", "lease_generation", {"type": "string"}),
+    ("CreateGatewayUserRequest", "display_name", {"type": "integer"}),
+    ("AcquireGatewayUserRequest", "client_label", {"type": "integer"}),
+    ("CreateGatewayGuestRequest", "tracking", {"type": "array"}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -200,6 +255,8 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "SshConnectionOptionListDTO", "SshConnectionOptionDTO", "AddRemoteGatewayRequest",
     "PortForwardListDTO", "PortForwardDTO", "CreatePortForwardRequest",
     "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
+    "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserLeaseDTO", "GatewayUserAccessDTO",
+    "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
