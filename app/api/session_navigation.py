@@ -84,6 +84,8 @@ async def enqueue_session_catalog_operations(
         raise HTTPException(status_code=503, detail=str(error)) from error
     except NavigationMutationConflictError as error:
         raise state_conflict_http_error(error) from error
+    except ValidationError:
+        raise
     except (KeyError, ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -104,6 +106,8 @@ async def get_session_catalog_operation_status(
         result = service.operation_status(operation_id, _navigation_scope(service))
     except NavigationQueueOwnerError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValidationError:
+        raise
     except (KeyError, ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=client_error_message(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -145,6 +149,8 @@ async def list_session_catalog_navigation_events(
         result = service.navigation_events(after=after, limit=limit)
     except NavigationQueueOwnerError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValidationError:
+        raise
     except (ValueError, TypeError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -222,6 +228,8 @@ async def list_session_catalog_children(
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except ValidationError:
+        raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -243,6 +251,8 @@ async def list_session_catalog_roots(
             limit=limit,
             cursor=cursor,
         )
+    except ValidationError:
+        raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -310,6 +320,8 @@ async def search_session_catalog(
 ):
     try:
         result = await service.search(query=query, limit=limit, cursor=cursor)
+    except ValidationError:
+        raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

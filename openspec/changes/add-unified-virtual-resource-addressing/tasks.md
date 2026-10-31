@@ -1760,3 +1760,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 生成器定义校验和位置预览不再把内部 Pydantic ValidationError 返回400及原文；原异常交既有 TraceMiddleware 返回安全500和同一request_id。定义中的命名参数仍在原预览请求构造处校验，明确转换为业务400，只公开固定字段与规则，原输入、cause及日志故障留在原始诊断；实际预览调用在该输入校验捕获范围之外。补齐上一片持久任务创建／更新对延后命名拒绝误报500的回归，不改变公开请求schema或命名限制。
 - 改生产前29项中25项失败、4项原业务分支通过；失败分别为9项内部响应误报400、7项延后输入拒绝回显正文、8项持久任务输入误报500及1项日志故障边界。最终146项定向后端单测通过，含新增32项生成器API验证、原命名／provider／创建规则和持久任务API回归；验证使用真实FastAPI路由、中间件、生产异常处理器及生成器／任务服务，隔离外部runtime，不代替完整产品执行、fork或恢复。
 - 三文件Pyright、compileall及本change strict通过；Ruff12条既有诊断按规则、完整消息与最窄表达式AST无新增。命令、源码指纹、原始输出、退出码和差异审查见 `out/tests/temp/generation_response_validation_20261031/artifacts/verification.json`。未修改另一会话Web／Workbench、其自动化、共享debug或暂存；2.2／7.2仍未勾，整体51/53保持。
+
+### 2026-10-31 会话目录内部响应校验的错误归属（2.2／7.2部分收口）
+
+- 导航入队、状态、事件，以及目录子节点、根和搜索的六处入口，原样重抛内部Pydantic ValidationError，由既有TraceMiddleware返回安全500及同一request_id；输入拒绝、分页冲突、owner未就绪和背压状态保持。输入intent已经请求DTO解析，游标以JSON及基本类型校验，不把业务输入拒绝改成内部故障。
+- 生产改动前30个三平台路径反例有效失败，含9个真实目录读服务装配响应反例；7个业务拒绝保持。初始装具的cursor被HTTPX显式params覆盖，已修正请求构造，只补跑受影响4例并保留两次原件，不把装具失败计入生产反例。最终关联检查140 passed／1 failed；新增37项均通过，真实读服务修复同一来源后自动重建快照并沿原入口恢复，不改清缓存行为。HTTP使用真实路由、中间件及生产异常处理器，resolver元数据由fixture注入，不代替真实网络或产品执行验收。
+- 未通过项为既有 `test_delete_receipt_uses_revision_after_all_node_updates`：回执committed时最终清理的revision尚未到预期。该用例直接调用service，未经过本片API，运行前后相关源码指纹稳定；保留失败待独立核删除终态／pending_settlement合同，不重复长跑或修改断言。两文件Pyright、compileall和本change strict通过，Ruff12条原诊断按规则／全文／最窄表达式AST无新增；移除六处重抛后生产AST与固定基线 `79ef44964` 相同。证据：`out/tests/temp/catalog_response_validation_20261031/artifacts/verification.json`。
+- 未修改或运行另一会话Web／Workbench、自动化、共享debug或暂存；不代全局URI、Windows、真实Gateway、模型执行或重启验收，2.2／7.2及整体51/53保持。
