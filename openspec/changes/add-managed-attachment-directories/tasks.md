@@ -712,3 +712,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 最终真实 HTTP/PTY 集成：迟到身份、丢停止证明、同Manager/精确Node硬重启、kill/delete和重复请求4 passed（12.64秒）；原启动失败/强杀/日志/cwd完整8 passed（47.38秒）；原根退出仍沿SID核实真实后代及冷管理4 passed（23.86秒）。三组均沿原主仓共享闸门串行，分别保留60秒/4GiB保护；完整状态经真实创建生成，重启不补写记录或身份，核原 native标记、owner版本、unknown/终态、持久字节及无新执行。首轮在追加失败窗口保存之前也有173项单测和相同三组通过，修改后已集中补跑，数字不重复累计。
 - Ruff、编译、两Python集成文件 Pyright零诊断、对应Node语法及 OpenSpec strict通过。初版新测试的局部final变量有一条可能未绑定诊断，改为沿真实已查询快照初始化，未改变2次管理请求、身份或终态断言，最终检查通过；原输出保留。作者 AST 自查只涉及原构造/start、Worker handleStart、Session start/停止失败/身份捕获/启动失败，原其余方法保持；既有Session超过800行结构债务未据此关闭，未冒充独立审查。
 - 命令、完整固定HEAD归档、源码指纹、原始输出/实际退出码、7项单测反例、真实HTTP反例、结构与差异复核见 `out/tests/temp/terminal_identity_recovery_20261031/artifacts/verification.json`。native始终不交付身份、Workspace Backend退出后的Python lease/目录占用接管、完整operation/shutdown硬期限、Windows与Gateway/Web仍未验完，5.2／5.4和21/23保持。没有修改另一会话的Web/Workbench、自动化测试或共享Debug；只提交本片文件，其他暂存保持。
+
+### 2026-10-31 启动未知操作跨 Backend 硬重启的占用验收（5.2 部分）
+
+- 正式 Gateway/Backend 消息入口及 model_stream 生成附件和 canonical 历史，原管理创建启动真实 PTY 父子；沿原 SHELL 配置复用启动故障装具，只丢停止证明。两次 Backend 硬重启、到期和普通查询均保留 created/unknown、原 operation 与目录 lease；原管理停止核实后才结清，后续重启回收目录，原身份、历史字节和执行次数保持。新集成 1 passed（90.16 秒），原启动失败完整 8 passed（46.73 秒）；主仓共享闸门串行，保留进程外 180/60 秒及 4GiB。
+- Ruff、Pyright 零诊断及 Node 语法通过。固定 HEAD 完整归档、源码指纹、原输出和退出码见 `out/tests/temp/terminal_startup_backend_recovery_20261031/artifacts/verification.json`。没有新产品实现或第二套故障/持久化链；native 始终无身份、原调用未派发即消失、不合作操作总期限、Windows 和 Web 仍未验完，5.2/5.4 与 21/23 保持。未修改另一会话 Web/Workbench、其自动化、共享暂存或 Debug。

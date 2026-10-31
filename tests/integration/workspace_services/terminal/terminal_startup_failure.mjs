@@ -27,7 +27,8 @@ const start = IsolatedPtyProcess.prototype.start;
 
 IsolatedPtyProcess.prototype.start = async function (options) {
   const pending = start.call(this, options);
-  if (!options.args.some(arg => arg.includes("gated-terminal-startup-cleanup"))) {
+  if (!options.command.includes("gated-terminal-startup-cleanup")
+      && !options.args.some(arg => arg.includes("gated-terminal-startup-cleanup"))) {
     const ready = await pending;
     await appendFile(path.join(controlRoot, "starts.jsonl"), `${JSON.stringify(await readProcessStat(ready.pid))}\n`);
     return ready;
