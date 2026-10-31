@@ -30,6 +30,8 @@ from tests.unit.services.business.workspace_resources.test_operation_release_io 
     release_write as release_write,  # noqa: PLC0414
 )
 
+pytestmark = pytest.mark.parametrize("release_write", ["receipt"], indirect=True)
+
 
 @dataclass
 class ProjectionCall:
@@ -78,6 +80,10 @@ async def test_original_observation_persists_owner_before_nonblocking_ledger_pub
     pending = asyncio.create_task(case.run())
     try:
         await asyncio.wait_for(gate.entered.wait(), 2)
+        inflight = lease
+        if case.entry == "tool":
+            assert gate.before is not None and gate.lease is not None
+            before, inflight = gate.before, gate.lease
         assert not pending.done(), "原账本投影写盘不能阻塞事件循环"
         assert len(gate.threads) == 1 and gate.threads[0] != get_ident()
         assert owner._resource_lock(rid).locked() and path.read_bytes() == before
@@ -85,7 +91,7 @@ async def test_original_observation_persists_owner_before_nonblocking_ledger_pub
         assert record is not None and record.status == case.stopped and record.reconciliation_status == "verified"
         prior = type(bundle.leases)(state_path=path).get(rid)
         assert prior is not None and prior.status == "running"
-        assert bundle.leases.get_lease(lease.lease_id) == lease
+        assert bundle.leases.get_lease(lease.lease_id) == inflight
         gate.release.set()
         if write_fails:
             with pytest.raises(OSError) as caught:
@@ -130,13 +136,17 @@ async def test_cancelled_observation_settles_original_writer_before_unlocking(
     pending = asyncio.create_task(case.run())
     try:
         await asyncio.wait_for(gate.entered.wait(), 2)
+        inflight = lease
+        if case.entry == "tool":
+            assert gate.lease is not None
+            inflight = gate.lease
         assert not pending.done(), "原投影写盘期间必须仍能观察取消"
         pending.cancel("原投影取消")
         await asyncio.sleep(0)
         pending.cancel("重复取消不能提前释放原资源锁")
         await asyncio.sleep(0)
         assert not pending.done() and owner._resource_lock(rid).locked()
-        assert bundle.leases.get_lease(lease.lease_id) == lease
+        assert bundle.leases.get_lease(lease.lease_id) == inflight
         gate.release.set()
         with pytest.raises(asyncio.CancelledError, match="原投影取消") as caught:
             await pending

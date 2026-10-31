@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Event, get_ident
 
 import pytest
@@ -27,12 +27,16 @@ from tests.unit.services.business.workspace_resources.test_operation_release_io 
     release_write as release_write,  # noqa: PLC0414
 )
 
+pytestmark = pytest.mark.parametrize("release_write", ["receipt"], indirect=True)
+
 
 @dataclass
 class FailedCall:
     operation: LeasedOperation
     original: BaseException
     dispatches: int = 0
+    before_failure: Callable[[], Awaitable[None]] | None = None
+    failed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def run(self) -> None:
         operation, rid, _ = self.operation
@@ -53,6 +57,9 @@ async def failed_call(
 
     async def fail(*args, **kwargs):
         case.dispatches += 1
+        if case.before_failure is not None:
+            await case.before_failure()
+        case.failed.set()
         raise original
 
     method = "read_terminal" if isinstance(leased_operation[0], TerminalOperations) else "perform"
@@ -74,11 +81,13 @@ async def test_failed_operation_settles_original_unknown_writer_before_unlocking
     pending = asyncio.create_task(failed_call.run())
     try:
         await asyncio.wait_for(gate.entered.wait(), 2)
+        assert gate.before is not None and gate.lease is not None
+        before, inflight = gate.before, gate.lease
         assert not pending.done(), "失败收尾不能阻塞事件循环"
         assert len(gate.threads) == 1 and gate.threads[0] != get_ident()
         assert owner._resource_lock(rid).locked() and failed_call.dispatches == 1
         assert path.read_bytes() == before and owner._store.path.read_bytes() == records
-        assert type(bundle.leases)(state_path=path).get_lease(lease.lease_id) == lease
+        assert type(bundle.leases)(state_path=path).get_lease(lease.lease_id) == inflight
         if cancel_cleanup:
             pending.cancel("后续取消不能割裂原失败收尾")
             await asyncio.sleep(0)
@@ -92,7 +101,7 @@ async def test_failed_operation_settles_original_unknown_writer_before_unlocking
             assert caught.value.__cause__ is gate.failure
             assert caught.value.__context__ is failed_call.original
             assert path.read_bytes() == before and owner._store.path.read_bytes() == records
-            assert type(bundle.leases)(state_path=path).get_lease(lease.lease_id) == lease
+            assert type(bundle.leases)(state_path=path).get_lease(lease.lease_id) == inflight
             # 只在显式重试成功后声明占用已保护；失败不能冒充unknown持久成功。
             await owner._unknown(owner._require_owned_resource_record(rid), failed_call.original, lease_id=lease.lease_id)
         else:
@@ -129,14 +138,20 @@ async def test_queued_unknown_cleanup_survives_cancellation_and_preserves_origin
 
     with ThreadPoolExecutor(max_workers=1) as executor, monkeypatch.context() as patch:
         patch.setattr(loop, "_default_executor", executor)
-        occupying_task = loop.run_in_executor(None, occupying)
-        await asyncio.wait_for(occupied.wait(), 2)
-        before, records = path.read_bytes(), owner._store.path.read_bytes()
+        occupying_task: asyncio.Future[None] | None = None
+
+        async def occupy_after_dispatch() -> None:
+            nonlocal occupying_task
+            occupying_task = loop.run_in_executor(None, occupying)
+            await occupied.wait()
+
+        failed_call.before_failure = occupy_after_dispatch
+        records = owner._store.path.read_bytes()
         pending = asyncio.create_task(failed_call.run())
         try:
-            async with asyncio.timeout(2):
-                while failed_call.dispatches == 0:
-                    await asyncio.sleep(0)
+            await asyncio.wait_for(failed_call.failed.wait(), 2)
+            assert gate.before is not None
+            before = gate.before
             pending.cancel("排队时取消失败收尾")
             await asyncio.sleep(0)
             pending.cancel("再次取消不能跳过owner记录")
@@ -161,4 +176,5 @@ async def test_queued_unknown_cleanup_survives_cancellation_and_preserves_origin
         finally:
             free.set()
             gate.release.set()
-            await asyncio.gather(pending, occupying_task, return_exceptions=True)
+            waiting = [pending] if occupying_task is None else [pending, occupying_task]
+            await asyncio.gather(*waiting, return_exceptions=True)

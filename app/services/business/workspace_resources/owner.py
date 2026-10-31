@@ -644,7 +644,7 @@ class WorkspaceResourceOwner:
             await self._store.save(record)
             await self._sync_ledger(record)
             for pending in self._leases.leases_for_resource(record.resource_id):
-                if pending.status == "reconcile_required":
+                if pending.status in {"dispatching", "reconcile_required"}:
                     self._leases.settle(pending.lease_id)
             return resource_projection(record, runtime, self.kind)
         except BaseException as error:
@@ -976,7 +976,7 @@ class WorkspaceResourceOwner:
             if pending_leases is None
             else pending_leases
         )
-        if any(lease.status != "reconcile_required" for lease in pending):
+        if any(lease.status not in {"dispatching", "reconcile_required"} for lease in pending):
             return pending
         # 只接受当前身份、非旧版本且已核实停止的外部事实；不声称旧操作成功。
         if runtime is None or runtime.get("reconciliation_status") != "verified" or runtime.get("status") not in STOPPED_STATUSES:
@@ -1004,7 +1004,12 @@ class WorkspaceResourceOwner:
             raise KeyError(f"外部资源 owner 资源不存在: {resource_id}")
         # owner 的 unknown 写盘可能失败；原账本的未核实事实不能被普通读取消除。
         external = self._leases.get(resource_id)
-        if record.reconciliation_status == "verified" and external is not None and external.status in {"unknown", "orphaned"}:
+        unconfirmed_dispatch = any(
+            lease.status == "dispatching" for lease in self._leases.leases_for_resource(resource_id)
+        )
+        if record.reconciliation_status == "verified" and (
+            unconfirmed_dispatch or (external is not None and external.status in {"unknown", "orphaned"})
+        ):
             record.reconciliation_status = "reconcile_required"
             record.error = record.error or "原资源账本的运行事实或 operation 尚未核实"
         return record
@@ -1085,7 +1090,7 @@ class WorkspaceResourceOwner:
         )
         record.updated_at = self._now()
         async def persist() -> None:
-            # TODO(5.2)：账本自身写入失败后的旧代接管未收口，不能视为unknown持久成功。
+            # TODO(5.2)：普通工具已有原dispatching保护，创建/管理/传输授权仍须迁齐；失败不能视为unknown持久成功。
             # 先保护本次占用；unknown 记录再次写盘失败也不能由普通 finally 释放。
             await run_sync_shielded(
                 self._leases.update_external_state,

@@ -796,3 +796,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Ruff、compileall及OpenSpec strict通过；最终Pyright与原生产各21条既存诊断，文件、规则、完整消息、词法owner及最窄AST表达式逐项相同，新测试零诊断，不称类型全绿。准确命令、原始输出、退出码、指纹、类型对照及作者结构自查见`out/tests/temp/ledger_projection_io_20261031/artifacts/verification.json`。
 - TODO(5.2)：`out/tests/temp/unknown_write_cleanup_window_20261031/artifacts/probe-final.json`已实证unknown首步账本写失败后的释放窗口：恢复存储后，普通operation.close仍把两领域原active lease改为released，而外部记录仍running；通用Turn收尾也释放active，仅改工具finally不足。探针使用原owner/账本及替身传输，不证明真实进程或Backend硬重启。仍需在原账本和owner链解决派发未核实的持久保护，不能新增第二账本或把写失败当作unknown已持久。
 - 真实PTY/Chromium、旧代接管、其它同步writer、原生I/O抢占及完整operation/shutdown期限继续TODO，5.2/5.4及21/23保持未完成；未修改另一会话Web/Workbench、其自动化或共享debug。
+
+### 2026-10-31 普通工具派发的原lease持久保护（5.2/5.4部分）
+
+- Terminal普通调用、workspace完成查询与Browser动作（工具/既有HTTP入口）共用原派发保护；同一JSON账本的原lease先持久进入dispatching，正式回执校验、owner记录和账本投影提交后恢复active。unknown首步账本写失败仍保留原dispatching，operation和Turn收尾不再释放；普通查询、冷owner重建与显式停止沿原身份核实，不增加账本、记录副本、生成结构或数据库迁移。
+- 准备写失败不派发；排队取消/关闭不开始新写入，已开始的原写入持锁结算。原调用证明尚未进入外部回调时才撤回准备，撤回失败保留占用与原取消。准备写入期间close开始后重核原operation准入，拒绝迟到外部调用；收尾不补造unknown或外部回执。
+- 新增37项；定向241项、补齐准入装具后的271项及最终相关回归1051项通过，采样源码前后一致。首轮56项失败中52项是Browser回调装具仍断言active、4项是新线程池装具在原错误产生前取消，已分别按派发阶段和原错误事件修正；随后8项缺失replace导入、扩大回归4项准入writer计数失败也已修复。准入与回执故障点各自限定原阶段，保留精确写入次数、原错误、身份及期限断言，不把新增派发/确认写入混算为获取原lease。
+- 完整旧生产归档8项反例准确复现普通收尾将active改为released；完整候选归档仅放开Turn对dispatching的释放，8项变异反例失败；仅删除准备写盘后的operation准入重核，2项变异反例失败。Ruff、compileall与strict通过；最终Pyright和旧生产各19条既存诊断，规则、完整消息、文件、词法owner和最窄AST表达式逐项一致，新测试零诊断，不称类型全绿。
+- 同一资源/operation顺序100次读取的本机替身传输测量：Terminal中位1.66→3.96ms，Browser 2.35→6.11ms；每领域原owner仍写100次，账本新增200次快照写入，分别194500/196500字节。TODO(性能)：测量大账本重写和调度成本后再优化原writer，保留派发前及回执后两个持久边界；此小工作负载不代表真实HTTP/PTY/Chromium或全链路性能。
+- 原始输出、准确命令、源码指纹、退出码、反例/变异补丁、测量及作者结构自查见`out/tests/temp/operation_dispatch_receipt_20261031/artifacts/verification.json`。传输和Session定位使用既有替身，仅证明原owner/账本及协议入口单测；真实进程、Backend硬重启、Windows、创建/版本管理/传输授权的首步写失败保护及完整operation/shutdown仍TODO。5.2/5.4与本变更21/23保持未完成，未修改另一会话Web/Workbench、其自动化、共享暂存或debug。

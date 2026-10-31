@@ -33,6 +33,9 @@ class ReleaseWrite:
     release: Event = field(default_factory=Event)
     threads: list[int] = field(default_factory=list)
     failure: OSError | None = None
+    enabled: bool = True
+    before: bytes | None = None
+    lease: ResourceLease | None = None
 
 
 @pytest.fixture
@@ -58,7 +61,7 @@ async def leased_operation(
 async def release_write(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture,
     leased_operation: LeasedOperation,
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ) -> AsyncIterator[ReleaseWrite]:
     assert bundle.leases._state_path is not None
     pending = bundle.leases._state_path.with_suffix(".tmp")
@@ -67,7 +70,7 @@ async def release_write(
     gate = ReleaseWrite()
 
     def publishing(path: Path, target: Path) -> Path:
-        if path == pending:
+        if path == pending and gate.enabled:
             gate.threads.append(get_ident())
             if len(gate.threads) == 1:
                 loop.call_soon_threadsafe(gate.entered.set)
@@ -78,6 +81,21 @@ async def release_write(
         return original(path, target)
 
     monkeypatch.setattr(Path, "replace", publishing)
+    if getattr(request, "param", None) == "receipt":
+        mark = bundle.leases.mark_operation_dispatched
+
+        def preparing(lease_id: str) -> None:
+            # 这些用例注入回执后的写盘；派发准备仍沿真实账本完成，不拦截另一个阶段。
+            gate.enabled = False
+            try:
+                mark(lease_id)
+            finally:
+                gate.enabled = True
+            assert bundle.leases._state_path is not None
+            gate.before = bundle.leases._state_path.read_bytes()
+            gate.lease = bundle.leases.get_lease(lease_id)
+
+        monkeypatch.setattr(bundle.leases, "mark_operation_dispatched", preparing)
     try:
         yield gate
     finally:

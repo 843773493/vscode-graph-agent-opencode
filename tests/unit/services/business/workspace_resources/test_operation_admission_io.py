@@ -79,9 +79,22 @@ async def admission_write(
     pending = path.with_suffix(".tmp")
     loop, replace = asyncio.get_running_loop(), Path.replace
     gate = AdmissionWrite()
+    owner = bundle.owner
+    assert owner is not None
+    acquire = owner._acquire
+    acquiring = False
+
+    def acquire_original(*args, **kwargs):
+        nonlocal acquiring
+        acquiring = True
+        try:
+            return acquire(*args, **kwargs)
+        finally:
+            acquiring = False
 
     def publishing(source: Path, target: Path) -> Path:
-        if source == pending:
+        # 只计原lease获取的写盘；后续派发/回执阶段不属于这份准入故障点。
+        if source == pending and acquiring:
             gate.threads.append(get_ident())
             if len(gate.threads) == 1:
                 loop.call_soon_threadsafe(gate.entered.set)
@@ -92,6 +105,7 @@ async def admission_write(
         return replace(source, target)
 
     monkeypatch.setattr(Path, "replace", publishing)
+    monkeypatch.setattr(owner, "_acquire", acquire_original)
     try:
         yield gate
     finally:

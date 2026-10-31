@@ -28,7 +28,7 @@ from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
 
-_UNSETTLED_LEASE_STATUSES = frozenset({"active", "reconcile_required"})
+_UNSETTLED_LEASE_STATUSES = frozenset({"active", "dispatching", "reconcile_required"})
 
 
 @dataclass(slots=True)
@@ -52,7 +52,7 @@ class ResourceLease:
     turn_stream_id: str
     operation_id: str
     # 冷恢复必须拒绝非法状态，不能将未识别的占用当作已释放。
-    status: Literal["active", "released", "settled", "reconcile_required"] = "active"
+    status: Literal["active", "dispatching", "released", "settled", "reconcile_required"] = "active"
     updated_at: str = ""
     holder_session_id: str | None = None
     holder_thread_id: str | None = None
@@ -229,11 +229,33 @@ class ExternalResourceLeaseLedger:
             expires_at=expires_at,
         )
 
+    def mark_operation_dispatched(self, lease_id: str) -> None:
+        """先持久保护本次派发；回执未核实前，普通收尾不能释放占用。"""
+        with self._write_lock:
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
+            if lease.status != "active":
+                raise RuntimeError(f"原 operation 尚未核实或已结束，拒绝再次派发: lease_id={lease_id} status={lease.status}")
+            self._commit(leases=(replace(lease, status="dispatching", updated_at=self._now()),))
+
+    def finish_operation_dispatch(self, lease_id: str) -> None:
+        """原owner已提交正式回执，或原调用证明尚未派发时，恢复普通占用。"""
+        with self._write_lock:
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
+            if lease.status != "dispatching":
+                raise RuntimeError(f"operation 缺少本次待核实派发: lease_id={lease_id} status={lease.status}")
+            self._commit(leases=(replace(lease, status="active", updated_at=self._now()),))
+
     def release(self, lease_id: str) -> ResourceLease:
         with self._write_lock:
             lease = self._leases.get(lease_id)
             if lease is None:
                 raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
+            if lease.status == "dispatching":
+                raise RuntimeError(f"operation 尚未取得核实回执，不能普通释放: lease_id={lease_id}")
             lease = replace(lease, status="released", updated_at=self._now())
             self._commit(leases=(lease,))
             return self._copy_lease(lease)
@@ -300,7 +322,7 @@ class ExternalResourceLeaseLedger:
             changed_leases = []
             for lease in self._leases.values():
                 record = self._require_record(lease.resource_id)
-                if lease.status == "active" and (kind is None or record.kind == kind):
+                if lease.status in {"active", "dispatching"} and (kind is None or record.kind == kind):
                     changed_leases.append(replace(lease, status="reconcile_required", updated_at=self._now()))
             self._commit(records=reconciled, leases=changed_leases)
             for record in reconciled:
@@ -391,11 +413,11 @@ class ExternalResourceLeaseLedger:
                 raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
             # 列表读取会逐项同步；相同状态不重写并 fsync 整个账本。
             if (record.lifetime_scope == lifetime_scope and record.status == status
-                    and (lease is None or lease.status != "active")):
+                    and (lease is None or lease.status not in {"active", "dispatching"})):
                 return
             record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now())
             changed_leases = ()
-            if lease is not None and lease.status == "active":
+            if lease is not None and lease.status in {"active", "dispatching"}:
                 # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
                 changed_leases = (replace(lease, status="reconcile_required", updated_at=record.updated_at),)
             self._commit(records=(record,), leases=changed_leases)

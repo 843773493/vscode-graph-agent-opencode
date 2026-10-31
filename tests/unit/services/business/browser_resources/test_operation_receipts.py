@@ -57,7 +57,7 @@ def receipt(
 
     async def returned(rid: str, action: str, values: ResourceSnapshot, *, actor: str) -> ResourceSnapshot:
         lease, = browser_owner.leases.leases_for_resource(rid)
-        assert lease.status == "active"
+        assert lease.status == "dispatching"
         acquired.append(lease)
         if failure is not None:
             raise failure

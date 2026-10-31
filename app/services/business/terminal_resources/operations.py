@@ -11,7 +11,10 @@ from app.services.business.workspace_resources.facts import (
     observe_resource,
     resource_projection,
 )
-from app.services.business.workspace_resources.operations import ResourceOperations
+from app.services.business.workspace_resources.operations import (
+    ResourceOperations,
+    resource_operation_dispatch,
+)
 from app.services.business.workspace_resources.records import OwnedResourceRecord
 
 if TYPE_CHECKING:
@@ -111,7 +114,7 @@ class TerminalOperations(ResourceOperations):
         self, record: OwnedResourceRecord, call: Callable[[], Awaitable[TerminalSnapshot]],
     ) -> TerminalSnapshot:
         # 工作区命令完成与普通工具调用共用回执链；只有已核实终态才能结清受管cwd占用。
-        try:
+        async with resource_operation_dispatch(self._owner, record, self._lease_refs[record.resource_id], operation=self):
             result = await call()
             runtime = result.get("terminal", result)
             if not isinstance(runtime, dict):
@@ -124,6 +127,3 @@ class TerminalOperations(ResourceOperations):
             await self._owner._sync_ledger(record)
             projection = resource_projection(record, runtime, self._owner.kind)
             return {**result, "terminal": projection} if "terminal" in result else projection
-        except BaseException as error:
-            await self._owner._unknown(record, error, lease_id=self._lease_refs[record.resource_id])
-            raise

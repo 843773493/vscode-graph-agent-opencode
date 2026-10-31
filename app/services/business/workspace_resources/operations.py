@@ -22,6 +22,65 @@ OPERATION_CLOSE_WAIT_SECONDS = 30.0
 OPERATION_ADMISSION_WAIT_SECONDS = 30.0
 
 
+@asynccontextmanager
+async def resource_operation_dispatch(
+    owner: WorkspaceResourceOwner, record: OwnedResourceRecord, lease_id: str,
+    *, operation: ResourceOperations | None,
+) -> AsyncIterator[None]:
+    """同一原lease覆盖派发、正式回执提交及失败写盘，不能靠finally猜测成功。"""
+    # TODO(5.2)：创建、版本管理及传输授权的派发仍须沿各自原入口迁齐，不能据此声明全部接管完成。
+    cancelled = Event()
+
+    def prepare() -> None:
+        if not cancelled.is_set() and (operation is None or not operation._closed):
+            owner._leases.mark_operation_dispatched(lease_id)
+
+    preparing = asyncio.create_task(run_sync_shielded(prepare))
+
+    async def settle_unstarted() -> None:
+        await preparing
+        lease = owner._leases.get_lease(lease_id)
+        # 原调用尚未进入外部回调，可沿原账本撤销自己已完成的准备。
+        if lease is not None and lease.status == "dispatching":
+            await run_sync_shielded(owner._leases.finish_operation_dispatch, lease_id)
+
+    try:
+        await asyncio.shield(preparing)
+    except asyncio.CancelledError as original:
+        cancelled.set()
+
+        try:
+            await run_cleanup_shielded(settle_unstarted)
+        except BaseException as failure:
+            raise original from failure
+        raise
+    if operation is not None:
+        try:
+            operation._assert_open()
+        except RuntimeError as original:
+            # close可能在原写盘期间开始；未进入外部回调的准备不能继续派发。
+            try:
+                await run_cleanup_shielded(settle_unstarted)
+            except BaseException as failure:
+                raise original from failure
+            raise
+    try:
+        yield
+    except BaseException as error:
+        await owner._unknown(record, error, lease_id=lease_id)
+        raise
+    else:
+        confirming = asyncio.create_task(run_sync_shielded(owner._leases.finish_operation_dispatch, lease_id))
+        try:
+            await asyncio.shield(confirming)
+        except asyncio.CancelledError as original:
+            try:
+                await run_cleanup_shielded(lambda: confirming)
+            except BaseException as failure:
+                raise original from failure
+            raise
+
+
 class ResourceOperations:
     def __init__(
         self, owner: WorkspaceResourceOwner, thread: ThreadRef,

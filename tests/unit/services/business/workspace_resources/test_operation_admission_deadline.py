@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -146,7 +147,8 @@ async def test_wait_preserves_facts_and_drains_only_this_call(
         leases = bundle.leases.leases_for_resource(rid)
         assert len(leases) == 1 and leases[0].status == "active"
         if held:
-            assert leases == original
+            # 原lease派发和确认会推进更新时间，其余身份及事实必须完整保持。
+            assert replace(leases[0], updated_at=original[0].updated_at) == original[0]
 
 
 async def test_recovery_and_lock_share_one_deadline(
