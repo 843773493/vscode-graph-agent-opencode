@@ -59,7 +59,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     )
 }
 
-# TODO：工作区列表 remote 的配置状态尚未同步 proto，需迁齐生成绑定后再登记该根。
+# TODO：联邦 manifest、配置状态及工作区列表 remote 尚未同步 proto，需迁齐生成绑定后再登记。
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]
     for name in (
@@ -73,6 +73,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
         "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
         "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+        "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
+        "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
     )
 }
 

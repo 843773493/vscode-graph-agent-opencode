@@ -20,6 +20,13 @@ def http_openapi() -> JsonSchemaValue:
 
 
 @pytest.fixture
+def gateway_openapi() -> JsonSchemaValue:
+    from app.gateway.main import app
+
+    return deepcopy(app.openapi())
+
+
+@pytest.fixture
 def http_descriptor_bundle() -> FileDescriptorSet:
     """HTTP 导出同时核对 Workspace 与 Gateway，依赖只登记一次。"""
     bundle = FileDescriptorSet()

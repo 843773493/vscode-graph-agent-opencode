@@ -39,13 +39,6 @@ from app.schemas.gateway.workspaces import (
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
-@pytest.fixture
-def gateway_openapi() -> JsonSchemaValue:
-    from app.gateway.main import app
-
-    return deepcopy(app.openapi())
-
-
 def test_gateway_directory_schema_uses_actual_routes_and_keeps_business_validation(
     gateway_openapi: JsonSchemaValue,
 ) -> None:
