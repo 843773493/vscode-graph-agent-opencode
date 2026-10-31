@@ -219,8 +219,10 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     blocked = browser_resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": frozen_revision,
     })
-    assert blocked.status_code == 409, blocked.text
-    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"]
+    # 显式停止沿原冻结版本重试；原协议仍失败，不推进版本或派发停止。
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json() == {"detail": expected}
+    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"] * 2
     persisted = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
     assert persisted["records"][0]["owner_revision"] == frozen_revision
     assert persisted["records"][0]["reconciliation_status"] == "unknown"
@@ -234,7 +236,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     assert current["reconciliation_status"] == "unknown" and current["error"] == expected
     assert current["available_actions"] == ["stop"]
     assert current["metadata"]["transport_owner_revision"] == current["owner_revision"]
-    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"]
+    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"] * 2
     stopped = browser_resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": current["owner_revision"],
     })

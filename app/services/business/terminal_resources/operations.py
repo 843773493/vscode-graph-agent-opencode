@@ -121,7 +121,7 @@ class TerminalOperations(ResourceOperations):
             observe_resource(record, runtime, self._owner.kind)
             self._owner._verified(record)
             await self._owner._store.save(record)
-            self._owner._sync_ledger(record)
+            await self._owner._sync_ledger(record)
             projection = resource_projection(record, runtime, self._owner.kind)
             return {**result, "terminal": projection} if "terminal" in result else projection
         except BaseException as error:

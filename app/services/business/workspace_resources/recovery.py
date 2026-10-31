@@ -152,9 +152,10 @@ class ResourceRecovery:
         """调用方持原资源锁；管理停止先核准入，再撤权而不等待依赖停止的旧执行。"""
         owner = self._owner
         assert self._pending is not None
-        if resource_id not in self._pending:
+        pending_versions = self._pending
+        if resource_id not in pending_versions:
             return None
-        pending = self._pending[resource_id]
+        pending = pending_versions[resource_id]
         if pending.management_only and not for_stop:
             return None
         record = owner._require_owned_resource_record(resource_id)
@@ -168,6 +169,18 @@ class ResourceRecovery:
             if not isinstance(error, Exception):
                 raise
             return error
-        owner._sync_ledger(owner._require_owned_resource_record(resource_id))
-        del self._pending[resource_id]
+        async def commit() -> None:
+            await owner._sync_ledger(owner._require_owned_resource_record(resource_id))
+            del pending_versions[resource_id]
+
+        # 外部同步已成功：本地结算和移除原pending必须一起完成，取消不能导致再次派发。
+        committing = asyncio.create_task(commit())
+        try:
+            await asyncio.shield(committing)
+        except asyncio.CancelledError as original:
+            try:
+                await run_cleanup_shielded(lambda: committing)
+            except BaseException as failure:
+                raise original from failure
+            raise
         return None

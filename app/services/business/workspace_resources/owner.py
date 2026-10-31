@@ -169,7 +169,7 @@ class WorkspaceResourceOwner:
                 observe_resource(record, runtime, self.kind)
                 self._verified(record)
                 await self._store.save(record)
-                self._sync_ledger(record)
+                await self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
             except BaseException as error:
                 lease_id = lease_refs[record.resource_id]
@@ -193,7 +193,7 @@ class WorkspaceResourceOwner:
         record.error = None
         record.updated_at = self._now()
         await self._store.save(record)
-        self._sync_ledger(record)
+        await self._sync_ledger(record)
 
     async def _record_creation_failure(
         self, record: OwnedResourceRecord, receipt: object, lease_id: str, error: BaseException,
@@ -230,7 +230,7 @@ class WorkspaceResourceOwner:
         record.updated_at = self._now()
         await self._store.save(record)
         self._leases.settle(lease_id)
-        self._sync_ledger(record)
+        await self._sync_ledger(record)
         return True
 
     async def list_resources(
@@ -281,7 +281,7 @@ class WorkspaceResourceOwner:
                         observe_resource(record, runtime, self.kind)
                         # TODO：逐项持久化仍重写全量JSON，后续测量大清单成本再优化写盘。
                         await self._store.save(record)
-                        self._sync_ledger(record)
+                        await self._sync_ledger(record)
                         result.append(resource_projection(record, runtime, self.kind))
                 return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
         except TimeoutError as error:
@@ -305,7 +305,7 @@ class WorkspaceResourceOwner:
                     runtime = observed.get(resource_id)
                     observe_resource(record, runtime, self.kind)
                     await self._store.save(record)
-                    self._sync_ledger(record)
+                    await self._sync_ledger(record)
                     return resource_projection(record, runtime, self.kind)
         except TimeoutError as error:
             if not deadline.expired():
@@ -581,7 +581,7 @@ class WorkspaceResourceOwner:
                 await self._store.save(record)
                 if fork_attachment is not None:
                     await observe_phase(fork_attachment.creation_key, f"fork.live.committed.{self.kind}")
-                self._sync_ledger(record)
+                await self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
             except BaseException as error:
                 if fork_attachment is not None:
@@ -589,7 +589,7 @@ class WorkspaceResourceOwner:
                     saved = self._require_owned_resource_record(resource_id)
                     receipt = saved.fork_attachments.get(fork_attachment.creation_key)
                     if receipt is not None and receipt.state == "committed":
-                        self._sync_ledger(saved)
+                        await self._sync_ledger(saved)
                         self._release_committed_fork_leases(saved)
                         raise
                 await self._unknown(record, error, lease_id=acquired_lease_id)
@@ -642,7 +642,7 @@ class WorkspaceResourceOwner:
             record.error = None
             record.unattached_since = None if delete else record.unattached_since
             await self._store.save(record)
-            self._sync_ledger(record)
+            await self._sync_ledger(record)
             for pending in self._leases.leases_for_resource(record.resource_id):
                 if pending.status == "reconcile_required":
                     self._leases.settle(pending.lease_id)
@@ -962,7 +962,7 @@ class WorkspaceResourceOwner:
         observe_resource(record, runtime, self.kind)
         record.owner_revision = revision
         await self._store.save(record)
-        self._sync_ledger(record)
+        await self._sync_ledger(record)
 
     async def _reconcile_stopped_record(
         self,
@@ -991,7 +991,7 @@ class WorkspaceResourceOwner:
         await self._store.save(record)
         for lease in pending:
             self._leases.settle(lease.lease_id)
-        self._sync_ledger(record)
+        await self._sync_ledger(record)
         return []
 
     def _resource_lock(self, resource_id: str) -> asyncio.Lock:
@@ -1097,12 +1097,21 @@ class WorkspaceResourceOwner:
         # 原错误的两步收尾共用一次保护；排队和写盘期间的新取消不能跳过记录保存。
         await run_cleanup_shielded(persist)
 
-    def _sync_ledger(self, record: OwnedResourceRecord) -> None:
-        self._leases.update_external_state(
+    async def _sync_ledger(self, record: OwnedResourceRecord) -> None:
+        syncing = asyncio.create_task(run_sync_shielded(
+            self._leases.update_external_state,
             record.resource_id,
             lifetime_scope=record.retention_scope,
             status=lease_status(record),
-        )
+        ))
+        try:
+            await asyncio.shield(syncing)
+        except asyncio.CancelledError as original:
+            try:
+                await run_cleanup_shielded(lambda: syncing)
+            except BaseException as failure:
+                raise original from failure
+            raise
 
     def _now(self) -> str:
         return self._clock().isoformat()

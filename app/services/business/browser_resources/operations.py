@@ -84,7 +84,7 @@ class BrowserOperations(ResourceOperations):
                 raise failure
             owner._verified(record)
             await owner._store.save(record)
-            owner._sync_ledger(record)
+            await owner._sync_ledger(record)
             projected = {**result, "browser": resource_projection(record, runtime, owner.kind)}
         except BaseException as error:
             await owner._unknown(record, error, lease_id=lease_id)

@@ -787,3 +787,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原unknown账本写入改用shielded worker，与后续原owner记录save共用一次取消保护；原资源锁和holder覆盖排队与结算，后续重复取消不割裂两步、不替换原工具错误或取消。不新增writer、账本或状态格式。
 - 新增20项、连同记录收尾42项及相关owner589项通过，回归35份源码前后一致。完整旧生产归档的两项反例复现同步阻塞；移除整段收尾保护的两项变异反例精确失败于原错误被新取消替换。Ruff、compileall、strict通过；生产原4条Pyright诊断的规则、完整消息、文件归属和最窄AST表达式逐项相同，新增测试零诊断。首轮20项均因新测试误用冷store构造参数失败，修正装具后通过，未修改产品合同或放宽原错误/lease断言。
 - 准确命令、原始输出、退出码、指纹与作者AST自查见`out/tests/temp/operation_unknown_io_20261031/artifacts/verification.json`。传输使用替身，账本自身写盘失败只验原错、原件及显式重试，不证明旧代接管；真实PTY/Chromium终态、其它同步writer与完整关闭期限继续TODO。5.2/5.4及21/23未完成，另一会话Web/Workbench、其自动化、共享暂存和debug未动。
+
+### 2026-10-31 owner状态发布的异步账本结算（5.4部分）
+
+- 唯一`_sync_ledger`改为异步入口，14处生产调用全部直接等待；先保存原owner记录，再等待原账本worker结算后投影。资源锁覆盖线程池排队与写盘，取消和重复取消保留原消息及迟到存储错误。Terminal目录lease终态通知仍在原事件循环线程，不将其它writer或通知迁移冒充完成。
+- 新增40项，定向146项及相关回归989项通过，47份采样源码在回归前后相同；随后仅捕获原pending map以修复闭包类型收窄，并补跑52项冷恢复/投影测试。首轮回归6项取消顺序失败已修复：外部同步成功后，原账本发布和移除pending共用受保护提交，取消不再导致重复同步；原发布失败保留同版本供显式重试。
+- 另一首轮失败为既存API测试与规范不符；完整旧生产复现同一400/409差异，仅调整显式stop重试原冻结版本的断言，并加强完整错误正文和精确请求次数检查，不改产品行为。完整旧生产6项反例复现同步阻塞；仅删除两领域工具调用的await，2项最终变异反例均失败。初次变异参数选择错误退出4，未进入测试体，不计有效反例。
+- Ruff、compileall及OpenSpec strict通过；最终Pyright与原生产各21条既存诊断，文件、规则、完整消息、词法owner及最窄AST表达式逐项相同，新测试零诊断，不称类型全绿。准确命令、原始输出、退出码、指纹、类型对照及作者结构自查见`out/tests/temp/ledger_projection_io_20261031/artifacts/verification.json`。
+- TODO(5.2)：`out/tests/temp/unknown_write_cleanup_window_20261031/artifacts/probe-final.json`已实证unknown首步账本写失败后的释放窗口：恢复存储后，普通operation.close仍把两领域原active lease改为released，而外部记录仍running；通用Turn收尾也释放active，仅改工具finally不足。探针使用原owner/账本及替身传输，不证明真实进程或Backend硬重启。仍需在原账本和owner链解决派发未核实的持久保护，不能新增第二账本或把写失败当作unknown已持久。
+- 真实PTY/Chromium、旧代接管、其它同步writer、原生I/O抢占及完整operation/shutdown期限继续TODO，5.2/5.4及21/23保持未完成；未修改另一会话Web/Workbench、其自动化或共享debug。

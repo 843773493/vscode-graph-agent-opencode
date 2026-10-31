@@ -157,8 +157,8 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         attachment_id = parse_resource_uri(uri).tail_segments[0]
         return f"{terminal_id}:working-directory:{attachment_id}"
 
-    def _sync_ledger(self, record: OwnedResourceRecord) -> None:
-        super()._sync_ledger(record)
+    async def _sync_ledger(self, record: OwnedResourceRecord) -> None:
+        await super()._sync_ledger(record)
         if (record.working_directory_uri is not None and record.reconciliation_status == "verified"
                 and record.status in STOPPED_STATUSES):
             lease = self._leases.get_lease(self._directory_lease_id(record.resource_id, record.working_directory_uri))
