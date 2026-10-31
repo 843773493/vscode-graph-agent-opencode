@@ -19,7 +19,14 @@ from app.protocol.schema import assert_public_schema
 # 只登记本切片已迁齐的 HTTP 根模型，嵌套字段由 descriptor 递归校验。
 HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: public_pb2.DESCRIPTOR.message_types_by_name[name]
-    for name in ("ResourceNavigationRequest", "ResourceNavigationResultDTO")
+    for name in (
+        "ResourceNavigationRequest", "ResourceNavigationResultDTO",
+        "WorkspaceFileRootsDTO", "WorkspaceFileReferencesRequest", "WorkspaceFileReferencesDTO",
+        "WorkspaceFileWatchRequest", "WorkspaceFileListDTO", "WorkspaceFileContentDTO",
+        "WorkspaceFileUpdateRequest", "WorkspaceFileCreateRequest", "WorkspaceFilePasteRequest",
+        "WorkspaceFileCopyRequest", "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationStatusDTO",
+        "WorkspaceFileRevealDTO", "FileTreeShortcutRequest", "SessionFileTreeSettingsDTO",
+    )
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {

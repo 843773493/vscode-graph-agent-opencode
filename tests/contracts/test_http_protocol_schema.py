@@ -101,8 +101,69 @@ def test_http_schema_recursively_rejects_real_component_drift(
     assert f"/{field}" in str(error.value)
 
 
+def test_file_http_routes_register_their_actual_public_json_roots(http_openapi: JsonSchemaValue) -> None:
+    schemas = http_openapi["components"]["schemas"]
+    roots: set[str] = set()
+    for path, operations in http_openapi["paths"].items():
+        if not (path.startswith("/api/v1/workspaces/{workspace_id}/workspace/files") or "file-tree-" in path):
+            continue
+        for operation in operations.values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                roots.add(request["schema"]["$ref"].rsplit("/", 1)[1])
+            for status, response in operation["responses"].items():
+                if not status.startswith("2"):
+                    continue
+                body = response.get("content", {}).get("application/json")
+                if body is None:
+                    continue
+                envelope = schemas[body["schema"]["$ref"].rsplit("/", 1)[1]]
+                roots.update(branch["$ref"].rsplit("/", 1)[1]
+                             for branch in envelope["properties"]["data"]["anyOf"] if "$ref" in branch)
+    assert {"WorkspaceFileCreateRequest", "WorkspaceFileOperationReceiptDTO", "SessionFileTreeSettingsDTO"} <= roots
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"文件入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+def test_file_http_schema_keeps_native_inputs_and_business_constraints(http_openapi: JsonSchemaValue) -> None:
+    components = http_openapi["components"]
+    schemas = components["schemas"]
+    references = {**schemas["WorkspaceFileReferencesRequest"], "components": components}
+    # 请求原生路径仍是合法输入；输出 URI 语义不由 proto 的基础字符串类型代替。
+    paths = ["src/main.py", "/etc/hosts", r"C:\work\main.py", "boxteam://workspace/ws-1/resources/files/root/main.py"]
+    validate({"paths": paths}, references)
+    with pytest.raises(SchemaValidationError):
+        validate({"paths": []}, references)
+    with pytest.raises(SchemaValidationError):
+        validate({"paths": paths * 26}, references)
+    update = {**schemas["WorkspaceFileUpdateRequest"], "components": components}
+    validate({"content": "/etc/hosts", "expected_revision": "a" * 64}, update)
+    with pytest.raises(SchemaValidationError):
+        validate({"content": "正文", "expected_revision": "invalid"}, update)
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("WorkspaceFileCreateRequest", "kind", {"type": "integer"}),
+    ("WorkspaceFileMutationIntentDTO", "depends_on", {"type": "object"}),
+    ("WorkspaceDirectoryKeyDTO", "workspace_id", {"type": "integer"}),
+    ("WorkspaceFileOperationItemDTO", "path", {"type": "integer"}),
+    ("WorkspaceFileNodeDTO", "kind", {"type": "integer"}),
+    ("FileTreeShortcutDTO", "source", {"type": "integer"}),
+])
+def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
 @pytest.mark.parametrize("message_name", [
     "ResourceNavigationRequest", "ResourceNavigationResultDTO", "ResourceNavigationNodeDTO", "ResourceNavigationMatchDTO",
+    "WorkspaceFileCreateRequest", "WorkspaceDirectoryKeyDTO", "WorkspaceFileMutationIntentDTO",
+    "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationItemDTO", "WorkspaceFileNodeDTO", "FileTreeShortcutDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
