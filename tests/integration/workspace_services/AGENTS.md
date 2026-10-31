@@ -30,7 +30,7 @@ workspace_services/
 
 `test_resource_grant_deadline.py`经正式Session、ASGI资源创建/传输授权与真实Node/PTY或Chromium/HTTP，验证原资源锁及已签发授权回执等待到期后的503/request_id、peer授权、原身份/版本、精确lease冷读和原管理停止结算。派发前到期可沿原入口重试；回执未知时存活查询不结清，停止核实后拒绝新授权。suite `integration-resource-grant-deadline`固定90秒/4GiB，Linux/Windows均运行；只推进本次截止，不替代真实等待30秒、Gateway/Web、独立Backend重启或整个operation终止核实。
 
-`test_resource_operation_admission.py`复用正式Session、ASGI资源创建及原operation，真实PTY或Chromium/HTTP核对资源锁准入到期、peer继续执行、原记录/lease冷读、外部身份及显式重试；不派发与无后台补做由原transport调用观察证明。suite `integration-resource-operation-admission`固定90秒/4GiB；只推进本次截止，不代表真实等待30秒、Gateway/Web、Backend重启或完整operation终止核实。
+`test_resource_operation_admission.py`复用正式Session、ASGI资源创建及原operation，真实PTY或Chromium/HTTP核对资源锁准入到期、peer继续执行、原记录/lease冷读、外部身份及显式重试；不派发与无后台补做由原transport调用观察证明。Terminal创建还核对慢cwd解析时同服务详情可读、原holder保持，以及相对/绝对/目录URI三种输入对应同一真实PTY目录；不将Proto Struct的整数值误限定为Python int。suite `integration-resource-operation-admission`固定90秒/4GiB；只推进本次截止，不代表真实等待30秒、Gateway/Web、Backend重启或完整operation终止核实。
 
 `test_resource_thread_admission.py`复用正式Session、ASGI资源创建、原工具operation及导航enqueue/唯一worker，验证Thread准入503/request_id、原记录/lease不变、显式重试、同Session peer并行，以及逻辑删除先提交而原holder退出后才资源清理/物理隔离。同步I/O场景还覆盖active、Session目录、main/Thread定位、共享catalog连接锁与线程池排队，取消/到期后原gate及holder等真实结算，外部HTTP仍响应且无迟到创建。suite `integration-resource-thread-admission`固定90秒/4GiB；真实PTY/Chromium与HTTP不代表Gateway/Web、Backend重启、原生线程可终止或整个operation终止期限，Windows Browser的内存前置条件另记未验证。
 

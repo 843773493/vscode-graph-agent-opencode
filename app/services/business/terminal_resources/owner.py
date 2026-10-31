@@ -19,7 +19,7 @@ from app.abstractions.workspace_resources import (
     RetentionScope,
 )
 from app.core.resource_uri import parse_resource_uri
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources.facts import STOPPED_STATUSES
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
@@ -119,7 +119,9 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         created_by_turn_id: str | None,
         lease_refs: dict[str, str],
     ) -> TerminalSnapshot:
-        resolved_cwd = self._resolve_workdir(cwd)
+        # 原生路径及目录 URI 都可能等待文件系统或同机 Gateway；原 holder 覆盖 worker 结算。
+        # TODO(5.4)：受管目录复核及 lease 写盘仍同步；原生 I/O 抢占与整个 operation／shutdown 期限须分别核实。
+        resolved_cwd = await run_sync_shielded(self._resolve_workdir, cwd)
 
         async def create(record: OwnedResourceRecord) -> TerminalSnapshot:
             if self._working_directories is not None:

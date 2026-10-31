@@ -5,6 +5,7 @@
 # 可修改内容
 
 - 工具读写、steering 及工作区命令完成的回执与失败测试。
+- 创建 cwd 的慢文件访问、请求上下文、取消及原 Thread holder 的结算测试。
 - 本组专用 pytest fixture。
 
 # 不可修改内容

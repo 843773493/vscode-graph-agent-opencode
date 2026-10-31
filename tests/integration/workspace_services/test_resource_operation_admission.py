@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
+import psutil
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
+from app.core.resource_uri import resource_display_uri
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources import operations as operations_module
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -144,3 +147,78 @@ async def test_real_admission_keeps_original_resource(
                     if lock.locked():
                         lock.release()
         assert not owner._leases.leases_for_resource(rid)
+
+
+async def test_terminal_cwd_resolution_does_not_block_peer_http_or_change_native_target(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext], owner_mount: MountedWorkspace,
+    monkeypatch: pytest.MonkeyPatch, resource_api,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner
+        target = root / "http-waiting-cwd"
+        target.mkdir()
+        loop = asyncio.get_running_loop()
+        entered, release = asyncio.Event(), threading.Event()
+        expired: list[bool] = []
+        resolve = Path.resolve
+
+        def waiting(path: Path, strict: bool = False) -> Path:
+            if path == target:
+                loop.call_soon_threadsafe(entered.set)
+                if not release.wait(5):
+                    expired.append(True)
+                    raise TimeoutError("原生 cwd 解析阻塞了同一服务的 HTTP 查询")
+            return resolve(path, strict=strict)
+
+        proofs = []
+        gateway_id = "gateway_00000000000040008000000000000099"
+        uri = resource_display_uri(gateway_authority=gateway_id, scope="workspace", scope_id=container.workspace_id,
+                                   kind="files", tail_segments=("root", target.name))
+        async with resource_api(container, "terminal") as client:
+            response = await client.post("/api/v1/resources/terminals", json={"session_id": sid, "retention_scope": "thread"})
+            assert response.status_code == 200, response.text
+            peer = response.json()["data"]["resource_id"]
+            original = await owner._transport.get_resource(peer)
+            for cwd in (target.name, str(target), uri):
+                entered.clear()
+                release.clear()
+                before = tuple(owner._store.ids())
+                with monkeypatch.context() as patch:
+                    patch.setattr(Path, "resolve", waiting)
+                    creating = asyncio.create_task(client.post("/api/v1/resources/terminals", json={
+                        "session_id": sid, "retention_scope": "thread", "cwd_relative": cwd,
+                    }, headers={"X-BoxTeam-Gateway-Id": gateway_id}))
+                    try:
+                        await asyncio.wait_for(entered.wait(), 7)
+                        assert not expired and not creating.done()
+                        peer_reply = await asyncio.wait_for(client.get(f"/api/v1/resources/{peer}"), 2)
+                        assert peer_reply.status_code == 200, peer_reply.text
+                        assert peer_reply.headers["X-Request-ID"] == peer_reply.json()["request_id"]
+                        assert peer_reply.json()["data"]["status"] == "running"
+                        assert tuple(owner._store.ids()) == before
+                        assert (await owner._transport.get_resource(peer))["os_pid"] == original["os_pid"]
+                        async with owner.deletion_holder.lock_for(sid, wait=False) as probe:
+                            assert not probe.acquired
+                        release.set()
+                        response = await asyncio.wait_for(creating, 10)
+                        assert response.status_code == 200, response.text
+                    finally:
+                        release.set()
+                        await asyncio.gather(creating, return_exceptions=True)
+                created = response.json()["data"]
+                runtime = await owner._transport.get_resource(created["resource_id"])
+                # 现有 Proto Struct 数值解为 float；PID 必须仍是精确正整数并指向真实进程。
+                pid = runtime["os_pid"]
+                assert isinstance(pid, (int, float)) and not isinstance(pid, bool)
+                assert pid > 0 and pid == int(pid)
+                assert Path(psutil.Process(int(pid)).cwd()).resolve() == target
+                assert runtime["cwd_relative"] == created["cwd_relative"] == target.name
+                assert created["source_thread"]["session_id"] == sid
+                assert not owner._leases.leases_for_resource(created["resource_id"])
+                assert str(root) not in owner._store.path.read_text(encoding="utf-8")
+                proofs.append({"input": cwd, "resource": created, "runtime": runtime})
+        (run.artifacts_dir / "cwd-worker.json").write_text(json.dumps({
+            "peer": original, "created": proofs,
+            "scope": "ASGI Session资源入口、真实Node HTTP及PTY；慢解析时同服务详情可读，三种输入均在同一原生目录执行；非Gateway/Web或进程重启验收",
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

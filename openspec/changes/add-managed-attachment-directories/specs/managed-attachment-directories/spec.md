@@ -351,6 +351,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Session读写准入或Terminal/Browser的Thread准入在active核验、Session目录、canonical main或显式Thread定位时等待同步I/O、catalog连接锁或线程池
 - **THEN** 复用原同步查询与受保护worker，原topology/Session gate及已取得的资源holder覆盖该调用真实结算，不阻断事件循环及不依赖该存储的HTTP查询；取消或外层期限到达后不遗弃已提交调用、不提前释放原gate，也不进入后续准入或资源创建。工作区归属、冻结Thread身份、目录核验、原异常及DTO投影保持原合同，不新增查询链或业务lease；正常重试沿原入口完成。worker不能抢占原生I/O，不将协作式等待预算称为线程终止或整个operation/shutdown硬期限
 
+#### Scenario: Terminal 创建的 cwd 解析尚未结算
+
+- **WHEN** Terminal 创建已经取得原 Thread holder，而相对路径、原生绝对路径或目录 URI 的解析仍等待文件系统、同机 Gateway 或线程池
+- **THEN** 同一个目录解析调用由既有受保护 worker 执行并保留请求上下文，事件循环及不依赖该等待的资源查询可以继续；原 holder 覆盖排队与执行，取消须等原调用结算后传播，不提前创建资源 intent、lease 或 PTY，不在取消后后台补做。相对输入锚定目标工作区，工作区外绝对路径及目标平台语义保持，URI 仍由原文件 owner 核对目标和权限，原失败及因果关系保持；本等待不构成原生 I/O 可抢占或整个 operation/shutdown 有硬期限的证明
+
 #### Scenario: 工具方法的资源准入等待到期
 
 - **WHEN** Terminal或Browser的单次工具方法等待所选资源冷恢复或原资源锁

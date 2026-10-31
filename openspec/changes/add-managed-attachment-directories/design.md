@@ -30,6 +30,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 后续 Shell 公共边界已在原 Terminal owner 接入 `TerminalWorkingDirectories` 准入端口，持久记录只增加同工作区附件目录根 URI；目录使用继续写入唯一 `ExternalResourceLeaseLedger`，holder 使用持久终端身份而非本次工具/Turn。准入锁内发布占用后才启动 PTY；工具提前返回不结清，核实终态与冷恢复才结清，未知/缺失回执保留。线上 container 已注入 schema 4 目录 owner，不保留空准入或另一套文件/进程执行链。Linux 真实 PTY 已验证相对/绝对/目录 URI 三种 cwd、后台进程保活、准入与到期 GC 竞争及核实停止后的释放；未知停止结果继续由原 owner 保留，Windows 与远端产品验收仍 TODO。准确候选指纹、命令和原始结果在 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
 
+Terminal 创建中的 cwd 解析统一通过既有 `run_sync_shielded` 执行原 `_resolve_workdir`，原生文件访问和同机 Gateway 控制调用不占用事件循环；请求上下文随 worker 复制。原 Thread holder 覆盖线程池排队和实际解析，取消等待至该调用结算后传播，期间及取消后不创建资源 intent、lease 或 PTY。输入、原文件 owner 的目标/权限检查和错误因果保持；该步骤不提供原生 I/O 抢占或整个 operation/shutdown 的硬期限，5.4 继续按完整合同验收。
+
 ### 3. 目录关联与 30 天回收
 
 用户上传经既有 ingest/消息接受边界自动关联发起 Thread；未发送或接受失败的上传继续由原 pin/ingest 恢复流程收敛。关联是一组幂等的精确 Thread 关系，不是每次读取递增的计数，不承担鉴权职责。工作区内按既有授权可读取的 Thread 不因缺少上传者身份而被拒绝；需要长期保活时显式 attach，短期文件/Shell 操作由 lease 保护。
