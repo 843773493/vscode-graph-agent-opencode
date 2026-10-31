@@ -39,6 +39,9 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SessionForkRequest", "SessionForkSourcePointDTO", "SessionForkResultDTO",
         "SessionForkTransferRequest", "SessionForkTransferResultDTO",
         "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
+        "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
+        "McpAuthorizationDTO", "McpAuthorizationCallbackDTO",
+        "ToolDTO", "ToolSelectionPatchRequest", "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
     )
 }
 

@@ -13,6 +13,7 @@
 - Job 详情、步骤、控制、派发快照及 Session Goal 共用该检查；原时间字段、控制目标、队列计数和预算约束继续归 Pydantic，不将任意 JSON 正文当作具名 proto 消息。
 - Fork 的来源点、创建及跨 Gateway 传输共用该检查；冻结 capture、资源 owner、发布结果和分块成员从 descriptor 递归核对，锚点、资源选择、授权角色及分块边界仍由原 Pydantic 和业务 owner 校验。
 - Session 创建、更新、查询与信息快照共用该检查；时间、来源、资源汇总及错误成员由 descriptor 递归核对，URI、fork 来源和展示长度约束仍由原 Pydantic 与 owner 负责。
+- MCP 连接管理、授权、工具目录、开关与测试记录共用该检查；工具成员、选择变更、测试样本与 provider 结果从 descriptor 递归核对，操作状态、敏感字段及重复工具等业务约束仍归原 Pydantic 和 owner。
 - Node Debug 的配置、状态与请求共用同一检查；既有 `action + params` 仅在此投影到 proto oneof，成员和参数结构从 descriptor 推导，不另维护动作映射。
 
 ## 不可修改内容

@@ -21,11 +21,17 @@ from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
 from app.schemas.internal_v2.goal import SessionGoalSetRequest
 from app.schemas.internal_v2.job import JobControlRequest, JobDispatchSnapshotDTO
+from app.schemas.internal_v2.mcp import (
+    McpAuthorizationCallbackDTO,
+    McpConnectionRequestDTO,
+)
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
 )
 from app.schemas.internal_v2.session import SessionDTO, SessionInformationSessionDTO
+from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
+from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceOperationRequest,
     TerminalResourceCreateRequest,
@@ -360,6 +366,81 @@ def test_session_structure_checks_keep_pydantic_uri_origin_and_length_rules(http
         SessionInformationSessionDTO.model_validate({**session, "title": "长" * 513, "kind": "normal"})
 
 
+def test_tool_http_routes_check_catalog_selection_test_and_connection_management_roots(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    pending: list[JsonSchemaValue] = []
+    prefix = "/api/v1/workspaces/{workspace_id}"
+    for path, operations in http_openapi["paths"].items():
+        if not (path == prefix + "/tools" or path.startswith((prefix + "/tools/", prefix + "/mcp/"))):
+            continue
+        for operation in operations.values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                pending.append(request["schema"])
+            for status, response in operation["responses"].items():
+                body = response.get("content", {}).get("application/json")
+                if status.startswith("2") and body is not None:
+                    pending.append(body["schema"])
+    roots = _public_roots(http_openapi, pending)
+    assert roots == {
+        "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
+        "McpAuthorizationDTO", "McpAuthorizationCallbackDTO", "ToolDTO", "ToolSelectionPatchRequest",
+        "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
+    }
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"工具入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("McpServerDTO", "enabled", {"type": "string"}),
+    ("McpToolDTO", "remote_name", {"type": "integer"}),
+    ("McpConnectionOperationDTO", "deadline", {"type": "string"}),
+    ("McpConnectionRequestDTO", "action", {"type": "integer"}),
+    ("McpAuthorizationDTO", "authorization_url", {"type": "integer"}),
+    ("McpAuthorizationCallbackDTO", "state", {"type": "integer"}),
+    ("ToolDTO", "parameters", {"type": "array", "items": {}}),
+    ("ToolSelectionChange", "model_visible", {"type": "string"}),
+    ("ToolTestStartRequest", "provider_ids", {"type": "object"}),
+    ("ToolTestRunDTO", "created_at", {"type": "integer"}),
+    ("ToolTestAttemptDTO", "execution_succeeded", {"type": "integer"}),
+    ("ToolTestProviderResultDTO", "success_rate", {"type": "string"}),
+])
+def test_tool_http_schema_rejects_catalog_selection_authorization_and_nested_test_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_tool_structure_checks_preserve_pydantic_operation_secret_and_selection_rules(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    with pytest.raises(ValidationError, match="operation_id"):
+        McpConnectionRequestDTO(operation_id="../operation", server_id="server", action="connect")
+    with pytest.raises(ValidationError, match="action"):
+        McpConnectionRequestDTO.model_validate({"operation_id": "operation", "server_id": "server", "action": "hold"})
+    with pytest.raises(ValidationError) as error:
+        McpAuthorizationCallbackDTO(code="private-code" * 1000, state="private-state")
+    assert "private-" not in str(error.value)
+    callback = McpAuthorizationCallbackDTO(code="private-code", state="private-state")
+    assert "private-" not in repr(callback)
+    assert callback.model_dump() == {"code": "private-code", "state": "private-state"}
+    change = {"tool_id": "tool", "execution_enabled": True, "model_visible": False}
+    assert ToolSelectionPatchRequest.model_validate({"changes": [change]}).changes[0].model_visible is False
+    with pytest.raises(ValidationError, match="重复 tool_id"):
+        ToolSelectionPatchRequest.model_validate({"changes": [change, change]})
+    with pytest.raises(ValidationError, match="changes"):
+        ToolSelectionPatchRequest(changes=[])
+    with pytest.raises(ValidationError, match="repetitions"):
+        ToolTestStartRequest(repetitions=21)
+
+
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("NodeDebugStartRequest", "path", {"type": "integer"}),
     ("NodeDebugStateDTO", "call_stack", {"type": "object"}),
@@ -439,6 +520,7 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "SessionForkRequest", "SessionForkResultDTO", "ForkSourceCaptureDTO", "SessionForkOwnerReference",
     "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
     "SessionGenerationOriginDTO", "SessionInformationResourceDTO",
+    "McpToolDTO", "ToolTestAttemptDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
