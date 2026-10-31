@@ -68,6 +68,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest",
         "CreateFederationManagedWorkspaceRequest",
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
+        "PortForwardListDTO", "CreatePortForwardRequest",
+        "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
     )
 }
 

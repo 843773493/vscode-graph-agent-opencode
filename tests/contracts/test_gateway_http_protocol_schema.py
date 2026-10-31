@@ -16,6 +16,11 @@ from pydantic.json_schema import JsonSchemaValue
 from app.protocol import openapi
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
+from app.schemas.gateway.port_forwarding import (
+    ChangePortForwardLabelRequest,
+    ChangePortForwardLocalPortRequest,
+    CreatePortForwardRequest,
+)
 from app.schemas.gateway.workspaces import (
     CreateFederationManagedWorkspaceRequest,
     CreateGatewayManagedWorkspaceRequest,
@@ -109,10 +114,45 @@ def test_gateway_ssh_schema_follows_actual_connection_routes(gateway_openapi: Js
     assert gateway_openapi == original
 
 
+def test_gateway_port_forward_schema_follows_control_routes_and_keeps_business_rules(gateway_openapi: JsonSchemaValue) -> None:
+    original = deepcopy(gateway_openapi)
+    components = gateway_openapi["components"]["schemas"]
+    base = "/api/gateway/workspaces/{workspace_id}/port-forwards"
+    for suffix, method in (("", "get"), ("", "post"), ("/{forward_id}", "delete"),
+                           ("/{forward_id}/reconnect", "post"), ("/{forward_id}/local-port", "patch"),
+                           ("/{forward_id}/label", "patch")):
+        operation = gateway_openapi["paths"][base + suffix][method]
+        response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        envelope = components[response["$ref"].rsplit("/", 1)[1]]
+        assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/PortForwardListDTO")
+    for suffix, method, model in (("", "post", "CreatePortForwardRequest"),
+                                  ("/{forward_id}/local-port", "patch", "ChangePortForwardLocalPortRequest"),
+                                  ("/{forward_id}/label", "patch", "ChangePortForwardLabelRequest")):
+        body = gateway_openapi["paths"][base + suffix][method]["requestBody"]["content"]["application/json"]["schema"]
+        assert body["$ref"].endswith("/" + model)
+    assert {"PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest",
+            "ChangePortForwardLabelRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    request = CreatePortForwardRequest(remote_port=1, label="  预览  ")
+    assert request.protocol == "http" and request.local_port is None and request.label == "预览"
+    assert ChangePortForwardLabelRequest().label is None
+    for model, invalid in (
+        (CreatePortForwardRequest, {"remote_port": 0}),
+        (CreatePortForwardRequest, {"remote_port": 80, "protocol": "file"}),
+        (CreatePortForwardRequest, {"remote_port": 80, "unexpected": True}),
+        (ChangePortForwardLocalPortRequest, {"local_port": 65536}),
+        (ChangePortForwardLabelRequest, {"label": "x" * 121}),
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate(invalid)
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
     "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
+    "PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -137,6 +177,12 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("SshConnectionOptionDTO", "host", {"type": "integer"}),
     ("SshConnectionOptionDTO", "port", {"type": "string"}),
     ("AddRemoteGatewayRequest", "private_key_path", {"type": "integer"}),
+    ("PortForwardListDTO", "items", {"type": "object"}),
+    ("PortForwardDTO", "remote_port", {"type": "string"}),
+    ("PortForwardDTO", "local_host", {"type": "integer"}),
+    ("CreatePortForwardRequest", "remote_port", {"type": "string"}),
+    ("ChangePortForwardLocalPortRequest", "local_port", {"type": "string"}),
+    ("ChangePortForwardLabelRequest", "label", {"type": "integer"}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -152,6 +198,8 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "GatewayManagedWorkspaceListDTO", "GatewayManagedWorkspaceDTO",
     "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
     "SshConnectionOptionListDTO", "SshConnectionOptionDTO", "AddRemoteGatewayRequest",
+    "PortForwardListDTO", "PortForwardDTO", "CreatePortForwardRequest",
+    "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
