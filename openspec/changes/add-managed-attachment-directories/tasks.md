@@ -728,3 +728,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 原裁剪入口只将 deleted/verified 纳入既有256条配额；unknown/reconcile_required 保留同一身份、版本和恢复正文。原近期历史装具补齐真实 Session 已有的核实字段，保留原数量与淘汰顺序断言；不增加 writer、schema、模块或第二套裁剪链。
 - 182 项相关 Node 单测通过（9.82 秒），完整旧生产叠加最终测试的两个反例均失败于冷启动丢失待核实记录。新增验证使用历史记录测试原保存、冷启动、裁剪及身份冲突拒绝，只证明该筛选/恢复链，不冒充真实进程生成状态或完整接管验收。Node 语法、作者 AST 自查及 OpenSpec strict 通过，准确命令、源码指纹和原输出/退出码见 `out/tests/temp/terminal_unknown_retention_20261031/artifacts/verification.json`。未改 Web/Workbench、自动化、共享暂存或 Debug，5.2/5.4 与21/23继续未完成。
+
+### 2026-10-31 Browser 原生创建前发布恢复意图（5.2 部分）
+
+- 原Manager在Session.start前沿唯一writer发布created/unknown，首次导航完成后才核实。未派发的意图保存失败复用原failStartup/close，持久保存failed/verified后才签not_created；收尾失败保留unknown、原错误链和无回执。created的close/delete明确409，不用空context伪报终态。创建测试迁入独立文件，原Manager测试1016→775行；既有迁移测试正文经AST核对，仅原收尾写入故障调整为允许新的首条意图保存，原错误/cause/无回执断言保持。
+- 官方Node/Bun分流runner分别305/469项通过（整组12.39秒）；真实HTTP/Chromium硬退出恢复1项、原启动诊断2项及原关闭/超时/冷恢复脚本10场景通过（4.04/6.28/32.87秒）。完整旧生产叠相同最终测试，5项单测与1项真实HTTP反例精确失败；后者在真实context已创建时核到空恢复列表，未进入后续SIGKILL步骤。集成均沿主仓闸门串行并保留原进程外期限与4GiB。
+- 首轮误用Bun直接运行混合目录，触发现有node:test的t.mock不支持，另有新测试把尚未出现的started_at误写为null；修正新预期并改用已有分流runner后全部通过，不修改既有Node测试。Ruff、Python编译/Pyright零诊断、Node语法、作者AST自查及OpenSpec strict通过；准确命令、固定完整归档与源码指纹、原输出/退出码及失败归因见 `out/tests/temp/browser_creation_intent_20261031/artifacts/verification.json`。原context身份的旧代接管、其它冷unknown窗口、Python lease、完整operation/shutdown期限、Windows与Gateway/主Web仍未验完，5.2/5.4与21/23保持。未修改另一会话Web/Workbench、自动化、共享暂存或Debug。

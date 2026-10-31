@@ -427,7 +427,7 @@ export class BrowserManager {
               page_id: id,
               workspace_id: workspaceId,
               transport_owner_revision: ownerRevision,
-              reconciliation_status: "verified",
+              reconciliation_status: "unknown",
               title,
               url: normalizeBrowserUrl(url),
               viewport: viewport || { ...deviceState.viewport },
@@ -462,6 +462,25 @@ export class BrowserManager {
       });
       this.createAdmissionTail = admission.then(() => undefined, () => undefined);
       const session = await admission;
+      try {
+        // 原生context创建前先保存同一恢复意图；原调用在场才能证明尚未派发。
+        await this.persist();
+      } catch (error) {
+        try {
+          await session.failStartup(error.message, { reason: "browser_creation_not_dispatched" });
+        } catch (cleanupError) {
+          const failure = new AggregateError([error, cleanupError],
+            `Browser未派发创建的收尾失败: browser_id=${session.id}`, { cause: error });
+          failure.code = error.code;
+          failure.statusCode = error.statusCode;
+          throw failure;
+        }
+        error.creationReceipt = {
+          resource_id: browserId, workspace_id: workspaceId, owner_revision: ownerRevision,
+          outcome: "not_created",
+        };
+        throw error;
+      }
       await session.start();
       await this.persist();
       return session.snapshot();

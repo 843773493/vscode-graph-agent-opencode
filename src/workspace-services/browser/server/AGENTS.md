@@ -10,6 +10,7 @@ server/
 ├── browserStateStore.js            状态和产物落盘、检查点配额
 ├── browserRuntime.js               运行常量、Chromium启动选项、工具超时与结果归一
 ├── browserDeviceProfiles.js        设备仿真几何、覆盖值与网络限速预设
+├── browserCreation.test.js         创建准入、意图发布、失败回执与关闭等待
 ├── workspaceIdentity.js            不依赖Manager的工作区UUID格式校验
 ├── url.js                          导航URL协议校验、缺省地址解析与ISO观察时刻
 ├── *.test.js                       对应模块的单元测试
@@ -72,6 +73,8 @@ Manager关闭时，先同步关闭当前整批运行资源（含已冷回收资�
 Manager关闭的唯一`shutdownPromise`覆盖创建排空、资源检查点/失败收尾、共享运行时和最终写盘；每次调用默认30秒观察预算不随阶段重置，超时只结束本次等待。`shutdownStage`与`shutdownBrowserIds`仅描述原任务当前阶段和仍执行的资源，不是业务状态或第二账本。重入等待原任务，整批收齐失败后才清除任务供显式重试；失败完整记录，成功任务保留且重复关闭无副作用。各资源独立推进，正文捕获仍按原队列串行；共享池关闭成功后，末次写盘失败不得重复关闭共享池。同步阻塞、原生调用强制终止与进程退出核实仍TODO。
 
 Manager 的状态文件保存只有一个写入者：同轮请求合并，写入期间的更新置为待保存，再取一份当前状态串行写入。所有等待方在待保存请求排空后才成功返回；快照生成或文件写入失败原样交给等待方，并释放在途 Promise，不能静默重试或让后续保存永久卡在旧失败上。合并的是完整状态保存，不合并业务操作或检查点。
+
+Manager先沿该writer发布created/unknown，再调用原Session.start；首次导航完成后才标verified并完成原最终保存。意图保存失败时，原调用尚未派发start，沿原failStartup/close链保存failed/verified后才签not_created；收尾失败保留unknown、原错误链与无回执。created状态的close/delete明确409，不能用空context伪报停止；原创建继续由原Promise持有，原失败仍通过failStartup收尾。冷创建的无身份接管继续按5.2保留TODO，不新增另一套恢复账本。
 
 Session的`toRecord()`显式组装恢复事实，供Manager写入状态文件；文档与操作序号、传输授权版本及最近运行时代际取当前宿主事实。`snapshot()`仍负责对外完整展示，其中设备配置列表、参与者、当前页面、保护派生和逐连接流统计不再为保存而计算或写入。恢复事实保留设备覆盖、下载身份、操作结果和生命周期时间；实时连接数在恢复后从当前句柄取得，不能用磁盘上的观察值恢复连接。
 

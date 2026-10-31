@@ -965,6 +965,7 @@ export class BrowserSession extends EventEmitter {
       this.record.runtime_generation = this.chromiumInstanceGeneration;
       this.record.started_at = this.record.started_at || nowIso();
       await this.goto(this.record.url || "about:blank");
+      this.record.reconciliation_status = "verified";
       return this.snapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1763,6 +1764,13 @@ export class BrowserSession extends EventEmitter {
     this.closingRequested = true;
     return await this.runResourceTransition(async () => {
       if (this.record.status === "deleted" && this.record.reconciliation_status === "verified") return this.snapshot();
+      if (this.record.status === "created") {
+        // TODO（5.2）：无原context身份的旧代创建须经运行时owner接管，不能以空句柄核实停止。
+        const error = new Error(`Browser创建尚未核实，不能关闭: browser_id=${this.id}`);
+        error.code = "browser_creation_unverified";
+        error.statusCode = 409;
+        throw error;
+      }
       try {
         if (this.streaming && this.browser && this.cdpSession && this.record.status === "running") {
           await this.stopScreencast();
@@ -1804,10 +1812,10 @@ export class BrowserSession extends EventEmitter {
     });
   }
 
-  async failStartup(message) {
+  async failStartup(message, { reason = "browser_initial_navigation_failed" } = {}) {
     this.record.status = "failed";
     this.record.error_message = message;
-    const snapshot = await this.close({ status: "failed", reason: "browser_initial_navigation_failed" });
+    const snapshot = await this.close({ status: "failed", reason });
     this.emit("state", snapshot);
     return snapshot;
   }

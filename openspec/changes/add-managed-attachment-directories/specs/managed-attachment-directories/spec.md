@@ -193,6 +193,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal在冷启动或接纳新建前裁剪已删除历史
 - **THEN** 仅deleted/verified记录参与原256条历史配额及排序；deleted/unknown和deleted/reconcile_required保持原恢复记录、资源身份与版本，不占已核实历史配额，也不能被迟到创建覆盖。裁剪不能作为原操作已停止或已核实的证明
 
+#### Scenario: Browser 原生创建前发布恢复意图
+
+- **WHEN** Browser原生context创建尚未派发或就绪回执尚未交给Session
+- **THEN** 原Manager先经唯一writer发布同一资源的created/unknown；首次导航完成后才核实并完成原最终保存。意图写入失败时，只有仍在场且确认start未派发的原调用才能沿原失败关闭链持久保存failed/verified后签not_created；收尾失败保留unknown、原错误及收尾错误且不签回执。created记录的close/delete明确409/browser_creation_unverified，不以空context核实停止；Node硬退出后的冷Manager保留原意图并拒绝同身份重复创建，没有原context身份的旧代接管另行核实
+
 #### Scenario: Terminal 原生创建后就绪交付失败
 
 - **WHEN** 原生PTY已创建并交付唯一PID，但就绪前发生错误、超时或Worker退出
