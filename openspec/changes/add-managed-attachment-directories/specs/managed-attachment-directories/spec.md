@@ -201,7 +201,7 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 #### Scenario: Browser 原生创建前发布恢复意图
 
 - **WHEN** Browser原生context创建尚未派发或就绪回执尚未交给Session
-- **THEN** 原Manager先经唯一writer发布同一资源的created/unknown；首次导航完成后才核实并完成原最终保存。意图写入失败时，只有仍在场且确认start未派发的原调用才能沿原失败关闭链持久保存failed/verified后签not_created；收尾失败保留unknown、原错误及收尾错误且不签回执。created记录的close/delete明确409/browser_creation_unverified，不以空context核实停止；Node硬退出后的冷Manager保留原意图并拒绝同身份重复创建，没有原context身份的旧代接管另行核实
+- **THEN** 原Manager先经唯一writer发布同一资源的created/unknown；首次导航完成后才核实并完成原最终保存。意图写入失败时，只有仍在场且确认start未派发的原调用才能沿原失败关闭链持久保存failed/verified后签not_created；收尾失败保留unknown、原错误及收尾错误且不签回执。created记录的close/delete明确409/browser_creation_unverified，不以空context核实停止，也不改变原创建的操作准入；原调用可继续完成创建及后续交互。Node硬退出后的冷Manager保留原意图并拒绝同身份重复创建，没有原context身份的旧代接管另行核实
 
 #### Scenario: Terminal 原生创建后就绪交付失败
 

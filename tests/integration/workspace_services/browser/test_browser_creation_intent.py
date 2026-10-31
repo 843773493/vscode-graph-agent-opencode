@@ -98,6 +98,63 @@ if (path.basename(process.argv[1] || '') === 'backend.js') {
                 assert not [p.pid for p in alive if p.is_running() and p.status() != psutil.STATUS_ZOMBIE]
 
 
+async def test_rejected_close_and_delete_leave_original_creation_and_interaction_usable(
+    browser_service: BrowserService,
+) -> None:
+    handle, root, control, run, _native = browser_service
+    browser_id = f"browser_{uuid4().hex}"
+    workspace_id = load_or_create_workspace_id(root)
+    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-browser"}
+    state_file = root / ".boxteam/browser-manager/browsers.json"
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{handle.backend_port}", headers=headers, trust_env=False, timeout=15,
+    ) as client:
+        creating = asyncio.create_task(client.post("/api/browsers", json={
+            "browser_id": browser_id, "workspace_id": workspace_id, "owner_revision": 7, "url": "about:blank",
+        }))
+        try:
+            async with asyncio.timeout(8):
+                while not (control / "arrived.json").is_file():
+                    await asyncio.sleep(0.02)
+            observed = json.loads((control / "arrived.json").read_text())
+            assert observed["connected"] is True and observed["contexts"] == 1
+            frozen = state_file.read_bytes()
+            record, = json.loads(frozen)["browsers"]
+            assert record["status"] == "created" and record["reconciliation_status"] == "unknown"
+            for method, endpoint in (("POST", f"/api/browsers/{browser_id}/close"), ("DELETE", f"/api/browsers/{browser_id}")):
+                refused = await client.request(method, endpoint)
+                assert refused.status_code == 409 and refused.json()["code"] == "browser_creation_unverified", refused.text
+                assert state_file.read_bytes() == frozen and not creating.done()
+            # 只释放原生context回执，后续状态与页面均由同一产品入口生成。
+            (control / "release").touch()
+            created = await creating
+            assert created.status_code == 200, created.text
+            original = created.json()["data"]
+            assert original["browser_id"] == browser_id and original["transport_owner_revision"] == 7
+            assert original["status"] == "running" and original["reconciliation_status"] == "verified"
+            assert len(original["pages"]) == 1
+            navigation = await client.post(f"/api/browsers/{browser_id}/navigate", json={
+                "type": "new_tab", "url": "about:blank",
+            })
+            assert navigation.status_code == 200, navigation.text
+            current = navigation.json()["data"]["browser"]
+            assert current["browser_id"] == browser_id and current["transport_owner_revision"] == 7
+            assert len(current["pages"]) == 2
+            assert {page["page_id"] for page in original["pages"]} < {page["page_id"] for page in current["pages"]}
+            closed = await client.post(f"/api/browsers/{browser_id}/close", json={})
+            assert closed.status_code == 200, closed.text
+            assert closed.json()["data"]["browser"]["status"] == "closed"
+            final, = json.loads(state_file.read_bytes())["browsers"]
+            assert final["status"] == "closed" and final["reconciliation_status"] == "verified"
+            health = (await client.get("/health")).json()
+            assert health["browser_runtime"]["context_count"] == 0
+            run.write_result("passed", {"observed": observed, "created": original, "after_rejection": current,
+                "final": final, "scope": "真实Node/HTTP/Chromium；仅暂扣context回执，不代替Python owner、Gateway/Web、冷身份接管或Windows"})
+        finally:
+            (control / "release").touch()
+            await asyncio.gather(creating, return_exceptions=True)
+
+
 async def test_context_before_receipt_keeps_original_intent_after_hard_restart(browser_service: BrowserService) -> None:
     handle, root, control, run, native = browser_service
     browser_id = f"browser_{uuid4().hex}"

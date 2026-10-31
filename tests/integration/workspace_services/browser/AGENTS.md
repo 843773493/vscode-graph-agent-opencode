@@ -40,7 +40,7 @@ browser/
 
 `test_browser_runtime_diagnostics.py`与`browser_runtime_diagnostic_failure.mjs`仅在原Chromium启动参数及日志writer边界注入故障，通过真实Node/HTTP核对原生启动失败、日志目录访问失败、原创建回执、只读磁盘记录及故障解除后的真实页面；观察writer尝试不充当产品日志回退。suite `integration-browser-runtime-diagnostics`固定60秒/4GiB，不代Gateway/Web、Python业务owner、Backend重启、Windows实机或全部运行时收尾验收。
 
-`test_browser_creation_intent.py`只暂扣真实RuntimePool的context回执，核原生Chromium已创建时磁盘先有created/unknown，再SIGKILL本fixture的Node并沿原磁盘冷启动。原close/delete不得以空context签核实终态，重复创建不得替换身份；关键记录由正式HTTP生成，不补写恢复数据。定向pytest走主仓集成独占闸门、60秒进程外超时和4GiB保护；产物镜像本测试路径。不代表无身份接管、Python lease、Gateway/主Web或Windows，清理仅操作本fixture的精确进程实例。
+`test_browser_creation_intent.py`只暂扣真实RuntimePool的context回执，核原生Chromium已创建时磁盘先有created/unknown，再SIGKILL本fixture的Node并沿原磁盘冷启动。原close/delete不得以空context签核实终态，重复创建不得替换身份；另核拒绝不改变磁盘或原创建，释放原回执后同一资源仍能通过正式navigate新增页面、正常关闭并释放context。关键记录由正式HTTP生成，不补写恢复数据。定向pytest走主仓集成独占闸门、进程外超时和4GiB保护，期限包括排队；产物镜像本测试路径。不代表无身份接管、Python lease、Gateway/主Web或Windows，清理仅操作本fixture的精确进程实例。
 
 `test_browser_storage_diagnostics.py`通过真实Node/HTTP/Chromium截图、原生目录冲突及日志writer的真实ENOTDIR次错，核对原失败操作、公开查询、冷磁盘记录和显式重试后的PNG字节；关键资源状态由正式创建／截图入口生成，故障文件仅制造fs边界冲突。suite `integration-browser-storage-diagnostics`固定60秒/4GiB；不代其它存储出口的网络验收、Gateway/Web、Python业务owner、Backend重启或Windows实机。
 

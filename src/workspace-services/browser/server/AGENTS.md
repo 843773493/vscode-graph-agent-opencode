@@ -74,7 +74,7 @@ Manager关闭的唯一`shutdownPromise`覆盖创建排空、资源检查点/失�
 
 Manager 的状态文件保存只有一个写入者：同轮请求合并，写入期间的更新置为待保存，再取一份当前状态串行写入。所有等待方在待保存请求排空后才成功返回；快照生成或文件写入失败原样交给等待方，并释放在途 Promise，不能静默重试或让后续保存永久卡在旧失败上。合并的是完整状态保存，不合并业务操作或检查点。
 
-Manager先沿该writer发布created/unknown，再调用原Session.start；首次导航完成后才标verified并完成原最终保存。意图保存失败时，原调用尚未派发start，沿原failStartup/close链保存failed/verified后才签not_created；收尾失败保留unknown、原错误链与无回执。created状态的close/delete明确409，不能用空context伪报停止；原创建继续由原Promise持有，原失败仍通过failStartup收尾。冷创建的无身份接管继续按5.2保留TODO，不新增另一套恢复账本。
+Manager先沿该writer发布created/unknown，再调用原Session.start；首次导航完成后才标verified并完成原最终保存。意图保存失败时，原调用尚未派发start，沿原failStartup/close链保存failed/verified后才签not_created；收尾失败保留unknown、原错误链与无回执。created状态的close/delete在设置closingRequested前明确409，不能用空context伪报停止或关闭后续交互准入；原创建继续由原Promise持有，原失败仍通过failStartup收尾。冷创建的无身份接管继续按5.2保留TODO，不新增另一套恢复账本。
 
 Session的`toRecord()`显式组装恢复事实，供Manager写入状态文件；文档与操作序号、传输授权版本及最近运行时代际取当前宿主事实。`snapshot()`仍负责对外完整展示，其中设备配置列表、参与者、当前页面、保护派生和逐连接流统计不再为保存而计算或写入。恢复事实保留设备覆盖、下载身份、操作结果和生命周期时间；实时连接数在恢复后从当前句柄取得，不能用磁盘上的观察值恢复连接。
 

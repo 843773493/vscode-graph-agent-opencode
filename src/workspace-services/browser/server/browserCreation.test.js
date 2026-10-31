@@ -127,6 +127,7 @@ test("Browser冷创建意图不能用空context假报关闭或删除", async () 
     await expect(cold[action](session.id)).rejects.toMatchObject({ code: "browser_creation_unverified", statusCode: 409 });
     expect(readFileSync(cold.stateStore.stateFile)).toEqual(before);
     expect(cold.get(session.id).record).toMatchObject({ status: "created", reconciliation_status: "unknown" });
+    expect(cold.get(session.id).closingRequested).toBe(false);
   }
   expect(cold.runtimePool.snapshot()).toMatchObject({ connected: false, context_count: 0 });
 });

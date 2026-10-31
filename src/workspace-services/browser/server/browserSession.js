@@ -1761,16 +1761,16 @@ export class BrowserSession extends EventEmitter {
 
   async close({ status = "closed", reason = "browser_closed",
     operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS } = {}) {
+    if (this.record.status === "created") {
+      // TODO（5.2）：无原context身份的旧代创建须经运行时owner接管，拒绝不能关闭原创建的操作准入。
+      const error = new Error(`Browser创建尚未核实，不能关闭: browser_id=${this.id}`);
+      error.code = "browser_creation_unverified";
+      error.statusCode = 409;
+      throw error;
+    }
     this.closingRequested = true;
     return await this.runResourceTransition(async () => {
       if (this.record.status === "deleted" && this.record.reconciliation_status === "verified") return this.snapshot();
-      if (this.record.status === "created") {
-        // TODO（5.2）：无原context身份的旧代创建须经运行时owner接管，不能以空句柄核实停止。
-        const error = new Error(`Browser创建尚未核实，不能关闭: browser_id=${this.id}`);
-        error.code = "browser_creation_unverified";
-        error.statusCode = 409;
-        throw error;
-      }
       try {
         if (this.streaming && this.browser && this.cdpSession && this.record.status === "running") {
           await this.stopScreencast();

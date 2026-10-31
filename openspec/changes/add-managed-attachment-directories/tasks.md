@@ -742,3 +742,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 214 项相关单测通过（31.15 秒，含新增 11 项），覆盖识别／可用性／目录检查、成功／原失败／重复取消及两处线程池排队。完整旧生产归档叠加相同新增测试，来源识别反例精确失败于同步阻塞事件循环。3 项原准入真实集成通过；最终独立附件场景 2 项通过（36.65 秒），从正式消息上传生成目录，经 ASGI 资源入口和真实 Node HTTP／PTY 验 peer 可读、原 intent／lease／holder、真实 cwd、持久目录占用及正式 detach/delete 结清。原准入文件逐字节恢复，不增加既有 90 秒 suite 预算；新增文件由 integration-python 发现。
 - 初版附件集成因测试查询尚未登记的资源而失败；按原账本合同改验未登记身份后通过，不修改产品语义或原身份断言。一次补验仅等待另一会话共享闸门，主动终止本会话监督器并保留退出 143，未进入测试体；最终先等待同一闸门释放，再由原 fixture 准入串行执行，仍有进程外 180 秒／4GiB 保护。拆分装具时一次末尾空行保护断言拒绝覆盖，后续静态检查因文件尚未生成退出，未进入测试；修正装具后最终检查通过，失败原件保留。
 - Ruff、compileall 和 OpenSpec strict 通过；Pyright 的 2 条生产诊断与完整旧生产逐项一致，无新增类型诊断，不称类型全绿。准确命令、源码指纹、原始输出、实际退出码、类型对照及作者 AST 自查见 `out/tests/temp/attachment_cwd_admission_20261031/artifacts/verification.json`；完整旧源码临时副本已清理，其测试产物和指纹保留。同步 lease 写盘、原生 I/O 抢占、旧代完整接管、整个 operation／shutdown 期限及 Windows／Gateway／主 Web 未验，5.2／5.4 和整体 21/23 保持未完成；未修改另一会话的 Web／Workbench、自动化或共享暂存，不重启共享 debug。
+
+
+### 2026-10-31 Browser 创建期间拒绝管理关闭不得污染交互准入（5.2 部分）
+
+- created 状态的 close/delete 在设置 closingRequested 前保持原 409/browser_creation_unverified；拒绝不改变磁盘、原创建 Promise 或后续交互准入。只移动原拒绝分支，不新增恢复链、状态或账本；无原 context 身份的旧代接管继续 TODO。
+- 相关 30 项单测通过；新增断言在原生产实现上精确红测（16 通过、1 失败）。2 项真实 Node HTTP/Chromium 集成通过（4.49 秒），沿主仓独占闸门串行：暂扣真实 context 回执后分别拒绝 close/delete，释放原回执后同一 ID/版本完成创建、正式 navigate 新增页面、正式关闭并释放 context；既有硬退出/冷启动场景继续保留原意图及未知身份保护。外部 900 秒期限包含排队，各进程保留 4GiB 数据段保护。
+- Ruff、Python 编译、定向 Pyright 零诊断、Node 语法、作者差异自查及 OpenSpec strict 通过；准确命令、源码指纹、原始输出及实际退出码见 `out/tests/temp/browser_creation_rejection_20261031/artifacts/verification.json`。这不代表 Python owner/lease、无身份接管、完整 operation/shutdown 期限、Windows 或 Gateway/主 Web 验收，5.2/5.4 与整体 21/23 保持未完成。未修改另一会话 Web/Workbench、自动化或共享暂存，未重启共享 debug。
