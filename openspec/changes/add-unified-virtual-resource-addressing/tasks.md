@@ -1697,3 +1697,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 图片／视频预览统一复用既有 `report_failure`，移除局部 logger；原 URI、阶段、异常类别及系统码保持，日志真实 ENOTDIR 只追加次错类别，完整原错和次错留诊断及原异常附注。原图片／视频处理、metadata 和内容构造 AST 保持，不增加预览重试、内容 writer 或错误账本。
 - 旧生产的5项日志故障反例均有效失败；最终25项内容／预览单测通过。集成迁到既有完整应用 lifespan 与 model_stream，经真实 ASGI Session／消息入口覆盖图片、视频×正常／失败日志4项，全部通过（55.27秒、54.22秒）；核原件 API 字节、URI、预览失败标记、canonical、冷 Saver 及封存请求 hash，失败日志后同 Thread 第二轮执行保持原 canonical 前缀与 assembly。直接 pytest 的正式 runner 拒绝、误复用单次执行装具的后继失败、脱离请求上下文直读带 authority URI 的拒绝原件均保留，修正测试调用方式，未改变产品关闭或授权。两项图片用例完成正文后曾在60秒整组清理预算超时，不计通过；两次完整应用生命周期的 suite 总保护改为120秒／4GiB，原 Job 45秒期限保持。套件仅配置在隔离完整源码归档，沿主仓独占闸门串行运行，共享矩阵不改。
 - Ruff、compileall与strict通过；Pyright保留单测12项既有诊断，逐条与完整 HEAD 基线核 AST／规则／完整消息，生产与集成测试零诊断、新增0，不称类型全绿。生产和单测字节与已通过25项的候选一致；后续仅迁移集成装具。准确命令、指纹、原始输出、实际退出码及自查见 `out/tests/temp/attachment_preview_diagnostics_20261031/artifacts/verification.json`。本片不代真实 Gateway 业务代理、独立 Backend 重启、Windows、真实 Provider或全局 URI 验收，2.2／7.2仍未勾、整体51/53；Web／Workbench及其自动化由另一会话推进，协作与MCP显式持有继续延期。
+
+
+### 2026-10-31 内部执行校验失败的公开记录（2.2／7.2部分收口）
+
+- 共用执行消息出口识别内部 Pydantic ValidationError，只公布校验失败事实和异常类别；字段、动态字典键及 input_value 保留在原执行出口的同一异常诊断中，不重复记录。已标记 Provider 的归属优先、既有 I/O 和业务错误合同保持；真实日志写入次错不替换主错。
+- 128 项关联单元回归通过；旧生产的两项内部校验反例有效失败。原两项 I/O 集成通过，新增场景最终 1 passed／37.78秒，经真实 ASGI Session／消息入口及 model_stream 生成执行，核 Job／事件／冷消息流身份、SQLite 与 LLM 日志无原生位置、完整诊断、封存请求 hash，以及同 Thread 后续执行不改旧 canonical 前缀和失败快照。相同新增场景在完整旧生产归档中精确失败于 Job 公开原校验正文；首次新增场景的审计装具漏传 capture identity 已修正，未放宽断言。集成沿主仓独占闸门与外部180秒／4GiB运行，最终候选排队228.91秒后才开始独立测试预算。
+- Ruff、compileall、本change strict通过；Pyright两条既有 _jobs 诊断与原git源码指纹、规则、完整消息及最窄AST相同，零新增，不称类型全绿。作者结构自查不代独立审查。准确命令、源码指纹、原始输出／退出码与核验见 `out/tests/temp/execution_validation_facts_20261031/artifacts/verification.json`。另有全量规范合法性54/0的只读结果，运行前后另一会话Workbench任务有变更，不将其当固定候选或实施完成证据。
+- 本片未验真实Gateway／Web、独立Backend硬重启、Windows或真实Provider，不代全局URI不变量；2.2／7.2及51/53保持。未修改另一会话Web／Workbench、自动化、其暂存或共享Debug，协作与MCP显式持有继续延期。

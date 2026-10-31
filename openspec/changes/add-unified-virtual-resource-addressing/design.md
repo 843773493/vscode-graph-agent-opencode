@@ -65,6 +65,8 @@ ChatGPT／Codex凭据的原生访问与具名access_token／tokens拒绝复用�
 
 上游模型失败从原候选路由事件及共用执行消息出口分离公开事实与完整诊断：Provider 失败标记、判定和执行消息合同统一归 `app.core.failures`，SDK 临时失败分类仍留 runtime，领域错误模块不反向依赖运行时。事件保留候选身份、模型、阶段与异常类别；Job、消息流、Trace、检查点及 LLM 请求的响应/attempt 错误沿原 owner 保存事实，完整原异常只进入诊断。所有旧导入迁齐后物理删除旧定义，不保留转发。原生 I/O 与明确本地业务错误的既有合同、仅推理响应的既有说明、候选顺序、用户取消、本地 preflight、重试次数及最终异常实例/cause 保持；上游恢复后通过原发送入口继续，旧失败记录不被新调用覆盖。
 
+执行内部的 Pydantic `ValidationError` 同样由该执行消息出口分离：公开记录只保存校验失败事实和异常类别，不复制字段名、动态字典键或 `input_value`。消息转换不重复写日志，原执行出口仍记录同一异常及完整输入；日志次错只附到原异常并公开类别，不替换原失败。已标记的 Provider 校验异常继续保留 Provider 归属；原 Job、消息流及模型调用身份、canonical 顺序和已封存请求保持，同一 Thread 可由原消息入口继续。
+
 一次性 v1 历史导入的失败审计同样消费 `app.core.failures`，以既有 migration_id 定位失败；来源/目标 SessionThread、状态与回滚事实继续由原审计记录持有，系统错误码和 JSON 坐标保留。完整异常只留诊断，原实例继续抛出，包括中断；安装前隔离与安装后保留 v2、marker 验收及冷恢复顺序保持，不增加迁移 schema 或第二审计入口。
 
 rollout schema 维护迁移同样在原失败 journal 写入处使用该出口，以原 from/to version 表明失败阶段；SQLite 仍持有原迁移名、校验和与归属。原异常继续抛出，备份恢复、失败 journal 与 recovery_required 提交顺序及 SQL 资产不变；失败不能改写既有 canonical、checkpoint、assembly、view 或追加成功控制事实。
