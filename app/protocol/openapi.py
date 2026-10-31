@@ -30,6 +30,10 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "NodeDebugConfigurationCreateRequest", "NodeDebugConfigurationUpdateRequest",
         "NodeDebugConfigurationActivateRequest", "NodeDebugConfigurationImportRequest",
         "NodeDebugConfigurationCopyRequest", "NodeDebugStartRequest",
+        "WorkspaceResourceDTO", "WorkspaceResourceListDTO", "TerminalResourceCreateRequest",
+        "BrowserResourceCreateRequest", "BrowserResourceOperationRequest",
+        "WorkspaceResourceCommandRequest", "ResourceTransportGrantDTO",
+        "SessionResourceListDTO", "SessionResourceControlRequest", "SessionResourceControlResultDTO",
     )
 }
 

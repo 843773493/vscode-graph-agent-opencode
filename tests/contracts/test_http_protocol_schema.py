@@ -16,11 +16,17 @@ from jsonschema import validate
 from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
+from app.core.identifier import create_prefixed_id
 from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
+)
+from app.schemas.internal_v2.workspace_resource import (
+    BrowserResourceOperationRequest,
+    TerminalResourceCreateRequest,
+    WorkspaceResourceCommandRequest,
 )
 
 _SNAPSHOTS = ("src/clients/web/openapi.json", "src/clients/web/src/types/openapi/index.json")
@@ -160,6 +166,69 @@ def test_node_debug_routes_register_their_actual_public_json_roots(http_openapi:
     assert_public_http_schemas(http_openapi)
 
 
+def test_resource_routes_register_their_actual_requests_and_response_roots(http_openapi: JsonSchemaValue) -> None:
+    prefix = "/api/v1/workspaces/{workspace_id}/resources"
+    schemas = http_openapi["components"]["schemas"]
+    roots: set[str] = set()
+    for path, operations in http_openapi["paths"].items():
+        if not (path in (prefix, prefix + "/terminals", prefix + "/browsers")
+                or path.startswith(prefix + "/{resource_id}")
+                or "/sessions/{session_id}/resources" in path):
+            continue
+        for operation in operations.values():
+            request = operation.get("requestBody", {}).get("content", {}).get("application/json")
+            if request is not None:
+                roots.add(request["schema"]["$ref"].rsplit("/", 1)[1])
+            for status, response in operation["responses"].items():
+                body = response.get("content", {}).get("application/json")
+                if not status.startswith("2") or body is None:
+                    continue
+                envelope = schemas[body["schema"]["$ref"].rsplit("/", 1)[1]]
+                roots.update(branch["$ref"].rsplit("/", 1)[1]
+                             for branch in envelope["properties"]["data"]["anyOf"] if "$ref" in branch)
+    assert {"WorkspaceResourceDTO", "ResourceTransportGrantDTO", "SessionResourceListDTO"} <= roots
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"资源入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("WorkspaceResourceDTO", "owner_revision", {"type": "string"}),
+    ("ResourceThreadRef", "thread_id", {"type": "integer"}),
+    ("ResourceTransportGrantDTO", "resource", {"type": "string"}),
+    ("BrowserResourceOperationRequest", "payload", {"type": "array", "items": {}}),
+    ("TerminalResourceCreateRequest", "cols", {"type": "string"}),
+    ("SessionResourceDTO", "created_at", {"type": "integer"}),
+    ("SessionResourceControlRequest", "params", {"type": "string"}),
+])
+def test_resource_http_schema_rejects_identity_revision_payload_and_nested_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_resource_structure_checks_preserve_pydantic_identity_revision_and_action_constraints(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    session_id = create_prefixed_id("ses")
+    assert TerminalResourceCreateRequest(session_id=session_id, cwd_relative="/etc/hosts").cwd_relative == "/etc/hosts"
+    with pytest.raises(ValidationError, match="cols"):
+        TerminalResourceCreateRequest(session_id=session_id, cols=0)
+    with pytest.raises(ValidationError, match="expected_revision"):
+        WorkspaceResourceCommandRequest(expected_revision=0)
+    with pytest.raises(ValidationError, match="thread_id"):
+        WorkspaceResourceCommandRequest.model_validate({
+            "expected_revision": 1, "thread": {"session_id": session_id, "thread_id": "../thread"},
+        })
+    with pytest.raises(ValidationError, match="action"):
+        BrowserResourceOperationRequest.model_validate({"expected_revision": 1, "action": "unknown_action"})
+
+
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("NodeDebugStartRequest", "path", {"type": "integer"}),
     ("NodeDebugStateDTO", "call_stack", {"type": "object"}),
@@ -233,6 +302,8 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "WorkspaceFileCreateRequest", "WorkspaceDirectoryKeyDTO", "WorkspaceFileMutationIntentDTO",
     "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationItemDTO", "WorkspaceFileNodeDTO", "FileTreeShortcutDTO",
     "NodeDebugStateDTO", "NodeDebugConfigurationDTO", "NodeDebugVariableDTO", "NodeDebugSetBreakpointParams",
+    "WorkspaceResourceDTO", "ResourceThreadRef", "TerminalResourceCreateRequest",
+    "BrowserResourceOperationRequest", "SessionResourceControlResultDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
