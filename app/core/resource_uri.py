@@ -476,6 +476,16 @@ def parse_attachment_uri(
     return parsed
 
 
+def parse_message_attachment_uri(uri: str, *, local_gateway_id: str | None = None) -> ParsedResourceUri:
+    """消息可引用普通文件或受管附件；可解析不代表获得对应 owner 的能力。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    if parsed.kind != "files":
+        return parse_attachment_uri(uri, local_gateway_id=local_gateway_id, require_file=True)
+    if len(parsed.tail_segments) == 1:
+        raise ResourceUriGrammarError("malformed_path", "消息附件必须明确指向文件，不能使用目录根")
+    return parsed
+
+
 def workspace_agent_spec_display_uri(workspace_id: str) -> str:
     """构造并校验 workspace AGENTS 规范 display URI。"""
     return resource_display_uri(

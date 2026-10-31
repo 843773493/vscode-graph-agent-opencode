@@ -6,7 +6,12 @@ from collections.abc import Callable, Mapping
 from html import escape
 from xml.etree.ElementTree import fromstring
 
-from app.core.resource_uri import file_uri_child, file_uri_root, parse_attachment_uri
+from app.core.resource_uri import (
+    file_uri_child,
+    file_uri_root,
+    parse_attachment_uri,
+    parse_message_attachment_uri,
+)
 
 
 class RolloutAttachmentProjection:
@@ -41,7 +46,11 @@ class RolloutAttachmentProjection:
 
         def project(file_id: str) -> dict[str, str]:
             if file_id not in cache:
+                parsed = parse_message_attachment_uri(file_id)
+                if parsed.attachment_id is None:
+                    return {"file_id": file_id}
                 reference = self._attachment_ref_projector(session_id, thread_id, file_id)
+                parse_attachment_uri(reference["file_id"], require_file=True)
                 directory_uri = reference.get("directory_uri")
                 if directory_uri is not None and directory_uri != file_uri_root(reference["file_id"]):
                     raise ValueError("source-mismatch: 投影附件目录与文件身份不一致")
@@ -58,7 +67,10 @@ class RolloutAttachmentProjection:
                 for attachment in attachments:
                     if not isinstance(attachment, Mapping) or not isinstance(attachment.get("file_id"), str):
                         raise TypeError("message attachment projection 必须使用 typed logical file_id")
-                    if "directory_uri" in attachment and attachment["directory_uri"] is not None and attachment["directory_uri"] != file_uri_root(attachment["file_id"]):
+                    parsed = parse_message_attachment_uri(attachment["file_id"])
+                    if attachment.get("directory_uri") is not None and (
+                        parsed.attachment_id is None or attachment["directory_uri"] != file_uri_root(attachment["file_id"])
+                    ):
                         raise ValueError("source-mismatch: typed 附件目录与文件不一致")
                     mapped.append({**attachment, **project(attachment["file_id"])})
                 projected["attachments"] = mapped
@@ -77,13 +89,12 @@ class RolloutAttachmentProjection:
             file_id = metadata.get("file_id")
             if not isinstance(file_id, str):
                 raise TypeError("generated attachment block 必须有 typed file_id")
-            if "://" not in file_id:
-                blocks.append(block)
-                continue
-            parse_attachment_uri(file_id, require_file=True)
+            parsed = parse_message_attachment_uri(file_id)
             if metadata.get("schema_version") != 1 or metadata.get("path") != file_id:
                 raise ValueError("source-mismatch: generated attachment block 缺少精确 logical reference")
-            if "directory_uri" in metadata and metadata["directory_uri"] != file_uri_root(file_id):
+            if "directory_uri" in metadata and (
+                parsed.attachment_id is None or metadata["directory_uri"] != file_uri_root(file_id)
+            ):
                 raise ValueError("source-mismatch: generated attachment block 目录与文件不一致")
             reference = project(file_id)
             projected_block = {**block, "metadata": {**metadata, **reference, "path": reference["file_id"]}}
@@ -97,6 +108,8 @@ class RolloutAttachmentProjection:
                 original_attributes = dict(element.attrib)
                 directory_uri = reference.get("directory_uri")
                 if "directory_uri" in element.attrib:
+                    if parsed.attachment_id is None:
+                        raise ValueError("source-mismatch: 普通文件不能声明受管附件目录")
                     source_directory = file_uri_root(file_id)
                     if (element.attrib["directory_uri"] != source_directory
                             or element.attrib.get("output_directory") != file_uri_child(source_directory, "derived")):

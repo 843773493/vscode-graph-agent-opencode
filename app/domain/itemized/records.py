@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from xml.etree import ElementTree
 
-from app.core.resource_uri import file_uri_child, file_uri_root, parse_attachment_uri
+from app.core.resource_uri import (
+    file_uri_child,
+    file_uri_root,
+    parse_message_attachment_uri,
+)
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -240,9 +244,9 @@ class RuntimeNoticePayload:
         for attachment in self.attachments:
             raw = _strict_mapping(attachment, _RUNTIME_NOTICE_ATTACHMENT_FIELDS, "runtime_notice.attachment")
             file_id = _non_empty_string(raw.get("file_id"), "runtime_notice.attachment.file_id")
-            parse_attachment_uri(file_id, require_file=True)
+            parsed = parse_message_attachment_uri(file_id)
             directory_uri = raw.get("directory_uri")
-            if directory_uri is not None and directory_uri != file_uri_root(file_id):
+            if directory_uri is not None and (parsed.attachment_id is None or directory_uri != file_uri_root(file_id)):
                 raise ItemSchemaError("runtime_notice 附件目录与文件身份不一致")
             references[file_id] = directory_uri
             for key, value in raw.items():

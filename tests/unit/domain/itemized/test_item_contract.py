@@ -75,7 +75,7 @@ def test_user_attachment_identity_survives_canonical_serialization_and_job_proje
         assert "directory_uri" not in restored.payload["attachments"][0]
 
 
-@pytest.fixture(params=["legacy", "directory"])
+@pytest.fixture(params=["legacy", "directory", "file"])
 def notice_attachment_payload(request):
     uri = "boxteam://workspace/notice-tests/resources/session/ses_019c3635a6c278efb831fe265bdcd656/attachments/att_00000000000000000000000000000000"
     metadata = {
@@ -86,6 +86,9 @@ def notice_attachment_payload(request):
     if request.param == "directory":
         uri = directory + "/original/content"
         metadata.update(file_id=uri, path=uri, directory_uri=directory)
+    elif request.param == "file":
+        uri = "boxteam://workspace/notice-tests/resources/files/root/input.png"
+        metadata.update(file_id=uri, path=uri)
     payload = {
         "prompt": "<system_reminder>私有正文</system_reminder>",
         "display_part": {"kind": "generated_session_result", "text": "正在处理结果。", "provenance": {}},

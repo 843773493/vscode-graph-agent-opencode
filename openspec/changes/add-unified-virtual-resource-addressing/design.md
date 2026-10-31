@@ -334,6 +334,8 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 工作区文件附件复用 `WorkspaceFilePaths` 解析相对路径、绝对路径及 files URI，在 `MessageService.create` 返回 DTO 前统一引用、默认文件名和 MIME；Job、SSE 与 canonical 消费同一对象。`UserContentBuilder` 的直接入口也复用同一归一方法，删除附件自带的原生路径解析器及旧相对路径输出。Session 附件仍调用 blob owner 的发布校验与预览端口，不复制正文、不改写既有历史。用户正文保持原字节；视频抽帧以临时目录为 cwd、仅传相对文件名，文件 I/O 错误在最终访问边界使用 URI 和 errno，原始异常保留为 cause。
 
+消息附件的纯解析允许 files 文件、受管附件文件及已封存历史附件，复用公共 grammar；受管附件 parser 继续保持严格目录 owner 语义。投影遇到普通文件保留原 URI，不调用目录 owner 或附加目录可用性；typed 引用和生成块均拒绝普通文件伪造受管目录。目录 owner 的消息事实端口先核对完整 canonical/使用索引，再仅返回受管引用供 pin 结算与恢复；fork 同样只收集受管目录依赖。工具读取的目标仍须为受管附件，并核原模型调用 selection；遍历混合附件使用广义消息解析，不把普通文件视为目录能力。投影回执无论是否携带目录字段，都须校验受管文件 URI，不修改 canonical 或重建历史请求。
+
 ### Fork容器模板与资源目标检查
 
 统一owner登记session集合根/Session/Thread三种domain_object模板；使用既有session kind，不新增thread或workspace URI kind，不将领域对象转成文件树。source Thread精确归属，target用容器URI和创建意图；view/revision/anchor仍是兄弟字段。登记后必须同批迁构造器、parser、scope路由和消费者，当前只支持非空Session尾段的实现不构成对新模板已交付的证据。

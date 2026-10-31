@@ -25,7 +25,7 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 
 
 class AttachmentMessageReader(Protocol):
-    """canonical owner 提供接受与使用事实；附件 store 不读取 rollout 数据库。"""
+    """canonical owner 核完整消息后提供受管附件事实；普通文件不参与目录 pin 结算。"""
 
     def attachment_message_references(self, session_id: str, thread_id: str, message_id: str) -> tuple[str, ...] | None: ...
 

@@ -1682,3 +1682,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原生产三平台路径均以 200 成功回包，三个定向反例有效失败；最终 10 项单元与 2 项集成通过。集成在完整 HEAD 归档叠加本片改动，经真实 Agent／ToolNode 与 model_stream 建立 tracked 状态后，仅破坏原 untrack 已完成后的回执；覆盖六类非法地址、原 mutation 只增加一次控制 revision、同入口重试、冷 Saver 状态及原 assembly/hash 字节。原 Skill 模式与回退恢复场景同批通过。新增场景已合入原注册测试文件，默认套件无需额外选择器即可运行两项；最终复验沿主仓独占闸门及原 240 秒 matrix，测试本身 130.09 秒，总 137.53 秒，排队 0.004 秒。
 - 序列化 JSON Schema 与完整 HEAD 相同，不修改 proto、Web 生成物或外部结构。新增／修改测试 Ruff 与 Pyright 通过；原 API 的 27 条 Ruff／6 条 Pyright 诊断与完整 HEAD 按规则、完整消息及最窄 AST 逐项相同，零新增，不称静态全绿。作者 AST 检查不代独立审查。准确命令、源码指纹、raw、退出码与比较收据在 `out/tests/temp/skill_untrack_uri_20261031/artifacts/verification.json`。
 - 本片不代替全局 URI 不变量、Gateway/Web、Windows 或进程重启验收；2.2／7.2 仍未勾，整体 51/53。未修改另一会话的 Web／Workbench、自动化、矩阵或共享 debug；团队协作及 MCP 显式持有继续按用户裁定延期。
+
+
+### 2026-10-31 普通文件与受管目录的混合附件归属（2.2／7.2部分收口）
+
+- 真实消息入口反例证实：相对、绝对及URI输入已正确归一为files引用，但与上传附件混合接受时，投影及pin结算误将普通文件交给目录owner。消息附件纯解析复用中央grammar，受管附件parser保持严格语义；投影、RuntimeNotice、使用查询、pin结算与冷恢复、fork收集及原工具selection读取迁齐类型分派。普通文件保留原URI，不生成目录／claim／可用性；完整canonical／使用索引核验不减弱，生成块不再允许原生路径绕过，受管回执即使无directory_uri也须是附件文件URI。
+- 663项领域／投影单测、79项目录owner回归、16项真实消息／目录／跨工作区fork入口及8项运行时生命周期回归通过；三种输入的新场景均覆盖接受、历史、fork、使用查询与结算。正式matrix产品流程1项通过（124.21秒），经真实Gateway、model_stream、PTY、产品fork及独立Backend硬重启验证混合附件执行、引用再使用、冷读取、canonical原字节和全部已封存请求hash；测试补齐已有fork_deadlines装具，不绕过原进程外期限监督。
+- Ruff、compileall与本change strict通过；Pyright对同一11文件的完整HEAD归档基线为162条、候选157条，按文件／规则／完整消息／重复次数比对无新增，消除产品测试原有5条，仍非类型全绿。原生输入authority断言修正、旧fork helper漏传fixture、直接pytest触发正式matrix装具拒绝等失败原件均保留，不计产品通过。
+- 准确命令、源码指纹、红绿原件和收据见`out/tests/temp/attachment_projection_uri_20261031/artifacts/verification.json`。完整源码归档隔离验证，集成串行沿主仓独占闸门与4GiB数据段／硬超时，不修改Web／Workbench、其自动化／矩阵、共享debug或他人暂存。未验证Windows、真实Provider及跨Gateway真实网络，不代URI全局不变量，2.2／7.2保持未勾，整体51/53；协作及显式MCP持有继续延期。

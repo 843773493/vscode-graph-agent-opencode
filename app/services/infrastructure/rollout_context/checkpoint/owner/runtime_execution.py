@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.turn_terminal_status import ToolResultCompletion
-from app.core.resource_uri import parse_attachment_uri
+from app.core.resource_uri import parse_message_attachment_uri
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
@@ -124,7 +124,7 @@ class RuntimeExecutionOwnerMixin:
         )
 
     def attachment_message_references(self, session_id: str, thread_id: str, message_id: str) -> tuple[str, ...] | None:
-        """精确读取已接受消息的附件使用；缺消息与损坏提交必须区分。"""
+        """核完整 canonical 使用索引后，仅向目录 owner 返回受管附件；缺消息与损坏须区分。"""
         storage = self._storage.storage
         item_id = f"item-{message_id}"
         try:
@@ -162,7 +162,8 @@ class RuntimeExecutionOwnerMixin:
                 if references != tuple(entry["file_id"] for entry in attachments):
                     raise RuntimeError("canonical 附件正文与使用索引不一致")
                 projected = self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, {"attachments": list(attachments)})
-                return tuple(entry["file_id"] for entry in projected["attachments"])
+                return tuple(entry["file_id"] for entry in projected["attachments"]
+                             if parse_message_attachment_uri(entry["file_id"]).attachment_id is not None)
         except RolloutNotMaterializedError:
             return None
 
@@ -185,7 +186,7 @@ class RuntimeExecutionOwnerMixin:
                         "attachments": [{"file_id": uri} for uri in references],
                     })
                     for entry in projected["attachments"]:
-                        parsed = parse_attachment_uri(entry["file_id"])
+                        parsed = parse_message_attachment_uri(entry["file_id"])
                         # 未继承的外部引用可以保留在历史中，不归本 Session owner。
                         if (parsed.scope_id == workspace_id and parsed.attachment_id == attachment_id
                                 and (parsed.kind == "attachments" or parsed.tail_segments[0] == session_id)):

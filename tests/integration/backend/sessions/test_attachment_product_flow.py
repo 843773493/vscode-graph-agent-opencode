@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
@@ -14,6 +15,11 @@ import pytest
 
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child, parse_resource_uri
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     _fork,
@@ -29,6 +35,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_case as communication_case,  # noqa: PLC0414
 )
 from tests.support.api_helpers import create_session
+from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
 def _sqlite_sidecar_boundary_workspace(context: TestRunContext, model_port: int, gateway_port: int) -> Path:
@@ -44,12 +51,16 @@ def _sqlite_sidecar_boundary_workspace(context: TestRunContext, model_port: int,
 @pytest.mark.parametrize("communication_case", [{"resources": True, "prepare_workspace": _sqlite_sidecar_boundary_workspace}], indirect=True)
 async def test_upload_shell_read_fork_and_restart_share_original_directory(
     communication_case: CommunicationCase,
+    fork_deadlines: ForkDeadlineRegistry,
 ) -> None:
     case = communication_case
+    regular_file = case.workspace / "ordinary-input.txt"
+    regular_file.write_text("ordinary-file-for-product-flow", encoding="utf-8")
     session = await create_session(case.client, "附件完整处理来源")
     await case.plan(session, [{"content": "附件已接受"}])
     response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "保留原件并处理附件", "attachments": [
+            {"file_id": regular_file.name},
             upload(b"original-for-product-flow").model_dump(mode="json"),
         ]}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
@@ -57,7 +68,9 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     await _completed(case.client, response.json()["data"]["job_id"])
     history = await case.client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
     assert history.status_code == 200, history.text
-    original, = history.json()["data"]["items"][0]["user_messages"][0]["attachments"]
+    ordinary, original = history.json()["data"]["items"][0]["user_messages"][0]["attachments"]
+    assert parse_resource_uri(ordinary["file_id"]).kind == "files"
+    assert ordinary.get("directory_uri") is None and ordinary.get("availability") is None
     derived = file_uri_child(original["directory_uri"], "derived", "result.txt")
     program = (
         "from pathlib import Path; "
@@ -75,17 +88,21 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
         {"content": "派生文件已读取"},
     ])
     response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
-        "message": {"content": "在目录中处理原件并读取结果"},
+        "message": {"content": "在目录中处理原件并读取结果", "attachments": [
+            {"file_id": ordinary["file_id"]}, {"file_id": original["file_id"]},
+        ]},
         "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     shell = case.tool_result(session, calls[0] + ":tool-call:process-original")
     assert shell["tool_outcome"] == "success" and shell["execution_confirmed"] is True, shell
+    assert isinstance(shell["content"], str)
     assert json.loads(shell["content"])["exit_code"] == 0
     assert "attachment-processing-complete" in shell["content"]
     read = case.tool_result(session, calls[1] + ":tool-call:read-derived")
     assert read["tool_outcome"] == "success" and read["execution_confirmed"] is True, read
+    assert isinstance(read["content"], str)
     assert "original-for-product-flow processed" in read["content"], read
     saved = await case.client.get("/api/v1/workspace/files/content", params={"path": derived})
     assert saved.status_code == 200 and saved.json()["data"]["content"] == "original-for-product-flow processed", saved.text
@@ -96,9 +113,15 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     source_canonical = native_io_path(case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes()
     point = await case.client.get(f"/api/v1/sessions/{session}/fork-source-point", params={"mode": "full_rollout_copy"})
     assert point.status_code == 200, point.text
-    fork = await _fork(case.client, session, point.json()["data"], mode="full_rollout_copy", key="attachment-product-flow")
+    fork = await _fork(case.client, session, point.json()["data"], fork_deadlines, mode="full_rollout_copy", key="attachment-product-flow")
+    assert isinstance(fork["session"], dict)
     target = fork["session"]["session_id"]
+    assert isinstance(target, str)
     assert target != session
+    resources = fork["resources"]
+    assert isinstance(resources, list)
+    assert [resource["resource_uri"] for resource in resources] == [original["file_id"]]
+    assert isinstance(fork["source_uri"], str)
     assert parse_resource_uri(fork["source_uri"]).gateway_authority == case.gateway_id
     assert parse_resource_uri(fork["source_uri"], local_gateway_id=case.gateway_id) == parse_resource_uri(
         point.json()["data"]["source_uri"], local_gateway_id=case.gateway_id,
@@ -107,13 +130,15 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     await case.hard_restart()
     history = await case.client.post(f"/api/v1/sessions/{target}/history", json={"direction": "head", "turns": 10})
     assert history.status_code == 200, history.text
-    restored, = history.json()["data"]["items"][0]["user_messages"][0]["attachments"]
+    cold_ordinary, restored = history.json()["data"]["items"][0]["user_messages"][0]["attachments"]
+    assert cold_ordinary == ordinary
     assert restored["file_id"] == original["file_id"]
     assert restored["directory_uri"] == original["directory_uri"]
     assert restored["availability"] == "available"
     target_calls = await case.plan(target, [
         _tool("read_file", {"path": original["file_id"]}, "cold-original"),
         _tool("read_file", {"path": derived}, "cold-derived"),
+        _tool("read_file", {"path": ordinary["file_id"]}, "cold-ordinary"),
         {"content": "重启后原件与处理结果均可用"},
     ])
     response = await case.client.post(f"/api/v1/sessions/{target}/messages", json={
@@ -123,13 +148,23 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     # 冷读使用真实新执行取得 capability，不能由测试替目标补建执行或关联。
-    for call, name, expected in zip(target_calls[:2], ("cold-original", "cold-derived"),
-                                    ("original-for-product-flow", "original-for-product-flow processed"), strict=True):
+    for call, name, expected in zip(target_calls[:3], ("cold-original", "cold-derived", "cold-ordinary"),
+                                    ("original-for-product-flow", "original-for-product-flow processed", "ordinary-file-for-product-flow"), strict=True):
         result = case.tool_result(target, call + ":tool-call:" + name)
         assert result["tool_outcome"] == "success" and result["execution_confirmed"] is True, result
+        assert isinstance(result["content"], str)
         assert expected in result["content"], result
     assert native_io_path(case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes() == source_canonical
     assert native_io_path(case.main_thread_node(target) / "rollout/rollout.jsonl").read_bytes().startswith(source_canonical)
+    verified = set()
+    for owner_session in (session, target):
+        with sqlite3.connect(native_io_path(case.main_thread_node(owner_session) / "rollout/index.sqlite")) as connection:
+            for call_id, raw in connection.execute("SELECT model_call_id,snapshot_json FROM context_assemblies"):
+                snapshot = ContextAssemblySnapshot.from_dict(load_snapshot(connection, raw))
+                snapshot.validate_hashes()
+                assert normalize_wire_request(case.request(call_id)) == snapshot.request_hash_preimage
+                verified.add(call_id)
+    assert verified == set(case.planned_calls)
     case.record("attachment-product-flow", {
         "source_session": session, "fork": fork, "attachment": original, "sqlite_path_characters": len(str(index)),
         "source_calls": calls, "target_calls": target_calls,

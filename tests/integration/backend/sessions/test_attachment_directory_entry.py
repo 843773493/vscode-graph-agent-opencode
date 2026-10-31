@@ -24,7 +24,11 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    reset_current_gateway_id,
+    set_current_gateway_id,
+)
 from app.protocol.generated.boxteam.workspace.v2.message_pb2 import (
     AttachmentRef as ProtocolAttachmentRef,
 )
@@ -108,6 +112,54 @@ async def test_message_uploads_are_independent_and_canonical_acceptance_protects
     with closing(AttachmentBlobStore(container.workspace_root, path_resolver=container.session_service.path_resolver)) as cold:
         for ref in refs:
             assert cold.read(session.session_id, ref.file_id).data == body
+
+
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+async def test_regular_file_and_managed_attachments_share_history_and_fork_without_owner_confusion(
+    startup_container: AppContainer, fork_gateway_request_context: None,
+    monkeypatch: pytest.MonkeyPatch, input_kind: str,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    container = startup_container
+    for owner in (container.terminal_resource_owner, container.browser_resource_owner):
+        monkeypatch.setattr(owner._transport, "list_resources", AsyncMock(return_value=[]))
+    file = container.workspace_root / "source-file.txt"
+    file.write_text("普通文件正文 Ω", encoding="utf-8")
+    uri = resource_display_uri(scope="workspace", scope_id=container.workspace_id,
+                               kind="files", tail_segments=("root", file.name),
+                               gateway_authority=get_current_gateway_id())
+    value = {"relative": file.name, "absolute": str(file), "uri": uri}[input_kind]
+    session = await container.session_service.create(SessionCreateRequest(title="混合附件归属"))
+    message = await container.message_service.create(session.session_id, MessageCreateRequest(
+        content="普通文件和上传目录使用各自owner", attachments=[
+            AttachmentRef(file_id=value), upload(b"managed original"),
+        ],
+    ))
+    assert message.attachments[0].file_id == uri
+    assert message.attachments[0].directory_uri is None
+    accept_queued_message(container.message_service, message)
+    saver = container.checkpointer
+    before = [item.to_dict() for item in saver._storage.storage.read_items(session.session_id, message.thread_id)]
+    history = saver.load_history(session.session_id, message.thread_id, TurnHistoryLoadRequest(direction="tail"))
+    user, = history.items[0].user_messages
+    assert [ref.file_id for ref in user.attachments] == [ref.file_id for ref in message.attachments]
+    context = _production_fork_context(container)
+    request = await _fork_request(context, session.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
+    result = await context.forks.fork(request)
+    # 普通文件引用不冒充受管目录，不生成目录claim或来源重映射。
+    assert len(result.resources) == 1 and result.resources[0].resource_uri == message.attachments[1].file_id
+    copied = saver.load_history(result.session.session_id, result.thread_id, TurnHistoryLoadRequest(direction="tail"))
+    assert [ref.file_id for ref in copied.items[0].user_messages[0].attachments] == [ref.file_id for ref in message.attachments]
+    assert [item.to_dict() for item in saver._storage.storage.read_items(result.session.session_id, result.thread_id)] == before
+    assert [item.to_dict() for item in saver._storage.storage.read_items(session.session_id, message.thread_id)] == before
+    assert file.read_text(encoding="utf-8") == "普通文件正文 Ω"
+    managed = message.attachments[1]
+    assert saver.attachment_message_references(session.session_id, message.thread_id, message.message_id) == (managed.file_id,)
+    attachment_id = parse_attachment_uri(managed.file_id).attachment_id
+    assert attachment_id is not None
+    assert saver.attachment_reference_in_use(session.session_id, message.thread_id, attachment_id)
+    assert container.attachment_blob_store.recover_session(session.session_id, messages=saver) == ()
 
 
 @pytest.mark.parametrize("size", [(900, 600), (120, 80)])

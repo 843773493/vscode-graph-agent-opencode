@@ -14,7 +14,7 @@ from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWirePro
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.failures import mark_public_failure
 from app.core.model_request_context import SummaryCandidateScope
-from app.core.resource_uri import parse_attachment_uri
+from app.core.resource_uri import parse_attachment_uri, parse_message_attachment_uri
 from app.core.sqlite_state import utc_now_text
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -473,8 +473,7 @@ class ContextDispatchOwnerMixin:
                 continue
             attachments = payload.get("attachments", ())
             if any(isinstance(ref, Mapping) and isinstance(ref.get("file_id"), str)
-                   and "://" in ref["file_id"]
-                   and parse_attachment_uri(ref["file_id"], local_gateway_id=get_current_gateway_id(), require_file=True).display_uri == target
+                   and parse_message_attachment_uri(ref["file_id"], local_gateway_id=get_current_gateway_id()).display_uri == target
                    for ref in attachments):
                 return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
         error = PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")

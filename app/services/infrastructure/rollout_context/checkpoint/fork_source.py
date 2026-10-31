@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_attachment_uri, parse_resource_uri
+from app.core.resource_uri import parse_message_attachment_uri, parse_resource_uri
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import (
     ForkCapturedPoint,
@@ -84,10 +84,8 @@ if TYPE_CHECKING:
 def _attachment_references(references: Iterable[tuple[str, int]]) -> tuple[tuple[str, bool], ...]:
     result: list[tuple[str, bool]] = []
     for uri, required in references:
-        if "://" not in uri:
-            continue
-        parse_attachment_uri(uri, require_file=True)
-        result.append((uri, bool(required)))
+        if parse_message_attachment_uri(uri).attachment_id is not None:
+            result.append((uri, bool(required)))
     return tuple(result)
 
 @dataclass(frozen=True, slots=True)
