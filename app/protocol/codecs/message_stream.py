@@ -29,6 +29,12 @@ _PAYLOAD_FIELDS = event_payload_fields(
 
 
 @cache
+def _required_envelope_fields(descriptor: Descriptor) -> tuple[FieldDescriptor, ...]:
+    # 非 presence 标量是既有必填信封；关联身份、时间与 payload 沿各自合同转换。
+    return tuple(field for field in descriptor.fields if not field.has_presence)
+
+
+@cache
 def _identity_fields(descriptor: Descriptor) -> tuple[str, ...]:
     # 可选字符串是信封关联身份；job_id 沿既有合同独立传输，不从 payload 补齐或核冲突。
     return tuple(field.name for field in descriptor.fields
@@ -43,15 +49,10 @@ def message_stream_to_proto(
     # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
     validate_session_id(_required_string(value, "session_id"))
     validate_thread_id(_required_string(value, "thread_id"))
-    event = message_stream_pb2.MessageStreamEvent(
-        event_id=_required_string(value, "event_id"),
-        session_id=_required_string(value, "session_id"),
-        thread_id=_required_string(value, "thread_id"),
-        turn_id=_required_string(value, "turn_id"),
-        turn_stream_id=_required_string(value, "turn_stream_id"),
-        event_seq=_required_int(value, "event_seq"),
-        type=_required_string(value, "type"),
-    )
+    event = message_stream_pb2.MessageStreamEvent()
+    readers = {FieldDescriptor.TYPE_STRING: _required_string, FieldDescriptor.TYPE_INT64: _required_int}
+    for field in _required_envelope_fields(cast(Descriptor, event.DESCRIPTOR)):
+        setattr(event, field.name, readers[field.type](value, field.name))
     payload_field = _PAYLOAD_FIELDS.get(event.type)
     if payload_field is None:
         raise ValueError(f"消息流事件类型未注册: {event.type}")
@@ -121,16 +122,9 @@ def message_stream_to_json(
     payload = map_enum_values(message_to_json(payload_message), cast(Descriptor, payload_message.DESCRIPTOR), to_proto=False)
     if value.type == "stream.snapshot":
         payload = _denormalize_snapshot(payload)
-    result: dict[str, Any] = {
-        "event_id": value.event_id,
-        "session_id": value.session_id,
-        "thread_id": value.thread_id,
-        "turn_id": value.turn_id,
-        "turn_stream_id": value.turn_stream_id,
-        "event_seq": value.event_seq,
-        "type": value.type,
-        "payload": payload,
-    }
+    result: dict[str, Any] = {field.name: getattr(value, field.name)
+                              for field in _required_envelope_fields(cast(Descriptor, value.DESCRIPTOR))}
+    result["payload"] = payload
     if value.HasField("emitted_at"):
         result["emitted_at"] = value.emitted_at.ToDatetime().isoformat().replace(
             "+00:00", "Z"

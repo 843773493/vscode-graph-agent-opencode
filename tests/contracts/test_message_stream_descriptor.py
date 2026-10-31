@@ -47,6 +47,86 @@ def extended_message_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(message_stream_pb2, "MessageStreamEvent", message_factory.GetMessageClass(descriptor))
 
 
+@pytest.fixture(params=[
+    ("source_label", FieldDescriptorProto.TYPE_STRING, "source_descriptor"),
+    ("replay_seq", FieldDescriptorProto.TYPE_INT64, 2**53 + 1),
+])
+def required_envelope_field(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> tuple[str, object]:
+    """编译带新非可选标量的真实消息，证明信封映射不依赖字段清单。"""
+    name, field_type, value = request.param
+    file = FileDescriptorProto()
+    message_stream_pb2.DESCRIPTOR.CopyToProto(file)
+    envelope = next(message for message in file.message_type if message.name == "MessageStreamEvent")
+    envelope.field.add(name=name, number=40, label=FieldDescriptorProto.LABEL_OPTIONAL, type=field_type)
+    pool = DescriptorPool()
+    for dependency in (struct_pb2.DESCRIPTOR, timestamp_pb2.DESCRIPTOR):
+        pool.AddSerializedFile(dependency.serialized_pb)
+    pool.Add(file)
+    descriptor = pool.FindMessageTypeByName("boxteam.workspace.message.v1.MessageStreamEvent")
+    monkeypatch.setattr(message_stream_pb2, "MessageStreamEvent", message_factory.GetMessageClass(descriptor))
+    return name, value
+
+
+def test_descriptor_required_envelope_field_encodes_without_a_field_list(
+    event: dict[str, object], required_envelope_field: tuple[str, object],
+) -> None:
+    name, value = required_envelope_field
+    source = {**event, name: value, "type": "stream.opened", "payload": {"status": "open"}}
+    original = deepcopy(source)
+    wire = message_stream_to_proto(source)
+    decoded = message_stream_pb2.MessageStreamEvent.FromString(wire.SerializeToString())
+    assert getattr(decoded, name) == value
+    assert source == original
+
+
+def test_descriptor_required_envelope_field_decodes_without_a_field_list(
+    event: dict[str, object], required_envelope_field: tuple[str, object],
+) -> None:
+    name, value = required_envelope_field
+    wire = message_stream_to_proto({**event, name: value, "type": "stream.opened", "payload": {"status": "open"}})
+    setattr(wire, name, value)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(wire.SerializeToString()))
+    assert decoded[name] == value and type(decoded[name]) is type(value)
+
+
+def test_descriptor_required_envelope_wire_defaults_keep_native_types(
+    event: dict[str, object], required_envelope_field: tuple[str, object],
+) -> None:
+    name, value = required_envelope_field
+    wire = message_stream_to_proto({**event, name: value, "type": "stream.opened", "payload": {"status": "open"}})
+    wire.ClearField(name)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(wire.SerializeToString()))
+    assert decoded[name] == ("" if isinstance(value, str) else 0)
+    assert type(decoded[name]) is type(value)
+
+
+@pytest.mark.parametrize("sequence", [0, -(2**63), 2**63 - 1])
+def test_current_envelope_int64_range_remains_native_json_integer(event: dict[str, object], sequence: int) -> None:
+    source = {**event, "event_seq": sequence, "type": "stream.opened", "payload": {"status": "open"}}
+    wire = message_stream_to_proto(source)
+    decoded = message_stream_to_json(message_stream_pb2.MessageStreamEvent.FromString(wire.SerializeToString()))
+    assert decoded["event_seq"] == sequence and type(decoded["event_seq"]) is int
+
+
+@pytest.mark.parametrize("invalid", [None, True, [], {}])
+def test_descriptor_required_envelope_field_keeps_strict_input_types(
+    event: dict[str, object], required_envelope_field: tuple[str, object], invalid: object,
+) -> None:
+    name, expected = required_envelope_field
+    error_type = ValueError if isinstance(expected, str) else TypeError
+    with pytest.raises(error_type, match=name):
+        message_stream_to_proto({**event, name: invalid, "type": "stream.opened", "payload": {"status": "open"}})
+
+
+def test_descriptor_required_envelope_field_cannot_be_omitted(
+    event: dict[str, object], required_envelope_field: tuple[str, object],
+) -> None:
+    name, expected = required_envelope_field
+    error_type = ValueError if isinstance(expected, str) else TypeError
+    with pytest.raises(error_type, match=name):
+        message_stream_to_proto({**event, "type": "stream.opened", "payload": {"status": "open"}})
+
+
 @pytest.mark.usefixtures("extended_message_stream")
 @pytest.mark.parametrize("origin", ["envelope", "payload", "both"])
 def test_new_descriptor_identity_is_encoded_and_decoded_without_a_field_list(
