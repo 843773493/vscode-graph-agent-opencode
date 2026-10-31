@@ -122,6 +122,46 @@ def test_ssh_config_failure_keeps_raw_process_output_in_diagnostics(
     run.assert_called_once_with(["ssh", "-G", "dev"], capture_output=True, text=True, timeout=10, check=False)
 
 
+@pytest.mark.parametrize("rejected_ssh_config", [
+    "/private/ssh-config-location-marker/config", r"C:\Users\ssh-config-location-marker\config",
+    r"\\ssh-config-location-marker\share\config",
+], indirect=True)
+@pytest.mark.parametrize("entry", ["list", "resolve"])
+def test_ssh_config_process_failure_survives_diagnostic_sink_failure(
+    rejected_ssh_config: tuple[Path, str, Mock], entry: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    config, detail, run = rejected_ssh_config
+    sink = OSError(errno.ENOSPC, "log sink", "/private/ssh-log-location-marker/log")
+    emit = Mock(side_effect=sink)
+    monkeypatch.setattr(caplog.handler, "emit", emit)
+    with pytest.raises(RuntimeError) as raised:
+        if entry == "list":
+            list_user_ssh_hosts(config)
+        else:
+            resolve_user_ssh_host("dev", config)
+    assert str(raised.value) == (
+        "解析 SSH Host dev 失败: stage=effective_config, returncode=255, diagnostic_sink_error=OSError"
+    )
+    assert "location-marker" not in str(raised.value)
+    emit.assert_called_once()
+    record = emit.call_args.args[0]
+    assert record.exc_info is not None
+    original = raised.value.__cause__
+    assert isinstance(original, RuntimeError) and original is record.exc_info[1]
+    notes = "\n".join(original.__notes__)
+    assert f"stdout: {detail}" in notes and f"stderr: {detail}" in notes
+    assert str(sink) in notes
+    run.assert_called_once_with(["ssh", "-G", "dev"], capture_output=True, text=True, timeout=10, check=False)
+    # 配置修复后同入口重新解析，不因日志次错缓存失败或空连接清单。
+    run.return_value = subprocess.CompletedProcess(["ssh", "-G", "dev"], 0, "hostname example.invalid\nuser developer\nport 22\n", "")
+    if entry == "list":
+        assert [host.alias for host in list_user_ssh_hosts(config)] == ["dev"]
+    else:
+        assert resolve_user_ssh_host("dev", config).hostname == "example.invalid"
+    assert run.call_count == 2
+
+
 @pytest.fixture
 def unreadable_ssh_config(
     ssh_config_with_includes: Path, monkeypatch: pytest.MonkeyPatch,
@@ -409,7 +449,6 @@ def test_ssh_config_diagnostic_failure_does_not_replace_read_error(
     sink = OSError(errno.ENOSPC, "log sink", "/private/ssh-log-location-marker/log")
     emit = Mock(side_effect=sink)
     monkeypatch.setattr("app.core.failures.logger.error", emit)
-    monkeypatch.setattr("app.gateway.ssh_config.logger.exception", emit)
     with pytest.raises((OSError, UnicodeError)) as caught:
         list_user_ssh_hosts(config)
     assert caught.value.__cause__ is original

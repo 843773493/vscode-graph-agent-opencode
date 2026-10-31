@@ -1797,3 +1797,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原 SSH 配置来源的主文件／Include 读取与路径展开共用一个错误出口；循环符号链接、权限及展开失败只公开阶段、原错误类别和适用系统错误码，完整位置留原异常原因及诊断。日志次错附在原异常，不能替换原读取失败；不把失败当成空连接清单，不增加解析器或路由回退。
 - 原实现12项来源反例和1项真实路由反例失败；路由500明确回显实际符号链接环路径。修复后48项不同用例通过，覆盖真实POSIX符号链接、三平台原生错误文本、原读取／解析行为、原cause、日志次错、同配置修复后的显式重试及request_id。首轮46通过／2失败的原因是测试直接比较Windows文件名与OSError格式化文本；改为核对原异常对象和其完整格式化文本后，受影响6项通过，其余42项结果按源码依赖复用，不重复计数。
 - Ruff、真实Pyright和compileall通过；准确命令、指纹、红绿原件、实际退出码及作者AST审查见`out/tests/temp/ssh_include_diagnostics_20261031/artifacts/verification.json`。HTTP为真实FastAPI路由／TraceMiddleware与配置读取链的进程内请求，配置来源由fixture注入，不是独立Gateway网络、实际SSH连接或Windows实机验收；未改另一会话Web／自动化、共享暂存或debug，2.2／7.2及整体51/53保持未完成。
+
+### 2026-10-31 SSH 生效配置拒绝与日志次错（2.2／7.2部分收口）
+
+- `ssh -G` 非零退出沿原配置来源复用 `report_failure`，保留原阶段、退出码及正常拒绝文案；stdout／stderr 只存原异常诊断。日志 sink 失败只公开次错类别，完整进程输出及日志故障位置保留在同一原因链，不替换原解析错误。已删除模块中不再使用的 logger 和测试注入，不增加解析／日志回退链。
+- 六个进程错误＋日志故障反例在原生产实现全部失败；最终54个不同用例通过，涵盖列表／显式选择、POSIX／盘符／UNC诊断样本、原始输出、直接原因、修复后同入口重试及既有配置来源／路由合同。首次全54项通过后只补强新六例的 cause 类型断言，定向六项再通过，其余48项复用，不重复计数。
+- Ruff、真实Pyright和compileall通过；首次Pyright指出新测试未收窄可空cause，补强类型及身份断言后零诊断。命令、前后指纹、红绿原件、退出码及作者AST自查见`out/tests/temp/ssh_process_diagnostics_20261031/artifacts/verification.json`。除非零退出分支及必要导入外，生产函数、subprocess调用和成功解析AST保持；既有测试仅删无消费者logger注入。
+- 配置进程由fixture注入，不代实际SSH连接、Windows实机或独立Gateway网络验收；另一会话长测仍占集成闸门，未运行Web／Workbench及其自动化，未动共享debug或既有暂存。2.2／7.2仍未勾、整体51/53保持，显式MCP持有及团队协作继续延期。
