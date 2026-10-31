@@ -264,11 +264,15 @@ for (const cleanupResult of ["force_killed", "still_running", null]) {
     assert.equal(states[0].reconciliation_status, "unknown");
     assert.equal(original.creationReceipt, undefined);
     worker.pid = 42002;
+    worker.processIdentity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
     worker.startupCleanupResult = cleanupResult;
     shutdown.resolve();
     await rejected;
     assert.equal(session.osPid, 42002);
     assert.equal(states.at(-1).os_pid, 42002);
+    assert.equal(states.at(-1).process_group_id, 42002);
+    assert.equal(states.at(-1).process_session_id, 42002);
+    assert.equal(states.at(-1).process_start_time, 9123);
     assert.equal(session.ptyProcess, null);
     const stopped = cleanupResult === "force_killed";
     assert.equal(session.status, stopped ? "terminated" : "created");
@@ -278,6 +282,89 @@ for (const cleanupResult of ["force_killed", "still_running", null]) {
       outcome: "failed", resource: session.snapshot(),
     });
     else assert.equal(original.creationReceipt, undefined);
+  });
+}
+
+test("正常启动持久化原Worker身份，不重新采样进程启动标记", async t => {
+  const session = completedSession(t, { status: "created" });
+  const identity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
+  t.mock.method(IsolatedPtyProcess.prototype, "start", async function () {
+    this.pid = identity.pid;
+    this.processIdentity = identity;
+    return { pid: this.pid };
+  });
+  t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
+  await session.start();
+  assert.equal(session.status, "running");
+  assert.equal(session.osPid, identity.pid);
+  assert.equal(session.processGroupId, identity.processGroupId);
+  assert.equal(session.processSessionId, identity.processSessionId);
+  assert.equal(session.processStartTime, identity.processStartTime);
+  await session.dispose();
+});
+
+test("停止失败落盘包含收尾期间到达的原生身份，保留原异常", async t => {
+  const session = completedSession(t, { status: "created", reconciliation_status: "unknown" });
+  const identity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
+  const worker = { pid: 42002, processIdentity: undefined };
+  session.ptyProcess = worker;
+  const original = new Error("原停止失败");
+  t.mock.method(session, "_terminateForRelease", async () => {
+    worker.processIdentity = identity;
+    throw original;
+  });
+  const saved = [];
+  session.manager.persist = async () => { saved.push(session.toRecord()); };
+  await assert.rejects(session.kill(), error => error === original);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].os_pid, identity.pid);
+  assert.equal(saved[0].process_group_id, identity.processGroupId);
+  assert.equal(saved[0].process_session_id, identity.processSessionId);
+  assert.equal(saved[0].process_start_time, identity.processStartTime);
+  assert.equal(saved[0].status, "created");
+  assert.equal(saved[0].reconciliation_status, "unknown");
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.releasePromise, null);
+});
+
+for (const failSave of [false, true]) {
+  test(`迟到身份遇到Worker关闭失败仍保存原事实并保留错误：${failSave}`, async t => {
+    const session = completedSession(t, { status: "created" });
+    const identity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
+    const original = new Error("原创建失败"), cleanup = new Error("原Worker尚未确认退出"), disk = new Error("身份写盘失败");
+    t.mock.method(process.stderr, "write", () => {});
+    const worker = { pid: null, processIdentity: undefined, async shutdown() {
+      this.pid = identity.pid;
+      this.processIdentity = identity;
+      throw cleanup;
+    } };
+    session.ptyProcess = worker;
+    const attempts = [];
+    session.manager.persist = async () => {
+      attempts.push(session.toRecord());
+      if (failSave && attempts.length === 2) throw disk;
+    };
+    await assert.rejects(session.failStartup(original), error => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.cause, original);
+      assert.equal(error.errors[0], original);
+      if (failSave) {
+        assert(error.errors[1] instanceof AggregateError);
+        assert.deepEqual(error.errors[1].errors, [cleanup, disk]);
+        assert.equal(error.errors[1].cause, cleanup);
+      } else assert.equal(error.errors[1], cleanup);
+      return true;
+    });
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].os_pid, null);
+    assert.equal(attempts[1].os_pid, identity.pid);
+    assert.equal(attempts[1].process_group_id, identity.processGroupId);
+    assert.equal(attempts[1].process_session_id, identity.processSessionId);
+    assert.equal(attempts[1].process_start_time, identity.processStartTime);
+    assert.equal(attempts[1].reconciliation_status, "unknown");
+    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.status, "created");
+    assert.equal(original.creationReceipt, undefined);
   });
 }
 

@@ -703,3 +703,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 初版强杀正向场景的失败已查明：实机 /proc 约 6381 项，三轮扫描加 1.5 秒宽限使正式证明晚于宿主 3 秒强杀期限，保留 unknown 符合合同；正向迟到证明场景改用配合 TERM 退出的真实父子，原忽略 TERM 的强杀及停止失败重试场景和断言保持。扫描成本、统一总期限及缺证明后的管理接管保留代码 TODO 与原始时间线，不扩超时、不修改停止算法，也不据此宣称性能问题已解决。一次临时诊断 preload 提前注册 message listener 消费了 start，修正为只观察原 emit 后取得真实时间线，最终已撤回全部临时观察代码。
 - 首轮完整集成出现 6 项完成／2 项失败后因 60 秒退出124；同轮旧版本因端口占用在 setup 拒绝，不能算行为红测。最终候选首次排队满600秒未启动，随后共享名额释放才重试；原失败、工具阶段和真实退出码均保留。最终 8 项通过补齐该文件验收，不倒推此前没有停止证明即意味着原生进程已停止。
 - Ruff、编译、Python 集成文件 Pyright 零诊断、Node 语法及 OpenSpec strict 通过；作者 AST 自查只改变原 start、Worker shutdown 和 Session failStartup，既有超过800行 Session 的结构债务仍保留，未冒充独立审查。准确命令、源码指纹、原始输出／退出码、反例、时间线、差异与复用依据见 `out/tests/temp/terminal_late_startup_20261031/artifacts/verification.json`。native 始终无身份、Backend 已退出、丢回执后接管、Windows、Gateway/Web 与完整 shutdown 仍未验完，5.2／5.4 和21/23保持；没有修改另一会话的 Web/Workbench、自动化、共享暂存或 Debug。
+
+### 2026-10-31 Terminal 原生创建身份与丢证明后的管理恢复（5.2 部分收口）
+
+- Worker 原有一次元数据读取经同一 IPC 交付原 PID 的进程组、系统 session 和启动标记，读取与原25毫秒最小观察均结束后才 ready；没有元数据明确交付 null。宿主只收原 PID 匹配的首次身份，错误、迟到、重复或已退出 Worker 不替换原标记。Session 正常启动、失败收尾与停止失败的 unknown 落盘共用同一身份捕获，移除成功启动后重新采样当前进程作为创建身份的旧读取，不新增产品模块、状态 writer、账本、schema 或公开字段。
+- Worker 关闭本身失败时也保存新到身份；只有原身份字段发生变化才追加既有 writer 的保存。保存再次失败按发生顺序保留创建、关闭、存储原错，保留原句柄与 unknown，不将身份到达当作停止证明，也不重放清理。原生无身份、Python operation/目录 lease、整个关闭硬期限仍未收口。
+- 最终相关 Node 单测176 passed（8.99秒），含原 cwd/HTTP线程池、记录/重试、未知管理及新增身份/失败窗口；完整旧生产叠加相同最终测试的7项反例均因原身份未保存、遗漏写盘或原错链缺失精确失败。旧生产真实 HTTP/PTY 反例进入业务体，核到原 unknown 记录的进程组为 null、与实际原生身份不符；未用新增私有接口缺失、setup 或端口错误冒充反例。
+- 最终真实 HTTP/PTY 集成：迟到身份、丢停止证明、同Manager/精确Node硬重启、kill/delete和重复请求4 passed（12.64秒）；原启动失败/强杀/日志/cwd完整8 passed（47.38秒）；原根退出仍沿SID核实真实后代及冷管理4 passed（23.86秒）。三组均沿原主仓共享闸门串行，分别保留60秒/4GiB保护；完整状态经真实创建生成，重启不补写记录或身份，核原 native标记、owner版本、unknown/终态、持久字节及无新执行。首轮在追加失败窗口保存之前也有173项单测和相同三组通过，修改后已集中补跑，数字不重复累计。
+- Ruff、编译、两Python集成文件 Pyright零诊断、对应Node语法及 OpenSpec strict通过。初版新测试的局部final变量有一条可能未绑定诊断，改为沿真实已查询快照初始化，未改变2次管理请求、身份或终态断言，最终检查通过；原输出保留。作者 AST 自查只涉及原构造/start、Worker handleStart、Session start/停止失败/身份捕获/启动失败，原其余方法保持；既有Session超过800行结构债务未据此关闭，未冒充独立审查。
+- 命令、完整固定HEAD归档、源码指纹、原始输出/实际退出码、7项单测反例、真实HTTP反例、结构与差异复核见 `out/tests/temp/terminal_identity_recovery_20261031/artifacts/verification.json`。native始终不交付身份、Workspace Backend退出后的Python lease/目录占用接管、完整operation/shutdown硬期限、Windows与Gateway/Web仍未验完，5.2／5.4和21/23保持。没有修改另一会话的Web/Workbench、自动化测试或共享Debug；只提交本片文件，其他暂存保持。

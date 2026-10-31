@@ -15,6 +15,8 @@ export class IsolatedPtyProcess {
     this.workerProcess = null;
     /** @type {number|null} worker原生创建消息中的PTY执行根PID；就绪前也保留原身份。 */
     this.pid = null;
+    /** @type {import("./terminalProcessLifecycle.js").TerminalProcessStat|null|undefined} 原Worker读取的创建身份；undefined表示尚未交付，null表示平台没有该元数据。 */
+    this.processIdentity = undefined;
     /** @type {string|null} 只记录本次就绪前 PTY 退出的正式进程树清理结果。 */
     this.startupCleanupResult = null;
     /** @type {Promise<void>|null} 唯一在途宿主关闭任务，失败结算后允许原入口重试。 */
@@ -112,7 +114,22 @@ export class IsolatedPtyProcess {
             failStart(new Error("隔离 PTY Worker 就绪身份与原生创建不一致"));
             return;
           }
+          if (this.processIdentity === undefined) {
+            failStart(new Error("隔离 PTY Worker 尚未交付原生进程身份"));
+            return;
+          }
           completeStart({ pid: this.pid });
+          return;
+        }
+        if (message.type === "processIdentity") {
+          if (this.workerState === "exited" || this.processIdentity !== undefined) return;
+          if (this.pid === null || message.pid !== this.pid || (
+            message.identity !== null && message.identity?.pid !== this.pid
+          )) {
+            failStart(new Error("隔离 PTY Worker 原生进程身份与创建PID不一致"));
+            return;
+          }
+          this.processIdentity = message.identity;
           return;
         }
         if (message.type === "output") {

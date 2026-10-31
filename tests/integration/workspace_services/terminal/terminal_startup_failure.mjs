@@ -38,6 +38,7 @@ IsolatedPtyProcess.prototype.start = async function (options) {
   const kill = worker.kill.bind(worker);
   const lateIdentity = existsSync(path.join(controlRoot, "late-native-identity"));
   let spawned;
+  let processIdentity;
   worker.send = (...arguments_) => {
     if (lateIdentity && arguments_[0]?.type === "shutdown") {
       const state = JSON.parse(readFileSync(path.join(process.env.WORKSPACE_ROOT,
@@ -45,6 +46,7 @@ IsolatedPtyProcess.prototype.start = async function (options) {
       appendFileSync(path.join(controlRoot, "shutdown-observations.jsonl"),
         `${JSON.stringify({ pid: this.pid, state })}\n`);
       emit("message", spawned);
+      if (processIdentity) emit("message", processIdentity);
     }
     return send(...arguments_);
   };
@@ -56,6 +58,10 @@ IsolatedPtyProcess.prototype.start = async function (options) {
     const [message] = arguments_;
     if (lateIdentity && event === "message" && message?.type === "spawned") {
       spawned = message;
+      return true;
+    }
+    if (lateIdentity && event === "message" && message?.type === "processIdentity") {
+      processIdentity = message;
       return true;
     }
     if (lateIdentity && event === "message" && message?.type === "stopped") {

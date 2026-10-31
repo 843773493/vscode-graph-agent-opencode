@@ -22,10 +22,47 @@ async function createReadyWorker(t) {
   const isolated = new IsolatedPtyProcess();
   const startup = isolated.start({ command: "fixture-shell", args: [], options: {} });
   worker.emit("message", { type: "spawned", pid: 42001 });
+  worker.emit("message", { type: "processIdentity", pid: 42001, identity: null });
   worker.emit("message", { type: "ready", pid: 42001 });
   assert.deepEqual(await startup, { pid: 42001 });
   return { isolated, worker };
 }
+
+test("未交付原生进程身份不能就绪", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start(), /尚未交付原生进程身份/);
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "ready", pid: 42002 });
+  await rejected;
+  assert.equal(isolated.processIdentity, undefined);
+  assert.equal(isolated.workerState, "stopping");
+});
+
+test("原Worker的进程身份在启动失败后仍保留且不能被后续消息替换", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start());
+  worker.emit("error", new Error("身份交付前启动失败"));
+  await rejected;
+  const identity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "processIdentity", pid: 42002, identity });
+  worker.emit("message", { type: "processIdentity", pid: 42002, identity: { ...identity, processStartTime: 9988 } });
+  worker.emit("message", { type: "ready", pid: 42002 });
+  worker.emit("exit", 0, null);
+  worker.emit("message", { type: "processIdentity", pid: 42002, identity: null });
+  assert.deepEqual(isolated.processIdentity, identity);
+  assert.equal(isolated.workerState, "exited");
+});
+
+test("其它PID的进程身份拒绝启动且不能进入原记录", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start(), /原生进程身份与创建PID不一致/);
+  worker.emit("message", { type: "spawned", pid: 42002 });
+  worker.emit("message", { type: "processIdentity", pid: 42002, identity: { pid: 43003 } });
+  await rejected;
+  assert.equal(isolated.pid, 42002);
+  assert.equal(isolated.processIdentity, undefined);
+});
 
 test("worker在宽限期内退出，关闭才完成且不发送强杀", async t => {
   const { isolated, worker } = await createReadyWorker(t);

@@ -273,11 +273,10 @@ export class TerminalSession {
       }
       if (failure !== error) throw failure;
     }));
-    let ready;
     let resolvedCwd = null;
     try {
       resolvedCwd = await resolveTerminalCwd(this.manager.workspaceRoot, this.cwdRelative);
-      ready = await isolatedPty.start({
+      await isolatedPty.start({
         command: this.command,
         args: this.args,
         options: {
@@ -304,15 +303,7 @@ export class TerminalSession {
     }
     this.status = "running";
     this.startedAt = this.startedAt || nowIso();
-    this.osPid = ready.pid;
-    const stat = await readProcessStat(this.osPid);
-    if (stat) {
-      this.processGroupId = stat.processGroupId;
-      this.processSessionId = stat.processSessionId;
-      this.processStartTime = stat.processStartTime;
-    } else {
-      this.processGroupId = this.processGroupId || this.osPid;
-    }
+    this.capturePtyIdentity(isolatedPty);
     this.touch();
     await this.manager.persist();
   }
@@ -521,6 +512,7 @@ export class TerminalSession {
     try {
       return await releasePromise;
     } catch (error) {
+      this.capturePtyIdentity(this.ptyProcess);
       this.markReconciliationStatus("unknown");
       try {
         await this.manager.persist();
@@ -670,16 +662,28 @@ export class TerminalSession {
     this.ptyProcess = null;
   }
 
+  capturePtyIdentity(isolatedPty) {
+    if (!isolatedPty) return false;
+    const pid = isolatedPty.pid ?? this.osPid;
+    const identity = isolatedPty.processIdentity;
+    const group = identity?.processGroupId ?? this.processGroupId ?? pid;
+    const session = identity?.processSessionId ?? this.processSessionId ?? (process.platform === "linux" ? pid : null);
+    const started = identity?.processStartTime ?? this.processStartTime;
+    const changed = this.osPid !== pid || this.processGroupId !== group
+      || this.processSessionId !== session || this.processStartTime !== started;
+    this.osPid = pid;
+    this.processGroupId = group;
+    this.processSessionId = session;
+    this.processStartTime = started;
+    return changed;
+  }
+
   async failStartup(error) {
     const isolatedPty = this.ptyProcess;
     // TODO（5.2）：native 尚未交付 PID 的阻塞仍须由原 owner 接管，不能凭 Worker 退出结清。
     let stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
       .has(isolatedPty.startupCleanupResult);
-    this.osPid = isolatedPty?.pid ?? this.osPid;
-    if (process.platform === "linux" && this.osPid) {
-      // forkpty 的 SID 等于执行根PID；根已回收后仍须核对同 SID 后代。
-      this.processSessionId = this.processSessionId || this.osPid;
-    }
+    this.capturePtyIdentity(isolatedPty);
     this.markReconciliationStatus("unknown");
     this.releaseReason = "terminal_startup_failed";
     await this.manager.persist();
@@ -691,12 +695,19 @@ export class TerminalSession {
       } else {
         await this.dispose();
         // 收尾期间可取得同一Worker迟到的原生身份和正式停止回执。
-        this.osPid = isolatedPty?.pid ?? this.osPid;
-        if (process.platform === "linux" && this.osPid) this.processSessionId ||= this.osPid;
+        this.capturePtyIdentity(isolatedPty);
         stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
           .has(isolatedPty.startupCleanupResult);
       }
     } catch (cleanupError) {
+      if (this.capturePtyIdentity(isolatedPty)) {
+        try {
+          await this.manager.persist();
+        } catch (persistError) {
+          cleanupError = new AggregateError([cleanupError, persistError],
+            "终端启动清理及迟到身份持久化均失败", { cause: cleanupError });
+        }
+      }
       const failure = new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
       throw recordTerminalFailure(failure, `[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
     }

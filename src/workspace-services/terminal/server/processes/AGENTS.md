@@ -36,7 +36,7 @@ ps/taskkill失败后的存在性探测也失败时，原操作仍是主拒绝，
 
 worker的`outputPacketId`（IPC字段仍为`messageId`）逐包计费，宿主结束本次分发后逐包回执；它不是Session的输出sequence或聊天消息ID。`ptyOutputPaused`只暂停node-pty输出读取，未确认UTF-8字节超过高水位时暂停、低于低水位时恢复，不表示OS进程或Job暂停。重复或未知包回执不重复释放额度。
 
-原生PTY创建返回后，worker先发送唯一`spawned`身份，再交付`ready`；ready必须与该PID一致，重复或非法身份明确拒绝启动。启动失败保留原PID，晚到消息不能替换身份；正式启动失败清理结果也必须属于同一PID。宿主沿原进程树停止链核实PTY及后代，再确认worker退出，不能把worker退出当作PTY停止证明。
+原生PTY创建返回后，worker先发送唯一`spawned` PID，原有一次元数据读取经`processIdentity`交付同一PID的进程组、系统session和启动标记，再交付`ready`；ready必须与该PID一致，重复或非法身份明确拒绝启动。启动失败保留原PID，晚到消息不能替换身份；正式启动失败清理结果也必须属于同一PID。宿主只接受原PID匹配的首次进程身份，不以重读当前进程替换创建标记；正常启动和启动失败均将同一身份交给Session原恢复记录，原进程树停止链核实PTY及后代后再确认worker退出。缺少停止证明仍保持unknown；已有完整身份的显式管理重试可沿原核实链处理，不能把worker退出当作PTY停止证明。
 
 ## 可修改内容
 

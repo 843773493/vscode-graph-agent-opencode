@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -45,11 +46,13 @@ class TerminalService:
     workspace_id: str
     control: Path
     root: Path
+    process: subprocess.Popen[str]
 
 
 @pytest.fixture
-def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[TerminalService]:
-    with TestRunContext.from_test_file(Path(__file__)) as run:
+def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
+                     request: pytest.FixtureRequest) -> Iterator[TerminalService]:
+    with TestRunContext.from_test_file(Path(request.node.path)) as run:
         root = prepare_default_test_workspace(
             workspace_root=run.workspace_root / uuid4().hex,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
@@ -64,11 +67,12 @@ def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPa
             process = start_terminal_backend(
                 backend_port=integration_backend_port + 67, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
+        service = TerminalService(run, f"http://127.0.0.1:{integration_backend_port + 67}", load_or_create_workspace_id(root), control, root, process)
         try:
-            yield TerminalService(run, f"http://127.0.0.1:{integration_backend_port + 67}", load_or_create_workspace_id(root), control, root)
+            yield service
         finally:
             try:
-                terminate_process(process)
+                terminate_process(service.process)
             finally:
                 # 失败收尾只停止本fixture观察到的精确实例，不替产品签回执或修改恢复状态。
                 identities: list[dict[str, int | str]] = []

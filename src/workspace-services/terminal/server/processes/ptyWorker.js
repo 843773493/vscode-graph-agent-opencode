@@ -117,9 +117,13 @@ function handleStart(message) {
   // 原生创建成功即交付身份；后续就绪失败仍由宿主沿同一进程树入口收尾。
   send({ type: "spawned", pid: activePty.pid });
   // Linux forkpty 创建的 SID 等于 PTY 根 PID；根已被 waitpid 时仍核对同 SID 后代。
-  shellProcessMetadata = readProcessStat(activePty.pid).then((metadata) => metadata ?? (
-    process.platform === "linux" ? { processSessionId: activePty.pid, processStartTime: null } : null
-  ));
+  shellProcessMetadata = readProcessStat(activePty.pid).then((metadata) => {
+    // 同一次原生读取供宿主恢复与Worker停止使用，不在宿主重新采样创建身份。
+    send({ type: "processIdentity", pid: activePty.pid, identity: metadata });
+    return metadata ?? (
+      process.platform === "linux" ? { processSessionId: activePty.pid, processStartTime: null } : null
+    );
+  });
   ptyProcess.onData((data) => {
     if (shuttingDown) {
       return;
@@ -151,13 +155,18 @@ function handleStart(message) {
       setImmediate(() => process.exit(1));
     });
   });
-  setTimeout(() => {
+  void Promise.all([
+    shellProcessMetadata,
+    new Promise((resolve) => setTimeout(resolve, STARTUP_CONFIRM_DELAY_MS)),
+  ]).then(() => {
     if (!ptyProcess || shuttingDown) {
       return;
     }
     readySent = true;
     send({ type: "ready", pid: ptyProcess.pid });
-  }, STARTUP_CONFIRM_DELAY_MS);
+  }).catch((error) => {
+    send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+  });
 }
 
 // 宿主按单个包回执；重复或未知编号不改变背压计费，不是UI的累计sequence ACK。

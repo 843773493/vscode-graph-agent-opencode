@@ -38,6 +38,8 @@ Linux的SIGTERM后代场景由真实受控根进程在信号处理期间fork，�
 同文件的ps/taskkill与探测双错场景始终由真实Linux PTY创建资源，只在故障窗口显式替换平台选择、原生查询和存在性探测，故障解除后恢复Linux原停止链。核主错误码、两份原诊断、unknown/原身份及同入口停止；不能把这种HTTP/PTY组合证据称为Windows或Darwin实机验收。
 
 
+`test_terminal_startup_recovery.py`复用启动失败装具，输出按当前测试文件归属。真实创建在PID/身份交付前失败、收到迟到身份并丢弃停止证明后，持久保持created/unknown；同Manager和精确Node硬重启后的原HTTP kill/delete均沿原生启动标记核实终态、持久发布并重复请求，不补写恢复状态或重新执行命令。Linux定向验证保留60秒/4GiB及共享闸门，不代Python lease、未知native无身份、Windows或Gateway/Web。
+
 ## 可修改内容
 
 - Terminal 模块与受控子进程组成的集成测试及专用 fixture。
