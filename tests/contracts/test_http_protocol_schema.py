@@ -35,6 +35,12 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
 )
 from app.schemas.internal_v2.session import SessionDTO, SessionInformationSessionDTO
+from app.schemas.internal_v2.text_mutation import (
+    CreateText,
+    TextMutationReceiptDTO,
+    TextMutationRequest,
+    TextMutationSnapshotDTO,
+)
 from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.schemas.internal_v2.workspace_resource import (
@@ -558,6 +564,70 @@ def test_file_http_schema_keeps_native_inputs_and_business_constraints(http_open
     assert_public_http_schemas(http_openapi)
 
 
+def test_text_mutation_http_route_checks_actual_command_and_transfer_roots(http_openapi: JsonSchemaValue) -> None:
+    operation = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/resources/text-mutations"]["post"]
+    roots = _public_roots(http_openapi, [
+        operation["requestBody"]["content"]["application/json"]["schema"],
+        operation["responses"]["200"]["content"]["application/json"]["schema"],
+    ])
+    assert roots == {"TextMutationRequest", "TextMutationTransferDTO"}
+    assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"正文修改入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
+    assert_public_http_schemas(http_openapi)
+
+
+@pytest.mark.parametrize(("model", "field", "shape"), [
+    ("TextMutationRequest", "timeout_ms", {"type": "string"}),
+    ("CreateText", "content", {"type": "integer"}),
+    ("EditText", "replace_all", {"type": "string"}),
+    ("PatchText", "expected_versions", {"type": "object", "additionalProperties": {"type": "integer"}}),
+    ("TextMutationTransferDTO", "snapshots", {"type": "object"}),
+    ("TextMutationReceiptDTO", "retryable", {"type": "integer"}),
+    ("TextMutationFileDTO", "exists", {"type": "string"}),
+    ("TextMutationSnapshotDTO", "after_exists", {"type": "string"}),
+])
+def test_text_mutation_http_schema_rejects_command_map_receipt_and_snapshot_drift(
+    http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
+) -> None:
+    http_openapi["components"]["schemas"][model]["properties"][field] = shape
+    with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as error:
+        assert_public_http_schemas(http_openapi)
+    assert f"/{field}" in str(error.value)
+
+
+def test_text_mutation_structure_checks_preserve_command_uri_version_and_postcondition_rules(
+    http_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(http_openapi)
+    assert_public_http_schemas(http_openapi)
+    assert http_openapi == original
+    uri = "boxteam://workspace/ws-1/resources/files/root/result.txt"
+    command = CreateText(target=uri, content="/etc/hosts", expected_version="absent")
+    assert TextMutationRequest(create=command).command == command
+    with pytest.raises(ValidationError, match="恰好提供"):
+        TextMutationRequest()
+    with pytest.raises(ValidationError, match="恰好提供"):
+        TextMutationRequest.model_validate({"create": command.model_dump(), "patch": {
+            "target": uri, "input": "patch", "expected_versions": {}, "explanation": "修改",
+        }})
+    # 普通工具接受原生目标；传输封套仍要求目标owner已解析的固定URI。
+    native = CreateText(target="/etc/hosts", content="正文", expected_version="absent")
+    with pytest.raises(ValidationError, match="URI"):
+        TextMutationRequest(create=native)
+    with pytest.raises(ValidationError, match="expected_version"):
+        CreateText(target=uri, content="正文", expected_version="latest")
+    with pytest.raises(ValidationError, match="timeout_ms"):
+        TextMutationRequest(create=command, timeout_ms=30001)
+    with pytest.raises(ValidationError, match="URI"):
+        TextMutationReceiptDTO(status="success", effect="completed", target="/etc/hosts")
+    with pytest.raises(ValidationError, match="retryable"):
+        TextMutationReceiptDTO.model_validate({"status": "error", "effect": "unknown", "retryable": True})
+    with pytest.raises(ValidationError, match="缺少可核后件"):
+        TextMutationSnapshotDTO(uri=uri, before_exists=True, before_content="正文")
+    snapshot = TextMutationSnapshotDTO(uri=uri, before_exists=True, before_content="/etc/hosts",
+                                       after_exists=False, after_content="")
+    assert snapshot.before_content == "/etc/hosts" and snapshot.after_exists is False
+
+
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("WorkspaceFileCreateRequest", "kind", {"type": "integer"}),
     ("WorkspaceFileMutationIntentDTO", "depends_on", {"type": "object"}),
@@ -588,6 +658,8 @@ def test_file_http_schema_rejects_request_receipt_snapshot_and_shortcut_drift(
     "SessionGenerationOriginDTO", "SessionInformationResourceDTO",
     "McpToolDTO", "ToolTestAttemptDTO",
     "PersistentTaskCreateRequest", "TaskInputConsumptionDTO", "TaskActionDTO", "SessionGeneratorImportRequest",
+    "TextMutationRequest", "CreateText", "EditText", "PatchText",
+    "TextMutationTransferDTO", "TextMutationReceiptDTO", "TextMutationFileDTO", "TextMutationSnapshotDTO",
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

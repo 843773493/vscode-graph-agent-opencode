@@ -26,6 +26,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "WorkspaceFileUpdateRequest", "WorkspaceFileCreateRequest", "WorkspaceFilePasteRequest",
         "WorkspaceFileCopyRequest", "WorkspaceFileOperationReceiptDTO", "WorkspaceFileOperationStatusDTO",
         "WorkspaceFileRevealDTO", "FileTreeShortcutRequest", "SessionFileTreeSettingsDTO",
+        "TextMutationRequest", "TextMutationTransferDTO",
         "NodeDebugCapabilitiesDTO", "NodeDebugStateDTO", "NodeDebugConfigurationDTO",
         "NodeDebugConfigurationCreateRequest", "NodeDebugConfigurationUpdateRequest",
         "NodeDebugConfigurationActivateRequest", "NodeDebugConfigurationImportRequest",
