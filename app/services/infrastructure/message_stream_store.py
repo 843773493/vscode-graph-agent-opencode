@@ -20,6 +20,7 @@ from app.abstractions.turn_terminal_status import (
 )
 from app.core.atomic_fs import atomic_write_bytes, native_io_path
 from app.core.bounded_json import bound_json_value
+from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -31,6 +32,17 @@ from app.domain.message_stream.projection import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _report_read_failure(
+    error: MessageStreamError, *, diagnostic: str, cause: BaseException | None = None,
+) -> MessageStreamError:
+    """读取拒绝共用诊断出口，日志次错不能替换原校验或原生错误。"""
+    original = cause if cause is not None else error
+    original.add_note(diagnostic)
+    error.args = (report_failure(original, detail=str(error), diagnostic_logger=logger),)
+    return error
+
 
 TERMINAL_STREAM_STATUSES = frozenset({"completed", "interrupted", "failed"})
 MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES = 256 * 1024
@@ -403,8 +415,10 @@ class MessageStreamStore:
             or any(char in turn_stream_id for char in ("/", "\\", ":"))
             or any(ord(char) < 32 or ord(char) == 127 for char in turn_stream_id)
         ):
-            logger.error("消息流标识非法: %s value=%r", context, turn_stream_id)
-            raise MessageStreamError(f"消息流标识必须是单一不透明文件名: {context} field=turn_stream_id")
+            raise _report_read_failure(
+                MessageStreamError(f"消息流标识必须是单一不透明文件名: {context} field=turn_stream_id"),
+                diagnostic=f"消息流标识非法: value={turn_stream_id!r}",
+            )
 
     def _stream_path(self, session_id: str, turn_stream_id: str) -> Path:
         self._validate_stream_id(turn_stream_id, context=f"session_id={session_id} artifact=events")
@@ -436,14 +450,14 @@ class MessageStreamStore:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            logger.exception("消息流已应用event_id读取失败: path=%s", path)
-            raise MessageStreamError(
-                f"消息流已应用 event_id 记录损坏: {context}"
+            raise _report_read_failure(
+                MessageStreamError(f"消息流已应用 event_id 记录损坏: {context}"),
+                cause=error, diagnostic=f"消息流已应用event_id读取失败: path={path}",
             ) from error
         if not isinstance(raw, dict):
-            logger.error("消息流已应用event_id记录非法: path=%s record=%r", path, raw)
-            raise MessageStreamError(
-                f"消息流已应用 event_id 记录必须是对象: {context}"
+            raise _report_read_failure(
+                MessageStreamError(f"消息流已应用 event_id 记录必须是对象: {context}"),
+                diagnostic=f"消息流已应用event_id记录非法: path={path} record={raw!r}",
             )
         entries: dict[str, dict[str, Any]] = {}
         for key, value in raw.items():
@@ -460,8 +474,8 @@ class MessageStreamStore:
                 )
                 if key != event_id:
                     raise MessageStreamError(f"消息流已应用 event_id 与索引键不一致: {context}")
-            except MessageStreamError:
-                logger.exception("消息流已应用event_id记录校验失败: path=%s event_id=%r record=%r", path, key, value)
+            except MessageStreamError as error:
+                _report_read_failure(error, diagnostic=f"消息流已应用event_id记录校验失败: path={path} event_id={key!r} record={value!r}")
                 raise
             entries[key] = value
         return entries
@@ -712,13 +726,13 @@ class MessageStreamStore:
                     seen_event_ids.add(event_id)
                     previous_event_seq = event_seq
                     valid_offset = next_offset
-        except MessageStreamError:
-            logger.exception("消息流事件日志校验失败: path=%s record=%r", path, raw)
+        except MessageStreamError as error:
+            _report_read_failure(error, diagnostic=f"消息流事件日志校验失败: path={path} record={raw!r}")
             raise
         except (OSError, UnicodeDecodeError) as error:
-            logger.exception("消息流事件日志读取失败: path=%s", path)
-            raise MessageStreamError(
-                f"消息流事件日志读取失败: {context} error_type={type(error).__name__} errno={getattr(error, 'errno', None)}"
+            raise _report_read_failure(
+                MessageStreamError(f"消息流事件日志读取失败: {context} error_type={type(error).__name__} errno={getattr(error, 'errno', None)}"),
+                cause=error, diagnostic=f"消息流事件日志读取失败: path={path}",
             ) from error
 
     def _read_records(
@@ -748,11 +762,15 @@ class MessageStreamStore:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            logger.exception("消息流状态快照读取失败: path=%s", path)
-            raise MessageStreamError(f"消息流状态快照损坏: {context} error_type={type(error).__name__}") from error
+            raise _report_read_failure(
+                MessageStreamError(f"消息流状态快照损坏: {context} error_type={type(error).__name__}"),
+                cause=error, diagnostic=f"消息流状态快照读取失败: path={path}",
+            ) from error
         if not isinstance(raw, dict):
-            logger.error("消息流状态快照必须是对象: path=%s record=%r", path, raw)
-            raise MessageStreamError(f"消息流状态快照必须是对象: {context}")
+            raise _report_read_failure(
+                MessageStreamError(f"消息流状态快照必须是对象: {context}"),
+                diagnostic=f"消息流状态快照必须是对象: path={path} record={raw!r}",
+            )
         return raw
 
     @staticmethod
@@ -773,10 +791,9 @@ class MessageStreamStore:
             ("turn_stream_id", turn_stream_id),
         ):
             if state.get(field_name) != expected:
-                logger.error("消息流快照关联键不匹配: %s field=%s expected=%r actual=%r", context, field_name, expected, state.get(field_name))
-                raise MessageStreamError(
-                    "消息流状态快照关联键不匹配: "
-                    f"{context} field={field_name}"
+                raise _report_read_failure(
+                    MessageStreamError(f"消息流状态快照关联键不匹配: {context} field={field_name}"),
+                    diagnostic=f"消息流快照关联键不匹配: field={field_name} expected={expected!r} actual={state.get(field_name)!r}",
                 )
         snapshot_seq = state.get("snapshot_seq")
         if (
@@ -785,10 +802,9 @@ class MessageStreamStore:
             or snapshot_seq < 0
             or snapshot_seq > last_event_seq
         ):
-            logger.error("消息流快照序号非法: %s snapshot_seq=%r last_event_seq=%s", context, snapshot_seq, last_event_seq)
-            raise MessageStreamError(
-                "消息流状态快照序号非法: "
-                f"{context} field=snapshot_seq last_event_seq={last_event_seq}"
+            raise _report_read_failure(
+                MessageStreamError(f"消息流状态快照序号非法: {context} field=snapshot_seq last_event_seq={last_event_seq}"),
+                diagnostic=f"消息流快照序号非法: snapshot_seq={snapshot_seq!r} last_event_seq={last_event_seq}",
             )
         return snapshot_seq
 
@@ -964,13 +980,13 @@ class MessageStreamStore:
                     if not isinstance(turn_id, str) or not turn_id:
                         raise MessageStreamError(f"消息流 thread 索引损坏: {context}")
                     self._validate_stream_id(stream_id, context=context)
-        except MessageStreamError:
-            logger.exception("消息流索引校验失败: path=%s record=%r", path, raw)
+        except MessageStreamError as error:
+            _report_read_failure(error, diagnostic=f"消息流索引校验失败: path={path} record={raw!r}")
             raise
         except (OSError, UnicodeDecodeError, ValueError) as error:
-            logger.exception("消息流索引读取失败: path=%s record=%r", path, raw)
-            raise MessageStreamError(
-                f"消息流索引读取失败: {context} error_type={type(error).__name__}"
+            raise _report_read_failure(
+                MessageStreamError(f"消息流索引读取失败: {context} error_type={type(error).__name__}"),
+                cause=error, diagnostic=f"消息流索引读取失败: path={path} record={raw!r}",
             ) from error
         return threads
 
@@ -1052,10 +1068,10 @@ class MessageStreamStore:
             and stored_workspace_id is not None
             and stored_workspace_id != self._workspace_id
         ):
-            logger.error("消息流快照工作区不匹配: session_id=%s turn_stream_id=%s expected=%s actual=%r", session_id, turn_stream_id, self._workspace_id, stored_workspace_id)
-            raise MessageStreamError(
-                "消息流状态快照 workspace_id 不匹配: "
-                f"session_id={session_id} turn_stream_id={turn_stream_id} expected={self._workspace_id}"
+            raise _report_read_failure(
+                MessageStreamError("消息流状态快照 workspace_id 不匹配: "
+                                   f"session_id={session_id} turn_stream_id={turn_stream_id} expected={self._workspace_id}"),
+                diagnostic=f"消息流快照工作区不匹配: actual={stored_workspace_id!r}",
             )
         if self._workspace_id is not None:
             state["workspace_id"] = self._workspace_id

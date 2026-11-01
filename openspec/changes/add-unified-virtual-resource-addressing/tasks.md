@@ -1874,3 +1874,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 完整HEAD归档叠加最终新增单测为18项反例失败、18项业务控制通过；候选新增36项及相关历史回归共59 passed。产品消息和现有model_stream生成原历史，1 passed／26.68秒：三入口分别核布局缺失拒绝及真实OS正文open失败，修复后历史身份、顺序、canonical字节及sealed request_hash审计一致，模型调用仍为一次。首次装具Session ID格式错误的36项422及归档尚未就绪导致的收集退出4均不计反例；产品首验错误预期缺文件直接产生FileNotFoundError，依据原布局owner的recovery_required合同拆为两段故障验证，保留原失败，不改产品或放宽终态。
 - Ruff、compileall、真实Pyright零诊断、矩阵注册及OpenSpec strict通过；独立只读审查未发现剩余问题，审查方未运行测试。准确命令、源码指纹、完整归档摘要、原始输出与退出码见`out/tests/temp/history_failure_boundary_20261101/artifacts/verification.json`。产品测试期间采样源码前后稳定；归档反例过程主工作树新增测试变动单独登记，不扩张为全树冻结。
 - 业务HTTP为进程内ASGI，真实Gateway仅提供原来源配置，不代完整Gateway业务网络、Web、Backend重启、fork或Windows验收；2.2／7.2及整体51/53继续未完成。未修改前端、公共fixture、长回归driver或共享debug，未纳入bootstrap独立thread_id改动及另一会话暂存；团队协作和MCP显式持有继续延期。
+
+### 2026-11-01 消息流持久读取与诊断双错（2.2／7.2部分收口）
+
+- 原消息流存储在事件、状态快照、索引、已应用事件记录及流标识的拒绝处统一复用 `report_failure`，保留原校验实例或原生直接 cause，日志失败只追加次错类别；位置、损坏原值及完整次错留原异常诊断。原公开说明、HTTP 分类、缓存发布和磁盘恢复顺序保持，不增加日志回退或恢复 writer。
+- 原生产实现的34项日志sink反例均被真实 ENOTDIR／ENOENT 覆盖主错；最终150项不同单测、3项不同集成通过。新增产品验收由消息入口和原 model_stream 产生关键历史，覆盖四类持久记录及三个读取入口的24次双错拒绝、同入口恢复、原 Thread 续聊和4份 sealed request/hash 审计；既有真实 Gateway／Backend网络用例补验损坏拒绝与硬重启后原历史一致。另12项原生读取使用生产 `_RuntimeHandler` 和真实文件写入故障，核对同一 cause、原件不变及冷缓存不发布。
+- Ruff、compileall、新测试真实 Pyright 通过；Store 原2条 `reportIndexIssue` 的所属函数与表达式 AST 和原 HEAD 相同，前轮完整基线证据保留，不扩修。首轮两项健康日志分支的 artifact 装具期望已按原合同纠正，不计为产品反例。独立复审按本 worktree 的绝对目录及最终源码指纹确认无待处理 finding。证据：`out/tests/temp/message_stream_read_diagnostics_20261101/artifacts/verification.json`。
+- 全部测试使用外部超时和4GiB数据段保护，集成沿共享独占闸门。未改前端、公共fixture、配置迁移链或共享debug服务；本片不代Windows/Web、全局路径不变量或Store职责拆分总门，2.2／7.2仍未勾，整体51/53。
