@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from app.abstractions.workspace_resources import ResourceSnapshot
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.workspace_resources.facts import (
     index_resources,
     lease_status,
@@ -92,8 +92,12 @@ class ResourceRecovery:
             preparing = asyncio.create_task(self._prepare_records(items))
             try:
                 await asyncio.shield(preparing)
-            finally:
-                await run_cleanup_shielded(lambda: preparing)
+            except asyncio.CancelledError as original:
+                try:
+                    await run_cleanup_shielded(lambda: preparing)
+                except BaseException as failure:
+                    raise original from failure
+                raise
 
     async def _prepare_records(self, items: list[ResourceSnapshot]) -> None:
         owner = self._owner
@@ -105,7 +109,8 @@ class ResourceRecovery:
         }
         statuses: dict[str, str] = {}
         for record in records:
-            owner._leases.register_external(
+            await run_sync_shielded(
+                owner._leases.register_external,
                 resource_id=record.resource_id,
                 kind=owner.lease_kind,
                 lifetime_scope=record.retention_scope,
@@ -117,7 +122,7 @@ class ResourceRecovery:
         # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
         await owner._leases.reconcile(statuses, kind=owner.lease_kind)
         for record in records:
-            owner._release_committed_fork_leases(record)
+            await run_sync_shielded(owner._release_committed_fork_leases, record)
         pending_by_resource = owner._leases.leases_for_resources(owner._store.ids())
         for record in records:
             outstanding_leases = await owner._reconcile_stopped_record(

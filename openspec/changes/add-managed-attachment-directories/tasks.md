@@ -847,3 +847,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 受管cwd准入、目录URI保存和目录lease获取移至共享创建链的外部派发前；原资源锁、目录holder及Thread准入覆盖原writer的worker结算。准备失败或取消沿原未派发收尾，关闭后不迟到创建；真正派发丢回执仍保留unknown及目录占用，不新增账本或恢复入口。
 - 新增16项，相关后端回归910 passed／40.77秒，采样源码前后一致。完整旧生产归档叠加最终测试的四个准备故障均复现未结清intent，正常与丢回执两个控制通过；Ruff、compileall通过。Pyright原新各一条既存ResourceTransport属性诊断，文件、规则、完整消息和原Attribute表达式一致，新测试零诊断。原始输出、命令、指纹、类型对照及作者结构审查见`out/tests/temp/terminal_pre_dispatch_20261031/artifacts/verification.json`。
 - 本轮使用原owner、文件writer及lease账本和替身目录准入／外部transport，不证明真实PTY、GC、HTTP、Backend硬退出或Windows；完整旧代接管、原生I/O抢占和整个operation/shutdown期限仍TODO，5.2／5.4及21/23保持未完成。未修改Web／Workbench、其自动化或共享debug。
+
+### 2026-11-01 冷恢复准备的原生账本结算（5.2／5.4部分）
+
+- 资源登记与committed fork占用结算复用既有shielded worker及原账本writer锁，准备锁覆盖完整写盘、对账和版本冻结。仅实际取消后排空同一准备任务，保留首次取消及迟到写盘cause；正常结果和原失败直接传播，同key不重放关联，不新增账本或恢复入口。
+- 新增16项，定向24项及相关后端回归1062项全部通过；63份采样源码在检查前后保持一致。完整旧生产归档的四项反例均复现事件循环被同步写盘阻塞；保留worker修复而恢复旧finally的归档变异为4 failed／4 passed，失败均为原取消被迟到写盘错误替换。Ruff、compileall、Pyright及OpenSpec strict通过，准确命令、指纹、原始输出、实际退出码和作者结构审查见`out/tests/temp/resource_cold_preparation_20261101/artifacts/verification.json`。
+- 原owner与账本真实落盘，外部transport为替身；不代真实PTY／Chromium、HTTP、独立Backend硬重启或Windows验收。其它同步访问、原生I/O抢占、完整旧代接管与整个operation/shutdown期限继续TODO，5.2／5.4未勾，整体仍21/23。未修改或运行Web／Workbench及其自动化，未重启共享debug。
