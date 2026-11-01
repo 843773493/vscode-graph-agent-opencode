@@ -1470,3 +1470,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 最终新增3 passed／65.67秒（外层71.70秒），既有真实 HTTP Responses 工具循环及跨协议 fallback 的 sync／async 回归6 passed／39.09秒（外层46.57秒），均 exit0；原进程外180／120秒期限、4GiB数据段上限及共享集成独占闸门保持。Ruff、compileall及本 change strict 校验通过；真实 Pyright 新测试零诊断，helper 的4条诊断与完整 HEAD 归档基线按文件、规则、完整消息及表达式一致，不称完整类型全绿。早期 fixture 的 reasoning 声明、公开事件投影、虚构模型触发 fake_stream 及残缺参数构造问题均修正后补验，未修改生产逻辑或放宽断言；失败原件保留。
 - 澄清上一收据的最终错误分类：原 Provider 故障未被 runner cleanup 吞掉；残缺 canonical 调用使下一候选的准备阶段被安全边界拒绝。TODO：若需自动继续，须先明确上下文选集转换合同，不得静默隐藏失败历史或合成工具结果。本片不关闭此前真实外部 Provider 三文件工具链／冷恢复续聊缺口，也不新增 Gateway／Web／Windows／OS重启或完整 Section8 验收；7.5／8.3及整体111/119保持未完成。
 - 准确命令、源码前后指纹、原始输出、实际退出码、类型基线、失败归因及正式产物见 `out/tests/temp/provider_fallback_boundary_20261101/artifacts/verification.json`。本片只含本方两个测试文件及本收据，不含前端、公共 fixture、长回归驱动、共享 Debug 或其它会话独有改动；未作新的非作者独审，不以本片代替独审总门。
+
+
+### 2026-11-01 7.5-A/B detail 路径拒绝的诊断次错（部分）
+
+- detail 唯一文件 owner 的文件形态拒绝与原生路径访问失败统一复用现有 `report_failure`；日志 sink 失败不再覆盖 `DetailUnavailableError` 或原生 cause。真实路径仅留在原始日志 extra／异常 note，公开说明保留 typed detail 身份、stage、原 errno 与次错类别；不改 locator、正文格式、发布／删除算法或恢复 writer。六个未改方法 AST 与原生产逐项一致。
+- 新增隔离跨模块验收覆盖 read／排他 publish／remove／GC × target 目录冲突／parent 普通文件／真实父目录 chmod EACCES × 正常日志／真实日志 ENOTDIR，共24 passed／1.59秒；核原异常身份、cause、错误归属、正文与 sibling 原字节、零残留及解除故障后的冷读取。完整 HEAD 归档的原生产为12 failed／12健康控制 passed，失败精确复现日志异常盖掉原拒绝；现有 detail／registry 两完整模块135 passed／29.31秒。
+- Ruff、compileall、生产与新测试真实 Pyright（零诊断）及 strict 通过；初次测试 setup 将字符串 fixture 误标为 Path，修正后通过，原件保留。限定独审无剩余 finding，runtime直接11个Python文件，测试目录64个的既存越限只登记观察；未触碰前端、共享 fixture／driver／debug 服务或他人暂存。
+- 准确命令、源码指纹、原始输出、实际退出码、红测、方法对照和独审见 `out/tests/temp/detail_path_diagnostics_20261101/artifacts/verification.json`。本片只验 detail 文件 owner 边界，不代完整消息执行／fork、Gateway／Web、Windows、进程重启或7.5总门；111/119及各延期项保持未完成。

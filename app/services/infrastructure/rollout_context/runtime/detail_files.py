@@ -12,6 +12,7 @@ from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.core.failures import report_failure
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.sqlite_state import sqlite_file_uri
@@ -36,8 +37,13 @@ class DetailFiles:
 
     @staticmethod
     def _invalid_path(ref: DetailRef, path: Path, reason: str) -> DetailUnavailableError:
-        logger.error("%s: detail_ref=%s path=%s", reason, ref, path)
-        return DetailUnavailableError(f"{reason}: detail_ref={ref}, stage=path")
+        error = DetailUnavailableError(f"{reason}: detail_ref={ref}, stage=path")
+        error.add_note(f"detail path: {path}")
+        error.args = (report_failure(
+            error, detail=str(error), diagnostic_logger=logger,
+            extra={"detail_path": str(path)},
+        ),)
+        return error
 
     @staticmethod
     @contextmanager
@@ -50,8 +56,10 @@ class DetailFiles:
             if winerror is not None:
                 facts += f", winerror={winerror}"
             detail = f"assembly detail 路径访问失败: detail_ref={ref}, stage=path, {facts}"
-            logger.exception("%s；path=%s", detail, path)
-            raise DetailUnavailableError(detail) from error
+            raise DetailUnavailableError(report_failure(
+                error, detail=detail, diagnostic_logger=logger,
+                extra={"detail_path": str(path)},
+            )) from error
 
     def _info(self, ref: DetailRef, path: Path) -> os.stat_result | None:
         with self._path_access(ref, path):
