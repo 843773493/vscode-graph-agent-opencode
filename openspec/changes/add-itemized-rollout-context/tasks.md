@@ -1486,3 +1486,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 新增独立诊断测试复用原锁／连接的完整行为断言，最终新增62 passed／1.66秒，复用生产未变的原相关32项通过；完整HEAD归档加相同新测试的反例31 failed、31健康对照passed／7.87秒。原消息入口及model_stream生成工具历史后，两种存储故障×日志状态的4项产品验收通过／158.15秒（外层166.19秒），核两个公开历史入口、原cause、数据不变、独立writer、冷Saver、封存请求hash及同Thread续聊；快照释放与来源准备回归8 passed／19.45秒。新测试按目标平台实际日志错误类型／errno／filename精确对照；不同相关用例共106项通过。全部沿外部超时／4GiB及既有集成闸门。
 - Ruff、compileall和strict通过；Pyright保留4条既存`_RolloutSQLiteConnection.__exit__`诊断，与完整HEAD归档按owner／规则／完整消息一致，新测试零诊断。独立只读审查无finding，未独立跑测试。首次产品验证因测试探针漏传namespace失败，已修复，原输出及源码变化记录保留，不计为最终通过证据。
 - 准确命令、源码指纹、raw／退出码、红绿反例、AST和审查见`out/tests/temp/rollout_storage_diagnostics_20261101/artifacts/verification.json`。本片为Linux进程内完整应用／ASGI验收，不代完整Gateway代理、Web、Windows、真实外部Provider、Backend重启或7.5／Section8总门；111/119及延期项保持未完成。未改前端、公共fixture、长回归驱动或共享Debug。
+
+
+### 2026-11-01 7.5-A/C 真实工作台的存储权限拒绝与重试（部分）
+
+- 新增独立 Web Integration，复用现有 Workbench 构建和受管服务装具，但按本测试路径分配工作区、端口和产物；真实 Composer 及精确 model_stream 生成 read_file 完整工具历史。只撤销原锁文件读取权限，不替换其 inode、不改数据库或手工制造执行状态；新 BrowserContext 无旧缓存，以真实 Backend EACCES 经 Gateway 产生500，核公开错误类别／errno／request_id、精确owner及可见错误，无原生路径泄漏，也不显示虚假的空历史。
+- 恢复权限后真实点击重试，bootstrap核嵌套Session／Thread／工作区及request_id，完整历史、原canonical字节与输入草稿保持；随后原Thread续聊成功，原Turn除按正式当前视图重新投影的view坐标外每字段一致、原JSONL前缀不变，三份封存请求核真实transport正文／owner／request_hash及原工具配对。最终1 passed／138.56秒，外层141.78秒、exit0；3595项有范围受测源码前后无变化，独占集成闸门、外部600秒与4GiB保护保持，专用两端口可重绑定且锁权限已恢复。
+- Ruff、真实Pyright零诊断、Node语法检查与compileall通过；正式Workbench构建成功，保留产物main哈希、两份操作trace、阶段内存、截图及网络回执。首次产品轮因测试误读bootstrap的Session层级失败，已按正式DTO修正并完整补验；原失败保留，不计作通过。作者结构自查无finding，没有新的非作者独审。
+- 准确命令、原始输出、退出码、源码清单、初次失败归因及正式run路径见`out/tests/temp/web_history_storage_failure_20261101/artifacts/verification.json`。本片使用当前含未提交Workbench迁移的工作树，不宣称HEAD干净检出独立可复现；不改或夹带前端、公共fixture、矩阵／长回归driver、共享Debug及他人暂存。不新增Windows、真实外部Provider、同步transport、Backend重启、fork或全部Section8证据；整体111/119及延期项保持未完成。
