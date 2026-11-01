@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
@@ -24,8 +24,9 @@ def descriptor_pool_from_set(data: bytes) -> DescriptorPool:
 def assert_public_schema(
     schema: JsonSchemaValue, descriptor: Descriptor, *,
     message_adapter: Callable[[JsonSchemaValue, Descriptor], JsonSchemaValue | None] | None = None,
+    root_fields: Mapping[str, FieldDescriptor] | None = None,
 ) -> None:
-    """核对结构；具名 adapter 可投影外形或接管异形消息，业务约束仍由模型负责。"""
+    """核对结构；具名根投影可组合原 descriptor 字段，嵌套消息仍完整递归核对。"""
     visited: set[tuple[str, int]] = set()
 
     def concrete(node: JsonSchemaValue, path: str) -> JsonSchemaValue:
@@ -93,7 +94,10 @@ def assert_public_schema(
         else:
             require_type(node, "integer", path)
 
-    def message_shape(node: JsonSchemaValue, message: Descriptor, path: str) -> None:
+    def message_shape(
+        node: JsonSchemaValue, message: Descriptor, path: str,
+        fields: Mapping[str, FieldDescriptor] | None = None,
+    ) -> None:
         if message_adapter is not None:
             adapted = message_adapter(concrete(node, path), message)
             if adapted is None:
@@ -103,8 +107,9 @@ def assert_public_schema(
         for value in values:
             require_type(value, "object", path)
         public_fields = set().union(*(value.get("properties", {}) for value in values))
-        missing = sorted(set(message.fields_by_name) - public_fields)
-        extra = sorted(public_fields - set(message.fields_by_name))
+        expected_fields = message.fields_by_name if fields is None else fields
+        missing = sorted(set(expected_fields) - public_fields)
+        extra = sorted(public_fields - set(expected_fields))
         if missing or extra:
             raise ValueError(f"公开结构与 proto 字段不一致: {path}, message={message.full_name}, missing={missing}, extra={extra}")
         for value in values:
@@ -114,11 +119,11 @@ def assert_public_schema(
             visited.add(key)
             properties = value.get("properties", {})
             # 业务联合可按分支省略有 presence 的字段；其余公共字段不能消失。
-            missing_common = sorted(field.name for field in message.fields
-                                    if field.name not in properties and not field.has_presence)
+            missing_common = sorted(name for name, field in expected_fields.items()
+                                    if name not in properties and not field.has_presence)
             if missing_common:
                 raise ValueError(f"公开结构与 proto 联合分支字段不一致: {path}, missing={missing_common}")
             for name, field_schema in properties.items():
-                field_shape(field_schema, message.fields_by_name[name], path + "/" + name)
+                field_shape(field_schema, expected_fields[name], path + "/" + name)
 
-    message_shape(schema, descriptor, descriptor.full_name)
+    message_shape(schema, descriptor, descriptor.full_name, root_fields)

@@ -18,9 +18,7 @@ from app.protocol.generated.boxteam.workspace.v2 import (
 )
 from app.protocol.schema import assert_public_schema
 
-# TODO: HTTP 根的定位信封及 StreamSnapshot 旧中断字段仍需具名投影核对。
-# 本登记只覆盖同形嵌套对象。
-# 不以根的具名差异跳过这些对象的字段、枚举或嵌套结构检查。
+# 同形成员直接递归核对；HTTP 根的信封合并及中断别名在具名投影中核对。
 MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, Descriptor] = {
     f"MessageStream{suffix}DTO": message_stream_pb2.DESCRIPTOR.message_types_by_name[message]
     for suffix, message in (
@@ -174,6 +172,7 @@ def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool |
     _assert_http_schemas(document, HTTP_JSON_DESCRIPTORS, pool)
     components = document["components"]
     schemas = components["schemas"]
+    _assert_message_stream_snapshot(schemas, components, pool)
     # REST 的 action + params 是既有业务外形；只在此把外形投影到 proto oneof，
     # 动作成员、公共字段及嵌套参数仍由本次 descriptor 推导，不另维护字段表。
     descriptor = public_pb2.DESCRIPTOR.message_types_by_name["NodeDebugActionRequest"]
@@ -202,3 +201,35 @@ def assert_public_http_schemas(document: JsonSchemaValue, pool: DescriptorPool |
             **{name: properties[name] for name in common}, action: properties["params"],
         }})
     assert_public_schema({"oneOf": branches, "components": components}, descriptor)
+
+
+def _assert_message_stream_snapshot(
+    schemas: JsonSchemaValue, components: JsonSchemaValue, pool: DescriptorPool | None,
+) -> None:
+    """HTTP 根展平事件定位字段，并把旧 wire 中断别名对应到现行嵌套字段。"""
+    name = "MessageStreamSnapshotDTO"
+    if name not in schemas:
+        raise ValueError(f"公开 HTTP 结构未被导出: {name}")
+    snapshot = message_stream_pb2.DESCRIPTOR.message_types_by_name["StreamSnapshot"]
+    event = message_stream_pb2.DESCRIPTOR.message_types_by_name["MessageStreamEvent"]
+    if pool is not None:
+        snapshot = pool.FindMessageTypeByName(snapshot.full_name)
+        event = pool.FindMessageTypeByName(event.full_name)
+    fields = dict(snapshot.fields_by_name)
+    fields.update({
+        field: event.fields_by_name[field]
+        for field in ("session_id", "thread_id", "turn_id", "turn_stream_id")
+    })
+    # 不跳过旧 wire 字段；从同一公开中断对象取外形，仍核其真实 descriptor 类型。
+    interrupt = schemas["MessageStreamInterruptStateDTO"]["properties"]
+    aliases = {"interrupt_request_id": "request_id", "interrupt_status": "status"}
+    if set(aliases) & schemas[name]["properties"].keys():
+        raise ValueError("消息流 HTTP 根不接受 wire 中断别名，必须使用 interrupt_state")
+    properties = {
+        **schemas[name]["properties"],
+        **{wire: interrupt[public] for wire, public in aliases.items()},
+    }
+    assert_public_schema(
+        {**schemas[name], "properties": properties, "components": components},
+        snapshot, root_fields=fields,
+    )
