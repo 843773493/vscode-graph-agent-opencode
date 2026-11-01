@@ -1532,3 +1532,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 原始运行均保留：004初版直接reload通过但绕过生产candidate applier，不算完整产品验收；006改为真实watcher后复现ConfigRestartRequiredError。扩大配置单测批次007在180秒外部期限退出124，未完成、未算通过；008只补直接相关31项并通过。009在配置修改前的首模型20秒阶段等待到期，并引出fixture读取未结算transport的teardown错误；010按既有同类fixture的45秒阶段等待通过，未改变产品执行期限。TODO：首轮模型准备的冷启动长尾根因仍未定位；扩大批次未完成范围保留，不通过放宽业务断言或产品期限掩盖。
 - Ruff、Pyright零诊断、compileall、严格规范校验通过；最终2873份源码（含configs）采样前后无变化。命令、原始输出/实际退出码、源码与产物hash、作者结构审查见`out/tests/temp/activation_policy_turn_20261101/artifacts/verification.json`。原策略模块316行、目录17个直接Python文件；测试generation目录6个，无新增目录和职责层。只做作者复核，无新增非作者独审。
 - 本片不新增Gateway/Web、独立Backend硬重启、Windows、同步SDK、真实Provider或完整Section8证据。9.7/7.5/8.3/8.13及整体111/119保持未完成，团队与MCP持有延期项继续原TODO；未改前端迁移、公共fixture、长回归驱动、共享debug或他人暂存。
+
+### 2026-11-01 9.7 同请求混合边界与原调用Skill选择修复（部分）
+
+- 新真实消息场景复现：Skill采用model_call时，发起工具调用后来源已更新，旧版本snapshot加载成功，但下一请求安装新目录后以新版校验待封存旧选择，报skill-selection-unavailable。现在Saver将上一份已封存普通请求的原activation/catalog明确交给选择恢复；新目录继续负责当前metadata与tracked观察，原source identity/revision的正文与descriptor从原调用目录恢复。缺原目录或版本冲突仍明确拒绝，不从当前目录补造。assembly reader既有summary_candidate排除规则保留；没有新存储、writer、缓存账本、配置或兼容入口，所有直接调用方已迁齐，descriptor构造合为一处。
+- 最终32项定向单测通过/46.04秒；正式集成7 passed/126.11秒，包括新混合场景、真实Skill刷新/同名来源覆盖和同步/异步rewind各驻留/冷恢复。新场景两轮消息、三次Skill工具调用和5次model_stream请求均经原ASGI消息/执行入口生成，Gateway Skill来源使用真实认证owner；在两个model.response_ready屏障内同时修改AGENTS与Skill，等待原Registry真实发布后放行。AGENTS在同Turn三份assembly逐字段保持A，Skill两次显式选择取发起时A/B，新Turn采用C。三次Skill正文版本不同，同一raw来源的metadata语义revision不变而lineage digest逐次变化；assistant/tool前缀和顺序、原owner与有效完整policy、冷Saver及投影、删除当前源后的5份封存正文/request hash均精确核对。
+- product-004保留原缺陷与后续fixture transport计数错误原件，不把其错误算通过。product-008修复后已完成全部5次调用，但新测试错误地只期待显式skill override，漏计配置继承的mcp_tool_catalog=turn；integrated-010改为与生产配置owner发布的完整有效policy严格对账并通过，未放宽版本、身份、顺序或业务期限。unit-final-011、integrated-010和final-static-012的2874份采样源码前后均无变化；使用原集成独占闸门、外置timeout与4GiB数据段保护。
+- Ruff、compileall和54项strict均通过。Pyright实测exit1/21条诊断，与修改前完整HEAD归档按文件/规则/完整消息逐项相同，新场景零诊断；不称整个类型检查全绿。作者结构复核：CSM目录12个直接Python文件、seal目录5个、generation目录6个；app/agents既有35个直接Python文件且本片未增加，不能代全仓结构门。命令、源码指纹、原始输出/实际退出码、完整类型基线比对与正式产物引用见out/tests/temp/mixed_activation_sources_20261101/artifacts/verification.json。
+- 本片未改前端迁移、公共fixture、唯一conversation_lifecycle长驱动、共享debug或他人暂存；不代真实浏览器、独立Backend硬重启、Windows、同步Provider SDK或外部模型验收。9.7/7.5/8.3/8.13及整体111/119保持未完成；团队与MCP持有延期仍保留TODO，无新增非作者独审。

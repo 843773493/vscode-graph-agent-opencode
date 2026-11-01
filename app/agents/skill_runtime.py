@@ -337,9 +337,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
 
 def install_frozen_skill_catalog(
     manager: ContextSourceManager, snapshot: SkillCatalogActivationSnapshot, *,
-    include_instructions: bool,
+    include_instructions: bool, pending_catalog: SkillCatalogActivationSnapshot | None,
 ) -> None:
-    """只消费本次 Saver 已冻结的 exact facets；tracked 更新不读取 live Registry。"""
+    """显式选择取原调用目录；新目录仅负责本次metadata与tracked观察。"""
     manager.install_skill_activation_snapshot(snapshot)
     for binding in snapshot.sources.values():
         manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
@@ -347,7 +347,7 @@ def install_frozen_skill_catalog(
     for binding in snapshot.entries.values():
         manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
         metadata.append({"name": binding.name, "description": binding.description})
-    manager.restore_frozen_skill_selections()
+    manager.restore_frozen_skill_selections(pending_catalog)
     manager.observe_frozen_tracked_skills()
     if not include_instructions or (not metadata and not any(
         descriptor.source_id == "instruction:skill-catalog" for descriptor in manager.descriptors()

@@ -544,7 +544,7 @@ async def test_frozen_catalog_can_prepare_after_rewind_before_its_registration(
     )
     install_frozen_skill_catalog(case.manager, SkillCatalogActivationSnapshot(
         "catalog:1", {binding.name: binding},
-    ), include_instructions=True)
+    ), include_instructions=True, pending_catalog=None)
     prepared = case.prepare("late-catalog")
     original = canonical_json_bytes(case.snapshot(prepared).to_dict())
     assert case.connection.execute(
@@ -562,7 +562,7 @@ async def test_frozen_catalog_can_prepare_after_rewind_before_its_registration(
     current = replace(binding, description="本次冻结的目录说明")
     install_frozen_skill_catalog(case.manager, SkillCatalogActivationSnapshot(
         "catalog:2", {current.name: current},
-    ), include_instructions=True)
+    ), include_instructions=True, pending_catalog=None)
     rebuilt = case.snapshot(case.prepare("regenerated-catalog"))
     assert rebuilt.seal_binding is not None
     root = rebuilt.seal_binding.root

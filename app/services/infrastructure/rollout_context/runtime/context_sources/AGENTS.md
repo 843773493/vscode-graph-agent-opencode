@@ -16,6 +16,7 @@
 
 - snapshot 每次显式加载采用调用冻结版本，并停止同名追踪；不自动观察更新。tracked 的变化通过已注册观察事件或显式 observe 输入进入。
 - Skill 的冻结正文候选与 snapshot/tracked 模式由同一控制事务接受；applied 仍只由 assembly seal 推进，失败不得清理原 pending 或提前切换模式。
+- 待封存的显式Skill选择只从发起工具调用的原封存catalog恢复；下一model_call的新目录用于metadata与tracked观察，不能覆盖或拒绝已接受的旧版本选择。冷恢复按原source identity绑定descriptor，原目录缺失或版本不符明确报错。
 - 同一来源的未发送变化必须从已应用 revision 合并成一个 delta；untrack 不移除已提交上下文。
 - 生命周期机制只返回状态和释放结果，不发布业务事件。
 - observe明确区分unchanged、baseline_restored、not_tracked与accepted，pending单独表示尚未封存的更新；持续更新入口必须核验tracked，禁止用布尔回执推断已生效。

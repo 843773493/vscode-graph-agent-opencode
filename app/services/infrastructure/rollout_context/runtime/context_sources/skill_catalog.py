@@ -109,6 +109,14 @@ def skill_catalog_from_activation(
     return SkillCatalogActivationSnapshot(catalog_revision=catalogs[0].revision, entries=entries, sources=sources)
 
 
+def _skill_descriptor(binding: SkillCatalogBinding) -> ContextSourceDescriptor:
+    return ContextSourceDescriptor(
+        source_id=f"skill:{binding.entry_identity}", source_kind="skill",
+        name=binding.name, description=binding.description, internal_locator=binding.display_uri,
+        resource_uri=binding.display_uri,
+    )
+
+
 class SkillCatalogMixin:
         _sources: dict[str, SourceState]
         _source_ids_by_kind_and_name: dict[tuple[str, str], str]
@@ -124,11 +132,7 @@ class SkillCatalogMixin:
 
         def register_skill_binding(self, binding: SkillCatalogBinding, *, catalog_revision: str) -> None:
             """entry identity 决定 registration；同名新 entry 保留原 tracked registration。"""
-            self.register(ContextSourceDescriptor(
-                source_id=f"skill:{binding.entry_identity}", source_kind="skill",
-                name=binding.name, description=binding.description, internal_locator=binding.display_uri,
-                resource_uri=binding.display_uri,
-            ), binding_revision=catalog_revision)
+            self.register(_skill_descriptor(binding), binding_revision=catalog_revision)
 
         def install_skill_activation_snapshot(
             self,
@@ -172,11 +176,7 @@ class SkillCatalogMixin:
                 binding = activation_snapshot.entries.get(normalized)
                 if binding is None:
                     raise KeyError(f"Skill 不存在: name={normalized}")
-                state = self._registration_candidate(ContextSourceDescriptor(
-                    source_id=f"skill:{binding.entry_identity}", source_kind="skill",
-                    name=binding.name, description=binding.description,
-                    internal_locator=binding.display_uri, resource_uri=binding.display_uri,
-                ), activation_snapshot.catalog_revision)
+                state = self._registration_candidate(_skill_descriptor(binding), activation_snapshot.catalog_revision)
                 source_id = state.source_id
             else:
                 source_id = self._source_ids_by_kind_and_name.get(("skill", normalized))
@@ -385,19 +385,21 @@ class SkillCatalogMixin:
                 )
             return candidate
 
-        def restore_frozen_skill_selections(self) -> None:
-            """恢复已接受但尚未封存的选择，只消费同一 execution 冻结的正文版本。"""
-            snapshot = self.frozen_skill_catalog()
+        def restore_frozen_skill_selections(self, snapshot: SkillCatalogActivationSnapshot | None) -> None:
+            """只从发起工具调用的封存目录恢复待选择正文，不消费下一请求的新目录。"""
+            bindings = {} if snapshot is None else {
+                f"skill:{binding.entry_identity}": binding for binding in snapshot.sources.values()
+            }
             for state in self._sources.values():
                 if state.source_kind != "skill" or state.selection_sequence <= state.latest_visible_selection_sequence:
                     continue
                 if any(other.source_kind == "skill" and _normalize_skill_name(other.name) == _normalize_skill_name(state.name)
                        and other.selection_sequence > state.selection_sequence for other in self._sources.values()):
                     continue
-                descriptor = state.descriptor
-                binding = snapshot.sources.get(descriptor.resource_uri) if descriptor is not None and descriptor.resource_uri is not None else None
+                binding = bindings.get(state.source_id)
                 if binding is None or binding.activation_revision != state.latest_revision:
                     raise SkillCatalogSnapshotConflict("skill-selection-unavailable: 待封存选择缺少精确冻结正文")
+                state.bind_descriptor(_skill_descriptor(binding))
                 state.latest_content = binding.body
                 state.pending_kind = "activation"
                 self._queue_delta(state)

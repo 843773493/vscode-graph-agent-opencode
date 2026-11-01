@@ -263,9 +263,25 @@ def prepare_registered_context(
                 ),
             )
             if frozen_skills is not None:
+                # 待封存的显式选择来自上一已封存请求的工具调用；同Turn下的
+                # model_call目录可以更新，不能用新版正文覆盖或拒绝原选择。
+                pending_catalog = None
+                if previous is not None:
+                    original = owner.load_sealed_resource_activation(
+                        session_id, thread_id=thread_id, assembly_id=previous.assembly_id,
+                        plan_hash=previous.plan_hash, request_hash=previous.request_hash,
+                        checkpoint_ns=checkpoint_ns,
+                    )
+                    pending_catalog = skill_catalog_from_activation(
+                        original, lambda frozen, binding: owner.read_resource_activation_payload(
+                            frozen, binding, checkpoint_ns=checkpoint_ns,
+                            storage_owner=(session_id, thread_id),
+                        ),
+                    )
                 install_frozen_skill_catalog(
                     context_source_manager, frozen_skills,
                     include_instructions="skill_load" in tool_set.tool_names,
+                    pending_catalog=pending_catalog,
                 )
             rebuild = None if summary_candidate is not None else owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,

@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.agents.skill_runtime import install_frozen_skill_catalog
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.serde.epoch import context_seal_binding_to_dict
@@ -186,7 +187,7 @@ def test_last_explicit_selection_wins_before_seal_and_after_cold_restore(source_
     manager = case.manager()
     manager.install_skill_activation_snapshot(original)
     manager.register_skill_binding(a, catalog_revision=original.catalog_revision)
-    manager.restore_frozen_skill_selections()
+    manager.restore_frozen_skill_selections(original)
     tools = ToolSetSnapshot(selection_revision=sha256_jcs({"changed": True}), tools=(
         {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
     )) if rebase else None
@@ -216,3 +217,47 @@ def test_catalog_rebind_keeps_pending_tracked_update_sealable(source_seal_case):
     assert block["revision"] == _revision("v2\n")
     assert block["base_revision"] == catalog.entries["demo"].activation_revision
     assert block["representation"] == "unified_diff"
+
+
+@pytest.mark.parametrize("cold", [False, True], ids=["resident", "cold"])
+@pytest.mark.parametrize("current", ["same", "updated", "removed"])
+def test_pending_selection_uses_original_call_catalog(source_seal_case, cold, current):
+    case = source_seal_case
+    manager = case.manager()
+    original = _catalog("original-call-A\n")
+    receipt = manager.load_skill("demo", activation_snapshot=original)
+    accepted = case.saver.load_context_source_control_states(case.owner)
+    if cold:
+        manager = case.manager()
+        assert manager.descriptors() == ()
+    catalog = original if current == "same" else _catalog("next-call-B\n") if current == "updated" else SkillCatalogActivationSnapshot("empty", {})
+    install_frozen_skill_catalog(manager, catalog, include_instructions=False, pending_catalog=original)
+    assert manager.frozen_skill_catalog() == catalog
+    pending = manager.prepare_pending()
+    assert pending is not None
+    source, = pending.sources
+    assert (source.descriptor.source_id, source.revision, source.content) == (
+        "skill:demo", receipt.revision, original.entries["demo"].body,
+    )
+    controls = case.saver.load_context_source_control_states(case.owner)
+    assert len(controls) == len(accepted) == 1
+    assert controls[0].latest_revision == accepted[0].latest_revision
+    assert controls[0].selection_sequence == accepted[0].selection_sequence
+    assert controls[0].latest_visible_committed_revision is None
+    _, sealed = case.seal(manager)
+    block, = json.loads(sealed.prefix.state.frames[-1].content)["sources"]
+    assert block["body"] == original.entries["demo"].body
+    assert block["revision"] == receipt.revision
+
+
+@pytest.mark.parametrize("wrong_origin", [None, _catalog("another-call\n")], ids=["missing", "wrong-revision"])
+def test_pending_selection_rejects_missing_original_even_when_current_matches(source_seal_case, wrong_origin):
+    case = source_seal_case
+    original = _catalog("original-call\n")
+    case.manager().load_skill("demo", activation_snapshot=original)
+    manager = case.manager()
+    before = case.saver.load_context_source_control_states(case.owner)
+    with pytest.raises(SkillCatalogSnapshotConflict, match="skill-selection-unavailable"):
+        install_frozen_skill_catalog(manager, original, include_instructions=False, pending_catalog=wrong_origin)
+    assert case.saver.load_context_source_control_states(case.owner) == before
+    assert manager.prepare_pending() is None
