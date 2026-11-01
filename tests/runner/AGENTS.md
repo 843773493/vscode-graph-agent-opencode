@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-history-failure-boundary` 经产品消息与 model_stream 生成历史，验证三个历史入口的真实布局／I/O 拒绝和修复后冷读，核原 canonical 字节及封存请求 hash；固定120秒／4GiB并沿共享集成闸门，不代替独立Backend重启、Gateway、Web或Windows验收。
+
 `integration-session-creation-io` 经消息、Agent/model_stream和ASGI fork入口核对Session冻结、准备、rename、发布CAS与隔离中止中的真实SQLite写锁及取消；原key/gate持续到I/O结算，同请求恢复原目标或原aborted记录。固定180秒/4GiB及原60秒fork watchdog和集成闸门；不代表Gateway/Web、独立Backend重启、Windows或全shutdown期限。
 
 `integration-fork-confirmation-io` 经产品消息、Agent 和 model_stream 生成带附件来源，核新 Session main/child 的异步发布确认、线程池排队及确认写入前后取消；保留原 gate、published 事实、附件结算和同 key 恢复。固定180秒/4GiB及原60秒fork期限，复用集成独占闸门；不代表独立进程重启、Gateway/Web、Windows或整个shutdown期限。

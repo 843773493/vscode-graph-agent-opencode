@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 
 from app.api.deps import (
     get_request_id,
@@ -15,8 +16,10 @@ from app.api.errors import (
     state_conflict_http_error,
 )
 from app.core.exceptions import NotFoundError
+from app.core.failures import failure_detail
 from app.core.history_loading import parse_history_loading_header
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.domain.itemized.errors import ItemSchemaError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.turn import (
@@ -55,13 +58,13 @@ def _turn_history_http_error(
         return HTTPException(status_code=404, detail=client_error_message(error))
     if isinstance(error, InvalidTurnCursorError):
         return HTTPException(status_code=400, detail=str(error))
-    if isinstance(error, ValueError):
+    if isinstance(error, ValueError) and not isinstance(error, (ValidationError, ItemSchemaError)):
         return HTTPException(status_code=400, detail=str(error))
     return HTTPException(
         status_code=500,
         detail=TurnProjectionCorruptedErrorDTO(
             session_id=session_id,
-            message=str(error),
+            message=failure_detail(error, stage="history_read", label=f"历史读取失败: session_id={session_id}"),
         ).model_dump(mode="json"),
     )
 

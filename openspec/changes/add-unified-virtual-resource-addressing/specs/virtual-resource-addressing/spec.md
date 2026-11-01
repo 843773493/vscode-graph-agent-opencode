@@ -49,6 +49,11 @@
 - **WHEN** API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path，且不属于上述控制面根绑定或两个具名入口例外
 - **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
 
+#### Scenario: 历史读取失败不复制内部诊断或冒充输入错误
+
+- **WHEN** bootstrap、Session 历史或精确 Thread 历史读取遇到原生 I/O、SQLite、内部完整性或 Pydantic／canonical 领域校验失败
+- **THEN** 三个入口复用同一错误出口，保留结构化 `turn_projection_corrupted`、Session 身份和 HTTP 500，只公开读取阶段、原异常类别及适用系统错误码；原生位置、损坏字段和原值仅留原异常及诊断，日志输出再次失败不能替换原失败。内部校验不得因继承 ValueError 被映射为客户端 400；既有非法游标、过期游标／Turn、未找到及删除中合同保持。失败不重建或改写已提交历史，恢复原存储后同入口可重读相同身份、顺序与封存请求 hash
+
 #### Scenario: 操作 ID 拒绝不回显非法值
 
 - **WHEN** 文件或会话目录的操作状态查询、受理请求拒绝非法 `operation_id`，且输入可能包含原生路径

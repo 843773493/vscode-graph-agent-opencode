@@ -1867,3 +1867,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 工具测试的运行、样本及存储拒绝复用唯一`report_failure`，保留原owner logger、request_id及运行／样本归属；日志不可写只追加次错类别与原异常notes，不能阻止失败回执落盘或把运行遗留为running。原阶段、原生错误码／cause、模型调用计数、成功正文和显式重试保持，不增加错误账本、重试或公开结构。
 - 定向单测及原ASGI API共253项通过，另175项共享诊断／Trace／SQLite回归通过；最终损坏记录日志装具改为观察实际logging派发后，受影响8项补验通过。完整旧生产归档的执行反例确认运行仍为running；损坏记录反例核实原日志次错替换拒绝。原查询9项旧断言在完整HEAD原测试中同样失败，已按现行500请求阶段合同迁齐，并继续精确核owner阶段、request_id、原异常、原件保全及同入口恢复。首次装具因假定logger.error总带exc_info而失败的记录保留，不计有效反例。
 - Ruff、真实Pyright零诊断、compileall及本change strict通过；准确命令、源码指纹、旧生产归档tree、原始输出／退出码、测试复用依据和差异自查见`out/tests/temp/tool_test_diagnostic_settlement_20261101/artifacts/verification.json`。API使用进程内ASGI和既有工具测试专用脚本模型，不代真实Provider、独立Gateway网络、Web、Backend重启或Windows实机；未改另一会话的前端、公共fixture、回归驱动、共享debug或暂存。2.2／7.2仍未勾，整体51/53。
+
+### 2026-11-01 历史读取失败的公开边界（2.2／7.2部分收口）
+
+- bootstrap、Session历史及精确Thread历史复用原错误出口：保留结构化turn_projection_corrupted、Session归属及500，只公布阶段、原类别和适用系统码，原异常留诊断；内部Pydantic／canonical校验不再因ValueError继承被误归400。游标、404／409及普通输入拒绝保持，没有新增reader、writer或诊断链。
+- 完整HEAD归档叠加最终新增单测为18项反例失败、18项业务控制通过；候选新增36项及相关历史回归共59 passed。产品消息和现有model_stream生成原历史，1 passed／26.68秒：三入口分别核布局缺失拒绝及真实OS正文open失败，修复后历史身份、顺序、canonical字节及sealed request_hash审计一致，模型调用仍为一次。首次装具Session ID格式错误的36项422及归档尚未就绪导致的收集退出4均不计反例；产品首验错误预期缺文件直接产生FileNotFoundError，依据原布局owner的recovery_required合同拆为两段故障验证，保留原失败，不改产品或放宽终态。
+- Ruff、compileall、真实Pyright零诊断、矩阵注册及OpenSpec strict通过；独立只读审查未发现剩余问题，审查方未运行测试。准确命令、源码指纹、完整归档摘要、原始输出与退出码见`out/tests/temp/history_failure_boundary_20261101/artifacts/verification.json`。产品测试期间采样源码前后稳定；归档反例过程主工作树新增测试变动单独登记，不扩张为全树冻结。
+- 业务HTTP为进程内ASGI，真实Gateway仅提供原来源配置，不代完整Gateway业务网络、Web、Backend重启、fork或Windows验收；2.2／7.2及整体51/53继续未完成。未修改前端、公共fixture、长回归driver或共享debug，未纳入bootstrap独立thread_id改动及另一会话暂存；团队协作和MCP显式持有继续延期。
