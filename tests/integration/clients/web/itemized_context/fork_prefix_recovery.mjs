@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright";
@@ -27,21 +28,28 @@ let page;
 let token;
 let executionError;
 
-async function api(pathname, owner, data, method = data === undefined ? "GET" : "POST") {
+async function responseBody(pathname, owner, data, method = data === undefined ? "GET" : "POST") {
+  const sentRequestId = randomUUID();
   const response = await page.request.fetch(new URL(pathname, baseUrl).href, {
     method,
-    headers: { "X-Local-Token": token, ...(owner ? { "X-BoxTeam-Workspace-Id": owner.routeId } : {}) },
+    headers: { "X-Local-Token": token, "X-Request-ID": sentRequestId,
+      ...(owner ? { "X-BoxTeam-Workspace-Id": owner.routeId } : {}) },
     ...(data === undefined ? {} : { data }), timeout: 60_000,
   });
   try {
     const body = await response.json();
     const requestId = response.headers()["x-request-id"];
-    assert(requestId);
-    assert.equal(body.request_id, requestId);
+    assert.equal(requestId, sentRequestId);
     facts.responses.push({ path: pathname, status: response.status(), requestId });
     assert.equal(response.status(), 200, JSON.stringify(body));
-    return body.data;
+    return { body, requestId };
   } finally { await response.dispose(); }
+}
+
+async function api(...args) {
+  const { body, requestId } = await responseBody(...args);
+  assert.equal(body.request_id, requestId);
+  return body.data;
 }
 
 async function history(owner) {
@@ -168,8 +176,37 @@ try {
   await assertPrefixVisible(refreshedThread, earlier.turn_id);
   facts.refreshedHistory = await history(child);
   assert.deepEqual(facts.refreshedHistory, imported);
+  facts.phase = "backend-restart";
+  // health 沿用平铺响应；普通业务 API 继续严格核对 APIResponse 的 request_id。
+  const beforeRestart = (await responseBody("/api/v1/health", source)).body;
+  const registered = (await api("/api/gateway/workspaces")).items.find(item => item.workspace_id === source.routeId);
+  assert(registered?.managed);
+  assert.equal(registered.backend_workspace_id, source.workspaceId);
+  assert.equal(typeof registered.backend_generation, "string");
+  // 离开真实页面以关闭其 SSE，再走安全重启；不以强制重启跳过活动引用保护。
+  await page.goto("about:blank");
+  const restart = await api(`/api/gateway/workspaces/${source.routeId}/runtime/restart-safe`, undefined, {
+    expected_backend_generation: registered.backend_generation,
+    expected_workspace_ids: registered.affected_workspace_ids,
+  });
+  assert.equal(restart.status, "restarted");
+  assert.deepEqual(restart.blockers, []);
+  assert.notEqual(restart.backend_generation, registered.backend_generation);
+  const afterRestart = (await responseBody("/api/v1/health", source)).body;
+  assert.equal(beforeRestart.workspace_id, source.workspaceId);
+  assert.equal(afterRestart.workspace_id, source.workspaceId);
+  assert.notEqual(beforeRestart.process_id, afterRestart.process_id, "必须真正更换 Backend 进程");
+  facts.backendRestart = { before: beforeRestart, after: afterRestart, receipt: restart,
+    previousGeneration: registered.backend_generation };
+  // 新 Backend 冷读必须由原产品 owner 完成，不能借页面缓存或手工恢复数据通过。
+  facts.restartedHistory = await history(child);
+  assert.deepEqual(facts.restartedHistory, imported);
+  assert.deepEqual(await history(source), before, "Backend 重启不能改写 source 历史");
+  await openWorkbench(page, baseUrl);
+  const restartedThread = await openChild(child);
+  await assertPrefixVisible(restartedThread, earlier.turn_id);
   facts.phase = "child-successor";
-  facts.successorTurnId = await send(child, refreshedThread, 2, interactions.slice(4));
+  facts.successorTurnId = await send(child, restartedThread, 2, interactions.slice(4));
   const continued = await history(child);
   assert.deepEqual(continued.items.map(turn => turn.turn_id), [earlier.turn_id, facts.successorTurnId]);
   assert.deepEqual(await history(source), before, "child 续聊不能修改 source 历史");

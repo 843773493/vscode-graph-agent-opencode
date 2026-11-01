@@ -1408,3 +1408,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 独立 `integration-web-fork-prefix-recovery` 通过正式 Workbench、真实 Gateway/Backend、Composer 与 model_stream 生成两轮工具历史，再按第一轮 final item 的实际 view/revision 创建 child；真实刷新后核同一历史并继续执行。核八个继承 canonical item 的原身份、sequence、owner、hash/revision，后续 Turn/tool 不进入 child，main 历史保持原样；五次 transport 请求与原 sealed assembly/request hash 逐项对账。不手填执行、checkpoint 或 fork 状态，也不另建 Section 8 总验收。
 - 最终矩阵 1 passed/141.85秒（外层145.40秒）、exit0；固定360秒/单进程4GiB、原60秒fork watchdog和跨worktree集成独占闸门。正式构建成功，Ruff、真实Pyright零诊断、Node语法及矩阵注册检查通过；4341项受测主仓源码前后指纹一致，upstream内部不在该清单内，构建收据记录其精确commit。只读独审发现并修正了缺少item_sequence的顺序证明，复核后无剩余可行动问题。首轮直接pytest在fork前被watchdog的matrix归属校验拒绝，未作fork通过证据；原件保留。
 - 证据：`out/tests/temp/fork_prefix_web_20261101/artifacts/verification.json`。这是浏览器刷新/重开后的定向回归，不新增Backend进程重启、Windows、同步入口、真实Provider或完整Section 8证据；7.5/8.3及111/119保持未关闭。复用另一会话当前Workbench构建/定位装具，前端实施及其独有改动不纳入本片提交。
+
+
+### 2026-11-01 7.5-C/E、8.3 Web 前缀分支的 Backend 安全重启补验（部分）
+
+- 原独立前缀场景改由本文件 fixture 管理 Gateway 受管 Backend，沿用正式 Workbench、Composer 与 model_stream，不修改公共 fixture 或唯一 Section 8 驱动。两轮工具历史及较早 final item 的实际 view/revision 仍由产品入口生成；原刷新后离开页面关闭 SSE，通过带完整组 generation/成员前置条件的 Gateway 安全重启，核 PID 3125850→3135768、原 workspace 身份及新 generation，再直接冷读 child 和 source、重开页面并从 child 续聊。八个继承 canonical item 的原身份、顺序、owner、hash/revision及五份封存请求对账保持，后续 source Turn/tool 不进入 child。
+- 正式矩阵1 passed／167.29秒、exit0；固定360秒／单进程4GiB、原60秒fork watchdog和共享集成闸门保持。4345份受测主仓文件前后指纹一致（不含gitlink内部）；实际Workbench构建收据及源码commit单独保留。Ruff、compileall、真实Pyright零诊断及Node语法通过，限定两文件的独立只读审查无finding、未运行测试。首轮新增装具误把原平铺health当APIResponse，在重启前失败；修正为显式消费health原结构并核发送/回传request ID，普通API仍核头／体一致，原失败保留且不计恢复通过。
+- 准确命令、原始输出、指纹、实际退出码、正式产物及审查边界见`out/tests/temp/fork_prefix_restart_20261101/artifacts/verification.json`。本片补齐该定向场景的真实Backend进程更换，不代表硬退出恢复、Gateway进程重启、Windows、同步入口、真实Provider或完整Section 8／全部fork验收；7.5／8.3及111/119继续未完成。前端实现、其它会话的独有改动与共享暂存未纳入本切片。
