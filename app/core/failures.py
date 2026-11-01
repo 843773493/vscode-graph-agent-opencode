@@ -9,6 +9,8 @@ from typing import TypeVar
 
 from pydantic import ValidationError
 
+from app.domain.itemized.errors import ItemSchemaError
+
 logger = logging.getLogger(__name__)
 _PROVIDER_FAILURE_ATTRIBUTE = "_boxteam_provider_failure"
 _PUBLIC_FAILURE_ATTRIBUTE = "_boxteam_public_failure"
@@ -42,8 +44,8 @@ def execution_failure_message(error: BaseException) -> str:
     """执行记录保留已知业务说明，内部校验、原生 I/O、SQLite 与上游异常不复制诊断正文。"""
     if is_provider_failure(error):
         return failure_detail(error, stage="execution-provider", label="模型执行失败")
-    if isinstance(error, ValidationError):
-        # 内部结构拒绝会在正文中携带字段名及 input_value；原错误交原执行出口记录。
+    if isinstance(error, (ValidationError, ItemSchemaError)):
+        # 内部结构拒绝可能携带动态键、字段值或 input_value；原错误交原执行出口记录。
         return f"执行数据校验失败: error={type(error).__name__}"
     if isinstance(error, sqlite3.Error):
         return f"执行数据库失败: error={type(error).__name__}, sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"

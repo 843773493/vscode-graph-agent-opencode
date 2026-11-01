@@ -27,8 +27,9 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from tests.support.diagnostic_failures import (
@@ -401,10 +402,20 @@ def test_llm_log_persists_failed_upstream_attempt(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-def test_llm_log_sqlite_failure_keeps_native_path_out_of_both_error_records(
+@pytest.mark.parametrize("internal_schema", [False, True], ids=["sqlite", "canonical"])
+def test_llm_log_internal_failure_keeps_native_path_out_of_both_error_records(
     tmp_path: Path, log_session, log_dispatch_reference,
-    sqlite_failure: sqlite3.OperationalError, asynchronous: bool,
+    sqlite_failure: sqlite3.OperationalError, asynchronous: bool, internal_schema: bool,
 ) -> None:
+    error: Exception = sqlite_failure
+    expected = "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+    marker = "sqlite-execution-private"
+    if internal_schema:
+        with pytest.raises(ItemSchemaError) as rejected:
+            canonical_json_bytes({"/private/llm-canonical-field.sqlite": float("nan")})
+        error = rejected.value
+        expected = "执行数据校验失败: error=ItemSchemaError"
+        marker = "llm-canonical-field.sqlite"
     session_id = "ses_019c47af8f1a75e08243db221ad02820"
     session_dir = log_session(tmp_path, session_id)
     thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
@@ -417,7 +428,7 @@ def test_llm_log_sqlite_failure_keeps_native_path_out_of_both_error_records(
     )
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
     reference = log_dispatch_reference(session_id, thread_id)
-    original = (sqlite_failure.args, sqlite_failure.sqlite_errorcode, sqlite_failure.sqlite_errorname)
+    original = (error.args, error.__cause__, error.__context__)
 
     def invoke(_: ModelRequest) -> ModelResponse:
         record_upstream_request(
@@ -425,24 +436,26 @@ def test_llm_log_sqlite_failure_keeps_native_path_out_of_both_error_records(
             model="failed-model", provider="openai", api_base=None,
             call_type="acompletion" if asynchronous else "completion", dispatch_ref=reference,
         )
-        raise sqlite_failure
+        raise error
 
     async def invoke_async(request: ModelRequest) -> ModelResponse:
         return invoke(request)
 
-    with pytest.raises(sqlite3.OperationalError) as caught:
+    with pytest.raises(type(error)) as caught:
         if asynchronous:
             asyncio.run(middleware.awrap_model_call(request, invoke_async))
         else:
             middleware.wrap_model_call(request, invoke)
-    assert caught.value is sqlite_failure
-    assert (sqlite_failure.args, sqlite_failure.sqlite_errorcode, sqlite_failure.sqlite_errorname) == original
+    assert caught.value is error
+    assert (error.args, error.__cause__, error.__context__) == original
+    assert sqlite_failure.sqlite_errorcode == sqlite3.SQLITE_CANTOPEN
+    assert sqlite_failure.sqlite_errorname == "SQLITE_CANTOPEN"
     log_file, = (session_dir / "logs/llm_requests").glob("*.json")
     raw = log_file.read_text(encoding="utf-8")
     payload = json.loads(raw)
-    assert payload["response"]["error"] == "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+    assert payload["response"]["error"] == expected
     attempt, = payload["upstream"]["attempts"]
     assert attempt["error"] == payload["response"]["error"]
     assert attempt["sealed_dispatch"]["assembly_id"] == reference.assembly_id
     assert attempt["sealed_dispatch"]["callback_model_call_id"] == reference.callback_model_call_id
-    assert str(sqlite_failure) not in raw and "sqlite-execution-private" not in raw
+    assert str(error) not in raw and marker not in raw

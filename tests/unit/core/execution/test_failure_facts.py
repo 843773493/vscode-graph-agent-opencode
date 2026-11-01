@@ -16,6 +16,8 @@ from app.core.failures import (
     mark_provider_failure,
     report_failure,
 )
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hashing import canonical_json_bytes
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
@@ -166,3 +168,50 @@ def test_provider_validation_failure_keeps_provider_ownership(
     assert message == "模型执行失败: stage=execution-provider, error=ValidationError"
     record, = caplog.records
     assert record.exc_info is not None and record.exc_info[1] is validation_failure
+
+
+@pytest.fixture(params=[
+    "/private/canonical-field.sqlite", r"C:\private\canonical-field.sqlite", r"\\target\private\canonical-field.sqlite",
+])
+def canonical_failure(request: pytest.FixtureRequest) -> ItemSchemaError:
+    with pytest.raises(ItemSchemaError) as caught:
+        canonical_json_bytes({request.param: float("nan")})
+    assert request.param in str(caught.value)
+    return caught.value
+
+
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
+def test_canonical_validation_does_not_publish_dynamic_field_values(
+    canonical_failure: ItemSchemaError, diagnostic_sink: DiagnosticFailure,
+    caplog: pytest.LogCaptureFixture, sink_fails: bool,
+) -> None:
+    error = canonical_failure
+    original = (error.args, error.__cause__, error.__context__)
+    expected = "执行数据校验失败: error=ItemSchemaError"
+    if sink_fails:
+        diagnostic_sink.primary = error
+        expected += ", diagnostic_sink_error=NotADirectoryError"
+    message = execution_failure_message(error)
+    assert caplog.records == []
+    assert "canonical-field.sqlite" not in message
+    with caplog.at_level(logging.ERROR):
+        assert report_failure(error, detail=message) == expected
+    record, = caplog.records
+    assert record.exc_info is not None and record.exc_info[1] is error
+    assert str(error) in caplog.text
+    assert (error.args, error.__cause__, error.__context__) == original
+    if sink_fails:
+        assert len(diagnostic_sink.errors) == 1
+        assert str(diagnostic_sink.destination) in "\n".join(error.__notes__)
+
+
+def test_provider_canonical_validation_keeps_provider_ownership(
+    canonical_failure: ItemSchemaError, caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = canonical_failure
+    assert mark_provider_failure(error) is error
+    with caplog.at_level(logging.ERROR):
+        message = execution_failure_message(error)
+    assert message == "模型执行失败: stage=execution-provider, error=ItemSchemaError"
+    record, = caplog.records
+    assert record.exc_info is not None and record.exc_info[1] is error

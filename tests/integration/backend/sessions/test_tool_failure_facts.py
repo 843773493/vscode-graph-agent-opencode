@@ -14,6 +14,8 @@ from langgraph.checkpoint.serde.types import ERROR
 
 from app.agents import agent_factory
 from app.agents.tools import web as web_tools
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hashing import canonical_json_bytes
 from tests.integration.backend.sessions.test_persistent_tasks import _target
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
@@ -146,6 +148,67 @@ async def test_unhandled_tool_failure_keeps_native_diagnostics_out_of_durable_er
                and record.exc_info[1] is raw_error for record in caplog.records)
     assert str(raw_error) in caplog.text
     case.write_actual("tool-execution", {"job": job, "canonical": result.payload, "checkpoint_errors": errors, "calls": calls})
+
+
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_canonical_rejection_keeps_dynamic_fields_out_of_public_execution_records(
+    source_case: RuntimeSourceCase, fail_after_read: Callable[[BaseException], list[ToolMessage]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    case = source_case
+    session_id, thread_id, _ = await _target(case)
+    (case.workspace / "canonical-input.txt").write_text("真实文件工具仍执行一次读取。", encoding="utf-8")
+    location = str(case.workspace / "private-canonical-field.sqlite")
+    with pytest.raises(ItemSchemaError) as rejected:
+        canonical_json_bytes({location: float("nan")})
+    error = rejected.value
+    original_builder = agent_factory.create_model_call_agent
+    observations = fail_after_read(error)
+    call, = await case.plan(session_id, [_tool_reply("read_file", {"path": "canonical-input.txt"}, "canonical-read")])
+    with caplog.at_level(logging.ERROR):
+        accepted = await _send(case, session_id, "读取材料并明确报告内部结构拒绝。")
+        job_id = accepted["job_id"]
+        assert isinstance(job_id, str)
+        failed = await _job(case, job_id, expected="failed")
+    assert len(observations) == 1 and case.call_count(session_id, thread_id) == 1
+    assert failed["error_message"] == "执行数据校验失败: error=ItemSchemaError"
+    items = case.container.checkpointer._storage.storage.read_items(session_id, thread_id)
+    result, = [item for item in items if item.semantic_kind == "tool_result"]
+    assert isinstance(result.payload, Mapping)
+    assert result.payload["name"] == "read_file" and result.payload["tool_call_id"] == call + ":tool-call:canonical-read"
+    assert result.payload["tool_outcome"] == "unknown" and result.payload["execution_confirmed"] is False
+    root = f"/api/v1/sessions/{session_id}/turns/{accepted['turn_id']}/message-stream"
+    snapshot = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    logs = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    traces = await case.client.get(f"/api/v1/sessions/{session_id}/traces", params={"thread_id": thread_id})
+    for response in (snapshot, logs, traces):
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    assert snapshot.json()["data"]["stream_status"] == "failed"
+    public = json.dumps([failed, result.payload, snapshot.json(), logs.json(), traces.json()], ensure_ascii=False)
+    assert "private-canonical-field.sqlite" not in public
+    checkpoints = list(case.container.checkpointer.list(None))
+    assert "private-canonical-field.sqlite" not in repr(checkpoints)
+    storage = case.container.checkpointer._storage.storage
+    with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
+        assert "private-canonical-field.sqlite" not in "\n".join(connection.iterdump())
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert str(error) in caplog.text
+    original_items = case.sql(session_id, thread_id, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence")
+
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", original_builder)
+    await case.plan(session_id, [{"content": "同一会话继续处理已有材料。"}])
+    resumed = await _send(case, session_id, "故障解除，继续整理。")
+    resumed_job = resumed["job_id"]
+    assert isinstance(resumed_job, str)
+    completed = await _job(case, resumed_job)
+    assert completed["session_id"] == session_id and completed["thread_id"] == thread_id
+    assert case.call_count(session_id, thread_id) == 2
+    assert "private-canonical-field.sqlite" not in json.dumps(case.requests(), ensure_ascii=False)
+    original = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    assert original.status_code == 200 and original.json()["data"] == snapshot.json()["data"]
+    assert case.sql(session_id, thread_id, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence")[:len(original_items)] == original_items
+    case.write_actual("canonical-validation-failure", {"job": failed, "tool_result": result.payload, "stream": snapshot.json()})
 
 
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)

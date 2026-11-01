@@ -1836,3 +1836,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 完整HEAD归档叠加初始新单测，16项路径外泄反例失败、2项业务说明通过。候选147项不同单测及15项集成通过；新单测的SQLite句柄收尾改用closing后，受影响18项补跑通过。真实消息入口生成failed执行，核Provider响应、Job、失败事件、持久执行结算与bootstrap历史无原位置，故障解除后同Session／Thread通过现有model_stream完成下一次调用。首轮新测试误用不存在的历史路由，第二轮暴露Job终态先于事件发布的既有顺序；修正测试为原bootstrap及有界等待原事件后通过，未放宽错误、身份或顺序断言。
 - Ruff、compileall与本change strict通过。真实Pyright保留199条既存诊断，按相对文件、规则、完整消息、所属函数与最窄表达式AST逐项一致，新增单测及产品场景零新增诊断，不称类型全绿。准确命令、源码指纹、红绿原件、退出码与差异检查见同一`verification.json`；早期runner仅采样tracked文件，后续3300份采样含非忽略untracked，新测试SHA另记，不扩张为完整工作树冻结。
 - 新产品场景通过真实应用lifespan、路由、服务、持久owner和模型回放执行，但HTTP为进程内ASGI，不代独立Gateway网络、Web工作台或Windows实机。未实现前端OpenSpec，未修改另一会话的公共fixture、长回归驱动、共享debug及原暂存。2.2／7.2仍未勾，整体51/53；团队协作与MCP显式持有继续延期。
+
+### 2026-11-01 canonical 领域校验失败的公开记录（2.2／7.2部分收口）
+
+- 真实 JCS 拒绝证明 `ItemSchemaError` 可在动态字段名中携带原生位置；唯一执行消息出口将其与内部 Pydantic 校验统一，只公布校验失败事实和原异常类别。原领域校验、异常参数、cause／context、Provider 归属优先级及明确业务说明保持，不修改 canonical writer 或另建诊断链。
+- 完整 HEAD 归档中的新增单测为6项外泄反例失败、3项 Provider 归属通过；候选共68项不同单测和5项集成通过。扩展后的 LLM 日志场景同时覆盖 SQLite／canonical 与同步／异步入口；新产品场景从消息入口执行真实文件读取，再注入实际 JCS 拒绝，核 Job、canonical 工具结果、失败消息流、LLM 日志、Trace、检查点及 SQLite 无诊断路径，原异常留诊断；解除注入后同 Session／Thread 完成下一轮，旧 canonical 前缀和失败流快照保持。它不代表故障工具本身的恢复或完整请求 hash 专项验收。
+- Ruff、compileall及本change strict通过；真实Pyright保留6条既存诊断，按相对文件、规则、完整消息、所属函数和最窄表达式AST核无新增。准确命令、红绿原件、源码指纹、实际退出码与作者自查见`out/tests/temp/canonical_failure_facts_20261101/artifacts/verification.json`；产品测试期间仅目录说明文件变化，全部采样执行源码保持。模型复用现有model_stream，业务HTTP为进程内ASGI，不代独立Gateway业务网络、Web、Windows或Backend重启；未改公共fixture、共享debug或另一会话暂存，2.2／7.2仍未勾、整体51/53，团队与MCP持有延期边界保持。
