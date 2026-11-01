@@ -1401,3 +1401,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 正式suite为1 passed／324.04秒，外层329.10秒、exit0。经真实Gateway、Backend和model_stream生成工具循环／并行工具、深历史两代fork、摘要、三次Backend进程重启、删除两代来源后的恢复、续聊与regenerate；20次模型请求逐项核对owner、工具配对与封存request_hash。两代fork及内容收集校验阶段合计7.02秒；8阶段原始表／索引／正文／写入与恢复测量保留，不据单次运行承诺固定收益。3154项受测源码及配置前后指纹一致。
 - 首轮在装具setup因19002被9月已运行的Docker服务占用而失败，尚未执行模型或fork；没有终止该服务。终端改用本测试独占端口块内固定offset5，并在启动与mount共用同一端口变量，未添加自动回退。Ruff和矩阵注册检查通过；完整HEAD归档加开始前测试源码的Pyright基线17条、最终17条，按文件、AST owner、规则、完整消息和表达式逐项一致，不称类型全绿。
 - 准确命令、退出码、原始输出、源码与测量hash及作者AST自查见 `out/tests/temp/history_workload_deadline_20261030/artifacts/verification.json`；临时完整基线及运行脚本清理，正式产物保留。不新增Web、Windows、同步入口、真实外部Provider或独立审查证据，7.5/8.3和整体111/119保持未关闭；前端、团队延期项及他人共享暂存不纳入本片提交。
+
+
+### 2026-11-01 7.5-C/E、8.3 较早工具回答的 Web 前缀分支回归（部分）
+
+- 独立 `integration-web-fork-prefix-recovery` 通过正式 Workbench、真实 Gateway/Backend、Composer 与 model_stream 生成两轮工具历史，再按第一轮 final item 的实际 view/revision 创建 child；真实刷新后核同一历史并继续执行。核八个继承 canonical item 的原身份、sequence、owner、hash/revision，后续 Turn/tool 不进入 child，main 历史保持原样；五次 transport 请求与原 sealed assembly/request hash 逐项对账。不手填执行、checkpoint 或 fork 状态，也不另建 Section 8 总验收。
+- 最终矩阵 1 passed/141.85秒（外层145.40秒）、exit0；固定360秒/单进程4GiB、原60秒fork watchdog和跨worktree集成独占闸门。正式构建成功，Ruff、真实Pyright零诊断、Node语法及矩阵注册检查通过；4341项受测主仓源码前后指纹一致，upstream内部不在该清单内，构建收据记录其精确commit。只读独审发现并修正了缺少item_sequence的顺序证明，复核后无剩余可行动问题。首轮直接pytest在fork前被watchdog的matrix归属校验拒绝，未作fork通过证据；原件保留。
+- 证据：`out/tests/temp/fork_prefix_web_20261101/artifacts/verification.json`。这是浏览器刷新/重开后的定向回归，不新增Backend进程重启、Windows、同步入口、真实Provider或完整Section 8证据；7.5/8.3及111/119保持未关闭。复用另一会话当前Workbench构建/定位装具，前端实施及其独有改动不纳入本片提交。
