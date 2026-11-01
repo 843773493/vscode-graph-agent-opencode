@@ -5,6 +5,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .attachment import AttachmentDirectoryURI, AttachmentFileURI
 from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
@@ -35,11 +36,11 @@ TurnProjectionState = Literal["ready", "partial"]
 class TurnAttachmentDTO(BaseModel):
     """Turn 展示层只保存持久化附件引用，不携带内联 data URL。"""
 
-    file_id: str
+    file_id: AttachmentFileURI
     name: str | None = None
     content_type: str | None = None
     availability: Literal["available", "unavailable"] | None = None
-    directory_uri: str | None = None
+    directory_uri: AttachmentDirectoryURI | None = None
 
 
 class TurnUserMessageDTO(BaseModel):

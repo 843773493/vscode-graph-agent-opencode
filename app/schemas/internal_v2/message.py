@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .attachment import AttachmentRef
+from .attachment import AttachmentRef, ResolvedAttachmentRef
 from .common import MessageRole, RunMode, TimestampedDTO
 from .job import (
     JobDispatchSnapshotDTO,
@@ -77,7 +77,7 @@ class MessageDTO(TimestampedDTO):
     thread_id: str = Field(min_length=1)
     role: MessageRole
     content: str
-    attachments: list[AttachmentRef] = Field(default_factory=list)
+    attachments: list[ResolvedAttachmentRef] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
 

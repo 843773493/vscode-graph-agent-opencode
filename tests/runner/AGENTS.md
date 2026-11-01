@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-attachment-publication` 经消息ASGI入口和model_stream生成普通文件三种输入与上传附件的同一历史，核消息详情、列表及Turn的32组损坏引用拒绝、原canonical与request_hash不变；固定120秒/4GiB及集成独占闸门，不代Gateway/Web、进程重启或Windows实机验收。
+
 `integration-task-uri-publication` 经真实 Session、消息与任务 ASGI 入口及 model_stream 生成历史和定义，验证原 SQLite owner 拒绝复制后损坏引用、事务事实不变及同 revision 重试；固定120秒／4GiB，沿原集成独占闸门，不代 Gateway 业务代理、独立进程重启、Web或Windows验收。
 
 `integration-history-failure-boundary` 经产品消息与 model_stream 生成历史，验证三个历史入口的真实布局／I/O 拒绝和修复后冷读，核原 canonical 字节及封存请求 hash；固定120秒／4GiB并沿共享集成闸门，不代替独立Backend重启、Gateway、Web或Windows验收。

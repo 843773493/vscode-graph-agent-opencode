@@ -1175,6 +1175,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
         "type": "image_url",
         "image_url": {"url": "data:image/jpeg;base64,abc123"},
     }
+    file_uri = "boxteam://workspace/fixture-workspace/resources/files/root/assets/test.jpg"
     user_message = HumanMessage(
         content=[
             {"type": "text", "text": "请描述图片"},
@@ -1184,7 +1185,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
             **_visible_metadata("msg_image"),
             "attachments": [
                 AttachmentRef(
-                    file_id="assets/test.jpg",
+                    file_id=file_uri,
                     name="test.jpg",
                     content_type="image/jpeg",
                 ).model_dump(mode="json")
@@ -1212,7 +1213,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
         session_id="ses_019c060ad21373a6803a34c5f2a272fd", limit=10
     )
     assert messages.items[0].content == "请描述图片"
-    assert messages.items[0].attachments[0].file_id == "assets/test.jpg"
+    assert messages.items[0].attachments[0].file_id == file_uri
 
     state_snapshot = await service.get_agent_state_messages(
         "ses_019c060ad21373a6803a34c5f2a272fd"
@@ -1224,7 +1225,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
     ]
     assert (
         records[0]["response_metadata"]["attachments"][0]["file_id"]
-        == "assets/test.jpg"
+        == file_uri
     )
 
 
@@ -1247,6 +1248,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
             "checkpoint_ns": "",
         }
     }
+    file_uri = "boxteam://workspace/fixture-workspace/resources/files/root/assets/demo.mp4"
     user_message = HumanMessage(
         content=[
             {"type": "text", "text": "请按时间顺序说明这个视频。"},
@@ -1257,10 +1259,10 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
                     "origin": "generated",
                     "kind": "attachment_manifest",
                     "schema_version": 1,
-                    "file_id": "assets/demo.mp4",
+                    "file_id": file_uri,
                     "name": "demo.mp4",
                     "content_type": "video/mp4",
-                    "path": "assets/demo.mp4",
+                    "path": file_uri,
                     "preview_status": "available",
                 },
             },
@@ -1274,7 +1276,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
             "display_content": "不应被普通用户消息读取的旧展示字段",
             "attachments": [
                 AttachmentRef(
-                    file_id="assets/demo.mp4",
+                    file_id=file_uri,
                     name="demo.mp4",
                     content_type="video/mp4",
                 ).model_dump(mode="json")

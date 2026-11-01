@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.turn_history import TurnSessionLookupProtocol
@@ -329,6 +330,9 @@ async def list_messages(
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
+    except ValidationError:
+        # 内部历史DTO损坏属于服务端故障，不把输入原文翻成cursor冲突。
+        raise
     except ValueError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -417,6 +421,9 @@ async def get_message(
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
+    except ValidationError:
+        # 查到的历史对象校验失败不是消息不存在，交原HTTP失败出口保留诊断。
+        raise
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

@@ -1938,3 +1938,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 最终357项不同定向检查通过（来源模型／core／Workspace owner及API297项、Gateway来源7项、公开协议31项、配置故障与恢复集成22项）；194项来源模型补验与297项重叠，不重复计数。新增集成在真实ConfigService与SQLite产生的来源上注入复制后坏值，覆盖POSIX／Windows／UNC／file URL、schema及嵌套来源和日志双错；核HTTP500／同request_id、配置快照身份、文件字节与SQLite全部行不变，解除故障后同入口恢复原响应。原实现126项发布拒绝与5项日志次错红测成立，6项合法控制通过。
 - 19模型的38份validation／serialization JSON Schema完全一致，compileall及OpenSpec strict（54项）通过；Ruff既存7项、真实Pyright既存1项与完整HEAD归档逐项对照无新增。首次HTTP测试4项失败归因于测试将repr日志当原生字节、误以为Pydantic包装错误携带原异常notes，修正观测后通过，未放宽HTTP／状态／身份断言。较宽Gateway回归在90秒外部保护下退出124，不计通过；随后按实际影响单独补验来源7项，未重跑整组。
 - 准确命令、3588份源码指纹、原始输出、实际退出码、静态基线及作者差异审查见 `out/tests/temp/config_source_publication_20261101/artifacts/verification.json`。所有检查均有外部超时及4GiB数据段保护，集成沿共享独占闸门；业务HTTP为进程内ASGI，不代独立Backend TCP／Gateway业务网络、Web、Windows或进程硬重启验收。2.2／7.2仍未勾，整体51/53；团队及MCP显式持有继续延期。
+
+
+### 2026-11-01 附件目录与历史引用的发布校验（2.2／7.2部分收口）
+
+- 附件目录、消息输出和Turn文件引用共用原附件grammar的构造与序列化校验；普通输入继续接受相对路径、绝对路径、URI和内联上传。复用同一个AttachmentRef结构，未增加parser或存储链。消息详情与列表将内部ValidationError交原500出口，保留原业务404／409。
+- 产品入口生成三种普通输入及上传附件，32组复制后损坏与服务内校验失败均拒绝；修复后完整响应、canonical字节及封存request_hash不变。旧生产真实返回200并发布原生路径的反例已保留。76项模型检查、相关映射／附件回归251项、历史业务142项、消息检查点24项、历史／公开协议26项及原附件入口16项通过，各组有重叠，不相加。两份旧多媒体fixture的封存相对路径已迁为URI，原内容／媒体块断言保留。
+- Pyright六文件零诊断、compileall通过；Ruff仅保留messages.py原有13项Depends规则诊断，与HEAD逐项相同。两个较宽组合触及90秒保护，不计通过；定向协议检查26项58.64秒，单次冷导出12.48／12.65秒，作为后续fixture优化依据。命令、源码指纹、原始输出与退出码见 `out/tests/temp/attachment_uri_publication_20261101/artifacts/verification.json`。全部检查带外部期限及4GiB保护，集成沿原独占闸门；本片为ASGI与model_stream，不代Gateway业务代理、Web、Windows或硬重启。2.2／7.2保持未勾，整体51/53。
