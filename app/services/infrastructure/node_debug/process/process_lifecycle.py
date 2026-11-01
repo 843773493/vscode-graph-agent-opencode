@@ -92,7 +92,7 @@ class NodeDebugProcessLifecycle:
                 claim = claim_marked(
                     claim, phase="reconcile_required", reason=decision.reason
                 )
-                self._write_launch_claim(claim)
+                await self._write_launch_claim(claim)
                 self._record_claim_action(
                     owner,
                     "reconcile_required",
@@ -116,7 +116,7 @@ class NodeDebugProcessLifecycle:
                     "已核实为登记的同一实例但停止失败，保持 reconcile_required: "
                     f"pid={claim.pid}"
                 )
-                self._write_launch_claim(
+                await self._write_launch_claim(
                     claim_marked(
                         claim,
                         phase="reconcile_required",
@@ -143,7 +143,7 @@ class NodeDebugProcessLifecycle:
             thread_id=claim.thread_id,
             process_instance_id=claim.process_instance_id,
         )
-        self._write_launch_claim(
+        await self._write_launch_claim(
             claim_marked(claim, phase="settled", reason=decision.reason)
         )
         self._record_claim_action(

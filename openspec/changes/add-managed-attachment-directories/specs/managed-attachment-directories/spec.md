@@ -631,3 +631,8 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 
 - **WHEN** 原目录URI及目录lease均已持久发布，原operation进入dispatching并调用外部Terminal，但创建回执丢失
 - **THEN** 原记录仍为unknown，原operation保持待核实，目录占用继续有效；冷读取不重放创建或套用本地未派发证明。Backend硬退出且原调用不在场的intent，仍由原owner接管规则核实，不能凭清单缺失推断未派发
+
+#### Scenario: Node 调试 claim 等待原存储提交
+
+- **WHEN** 调试启动、停止或冷恢复的 claim 写入在线程池排队或等待原生存储，调用者取消、存储失败或对应进程真实退出
+- **THEN** 统一等待原受保护 worker，事件循环及无关请求继续推进；原 owner 准入保持至提交结算。活跃阶段提交前登记原 tracker 的提交 blocker，成功后更新持久 claim 投影再解除提交 blocker，失败不发布候选或遗留临时占用；卸载已经关闭准入时不得先落盘新活跃 claim。首次取消及迟到故障均保留，spawn 身份与终态沿原 state_lock 串行，真实退出不能被迟到的活跃阶段覆盖。不据此宣称同步读取无阻塞、原生 I/O 可抢占或整个 shutdown 已有硬期限

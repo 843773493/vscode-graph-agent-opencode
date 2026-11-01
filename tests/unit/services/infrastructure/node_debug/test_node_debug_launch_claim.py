@@ -1459,9 +1459,10 @@ async def test_concurrent_starts_are_serialized_per_owner(
     )
     children: list[subprocess.Popen[bytes]] = []
     written: list[tuple[str, str]] = []
-    original_write = service._claim_runtime.write_launch_claim
+    original_write = store.write_launch_claim
 
     def spy_write(claim: NodeDebugLaunchClaimDTO) -> None:
+        # 观察原存储的真实提交；monitor 取消可能发生在异步调用回执返回前。
         original_write(claim)
         written.append((claim.phase, claim.process_instance_id))
 
@@ -1483,7 +1484,7 @@ async def test_concurrent_starts_are_serialized_per_owner(
     async def fake_background(runtime: NodeDebugRuntime) -> None:
         return None
 
-    monkeypatch.setattr(service._claim_runtime, "write_launch_claim", spy_write)
+    monkeypatch.setattr(store, "write_launch_claim", spy_write)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(websockets, "connect", fake_connect)
     monkeypatch.setattr(service._inspector, "command", fake_command)

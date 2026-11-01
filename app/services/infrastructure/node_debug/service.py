@@ -314,7 +314,11 @@ class NodeDebugService(
         """整个调试 mutation 期间持有 Session 生命周期准入。"""
         async with self._session_admission.admit(session_id, thread_id) as admitted:
             owner = admitted.key
-            await self._lifecycle.reconcile_persisted_claim(owner)
+            # 冷恢复也会等待持久提交；与同 owner 的启动、停止及其它恢复串行。
+            # 活跃 runtime 的只读快照仍能在进程停止等待期间推进。
+            if self._runtimes.get(owner) is None:
+                async with self._owner_lock(owner):
+                    await self._lifecycle.reconcile_persisted_claim(owner)
             yield owner
 
     def residency_blockers(

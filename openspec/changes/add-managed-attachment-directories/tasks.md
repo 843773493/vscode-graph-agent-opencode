@@ -921,3 +921,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 启动、重连及配置替换共用原 session task 的异步登记／关闭回调，删除三个重复同步登记；原 writer 的 worker 结算后才通知就绪或完成关闭，取消保留原取消和迟到失败，未发布候选的控制流异常仍收尾。运行中断线后的终态写盘次错立即由原 owner 报告；没有新增账本、连接重放或另一套 SDK 生命周期。
 - 修改前两个原生发布屏障反例均失败；正式独立矩阵最终17 passed／26.99秒（此前16项25.96秒通过），补充控制流与最终生命周期12 passed／6.45秒，其中新增1项真实连接控制流和1项存储次错单测。既有真实stdio／HTTP协议回归28 passed／32.38秒。扩大整组110秒及单测85秒运行均外部超时；单测原输出174个明确PASS，剩余17项独立29.88秒通过，不将两次整组退出124表述为全量成功。
 - 首轮取消cause环已修正；后补控制流场景曾错误计算共享正式工作区中所有历史连接，现按本次精确owner实例核两条原身份及stopped，不放宽生命周期断言。Ruff／编译通过，最终四文件Pyright零错误零警告；准确命令、指纹、原始输出、退出码与作者复审见`out/tests/temp/mcp_connection_publication_20261101/artifacts/verification.json`。全部测试有进程外期限／4GiB，集成沿原独占闸门；不代Gateway／Web、独立Backend硬重启、Windows、其它同步账本访问或整个operation／shutdown期限。5.2／5.4及21/23保持未完成；未修改公共fixture、前端迁移、长回归驱动或共享debug。
+
+### 2026-11-01 Node Debug claim 的原写入结算（5.4 部分）
+
+- 启动、身份登记、运行及停止／冷恢复统一等待原 claim writer 的受保护 worker；沿原 tracker 保护排队与写盘，再按真实提交更新投影，失败不遗留提交 blocker。原 owner 锁、Session 准入及 runtime state_lock 覆盖相应结算，冷恢复互斥不阻塞活跃进程的停止中快照；不新增持久账本或恢复链。
+- 真实 ASGI／Node／Inspector 的三阶段四结果矩阵12 passed／79.63秒，真实进程退出2 passed／9.73秒，既有 lease 场景10 passed／60.46秒；定向新单测7 passed／0.99秒，相关回归96 passed／64.71秒，共127个不同用例。新测试覆盖原提交、重复取消、迟到失败、实际线程池排队、闲置卸载及原进程终态。首轮屏障误挂 Path.replace，修正为原 os.replace；并发回归观察点从异步返回改为真实存储提交，原身份／顺序断言保留。失败原件未覆盖，不把中断运行或重复用例相加。
+- Ruff／编译／OpenSpec严格校验通过，五个生产文件及两个新测试 Pyright 零诊断；原始输出、命令、退出码、源码指纹及作者结构审查见 `out/tests/temp/claim_io_20261101/artifacts/verification.json`。测试均有进程外超时／4GiB保护，集成沿原独占闸门；不代 Gateway／Web、独立Backend重启、Windows、同步读取、原生I/O抢占或整个operation／shutdown期限。5.2／5.4及21/23保持未完成；未改共享debug、前端迁移、公共fixture或长回归驱动。

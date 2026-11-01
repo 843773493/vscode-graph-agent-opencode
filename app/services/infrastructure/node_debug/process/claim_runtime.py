@@ -106,15 +106,39 @@ class NodeDebugClaimRuntime:
             return
         await self._external_resource_leases.settle(identity.lease_id)
 
-    def write_launch_claim(self, claim: NodeDebugLaunchClaimDTO) -> None:
-        if self._session_store is None:
+    async def write_launch_claim(self, claim: NodeDebugLaunchClaimDTO) -> None:
+        store = self._session_store
+        if store is None:
             return
-        if self._residency_tracker is not None and claim.phase in _NODE_DEBUG_BLOCKER_REASON:
-            # 检查、持久写入与 blocker push 是同一同步步骤；卸载 listener 等待期间
-            # 不允许先落盘新 claim 再发现 runtime 已关闭准入。
-            self._residency_tracker.assert_blocker_admission(claim.session_id, claim.thread_id)
-        self._session_store.write_launch_claim(claim)
-        self._sync_residency_blocker(claim)
+        tracker = self._residency_tracker
+        blocker_key = f"node_debug_claim_write:{claim.process_instance_id}"
+        active = claim.phase in _NODE_DEBUG_BLOCKER_REASON
+        if tracker is not None and active:
+            # 原 blocker 机制覆盖排队及写盘；先撤销卸载资格，再让出事件循环。
+            # 真实 claim 的投影只在提交后更新，写入失败不能遗留虚假的持久占用。
+            tracker.register_blocker(
+                claim.session_id, claim.thread_id, blocker_key=blocker_key,
+                kind="node_debug_process", reason="Node 调试实例登记正在持久提交",
+            )
+
+        async def publish() -> None:
+            await run_sync_shielded(store.write_launch_claim, claim)
+            self._sync_residency_blocker(claim)
+
+        pending = asyncio.create_task(publish())
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError as original:
+            try:
+                await run_cleanup_shielded(lambda: pending)
+            except BaseException as failure:
+                raise original from failure
+            raise
+        finally:
+            if tracker is not None and active:
+                tracker.release_blocker(
+                    claim.session_id, claim.thread_id, blocker_key=blocker_key,
+                )
 
     def residency_blockers(
         self,
@@ -181,7 +205,7 @@ class NodeDebugClaimRuntime:
             if claim is None:
                 return
             if claim.phase != "running":
-                self.write_launch_claim(
+                await self.write_launch_claim(
                     claim_running(
                         claim,
                         inspector_port=self._authoritative_inspector_port(runtime),
@@ -202,7 +226,7 @@ class NodeDebugClaimRuntime:
                 )
 
             # 原owner准入与锁持续覆盖worker结算；取消不能留下晚于停止发布的活跃占用。
-            # TODO(5.4)：claim读写、原生I/O抢占与整个启动/关闭期限仍须分别收口。
+            # TODO(5.4)：同步读取、原生I/O抢占与整个启动/关闭期限仍须分别收口。
             pending = asyncio.create_task(run_sync_shielded(register))
             try:
                 await asyncio.shield(pending)
@@ -244,7 +268,7 @@ class NodeDebugClaimRuntime:
                     thread_id=claim.thread_id,
                     process_instance_id=claim.process_instance_id,
                 )
-            self.write_launch_claim(claim_marked(claim, phase=phase, reason=reason))
+            await self.write_launch_claim(claim_marked(claim, phase=phase, reason=reason))
 
     def notify_release_failed(
         self,

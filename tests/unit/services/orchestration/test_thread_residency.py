@@ -960,7 +960,7 @@ async def test_real_claim_writer_rejects_new_blocker_before_persist_during_unloa
         await asyncio.wait_for(entered.wait(), timeout=5)
         claim = _launch_pending_claim()
         with pytest.raises(ThreadUnloadBlocked, match="拒绝新增"):
-            claims.write_launch_claim(claim)
+            await claims.write_launch_claim(claim)
         assert store.read_launch_claim(*_OWNER) is None
         assert tracker.snapshot(*_OWNER).blockers == ()
     finally:
@@ -994,11 +994,11 @@ async def test_spawn_aborts_when_stop_already_took_over_runtime(
 
     original_write = service._claim_runtime.write_launch_claim
 
-    def stop_takes_over_before_spawn(claim: NodeDebugLaunchClaimDTO) -> None:
+    async def stop_takes_over_before_spawn(claim: NodeDebugLaunchClaimDTO) -> None:
         # 在"claim 已落盘、进程尚未 spawn"的窗口注入并发 stop 的接管结果：
         # `_stop_runtime` 进入后会把 runtime.closing 置位（这是该标志的合同语义），
         # 随后启动序列必须在 spawn 前被守卫拦下。
-        original_write(claim)
+        await original_write(claim)
         if claim.phase == "launch_pending":
             runtime = service._runtimes[(_PARENT_SESSION_ID, _THREAD_ID)]
             runtime.closing = True

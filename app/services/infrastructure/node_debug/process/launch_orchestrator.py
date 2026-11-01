@@ -398,9 +398,9 @@ class NodeDebugLaunchOrchestrator:
             inspector_port=runtime.inspector_port,
         )
         runtime.process_instance_id = claim.process_instance_id
-        context.write_claim(claim)
         try:
             async with runtime.state_lock:
+                await context.write_claim(claim)
                 if runtime.closing:
                     raise RuntimeError(
                         "并发的停止请求已接管该调试运行时，取消 spawn: "
@@ -420,21 +420,23 @@ class NodeDebugLaunchOrchestrator:
             runtime.stderr_task = asyncio.create_task(context.read_stream(runtime, "stderr"))
             runtime.stdout_task = asyncio.create_task(context.read_stream(runtime, "stdout"))
             runtime.process_task = asyncio.create_task(context.monitor_process(runtime))
-            spawn_identity = probe_process_identity(runtime.process.pid)
-            if spawn_identity is None:
-                raise RuntimeError(
-                    "spawn 后无法读取进程起始身份（进程可能已立即退出）: "
-                    f"pid={runtime.process.pid}"
+            # monitor 可以观察真实退出，但不能越过此实例尚未完成的身份登记。
+            async with runtime.state_lock:
+                spawn_identity = probe_process_identity(runtime.process.pid)
+                if spawn_identity is None:
+                    raise RuntimeError(
+                        "spawn 后无法读取进程起始身份（进程可能已立即退出）: "
+                        f"pid={runtime.process.pid}"
+                    )
+                runtime.process_identity_source = spawn_identity.source
+                runtime.process_start_marker = spawn_identity.start_marker
+                await context.write_claim(
+                    claim_with_spawn_identity(
+                        claim,
+                        pid=runtime.process.pid,
+                        identity=spawn_identity,
+                    )
                 )
-            runtime.process_identity_source = spawn_identity.source
-            runtime.process_start_marker = spawn_identity.start_marker
-            context.write_claim(
-                claim_with_spawn_identity(
-                    claim,
-                    pid=runtime.process.pid,
-                    identity=spawn_identity,
-                )
-            )
             await self._await_inspector_ready(runtime)
             await context.inspector.connect(runtime)
             await context.inspector.command(runtime, "Runtime.enable")

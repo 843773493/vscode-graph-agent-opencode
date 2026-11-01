@@ -149,7 +149,7 @@ class NodeDebugLaunchClaimReader(Protocol):
 
 
 class NodeDebugLaunchClaimWriter(Protocol):
-    def __call__(self, claim: NodeDebugLaunchClaimDTO) -> None: ...
+    async def __call__(self, claim: NodeDebugLaunchClaimDTO) -> None: ...
 
 
 class NodeDebugClaimPhaseMarker(Protocol):

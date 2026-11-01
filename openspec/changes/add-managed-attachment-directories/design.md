@@ -613,3 +613,9 @@ claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及�
 启动、配置替换和显式重连不再分别登记资源；唯一 runtime 在 SDK 初始化后等待原 owner 的异步登记回调，提交成功后才通知就绪。登记与关闭投影沿既有 shielded worker 和原账本 writer，均由同一个 session task 串行等待，不跨 worker 持有目录 publication 锁，也不让其它 task 退出 SDK 上下文。启动取消排空该原 task 的关闭，重复取消保留首次取消及迟到错误；未发布候选的清理也保留原控制流异常。关闭状态写盘失败继续由 start／close 交付；运行中断线后的存储次错立即走原 owner 失效报告，不能只留到 shutdown。已关闭的候选不得返回启动成功。
 
 模型封存资格、调用占用、定时到期和 canonical ack 等同步账本访问继续 TODO；不据此宣称共享账本所有入口均不阻塞、原生 I/O 可抢占或整个 operation／shutdown 已有硬期限。5.2／5.4 保持未完成。
+
+### Node Debug claim 的异步提交与卸载准入（5.4 部分收口）
+
+启动意图、spawn 身份、running、停止及冷恢复的 claim 写入统一等待既有受保护 worker，原会话存储仍是唯一 writer。活跃阶段在让出事件循环前通过原 tracker 登记本次提交的 blocker；持久提交后才更新真实 claim 的 blocker，原执行结束后移除提交 blocker。失败保留原持久事实与投影，不把尚未提交的候选当作已发布状态。重复取消等待同一写入及投影结算，保留首次取消与迟到存储错误。
+
+原 per-owner 锁和 Session 准入覆盖提交等待；冷恢复也在该 owner 锁内核实，活跃 runtime 的只读观察仍能在进程终止等待期间推进。spawn 身份和终态迁移共用原 state_lock，monitor 可观察真实退出，但不能先结清再被迟到的 spawned/running 覆盖。既有进程、lease 和 claim 身份不变，不新增恢复链或持久账本。同步读取、原生 I/O 抢占、无身份旧代接管及整个 operation／shutdown 总期限继续 TODO，5.2／5.4 保持未完成。

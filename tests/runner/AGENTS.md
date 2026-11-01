@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-debug-claim-publication` 经真实调试 ASGI、Node/Inspector 与原 claim writer 验证三种启动阶段的写盘、重复取消、迟到故障及进程退出顺序；固定120秒/4GiB，沿原集成独占闸门，不代替 Gateway/Web、独立进程重启、Windows 或整个 shutdown 期限。
+
 `integration-generation-source-publication` 经真实 Session/任务 ASGI 入口生成定义，停止隔离运行时的原 worker 后验证来源 URI 的冷读、普通错误、复制发布拒绝及原事务回滚；固定60秒/4GiB及集成独占闸门，不代替执行恢复、独立进程重启、Gateway/Web或Windows验收。
 
 `integration-mcp-connection-publication` 经真实 SDK/stdio 与原持久账本验证三种连接入口的登记、重复取消、写盘失败及关闭顺序，固定90秒/4GiB并复用集成独占闸门；不替代 Gateway/Web、独立Backend重启、Windows 或整个shutdown期限。
