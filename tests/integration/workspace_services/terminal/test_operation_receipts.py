@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import sys
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -46,13 +47,18 @@ async def managed_terminal(terminal_runtime: WorkspaceToolRuntime):
         content="回执验证目录", attachments=[upload(b"keep-original-receipt")],
     ))
     ref, = message.attachments
-    attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
-    directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
+    directory_uri = ref.directory_uri
+    assert isinstance(directory_uri, str)
+    binding = context.thread_binding
+    assert binding is not None
+    attachment_id = parse_resource_uri(directory_uri).tail_segments[0]
+    directory = store.resolve_directory_uri(parse_resource_uri(directory_uri))
     created = await owner.create_terminal(
-        session_id=sid, thread_id=context.thread_binding.thread_id, retention_scope="workspace",
-        cwd=file_uri_child(ref.directory_uri, "derived"), holder_id="request:receipt-create", operation_id="receipt-create",
+        session_id=sid, thread_id=binding.thread_id, retention_scope="workspace",
+        cwd=file_uri_child(directory_uri, "derived"), holder_id="request:receipt-create", operation_id="receipt-create",
     )
     rid = created["resource_id"]
+    assert isinstance(rid, str)
     current = await owner.command(rid, action="promote", expected_revision=1,
                                   holder_id="request:receipt-version", operation_id="receipt-version")
     assert current["owner_revision"] == 2
@@ -62,7 +68,9 @@ async def managed_terminal(terminal_runtime: WorkspaceToolRuntime):
     finally:
         current = await owner.get_resource(rid)
         if current["status"] not in {"terminated", "exited", "completed", "deleted"}:
-            await owner.command(rid, action="stop", expected_revision=current["owner_revision"],
+            revision = current["owner_revision"]
+            assert type(revision) is int
+            await owner.command(rid, action="stop", expected_revision=revision,
                                 holder_id="request:receipt-cleanup", operation_id="receipt-cleanup")
 
 
@@ -102,6 +110,10 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
         await operation.read_terminal(rid)
         active, = leases.leases_for_resource(rid)
         assert active.status == "active"
+        assert (active.resource_id, active.turn_stream_id, active.operation_id,
+                active.holder_session_id, active.holder_thread_id) == (
+            rid, "request:real-receipt", "real-receipt", sid, tid,
+        )
         with monkeypatch.context() as patch:
             patch.setattr(owner._transport, method, returned)
             with pytest.raises(ValueError if fault == "stale" else ResourceConflict):
@@ -116,6 +128,8 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
     cold = ExternalResourceLeaseLedger(state_path=leases._state_path)
     pending = leases.get_lease(active.lease_id)
     assert pending.status == "reconcile_required" and cold.get_lease(active.lease_id) == pending
+    assert pending == replace(active, status="reconcile_required", updated_at=pending.updated_at)
+    assert cold.get_lease(directory_lease.lease_id) == directory_lease
     assert leases.get_lease(directory_lease.lease_id).status == "active"
     record = owner._store.get(rid)
     assert record.reconciliation_status == "unknown" and record.owner_revision == 2
@@ -135,13 +149,18 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
                                   holder_id="request:receipt-proof", operation_id="receipt-proof")
     assert stopped["status"] == "terminated" and stopped["owner_revision"] == 3
     assert not process_running(pid)
-    assert leases.get_lease(active.lease_id).status == "settled"
+    settled = leases.get_lease(active.lease_id)
+    assert settled == replace(active, status="settled", updated_at=settled.updated_at)
     assert leases.get_lease(directory_lease.lease_id).status == "settled"
+    cold = ExternalResourceLeaseLedger(state_path=leases._state_path)
+    assert cold.get_lease(active.lease_id) == settled
+    assert cold.get_lease(directory_lease.lease_id) == leases.get_lease(directory_lease.lease_id)
     assert await store.collect_garbage(leases=leases) == (attachment_id,)
     assert not directory.exists() and len(received) == 1
     run = TestRunContext.from_test_file(Path(request.path)).prepare()
     (run.artifacts_dir / f"receipt-{entry}-{fault}.json").write_text(json.dumps({
         "entry": entry, "fault": fault, "os_pid": pid, "original_operation_lease": active.lease_id,
+        "original_operation": asdict(active), "pending_operation": asdict(pending), "settled_operation": asdict(settled),
         "original_directory_lease": directory_lease.lease_id, "stop": stopped,
         "scope": "正式Session/上传/Terminal创建、原工具operation及真实Node/PTY/HTTP；仅回执为故障注入，不代表Gateway/Web或独立Backend重启",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
