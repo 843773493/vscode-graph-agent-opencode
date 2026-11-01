@@ -591,3 +591,7 @@ tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记
 到期目录候选与终态 fork 操作枚举通过既有受保护 worker 查询。每个目录先在原目录 holder 和工作区文件 mutation lock 内核对、提交 deleting 并幂等删除物理目录；随后归还工作区文件写锁，仍在原目录 holder 与同一 worker 内沿唯一外部 lease 账本提交 stopped，最后写 tombstone，账本等待不阻塞无关文件操作。账本或最后提交失败时保留原 deleting 与 locator，由下次原 GC 定点重试；不添加补偿表或扫描目录。实际仍被保留的目录在同步删除入口内返回未收集，原异步调用取消仍由 worker 原语传播，不因跳过保留目录而吞掉取消。
 
 终态 fork 暂存沿原 operation import holder，在同一 worker 内完成快照查询、原生路径探测及删除；显式 operation 与周期全量入口复用同一实现。holder 覆盖排队和全部结算，取消或迟到失败不让原 writer／GC 在锁外继续。未知目录与原终态 claim 不变。此切片不证明原生 I/O 可抢占、旧代无身份接管或整个 operation／shutdown 有硬期限，5.2／5.4 保持未完成。
+
+### 创建回执前 Python owner 硬退出的核实边界
+
+真实创建入口先生成 intent 和 dispatching lease；独立 Python 进程在原 transport 派发前，或真实 Node 创建返回而 Python 尚未接收回执时被强杀。新进程仅从原 owner 记录与唯一 lease 账本恢复，不补写历史或复用旧创建调用。外部实例存在时，普通读取保持 reconcile_required，来源、关联和原 lease 身份不变；必须取得新的管理 operation，沿原停止链核实真实 PTY／页面终态，持久结清精确原占用后才能完成原 Session 清理。外部实例不存在时仍保留 creating／unknown 和原待核实 lease，404 与空清单均不构成未创建证明。该验收覆盖 Python owner 进程强杀与新进程恢复、真实 Node HTTP／PTY／Chromium；不替代完整 Backend／Gateway／Web 重启、Windows、无外部身份接管或整个 operation／shutdown 期限。

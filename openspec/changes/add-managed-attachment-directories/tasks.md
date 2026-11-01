@@ -871,3 +871,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 到期候选和终态 fork 操作查询复用受保护 worker；同一目录的 deleting、物理删除、原账本 stopped 和 tombstone 在原目录 holder 内依次结算。物理删除后归还工作区文件写锁，账本等待不阻塞无关文件；账本失败保留 deleting、原 locator 与期限，下一次原 GC 幂等重试。终态 fork 的快照、原生探测与删除在原 import holder 内结算，取消和迟到失败不遗弃原访问，不扫描未知目录。
 - 28 项新增 worker／取消／失败／原 holder 单测与相关附件回归共155 passed；最终目标平台异常断言补验1 passed。正式产品4项覆盖真实启动失败后的目录释放、GC原账本写盘失败重试及两项既有停止故障收尾；独立进程GC删除前／后硬退出2 passed，main／child fork、GC竞争及发布／失败／删除11 passed。首次Shell组合11 passed／2 failed仅因旧测试仍断言原生错误直接公开；按已生效的结构化错误合同迁齐类型、errno、原cause身份和路径边界后，4项定向通过，其余9项沿相同源码证据复用，不放宽终态或身份断言。
 - 实现前的4项新测试均失败于同步访问阻塞；原记录不足以证明完整旧归档对照，不据此声称完成归档变异验证。Ruff、compileall、OpenSpec strict通过；Pyright原新各17条既存诊断，逐项一致，新测试零诊断。准确命令、源码指纹、原始输出、实际退出码及结构审查见`out/tests/temp/attachment_gc_workers_20261101/artifacts/verification.json`。既有Session集成目录有144个直接Python文件，本轮未新增其直接文件；新单测置于原附件专用子目录。未修改Web迁移、公共fixture或共享debug；此证据不代Windows、原生I/O抢占、旧代无身份接管或整个operation／shutdown期限，5.2／5.4及21/23保持未完成。
+
+### 2026-11-01 创建回执前 Python owner 硬退出（5.2 部分）
+
+- 新增独立真实进程验收：正式 Session／acceptance 和原资源创建入口生成 intent 与 dispatching lease，在 transport 派发前或真实 Node 已创建而 Python 尚未消费回执时强杀原 Python 进程。冷 owner 从原持久记录恢复，核来源、关联、精确 lease、外部 PID／页面身份和无自动重放；有实例时仅新管理 operation 可停止并结清，随后原 Session 清理完成真实删除。无实例时空清单／404仍保持 creating／unknown 和原占用，代码明确保留无身份接管 TODO。
+- 两领域×两个窗口共4 passed／89.39秒，外层180秒和4GiB数据段保护，沿原集成独占闸门；采样源码前后无变化。Ruff、compileall、Pyright零诊断，限定独立复审核准worktree／HEAD／指纹后无finding。首轮误将缺失实例的unknown期望成reconcile_required、次轮将Proto Struct整数PID限定为Python int的装具失败均保留，按现有合同修正，不改产品或放宽身份、原占用和真实终态断言；初次调用未安装的Python pyright入口失败后使用既有Bun入口。
+- 准确命令、源码指纹、原始输出和实际退出码见`out/tests/temp/resource_creation_restart_20261101/artifacts/verification.json`；正式工作区／进程日志与强杀、恢复原件在`out/tests/integration/workspace_services/test_resource_creation_restart/`。本轮只新增验收及合同登记，未修改产品、公共fixture、Web迁移或共享服务；不代表完整Backend／Gateway／Web重启、Windows、无外部身份接管或整个operation／shutdown期限。5.2／5.4及21/23继续未完成。

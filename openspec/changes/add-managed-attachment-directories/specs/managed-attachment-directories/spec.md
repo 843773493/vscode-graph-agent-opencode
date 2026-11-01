@@ -88,6 +88,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 后端在关联资源后退出且未发送 detach，随后重启
 - **THEN** owner 按原持久事实区分待恢复任务、新代关联和已失效持有者，解除可证明失效的关联并开始相应回收规则，未知外部进程仍要求核实
 
+#### Scenario: 创建回执前资源 owner 进程硬退出
+
+- **WHEN** Terminal 或 Browser 已持久提交创建 intent 和原 dispatching lease，但 Python owner 进程在外部派发前或取得创建回执前硬退出
+- **THEN** 冷 owner 保留原资源身份、来源 Thread、关联和精确 lease，不自动重放创建；外部实例存在时，普通存活观察不能结清未知创建，新管理 operation 沿原停止链核实并持久提交终态后才结清原占用。外部清单缺失及详情 404 不能证明未创建，不得据此关闭 intent、释放 lease 或补造停止回执；无外部身份接管仍按任务 5.2 的未完成边界处理
+
 #### Scenario: 停止派发前 Backend 硬退出
 
 - **WHEN** 管理停止已登记原 operation lease 并完成撤权，但尚未向外部 owner 派发停止时 Backend 硬退出
