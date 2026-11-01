@@ -56,10 +56,11 @@ export type GatewayConfigSourceDTO = Omit<
 };
 export type GatewayConfigSourcesDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourcesDTO>,
-  "schema_uri" | "sources"
+  "schema_uri" | "sources" | "policy_manifest"
 > & {
   schema_uri: string | null;
   sources: GatewayConfigSourceDTO[];
+  policy_manifest: Record<string, unknown>[];
 };
 export type GatewayDiagnosticLogDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticLogDTO>;
 export type GatewayDiagnosticWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticWorkspaceDTO>;
@@ -141,8 +142,15 @@ export type GatewayWorkspaceListDTO = Omit<OptionalFields<GatewayProtocol.Gatewa
   active_workspace_id?: string | null;
   items?: GatewayWorkspaceDTO[];
 };
-export type GatewayConfigReloadStatusDTO = Omit<OptionalFields<GatewayProtocol.GatewayConfigReloadStatusDTO>, "reason"> & {
-  reason?: "invalid_config" | "restart_required" | "apply_failed" | null;
+// Proto 的 presence 字段在 HTTP 响应中允许显式 null；取值约束仍由配置 owner 定义。
+type NullableOptionalFields<T> = {
+  [Key in keyof T]: undefined extends T[Key] ? T[Key] | null : T[Key];
+};
+export type GatewayConfigReloadStatusDTO = Omit<
+  NullableOptionalFields<GatewayProtocol.GatewayConfigReloadStatusDTO>, "reason" | "layer_digests"
+> & {
+  reason?: "invalid_config" | "restart_required" | "apply_failed" | "conflict" | "rejected" | "recovery_required" | null;
+  layer_digests: Record<string, string | null>;
 };
 export type PortForwardDTO = Omit<OptionalFields<GatewayProtocol.PortForwardDTO>, "remote_host" | "local_host" | "protocol" | "label" | "status" | "error" | "local_url"> & {
   remote_host: "127.0.0.1";

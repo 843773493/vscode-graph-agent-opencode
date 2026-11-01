@@ -124,6 +124,66 @@ message GatewayConfigReloadStatusDTO {
   repeated string changed_sections = 6;
   optional string last_error = 7;
   optional string error = 8;
+  optional string state = 9;
+  optional int64 active_revision = 10;
+  optional int64 pending_revision = 11;
+  optional string candidate_id = 12;
+  optional string candidate_ref = 13;
+  optional string attempt_id = 14;
+  optional string apply_id = 15;
+  // HTTP 保留来源缺失时的显式 null；字符串摘要的业务约束仍由配置 owner 校验。
+  map<string, google.protobuf.Value> layer_digests = 16;
+  repeated string applied_paths = 17;
+  repeated string deferred_paths = 18;
+}
+
+message GatewayConfigPendingHealthProofRequest {
+  optional string config_domain = 1;
+  string candidate_ref = 2;
+  string candidate_id = 3;
+  string generation = 4;
+  string loaded_source = 5;
+  optional int64 active_revision = 6;
+  int64 pending_revision = 7;
+  string candidate_digest = 8;
+  string effective_digest = 9;
+  string secret_binding_digest = 10;
+  string fencing_token_digest = 11;
+  string health_digest = 12;
+  string gateway_id = 13;
+  map<string, string> consumer_health_digests = 14;
+}
+
+message GatewayConfigPendingDiscardRequest {
+  int64 expected_active_revision = 1;
+  string expected_active_digest = 2;
+}
+
+message GatewayConfigEventDTO {
+  int64 event_seq = 1;
+  string event_id = 2;
+  string config_domain = 3;
+  optional string candidate_id = 4;
+  optional string attempt_id = 5;
+  optional string apply_id = 6;
+  optional string idempotency_key = 7;
+  optional int64 commit_revision = 8;
+  optional int64 active_revision = 9;
+  optional int64 pending_revision = 10;
+  string source = 11;
+  string result = 12;
+  optional string activation_scope = 13;
+  repeated string changed_paths = 14;
+  repeated string applied_paths = 15;
+  repeated string deferred_paths = 16;
+  optional string error = 17;
+  string occurred_at = 18;
+}
+
+message GatewayConfigEventsDTO {
+  int64 cursor = 1;
+  repeated GatewayConfigEventDTO events = 2;
+  optional bool has_more = 3;
 }
 
 message GatewayConfigSourceDTO {
@@ -152,6 +212,7 @@ message GatewayConfigSourcesDTO {
   repeated GatewayConfigSourceDTO sources = 3;
   // 配置 schema 文件的 URI；没有可寻址 schema 时不设置。
   optional string schema_uri = 4;
+  repeated google.protobuf.Struct policy_manifest = 5;
 }
 
 message GatewayDiagnosticLogDTO {

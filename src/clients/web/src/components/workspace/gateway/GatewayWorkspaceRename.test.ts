@@ -71,6 +71,9 @@ const remoteGatewayWorkspace: GatewayWorkspace = {
     healthy: true,
     restart_required: false,
     changed_sections: [],
+    applied_paths: [],
+    deferred_paths: [],
+    layer_digests: {},
   },
   remote: {
     gateway_connection_id: "remote_gateway_dev",

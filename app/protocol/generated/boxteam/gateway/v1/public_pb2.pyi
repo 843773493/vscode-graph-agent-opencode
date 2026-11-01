@@ -186,7 +186,14 @@ class FederationWorkspaceListDTO(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[FederationWorkspaceDTO, _Mapping]]] = ..., excluded: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class GatewayConfigReloadStatusDTO(_message.Message):
-    __slots__ = ("available", "healthy", "revision", "restart_required", "reason", "changed_sections", "last_error", "error")
+    __slots__ = ("available", "healthy", "revision", "restart_required", "reason", "changed_sections", "last_error", "error", "state", "active_revision", "pending_revision", "candidate_id", "candidate_ref", "attempt_id", "apply_id", "layer_digests", "applied_paths", "deferred_paths")
+    class LayerDigestsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: _struct_pb2.Value
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ...) -> None: ...
     AVAILABLE_FIELD_NUMBER: _ClassVar[int]
     HEALTHY_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
@@ -195,6 +202,16 @@ class GatewayConfigReloadStatusDTO(_message.Message):
     CHANGED_SECTIONS_FIELD_NUMBER: _ClassVar[int]
     LAST_ERROR_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_REF_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    APPLY_ID_FIELD_NUMBER: _ClassVar[int]
+    LAYER_DIGESTS_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    DEFERRED_PATHS_FIELD_NUMBER: _ClassVar[int]
     available: bool
     healthy: bool
     revision: str
@@ -203,7 +220,114 @@ class GatewayConfigReloadStatusDTO(_message.Message):
     changed_sections: _containers.RepeatedScalarFieldContainer[str]
     last_error: str
     error: str
-    def __init__(self, available: _Optional[bool] = ..., healthy: _Optional[bool] = ..., revision: _Optional[str] = ..., restart_required: _Optional[bool] = ..., reason: _Optional[str] = ..., changed_sections: _Optional[_Iterable[str]] = ..., last_error: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    state: str
+    active_revision: int
+    pending_revision: int
+    candidate_id: str
+    candidate_ref: str
+    attempt_id: str
+    apply_id: str
+    layer_digests: _containers.MessageMap[str, _struct_pb2.Value]
+    applied_paths: _containers.RepeatedScalarFieldContainer[str]
+    deferred_paths: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, available: _Optional[bool] = ..., healthy: _Optional[bool] = ..., revision: _Optional[str] = ..., restart_required: _Optional[bool] = ..., reason: _Optional[str] = ..., changed_sections: _Optional[_Iterable[str]] = ..., last_error: _Optional[str] = ..., error: _Optional[str] = ..., state: _Optional[str] = ..., active_revision: _Optional[int] = ..., pending_revision: _Optional[int] = ..., candidate_id: _Optional[str] = ..., candidate_ref: _Optional[str] = ..., attempt_id: _Optional[str] = ..., apply_id: _Optional[str] = ..., layer_digests: _Optional[_Mapping[str, _struct_pb2.Value]] = ..., applied_paths: _Optional[_Iterable[str]] = ..., deferred_paths: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class GatewayConfigPendingHealthProofRequest(_message.Message):
+    __slots__ = ("config_domain", "candidate_ref", "candidate_id", "generation", "loaded_source", "active_revision", "pending_revision", "candidate_digest", "effective_digest", "secret_binding_digest", "fencing_token_digest", "health_digest", "gateway_id", "consumer_health_digests")
+    class ConsumerHealthDigestsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    CONFIG_DOMAIN_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_REF_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    LOADED_SOURCE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    EFFECTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SECRET_BINDING_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    FENCING_TOKEN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    HEALTH_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    CONSUMER_HEALTH_DIGESTS_FIELD_NUMBER: _ClassVar[int]
+    config_domain: str
+    candidate_ref: str
+    candidate_id: str
+    generation: str
+    loaded_source: str
+    active_revision: int
+    pending_revision: int
+    candidate_digest: str
+    effective_digest: str
+    secret_binding_digest: str
+    fencing_token_digest: str
+    health_digest: str
+    gateway_id: str
+    consumer_health_digests: _containers.ScalarMap[str, str]
+    def __init__(self, config_domain: _Optional[str] = ..., candidate_ref: _Optional[str] = ..., candidate_id: _Optional[str] = ..., generation: _Optional[str] = ..., loaded_source: _Optional[str] = ..., active_revision: _Optional[int] = ..., pending_revision: _Optional[int] = ..., candidate_digest: _Optional[str] = ..., effective_digest: _Optional[str] = ..., secret_binding_digest: _Optional[str] = ..., fencing_token_digest: _Optional[str] = ..., health_digest: _Optional[str] = ..., gateway_id: _Optional[str] = ..., consumer_health_digests: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class GatewayConfigPendingDiscardRequest(_message.Message):
+    __slots__ = ("expected_active_revision", "expected_active_digest")
+    EXPECTED_ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    expected_active_revision: int
+    expected_active_digest: str
+    def __init__(self, expected_active_revision: _Optional[int] = ..., expected_active_digest: _Optional[str] = ...) -> None: ...
+
+class GatewayConfigEventDTO(_message.Message):
+    __slots__ = ("event_seq", "event_id", "config_domain", "candidate_id", "attempt_id", "apply_id", "idempotency_key", "commit_revision", "active_revision", "pending_revision", "source", "result", "activation_scope", "changed_paths", "applied_paths", "deferred_paths", "error", "occurred_at")
+    EVENT_SEQ_FIELD_NUMBER: _ClassVar[int]
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_DOMAIN_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    APPLY_ID_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    COMMIT_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    RESULT_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    DEFERRED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    event_seq: int
+    event_id: str
+    config_domain: str
+    candidate_id: str
+    attempt_id: str
+    apply_id: str
+    idempotency_key: str
+    commit_revision: int
+    active_revision: int
+    pending_revision: int
+    source: str
+    result: str
+    activation_scope: str
+    changed_paths: _containers.RepeatedScalarFieldContainer[str]
+    applied_paths: _containers.RepeatedScalarFieldContainer[str]
+    deferred_paths: _containers.RepeatedScalarFieldContainer[str]
+    error: str
+    occurred_at: str
+    def __init__(self, event_seq: _Optional[int] = ..., event_id: _Optional[str] = ..., config_domain: _Optional[str] = ..., candidate_id: _Optional[str] = ..., attempt_id: _Optional[str] = ..., apply_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., commit_revision: _Optional[int] = ..., active_revision: _Optional[int] = ..., pending_revision: _Optional[int] = ..., source: _Optional[str] = ..., result: _Optional[str] = ..., activation_scope: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ..., applied_paths: _Optional[_Iterable[str]] = ..., deferred_paths: _Optional[_Iterable[str]] = ..., error: _Optional[str] = ..., occurred_at: _Optional[str] = ...) -> None: ...
+
+class GatewayConfigEventsDTO(_message.Message):
+    __slots__ = ("cursor", "events", "has_more")
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    HAS_MORE_FIELD_NUMBER: _ClassVar[int]
+    cursor: int
+    events: _containers.RepeatedCompositeFieldContainer[GatewayConfigEventDTO]
+    has_more: bool
+    def __init__(self, cursor: _Optional[int] = ..., events: _Optional[_Iterable[_Union[GatewayConfigEventDTO, _Mapping]]] = ..., has_more: _Optional[bool] = ...) -> None: ...
 
 class GatewayConfigSourceDTO(_message.Message):
     __slots__ = ("layer", "precedence", "loaded", "source_key", "presence", "layer_revision", "layer_digest", "source_generation", "uri")
@@ -228,14 +352,16 @@ class GatewayConfigSourceDTO(_message.Message):
     def __init__(self, layer: _Optional[str] = ..., precedence: _Optional[int] = ..., loaded: _Optional[bool] = ..., source_key: _Optional[str] = ..., presence: _Optional[str] = ..., layer_revision: _Optional[int] = ..., layer_digest: _Optional[str] = ..., source_generation: _Optional[int] = ..., uri: _Optional[str] = ...) -> None: ...
 
 class GatewayConfigSourcesDTO(_message.Message):
-    __slots__ = ("revision", "sources", "schema_uri")
+    __slots__ = ("revision", "sources", "schema_uri", "policy_manifest")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     SOURCES_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_URI_FIELD_NUMBER: _ClassVar[int]
+    POLICY_MANIFEST_FIELD_NUMBER: _ClassVar[int]
     revision: str
     sources: _containers.RepeatedCompositeFieldContainer[GatewayConfigSourceDTO]
     schema_uri: str
-    def __init__(self, revision: _Optional[str] = ..., sources: _Optional[_Iterable[_Union[GatewayConfigSourceDTO, _Mapping]]] = ..., schema_uri: _Optional[str] = ...) -> None: ...
+    policy_manifest: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
+    def __init__(self, revision: _Optional[str] = ..., sources: _Optional[_Iterable[_Union[GatewayConfigSourceDTO, _Mapping]]] = ..., schema_uri: _Optional[str] = ..., policy_manifest: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ...) -> None: ...
 
 class GatewayDiagnosticLogDTO(_message.Message):
     __slots__ = ("log_id", "source", "workspace_id", "workspace_name", "service", "label", "status", "tail", "truncated", "line_count", "size_bytes", "updated_at", "error")

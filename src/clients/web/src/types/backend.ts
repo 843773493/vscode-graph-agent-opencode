@@ -398,16 +398,9 @@ export type GatewayUserList = Omit<Required<GatewayUserListDTO>, "items"> & {
 };
 export type GatewayUserAccess = Required<GatewayUserAccessDTO>;
 export type GatewayUserViewState = DeepRequired<GatewayUserViewStateDTO>;
-export type GatewayConfigReloadStatus = Omit<
-  Required<GatewayConfigReloadStatusDTO>,
-  "healthy" | "revision" | "reason" | "last_error" | "error"
-> & {
-  healthy?: boolean | null;
-  revision?: string | null;
-  reason?: GatewayConfigReloadStatusDTO["reason"];
-  last_error?: string | null;
-  error?: string | null;
-};
+export type GatewayConfigReloadStatus = GatewayConfigReloadStatusDTO & Required<
+  Pick<GatewayConfigReloadStatusDTO, "available" | "restart_required">
+>;
 export type GatewayConfigSource = GatewayConfigSourceDTO;
 export type GatewayConfigSources = GatewayConfigSourcesDTO;
 export type WorkspaceConfigSource = ConfigSourceDTO;

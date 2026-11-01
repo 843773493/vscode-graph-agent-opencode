@@ -125,6 +125,78 @@ export interface GatewayConfigReloadStatusDTO {
   changed_sections: string[];
   last_error?: string | undefined;
   error?: string | undefined;
+  state?: string | undefined;
+  active_revision?: number | undefined;
+  pending_revision?: number | undefined;
+  candidate_id?: string | undefined;
+  candidate_ref?: string | undefined;
+  attempt_id?: string | undefined;
+  apply_id?:
+    | string
+    | undefined;
+  /** HTTP 保留来源缺失时的显式 null；字符串摘要的业务约束仍由配置 owner 校验。 */
+  layer_digests: { [key: string]: any | undefined };
+  applied_paths: string[];
+  deferred_paths: string[];
+}
+
+export interface GatewayConfigReloadStatusDTO_LayerDigestsEntry {
+  key: string;
+  value: any | undefined;
+}
+
+export interface GatewayConfigPendingHealthProofRequest {
+  config_domain?: string | undefined;
+  candidate_ref: string;
+  candidate_id: string;
+  generation: string;
+  loaded_source: string;
+  active_revision?: number | undefined;
+  pending_revision: number;
+  candidate_digest: string;
+  effective_digest: string;
+  secret_binding_digest: string;
+  fencing_token_digest: string;
+  health_digest: string;
+  gateway_id: string;
+  consumer_health_digests: { [key: string]: string };
+}
+
+export interface GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry {
+  key: string;
+  value: string;
+}
+
+export interface GatewayConfigPendingDiscardRequest {
+  expected_active_revision: number;
+  expected_active_digest: string;
+}
+
+export interface GatewayConfigEventDTO {
+  event_seq: number;
+  event_id: string;
+  config_domain: string;
+  candidate_id?: string | undefined;
+  attempt_id?: string | undefined;
+  apply_id?: string | undefined;
+  idempotency_key?: string | undefined;
+  commit_revision?: number | undefined;
+  active_revision?: number | undefined;
+  pending_revision?: number | undefined;
+  source: string;
+  result: string;
+  activation_scope?: string | undefined;
+  changed_paths: string[];
+  applied_paths: string[];
+  deferred_paths: string[];
+  error?: string | undefined;
+  occurred_at: string;
+}
+
+export interface GatewayConfigEventsDTO {
+  cursor: number;
+  events: GatewayConfigEventDTO[];
+  has_more?: boolean | undefined;
 }
 
 export interface GatewayConfigSourceDTO {
@@ -151,6 +223,7 @@ export interface GatewayConfigSourcesDTO {
   sources: GatewayConfigSourceDTO[];
   /** 配置 schema 文件的 URI；没有可寻址 schema 时不设置。 */
   schema_uri?: string | undefined;
+  policy_manifest: { [key: string]: any }[];
 }
 
 export interface GatewayDiagnosticLogDTO {
@@ -1444,6 +1517,16 @@ function createBaseGatewayConfigReloadStatusDTO(): GatewayConfigReloadStatusDTO 
     changed_sections: [],
     last_error: undefined,
     error: undefined,
+    state: undefined,
+    active_revision: undefined,
+    pending_revision: undefined,
+    candidate_id: undefined,
+    candidate_ref: undefined,
+    attempt_id: undefined,
+    apply_id: undefined,
+    layer_digests: {},
+    applied_paths: [],
+    deferred_paths: [],
   };
 }
 
@@ -1460,6 +1543,33 @@ export const GatewayConfigReloadStatusDTO: MessageFns<GatewayConfigReloadStatusD
         : [],
       last_error: isSet(object.last_error) ? globalThis.String(object.last_error) : undefined,
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      state: isSet(object.state) ? globalThis.String(object.state) : undefined,
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      pending_revision: isSet(object.pending_revision) ? globalThis.Number(object.pending_revision) : undefined,
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : undefined,
+      candidate_ref: isSet(object.candidate_ref) ? globalThis.String(object.candidate_ref) : undefined,
+      attempt_id: isSet(object.attempt_id) ? globalThis.String(object.attempt_id) : undefined,
+      apply_id: isSet(object.apply_id) ? globalThis.String(object.apply_id) : undefined,
+      layer_digests: isObject(object.layer_digests)
+        ? (globalThis.Object.entries(object.layer_digests) as [string, any][]).reduce(
+          (acc: { [key: string]: any | undefined }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: value as any | undefined,
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      applied_paths: globalThis.Array.isArray(object?.applied_paths)
+        ? object.applied_paths.map((e: any) => globalThis.String(e))
+        : [],
+      deferred_paths: globalThis.Array.isArray(object?.deferred_paths)
+        ? object.deferred_paths.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -1489,6 +1599,42 @@ export const GatewayConfigReloadStatusDTO: MessageFns<GatewayConfigReloadStatusD
     if (message.error !== undefined) {
       obj.error = message.error;
     }
+    if (message.state !== undefined) {
+      obj.state = message.state;
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.pending_revision !== undefined) {
+      obj.pending_revision = Math.round(message.pending_revision);
+    }
+    if (message.candidate_id !== undefined) {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.candidate_ref !== undefined) {
+      obj.candidate_ref = message.candidate_ref;
+    }
+    if (message.attempt_id !== undefined) {
+      obj.attempt_id = message.attempt_id;
+    }
+    if (message.apply_id !== undefined) {
+      obj.apply_id = message.apply_id;
+    }
+    if (message.layer_digests) {
+      const entries = globalThis.Object.entries(message.layer_digests) as [string, any | undefined][];
+      if (entries.length > 0) {
+        obj.layer_digests = {};
+        entries.forEach(([k, v]) => {
+          obj.layer_digests[k] = v;
+        });
+      }
+    }
+    if (message.applied_paths?.length) {
+      obj.applied_paths = message.applied_paths;
+    }
+    if (message.deferred_paths?.length) {
+      obj.deferred_paths = message.deferred_paths;
+    }
     return obj;
   },
 
@@ -1505,6 +1651,465 @@ export const GatewayConfigReloadStatusDTO: MessageFns<GatewayConfigReloadStatusD
     message.changed_sections = object.changed_sections?.map((e) => e) || [];
     message.last_error = object.last_error ?? undefined;
     message.error = object.error ?? undefined;
+    message.state = object.state ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.pending_revision = object.pending_revision ?? undefined;
+    message.candidate_id = object.candidate_id ?? undefined;
+    message.candidate_ref = object.candidate_ref ?? undefined;
+    message.attempt_id = object.attempt_id ?? undefined;
+    message.apply_id = object.apply_id ?? undefined;
+    message.layer_digests = (globalThis.Object.entries(object.layer_digests ?? {}) as [string, any | undefined][])
+      .reduce((acc: { [key: string]: any | undefined }, [key, value]: [string, any | undefined]) => {
+        if (value !== undefined) {
+          acc[key] = value;
+        }
+        return acc;
+      }, {});
+    message.applied_paths = object.applied_paths?.map((e) => e) || [];
+    message.deferred_paths = object.deferred_paths?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayConfigReloadStatusDTO_LayerDigestsEntry(): GatewayConfigReloadStatusDTO_LayerDigestsEntry {
+  return { key: "", value: undefined };
+}
+
+export const GatewayConfigReloadStatusDTO_LayerDigestsEntry: MessageFns<
+  GatewayConfigReloadStatusDTO_LayerDigestsEntry
+> = {
+  fromJSON(object: any): GatewayConfigReloadStatusDTO_LayerDigestsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object?.value) ? object.value : undefined,
+    };
+  },
+
+  toJSON(message: GatewayConfigReloadStatusDTO_LayerDigestsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigReloadStatusDTO_LayerDigestsEntry>, I>>(
+    base?: I,
+  ): GatewayConfigReloadStatusDTO_LayerDigestsEntry {
+    return GatewayConfigReloadStatusDTO_LayerDigestsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigReloadStatusDTO_LayerDigestsEntry>, I>>(
+    object: I,
+  ): GatewayConfigReloadStatusDTO_LayerDigestsEntry {
+    const message = createBaseGatewayConfigReloadStatusDTO_LayerDigestsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayConfigPendingHealthProofRequest(): GatewayConfigPendingHealthProofRequest {
+  return {
+    config_domain: undefined,
+    candidate_ref: "",
+    candidate_id: "",
+    generation: "",
+    loaded_source: "",
+    active_revision: undefined,
+    pending_revision: 0,
+    candidate_digest: "",
+    effective_digest: "",
+    secret_binding_digest: "",
+    fencing_token_digest: "",
+    health_digest: "",
+    gateway_id: "",
+    consumer_health_digests: {},
+  };
+}
+
+export const GatewayConfigPendingHealthProofRequest: MessageFns<GatewayConfigPendingHealthProofRequest> = {
+  fromJSON(object: any): GatewayConfigPendingHealthProofRequest {
+    return {
+      config_domain: isSet(object.config_domain) ? globalThis.String(object.config_domain) : undefined,
+      candidate_ref: isSet(object.candidate_ref) ? globalThis.String(object.candidate_ref) : "",
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : "",
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      loaded_source: isSet(object.loaded_source) ? globalThis.String(object.loaded_source) : "",
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      pending_revision: isSet(object.pending_revision) ? globalThis.Number(object.pending_revision) : 0,
+      candidate_digest: isSet(object.candidate_digest) ? globalThis.String(object.candidate_digest) : "",
+      effective_digest: isSet(object.effective_digest) ? globalThis.String(object.effective_digest) : "",
+      secret_binding_digest: isSet(object.secret_binding_digest) ? globalThis.String(object.secret_binding_digest) : "",
+      fencing_token_digest: isSet(object.fencing_token_digest) ? globalThis.String(object.fencing_token_digest) : "",
+      health_digest: isSet(object.health_digest) ? globalThis.String(object.health_digest) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      consumer_health_digests: isObject(object.consumer_health_digests)
+        ? (globalThis.Object.entries(object.consumer_health_digests) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+    };
+  },
+
+  toJSON(message: GatewayConfigPendingHealthProofRequest): unknown {
+    const obj: any = {};
+    if (message.config_domain !== undefined) {
+      obj.config_domain = message.config_domain;
+    }
+    if (message.candidate_ref !== "") {
+      obj.candidate_ref = message.candidate_ref;
+    }
+    if (message.candidate_id !== "") {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.loaded_source !== "") {
+      obj.loaded_source = message.loaded_source;
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.pending_revision !== 0) {
+      obj.pending_revision = Math.round(message.pending_revision);
+    }
+    if (message.candidate_digest !== "") {
+      obj.candidate_digest = message.candidate_digest;
+    }
+    if (message.effective_digest !== "") {
+      obj.effective_digest = message.effective_digest;
+    }
+    if (message.secret_binding_digest !== "") {
+      obj.secret_binding_digest = message.secret_binding_digest;
+    }
+    if (message.fencing_token_digest !== "") {
+      obj.fencing_token_digest = message.fencing_token_digest;
+    }
+    if (message.health_digest !== "") {
+      obj.health_digest = message.health_digest;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.consumer_health_digests) {
+      const entries = globalThis.Object.entries(message.consumer_health_digests) as [string, string][];
+      if (entries.length > 0) {
+        obj.consumer_health_digests = {};
+        entries.forEach(([k, v]) => {
+          obj.consumer_health_digests[k] = v;
+        });
+      }
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigPendingHealthProofRequest>, I>>(
+    base?: I,
+  ): GatewayConfigPendingHealthProofRequest {
+    return GatewayConfigPendingHealthProofRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigPendingHealthProofRequest>, I>>(
+    object: I,
+  ): GatewayConfigPendingHealthProofRequest {
+    const message = createBaseGatewayConfigPendingHealthProofRequest();
+    message.config_domain = object.config_domain ?? undefined;
+    message.candidate_ref = object.candidate_ref ?? "";
+    message.candidate_id = object.candidate_id ?? "";
+    message.generation = object.generation ?? "";
+    message.loaded_source = object.loaded_source ?? "";
+    message.active_revision = object.active_revision ?? undefined;
+    message.pending_revision = object.pending_revision ?? 0;
+    message.candidate_digest = object.candidate_digest ?? "";
+    message.effective_digest = object.effective_digest ?? "";
+    message.secret_binding_digest = object.secret_binding_digest ?? "";
+    message.fencing_token_digest = object.fencing_token_digest ?? "";
+    message.health_digest = object.health_digest ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.consumer_health_digests =
+      (globalThis.Object.entries(object.consumer_health_digests ?? {}) as [string, string][]).reduce(
+        (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+          if (value !== undefined) {
+            acc[key] = globalThis.String(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    return message;
+  },
+};
+
+function createBaseGatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry(): GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry {
+  return { key: "", value: "" };
+}
+
+export const GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry: MessageFns<
+  GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry
+> = {
+  fromJSON(object: any): GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry>, I>>(
+    base?: I,
+  ): GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry {
+    return GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry>, I>>(
+    object: I,
+  ): GatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry {
+    const message = createBaseGatewayConfigPendingHealthProofRequest_ConsumerHealthDigestsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayConfigPendingDiscardRequest(): GatewayConfigPendingDiscardRequest {
+  return { expected_active_revision: 0, expected_active_digest: "" };
+}
+
+export const GatewayConfigPendingDiscardRequest: MessageFns<GatewayConfigPendingDiscardRequest> = {
+  fromJSON(object: any): GatewayConfigPendingDiscardRequest {
+    return {
+      expected_active_revision: isSet(object.expected_active_revision)
+        ? globalThis.Number(object.expected_active_revision)
+        : 0,
+      expected_active_digest: isSet(object.expected_active_digest)
+        ? globalThis.String(object.expected_active_digest)
+        : "",
+    };
+  },
+
+  toJSON(message: GatewayConfigPendingDiscardRequest): unknown {
+    const obj: any = {};
+    if (message.expected_active_revision !== 0) {
+      obj.expected_active_revision = Math.round(message.expected_active_revision);
+    }
+    if (message.expected_active_digest !== "") {
+      obj.expected_active_digest = message.expected_active_digest;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigPendingDiscardRequest>, I>>(
+    base?: I,
+  ): GatewayConfigPendingDiscardRequest {
+    return GatewayConfigPendingDiscardRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigPendingDiscardRequest>, I>>(
+    object: I,
+  ): GatewayConfigPendingDiscardRequest {
+    const message = createBaseGatewayConfigPendingDiscardRequest();
+    message.expected_active_revision = object.expected_active_revision ?? 0;
+    message.expected_active_digest = object.expected_active_digest ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayConfigEventDTO(): GatewayConfigEventDTO {
+  return {
+    event_seq: 0,
+    event_id: "",
+    config_domain: "",
+    candidate_id: undefined,
+    attempt_id: undefined,
+    apply_id: undefined,
+    idempotency_key: undefined,
+    commit_revision: undefined,
+    active_revision: undefined,
+    pending_revision: undefined,
+    source: "",
+    result: "",
+    activation_scope: undefined,
+    changed_paths: [],
+    applied_paths: [],
+    deferred_paths: [],
+    error: undefined,
+    occurred_at: "",
+  };
+}
+
+export const GatewayConfigEventDTO: MessageFns<GatewayConfigEventDTO> = {
+  fromJSON(object: any): GatewayConfigEventDTO {
+    return {
+      event_seq: isSet(object.event_seq) ? globalThis.Number(object.event_seq) : 0,
+      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
+      config_domain: isSet(object.config_domain) ? globalThis.String(object.config_domain) : "",
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : undefined,
+      attempt_id: isSet(object.attempt_id) ? globalThis.String(object.attempt_id) : undefined,
+      apply_id: isSet(object.apply_id) ? globalThis.String(object.apply_id) : undefined,
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : undefined,
+      commit_revision: isSet(object.commit_revision) ? globalThis.Number(object.commit_revision) : undefined,
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      pending_revision: isSet(object.pending_revision) ? globalThis.Number(object.pending_revision) : undefined,
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      result: isSet(object.result) ? globalThis.String(object.result) : "",
+      activation_scope: isSet(object.activation_scope) ? globalThis.String(object.activation_scope) : undefined,
+      changed_paths: globalThis.Array.isArray(object?.changed_paths)
+        ? object.changed_paths.map((e: any) => globalThis.String(e))
+        : [],
+      applied_paths: globalThis.Array.isArray(object?.applied_paths)
+        ? object.applied_paths.map((e: any) => globalThis.String(e))
+        : [],
+      deferred_paths: globalThis.Array.isArray(object?.deferred_paths)
+        ? object.deferred_paths.map((e: any) => globalThis.String(e))
+        : [],
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      occurred_at: isSet(object.occurred_at) ? globalThis.String(object.occurred_at) : "",
+    };
+  },
+
+  toJSON(message: GatewayConfigEventDTO): unknown {
+    const obj: any = {};
+    if (message.event_seq !== 0) {
+      obj.event_seq = Math.round(message.event_seq);
+    }
+    if (message.event_id !== "") {
+      obj.event_id = message.event_id;
+    }
+    if (message.config_domain !== "") {
+      obj.config_domain = message.config_domain;
+    }
+    if (message.candidate_id !== undefined) {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.attempt_id !== undefined) {
+      obj.attempt_id = message.attempt_id;
+    }
+    if (message.apply_id !== undefined) {
+      obj.apply_id = message.apply_id;
+    }
+    if (message.idempotency_key !== undefined) {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.commit_revision !== undefined) {
+      obj.commit_revision = Math.round(message.commit_revision);
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.pending_revision !== undefined) {
+      obj.pending_revision = Math.round(message.pending_revision);
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.result !== "") {
+      obj.result = message.result;
+    }
+    if (message.activation_scope !== undefined) {
+      obj.activation_scope = message.activation_scope;
+    }
+    if (message.changed_paths?.length) {
+      obj.changed_paths = message.changed_paths;
+    }
+    if (message.applied_paths?.length) {
+      obj.applied_paths = message.applied_paths;
+    }
+    if (message.deferred_paths?.length) {
+      obj.deferred_paths = message.deferred_paths;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.occurred_at !== "") {
+      obj.occurred_at = message.occurred_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigEventDTO>, I>>(base?: I): GatewayConfigEventDTO {
+    return GatewayConfigEventDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigEventDTO>, I>>(object: I): GatewayConfigEventDTO {
+    const message = createBaseGatewayConfigEventDTO();
+    message.event_seq = object.event_seq ?? 0;
+    message.event_id = object.event_id ?? "";
+    message.config_domain = object.config_domain ?? "";
+    message.candidate_id = object.candidate_id ?? undefined;
+    message.attempt_id = object.attempt_id ?? undefined;
+    message.apply_id = object.apply_id ?? undefined;
+    message.idempotency_key = object.idempotency_key ?? undefined;
+    message.commit_revision = object.commit_revision ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.pending_revision = object.pending_revision ?? undefined;
+    message.source = object.source ?? "";
+    message.result = object.result ?? "";
+    message.activation_scope = object.activation_scope ?? undefined;
+    message.changed_paths = object.changed_paths?.map((e) => e) || [];
+    message.applied_paths = object.applied_paths?.map((e) => e) || [];
+    message.deferred_paths = object.deferred_paths?.map((e) => e) || [];
+    message.error = object.error ?? undefined;
+    message.occurred_at = object.occurred_at ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayConfigEventsDTO(): GatewayConfigEventsDTO {
+  return { cursor: 0, events: [], has_more: undefined };
+}
+
+export const GatewayConfigEventsDTO: MessageFns<GatewayConfigEventsDTO> = {
+  fromJSON(object: any): GatewayConfigEventsDTO {
+    return {
+      cursor: isSet(object.cursor) ? globalThis.Number(object.cursor) : 0,
+      events: globalThis.Array.isArray(object?.events)
+        ? object.events.map((e: any) => GatewayConfigEventDTO.fromJSON(e))
+        : [],
+      has_more: isSet(object.has_more) ? globalThis.Boolean(object.has_more) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayConfigEventsDTO): unknown {
+    const obj: any = {};
+    if (message.cursor !== 0) {
+      obj.cursor = Math.round(message.cursor);
+    }
+    if (message.events?.length) {
+      obj.events = message.events.map((e) => GatewayConfigEventDTO.toJSON(e));
+    }
+    if (message.has_more !== undefined) {
+      obj.has_more = message.has_more;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigEventsDTO>, I>>(base?: I): GatewayConfigEventsDTO {
+    return GatewayConfigEventsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigEventsDTO>, I>>(object: I): GatewayConfigEventsDTO {
+    const message = createBaseGatewayConfigEventsDTO();
+    message.cursor = object.cursor ?? 0;
+    message.events = object.events?.map((e) => GatewayConfigEventDTO.fromPartial(e)) || [];
+    message.has_more = object.has_more ?? undefined;
     return message;
   },
 };
@@ -1589,7 +2194,7 @@ export const GatewayConfigSourceDTO: MessageFns<GatewayConfigSourceDTO> = {
 };
 
 function createBaseGatewayConfigSourcesDTO(): GatewayConfigSourcesDTO {
-  return { revision: "", sources: [], schema_uri: undefined };
+  return { revision: "", sources: [], schema_uri: undefined, policy_manifest: [] };
 }
 
 export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
@@ -1600,6 +2205,7 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
         ? object.sources.map((e: any) => GatewayConfigSourceDTO.fromJSON(e))
         : [],
       schema_uri: isSet(object.schema_uri) ? globalThis.String(object.schema_uri) : undefined,
+      policy_manifest: globalThis.Array.isArray(object?.policy_manifest) ? [...object.policy_manifest] : [],
     };
   },
 
@@ -1614,6 +2220,9 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
     if (message.schema_uri !== undefined) {
       obj.schema_uri = message.schema_uri;
     }
+    if (message.policy_manifest?.length) {
+      obj.policy_manifest = message.policy_manifest;
+    }
     return obj;
   },
 
@@ -1625,6 +2234,7 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
     message.revision = object.revision ?? "";
     message.sources = object.sources?.map((e) => GatewayConfigSourceDTO.fromPartial(e)) || [];
     message.schema_uri = object.schema_uri ?? undefined;
+    message.policy_manifest = object.policy_manifest?.map((e) => e) || [];
     return message;
   },
 };

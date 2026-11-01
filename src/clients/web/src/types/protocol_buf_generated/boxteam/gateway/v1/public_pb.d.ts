@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
+import type { Value } from "@bufbuild/protobuf/wkt";
 
 /**
  * Describes the file boxteam/gateway/v1/public.proto.
@@ -518,6 +519,58 @@ export declare type GatewayConfigReloadStatusDTO = Message<"boxteam.gateway.v1.G
    * @generated from field: optional string error = 8;
    */
   error?: string | undefined;
+
+  /**
+   * @generated from field: optional string state = 9;
+   */
+  state?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 active_revision = 10;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 pending_revision = 11;
+   */
+  pendingRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string candidate_id = 12;
+   */
+  candidateId?: string | undefined;
+
+  /**
+   * @generated from field: optional string candidate_ref = 13;
+   */
+  candidateRef?: string | undefined;
+
+  /**
+   * @generated from field: optional string attempt_id = 14;
+   */
+  attemptId?: string | undefined;
+
+  /**
+   * @generated from field: optional string apply_id = 15;
+   */
+  applyId?: string | undefined;
+
+  /**
+   * HTTP 保留来源缺失时的显式 null；字符串摘要的业务约束仍由配置 owner 校验。
+   *
+   * @generated from field: map<string, google.protobuf.Value> layer_digests = 16;
+   */
+  layerDigests: { [key: string]: Value };
+
+  /**
+   * @generated from field: repeated string applied_paths = 17;
+   */
+  appliedPaths: string[];
+
+  /**
+   * @generated from field: repeated string deferred_paths = 18;
+   */
+  deferredPaths: string[];
 };
 
 /**
@@ -525,6 +578,235 @@ export declare type GatewayConfigReloadStatusDTO = Message<"boxteam.gateway.v1.G
  * Use `create(GatewayConfigReloadStatusDTOSchema)` to create a new message.
  */
 export declare const GatewayConfigReloadStatusDTOSchema: GenMessage<GatewayConfigReloadStatusDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayConfigPendingHealthProofRequest
+ */
+export declare type GatewayConfigPendingHealthProofRequest = Message<"boxteam.gateway.v1.GatewayConfigPendingHealthProofRequest"> & {
+  /**
+   * @generated from field: optional string config_domain = 1;
+   */
+  configDomain?: string | undefined;
+
+  /**
+   * @generated from field: string candidate_ref = 2;
+   */
+  candidateRef: string;
+
+  /**
+   * @generated from field: string candidate_id = 3;
+   */
+  candidateId: string;
+
+  /**
+   * @generated from field: string generation = 4;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string loaded_source = 5;
+   */
+  loadedSource: string;
+
+  /**
+   * @generated from field: optional int64 active_revision = 6;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: int64 pending_revision = 7;
+   */
+  pendingRevision: bigint;
+
+  /**
+   * @generated from field: string candidate_digest = 8;
+   */
+  candidateDigest: string;
+
+  /**
+   * @generated from field: string effective_digest = 9;
+   */
+  effectiveDigest: string;
+
+  /**
+   * @generated from field: string secret_binding_digest = 10;
+   */
+  secretBindingDigest: string;
+
+  /**
+   * @generated from field: string fencing_token_digest = 11;
+   */
+  fencingTokenDigest: string;
+
+  /**
+   * @generated from field: string health_digest = 12;
+   */
+  healthDigest: string;
+
+  /**
+   * @generated from field: string gateway_id = 13;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: map<string, string> consumer_health_digests = 14;
+   */
+  consumerHealthDigests: { [key: string]: string };
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayConfigPendingHealthProofRequest.
+ * Use `create(GatewayConfigPendingHealthProofRequestSchema)` to create a new message.
+ */
+export declare const GatewayConfigPendingHealthProofRequestSchema: GenMessage<GatewayConfigPendingHealthProofRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayConfigPendingDiscardRequest
+ */
+export declare type GatewayConfigPendingDiscardRequest = Message<"boxteam.gateway.v1.GatewayConfigPendingDiscardRequest"> & {
+  /**
+   * @generated from field: int64 expected_active_revision = 1;
+   */
+  expectedActiveRevision: bigint;
+
+  /**
+   * @generated from field: string expected_active_digest = 2;
+   */
+  expectedActiveDigest: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayConfigPendingDiscardRequest.
+ * Use `create(GatewayConfigPendingDiscardRequestSchema)` to create a new message.
+ */
+export declare const GatewayConfigPendingDiscardRequestSchema: GenMessage<GatewayConfigPendingDiscardRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayConfigEventDTO
+ */
+export declare type GatewayConfigEventDTO = Message<"boxteam.gateway.v1.GatewayConfigEventDTO"> & {
+  /**
+   * @generated from field: int64 event_seq = 1;
+   */
+  eventSeq: bigint;
+
+  /**
+   * @generated from field: string event_id = 2;
+   */
+  eventId: string;
+
+  /**
+   * @generated from field: string config_domain = 3;
+   */
+  configDomain: string;
+
+  /**
+   * @generated from field: optional string candidate_id = 4;
+   */
+  candidateId?: string | undefined;
+
+  /**
+   * @generated from field: optional string attempt_id = 5;
+   */
+  attemptId?: string | undefined;
+
+  /**
+   * @generated from field: optional string apply_id = 6;
+   */
+  applyId?: string | undefined;
+
+  /**
+   * @generated from field: optional string idempotency_key = 7;
+   */
+  idempotencyKey?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 commit_revision = 8;
+   */
+  commitRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 active_revision = 9;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 pending_revision = 10;
+   */
+  pendingRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: string source = 11;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string result = 12;
+   */
+  result: string;
+
+  /**
+   * @generated from field: optional string activation_scope = 13;
+   */
+  activationScope?: string | undefined;
+
+  /**
+   * @generated from field: repeated string changed_paths = 14;
+   */
+  changedPaths: string[];
+
+  /**
+   * @generated from field: repeated string applied_paths = 15;
+   */
+  appliedPaths: string[];
+
+  /**
+   * @generated from field: repeated string deferred_paths = 16;
+   */
+  deferredPaths: string[];
+
+  /**
+   * @generated from field: optional string error = 17;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: string occurred_at = 18;
+   */
+  occurredAt: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayConfigEventDTO.
+ * Use `create(GatewayConfigEventDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigEventDTOSchema: GenMessage<GatewayConfigEventDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayConfigEventsDTO
+ */
+export declare type GatewayConfigEventsDTO = Message<"boxteam.gateway.v1.GatewayConfigEventsDTO"> & {
+  /**
+   * @generated from field: int64 cursor = 1;
+   */
+  cursor: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewayConfigEventDTO events = 2;
+   */
+  events: GatewayConfigEventDTO[];
+
+  /**
+   * @generated from field: optional bool has_more = 3;
+   */
+  hasMore?: boolean | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayConfigEventsDTO.
+ * Use `create(GatewayConfigEventsDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigEventsDTOSchema: GenMessage<GatewayConfigEventsDTO>;
 
 /**
  * @generated from message boxteam.gateway.v1.GatewayConfigSourceDTO
@@ -607,6 +889,11 @@ export declare type GatewayConfigSourcesDTO = Message<"boxteam.gateway.v1.Gatewa
    * @generated from field: optional string schema_uri = 4;
    */
   schemaUri?: string | undefined;
+
+  /**
+   * @generated from field: repeated google.protobuf.Struct policy_manifest = 5;
+   */
+  policyManifest: JsonObject[];
 };
 
 /**
