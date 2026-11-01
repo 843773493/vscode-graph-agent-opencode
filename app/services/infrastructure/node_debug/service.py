@@ -369,7 +369,6 @@ class NodeDebugService(
                 update={
                     "verified": False,
                     "actual_line": None,
-                    "inspector_id": None,
                 }
             )
             for breakpoint_id, breakpoint in runtime.breakpoints.items()

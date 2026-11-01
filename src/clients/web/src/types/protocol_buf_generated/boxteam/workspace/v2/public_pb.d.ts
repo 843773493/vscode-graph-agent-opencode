@@ -2075,11 +2075,6 @@ export declare type NodeDebugBreakpointDTO = Message<"boxteam.workspace.v2.NodeD
   actualLine?: bigint | undefined;
 
   /**
-   * @generated from field: optional string inspector_id = 10;
-   */
-  inspectorId?: string | undefined;
-
-  /**
    * @generated from field: optional int64 original_line = 11;
    */
   originalLine?: bigint | undefined;

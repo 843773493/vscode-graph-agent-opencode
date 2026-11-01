@@ -367,7 +367,6 @@ class NodeDebugLaunchOrchestrator:
                     update={
                         "verified": False,
                         "actual_line": None,
-                        "inspector_id": None,
                     }
                 )
                 runtime.breakpoints[breakpoint.breakpoint_id] = breakpoint

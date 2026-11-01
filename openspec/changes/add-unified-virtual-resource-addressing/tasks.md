@@ -1971,3 +1971,13 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 先复现旧实现真实 Gateway HTTP 200 泄漏注入路径，再验证修复后的六次发布拒绝与同请求重试。245项不同定向检查通过，包含156项模型、87项客户端及既有文件链回归、1项真实 Gateway／Backend 网络验收和1项公开协议检查；原目录字节、未注册状态、注册身份和路由配置保持。首次绿版最后误将动态健康投影纳入注册不变断言，按注册合同纠正后通过；新 Gateway HOME 再按运行／节点隔离并复验。
 - 六份输入／输出 JSON Schema 逐项相同；Ruff、compileall和本 change strict 通过。Pyright保留4项HEAD既存诊断，完整首行消息、规则和最窄表达式AST一致，无新增。准确命令、源码指纹、红绿原件、实际退出码与作者结构自查见 `out/tests/temp/native_directory_publication_20261101/artifacts/verification.json`。
 - 测试带外部期限／4GiB保护，真实网络沿原独占闸门；本片不代Web、Windows、真实联邦或进程重启总验收。2.2／7.2仍未勾，整体51/53；未动另一会话前端、公共fixture、长回归驱动及共享debug，团队／协作和显式MCP持有继续延期。
+
+
+### 2026-11-01 Inspector 源码发布与断点内部句柄（2.2／7.2部分收口）
+
+- 真实调试入口复现断点 `inspector_id` 内嵌原生 file URL；全仓核对后删除公开 DTO／proto 字段及运行态的重复投影，字段号10和原名 reserved，Inspector 命令继续只消费原有内部映射。六个既有 owner／工具模块的 AST 核对证实仅移除该投影，命中、安装、移除、取消和持久方案链未另写实现。
+- 帧 url／path 在构造和三种序列化出口复用同一校验，复制／嵌套修改不能发布 POSIX、盘符、UNC 或 file URL；文件 URI 复用原 grammar，内置模块、匿名标签、非文件 URL、可空 path、合法悬空地址及含冒号的原生相对文件名保持。原工具结果复用 State 序列化，不加脱敏回退。
+- 新 suite 固定60秒／4GiB，复用原独占闸门及按当前文件隔离的调试 fixture；产品入口产生暂停、配置和真实 Node／Inspector，16组输出损坏均走原500与同一 request_id，原 manifest／claim／方案及进程身份不变；恢复读取后在同一进程清除、重设断点并停止，冷 owner 重新读取原方案场景通过。最终正式2 passed／11.28秒；ASGI与冷 owner 不代 Gateway、Backend进程重启、Web或Windows。
+- 首批单元回归614项通过、1项新增用例误将合法scope当成坏地址；按原grammar修正测试，未收紧产品。修正后的模型／协议批次402项通过；最终原生文件名边界调整后，受影响的模型、真实帧解析、API与OpenAPI共242项通过。各组有重叠，不相加；未无证据重复86秒的完整相关单元批次。
+- Ruff、compileall、三个改动模型／新增测试的真实Pyright零诊断、客户端独立tsc、独立产物目录完整Workbench构建、Buf lint／build、协议产物一致性及本change strict通过。Buf相对真实基线 `9caca4f9fc2b6c15b700bd7598f8405bf2811bef` 的breaking退出100，唯一项为按本规范下线 `NodeDebugBreakpointDTO.inspector_id`，不保留兼容字段。OpenAPI除该字段外同步生成了原exporter已声明的5个descriptor元数据标记，原元数据源码与HEAD字节相同，无其它结构漂移。
+- 准确命令、源码SHA、红绿原件、实际退出码、逐字段OpenAPI差异及作者自查见 `out/tests/temp/inspector_source_publication_20261101/artifacts/verification.json`；正式产品原件保留在 `out/tests/integration/backend/agents/node_debug/test_source_publication/runs/` 下各run／node的 `artifacts/publication.json`，精确路径和SHA由verification索引。独立构建二进制和临时runner核验后删除，仅保留其指纹及日志。无新增独立代理审查；2.2／7.2总门仍未勾，整体51/53，团队及MCP持有延期边界保持。

@@ -476,7 +476,6 @@ export interface NodeDebugBreakpointDTO {
   log_message?: string | undefined;
   verified?: boolean | undefined;
   actual_line?: number | undefined;
-  inspector_id?: string | undefined;
   original_line?: number | undefined;
   source_line?: string | undefined;
   previous_line?: string | undefined;
@@ -6020,7 +6019,6 @@ function createBaseNodeDebugBreakpointDTO(): NodeDebugBreakpointDTO {
     log_message: undefined,
     verified: undefined,
     actual_line: undefined,
-    inspector_id: undefined,
     original_line: undefined,
     source_line: undefined,
     previous_line: undefined,
@@ -6044,7 +6042,6 @@ export const NodeDebugBreakpointDTO: MessageFns<NodeDebugBreakpointDTO> = {
       log_message: isSet(object.log_message) ? globalThis.String(object.log_message) : undefined,
       verified: isSet(object.verified) ? globalThis.Boolean(object.verified) : undefined,
       actual_line: isSet(object.actual_line) ? globalThis.Number(object.actual_line) : undefined,
-      inspector_id: isSet(object.inspector_id) ? globalThis.String(object.inspector_id) : undefined,
       original_line: isSet(object.original_line) ? globalThis.Number(object.original_line) : undefined,
       source_line: isSet(object.source_line) ? globalThis.String(object.source_line) : undefined,
       previous_line: isSet(object.previous_line) ? globalThis.String(object.previous_line) : undefined,
@@ -6084,9 +6081,6 @@ export const NodeDebugBreakpointDTO: MessageFns<NodeDebugBreakpointDTO> = {
     }
     if (message.actual_line !== undefined) {
       obj.actual_line = Math.round(message.actual_line);
-    }
-    if (message.inspector_id !== undefined) {
-      obj.inspector_id = message.inspector_id;
     }
     if (message.original_line !== undefined) {
       obj.original_line = Math.round(message.original_line);
@@ -6129,7 +6123,6 @@ export const NodeDebugBreakpointDTO: MessageFns<NodeDebugBreakpointDTO> = {
     message.log_message = object.log_message ?? undefined;
     message.verified = object.verified ?? undefined;
     message.actual_line = object.actual_line ?? undefined;
-    message.inspector_id = object.inspector_id ?? undefined;
     message.original_line = object.original_line ?? undefined;
     message.source_line = object.source_line ?? undefined;
     message.previous_line = object.previous_line ?? undefined;

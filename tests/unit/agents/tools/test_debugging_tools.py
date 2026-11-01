@@ -351,7 +351,7 @@ def paused_debug_state() -> NodeDebugStateDTO:
             NodeDebugStackFrameDTO(
                 call_frame_id="frame-1",
                 function_name="main",
-                url="file:///workspace/fixture.mjs",
+                url="boxteam://workspace/22222222-2222-4222-8222-222222222222/resources/files/root/fixture.mjs",
                 path="fixture.mjs",
                 line=3,
                 column=1,

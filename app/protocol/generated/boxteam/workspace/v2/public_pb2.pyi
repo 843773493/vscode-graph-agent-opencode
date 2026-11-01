@@ -781,7 +781,7 @@ class NodeDebugActionRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., pause: _Optional[_Union[NodeDebugNoActionParams, _Mapping]] = ..., step_over: _Optional[_Union[NodeDebugNoActionParams, _Mapping]] = ..., step_into: _Optional[_Union[NodeDebugNoActionParams, _Mapping]] = ..., step_out: _Optional[_Union[NodeDebugNoActionParams, _Mapping]] = ..., set_breakpoint: _Optional[_Union[NodeDebugSetBreakpointParams, _Mapping]] = ..., update_breakpoint: _Optional[_Union[NodeDebugUpdateBreakpointParams, _Mapping]] = ..., clear_breakpoint: _Optional[_Union[NodeDebugClearBreakpointParams, _Mapping]] = ..., evaluate: _Optional[_Union[NodeDebugEvaluateParams, _Mapping]] = ..., stop: _Optional[_Union[NodeDebugNoActionParams, _Mapping]] = ..., thread_id: _Optional[str] = ..., **kwargs) -> None: ...
 
 class NodeDebugBreakpointDTO(_message.Message):
-    __slots__ = ("breakpoint_id", "path", "line", "column", "condition", "hit_condition", "log_message", "verified", "actual_line", "inspector_id", "original_line", "source_line", "previous_line", "next_line", "source_digest", "relocation_status", "relocation_message", "created_at")
+    __slots__ = ("breakpoint_id", "path", "line", "column", "condition", "hit_condition", "log_message", "verified", "actual_line", "original_line", "source_line", "previous_line", "next_line", "source_digest", "relocation_status", "relocation_message", "created_at")
     BREAKPOINT_ID_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
     LINE_FIELD_NUMBER: _ClassVar[int]
@@ -791,7 +791,6 @@ class NodeDebugBreakpointDTO(_message.Message):
     LOG_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     VERIFIED_FIELD_NUMBER: _ClassVar[int]
     ACTUAL_LINE_FIELD_NUMBER: _ClassVar[int]
-    INSPECTOR_ID_FIELD_NUMBER: _ClassVar[int]
     ORIGINAL_LINE_FIELD_NUMBER: _ClassVar[int]
     SOURCE_LINE_FIELD_NUMBER: _ClassVar[int]
     PREVIOUS_LINE_FIELD_NUMBER: _ClassVar[int]
@@ -809,7 +808,6 @@ class NodeDebugBreakpointDTO(_message.Message):
     log_message: str
     verified: bool
     actual_line: int
-    inspector_id: str
     original_line: int
     source_line: str
     previous_line: str
@@ -818,7 +816,7 @@ class NodeDebugBreakpointDTO(_message.Message):
     relocation_status: str
     relocation_message: str
     created_at: _timestamp_pb2.Timestamp
-    def __init__(self, breakpoint_id: _Optional[str] = ..., path: _Optional[str] = ..., line: _Optional[int] = ..., column: _Optional[int] = ..., condition: _Optional[str] = ..., hit_condition: _Optional[int] = ..., log_message: _Optional[str] = ..., verified: _Optional[bool] = ..., actual_line: _Optional[int] = ..., inspector_id: _Optional[str] = ..., original_line: _Optional[int] = ..., source_line: _Optional[str] = ..., previous_line: _Optional[str] = ..., next_line: _Optional[str] = ..., source_digest: _Optional[str] = ..., relocation_status: _Optional[str] = ..., relocation_message: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    def __init__(self, breakpoint_id: _Optional[str] = ..., path: _Optional[str] = ..., line: _Optional[int] = ..., column: _Optional[int] = ..., condition: _Optional[str] = ..., hit_condition: _Optional[int] = ..., log_message: _Optional[str] = ..., verified: _Optional[bool] = ..., actual_line: _Optional[int] = ..., original_line: _Optional[int] = ..., source_line: _Optional[str] = ..., previous_line: _Optional[str] = ..., next_line: _Optional[str] = ..., source_digest: _Optional[str] = ..., relocation_status: _Optional[str] = ..., relocation_message: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class NodeDebugBreakpointRequest(_message.Message):
     __slots__ = ("path", "line", "column", "condition", "hit_condition", "log_message")

@@ -295,9 +295,6 @@ class NodeDebugInspector:
                             update={
                                 "verified": True,
                                 "actual_line": frame.line,
-                                "inspector_id": runtime.inspector_breakpoint_ids.get(
-                                    breakpoint_id
-                                ),
                             }
                         )
             if frames:

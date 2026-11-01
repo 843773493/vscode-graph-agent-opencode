@@ -310,7 +310,6 @@ class NodeDebugBreakpointMutations:
                 update={
                     "verified": actual_line is not None,
                     "actual_line": actual_line,
-                    "inspector_id": inspector_id,
                     "relocation_status": "current",
                     "relocation_message": None,
                 }

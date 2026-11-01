@@ -84,7 +84,6 @@ def reconcile_breakpoint(
             update={
                 "verified": False,
                 "actual_line": None,
-                "inspector_id": None,
                 "relocation_status": "source_deleted",
                 "relocation_message": f"断点源文件已删除: {breakpoint.path}",
             }
@@ -103,7 +102,6 @@ def reconcile_breakpoint(
         update={
             "verified": False,
             "actual_line": None,
-            "inspector_id": None,
             "relocation_status": "pending_update",
             "relocation_message": (
                 "源码已变化，断点未自动重定位；请检查后重新设置 "
@@ -120,7 +118,6 @@ def persistable_breakpoint(
         update={
             "verified": False,
             "actual_line": None,
-            "inspector_id": None,
         },
         deep=True,
     )

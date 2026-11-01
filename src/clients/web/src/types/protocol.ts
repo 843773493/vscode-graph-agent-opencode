@@ -288,13 +288,12 @@ export type NodeDebugActionRecord = Omit<
 };
 export type NodeDebugBreakpoint = Omit<
   WorkspaceProtocol.NodeDebugBreakpointDTO,
-  "condition" | "hit_condition" | "log_message" | "actual_line" | "inspector_id" | "original_line" | "source_line" | "previous_line" | "next_line" | "source_digest" | "relocation_status" | "relocation_message" | "created_at"
+  "condition" | "hit_condition" | "log_message" | "actual_line" | "original_line" | "source_line" | "previous_line" | "next_line" | "source_digest" | "relocation_status" | "relocation_message" | "created_at"
 > & {
   condition?: string | null;
   hit_condition?: number | null;
   log_message?: string | null;
   actual_line?: number | null;
-  inspector_id?: string | null;
   original_line?: number | null;
   source_line?: string | null;
   previous_line?: string | null;

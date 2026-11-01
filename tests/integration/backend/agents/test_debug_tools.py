@@ -1243,7 +1243,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
     assert restored_state.launch_profile_name == "node-default"
     assert restored_state.args == ["session-argument"]
     assert restored_state.breakpoints[0].path == "debug-worker.mjs"
-    assert restored_state.breakpoints[0].inspector_id is None
+    assert "inspector_id" not in restored_state.breakpoints[0].model_dump()
 
 
 @pytest.mark.asyncio

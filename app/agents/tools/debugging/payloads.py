@@ -68,7 +68,6 @@ def _state_payload(state: NodeDebugStateDTO | None) -> dict[str, object] | None:
         for breakpoint in breakpoints:
             if isinstance(breakpoint, dict):
                 breakpoint.pop("breakpoint_id", None)
-                breakpoint.pop("inspector_id", None)
     actions = payload.get("actions")
     if isinstance(actions, list):
         for action in actions:

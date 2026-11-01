@@ -467,6 +467,9 @@ message NodeDebugActionRequest {
 }
 
 message NodeDebugBreakpointDTO {
+  reserved 10;
+  reserved "inspector_id";
+
   string breakpoint_id = 1;
   string path = 2;
   int64 line = 3;
@@ -476,7 +479,6 @@ message NodeDebugBreakpointDTO {
   optional string log_message = 7;
   optional bool verified = 8;
   optional int64 actual_line = 9;
-  optional string inspector_id = 10;
   optional int64 original_line = 11;
   optional string source_line = 12;
   optional string previous_line = 13;

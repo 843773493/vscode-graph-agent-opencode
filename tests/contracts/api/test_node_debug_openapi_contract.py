@@ -6,11 +6,19 @@ import pytest
 from pydantic import ValidationError
 
 from app.main import app
+from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
 from tests.contracts.api.openapi_snapshots import (
     OPENAPI_SNAPSHOTS,
     load_openapi_snapshot,
 )
+
+
+def test_node_debug_breakpoints_do_not_publish_inspector_locator(openapi_document) -> None:
+    schema = openapi_document["components"]["schemas"]["NodeDebugBreakpointDTO"]
+    assert "breakpoint_id" in schema["required"]
+    assert "inspector_id" not in schema["properties"]
+    assert "inspector_id" not in public_pb2.NodeDebugBreakpointDTO.DESCRIPTOR.fields_by_name
 
 
 def test_node_debug_state_requires_explicit_thread_owner(openapi_document) -> None:

@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-debug-source-publication` 经真实调试 ASGI、Node/Inspector 和同一暂停进程，核对调用栈／最后停止帧的原生位置发布拒绝、调试工具序列化、原持久事实及同进程重试；固定60秒／4GiB与集成独占闸门，不代 Gateway/Web、Backend 进程重启或 Windows 实机。
+
 `integration-tool-source-closure` 通过真实 ASGI 消息、Agent 工具和 model_stream 验证并行成功／失败结果的部分历史只读、来源 pending、完整配对后的逻辑顺序及冷读 hash；固定120秒／4GiB与原集成独占闸门，不代表 Gateway 业务代理、独立进程重启、Web、Windows或延期团队验收。
 
 `integration-debug-cold-recovery` 复用真实调试 API、Node/Inspector 与冷 service，核对 claim／OS 身份／恢复审计的原生等待、同 owner 竞争及取消结算，固定90秒／4GiB与原集成闸门；准入沿现有替身，不代 Session 删除 gate、Gateway、进程硬重启或 Windows。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
@@ -167,7 +168,6 @@ class NodeDebugBreakpointDTO(BaseModel):
     log_message: str | None = None
     verified: bool = False
     actual_line: int | None = Field(default=None, ge=1)
-    inspector_id: str | None = None
     original_line: int | None = Field(default=None, ge=1)
     source_line: str | None = None
     previous_line: str | None = None
@@ -208,11 +208,40 @@ class NodeDebugVariableDTO(BaseModel):
     scope: Literal["local", "global"] = "local"
 
 
+def _debug_source_path(value: str) -> str:
+    # 路径字段是工作区相对位置；Inspector 原生地址只在目标 owner 转换时使用。
+    if (PurePosixPath(value).is_absolute() or PureWindowsPath(value).root
+            or value.lstrip().lower().startswith(("file:/", "file:\\"))):
+        raise ValueError("调试源码引用不得包含原生位置")
+    return value
+
+
+def _inspector_source_url(value: str) -> str:
+    _debug_source_path(value)
+    if value.lstrip().lower().startswith("file:"):
+        raise ValueError("Inspector 文件源码必须先转换为资源 URI")
+    if value.lstrip().lower().startswith("boxteam:"):
+        parsed = parse_resource_uri(value)
+        if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
+            raise ValueError("Inspector 源码地址必须使用工作区或 Gateway 文件 URI")
+        return parsed.display_uri
+    # 内置模块、匿名源码和非文件 URL 沿用 Inspector 标签，不伪造文件资源。
+    return value
+
+
+_DebugSourcePath = Annotated[
+    str, AfterValidator(_debug_source_path), PlainSerializer(_debug_source_path),
+]
+_InspectorSourceURL = Annotated[
+    str, AfterValidator(_inspector_source_url), PlainSerializer(_inspector_source_url),
+]
+
+
 class NodeDebugStackFrameDTO(BaseModel):
     call_frame_id: str
     function_name: str
-    url: str
-    path: str | None = None
+    url: _InspectorSourceURL
+    path: _DebugSourcePath | None = None
     line: int = Field(ge=1)
     column: int = Field(ge=1)
     scope_names: list[str] = Field(default_factory=list)
