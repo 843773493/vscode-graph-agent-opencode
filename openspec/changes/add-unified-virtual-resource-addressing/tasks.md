@@ -1855,3 +1855,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 新消息入口场景复用model_stream，1 passed／46.95秒：六次POSIX／盘符／UNC拒绝不进入业务查询，两次纠正调用沿原owner成功；核原调用输入不变、执行事实与请求投影各自身份、模型结果唯一及顺序、三份assembly owner与request_hash。首轮新测试误将两类物理记录当作单一结果，依据原写入及投影合同修正取数口径，未改存储或放宽身份断言；临时误用不存在的uv pyright入口也保留失败原件。
 - 命令、前后指纹和原始结果见`out/tests/temp/resource_identity_errors_20261101/artifacts/verification.json`。业务HTTP为进程内ASGI，不代独立Gateway业务网络、Web、Backend硬重启或Windows实机；未改前端、公共fixture、长回归driver、共享debug和他人暂存。2.2／7.2仍未勾，整体51/53，团队与显式MCP持有延期保持。
 - 独立Workbench补验1 passed／108.07秒：真实Gateway、Backend与Chromium经输入框执行三次身份拒绝和一次纠正，八个canonical part按后端身份／顺序各呈现一次，原参数与三份安全输出分别核对，真实bootstrap后刷新保持同组part ID。复用现有model_stream、构建及服务fixture；所有资源归新测试文件，360秒／4GiB与共享集成闸门保持。初轮登录受Bun APIRequestContext Cookie解析错误阻断，改用页面原生fetch；后续新测试的即时展开检查及“一调用一张卡片”假设按原有权威顺序合同纠正，未改产品或公共helper。准确命令、所有失败原件、冷历史零改写、构建产物SHA和最终结果见`out/tests/temp/resource_identity_web_20261101/artifacts/verification.json`。当前共享Workbench迁移产物不是干净HEAD独立构建证明；本场景不代完整Web回归、联邦、进程重启或Windows总门，2.2／7.2仍未勾。
+
+### 2026-11-01 SSH 主配置符号链接环拒绝（2.2／7.2部分收口）
+
+- 原Host收集owner的配置读取边界补接`Path.resolve()`的RuntimeError，复用原`_config_file_error`；主配置及Include继续共用原读取／解析链路。普通错误保留config_read阶段和原类别，完整位置留原cause和诊断；不返回空清单、不增加解析器或重试，不改变HTTP500、错误类型与修复后同入口显式重试行为。
+- 真实主配置自环在连接列表、别名解析和原Gateway路由三入口均复现旧实现回显位置（3 failed）；原Include对照3 passed。修复后SSH选择、SSH进程和远端转发回归91 passed／3.73秒；直接核真实ASGI响应与request_id、原异常链、日志及修复后的200空清单。未改断言为宽泛匹配。Ruff、两文件Pyright零诊断、compileall及两份change strict通过；首次回归命令误写不存在文件，exit4且零测试，原件保留。
+- 准确命令、源码指纹、原始输出、实际退出码与AST差异核对见`out/tests/temp/ssh_root_loop_20261101/artifacts/verification.json`。本片是实际文件系统及进程内Gateway路由验证，不代独立Gateway网络、Web、Windows或全局不变量；未改前端、公共fixture、共享开发服务或他人暂存。2.2／7.2保持未勾。

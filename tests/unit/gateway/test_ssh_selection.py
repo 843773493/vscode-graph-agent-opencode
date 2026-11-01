@@ -372,27 +372,30 @@ def test_ssh_config_selection_uses_pairing_command_from_gateway_config(
     assert resolved.remote_pair_command == "python -m app.gateway.federation_pairing"
 
 
-@pytest.fixture
-def looping_include(tmp_path: Path) -> tuple[Path, Path]:
+@pytest.fixture(params=["root", "include"])
+def looping_ssh_config(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, Path, str]:
     config = tmp_path / "config"
+    if request.param == "root":
+        config.symlink_to(config.name)
+        return config, config, "读取 SSH Host 配置失败: stage=config_read, type=RuntimeError"
     included = tmp_path / "native-include-location-marker"
     included.symlink_to(included.name)
     config.write_text(f"Include {included}\n", encoding="utf-8")
-    return config, included
+    return config, included, "展开 SSH Include 失败: stage=include_expand, type=RuntimeError"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="真实符号链接环在 POSIX 验证")
 @pytest.mark.parametrize("entry", ["list", "resolve"])
-def test_ssh_include_loop_keeps_native_location_only_in_diagnostics(
-    looping_include: tuple[Path, Path], entry: str, caplog: pytest.LogCaptureFixture,
+def test_ssh_config_loop_keeps_native_location_only_in_diagnostics(
+    looping_ssh_config: tuple[Path, Path, str], entry: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    config, included = looping_include
+    config, included, detail = looping_ssh_config
     with pytest.raises(RuntimeError) as caught:
         if entry == "list":
             list_user_ssh_hosts(config)
         else:
             resolve_user_ssh_host("dev", config)
-    assert str(caught.value).startswith("展开 SSH Include 失败: stage=include_expand, type=RuntimeError")
+    assert str(caught.value) == detail
     assert str(included) not in str(caught.value)
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert str(included) in str(caught.value.__cause__)
@@ -459,10 +462,10 @@ def test_ssh_config_diagnostic_failure_does_not_replace_read_error(
 
 
 @pytest.fixture
-def ssh_include_client(
-    looping_include: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+def ssh_loop_client(
+    looping_ssh_config: tuple[Path, Path, str], monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[TestClient]:
-    config, _ = looping_include
+    config, _, _ = looping_ssh_config
     monkeypatch.setattr("app.gateway.ssh_connections.list_user_ssh_hosts", lambda: list_user_ssh_hosts(config))
     registry = Mock(spec=GatewayWorkspaceRegistry)
     registry.targets.return_value = ()
@@ -476,19 +479,19 @@ def ssh_include_client(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="真实符号链接环在 POSIX 验证")
-def test_ssh_connection_list_does_not_publish_include_location(
-    ssh_include_client: TestClient, looping_include: tuple[Path, Path], caplog: pytest.LogCaptureFixture,
+def test_ssh_connection_list_does_not_publish_config_location(
+    ssh_loop_client: TestClient, looping_ssh_config: tuple[Path, Path, str], caplog: pytest.LogCaptureFixture,
 ) -> None:
-    _, included = looping_include
-    response = ssh_include_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-request"})
+    _, included, detail = looping_ssh_config
+    response = ssh_loop_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-request"})
     assert response.status_code == 500
     assert response.headers["X-Request-ID"] == "ssh-include-request"
-    assert "展开 SSH Include 失败: stage=include_expand, type=RuntimeError" in response.json()["detail"]
+    assert response.json()["detail"] == detail
     assert str(included) not in response.text
     assert str(included) in caplog.text
     included.unlink()
     included.write_text("# repaired\n", encoding="utf-8")
-    retried = ssh_include_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-retry"})
+    retried = ssh_loop_client.get("/api/gateway/ssh-connections", headers={"X-Request-ID": "ssh-include-retry"})
     assert retried.status_code == 200
     assert retried.json()["data"] == {"items": []}
     assert retried.json()["request_id"] == retried.headers["X-Request-ID"] == "ssh-include-retry"

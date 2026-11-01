@@ -65,7 +65,7 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
             return []
         visited.add(resolved_path)
         config_text = resolved_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
+    except (OSError, UnicodeError, RuntimeError) as error:
         # 主文件与 Include 共用读取边界；原始位置和正文只留诊断。
         raise _config_file_error(error, stage="config_read", label="读取 SSH Host 配置失败") from error
     aliases: list[str] = []
