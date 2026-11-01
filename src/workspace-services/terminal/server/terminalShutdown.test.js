@@ -181,3 +181,95 @@ test("整批关闭与最终写盘均失败时保留原顺序及 cause，显式�
   assert.equal(writes, 2);
   assert.equal(session.ptyProcess, null);
 });
+
+for (const phase of ["creations", "resources", "persist"]) {
+  test(`关闭观察报告${phase}阶段，重入仍等待同一原任务`, async (t) => {
+    const manager = await prepareManager(t);
+    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    const pause = async () => { entered.resolve(); await release.promise; };
+    const starts = t.mock.method(IsolatedPtyProcess.prototype, "start", async () => {
+      if (phase === "creations") await pause();
+      return { pid: null };
+    });
+    const stops = t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {
+      if (phase === "resources") await pause();
+    });
+    const options = intent(manager);
+    const creating = manager.create(options);
+    if (phase === "creations") await entered.promise;
+    else await creating;
+    const writer = manager.stateStore.write.bind(manager.stateStore);
+    if (phase === "persist") t.mock.method(manager.stateStore, "write", async (payload) => {
+      await pause();
+      await writer(payload);
+    });
+    const first = manager.shutdown("original_reason", { shutdownWaitTimeoutMs: 10 });
+    const observing = assert.rejects(first, (error) => {
+      assert.equal(error.code, "terminal_manager_shutdown_timeout");
+      assert.equal(error.stage, phase);
+      assert.deepEqual(error.pending_terminal_ids, phase === "persist" ? [] : [options.terminalId]);
+      assert.ok(error.message.includes(manager.workspaceId));
+      return true;
+    });
+    try {
+      await entered.promise;
+      await observing;
+      const original = manager.shutdownPromise;
+      await assert.rejects(manager.shutdown("second_reason", { shutdownWaitTimeoutMs: 5 }), (error) => {
+        assert.equal(error.stage, phase);
+        return isTimeout(error);
+      });
+      assert.equal(manager.shutdownPromise, original);
+      release.resolve();
+      await creating;
+      await manager.shutdown();
+      await manager.shutdown();
+      assert.equal(starts.mock.callCount(), 1);
+      assert.equal(stops.mock.callCount(), 1);
+      assert.equal(manager.get(options.terminalId).releaseReason, "original_reason");
+      assert.equal(manager.shutdownStage, "complete");
+    } finally {
+      release.resolve();
+      await Promise.allSettled([creating, first, observing, manager.shutdownPromise]);
+    }
+  });
+}
+
+test("关闭观察已到期，原任务迟到失败仍完整记录且不重写原异常", async (t) => {
+  const manager = await prepareManager(t);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const cause = new Error("原文件系统失败"), failure = new Error("迟到关闭写盘失败", { cause });
+  const logs = [];
+  t.mock.method(process.stderr, "write", (text) => { logs.push(String(text)); return true; });
+  t.mock.method(manager.stateStore, "write", async () => { entered.resolve(); await release.promise; throw failure; });
+  try {
+    await assert.rejects(manager.shutdown("late", { shutdownWaitTimeoutMs: 5 }), isTimeout);
+    await entered.promise;
+    const execution = manager.shutdownPromise;
+    release.resolve();
+    await assert.rejects(execution, (error) => error === failure);
+    const output = logs.join("");
+    assert.ok(output.includes(failure.message), "超时后原关闭失败不能静默丢失");
+    assert.ok(output.includes(cause.message), "诊断应保留原始cause");
+    assert.ok(output.includes(manager.workspaceId) && output.includes("persist"));
+    assert.equal(manager.shutdownPromise, null);
+  } finally {
+    release.resolve();
+    await manager.shutdownPromise?.catch(() => {});
+  }
+});
+
+test("关闭失败且诊断写入再次失败时保留两份原异常", async (t) => {
+  const manager = await prepareManager(t);
+  const failure = new Error("原关闭写盘失败"), diagnostic = new Error("关闭日志写入失败");
+  t.mock.method(manager.stateStore, "write", async () => { throw failure; });
+  let attempted;
+  t.mock.method(process.stderr, "write", (text) => { attempted = String(text); throw diagnostic; });
+  await assert.rejects(manager.shutdown(), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [failure, diagnostic]);
+    assert.equal(error.cause, failure);
+    return true;
+  });
+  assert.ok(attempted.includes(failure.message));
+});

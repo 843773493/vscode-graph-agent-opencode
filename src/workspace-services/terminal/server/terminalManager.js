@@ -74,6 +74,8 @@ export class TerminalManager {
     this.capacityLock = Promise.resolve();
     this.closingRequested = false;
     this.shutdownPromise = null;
+    this.shutdownStage = null;
+    this.shutdownTerminalIds = new Set();
     this.persistRequested = false;
     this.persistPromise = null;
     /** @type {Map<string, TerminalTransportGrant>} */
@@ -428,18 +430,33 @@ export class TerminalManager {
     this.closingRequested = true;
     if (!this.shutdownPromise) {
       // 原容量队尾持有所有已接纳创建；观察超时不取消它或另起一批关闭。
-      const execution = Promise.resolve().then(() => this.drainShutdown(reason));
-      this.shutdownPromise = execution;
-      void execution.catch(() => {
-        if (this.shutdownPromise === execution) this.shutdownPromise = null;
+      const execution = Promise.resolve().then(() => this.drainShutdown(reason)).catch((error) => {
+        this.shutdownPromise = null;
+        try {
+          logger.withContext({ workspace_id: this.workspaceId }).error(
+            "[terminal-manager] 原关闭任务失败，保留未完成资源供显式重试",
+            { stage: this.shutdownStage, terminal_ids: [...this.terminalsById.keys()] }, error,
+          );
+        } catch (diagnosticError) {
+          throw new AggregateError([error, diagnosticError], "Terminal关闭与诊断输出均失败", { cause: error });
+        }
+        throw error;
       });
+      this.shutdownPromise = execution;
+      // 观察者可能已到期；原执行失败仍由上面记录，不产生悬空rejection。
+      void execution.catch(() => undefined);
     }
     let timer;
     try {
       await Promise.race([this.shutdownPromise, new Promise((_, reject) => {
         timer = setTimeout(() => {
-          const error = new Error(`Terminal Manager 关闭尚未完成，保留原任务供核实: workspace_id=${this.workspaceId}`);
+          const pendingTerminalIds = this.shutdownStage === "creations"
+            ? [...this.terminalsById.values()].filter((session) => session.status === "created").map((session) => session.id)
+            : [...this.shutdownTerminalIds];
+          const error = new Error(`Terminal Manager 关闭尚未完成，保留原任务供核实: workspace_id=${this.workspaceId}, stage=${this.shutdownStage}, terminals=${pendingTerminalIds.join(",")}`);
           error.code = "terminal_manager_shutdown_timeout";
+          error.stage = this.shutdownStage;
+          error.pending_terminal_ids = pendingTerminalIds;
           reject(error);
         }, shutdownWaitTimeoutMs);
       })]);
@@ -449,6 +466,7 @@ export class TerminalManager {
   }
 
   async drainShutdown(reason) {
+    this.shutdownStage = "creations";
     await this.capacityLock;
     const unverified = [...this.terminalsById.values()].filter((session) => session.status === "created"
       || (session.releaseReason === "terminal_startup_failed" && session.reconciliationStatus !== "verified"));
@@ -458,7 +476,10 @@ export class TerminalManager {
       throw error;
     }
     // 收齐所有结果才释放原关闭任务，首个失败不能让重试越过仍在途的其它资源。
-    const results = await Promise.allSettled([...this.terminalsById.values()].map(async (session) => {
+    this.shutdownStage = "resources";
+    const sessions = [...this.terminalsById.values()];
+    this.shutdownTerminalIds = new Set(sessions.map((session) => session.id));
+    const results = await Promise.allSettled(sessions.map(async (session) => {
       try {
         if (session.status === "running") {
           session.markReconciliationStatus("reconcile_required");
@@ -470,9 +491,12 @@ export class TerminalManager {
       } catch (error) {
         session.markReconciliationStatus("unknown");
         throw error;
+      } finally {
+        this.shutdownTerminalIds.delete(session.id);
       }
     }));
     const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    this.shutdownStage = "persist";
     try {
       await this.persist();
     } catch (error) {
@@ -480,5 +504,6 @@ export class TerminalManager {
     }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Terminal Manager 关闭失败", { cause: failures[0] });
+    this.shutdownStage = "complete";
   }
 }
