@@ -1,11 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.user_access import UserAccessService
 from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.main import app
+from app.gateway.routes import ui_assets
 from app.gateway.ui_settings import merge_web_ui_settings_values
 from app.schemas.gateway.ui_settings import (
     WebUILayoutSettingsDTO,
@@ -283,6 +285,74 @@ def test_resolve_browser_theme_does_not_write_user_profile(ui_settings_client, i
     assert resolved.json()["request_id"] == resolved.headers["X-Request-ID"]
     assert resolved.json()["data"]["theme"]["resolved_theme"]["id"] == "blue"
     assert client.get("/api/gateway/ui-settings").json()["data"] == before
+
     invalid = client.post("/api/gateway/ui-settings/resolve", json={"theme": {"theme_id": "missing-theme"}})
     assert invalid.status_code == 409
     assert client.get("/api/gateway/ui-settings").json()["data"] == before
+
+
+@pytest.mark.parametrize(("method", "suffix", "seam"), [
+    ("GET", "", "read"), ("PUT", "", "read"),
+    ("PUT", "", "write"), ("POST", "/resolve", "merge"),
+])
+@pytest.mark.parametrize("native", [
+    "/private/ui-publication", r"C:\private\ui-publication",
+    r"\\target\private\ui-publication", "file:///private/ui-publication",
+])
+def test_internal_file_reference_publication_preserves_profile(
+    ui_settings_client: TestClient, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, method: str, suffix: str, seam: str, native: str,
+) -> None:
+    client = ui_settings_client
+    created = client.post("/api/gateway/users", json={"display_name": "引用发布测试"})
+    assert created.status_code == 200, created.text
+    user_id = created.json()["data"]["user_id"]
+    acquired = client.post(f"/api/gateway/users/{user_id}/access", json={})
+    assert acquired.status_code == 200, acquired.text
+    baseline = client.get("/api/gateway/ui-settings")
+    assert baseline.status_code == 200, baseline.text
+    profiles: UserProfileStore = app.state.user_profile_store
+    profile = profiles.user_path(user_id) / "profile.jsonc"
+    original_bytes = profile.read_bytes()
+    original_read, original_write = profiles.read_ui_settings, profiles.write_ui_settings
+    original_merge = ui_assets.merge_web_ui_settings_values
+
+    def corrupt(settings: WebUISettingsDTO) -> WebUISettingsDTO:
+        return settings.model_copy(update={"layout": settings.layout.model_copy(
+            update={"workspace_preview_active_file_path": native},
+        )})
+
+    def broken_read(*, user_id: str) -> WebUISettingsDTO:
+        return corrupt(original_read(user_id=user_id))
+
+    def broken_write(*, user_id: str, settings: WebUISettingsDTO) -> None:
+        original_write(user_id=user_id, settings=corrupt(settings))
+
+    def broken_merge(current: WebUISettingsDTO, payload: WebUISettingsUpdateDTO) -> WebUISettingsDTO:
+        return original_merge(corrupt(current), payload)
+
+    with monkeypatch.context() as fault:
+        if seam == "read":
+            fault.setattr(profiles, "read_ui_settings", broken_read)
+        elif seam == "write":
+            fault.setattr(profiles, "write_ui_settings", broken_write)
+        else:
+            fault.setattr(ui_assets, "merge_web_ui_settings_values", broken_merge)
+        response = client.request(method, "/api/gateway/ui-settings" + suffix, json={} if method != "GET" else None)
+        assert response.status_code == 500, response.text
+        assert response.json()["message"] == "请求处理失败: stage=http_request, error=PydanticSerializationError"
+        assert response.json()["request_id"] == response.headers["X-Request-ID"]
+        assert "ui-publication" not in response.text
+    diagnostics = [record for record in caplog.records
+                   if record.exc_info and isinstance(record.exc_info[1], PydanticSerializationError)]
+    # grammar 不回显输入值，完整异常应仍包含原 serializer 和拒绝原因。
+    assert len(diagnostics) == 1
+    reason = "URI 不得包含反斜杠" if "\\" in native else "URI 只接受 boxteam:// scheme"
+    assert "_serialize_file_reference" in caplog.text and reason in caplog.text
+    assert profile.read_bytes() == original_bytes
+    restored = client.get("/api/gateway/ui-settings")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["data"] == baseline.json()["data"]
+    if method == "PUT":
+        retried = client.put("/api/gateway/ui-settings", json={})
+        assert retried.status_code == 200, retried.text

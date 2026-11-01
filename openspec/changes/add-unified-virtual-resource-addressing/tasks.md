@@ -1924,3 +1924,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原生产97项复制／嵌套反例失败、3项合法控制通过；真实产品历史经消息、Agent及model_stream生成后，旧实现以200发布损坏引用。补充6项反例确认分页／预算计算内的序列化异常曾被误映射400。最终494项不同检查通过：493项相关单元／公开协议合同及1项独立矩阵产品场景；后者覆盖20组查询后损坏与4组分页前损坏，均核API及模型工具出口拒绝、解除故障后的原投影和历史顺序、canonical字节及封存请求owner/hash不变（47.45秒，总55.83秒）。
 - 六文件Ruff与compileall通过，两个生产模块及两份新测试真实Pyright零诊断；47模型的94份校验／序列化JSON Schema逐项相同。旧日志替身漏接现行extra参数导致的失败已补齐签名并保留原诊断、次错及恢复断言。含200会话规模场景的210项组合触及60秒外部保护，不计部分通过；保留规模和断言，拆为203项与7项原模块检查后均完整通过。首个产品测试误将assembly首屏视为完整历史，按真实cursor读完后取得有效红测，全部原件保留。
 - 准确命令、源码指纹、raw、JUnit及作者结构自查见 `out/tests/temp/context_uri_publication_20261101/artifacts/verification.json`。新suite固定120秒／4GiB并沿原集成独占闸门；业务HTTP为ASGI，真实Gateway只用于来源管理，不代Gateway业务代理、Web、Windows、进程重启或全仓URI验收。未修改前端、公共fixture、既有长回归驱动、共享debug或他人暂存；2.2／7.2仍未勾，整体51/53，团队／协作及显式MCP持有延期保持。
+
+### 2026-11-01 既有领域 URI 在复制、嵌套修改与落盘时复核（2.2／7.2部分收口）
+
+- 产物、文件变更／事件、文本修改回执、任务 Thread、Gateway 目录／Skill 和 UI 文件引用复用各自原校验器的序列化合同，构造后复制或嵌套修改不能绕过；移除被替换的重复字段 validator。原生请求输入、用户正文、nullable、悬空 URI、领域 kind 约束与既有规范化保持，114模型的228份输入／输出JSON Schema逐项相同。不新增parser、存储、字段或前端实现。
+- 原生产352项模型检查中283项非法引用反例失败、69项合法控制通过。最终728项不同定向检查通过：536项模型／任务API／Gateway设置检查、171项相关owner回归、20项公开协议合同，以及1项产品任务发布场景。产品场景经消息、Agent和model_stream生成关键历史，再通过任务API创建定义；四类复制后原生路径在原SQLite发布入口失败，五张任务表事实、canonical字节与封存请求owner/hash保持，解除故障后同revision更新恰好新增一个定义版本。Gateway设置还覆盖读取、合并、原profile写入及resolve，失败不改原文件，修复后同入口成功。
+- 持久任务与Gateway设置将内部序列化失败交原TraceMiddleware返回500、同一request_id及单次原诊断；原业务400／409与请求422保持。初版测试误要求grammar诊断包含输入原值、误把Windows拒绝原因当scheme错误，以及遗漏任务入口补全Gateway authority，均依据源码和原输出修正，失败原件保留；未放宽状态、归属、事务、诊断次数或恢复断言。536项结果复用第二轮未受后续测试断言修订影响的512项，并补跑全部64项相关函数（含40项重叠），不重复计数。
+- 14份Python文件完成Ruff、真实Pyright与compileall；与HEAD原件对照，保留既有15项Depends静态规则诊断和31项类型诊断，均无新增，不称全绿。严格OpenSpec 54／0通过；全部测试带外部硬超时及4GiB数据段保护，产品suite固定120秒并沿原集成闸门。准确命令、源码指纹、原始输出、退出码、schema／静态对照及作者自查见 `out/tests/temp/typed_uri_publication_20261101/artifacts/verification.json`。业务HTTP仍为ASGI、真实Gateway仅用于来源管理，不代业务代理、Web、Windows、独立进程重启或全仓URI审计；2.2／7.2继续未勾，整体51/53。

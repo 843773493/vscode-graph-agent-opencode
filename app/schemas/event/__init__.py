@@ -8,21 +8,22 @@
 """
 
 from datetime import UTC, datetime
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
     JsonValue,
-    field_validator,
+    PlainSerializer,
     model_validator,
 )
 
 from app.core.resource_uri import parse_session_artifact_uri
 from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
-from app.schemas.internal_v2.session_changes import validate_change_file_reference
+from app.schemas.internal_v2.session_changes import SessionChangeFileURI
 
 # assistant 文本流的载体闭集：``markdown`` 为可见正文，``reasoning`` 为思考内容。
 TextStreamKind = Literal["markdown", "reasoning"]
@@ -186,32 +187,33 @@ class FileEditPayload(BaseModel):
     """工具产生的可审查文件变更摘要。"""
     model_config = ConfigDict(extra="forbid")
     edit_id: str
-    file_path: str
+    file_path: SessionChangeFileURI
     kind: str
     additions: int = 0
     deletions: int = 0
-    _file_uri = field_validator("file_path")(validate_change_file_reference)
+
+
+def _require_tool_result_uri(value: str) -> str:
+    parsed = parse_session_artifact_uri(value)
+    if parsed.session_artifact_kind != "tool-results":
+        raise ValueError("工具输出引用必须指向工具结果产物")
+    return parsed.display_uri
+
+
+_ToolResultURI = Annotated[str, AfterValidator(_require_tool_result_uri), PlainSerializer(_require_tool_result_uri)]
 
 
 class ToolOutputReferencePayload(BaseModel):
     """过大工具输出在工作区内的持久化引用。"""
     type: Literal["tool_output"] = "tool_output"
-    path: str
-    read_path: str
+    path: _ToolResultURI
+    read_path: _ToolResultURI
     tool_name: str
     tool_call_id: str
     byte_count: int
     line_count: int
     content_sha256: str
     truncated: bool = True
-
-    @field_validator("path", "read_path")
-    @classmethod
-    def validate_tool_result_uri(cls, value: str) -> str:
-        parsed = parse_session_artifact_uri(value)
-        if parsed.session_artifact_kind != "tool-results":
-            raise ValueError("工具输出引用必须指向工具结果产物")
-        return parsed.display_uri
 
 
 class ToolCallEndPayload(BaseModel):

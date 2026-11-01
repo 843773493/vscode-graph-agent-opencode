@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-task-uri-publication` 经真实 Session、消息与任务 ASGI 入口及 model_stream 生成历史和定义，验证原 SQLite owner 拒绝复制后损坏引用、事务事实不变及同 revision 重试；固定120秒／4GiB，沿原集成独占闸门，不代 Gateway 业务代理、独立进程重启、Web或Windows验收。
+
 `integration-history-failure-boundary` 经产品消息与 model_stream 生成历史，验证三个历史入口的真实布局／I/O 拒绝和修复后冷读，核原 canonical 字节及封存请求 hash；固定120秒／4GiB并沿共享集成闸门，不代替独立Backend重启、Gateway、Web或Windows验收。
 
 `integration-web-diagnostics-lifetime` 用真实 Chromium 调用唯一聊天驱动的诊断入口，验证大正文读取后释放及旧缓存路径被拒绝；固定180秒／4GiB，使用显式 HTTP 正文，不代替真实 Gateway 完整 default。

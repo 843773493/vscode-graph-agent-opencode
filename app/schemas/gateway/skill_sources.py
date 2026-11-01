@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.core.resource_uri import parse_resource_uri
 
 logger = logging.getLogger(__name__)
+
+
+def _require_skill_document_uri(uri: str) -> str:
+    try:
+        parsed = parse_resource_uri(uri)
+        if parsed.kind != "skills" or len(parsed.tail_segments) != 2 or parsed.tail_segments[1] != "SKILL.md":
+            raise ValueError("Skill 来源引用必须指向 skills 资源的 SKILL.md")
+    except ValueError:
+        # 非法原值只留原始诊断；普通响应拒绝发布，不修补来源地址。
+        logger.exception("Skill 来源 URI 合同错误: uri=%r", uri)
+        raise
+    return uri
+
+
+_SkillDocumentURI = Annotated[
+    str, AfterValidator(_require_skill_document_uri), PlainSerializer(_require_skill_document_uri),
+]
 
 
 class GatewaySkillSourceEntryDTO(BaseModel):
@@ -18,7 +35,7 @@ class GatewaySkillSourceEntryDTO(BaseModel):
     name: str = Field(min_length=1)
     entry_identity: str
     source_id: str
-    display_uri: str
+    display_uri: _SkillDocumentURI
     revision: str | None
     byte_length: int = Field(ge=0)
     content: str
@@ -26,19 +43,6 @@ class GatewaySkillSourceEntryDTO(BaseModel):
     error_code: Literal["source-unavailable"] | None = None
     layer: Literal["gateway", "network"] = "gateway"
     priority: int = Field(default=0, strict=True)
-
-    @field_validator("display_uri")
-    @classmethod
-    def require_skill_document_uri(cls, uri: str) -> str:
-        try:
-            parsed = parse_resource_uri(uri)
-            if parsed.kind != "skills" or len(parsed.tail_segments) != 2 or parsed.tail_segments[1] != "SKILL.md":
-                raise ValueError("Skill 来源引用必须指向 skills 资源的 SKILL.md")
-        except ValueError:
-            # 非法原值只留原始诊断；普通响应拒绝发布，不修补来源地址。
-            logger.exception("Skill 来源 URI 合同错误: uri=%r", uri)
-            raise
-        return uri
 
 
 class GatewaySkillSourcesDTO(BaseModel):

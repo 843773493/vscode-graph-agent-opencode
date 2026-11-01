@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 
@@ -19,6 +19,11 @@ def validate_change_file_reference(value: str, *, local_gateway_id: str | None =
     if resource.kind not in {"files", "attachments"} or len(resource.tail_segments) < 2:
         raise ValueError("文件变更只能引用明确的普通文件或附件目录 child URI")
     return resource.display_uri
+
+
+SessionChangeFileURI = Annotated[
+    str, AfterValidator(validate_change_file_reference), PlainSerializer(validate_change_file_reference),
+]
 
 
 class SessionChangesSummaryDTO(BaseModel):
@@ -44,7 +49,7 @@ class SessionChangesetListDTO(BaseModel):
 
 class SessionFileChangeDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    file_path: str
+    file_path: SessionChangeFileURI
     kind: SessionFileChangeKind
     additions: int = 0
     deletions: int = 0
@@ -57,7 +62,6 @@ class SessionFileChangeDTO(BaseModel):
     diff_text: str
     before_preview: str | None = None
     after_preview: str | None = None
-    _file_uri = field_validator("file_path")(validate_change_file_reference)
 
 
 class SessionChangesetDTO(BaseModel):
@@ -80,6 +84,5 @@ class SessionFileReviewRequest(BaseModel):
 
 class SessionFileReviewResultDTO(BaseModel):
     session_id: str
-    file_path: str
+    file_path: SessionChangeFileURI
     reviewed: bool
-    _file_uri = field_validator("file_path")(validate_change_file_reference)

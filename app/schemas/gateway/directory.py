@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, PlainSerializer
 
 from app.core.resource_uri import parse_resource_uri
 
@@ -14,7 +14,7 @@ def _directory_uri(value: str) -> str:
     return parsed.display_uri
 
 
-DirectoryUri = Annotated[str, AfterValidator(_directory_uri)]
+DirectoryUri = Annotated[str, AfterValidator(_directory_uri), PlainSerializer(_directory_uri)]
 
 
 class GatewayDirectoryEntryDTO(BaseModel):

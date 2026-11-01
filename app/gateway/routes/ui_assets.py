@@ -14,6 +14,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
+from pydantic_core import PydanticSerializationError
 
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
@@ -182,6 +183,8 @@ async def update_web_ui_settings(
             config=config,
             gateway_root=theme_asset_root,
         )
+    except PydanticSerializationError:
+        raise
     except (OSError, TypeError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=resolved, request_id=request_id)
@@ -210,6 +213,8 @@ async def resolve_web_ui_settings(
         )
         settings = merge_web_ui_settings_values(WebUISettingsDTO(), payload)
         resolved = resolve_settings_theme(settings, config=config, gateway_root=root)
+    except PydanticSerializationError:
+        raise
     except (OSError, TypeError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=resolved, request_id=request_id)

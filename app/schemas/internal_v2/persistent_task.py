@@ -12,6 +12,7 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    PlainSerializer,
     field_validator,
     model_validator,
 )
@@ -35,7 +36,7 @@ def _require_thread_uri(value: str) -> str:
     return value
 
 
-_TaskThreadURI = Annotated[str, AfterValidator(_require_thread_uri)]
+_TaskThreadURI = Annotated[str, AfterValidator(_require_thread_uri), PlainSerializer(_require_thread_uri)]
 
 
 class TaskComponentDTO(BaseModel):

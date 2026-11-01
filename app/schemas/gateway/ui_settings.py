@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    field_validator,
+    model_validator,
+)
 
 from app.core.resource_uri import parse_resource_uri
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
@@ -14,6 +21,14 @@ def _file_reference(value: str) -> str:
     if resource.kind not in {"files", "attachments"}:
         raise ValueError("UI 文件引用必须使用 files 或 attachments 资源 URI")
     return resource.display_uri
+
+
+def _serialize_file_reference(value: str):
+    # 不声明独立返回 schema，保留字段已有的长度等公开约束。
+    return _file_reference(value)
+
+
+_UIFileURI = Annotated[str, PlainSerializer(_serialize_file_reference)]
 
 
 class WebUIMainAreaRatiosDTO(BaseModel):
@@ -55,8 +70,8 @@ class WebUILayoutSettingsDTO(BaseModel):
     )
     workspace_preview_visible: bool | None = None
     workspace_preview_maximized: bool | None = None
-    workspace_preview_file_paths: list[str] | None = Field(default=None, max_length=20)
-    workspace_preview_active_file_path: str | None = Field(
+    workspace_preview_file_paths: list[_UIFileURI] | None = Field(default=None, max_length=20)
+    workspace_preview_active_file_path: _UIFileURI | None = Field(
         default=None,
         max_length=4096,
     )
@@ -139,7 +154,7 @@ class WebUISessionSidebarSettingsDTO(BaseModel):
 class WebUIWorkspaceFileTreeSettingsDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expanded_paths_by_workspace: dict[str, list[str]] = Field(
+    expanded_paths_by_workspace: dict[str, list[_UIFileURI]] = Field(
         default_factory=dict,
         max_length=200,
     )

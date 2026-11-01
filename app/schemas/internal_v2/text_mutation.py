@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    model_validator,
+)
 
 from app.core.resource_uri import parse_resource_uri
 
@@ -18,7 +25,7 @@ def _validate_output_uri(value: str) -> str:
     return value
 
 
-TextMutationOutputURI = Annotated[str, AfterValidator(_validate_output_uri)]
+TextMutationOutputURI = Annotated[str, AfterValidator(_validate_output_uri), PlainSerializer(_validate_output_uri)]
 
 
 class _Model(BaseModel):

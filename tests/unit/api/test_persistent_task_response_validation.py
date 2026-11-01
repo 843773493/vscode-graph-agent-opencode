@@ -15,16 +15,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api import persistent_tasks
 from app.api.deps import get_persistent_task_service, verify_local_token
 from app.core.exceptions import NotFoundError
+from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskCheckRequest,
     PersistentTaskCreateRequest,
     PersistentTaskRunDTO,
+    RuntimeSourceActionDTO,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
@@ -175,6 +178,7 @@ def boundary_client(
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation"), CASES)
 @pytest.mark.parametrize("native", NATIVE_PATHS)
+@pytest.mark.parametrize("error_type", [ValidationError, PydanticSerializationError])
 def test_internal_validation_remains_a_server_failure(
     boundary_client: tuple[TestClient, TaskBoundaryService],
     method: str,
@@ -182,29 +186,40 @@ def test_internal_validation_remains_a_server_failure(
     payload: dict[str, object] | None,
     operation: str,
     native: str,
+    error_type: type[ValidationError | PydanticSerializationError],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     client, service = boundary_client
-    with pytest.raises(ValidationError) as captured:
-        PersistentTaskRunDTO.model_validate(
-            {
-                "run_id": "run",
-                "task_id": "task",
-                "task_revision": 1,
-                "definition_revision": 1,
-                "trigger_key": "trigger",
-                "check_only": False,
-                "phase": native,
-                "created_at": "2026-10-31T00:00:00Z",
-                "updated_at": "2026-10-31T00:00:00Z",
-            }
-        )
+    with pytest.raises(error_type) as captured:
+        if error_type is PydanticSerializationError:
+            RuntimeSourceActionDTO(
+                type_id="builtin.runtime_source", version="1", delivery_mode="context_only",
+                target_uri=thread_resource_uri(
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                    "thr_01a100c4a1897a2d8d40b568d23fcbe6",
+                ),
+            ).model_copy(update={"target_uri": native}).model_dump_json()
+        else:
+            PersistentTaskRunDTO.model_validate(
+                {
+                    "run_id": "run",
+                    "task_id": "task",
+                    "task_revision": 1,
+                    "definition_revision": 1,
+                    "trigger_key": "trigger",
+                    "check_only": False,
+                    "phase": native,
+                    "created_at": "2026-10-31T00:00:00Z",
+                    "updated_at": "2026-10-31T00:00:00Z",
+                }
+            )
     service.error = captured.value
     response = client.request(method, BASE + suffix, json=payload)
     assert response.status_code == 500, response.text
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "message": f"请求处理失败: stage=http_request, error={error_type.__name__}",
         "data": None,
         "request_id": REQUEST_ID,
     }
@@ -218,7 +233,13 @@ def test_internal_validation_remains_a_server_failure(
         for record in caplog.records
         if record.exc_info and record.exc_info[1] is service.error
     ]
-    assert len(diagnostics) == 1 and "task-api-sentinel" in caplog.text
+    assert len(diagnostics) == 1
+    if error_type is ValidationError:
+        assert "task-api-sentinel" in caplog.text
+    else:
+        # URI grammar 的异常不含输入值；保留完整 serializer 及拒绝原因诊断。
+        reason = "URI 不得包含反斜杠" if "\\" in native else "URI 只接受 boxteam:// scheme"
+        assert "_require_thread_uri" in caplog.text and reason in caplog.text
 
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation"), CASES)
