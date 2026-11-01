@@ -1478,3 +1478,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 新增隔离跨模块验收覆盖 read／排他 publish／remove／GC × target 目录冲突／parent 普通文件／真实父目录 chmod EACCES × 正常日志／真实日志 ENOTDIR，共24 passed／1.59秒；核原异常身份、cause、错误归属、正文与 sibling 原字节、零残留及解除故障后的冷读取。完整 HEAD 归档的原生产为12 failed／12健康控制 passed，失败精确复现日志异常盖掉原拒绝；现有 detail／registry 两完整模块135 passed／29.31秒。
 - Ruff、compileall、生产与新测试真实 Pyright（零诊断）及 strict 通过；初次测试 setup 将字符串 fixture 误标为 Path，修正后通过，原件保留。限定独审无剩余 finding，runtime直接11个Python文件，测试目录64个的既存越限只登记观察；未触碰前端、共享 fixture／driver／debug 服务或他人暂存。
 - 准确命令、源码指纹、原始输出、实际退出码、红测、方法对照和独审见 `out/tests/temp/detail_path_diagnostics_20261101/artifacts/verification.json`。本片只验 detail 文件 owner 边界，不代完整消息执行／fork、Gateway／Web、Windows、进程重启或7.5总门；111/119及各延期项保持未完成。
+
+
+### 2026-11-01 7.5-A/C 存储主错与诊断次错的统一出口（部分）
+
+- SQLite路径拒绝与文件锁错误沿既有`report_failure`保留主错；原生异常实例继续进入日志并作为cause，日志写入失败只增加诊断note和安全错误类型，不覆盖原errno或公开原生位置。共同出口改为返回已构造异常，迁齐12处调用；归一异常构造后，其它锁／连接／快照方法AST与HEAD相同，无新增存储链路。
+- 新增独立诊断测试复用原锁／连接的完整行为断言，最终新增62 passed／1.66秒，复用生产未变的原相关32项通过；完整HEAD归档加相同新测试的反例31 failed、31健康对照passed／7.87秒。原消息入口及model_stream生成工具历史后，两种存储故障×日志状态的4项产品验收通过／158.15秒（外层166.19秒），核两个公开历史入口、原cause、数据不变、独立writer、冷Saver、封存请求hash及同Thread续聊；快照释放与来源准备回归8 passed／19.45秒。新测试按目标平台实际日志错误类型／errno／filename精确对照；不同相关用例共106项通过。全部沿外部超时／4GiB及既有集成闸门。
+- Ruff、compileall和strict通过；Pyright保留4条既存`_RolloutSQLiteConnection.__exit__`诊断，与完整HEAD归档按owner／规则／完整消息一致，新测试零诊断。独立只读审查无finding，未独立跑测试。首次产品验证因测试探针漏传namespace失败，已修复，原输出及源码变化记录保留，不计为最终通过证据。
+- 准确命令、源码指纹、raw／退出码、红绿反例、AST和审查见`out/tests/temp/rollout_storage_diagnostics_20261101/artifacts/verification.json`。本片为Linux进程内完整应用／ASGI验收，不代完整Gateway代理、Web、Windows、真实外部Provider、Backend重启或7.5／Section8总门；111/119及延期项保持未完成。未改前端、公共fixture、长回归驱动或共享Debug。
