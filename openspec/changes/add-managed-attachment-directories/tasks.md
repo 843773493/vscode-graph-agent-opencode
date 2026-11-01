@@ -890,3 +890,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - context事件接纳的注册进入既有operation执行集合；释放context后，迟到CDP、设备设置和激活不得重新发布页面，旧context事件不能进入新context。Manager仅停止新准入、原context仍在时，已接纳注册仍可完成供检查点捕获，不新增队列或持久账本。
 - 新增5项注册／关闭单测，相关Browser回归192 passed；实现前4项反例均失败，未作为完整归档变异证据。真实Python客户端、Node/HTTP及Chromium新场景与既有创建／两种关闭场景共4 passed：原关闭先408并持久保留unknown，独立页面可操作，原回执释放后显式重试才核实终态，页面不得复活。首次创建超时未定位，观察追踪下注册26毫秒且场景通过，未调大请求期限；保留启动慢的测量TODO及原件。扩大回归另两项曾因端口占用未进入业务，原同bind核空后仅补跑这两项通过，未杀未知进程。
 - Ruff、Pyright零诊断、Python编译及Node语法通过；本轮首次类型收窄前5条诊断和误用不存在的pyright script失败均保留。限定独审无finding，源码指纹、原始输出、准确命令与退出码见`out/tests/temp/browser_page_registration_20261101/artifacts/verification.json`。所有测试有外部超时与4GiB保护，集成沿原独占闸门；不替代Python业务owner、完整Backend／Gateway／Web重启或Windows验收，5.2／5.4和21/23继续未完成。未修改Web迁移、其公共fixture／回归driver或共享debug。
+
+### 2026-11-01 Browser下载保存与原结果写盘排空（5.4部分）
+
+- 页面下载复用原operation执行集合，保存及成功/失败结果写盘全程由同一句柄结算；activeDownloads不再被当作关闭完成证明。已释放或替换页面的迟到下载事件不启动保存；原context关闭后等待未结算时仍408/unknown，原执行完成后显式重试才核实终态，不新增队列或账本。
+- 新增5项单测，修改前4项反例失败、正常对照通过，未称完整归档变异；修复后相关Browser回归217 passed，Ruff/Pyright零诊断、编译/Node语法通过。真实Node/HTTP/Chromium下载与弹出页关闭2 passed/21.46秒：原StateStore实际保存正文后仅暂扣回执，核磁盘unknown、真实字节及原下载尚未发布、peer可操作，放行后原身份记录与同资源终态一致。2835份采样源码前后无变化，外部超时/4GiB及原集成闸门保持。
+- 准确命令、原始输出、退出码、指纹、正式产物及作者结构审查见`out/tests/temp/browser_download_drain_20261101/artifacts/verification.json`。不代原生保存强制抢占、下载网络永久挂起、整个operation/shutdown期限、Python业务owner、Gateway/Web或Windows；5.2/5.4及21/23保持未完成。前端、公共fixture、Section8长回归driver、共享Debug及他人暂存未改。

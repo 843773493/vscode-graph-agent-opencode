@@ -1219,6 +1219,7 @@ export class BrowserSession extends EventEmitter {
       });
     });
     page.on("download", (download) => {
+      if (!this.browser || this.pageEntries.get(pageId) !== entry) return;
       void this.handleDownload(download);
     });
     page.on("close", () => {
@@ -1345,23 +1346,26 @@ export class BrowserSession extends EventEmitter {
   }
 
   async handleDownload(download) {
-    this.activeDownloads += 1;
-    try {
-      const record = await this.manager.writeDownload(this.id, download);
-      this.record.downloads = [record, ...(this.record.downloads || [])].slice(0, 50);
-      this.record.updated_at = nowIso();
-      await this.manager.persist();
-      this.emit("state", this.snapshot());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.record.download_error = message;
-      this.record.updated_at = nowIso();
-      await this.manager.persist();
-      this.emit("state", this.snapshot());
-      logger.error("[browser-session] 保存下载失败:", message);
-    } finally {
-      this.activeDownloads = Math.max(0, this.activeDownloads - 1);
-    }
+    // 下载由页面事件接纳；保存及原结果写盘均结束后，关闭才能确认排空。
+    return await this.operationQueue.track((async () => {
+      this.activeDownloads += 1;
+      try {
+        const record = await this.manager.writeDownload(this.id, download);
+        this.record.downloads = [record, ...(this.record.downloads || [])].slice(0, 50);
+        this.record.updated_at = nowIso();
+        await this.manager.persist();
+        this.emit("state", this.snapshot());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.record.download_error = message;
+        this.record.updated_at = nowIso();
+        await this.manager.persist();
+        this.emit("state", this.snapshot());
+        logger.error("[browser-session] 保存下载失败:", message);
+      } finally {
+        this.activeDownloads = Math.max(0, this.activeDownloads - 1);
+      }
+    })());
   }
 
   download(downloadId) {
