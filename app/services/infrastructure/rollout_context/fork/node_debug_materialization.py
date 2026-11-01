@@ -59,7 +59,7 @@ def _stage_target_snapshot(
     with _storage_io(staging_root, "fork debug 文件操作失败", "staging_inspection", artifact="fork_debug"):
         exists = staging_root.exists() or staging_root.is_symlink()
     if exists:
-        raise FileExistsError(_storage_failure(staging_root, "fork debug staging 已存在", "staging", artifact="fork_debug"))
+        raise _storage_failure(staging_root, FileExistsError("fork debug staging 已存在"), "staging", artifact="fork_debug")
     with _storage_io(staging_root, "fork debug 文件操作失败", "staging", artifact="fork_debug"):
         configuration_id_map = tuple(
             (
@@ -237,15 +237,15 @@ def materialize_node_debug_fork(
 def publish_target_snapshot(staging_root: Path, target_node: Path) -> Path:
     with _storage_io(staging_root, "fork debug 文件操作失败", "publication", artifact="fork_debug"):
         if not staging_root.is_dir() or staging_root.is_symlink():
-            raise RuntimeError(_storage_failure(staging_root, "Node debug staging 不存在或不安全", "publication", artifact="fork_debug"))
+            raise _storage_failure(staging_root, RuntimeError("Node debug staging 不存在或不安全"), "publication", artifact="fork_debug")
         expected_parent = target_node / "rollout" / ".fork-debug-staging"
         if not staging_root.resolve().is_relative_to(expected_parent.resolve()):
             raise RuntimeError("Node debug staging 不属于受检 target")
         debug_root = target_node / "debug"
         if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
-            raise RuntimeError(_storage_failure(debug_root, "target debug 父目录不是普通目录", "publication", artifact="fork_debug"))
+            raise _storage_failure(debug_root, RuntimeError("target debug 父目录不是普通目录"), "publication", artifact="fork_debug")
         if debug_root.exists() and any(debug_root.iterdir()):
-            raise RuntimeError(_storage_failure(debug_root, "target 已存在 debug 正文，拒绝覆盖", "publication", artifact="fork_debug"))
+            raise _storage_failure(debug_root, RuntimeError("target 已存在 debug 正文，拒绝覆盖"), "publication", artifact="fork_debug")
         # ready proof 重放允许补完 mkdir 与 rename 之间留下的精确空父目录。
         debug_root.mkdir(exist_ok=True)
         target_root = debug_root / "node"

@@ -4,10 +4,12 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +46,26 @@ def databases(tmp_path):
         yield DatabaseFiles(source, destination, connection)
 
 
+@pytest.fixture(params=["ok", "failed"])
+def diagnostic_sink(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[list[OSError]]:
+    failures: list[OSError] = []
+    if request.param == "failed":
+        original = logging.Logger.callHandlers
+
+        def emit(logger: logging.Logger, record: logging.LogRecord) -> None:
+            original(logger, record)
+            if record.name in {worker.__name__, "app.services.infrastructure.rollout_context.storage.primitives"}:
+                failure = OSError(errno.EIO, "SQLite诊断日志写入失败")
+                failures.append(failure)
+                raise failure
+
+        monkeypatch.setattr(logging.Logger, "callHandlers", emit)
+    yield failures
+    assert len(failures) == (1 if request.param == "failed" else 0)
+
+
 @pytest.mark.parametrize('held', [False, True])
 def test_real_worker_preserves_committed_bytes_and_rows(databases, held):
     before = databases.source_bytes()
@@ -63,7 +85,7 @@ def test_real_worker_preserves_committed_bytes_and_rows(databases, held):
     assert not list(databases.destination.glob('.sqlite-copy-*'))
 
 
-def test_real_worker_failure_keeps_stderr_exit_and_source_and_retry(databases, monkeypatch, caplog):
+def test_real_worker_failure_keeps_stderr_exit_and_source_and_retry(databases, monkeypatch, caplog, diagnostic_sink):
     before = databases.source_bytes()
     run = subprocess.run
     missing = []
@@ -85,6 +107,9 @@ def test_real_worker_failure_keeps_stderr_exit_and_source_and_retry(databases, m
     assert isinstance(cause, subprocess.CalledProcessError) and cause.returncode == 1
     assert b'FileNotFoundError' in cause.stderr and str(missing[0]).encode() in cause.stderr
     assert str(missing[0]) in caplog.text and 'FileNotFoundError' in caplog.text
+    assert ('diagnostic_sink_error=OSError' in str(caught.value)) == bool(diagnostic_sink)
+    if diagnostic_sink:
+        assert any(str(diagnostic_sink[0]) in note for note in cause.__notes__)
     assert databases.source_bytes() == before
     worker.copy_live_sqlite_snapshot(databases.source, databases.destination, rollout_lock_held=True)
     assert databases.source_bytes() == before and not list(databases.destination.glob('.sqlite-copy-*'))
@@ -108,7 +133,7 @@ def test_native_spawn_failure_keeps_errno_cause_and_private_cleanup(databases, m
     assert databases.source_bytes() == before and not list(databases.destination.glob('.sqlite-copy-*'))
 
 
-def test_timeout_keeps_original_budget_and_diagnostics(databases, monkeypatch, caplog):
+def test_timeout_keeps_original_budget_and_diagnostics(databases, monkeypatch, caplog, diagnostic_sink):
     before = databases.source_bytes()
     native = subprocess.TimeoutExpired([str(databases.source / 'private-python')], 30,
                                        output=b'partial-output', stderr=str(databases.source).encode())
@@ -124,6 +149,9 @@ def test_timeout_keeps_original_budget_and_diagnostics(databases, monkeypatch, c
     assert caught.value.__cause__ is native and caught.value.timeout == 30
     assert str(databases.source) not in str(caught.value) and 'stage=sqlite_timeout' in str(caught.value)
     assert str(databases.source) in caplog.text and native.output == b'partial-output'
+    assert ('diagnostic_sink_error=OSError' in str(caught.value)) == bool(diagnostic_sink)
+    if diagnostic_sink:
+        assert any(str(diagnostic_sink[0]) in note for note in native.__notes__)
     assert databases.source_bytes() == before and not list(databases.destination.glob('.sqlite-copy-*'))
 
 

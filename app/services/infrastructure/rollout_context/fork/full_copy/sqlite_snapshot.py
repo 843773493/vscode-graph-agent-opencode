@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -15,8 +14,6 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     _storage_failure,
     _storage_io,
 )
-
-logger = logging.getLogger(__name__)
 
 SQLITE_COPY_FILES = ("index.sqlite", "index.sqlite-wal", "index.sqlite-journal")
 SQLITE_EXCLUDED_FILES = frozenset((*SQLITE_COPY_FILES, "index.sqlite-shm"))
@@ -117,18 +114,18 @@ def copy_live_sqlite_snapshot(
                 )
         except subprocess.TimeoutExpired as error:
             if error.stderr is not None:
-                logger.error("SQLite snapshot worker 超时原始 stderr: %s", error.stderr.decode(errors="replace"))
+                error.add_note("SQLite snapshot worker 超时原始 stderr: " + error.stderr.decode(errors="replace"))
             detail = _storage_failure(
-                destination, "source-mismatch: SQLite snapshot worker 超时", "sqlite_timeout", error, artifact="fork_source",
+                destination, RuntimeError("source-mismatch: SQLite snapshot worker 超时"), "sqlite_timeout", error, artifact="fork_source",
             )
-            raise subprocess.TimeoutExpired(detail, error.timeout) from error
+            raise subprocess.TimeoutExpired(str(detail), error.timeout) from error
         if result.returncode != 0:
             error = subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
-            logger.error("SQLite snapshot worker 失败原始 stderr: %s", result.stderr.decode(errors="replace"))
-            raise RuntimeError(_storage_failure(
-                destination, f"source-mismatch: 隔离进程复制 SQLite snapshot 失败 returncode={result.returncode}",
+            error.add_note("SQLite snapshot worker 失败原始 stderr: " + result.stderr.decode(errors="replace"))
+            raise _storage_failure(
+                destination, RuntimeError(f"source-mismatch: 隔离进程复制 SQLite snapshot 失败 returncode={result.returncode}"),
                 "sqlite_worker", error, artifact="fork_source",
-            )) from error
+            ) from error
     finally:
         with _storage_io(Path(private), "source-mismatch: SQLite snapshot 私有目录清理失败", "sqlite_private_cleanup", artifact="fork_source"):
             directory.cleanup()

@@ -124,9 +124,9 @@ def capture_fork_rollout_snapshot(
     )
     with _storage_io(source_rollout, "source-mismatch: fork source rollout 检查失败", "source_layout", artifact="fork_source"):
         if not native_io_path(source_rollout).is_dir() or native_io_path(source_rollout).is_symlink():
-            raise RuntimeError(_storage_failure(
-                source_rollout, "source-mismatch: fork source rollout 不存在或不是普通目录", "source_layout", artifact="fork_source",
-            ))
+            raise _storage_failure(
+                source_rollout, RuntimeError("source-mismatch: fork source rollout 不存在或不是普通目录"), "source_layout", artifact="fork_source",
+            )
     if not snapshot_id or Path(snapshot_id).name != snapshot_id:
         raise ValueError("fork source snapshot id 必须是单一路径段")
     with _storage_io(captured_root, "source-mismatch: fork snapshot 目录创建失败", "preparation", artifact="fork_source"):
@@ -141,9 +141,9 @@ def capture_fork_rollout_snapshot(
                 restrict_private_path_access(captured_root, is_directory=True)
             except RuntimeError as error:
                 # ACL 原语将 Windows 启动/超时错误包装为 RuntimeError，保留该类别与原异常链。
-                raise RuntimeError(_storage_failure(
-                    captured_root, "source-mismatch: fork snapshot 私有权限限制失败", "preparation", error, artifact="fork_source",
-                )) from error
+                raise _storage_failure(
+                    captured_root, RuntimeError("source-mismatch: fork snapshot 私有权限限制失败"), "preparation", error, artifact="fork_source",
+                ) from error
         if not rollout_lock_held:
             lock = _RolloutFileLock(
                 source_lock_path,
@@ -152,9 +152,9 @@ def capture_fork_rollout_snapshot(
             lock.acquire()
         with _storage_io(source_lock_path, "source-mismatch: fork source 写锁复制失败", "lock_copy", artifact="fork_source"):
             if not native_io_path(source_lock_path).is_file() or native_io_path(source_lock_path).is_symlink():
-                raise RuntimeError(_storage_failure(
-                    source_lock_path, "source-mismatch: fork source 缺少既有普通写锁文件", "lock_copy", artifact="fork_source",
-                ))
+                raise _storage_failure(
+                    source_lock_path, RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件"), "lock_copy", artifact="fork_source",
+                )
             # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
             shutil.copy2(native_io_path(source_lock_path), native_io_path(captured_root / ".rollout.write.lock"))
         source_files = _tree_manifest(
@@ -182,9 +182,9 @@ def capture_fork_rollout_snapshot(
             jsonl = native_io_path(snapshot_rollout / "rollout.jsonl")
             with _storage_io(jsonl, "source-mismatch: fork JSONL snapshot 冻结失败", "jsonl_snapshot", artifact="fork_source"):
                 if not jsonl.is_file() or jsonl.stat().st_size < committed_offset:
-                    raise RuntimeError(_storage_failure(
-                        jsonl, "source-mismatch: fork snapshot JSONL 短于 committed offset", "jsonl_snapshot", artifact="fork_source",
-                    ))
+                    raise _storage_failure(
+                        jsonl, RuntimeError("source-mismatch: fork snapshot JSONL 短于 committed offset"), "jsonl_snapshot", artifact="fork_source",
+                    )
                 with jsonl.open("r+b") as stream:
                     stream.truncate(committed_offset)
                     stream.flush()
@@ -211,9 +211,9 @@ def capture_fork_rollout_snapshot(
         control_path = captured_root / CONTROL_DATABASE_NAME
         with _storage_io(control_path, "source-mismatch: fork control snapshot 读取失败", "control_snapshot", artifact="fork_source"):
             if not native_io_path(control_path).is_file() or native_io_path(control_path).is_symlink():
-                raise RuntimeError(_storage_failure(
-                    control_path, "source-mismatch: fork source 缺少 session-control snapshot", "control_snapshot", artifact="fork_source",
-                ))
+                raise _storage_failure(
+                    control_path, RuntimeError("source-mismatch: fork source 缺少 session-control snapshot"), "control_snapshot", artifact="fork_source",
+                )
             control_digest = hashlib.sha256()
             for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                          CONTROL_DATABASE_NAME + "-journal"):
@@ -330,13 +330,13 @@ def _copy_declared_details(
             with _storage_io(source, "source-mismatch: fork detail 复制失败", "detail_copy", artifact="fork_source"):
                 for directory in (native_io_path(source_rollout / "context-plan-details"), source.parent):
                     if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
-                        raise RuntimeError(_storage_failure(
-                            directory, "source-mismatch: 冻结 detail 目录不是普通目录", "detail_copy", artifact="fork_source",
-                        ))
+                        raise _storage_failure(
+                            directory, RuntimeError("source-mismatch: 冻结 detail 目录不是普通目录"), "detail_copy", artifact="fork_source",
+                        )
                 if source.is_symlink() or (source.exists() and not source.is_file()):
-                    raise RuntimeError(_storage_failure(
-                        source, "source-mismatch: 冻结 detail 不是普通文件", "detail_copy", artifact="fork_source",
-                    ))
+                    raise _storage_failure(
+                        source, RuntimeError("source-mismatch: 冻结 detail 不是普通文件"), "detail_copy", artifact="fork_source",
+                    )
                 if not source.is_file():
                     # 是否必需由同一冻结 manifest 的资源 owner 在发布前裁定。
                     continue
@@ -366,20 +366,16 @@ def _tree_manifest(
 
     with _storage_io(root, "fork source 清单读取失败", "manifest", artifact="fork_source"):
         if root.is_symlink() or not root.is_dir():
-            raise RuntimeError(_storage_failure(root, "source-mismatch: fork source 清单根不是普通目录", "manifest", artifact="fork_source"))
+            raise _storage_failure(root, RuntimeError("source-mismatch: fork source 清单根不是普通目录"), "manifest", artifact="fork_source")
         files: list[ForkSnapshotFile] = []
         for current, directory_names, file_names in os.walk(root, followlinks=False, onerror=fail_walk):
             current_path = Path(current)
             for name in (*directory_names, *file_names):
                 candidate = current_path / name
                 if candidate.is_symlink():
-                    raise RuntimeError(
-                        _storage_failure(candidate, "source-mismatch: fork source rollout 包含符号链接", "manifest", artifact="fork_source")
-                    )
+                    raise _storage_failure(candidate, RuntimeError("source-mismatch: fork source rollout 包含符号链接"), "manifest", artifact="fork_source")
                 if name in file_names and not candidate.is_file():
-                    raise RuntimeError(
-                        _storage_failure(candidate, "source-mismatch: fork source rollout 包含非普通文件", "manifest", artifact="fork_source")
-                    )
+                    raise _storage_failure(candidate, RuntimeError("source-mismatch: fork source rollout 包含非普通文件"), "manifest", artifact="fork_source")
             directory_names[:] = [
                 name
                 for name in directory_names

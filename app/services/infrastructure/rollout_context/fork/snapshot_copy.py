@@ -66,8 +66,8 @@ def stage_captured_rollout(
                     raise ValueError("source-mismatch: captured rollout 文件 locator 非法")
                 source = native_io_path(source_root / relative)
                 if source.is_symlink() or not source.is_file():
-                    raise RuntimeError(_storage_failure(source, "source-mismatch: captured rollout 不是普通文件",
-                        "staging_copy", artifact="fork_target"))
+                    raise _storage_failure(source, RuntimeError("source-mismatch: captured rollout 不是普通文件"),
+                        "staging_copy", artifact="fork_target")
                 destination = native_io_path(stage / relative)
                 destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 digest = hashlib.sha256()
@@ -80,8 +80,8 @@ def stage_captured_rollout(
                     writer.flush()
                     os.fsync(writer.fileno())
                 if (length, digest.hexdigest()) != (captured.size_bytes, captured.sha256):
-                    raise RuntimeError(_storage_failure(source, "source-mismatch: captured rollout 文件 hash/length 不一致",
-                        "staging_copy", artifact="fork_target"))
+                    raise _storage_failure(source, RuntimeError("source-mismatch: captured rollout 文件 hash/length 不一致"),
+                        "staging_copy", artifact="fork_target")
         return stage
     except BaseException:
         with _storage_io(stage, "source-mismatch: fork 目标暂存清理失败", "staging_cleanup", artifact="fork_target"):
@@ -389,19 +389,19 @@ def _fsync_tree(root: Path) -> None:
     with _storage_io(root, "source-mismatch: fork 目标准备同步失败", "preparation_sync", artifact="fork_target"):
         root = native_io_path(root)
         if root.is_symlink() or not root.is_dir():
-            raise RuntimeError(_storage_failure(root, "source-mismatch: fork 目标暂存不是普通目录",
-                "preparation_sync", artifact="fork_target"))
+            raise _storage_failure(root, RuntimeError("source-mismatch: fork 目标暂存不是普通目录"),
+                "preparation_sync", artifact="fork_target")
         for directory, directories, names in os.walk(root, topdown=False, onerror=fail_walk):
             current = Path(directory)
             for name in directories:
                 child = current / name
                 if child.is_symlink():
-                    raise RuntimeError(_storage_failure(child, "source-mismatch: fork 目标暂存含符号链接目录",
-                        "preparation_sync", artifact="fork_target"))
+                    raise _storage_failure(child, RuntimeError("source-mismatch: fork 目标暂存含符号链接目录"),
+                        "preparation_sync", artifact="fork_target")
             for name in names:
                 child = current / name
                 if child.is_symlink() or not child.is_file():
-                    raise RuntimeError(_storage_failure(child, "source-mismatch: fork 目标暂存含非普通文件",
-                        "preparation_sync", artifact="fork_target"))
+                    raise _storage_failure(child, RuntimeError("source-mismatch: fork 目标暂存含非普通文件"),
+                        "preparation_sync", artifact="fork_target")
                 fsync_file(child)
             fsync_directory(current)

@@ -79,7 +79,7 @@ def reconcile_jsonl_tail(path: Path, committed_offset: int) -> None:
     )
     with _storage_io(path, "rollout JSONL 尾部恢复失败", "tail_reconciliation", artifact="rollout_jsonl"):
         if not path.is_file():
-            raise RuntimeError(_storage_failure(path, "committed JSONL 文件不存在", "tail_reconciliation", artifact="rollout_jsonl"))
+            raise _storage_failure(path, RuntimeError("committed JSONL 文件不存在"), "tail_reconciliation", artifact="rollout_jsonl")
         file_size = path.stat().st_size
         if file_size < committed_offset:
             raise RuntimeError(
@@ -369,7 +369,7 @@ class RolloutMaintenanceOwner(
             with _storage_io(root, "rollout 布局校验失败", "layout_validation", artifact="rollout_layout"):
                 root.mkdir(parents=True, exist_ok=True)
                 if self._is_removed_rollout_layout(root):
-                    raise RuntimeError(_storage_failure(root, "rollout 使用了已移除的旧布局", "layout_validation", artifact="rollout_layout"))
+                    raise _storage_failure(root, RuntimeError("rollout 使用了已移除的旧布局"), "layout_validation", artifact="rollout_layout")
             # 正常 runtime 只接收显式声明的 v2 rollout；旧格式必须重建。
             existing_index = root / "index.sqlite"
             needs_schema = True
@@ -498,7 +498,7 @@ class RolloutMaintenanceOwner(
             # 无意义的资源刷新。首次创建时才建立空的 canonical 文件。
             with _storage_io(path, "rollout JSONL 初始化失败", "jsonl_initialization", artifact="rollout_jsonl"):
                 if path.is_symlink() or (path.exists() and not path.is_file()):
-                    raise RuntimeError(_storage_failure(path, "rollout.jsonl 不是安全普通文件", "jsonl_initialization", artifact="rollout_jsonl"))
+                    raise _storage_failure(path, RuntimeError("rollout.jsonl 不是安全普通文件"), "jsonl_initialization", artifact="rollout_jsonl")
                 if not path.exists():
                     path.touch()
             # 已有 authoritative meta 的索引只能验证；当前 schema 仅在首次 bootstrap 创建。

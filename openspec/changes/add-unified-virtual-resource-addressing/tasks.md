@@ -1951,3 +1951,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 启动能力的program／working_directory在构造和序列化时复用唯一grammar，只接受工作区文件URI或原有空值；构造后赋值与model_copy不再绕过发布校验。fork迁用已有内部LaunchProfileConfig，删除公开DTO转换及重复supported判定，保留目标端三种路径输入、方案相对状态和Inspector非文件标签。
 - 原生产HTTP200发布原生路径的反例已保留；120项API／配置／fork检查、38项帧及配置发布回归、6项产品执行生成后的fork发布／恢复验收通过，真实OpenAPI与descriptor核对通过。Ruff通过；Pyright六文件28项诊断与完整HEAD归档逐项对照相同，无新增，不称全绿。
 - 命令、源码指纹、原始输出、退出码及基线比较见 `out/tests/temp/node_debug_profile_publication_20261101/artifacts/verification.json`。测试带外部超时／4GiB保护，产品矩阵沿原独占闸门；未代Gateway业务网络、Web、Windows或独立Backend硬重启。2.2／7.2保持未勾，整体51/53。
+
+### 2026-11-01 fork 存储错误出口调用方迁齐（2.2／7.2部分收口）
+
+- 迁齐来源捕获、目标复制、调试发布、传输与JSONL恢复中遗漏的25处共享错误出口调用，不再将字符串当异常或在返回异常外重复包装；全仓39处调用无旧字符串入参。SQLite worker将原始stderr附于原异常后交同一诊断出口，日志失败不替换进程退出／超时，原30秒预算、cause及清理语义保持。
+- 原生产4项形态拒绝被AttributeError替代、2项worker失败被日志次错替代的反例均成立；最终89项定向回归通过。来源清单产品矩阵2项、筛选的worker退出／ACL拒绝2项、目标符号链接拒绝1项通过；不将筛选结果称为完整矩阵验收。Ruff／compileall通过，Pyright七文件34→9，25项调用错误消除，剩余9项与完整HEAD归档未改行逐项一致；其余5份生产文件除调用迁移外AST相同。
+- 准确命令、源码指纹、原始输出、实际退出码与全仓调用审计见 `out/tests/temp/fork_debug_storage_rejection_20261101/artifacts/verification.json`。直接pytest补验曾在正式watchdog的setup拒绝，后续矩阵筛选曾因表达式引号错误而零用例退出，均保留原件，不算业务通过；最终沿正式矩阵／独占闸门及外部期限／4GiB保护。总门2.2／7.2保持未勾，不代Gateway、Web、Windows或硬重启验收。

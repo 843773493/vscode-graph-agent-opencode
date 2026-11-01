@@ -90,9 +90,9 @@ def _artifact_files(root: Path, record: ForkSourceCaptureRecord) -> Iterator[For
             for name in names:
                 path = Path(directory) / name
                 if path.is_symlink():
-                    raise RuntimeError(_storage_failure(
-                        path, "fork captured artifact 包含符号链接目录", "export_manifest", artifact="fork_transfer",
-                    ))
+                    raise _storage_failure(
+                        path, RuntimeError("fork captured artifact 包含符号链接目录"), "export_manifest", artifact="fork_transfer",
+                    )
             for name in sorted(files):
                 path = Path(directory) / name
                 relative = path.relative_to(root).as_posix()
