@@ -77,6 +77,48 @@ async def gc_case(tmp_path: Path, session_bundle_factory) -> AsyncIterator[GcCas
         yield GcCase(store, leases, parsed.attachment_id, directory, ledger_path)
 
 
+@pytest.mark.parametrize("count", [1, 32])
+async def test_gc_candidates_use_one_validated_catalog_snapshot(gc_case: GcCase, count: int) -> None:
+    store, catalog = gc_case.store, gc_case.store._catalog
+    identities = {gc_case.attachment_id}
+    for index in range(1, count):
+        ref, = await store.persist_inline(SESSION_ID, [AttachmentRef(
+            file_id=f"inline:gc-{index}.txt", name=f"gc-{index}.txt", content_type="text/plain",
+            data_url="data:text/plain;base64,Y3dk",
+        )], thread_id=store._path_resolver.main_thread_id(SESSION_ID), message_id=f"msg_gc_snapshot_{index}")
+        assert ref.directory_uri is not None
+        identities.add(parse_resource_uri(ref.directory_uri).tail_segments[0])
+    assert len(identities) == count
+    store.release_session_references(SESSION_ID)
+    due = store._clock() + timedelta(days=31)
+    statements: list[str] = []
+    catalog.connection.set_trace_callback(statements.append)
+    try:
+        candidates = catalog.gc_candidates(now=due)
+    finally:
+        catalog.connection.set_trace_callback(None)
+    assert {record.attachment_id for record in candidates} == identities
+    assert len([statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]) == 1
+    assert candidates == tuple(catalog.get_directory(identity) for identity in sorted(identities))
+    record = catalog.begin_delete(gc_case.attachment_id, now=due)
+    assert record == catalog.get_directory(gc_case.attachment_id) and record.availability == "deleting"
+    catalog.finish_delete(gc_case.attachment_id, now=due)
+    tombstone = catalog.get_directory(gc_case.attachment_id)
+    catalog.finish_delete(gc_case.attachment_id, now=due + timedelta(days=1))
+    assert catalog.get_directory(gc_case.attachment_id) == tombstone
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["available", "absent"])
+async def test_gc_finish_rejects_directory_without_delete_intent(gc_case: GcCase, missing: bool) -> None:
+    catalog = gc_case.store._catalog
+    identity = "att_missing_gc_intent" if missing else gc_case.attachment_id
+    original = tuple(catalog.connection.iterdump())
+    with pytest.raises(RuntimeError, match="附件目录没有登记 deleting，不能伪报已回收"):
+        catalog.finish_delete(identity, now=gc_case.store._clock())
+    assert tuple(catalog.connection.iterdump()) == original
+    assert gc_case.directory.is_dir()
+
+
 async def test_local_fork_claim_hands_retention_to_target_runtime_without_export(fork_capture) -> None:
     store, record = fork_capture
     ref, = await store.persist_inline(record.source_session_id, [AttachmentRef(

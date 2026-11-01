@@ -44,6 +44,15 @@ class AttachmentDirectoryRetainedError(RuntimeError):
     """目录仍有关联或持久操作依赖，不能开始删除。"""
 
 
+def _directory_record(row: sqlite3.Row) -> AttachmentDirectoryRecord:
+    """查询结果统一校验 locator，保留 SQLite 已读出的同一行快照。"""
+    record = AttachmentDirectoryRecord(**dict(row))
+    validate_attachment_directory_relative_locator(record.relative_locator)
+    if record.relative_locator.split("/")[-1] != record.attachment_id:
+        raise RuntimeError("附件目录 locator 与稳定身份不一致")
+    return record
+
+
 class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
     """沿用原附件 owner 的注入面，线上只读写 schema 4，不回读旧表。"""
 
@@ -155,13 +164,7 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
 
     def get_directory(self, attachment_id: str) -> AttachmentDirectoryRecord | None:
         row = self._connected().execute("SELECT * FROM attachment_directories WHERE attachment_id=?", (attachment_id,)).fetchone()
-        if row is None:
-            return None
-        record = AttachmentDirectoryRecord(**dict(row))
-        validate_attachment_directory_relative_locator(record.relative_locator)
-        if record.relative_locator.split("/")[-1] != attachment_id:
-            raise RuntimeError("附件目录 locator 与稳定身份不一致")
-        return record
+        return None if row is None else _directory_record(row)
 
     def require_available_directory(self, attachment_id: str) -> AttachmentDirectoryRecord:
         record = self.get_directory(attachment_id)
@@ -268,11 +271,11 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
 
     def gc_candidates(self, *, now: datetime) -> tuple[AttachmentDirectoryRecord, ...]:
         rows = self._connected().execute(
-            "SELECT attachment_id FROM attachment_directories WHERE availability='deleting' OR "
+            "SELECT * FROM attachment_directories WHERE availability='deleting' OR "
             "(availability='available' AND gc_after<=? AND (retention_until IS NULL OR retention_until<=?)) ORDER BY attachment_id",
             (now.astimezone(UTC).isoformat(), now.astimezone(UTC).isoformat()),
         ).fetchall()
-        return tuple(self.get_directory(row[0]) for row in rows)
+        return tuple(_directory_record(row) for row in rows)
 
     def begin_delete(self, attachment_id: str, *, now: datetime) -> AttachmentDirectoryRecord:
         with self.write_transaction() as connection:
@@ -294,7 +297,8 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             if association is not None or ingest is not None or fork is not None:
                 raise AttachmentDirectoryRetainedError("附件目录仍有关联或未结清操作")
             connection.execute("UPDATE attachment_directories SET availability='deleting',updated_at=? WHERE attachment_id=?", (timestamp, attachment_id))
-            return self.get_directory(attachment_id)
+            # 同一写事务已核实该行存在；返回实际写入后的完整记录。
+            return _directory_record(connection.execute("SELECT * FROM attachment_directories WHERE attachment_id=?", (attachment_id,)).fetchone())
 
     def finish_delete(self, attachment_id: str, *, now: datetime) -> None:
         with self.write_transaction() as connection:
@@ -302,5 +306,7 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
                 "UPDATE attachment_directories SET availability='tombstoned',updated_at=? WHERE attachment_id=? AND availability='deleting'",
                 (now.astimezone(UTC).isoformat(), attachment_id),
             ).rowcount
-            if not changed and self.get_directory(attachment_id).availability != "tombstoned":
-                raise RuntimeError("附件目录没有登记 deleting，不能伪报已回收")
+            if not changed:
+                record = self.get_directory(attachment_id)
+                if record is None or record.availability != "tombstoned":
+                    raise RuntimeError("附件目录没有登记 deleting，不能伪报已回收")

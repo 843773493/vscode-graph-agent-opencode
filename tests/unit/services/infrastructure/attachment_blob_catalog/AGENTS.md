@@ -16,3 +16,4 @@
 - 外部线程屏障必须在 finally 释放并排空任务，不留下锁外写入或后台访问。
 - GC 用原上传和冻结 claim 生成局部输入，核对 worker、取消、原 holder、账本先于 tombstone 及失败后的同入口重试；产品执行与硬退出验收仍归集成测试。
 - 同目录 fork 分别核 prepared/reserved、committed 活动关联与 runtime 释放后的回收；跨工作区来源在原 export release 前持续保活，不由测试直接写 claim 行。
+- 候选查询用真实独立上传的1／32个目录核单次 SQLite 读取；未开始删除或目录缺失须明确拒绝且不改库，重复 tombstone 收尾保留原记录。

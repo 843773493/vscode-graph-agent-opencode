@@ -27,6 +27,7 @@
 - GC 复用原文件 mutation lock、目录 holder 和唯一外部 lease 账本；删除前事务复核关联、ingest 与 fork claim，先标 deleting 再删物理目录，失败保留 locator 并幂等重试。
 - 同目录 fork 的 preparing/reserved claim 保护发布，committed 后由目标关联保活；运行时释放后按原期限回收，不等待跨端导出回执。物理独立目录的来源导出仍须等待原 export release。
 - GC 候选及终态 fork 操作查询走原受保护 worker；同一目录的物理删除、原账本 stopped 与 tombstone 在原 holder 内结算，工作区文件写锁只覆盖删除核对与物理删除，账本等待不阻塞无关文件。账本失败保留 deleting；终态 fork 暂存的快照、原生探测与删除由同一 worker 在原 import holder 内完成，取消须等它结算，不扫描未知目录。
+- GC 候选一次查询取得完整行，与单目录读取、deleting 回执共用 locator 校验；删除前仍在原事务复核。缺少删除意图明确失败，tombstone 重试不得改写原收尾时刻。
 - Shell 工作目录的来源识别与 holder 内复核复用既有受保护 worker，保留请求上下文及原 catalog/locator 校验；holder 覆盖线程池排队与原生访问结算，取消后不进入占用发布或 PTY 创建。worker 不抢占原生 I/O，持久 lease 写入和整个 operation/shutdown 期限仍单独验收。
 - fork 同工作区保留目录关联，跨工作区只复制冻结 manifest。网络统一使用原 files/chunk；新目录快照显式版本，旧 v2 blob 载荷只解码。alias 按精确消费 Session/Thread 与已提交 claim 解析，未映射 URI 不猜测归属。
 - `maintenance.py` 的共享/独占跨进程锁保护线上与离线切换；关闭失败保留未关闭连接和锁。schema 3 须显式离线迁移，未知版本或损坏结构直接报错，不能初始化空库掩盖丢失。

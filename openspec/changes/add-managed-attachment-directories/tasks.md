@@ -934,3 +934,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 ### 2026-11-01 同目录 fork 释放后的到期回收补验
 
 - 已修复本地同目录 fork 因不存在的独立导出回执而无限保活；prepared/reserved和跨工作区export的原保护保留。真实上传/工具/full copy/副本执行/目录GC/来源删除/进程重启及冻结请求恢复共用 itemized 7.5-C／8.3 本轮收据，原件见 `out/tests/temp/attachment_fork_gc_20261101/artifacts/verification.json`。不据此关闭5.2或5.4，整体仍21/23。
+
+### 2026-11-01 GC 候选的单次行快照与删除收尾失败（5.4 部分）
+
+- 删除先查ID再逐目录重查的读取，候选、单目录读取和deleting回执共用原locator校验。1／32个独立真实上传的候选查询从2／33次SELECT降为1次，不改变删除前事务复核、30天期限或原holder；没有schema变化或新SQLite语法依赖。未开始删除的目录与缺失目录均明确拒绝并回滚，缺失目录不再误抛AttributeError；重复tombstone收尾保留原时间。
+- 修改前新增4项中3项失败、正常对照通过；修复后相关单元回归113 passed/22.46秒。现有正式产品矩阵 `integration-attachment-retention-measurements` 2 passed/35.59秒，经真实消息执行／卸载形成1／32目录、冷owner恢复和到期GC，核真实原件、独立身份、原期限、tombstone、重复GC及canonical字节不变。全部测试有进程外期限／4GiB，集成沿原独占闸门；不承诺端到端速度比例。
+- Ruff、两个修改源码文件的真实Pyright零诊断、compileall和本change严格检查通过，消除catalog此前三项Optional诊断。准确命令、源码指纹、原始输出／退出码、查询量反例与作者审查见 `out/tests/temp/gc_catalog_snapshot_20261101/artifacts/verification.json`。本片不证明无原生身份的旧代接管、原生I/O抢占、整个operation/shutdown期限或Windows，5.2／5.4及21/23继续未完成；未改前端、公共fixture、长回归驱动或共享debug。
