@@ -884,3 +884,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原资源回归1118 passed／2 failed，失败仅为旧测试仍预期无管理动作；迁齐精确 stop 合同并增加真实 owner 冷恢复管理取消后，该文件22 passed。新取消专测12 passed；原生 Terminal 31 passed（Node node:test）、Browser 19 passed（Bun）。四项独立进程强杀／冷恢复／真实 HTTP、PTY／Chromium补验4 passed／91.78秒，包含取消后真实迟到创建被拒绝。原生测试装配曾因屏障释放顺序挂起及误用 Bun 执行 node:test 失败，原输出保留；修正 runner／屏障后验证通过，未修改既有行为断言。
 - Ruff、Python编译、Node ESM语法及OpenSpec strict通过；Pyright原新各13条诊断按相对文件、规则、完整消息、所属定义及最窄AST一致，新取消及本次触达的生命周期测试零诊断。准确命令、源码指纹、原始输出、实际退出码、复审及结构审查见`out/tests/temp/resource_creation_takeover_20261101/artifacts/verification.json`。真实重启补验期间只修改不参与该集成的单测，生产及集成源码未变化；不是全仓冻结。
 - 已登记但缺少 PID／context 的旧创建仍不能从空句柄推出停止；完整旧代接管、原生I/O抢占及整个operation／shutdown期限继续TODO，5.2／5.4和21/23保持未完成。本证据不替代完整Backend／Gateway／Web或Windows验收；未修改另一会话的前端、公共fixture、长回归driver或共享debug，仅复用现有独占闸门。
+
+### 2026-11-01 Browser弹出页注册的原执行排空（5.4部分）
+
+- context事件接纳的注册进入既有operation执行集合；释放context后，迟到CDP、设备设置和激活不得重新发布页面，旧context事件不能进入新context。Manager仅停止新准入、原context仍在时，已接纳注册仍可完成供检查点捕获，不新增队列或持久账本。
+- 新增5项注册／关闭单测，相关Browser回归192 passed；实现前4项反例均失败，未作为完整归档变异证据。真实Python客户端、Node/HTTP及Chromium新场景与既有创建／两种关闭场景共4 passed：原关闭先408并持久保留unknown，独立页面可操作，原回执释放后显式重试才核实终态，页面不得复活。首次创建超时未定位，观察追踪下注册26毫秒且场景通过，未调大请求期限；保留启动慢的测量TODO及原件。扩大回归另两项曾因端口占用未进入业务，原同bind核空后仅补跑这两项通过，未杀未知进程。
+- Ruff、Pyright零诊断、Python编译及Node语法通过；本轮首次类型收窄前5条诊断和误用不存在的pyright script失败均保留。限定独审无finding，源码指纹、原始输出、准确命令与退出码见`out/tests/temp/browser_page_registration_20261101/artifacts/verification.json`。所有测试有外部超时与4GiB保护，集成沿原独占闸门；不替代Python业务owner、完整Backend／Gateway／Web重启或Windows验收，5.2／5.4和21/23继续未完成。未修改Web迁移、其公共fixture／回归driver或共享debug。

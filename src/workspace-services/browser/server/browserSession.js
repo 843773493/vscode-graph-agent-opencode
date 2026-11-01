@@ -1013,12 +1013,15 @@ export class BrowserSession extends EventEmitter {
 
   bindContextPageEvents() {
     if (!this.context) throw new Error(`浏览器 context 尚未建立: browser_id=${this.id}`);
-    this.context.on("page", (page) => {
+    const context = this.context;
+    context.on("page", (page) => {
+      if (this.context !== context || !this.browser) return;
       if ([...this.pageEntries.values()].some((entry) => entry.page === page)) {
         return;
       }
       const registration = this.registerPage(page, { activate: true });
       void registration.catch((error) => {
+        if (this.context !== context || !this.browser) return;
         this.record.error_message = error.message;
         this.emit("state", this.snapshot());
       });
@@ -1077,7 +1080,8 @@ export class BrowserSession extends EventEmitter {
     });
     this.pageRegistrationPromises.set(page, registration);
     try {
-      return await registration;
+      // 弹出页由context事件接纳，也须由原执行集合排空，不能先发布关闭终态。
+      return await this.operationQueue.track(registration);
     } finally {
       if (this.pageRegistrationPromises.get(page) === registration) {
         this.pageRegistrationPromises.delete(page);
@@ -1093,7 +1097,8 @@ export class BrowserSession extends EventEmitter {
       }
       return existing;
     }
-    const cdpSession = await this.context.newCDPSession(page);
+    const context = this.context;
+    const cdpSession = await context.newCDPSession(page);
     await cdpSession.send("Page.enable");
     await cdpSession.send("Runtime.enable");
     await cdpSession.send("Network.enable");
@@ -1116,6 +1121,9 @@ export class BrowserSession extends EventEmitter {
     };
     if (this.deviceEmulationApplied) {
       await this.applyDeviceEmulation(entry);
+    }
+    if (this.context !== context || !this.browser) {
+      throw new Error("浏览器标签页注册所属context已释放，不能发布迟到页面");
     }
     entry.diagnostics = new BrowserPageDiagnostics(page);
     this.pageEntries.set(pageId, entry);
@@ -1242,6 +1250,9 @@ export class BrowserSession extends EventEmitter {
       await this.pointerController.reset();
     } catch (cause) {
       throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "reset_pointer", cause });
+    }
+    if (!this.browser || this.pageEntries.get(pageId) !== entry) {
+      throw new Error("浏览器标签页已释放，不能完成迟到激活");
     }
     this.activePageId = pageId;
     this.page = entry.page;
