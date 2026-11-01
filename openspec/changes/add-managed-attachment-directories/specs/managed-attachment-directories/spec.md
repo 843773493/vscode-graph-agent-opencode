@@ -361,6 +361,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原关联快照、pin／队列核对或精确 token 解绑等待同步存储，期间调用者取消或目标 Thread 已由产品入口重建新代
 - **THEN** 存储访问在原受保护 worker 结算，周期对账的原附件 holder 保护物理节点直至 worker 结束，旧快照不在关联已释放后重新打开控制库；tracker 回调始终在事件循环核当前绑定。旧 token 的迟到解绑不解除新代关联，pin 向 durable 队列交接不会出现误判零关联的窗口。仍登记的 runtime 即使正在关闭或关闭失败恢复准入，也不得被周期对账判为旧代；原卸载 owner 的显式重试仍能沿同一代完成释放
 
+#### Scenario: GC 查询、原账本或终态 fork 暂存清理尚未结算
+
+- **WHEN** 原 GC 的候选查询、目录删除及账本写入，或终态 fork 暂存的快照、原生探测与删除等待同步存储，且原调用取消或存储失败
+- **THEN** 复用受保护 worker，原目录／import holder 覆盖相应原访问的排队和结算，事件循环继续响应；目录先登记 deleting，物理删除及唯一原账本 stopped 成功后才提交 tombstone，工作区文件写锁在物理删除后归还，账本等待不阻塞无关文件。失败保留 deleting 与原 locator，下一次原 GC 幂等重试；保留目录的正常跳过不消耗取消。终态 fork 只清精确 operation 的已登记暂存，原 claim 与未知目录保持，取消和原失败继续交回原调用，不将 worker 结算当作原生 I/O 可抢占或整个 shutdown 已有硬期限
+
 #### Scenario: Windows 终止工具尚未返回
 
 - **WHEN** Terminal 原进程树停止链正在等待 `taskkill /T /F /PID` 回执

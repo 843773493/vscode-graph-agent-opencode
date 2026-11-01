@@ -584,4 +584,10 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 
 启动、周期维护和原 Thread 卸载全部等待唯一异步对账／解绑入口。catalog 关联快照、后台任务与上传 pin 核对、队列快照和精确 token 解绑由既有受保护 worker 执行；pin 先于队列读取，保留原跨库存储交接规则。周期对账复用删除 drain 的共享附件 holder，覆盖 worker 排队、执行和取消结算；它允许新代上传并行，物理删除须等待。打开 Session 控制库前复核精确关联，快照过期且原关联已释放时不再访问可能已隔离的节点。取消须等待同一 worker 实际完成，原错误及取消因果继续交回原调用，不另起后台释放或新增 lease 账本。
 
-tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记，就包含正在 closing 或关闭失败后恢复准入的同一代；closing 仅撤销 admission，不作为失效关联依据。原卸载 listener 仍可精确释放这一代，失败由原 scope／关闭任务重试。runtime 真正移除后才成为旧代，迟到 worker 的 SQL 继续匹配旧 token；新一轮产品执行重建的关联不会被它解除。同步 acquire listener、GC 账本写入、原生 I/O 抢占、旧代无身份接管及整个 operation／shutdown 总期限继续 TODO，不据此勾选 5.2／5.4。
+tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记，就包含正在 closing 或关闭失败后恢复准入的同一代；closing 仅撤销 admission，不作为失效关联依据。原卸载 listener 仍可精确释放这一代，失败由原 scope／关闭任务重试。runtime 真正移除后才成为旧代，迟到 worker 的 SQL 继续匹配旧 token；新一轮产品执行重建的关联不会被它解除。同步 acquire listener、原生 I/O 抢占、旧代无身份接管及整个 operation／shutdown 总期限继续 TODO，不据此勾选 5.2／5.4。
+
+### GC 查询、删除和原账本结算的 worker 边界（5.4 部分收口）
+
+到期目录候选与终态 fork 操作枚举通过既有受保护 worker 查询。每个目录先在原目录 holder 和工作区文件 mutation lock 内核对、提交 deleting 并幂等删除物理目录；随后归还工作区文件写锁，仍在原目录 holder 与同一 worker 内沿唯一外部 lease 账本提交 stopped，最后写 tombstone，账本等待不阻塞无关文件操作。账本或最后提交失败时保留原 deleting 与 locator，由下次原 GC 定点重试；不添加补偿表或扫描目录。实际仍被保留的目录在同步删除入口内返回未收集，原异步调用取消仍由 worker 原语传播，不因跳过保留目录而吞掉取消。
+
+终态 fork 暂存沿原 operation import holder，在同一 worker 内完成快照查询、原生路径探测及删除；显式 operation 与周期全量入口复用同一实现。holder 覆盖排队和全部结算，取消或迟到失败不让原 writer／GC 在锁外继续。未知目录与原终态 claim 不变。此切片不证明原生 I/O 可抢占、旧代无身份接管或整个 operation／shutdown 有硬期限，5.2／5.4 保持未完成。

@@ -76,8 +76,9 @@ def process_running(pid: int) -> bool:
 
 
 @pytest.mark.parametrize("terminal_runtime", ["missing"], indirect=True)
+@pytest.mark.parametrize("gc_ledger_failure", [False, True], ids=["gc-success", "gc-ledger-retry"])
 async def test_verified_startup_failure_releases_the_real_attachment_workdir(
-    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch, gc_ledger_failure: bool,
 ) -> None:
     container, session_id, context = terminal_runtime
     store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
@@ -104,8 +105,31 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
     assert (directory / "original/content").read_bytes() == b"original-for-startup-failure"
     store.release_thread_references(session_id, message.thread_id)
     monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
+    if gc_ledger_failure:
+        ledger_path = leases._state_path
+        assert ledger_path is not None
+        temporary = ledger_path.with_suffix(".tmp")
+        temporary.mkdir()
+        original = store._catalog.require_available_directory(attachment_id)
+        try:
+            with pytest.raises((IsADirectoryError, PermissionError)):
+                await store.collect_garbage(leases=leases)
+            pending = store._catalog.get_directory(attachment_id)
+            assert pending is not None and pending.availability == "deleting"
+            assert (pending.relative_locator, pending.gc_after) == (original.relative_locator, original.gc_after)
+            assert not directory.exists()
+            cold = ExternalResourceLeaseLedger(state_path=ledger_path)
+            registered = cold.get(attachment_id)
+            assert registered is not None and registered.status == "running"
+            assert cold.leases_for_resource(attachment_id) == []
+        finally:
+            temporary.rmdir()
     assert await store.collect_garbage(leases=leases) == (attachment_id,)
     assert not directory.exists()
+    registered = leases.get(attachment_id)
+    assert registered is not None and registered.status == "stopped"
+    final = store._catalog.get_directory(attachment_id)
+    assert final is not None and final.availability == "tombstoned"
 
 
 @pytest.mark.parametrize("input_form", ["uri", "absolute", "relative"])
@@ -371,7 +395,9 @@ async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_i
             with pytest.raises(OSError) as rejected:
                 await owner.command(terminal_id, action="stop", expected_revision=snapshot["owner_revision"],
                                     holder_id="request:durable-stop", operation_id="durable-stop")
-            assert rejected.value is failure
+            assert type(rejected.value) is type(failure) and rejected.value.errno == failure.errno
+            assert rejected.value.__cause__ is failure
+            assert "stage=write" in str(rejected.value) and str(path) not in str(rejected.value)
         assert calls == [terminal_id] and not process_running(pid)
         assert leases.get_lease(original.lease_id) == original
         assert ExternalResourceLeaseLedger(state_path=path).get_lease(original.lease_id) == original
@@ -557,7 +583,9 @@ async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_re
             with pytest.raises(OSError) as caught:
                 await owner.command(rid, action="stop", expected_revision=revision,
                                     holder_id="request:owner-commit-fail", operation_id="owner-commit-fail")
-        assert caught.value is failures[0] and not process_running(pid)
+        assert type(caught.value) is type(failures[0]) and caught.value.errno == failures[0].errno
+        assert caught.value.__cause__ is failures[0] and not process_running(pid)
+        assert "stage=write" in str(caught.value) and str(owner._store.path) not in str(caught.value)
         record = owner._store.get(rid)
         persisted, = json.loads(owner._store.path.read_bytes())["records"]
         assert record.status == persisted["status"] == "stopping"

@@ -865,3 +865,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 复用唯一正式 `integration-web-persistent-resources`，两参数2 passed／176.36秒，最终退出0，Gateway清理完成并释放原集成名额。真实Gateway、PTY、Chromium验证工作区保留资源在安全重启后仍可操作、跨Thread关联／解除、revision冲突后重读、删除Session后继续使用，以及工作区Browser创建预览和删除；模型使用显式model_stream回放。
 - 2289份采样源码前后无变化；正式`run-0aa95245e35e`的`workbench-build.json`及稳定dist保留，可供迁移会话复核。三个阶段均无pageerror，但不称控制台／网络全净：删除冲突409为显式注入，Session查询404发生在提交删除后，另一次Terminal列表409发生在停止／删除阶段，原驱动未保存其响应正文，具体原因仍未核实。
 - 准确命令、原始输出、源码指纹、三个阶段回执和清理证据见`out/tests/temp/resource_web_acceptance_20261101/artifacts/verification.json`。不替代首次取消、未知执行终止、整个operation／shutdown期限或Windows验收，5.2／5.4及21/23保持未完成；未修改正式driver、公共fixture、另一会话的迁移实现或共享debug。
+
+### 2026-11-01 GC 与终态 fork 暂存的原 worker 结算（5.4 部分）
+
+- 到期候选和终态 fork 操作查询复用受保护 worker；同一目录的 deleting、物理删除、原账本 stopped 和 tombstone 在原目录 holder 内依次结算。物理删除后归还工作区文件写锁，账本等待不阻塞无关文件；账本失败保留 deleting、原 locator 与期限，下一次原 GC 幂等重试。终态 fork 的快照、原生探测与删除在原 import holder 内结算，取消和迟到失败不遗弃原访问，不扫描未知目录。
+- 28 项新增 worker／取消／失败／原 holder 单测与相关附件回归共155 passed；最终目标平台异常断言补验1 passed。正式产品4项覆盖真实启动失败后的目录释放、GC原账本写盘失败重试及两项既有停止故障收尾；独立进程GC删除前／后硬退出2 passed，main／child fork、GC竞争及发布／失败／删除11 passed。首次Shell组合11 passed／2 failed仅因旧测试仍断言原生错误直接公开；按已生效的结构化错误合同迁齐类型、errno、原cause身份和路径边界后，4项定向通过，其余9项沿相同源码证据复用，不放宽终态或身份断言。
+- 完整旧生产归档叠加初始新测试的4个反例均失败于同步访问阻塞。Ruff、compileall、OpenSpec strict通过；Pyright原新各17条既存诊断，逐项一致，新测试零诊断。准确命令、源码指纹、原始输出、实际退出码及结构审查见`out/tests/temp/attachment_gc_workers_20261101/artifacts/verification.json`。既有Session集成目录有144个直接Python文件，本轮未新增其直接文件；新单测置于原附件专用子目录。未修改Web迁移、公共fixture或共享debug；此证据不代Windows、原生I/O抢占、旧代无身份接管或整个operation／shutdown期限，5.2／5.4及21/23保持未完成。

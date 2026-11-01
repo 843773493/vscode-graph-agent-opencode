@@ -99,15 +99,20 @@ class ForkAttachmentImportMixin:
         return True
 
     async def collect_fork_import_staging(self, copy_operation_id: str | None = None) -> tuple[str, ...]:
-        operations = (copy_operation_id,) if copy_operation_id is not None else self._catalog.terminal_fork_attachment_operations()
+        operations = (copy_operation_id,) if copy_operation_id is not None else await run_sync_shielded(self._catalog.terminal_fork_attachment_operations)
         removed = []
         for operation in operations:
             async with self._fork_imports.lock_for(operation, wait=False) as holder:
                 if not holder.acquired:
                     continue
-                for snapshot in self._catalog.terminal_fork_attachment_snapshots(operation):
-                    staging = resolve_staging_path(self._attachments_root, ingest_staging_relative_locator(_import_id(operation, snapshot.target_attachment_id)))
-                    if staging.exists():
-                        await run_sync_shielded(remove_directory, staging)
-                        removed.append(snapshot.target_attachment_id)
+                removed.extend(await run_sync_shielded(self._collect_terminal_fork_staging, operation))
+        return tuple(removed)
+
+    def _collect_terminal_fork_staging(self, operation: str) -> tuple[str, ...]:
+        removed = []
+        for snapshot in self._catalog.terminal_fork_attachment_snapshots(operation):
+            staging = resolve_staging_path(self._attachments_root, ingest_staging_relative_locator(_import_id(operation, snapshot.target_attachment_id)))
+            if staging.exists():
+                remove_directory(staging)
+                removed.append(snapshot.target_attachment_id)
         return tuple(removed)

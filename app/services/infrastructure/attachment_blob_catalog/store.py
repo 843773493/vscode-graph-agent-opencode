@@ -402,27 +402,32 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
     async def collect_garbage(self, *, leases: ExternalResourceLeaseLedger) -> tuple[str, ...]:
         await self.collect_fork_import_staging()
         collected = []
-        for candidate in self._catalog.gc_candidates(now=self._clock()):
+        candidates = await run_sync_shielded(self._catalog.gc_candidates, now=self._clock())
+        for candidate in candidates:
             async with self._directory_operations.lock_for(candidate.attachment_id, wait=False) as holder:
                 if not holder.acquired:
                     continue
                 if leases.get(candidate.attachment_id) is not None and leases.leases_for_resource(candidate.attachment_id):
                     continue
-                try:
-                    # 与普通文件写入/读取共用真实临界区；不另建一套文件执行链。
-                    await run_sync_shielded(self._delete_directory, candidate.attachment_id)
-                except AttachmentDirectoryRetainedError:
-                    continue
-                if leases.get(candidate.attachment_id) is not None:
-                    leases.update_external_state(candidate.attachment_id, lifetime_scope="workspace", status="stopped")
-                collected.append(candidate.attachment_id)
+                # 原 holder 覆盖删除、账本及 tombstone；取消不得在三者之间遗弃收尾。
+                if await run_sync_shielded(self._delete_directory, candidate.attachment_id, leases):
+                    collected.append(candidate.attachment_id)
         return tuple(collected)
 
-    def _delete_directory(self, attachment_id: str) -> None:
+    def _delete_directory(self, attachment_id: str, leases: ExternalResourceLeaseLedger) -> bool:
         with workspace_file_mutation_lock(self._workspace_root):
-            record = self._catalog.begin_delete(attachment_id, now=self._clock())
+            try:
+                record = self._catalog.begin_delete(attachment_id, now=self._clock())
+            except AttachmentDirectoryRetainedError:
+                return False
             remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
-            self._catalog.finish_delete(attachment_id, now=self._clock())
+        # deleting 与目录 holder 已关闭该目录准入；账本不占无关文件的工作区写锁。
+        if leases.get(attachment_id) is not None:
+            leases.update_external_state(attachment_id, lifetime_scope="workspace", status="stopped")
+        # 账本失败仍保留 deleting，原到期查询可沿同一 locator 幂等重试。
+        self._catalog.finish_delete(attachment_id, now=self._clock())
+        return True
+
     def _assert_session_active(self, session_id: str, thread_id: str) -> int:
         """gate 内 fresh 校验 catalog 节点 active、fence active 且 thread 未失效。"""
         node = self._path_resolver.catalog_store.get_node(session_id)
