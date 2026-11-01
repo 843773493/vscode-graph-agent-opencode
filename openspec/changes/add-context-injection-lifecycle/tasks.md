@@ -569,3 +569,10 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 
 - 复用现有真实 Gateway／Backend／外部 Provider 验收，迁齐来源协议 v2 的 root 和 A→B→C 精确差分／基准／具名替代断言，正式产物按 run 隔离。最终1 passed／183.98秒；三轮请求 hash、来源身份与原文、稳定前缀及 Backend 安全重启后的历史／assembly／checkpoint 不变，Ruff／compileall／Pyright和 strict validation 通过。
 - 限定证据及失败原件见 `out/tests/temp/itemized_provider_acceptance_20261101/artifacts/verification.json`，详细范围见 itemized 同日7.5-E收据。本片没有工具循环、Web、Windows、同步执行或硬退出验证，不关闭7.1–7.5综合门，69/76及用户延期的团队／协作任务保持未完成；产品、前端和公共测试装具未改。
+
+
+### 2026-11-01 默认 Turn 来源冻结的真实 Workbench 补验（部分）
+
+- 独立 `itemized_context/test_turn_source_freezing.py` 经真实Composer／Gateway／受管Backend和统一model_stream生成两轮三次请求，在首请求封存后的响应屏障中仅修改AGENTS A→B，证明同Turn工具循环保持A、下一Turn采用B。再改成C并经公开安全重启，三份assembly的API完整分页、UI展开selection／资源版本／provenance、冷Saver两facet原文及transport／日志／canonical／request_hash一致。
+- 最终 `product-008` 为1 passed／190.13秒、exit0，外层660秒／4GiB和集成独占闸门保持。Ruff／compileall／Pyright／Node语法和两份strict通过，当前代码限定独立复审无finding。准确命令、源码指纹、所有失败原件和正式产品产物索引见 `out/tests/temp/turn_source_freezing_20261101/artifacts/verification.json`；详细范围以itemized同日9.7收据为准。
+- 默认Workbench构建fixture首轮180秒超时仍记失败；最终显式临时复用同轮完整生成、2077份生产输入及全部资产SHA核验一致的真实产物，不替代页面或业务状态。**TODO：**公共构建耗时及超时后的子进程回收另行复核；默认矩阵仅完成新增注册解析，未记为整场通过。本片不改公共fixture、默认开发服务或唯一Section8 owner，不关闭7.1–7.5、显式model_call／Skill／混合边界及团队／协作等综合门。

@@ -51,6 +51,8 @@
 
 ## 规范
 
+- `integration-web-turn-source-freezing` 经真实 Workbench Composer／Gateway／受管 Backend 和 model_stream 验证工具循环中的 AGENTS Turn 冻结、下轮更新及安全重启后 API／UI／冷 Saver 原文与请求 hash；固定660秒／4GiB并沿集成独占闸门。公共构建装具、默认服务和 Section 8 总验收 owner 不变，不代替 model_call policy、Skill、团队或 Windows 验收。
+
 - `integration-skill-selection-recovery`经真实Skill文件发布/工具调用、Saver准入与封存，验证模式切换、A→B→A选择、checkpoint/rewind/compaction、冷Saver及24→25→26维护迁移的原字节和hash，固定60秒/4GiB；冻结来源装具不代表完整Agent、Backend进程重启、Gateway/Web或Windows实机。
 - `integration-context-source-seal`经真实Saver准入、Skill激活与SQLite/JSONL封存验证来源更新保留已接受及已封存选择次序、幂等冷读，以及原assembly提交/失败回滚/CAS/epoch合同，固定60秒/4GiB；关键输入由Saver装具生成，不代完整Agent、Backend进程重启、Gateway/Web或Windows验收。
 - `integration-execution-input-commit`经Saver准入、真实SQLite/JSONL及冷Saver核对内部输入在提交前/后失败或取消时的正文、准入和队列原子性，以及原身份重试不重复写入；复跑既有队列投影/显式迁移及checkpoint提交窗口，固定60秒/4GiB，不代表完整消息执行、Backend进程重启、Gateway/Web或Windows实机。

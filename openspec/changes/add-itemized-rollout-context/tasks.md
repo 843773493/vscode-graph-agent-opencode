@@ -1509,3 +1509,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 独立审查固定 `a69f2837e`，逐条核 canonical append／JSONL durable commit、checkpoint 恢复投影、history／Provider 纯映射、schema v26 dispatch 与一次性 migration、旧 shim 调用闭包；未发现限定范围中的第二 canonical 正文 writer、重复 projector 或第二 schema。SQLite catalog 与 checkpoint message 明确按索引／恢复投影处理，不以定义计数代替事实源判断。109个增量文件按职责分组，附完整 owner／调用链和源码哈希；未为旧行数记录重新拆分已未变的 facade。
 - 根侧复核六子树272份源码／SQL／AGENTS及额外5份生产文件均与受审HEAD及工作树一致；279项总清单另含两份已被其它会话修改的OpenSpec上下文文档，单独登记。原动态验收255份Python源码逐字一致、最大795行、目录直接Python最多20个且无缺失AGENTS；动态基线为当前祖先，六子树到当前零差异，复用原1 passed／351.83秒的产品矩阵，不重复长跑。初次指纹脚本将两份文档混入工作树一致性断言而失败，修正审计范围后退出0，失败原件保留。
 - 独审原件 `out/tests/temp/rollout_boundary_review_20261101/artifacts/current-owner-review.json`，SHA256 `a610fa4ecebcc560702424014dbca94862b7a7a8ac87bd5eff68fb303e34fe91`；准确复核命令、raw／退出码、指纹和原动态证据适用范围见 `out/tests/temp/rollout_boundary_audit_20261101/artifacts/verification.json`。本片关闭限定的存储／checkpoint／assembly／fork／domain／mapping静态职责子门；不外推其它业务owner、全部7.5-F、Provider／Web／Windows或Section8总门，7.5及111/119保持未完成。未改生产、测试、前端、公共fixture／长回归driver或共享Debug；其它会话改动和共享暂存保留。
+
+
+### 2026-11-01 9.7 默认 Turn 来源冻结的真实工作台补验（部分）
+
+- 新增独立 `test_turn_source_freezing.py` 与相邻浏览器驱动，复用正式 Workbench、独立 Gateway／受管 Backend、精确 model_stream 和既有集成独占闸门；仅经真实 Composer 生成两轮／三次请求。在首请求封存后、响应交付前的 `model.response_ready` 屏障中只改真实 AGENTS A→B，同 Turn 工具后继仍沿用 A，下一 Turn 才出现 B。随后改为 C、关闭页面并经公开 Gateway 安全重启，三份 assembly API 冷读深比对不变；页面实际翻完请求目录和上下文，展开全部 selection（18／15／13项）并核资源版本／provenance及遍历顺序。
+- `product-008` 为1 passed／190.13秒、exit0；外层准确命令与660秒／4GiB保护、193.59秒整组耗时和源码前后指纹均保留。transport capture、Provider 日志、canonical／JSONL与 sealed request hash交叉审计通过；冷 Saver分别核AGENTS chain／raw-file两facet的安全URI、来源链、revision、turn边界和封存原文，含CRLF、中文、emoji及尾空白，root始终A、B差分仅在下一轮出现，当前C不回填旧请求。
+- 限定构建边界：首次默认 `web_workbench_assets` 在180秒超时、exit1，子构建随后完整生成正式Workbench。最终通过临时pytest fixture显式复用该真实产物，核version／79扩展／全部资产SHA及2077份生产输入不变；没有替换页面、API或业务状态，不将默认构建fixture记为通过。**TODO：**公共构建耗时及超时后子进程回收另行复核，本片不放宽公共装具期限、不新增永久fallback。矩阵新增 `integration-web-turn-source-freezing`（660秒／4GiB），本轮只验证矩阵加载注册，未将默认矩阵执行记为通过。
+- Ruff、compileall、Pyright、Node语法检查和两change strict均exit0；最终代码及矩阵增量的非作者只读复审无finding。此前消息等待、分页／目录初始化、单facet假设和两次端口预检失败均保留；`ss`核原端口TIME-WAIT后，原合同预检明确全部available才完成最终运行，未终止未知进程或改宿主网络配置。代码与全部原件索引见 `out/tests/temp/turn_source_freezing_20261101/artifacts/verification.json`；正式产品原件位于其登记的 `run-235deb2ee0bf`，共享暂存gitlink保持不变。
+- 本片只补默认Turn的AGENTS来源冻结、安全重启与真实UI展示，不关闭9.7、7.5、8.3或8.13，不替代唯一 `conversation_lifecycle/` owner、显式model_call策略、Skill／混合边界、团队／协作、Windows或真实外部Provider验收；不因局部通过勾选综合门。
