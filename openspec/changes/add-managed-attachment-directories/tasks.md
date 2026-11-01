@@ -853,3 +853,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 资源登记与committed fork占用结算复用既有shielded worker及原账本writer锁，准备锁覆盖完整写盘、对账和版本冻结。仅实际取消后排空同一准备任务，保留首次取消及迟到写盘cause；正常结果和原失败直接传播，同key不重放关联，不新增账本或恢复入口。
 - 新增16项，定向24项及相关后端回归1062项全部通过；63份采样源码在检查前后保持一致。完整旧生产归档的四项反例均复现事件循环被同步写盘阻塞；保留worker修复而恢复旧finally的归档变异为4 failed／4 passed，失败均为原取消被迟到写盘错误替换。Ruff、compileall、Pyright及OpenSpec strict通过，准确命令、指纹、原始输出、实际退出码和作者结构审查见`out/tests/temp/resource_cold_preparation_20261101/artifacts/verification.json`。
 - 原owner与账本真实落盘，外部transport为替身；不代真实PTY／Chromium、HTTP、独立Backend硬重启或Windows验收。其它同步访问、原生I/O抢占、完整旧代接管与整个operation/shutdown期限继续TODO，5.2／5.4未勾，整体仍21/23。未修改或运行Web／Workbench及其自动化，未重启共享debug。
+
+### 2026-11-01 operation退出的原取消与异常归属（5.4部分）
+
+- Terminal／Browser owner迁齐共享operations异步上下文，移除重复finally。正常退出直接等待原close；主体已有错误或取消才屏蔽后续取消排空，保留主体原对象及迟到释放错误cause，原资源锁和Thread holder覆盖结算。同operation显式重试原lease，不改变预算、账本或外部动作。
+- 新增16项全部通过，相关后端回归1078 passed／67.61秒。完整旧生产归档叠加最终测试为8 failed／8 passed，分别检出正常收尾吞首次取消及释放写盘错误替换主体原错。新增装具先前误认锁返回值、额外持有无关operation holder的失败原件保留；最终隔离装具而不放宽holder、身份或异常断言。
+- Ruff、compileall及OpenSpec strict通过；Pyright原新同一条既存ResourceTransport属性诊断按文件、规则、完整消息、词法owner及最窄AST一致，新测试零诊断。准确命令、源码指纹、原输出／退出码和作者结构审查见`out/tests/temp/resource_operation_exit_20261101/artifacts/verification.json`。使用原owner、真实账本和OS holder，外部transport为替身，不替代真实HTTP／PTY／Chromium或Windows验收；完整旧代接管、原生I/O抢占及整个operation／shutdown期限仍TODO，5.2／5.4与21/23保持未完成。未改另一会话的Web迁移、回归driver、共享暂存或debug。

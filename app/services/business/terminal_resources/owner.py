@@ -19,7 +19,7 @@ from app.abstractions.workspace_resources import (
 )
 from app.core.failures import failure_detail
 from app.core.resource_uri import parse_resource_uri
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.workspace_resources.creation import create_resource
 from app.services.business.workspace_resources.facts import STOPPED_STATUSES
@@ -174,12 +174,11 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         created_by_turn_id: str | None = None,
     ) -> AsyncIterator[TerminalOperations]:
         await self.recover(())
-        async with self.admit_thread(session_id, thread_id) as ref:
-            operations = TerminalOperations(
+        async with (
+            self.admit_thread(session_id, thread_id) as ref,
+            TerminalOperations(
                 self, ref, holder_id, operation_id, created_by_turn_id
-            )
-            try:
-                yield operations
-            finally:
-                await run_cleanup_shielded(operations.close)
+            ) as operations,
+        ):
+            yield operations
 

@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 
 from app.abstractions.browser_resources import BrowserAction, BrowserTransport
 from app.abstractions.workspace_resources import ResourceSnapshot, RetentionScope
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.business.browser_resources.operations import BrowserOperations
 from app.services.business.workspace_resources.creation import create_resource
 from app.services.business.workspace_resources.owner import (
@@ -58,12 +57,11 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
         operation_id: str, created_by_turn_id: str | None = None,
     ) -> AsyncIterator[BrowserOperations]:
         await self.recover(())
-        async with self.admit_thread(session_id, thread_id) as ref:
-            operations = BrowserOperations(self, ref, holder_id, operation_id, created_by_turn_id)
-            try:
-                yield operations
-            finally:
-                await run_cleanup_shielded(operations.close)
+        async with (
+            self.admit_thread(session_id, thread_id) as ref,
+            BrowserOperations(self, ref, holder_id, operation_id, created_by_turn_id) as operations,
+        ):
+            yield operations
 
     async def perform(
         self, resource_id: str, *, action: BrowserAction, payload: ResourceSnapshot,

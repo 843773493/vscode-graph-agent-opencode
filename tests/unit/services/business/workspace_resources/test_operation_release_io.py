@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
 
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.services.business.browser_resources.operations import BrowserOperations
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.infrastructure.external_resource_leases import ResourceLease
@@ -57,12 +58,10 @@ async def leased_operation(
         yield operation, rid, lease
 
 
-@pytest.fixture
-async def release_write(
+def install_release_write(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture,
-    leased_operation: LeasedOperation,
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
-) -> AsyncIterator[ReleaseWrite]:
+    monkeypatch: pytest.MonkeyPatch,
+) -> ReleaseWrite:
     assert bundle.leases._state_path is not None
     pending = bundle.leases._state_path.with_suffix(".tmp")
     loop = asyncio.get_running_loop()
@@ -81,6 +80,16 @@ async def release_write(
         return original(path, target)
 
     monkeypatch.setattr(Path, "replace", publishing)
+    return gate
+
+
+@pytest.fixture
+async def release_write(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    leased_operation: LeasedOperation,
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> AsyncIterator[ReleaseWrite]:
+    gate = install_release_write(bundle, monkeypatch)
     if getattr(request, "param", None) == "receipt":
         mark = bundle.leases.mark_operation_dispatched
 
@@ -96,6 +105,19 @@ async def release_write(
             gate.lease = bundle.leases.get_lease(lease_id)
 
         monkeypatch.setattr(bundle.leases, "mark_operation_dispatched", preparing)
+    try:
+        yield gate
+    finally:
+        gate.release.set()
+
+
+@pytest.fixture
+async def operation_exit_write(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[ReleaseWrite]:
+    gate = install_release_write(bundle, monkeypatch)
+    gate.enabled = False
     try:
         yield gate
     finally:
@@ -255,3 +277,102 @@ async def test_release_queue_cancellation_keeps_original_lock_and_lease(
             free_worker.set()
             release_write.release.set()
             await asyncio.gather(closing, occupying_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("ending", ["success", "close-cancel", "body-cancel", "body-error"])
+@pytest.mark.parametrize("write_fails", [False, True])
+async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_release(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    operation_exit_write: ReleaseWrite, ending: str, write_fails: bool,
+) -> None:
+    owner, path = bundle.owner, bundle.leases._state_path
+    assert owner is not None and path is not None
+    operation_exit_write.enabled = False
+    rid = str((await bundle.create())["resource_id"])
+    instances: list[TerminalOperations | BrowserOperations] = []
+    continued: list[bool] = []
+    original = (asyncio.CancelledError("operation主体原取消") if ending == "body-cancel"
+                else RuntimeError("operation主体原错误") if ending == "body-error" else None)
+    native = OSError(28, "operation退出原账本写失败", str(path))
+    operation_exit_write.failure = native if write_fails else None
+    holder = OperationHolderGate(bundle.root / ".boxteam" / "sessions", namespace="workspace_resources")
+
+    async def invoke() -> None:
+        async with owner.operation(
+            session_id=SESSION_A, thread_id=THREAD_A,
+            holder_id="request:owner-exit", operation_id="owner-exit",
+        ) as operation:
+            instances.append(operation)
+            if isinstance(operation, TerminalOperations):
+                await operation.read_terminal(rid)
+            else:
+                await operation.perform(rid, "navigate", {"url": "https://exit.test"})
+            operation_exit_write.enabled = True
+            if original is not None:
+                raise original
+        continued.append(True)
+
+    pending = asyncio.create_task(invoke())
+    try:
+        await asyncio.wait_for(operation_exit_write.entered.wait(), 2)
+        operation, = instances
+        lease, = bundle.leases.leases_for_resource(rid)
+        before = path.read_bytes()
+        assert lease.status == "active" and lease.operation_id == "owner-exit"
+        assert operation._closed and owner._resource_lock(rid).locked()
+        assert operation_exit_write.threads and all(thread != get_ident() for thread in operation_exit_write.threads)
+        async with holder.lock_for(SESSION_A, wait=False) as proof:
+            assert not proof.acquired, "原Thread holder须覆盖operation退出写盘"
+        if ending == "close-cancel":
+            pending.cancel("operation正常退出首次取消")
+        if ending != "success":
+            for _ in range(5):
+                await asyncio.sleep(0)
+            pending.cancel("收尾重复取消不得替换原结果")
+            await asyncio.sleep(0)
+        assert not pending.done() and owner._resource_lock(rid).locked()
+        assert path.read_bytes() == before and continued == []
+        async with holder.lock_for(SESSION_A, wait=False) as proof:
+            assert not proof.acquired
+        operation_exit_write.release.set()
+        if original is not None:
+            with pytest.raises(type(original)) as caught:
+                await pending
+            assert caught.value is original
+            failure = caught.value.__cause__
+        elif ending == "close-cancel":
+            with pytest.raises(asyncio.CancelledError) as cancelled:
+                await pending
+            assert cancelled.value.args == ("operation正常退出首次取消",)
+            errors = cancelled.value.__cause__
+            if write_fails:
+                assert isinstance(errors, BaseExceptionGroup) and len(errors.exceptions) == 1
+                failure = errors.exceptions[0]
+            else:
+                assert errors is None
+                failure = None
+        elif write_fails:
+            with pytest.raises(OSError) as failed:
+                await pending
+            failure = failed.value
+        else:
+            await pending
+            failure = None
+        if write_fails:
+            assert isinstance(failure, OSError) and failure.__cause__ is native
+            assert operation._lease_refs == {rid: lease.lease_id} and path.read_bytes() == before
+        else:
+            assert failure is None and operation._lease_refs == {}
+        assert continued == ([True] if ending == "success" and not write_fails else [])
+        assert not owner._resource_lock(rid).locked()
+        async with holder.lock_for(SESSION_A, wait=False) as proof:
+            assert proof.acquired
+        await operation.close()
+        released = type(bundle.leases)(state_path=path).get_lease(lease.lease_id)
+        assert released is not None and released.status == "released"
+        assert released == replace(lease, status="released", updated_at=released.updated_at)
+        assert operation._lease_refs == {} and len(operation_exit_write.threads) == (2 if write_fails else 1)
+        assert bundle.transport.creates == 1 and bundle.transport.deleted == []
+    finally:
+        operation_exit_write.release.set()
+        await asyncio.gather(pending, return_exceptions=True)

@@ -7,7 +7,8 @@ from asyncio import timeout
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from threading import Event
-from typing import TYPE_CHECKING
+from types import TracebackType
+from typing import TYPE_CHECKING, Self
 
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.workspace_resources.records import (
@@ -111,6 +112,23 @@ class ResourceOperations:
         self._lease_refs: dict[str, str] = {}
         self._pending_resources: set[str] = set()
         self._closed = False
+
+    async def __aenter__(self) -> Self:
+        self._assert_open()
+        return self
+
+    async def __aexit__(
+        self, _error_type: type[BaseException] | None,
+        error: BaseException | None, _traceback: TracebackType | None,
+    ) -> None:
+        if error is None:
+            # 正常退出仍可首次取消；close负责排空原写入并传播取消。
+            await self.close()
+        else:
+            try:
+                await run_cleanup_shielded(self.close)
+            except BaseException as failure:
+                raise error from failure
 
     @asynccontextmanager
     async def _resource(self, resource_id: str) -> AsyncIterator[OwnedResourceRecord]:
