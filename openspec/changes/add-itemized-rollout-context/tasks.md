@@ -1430,3 +1430,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 原生产代码上的12项新单测及真实控制协调器组合负例均失败，修复后63个不同相关单测通过；首次单测批次62 passed、另1项因要求矩阵 runner 在 fixture 阶段拒绝，随后以原正式 suite 定向补验1 passed，不计拒绝为业务通过。消息流／控制组合14项、真实执行错误回归3项，以及既有Chat／Responses真实TCP中断和delta持久化竞争3项，共20个不同集成用例通过。组合测试经真实 coordinator 与 MessageStreamStore 验证失败不发命令／事件／取消，正常重试并并发重复提交只入队、记录和取消一次，再经 open_existing 冷读 interrupted；不手填控制或执行状态。
 - Ruff、真实Pyright零诊断及compileall通过；将本文件 fixture 的 object 标注迁齐为真实 SessionCatalogPathResolver，未改变装具行为。组合测试初版漏调冷读加载入口，在冷读前失败，修正调用方式后14项全部通过，原失败保留。所有测试有进程外超时与4GiB保护，集成沿用跨worktree独占闸门；每轮3230份采样代码／配置前后无变化。限定三文件的独立只读审查无finding，未运行测试。
 - 准确命令、原始输出、源码指纹、实际退出码及审查范围见 `out/tests/temp/control_inbox_commit_order_20261101/artifacts/verification.json`。本片不代完整控制恢复、OS崩溃、Gateway／Web、Windows、同步入口或Section8总验收；7.5／8.3与整体111/119仍未关闭。前端实现、公共fixture、长回归驱动、其它会话改动和共享暂存不纳入本片提交。
+
+
+### 2026-11-01 7.5／8.3 中断已提交后的控制终态重试（部分）
+
+- 真实复现 interrupt.requested 已落盘、owner callback 和取消已执行，但 inbox consumed 原子替换失败时，同 ID 重试被误拒绝为 turn_not_active。现沿原消息流 event-id 事实核对已提交事件，再由原 commit 检查完整 payload／identity；取消或关闭的 scope 仅补 consumed，不重复 callback／cancel。原事件不存在的新命令仍拒绝且不写消息流；不增加账本、第二 writer 或自动重放。只读查询持原 Turn lock 并返回深拷贝。
+- 原生产四组合（热／冷 writer × 已取消／已关闭 scope）均失败；最终整文件18项通过，覆盖真实 Path.replace 失败、同 ID 不同 reason 冲突、正确重试、终态冷载入及新 late ID 零事件。另112项核心／存储单测、23项中断服务单测及矩阵定向1项继承 fork 控制回归通过，共136个不同单测；Chat／Responses真实TCP中断及delta持久化竞争3项通过，共21个不同集成。均保留进程外180秒／4GiB保护，集成复用原共享独占闸门；各轮3230项受测代码／配置前后指纹一致。
+- Ruff、compileall通过；core和集成测试真实Pyright零诊断，完整三文件仍有Store既有2条索引诊断，与完整HEAD归档基线按文件、AST方法owner／完整方法、规则、消息和表达式逐项一致，不称完整类型全绿。限定三文件只读独审无finding、未运行测试；审查提出的payload冲突覆盖已补且最终18项通过。
+- 准确命令、原始输出、退出码、指纹、类型基线和审查范围见 `out/tests/temp/interrupt_settlement_reconcile_20261101/artifacts/verification.json`。本片不代完整控制恢复、OS崩溃、Gateway／Web、Windows、同步入口或Section8总验收；7.5／8.3与整体111/119保持未完成。前端实现、公共fixture、长回归驱动、其它会话改动与共享暂存未纳入本片提交。

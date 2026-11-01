@@ -151,6 +151,9 @@ class MessageStreamWriter:
         self.turn_stream_id = turn_stream_id
         self.job_id = job_id
 
+    async def get_event(self, event_id: str) -> dict[str, Any] | None:
+        return await self._store.get_event(self.turn_stream_id, event_id)
+
     async def commit(
         self,
         event_type: str,
@@ -1201,6 +1204,16 @@ class MessageStreamStore:
             if self._stream_path(session_id, turn_stream_id).is_file():
                 result[turn_id] = turn_stream_id
         return result
+
+    async def get_event(self, turn_stream_id: str, event_id: str) -> dict[str, Any] | None:
+        """沿原消息流幂等事实查已提交事件，不产生新的事件或副作用。"""
+        async with self._lock_for(turn_stream_id):
+            state = await self.get_state(turn_stream_id)
+            self._load_event_ids_from_disk(
+                str(state["session_id"]), turn_stream_id,
+                thread_id=str(state["thread_id"]), turn_id=str(state["turn_id"]),
+            )
+            return copy.deepcopy(self._event_ids[turn_stream_id].get(event_id))
 
     async def commit(
         self,

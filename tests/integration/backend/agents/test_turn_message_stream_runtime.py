@@ -16,6 +16,7 @@ from app.core.turn_execution_scope import (
     TurnControlCoordinator,
     TurnExecutionScope,
 )
+from app.domain.message_stream.errors import MessageStreamError
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -297,6 +298,93 @@ async def test_failed_control_acceptance_retries_once_before_interrupting_real_s
         assert interrupts[0]["payload"]["interrupt_request_id"] == "cmd_retry"
         assert (await restarted.get_state(writer.turn_stream_id))["stream_status"] == "interrupted"
         assert cancellations == ["user_requested"]
+    finally:
+        await scope.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_scope", [False, True])
+@pytest.mark.parametrize("reopen_writer", [False, True])
+async def test_interrupt_settlement_retry_uses_committed_event_without_repeating_effects(
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    close_scope: bool,
+    reopen_writer: bool,
+) -> None:
+    store, resolver, session_id, resource_state_path = runtime_context
+    writer = await store.open(
+        thread_id=resolver.main_thread_id(session_id), session_id=session_id,
+        turn_id="job_interrupt_settlement",
+    )
+    scope = TurnExecutionScope(writer.turn_stream_id)
+    path = resource_state_path.with_name("control-settlement.json")
+    path.unlink(missing_ok=True)
+    inbox = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path)
+    coordinator = TurnControlCoordinator(scope, inbox, writer)
+    cancellations: list[str] = []
+    callbacks: list[str] = []
+    scope.register_abort(cancellations.append)
+    failure = OSError("中断已接受后的控制终态写入失败")
+    replace = Path.replace
+
+    def fail_consumed_replace(source: Path, target: str | Path) -> Path:
+        if source == path.with_suffix(".tmp"):
+            persisted = json.loads(source.read_text())
+            if any(command["status"] == "consumed" for command in persisted["commands"]):
+                raise failure
+        return replace(source, target)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "replace", fail_consumed_replace)
+            with pytest.raises(OSError) as caught:
+                await coordinator.submit_interrupt(
+                    command_id="cmd_settle", idempotency_key="idem_settle",
+                    on_accepted=lambda: callbacks.append("accepted"),
+                )
+        assert caught.value is failure
+        assert cancellations == ["user_requested"]
+        assert callbacks == ["accepted"]
+        assert [command.status for command in inbox.snapshot()] == ["accepted"]
+        assert AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path).snapshot() == inbox.snapshot()
+        events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+        committed, = [event for event in events if event["type"] == "interrupt.requested"]
+        if close_scope:
+            await scope.close()
+        if reopen_writer:
+            cold_store = MessageStreamStore(path_resolver=resolver)
+            writer = await cold_store.open_existing(
+                session_id=session_id, thread_id=writer.thread_id,
+                turn_id=writer.turn_id, turn_stream_id=writer.turn_stream_id,
+            )
+            coordinator = TurnControlCoordinator(scope, inbox, writer)
+
+        with pytest.raises(MessageStreamError, match="重复 event_id"):
+            await coordinator.submit_interrupt(
+                command_id="cmd_settle", idempotency_key="idem_settle", reason="different_reason",
+            )
+        assert [command.status for command in inbox.snapshot()] == ["accepted"]
+        retried = await coordinator.submit_interrupt(
+            command_id="cmd_settle", idempotency_key="idem_settle",
+            on_accepted=lambda: callbacks.append("repeated"),
+        )
+        assert retried == {**committed, "command_id": "cmd_settle"}
+        observed = await writer.get_event("cmd_settle")
+        assert observed is not None
+        assert observed == committed
+        observed["payload"]["reason"] = "changed_copy"
+        assert await writer.get_event("cmd_settle") == committed
+        assert [command.status for command in inbox.snapshot()] == ["consumed"]
+        assert AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path).snapshot() == inbox.snapshot()
+        assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == events
+        late = await coordinator.submit_interrupt(command_id="late", idempotency_key="late")
+        assert late["type"] == "interrupt.rejected"
+        assert late["reason"] == "turn_not_active"
+        assert await writer.get_event("late") is None
+        assert cancellations == ["user_requested"]
+        assert callbacks == ["accepted"]
+        assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == events
+        await writer.close_interrupted("cmd_settle")
     finally:
         await scope.close()
 

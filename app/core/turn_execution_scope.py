@@ -523,6 +523,8 @@ class AgentControlInbox:
 
 
 class MessageStreamCommitter(Protocol):
+    async def get_event(self, event_id: str) -> dict[str, object] | None: ...
+
     async def commit(
         self,
         event_type: str,
@@ -558,7 +560,8 @@ class TurnControlCoordinator:
             )
             if command.status != "accepted":
                 return {"status": command.status, "command_id": command.command_id}
-            if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
+            stopped = self.scope.is_closed or self.scope.cancellation_signal.is_cancelled
+            if stopped and await self.writer.get_event(command.command_id) is None:
                 self.inbox.mark(command.command_id, "rejected")
                 return {
                     "type": "interrupt.rejected", "status": "rejected",
@@ -574,6 +577,10 @@ class TurnControlCoordinator:
             )
             if event["type"] == "interrupt.rejected":
                 self.inbox.mark(command.command_id, "rejected")
+                return {**event, "command_id": command.command_id}
+            if stopped:
+                # 原中断已提交并完成取消，只补控制日志终态，不重放 owner 副作用。
+                self.inbox.mark(command.command_id, "consumed")
                 return {**event, "command_id": command.command_id}
             # 接受事实已提交；发布或 hook 失败也必须完成取消，并保留原始异常。
             try:
