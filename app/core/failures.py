@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Mapping
 from traceback import format_exception
 from typing import TypeVar
 
@@ -75,10 +76,14 @@ def failure_detail(error: BaseException, *, stage: str, label: str) -> str:
     return report_failure(error, detail=detail)
 
 
-def report_failure(error: BaseException, *, detail: str) -> str:
+def report_failure(
+    error: BaseException, *, detail: str,
+    diagnostic_logger: logging.Logger = logger,
+    extra: Mapping[str, object] | None = None,
+) -> str:
     """记录原始诊断，保留调用方已分离的公开事实及既有格式。"""
     try:
-        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        diagnostic_logger.error("%s；完整诊断见异常链", detail, exc_info=error, extra=extra)
     except Exception as sink_error:  # noqa: BLE001 — 不递归写入失败sink，原异常继续携带两份原因。
         error.add_note("诊断日志输出失败：\n" + "".join(format_exception(sink_error)))
         detail += f", diagnostic_sink_error={type(sink_error).__name__}"

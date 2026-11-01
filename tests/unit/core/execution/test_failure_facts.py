@@ -33,6 +33,32 @@ def test_local_business_failure_keeps_its_message(error: BaseException) -> None:
     assert execution_failure_message(error) == str(error)
 
 
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
+def test_owner_diagnostic_logger_keeps_context_and_original_error(
+    caplog: pytest.LogCaptureFixture, diagnostic_sink: DiagnosticFailure, sink_fails: bool,
+) -> None:
+    owner_logger = logging.getLogger("test.owner_failure")
+    original = PermissionError(13, "原生读取失败", "/private/owner-record")
+    if sink_fails:
+        diagnostic_sink.primary = original
+    with caplog.at_level(logging.ERROR):
+        message = report_failure(
+            original, detail="owner读取失败: errno=13", diagnostic_logger=owner_logger,
+            extra={"request_id": "owner-request", "operation_id": "original-operation"},
+        )
+    record, = caplog.records
+    assert record.name == owner_logger.name
+    assert record.exc_info is not None and record.exc_info[1] is original
+    assert record.__dict__["request_id"] == "owner-request"
+    assert record.__dict__["operation_id"] == "original-operation"
+    assert message == "owner读取失败: errno=13" + (
+        ", diagnostic_sink_error=NotADirectoryError" if sink_fails else ""
+    )
+    if sink_fails:
+        secondary, = diagnostic_sink.errors
+        assert str(secondary) in "\n".join(original.__notes__)
+
+
 @pytest.mark.parametrize("error", [
     OSError(5, "本机读取失败", "/private/execution.sqlite"),
     OSError("本机读取失败: /private/execution.sqlite"),

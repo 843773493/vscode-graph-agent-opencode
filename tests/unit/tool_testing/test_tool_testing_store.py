@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from app.tool_testing.store import ToolTestStore
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
+)
 
 
 def test_tool_test_store_lists_readable_run_files(tmp_path: Path) -> None:
@@ -35,9 +40,10 @@ def test_tool_test_store_lists_readable_run_files(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("native", ["/private/tool-test.json", r"C:\private\tool-test.json", r"\\server\share\tool-test.json"])
 @pytest.mark.parametrize("stage", ["initialize", "reset_tool", "prepare_case", "write_case", "write_run", "read_run", "list_runs"])
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 def test_store_io_failure_keeps_original_in_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    native: str, stage: str,
+    native: str, stage: str, sink_fails: bool, diagnostic_sink: DiagnosticFailure,
 ) -> None:
     store = ToolTestStore(root=tmp_path / "tool_tests")
     store.reset_tool("apply_patch")
@@ -45,6 +51,8 @@ def test_store_io_failure_keeps_original_in_diagnostics(
     store.write_run("run_a", payload)
     case = store.prepare_case_dir(tool_name="apply_patch", provider_id="provider", case_id="case")
     original = PermissionError(13, f"原生 I/O 错误 {native}", native)
+    if sink_fails:
+        diagnostic_sink.primary = original
     method, target = {
         "initialize": ("mkdir", store.root),
         "reset_tool": ("mkdir", store.tool_dir("apply_patch")),
@@ -79,6 +87,11 @@ def test_store_io_failure_keeps_original_in_diagnostics(
     assert f"stage={stage}" in str(caught.value) and "errno=13" in str(caught.value)
     record, = [entry for entry in caplog.records if entry.name == "app.tool_testing.store"]
     assert record.exc_info is not None and record.exc_info[1] is original
+    if sink_fails:
+        secondary, = diagnostic_sink.errors
+        assert str(secondary) in "\n".join(original.__notes__)
+        assert "diagnostic_sink_error=NotADirectoryError" in str(caught.value)
+        assert "diagnostic-log-secret" not in str(caught.value)
     operation()  # 故障解除后沿原入口重试，不重建另一套存储。
 
 
@@ -133,3 +146,59 @@ def test_store_directory_record_is_not_silently_skipped(tmp_path: Path, filtered
     (directory / "run.json").mkdir()
     with pytest.raises(TypeError, match="普通文件"):
         store.list_runs(tool_name="apply_patch" if filtered else None)
+
+
+@pytest.mark.parametrize("damage", ["json", "utf8", "object", "directory"])
+@pytest.mark.parametrize("listing", [False, True])
+def test_corrupt_record_rejection_survives_diagnostic_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str, listing: bool,
+) -> None:
+    from app.tool_testing import store as store_module
+
+    store = ToolTestStore(root=tmp_path / "tool_tests")
+    directory = store.reset_tool("apply_patch")
+    record = directory / "run.json"
+    payload = {"run_id": "run_a", "tool_name": "apply_patch", "created_at": "1"}
+    store.write_run("run_a", payload)
+    original = record.read_bytes()
+    if damage == "directory":
+        record.unlink()
+        record.mkdir()
+        broken = None
+    else:
+        broken = {"json": b'{"private":"/private/record",', "utf8": b'\xff/private/record', "object": b'[]'}[damage]
+        record.write_bytes(broken)
+    blocker = tmp_path / "diagnostic-sink-private"
+    blocker.write_text("普通文件不能作为日志目录")
+    primaries: list[BaseException | None] = []
+    secondaries: list[OSError] = []
+    call_handlers = logging.Logger.callHandlers
+
+    def reject_log(logger: logging.Logger, record: logging.LogRecord) -> None:
+        call_handlers(logger, record)
+        if record.name == store_module.logger.name:
+            primaries.append(record.exc_info[1] if record.exc_info else None)
+            try:
+                (blocker / "service.log").write_text(record.getMessage())
+            except OSError as error:
+                secondaries.append(error)
+                raise
+
+    with monkeypatch.context() as patch:
+        patch.setattr(logging.Logger, "callHandlers", reject_log)
+        error_type = TypeError if damage in {"object", "directory"} else ValueError
+        with pytest.raises(error_type) as caught:
+            store.list_runs() if listing else store.read_run("run_a")
+    primary, = primaries
+    secondary, = secondaries
+    assert primary is not None
+    assert caught.value.__cause__ is primary
+    assert str(secondary) in "\n".join(primary.__notes__)
+    assert "diagnostic_sink_error=NotADirectoryError" in str(caught.value)
+    assert "private" not in str(caught.value) and str(store.root) not in str(caught.value)
+    assert (record.is_dir() if broken is None else record.read_bytes() == broken)
+    if damage == "directory":
+        assert str(record) in "\n".join(primary.__notes__)
+        record.rmdir()
+    record.write_bytes(original)
+    assert store.read_run("run_a") == payload

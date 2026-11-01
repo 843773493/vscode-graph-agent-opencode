@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,30 @@ from tests.support.tool_test_faults import (
 )
 
 
+@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
+def tool_test_diagnostic_sink(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[bool, list[tuple[BaseException, OSError]]]]:
+    failures: list[tuple[BaseException, OSError]] = []
+    blocker = tmp_path / "diagnostic-sink-private"
+    blocker.write_text("普通文件不能作为日志目录")
+
+    call_handlers = logging.Logger.callHandlers
+
+    def emit(logger: logging.Logger, record: logging.LogRecord) -> None:
+        call_handlers(logger, record)
+        if request.param and record.name in {"app.tool_testing.store", "app.tool_testing.service"}:
+            assert record.exc_info is not None and record.exc_info[1] is not None
+            try:
+                (blocker / "service.log").write_text(record.getMessage())
+            except OSError as error:
+                failures.append((record.exc_info[1], error))
+                raise
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", emit)
+    yield bool(request.param), failures
+
+
 @pytest.fixture
 def tool_test_http_app() -> FastAPI:
     app = FastAPI()
@@ -48,7 +73,9 @@ def tool_test_http_app() -> FastAPI:
 async def test_failure_records_keep_native_details_in_diagnostics(
     tmp_path: Path, tool_test_http_app: FastAPI, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, native: str, stage: str,
+    tool_test_diagnostic_sink: tuple[bool, list[tuple[BaseException, OSError]]],
 ) -> None:
+    sink_fails, sink_errors = tool_test_diagnostic_sink
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     store = ToolTestStore(root=workspace / ".boxteam/tool_tests")
@@ -161,7 +188,10 @@ async def test_failure_records_keep_native_details_in_diagnostics(
         failure_stage = "run" if stage == "directory" else "execute" if stage == "tool_error" else stage
         error_type = "RuntimeError" if stage == "tool_error" else "PermissionError"
         expected = f"工具测试失败: stage={failure_stage}, type={error_type}"
-        assert failure == expected + ("" if stage == "tool_error" else ", errno=13")
+        expected += "" if stage == "tool_error" else ", errno=13"
+        if sink_fails:
+            expected += ", diagnostic_sink_error=NotADirectoryError"
+        assert failure == expected
         assert calls.count(stage) == 1
         assert_no_native(result.model_dump(mode="json"))
         for path in store.root.rglob("*.json"):
@@ -170,6 +200,14 @@ async def test_failure_records_keep_native_details_in_diagnostics(
         records = [record for record in caplog.records if record.name == "app.tool_testing.service"]
         record, = records
         assert record.__dict__["request_id"] == "tool-test-original-failure"
+        assert record.__dict__["run_id"] == result.run_id
+        assert result.run_id in caplog.text
+        if stage != "directory":
+            attempt, = result.attempts
+            assert record.__dict__["attempt_id"] == attempt.attempt_id
+            assert record.__dict__["provider_id"] == attempt.provider_id
+            assert record.__dict__["case_id"] == attempt.case_id
+            assert attempt.attempt_id in caplog.text
         assert record.exc_info is not None
         error = record.exc_info[1]
         if stage == "tool_error":
@@ -179,6 +217,11 @@ async def test_failure_records_keep_native_details_in_diagnostics(
             assert error.cause is original
         else:
             assert error is original
+        if sink_fails:
+            (primary, secondary), = sink_errors
+            assert primary is error
+            assert str(secondary) in "\n".join(primary.__notes__)
+            assert "diagnostic-sink-private" not in json.dumps(result.model_dump(mode="json"))
 
         failing = False
         calls.clear()
@@ -198,7 +241,9 @@ async def test_failure_records_keep_native_details_in_diagnostics(
 async def test_store_read_failure_uses_original_api_and_diagnostics(
     tmp_path: Path, tool_test_http_app: FastAPI, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, native: str, listing: bool, error_type: type[OSError],
+    tool_test_diagnostic_sink: tuple[bool, list[tuple[BaseException, OSError]]],
 ) -> None:
+    sink_fails, sink_errors = tool_test_diagnostic_sink
     # 此处只验查询；局部历史夹具不代替执行、fork 或恢复验收。
     workspace = tmp_path / "workspace"
     store = ToolTestStore(root=workspace / ".boxteam/tool_tests")
@@ -232,11 +277,24 @@ async def test_store_read_failure_uses_original_api_and_diagnostics(
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
         message = response.json().get("detail", response.json().get("message"))
         assert isinstance(message, str) and native not in message and str(workspace) not in message
-        assert f"stage={'list_runs' if listing else 'read_run'}" in message
-        assert f"type={error_type.__name__}" in message
+        if response.status_code == 404:
+            assert "stage=read_run" in message and f"type={error_type.__name__}" in message
+        else:
+            # 未映射的500按现行TraceMiddleware只公开请求阶段；owner细节仍在同request_id诊断中。
+            assert message == (
+                f"请求处理失败: stage=http_request, error={error_type.__name__}, errno={original.errno}"
+            )
         record, = [entry for entry in caplog.records if entry.name == "app.tool_testing.store"]
         assert record.exc_info is not None and record.exc_info[1] is original
         assert record.__dict__["request_id"] == request_id
+        assert f"stage={'list_runs' if listing else 'read_run'}" in record.getMessage()
+        if sink_fails:
+            (primary, secondary), = sink_errors
+            assert primary is original
+            assert str(secondary) in "\n".join(original.__notes__)
+            if response.status_code == 404:
+                assert "diagnostic_sink_error=NotADirectoryError" in message
+            assert "diagnostic-sink-private" not in response.text
         assert record_path.read_bytes() == before
         recovered = await client.get(endpoint)
         assert recovered.status_code == 200

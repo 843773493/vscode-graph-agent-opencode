@@ -1861,3 +1861,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原Host收集owner的配置读取边界补接`Path.resolve()`的RuntimeError，复用原`_config_file_error`；主配置及Include继续共用原读取／解析链路。普通错误保留config_read阶段和原类别，完整位置留原cause和诊断；不返回空清单、不增加解析器或重试，不改变HTTP500、错误类型与修复后同入口显式重试行为。
 - 真实主配置自环在连接列表、别名解析和原Gateway路由三入口均复现旧实现回显位置（3 failed）；原Include对照3 passed。修复后SSH选择、SSH进程和远端转发回归91 passed／3.73秒；直接核真实ASGI响应与request_id、原异常链、日志及修复后的200空清单。未改断言为宽泛匹配。Ruff、两文件Pyright零诊断、compileall及两份change strict通过；首次回归命令误写不存在文件，exit4且零测试，原件保留。
 - 准确命令、源码指纹、原始输出、实际退出码与AST差异核对见`out/tests/temp/ssh_root_loop_20261101/artifacts/verification.json`。本片是实际文件系统及进程内Gateway路由验证，不代独立Gateway网络、Web、Windows或全局不变量；未改前端、公共fixture、共享开发服务或他人暂存。2.2／7.2保持未勾。
+
+### 2026-11-01 工具测试失败与日志次错的结算（2.2／7.2部分收口）
+
+- 工具测试的运行、样本及存储拒绝复用唯一`report_failure`，保留原owner logger、request_id及运行／样本归属；日志不可写只追加次错类别与原异常notes，不能阻止失败回执落盘或把运行遗留为running。原阶段、原生错误码／cause、模型调用计数、成功正文和显式重试保持，不增加错误账本、重试或公开结构。
+- 定向单测及原ASGI API共253项通过，另175项共享诊断／Trace／SQLite回归通过；最终损坏记录日志装具改为观察实际logging派发后，受影响8项补验通过。完整旧生产归档的执行反例确认运行仍为running；损坏记录反例核实原日志次错替换拒绝。原查询9项旧断言在完整HEAD原测试中同样失败，已按现行500请求阶段合同迁齐，并继续精确核owner阶段、request_id、原异常、原件保全及同入口恢复。首次装具因假定logger.error总带exc_info而失败的记录保留，不计有效反例。
+- Ruff、真实Pyright零诊断、compileall及本change strict通过；准确命令、源码指纹、旧生产归档tree、原始输出／退出码、测试复用依据和差异自查见`out/tests/temp/tool_test_diagnostic_settlement_20261101/artifacts/verification.json`。API使用进程内ASGI和既有工具测试专用脚本模型，不代真实Provider、独立Gateway网络、Web、Backend重启或Windows实机；未改另一会话的前端、公共fixture、回归驱动、共享debug或暂存。2.2／7.2仍未勾，整体51/53。

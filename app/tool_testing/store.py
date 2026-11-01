@@ -11,6 +11,7 @@ from pathlib import Path
 from stat import S_ISREG
 from typing import Any
 
+from app.core.failures import report_failure
 from app.core.trace_middleware import get_current_request_id
 from app.tool_testing.definitions import tool_test_failure_detail
 
@@ -120,9 +121,13 @@ class ToolTestStore:
                 except FileNotFoundError:
                     continue  # 尚无运行记录的工具目录不是读取失败。
                 if not S_ISREG(mode):
-                    logger.error("工具测试记录不是普通文件: path=%s", target,
-                                 extra={"request_id": get_current_request_id()})
-                    raise TypeError("工具测试记录必须为普通文件")
+                    error = TypeError("工具测试记录必须为普通文件")
+                    error.add_note(f"工具测试记录位置: {target}")
+                    detail = report_failure(
+                        error, detail=str(error), diagnostic_logger=logger,
+                        extra={"request_id": get_current_request_id()},
+                    )
+                    raise TypeError(detail) from error
                 yield target
 
 
@@ -144,9 +149,13 @@ def _write_json_atomic(target: Path, payload: dict[str, Any]) -> None:
 def _read_json_object(target: Path) -> dict[str, Any]:
     payload = json.loads(target.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        logger.error("工具测试记录不是 JSON object: path=%s", target,
-                     extra={"request_id": get_current_request_id()})
-        raise TypeError("工具测试记录必须为 JSON object")
+        error = TypeError("工具测试记录必须为 JSON object")
+        error.add_note(f"工具测试记录位置: {target}")
+        detail = report_failure(
+            error, detail=str(error), diagnostic_logger=logger,
+            extra={"request_id": get_current_request_id()},
+        )
+        raise TypeError(detail) from error
     return payload
 
 
@@ -163,9 +172,10 @@ def _store_access(stage: str) -> Iterator[None]:
     try:
         yield
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        logger.exception("工具测试存储访问失败: stage=%s", stage,
-                         extra={"request_id": get_current_request_id()})
-        detail = tool_test_failure_detail(error, stage=stage)
+        detail = report_failure(
+            error, detail=tool_test_failure_detail(error, stage=stage), diagnostic_logger=logger,
+            extra={"request_id": get_current_request_id()},
+        )
         if isinstance(error, OSError):
             raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
         raise ValueError(detail) from error

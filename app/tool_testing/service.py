@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.agent_factory import build_model_from_provider
+from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id
 from app.core.trace_middleware import get_current_request_id
 from app.schemas.internal_v2.tool_test import (
@@ -204,9 +205,12 @@ class ToolTestService:
             except BaseException as error:
                 if isinstance(error, asyncio.CancelledError):
                     raise
-                logger.exception("工具测试运行失败: run_id=%s", run_id,
-                                 extra={"request_id": get_current_request_id()})
-                error_message = tool_test_failure_detail(error, stage="run")
+                error.add_note(f"工具测试运行归属: run_id={run_id}")
+                error_message = report_failure(
+                    error, detail=tool_test_failure_detail(error, stage="run"),
+                    diagnostic_logger=logger,
+                    extra={"request_id": get_current_request_id(), "run_id": run_id},
+                )
                 await self._mutate_run(
                     run_id,
                     lambda run: self._fail_run(run, error_message),
@@ -369,12 +373,7 @@ class ToolTestService:
                 duration_ms=int((time.monotonic() - started) * 1000),
                 detail=evaluation.detail,
             )
-        except Exception as error:
-            logger.exception(
-                "工具测试样本失败: run_id=%s, attempt_id=%s, provider_id=%s, case_id=%s, stage=%s",
-                run_id, attempt_id, provider_id, case.case_id, stage,
-                extra={"request_id": get_current_request_id()},
-            )
+        except Exception as error:  # noqa: BLE001 — 任意样本失败都须保留原错并提交失败回执。
             failure = error
             if isinstance(error, ToolCallProbeInvocationError):
                 failure = error.cause
@@ -385,6 +384,18 @@ class ToolTestService:
             if not execution_succeeded:
                 # 失败回执的原文已随原异常保留诊断，不能再复制进持久结果。
                 tool_result = None
+            error.add_note(
+                f"工具测试样本归属: run_id={run_id}, attempt_id={attempt_id}, "
+                f"provider_id={provider_id}, case_id={case.case_id}, stage={stage}"
+            )
+            detail = report_failure(
+                error, detail=tool_test_failure_detail(failure, stage=stage),
+                diagnostic_logger=logger,
+                extra={
+                    "request_id": get_current_request_id(), "run_id": run_id,
+                    "attempt_id": attempt_id, "provider_id": provider_id, "case_id": case.case_id,
+                },
+            )
             attempt = ToolTestAttemptDTO(
                 attempt_id=attempt_id,
                 case_id=case.case_id,
@@ -399,7 +410,7 @@ class ToolTestService:
                 transient_retries=transient_retries,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 detail="工具测试失败",
-                error=tool_test_failure_detail(failure, stage=stage),
+                error=detail,
             )
         self._store.write_case_json(
             tool_name=case.tool_name,
