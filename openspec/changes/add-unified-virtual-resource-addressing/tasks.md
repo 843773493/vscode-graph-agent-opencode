@@ -1957,3 +1957,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 迁齐来源捕获、目标复制、调试发布、传输与JSONL恢复中遗漏的25处共享错误出口调用，不再将字符串当异常或在返回异常外重复包装；全仓39处调用无旧字符串入参。SQLite worker将原始stderr附于原异常后交同一诊断出口，日志失败不替换进程退出／超时，原30秒预算、cause及清理语义保持。
 - 原生产4项形态拒绝被AttributeError替代、2项worker失败被日志次错替代的反例均成立；最终89项定向回归通过。来源清单产品矩阵2项、筛选的worker退出／ACL拒绝2项、目标符号链接拒绝1项通过；不将筛选结果称为完整矩阵验收。Ruff／compileall通过，Pyright七文件34→9，25项调用错误消除，剩余9项与完整HEAD归档未改行逐项一致；其余5份生产文件除调用迁移外AST相同。
 - 准确命令、源码指纹、原始输出、实际退出码与全仓调用审计见 `out/tests/temp/fork_debug_storage_rejection_20261101/artifacts/verification.json`。直接pytest补验曾在正式watchdog的setup拒绝，后续矩阵筛选曾因表达式引号错误而零用例退出，均保留原件，不算业务通过；最终沿正式矩阵／独占闸门及外部期限／4GiB保护。总门2.2／7.2保持未勾，不代Gateway、Web、Windows或硬重启验收。
+
+### 2026-11-01 会话动作来源的构造、冷读与发布（2.2／7.2部分收口）
+
+- `created_from_uri`在原DTO构造及序列化时统一调用Session/Thread grammar，删除任务服务和一次性导入入口的重复校验。Session、Thread、远端与悬空引用及NULL保持，用户提示正文不改写；原生位置请求现由DTO明确返回422，损坏定义查询返回500且request_id一致，复制后非法来源不得提交定义或消耗revision。未新增SQL、存储或恢复链。
+- 修改前DTO与真实任务库冷读均接受原生路径的反例已保留。最终100项模型／任务引用／导入检查、90项公开结构及任务错误回归、1项真实Session/任务ASGI与SQLite验收、3项既有生成及历史／在途导入验收通过，共194项不同用例；新产品用例的直接运行和正式matrix复跑重叠，不相加。五文件Pyright零错误／警告，Ruff、严格OpenSpec与差异检查通过。
+- 首轮产品断言通过但后台worker并发读到故障注入，关闭报错；本场景只验冷读，改为注入前真实停止隔离worker后通过，不修改产品故障语义。宽协议／API组合虽打印156项通过，进程在60秒外部期限退出124，不称整组通过；一次错误筛选已显式终止，退出143，随后用准确节点完成90项检查。
+- 命令、原始输出、退出码及2567份源码／依赖前后指纹核对见 `out/tests/temp/generation_source_publication_20261101/artifacts/verification.json`。产品suite固定60秒／4GiB并沿原集成独占闸门；不代表Gateway业务网络、Web、独立Backend硬重启、Windows或整个生成执行／fork验收。总门2.2／7.2仍未勾，整体51/53。

@@ -51,6 +51,8 @@ Gateway与Workspace的active快照解码catch在原恢复标记写入之前复�
 
 持久任务的执行结束来源读取、动作对账/准入及模型判断对账/准入/结果读取，在原异常被转为任务reason或run.error之前复用`failure_detail`。记录保留任务、运行、来源/目标URI、阶段及原异常类别，完整原异常与原因链只进入诊断；不从异常正文提取或改写路径。原失败阶段、needs_attention、check_only、revision复核、接受对账和显式恢复保持。会话生成动作在原失败结算点使用同一出口，保存任务、运行、工作区身份与generation-action阶段；保留已有generation state、已接受Job及mount_missing的pause/fail差异。脚本/模型返回的合法业务判断与用户正文继续遵守原输入合同，不用统一错误包装抹掉其语义；旧生成器导入等失败出口须分别核验，不据本片宣称全部任务出口完成。
 
+会话动作的`created_from_uri`由原DTO在构造和序列化时调用唯一Session/Thread URI解析器，两个业务入口不再分别校验。原生路径、其它资源类型和附带版本query拒绝；Session、Thread、远端与悬空来源及原有NULL保持。请求沿既有DTO入口报告422，冷读损坏仍由共享HTTP出口报告500，原输入只留诊断；复制后的非法来源不能进入原SQLite定义事务。该字段仅为来源引用，不查当前catalog、不改写历史URI或生成提示正文，也不新增存储或恢复入口。
+
 共享runtime wakeup在原派发catch内复用同一`failure_detail`，last_error保留Session/Thread、Job/execution/admission、dispatch generation和失败阶段，不复制异常正文。原异常在冻结的request/Gateway上下文内记录后原样重抛，finally恢复调用者上下文；原SQLite事务与generation CAS保持。恢复只消费原持久准入，回执写入失败不删除已接受的Job或创建第二份执行，终态重派只形成原Job回执。
 
 Node 调试启动的原生错误在原 catch 内复用 `failure_detail`，统一输出 Session/Thread、node-debug-launch 阶段、异常类别与适用系统错误码。删除局部日志出口；日志次错附到原异常而不打断 failed 状态、start_failed 动作、manifest 与 claim 结算及原进程清理。公开文本的异常类别字段统一为该原语的 `error`，不另存一份错误状态。非原生的明确启动协议拒绝沿原合同保留，冷读及显式同方案重试仍由原 owner 执行。

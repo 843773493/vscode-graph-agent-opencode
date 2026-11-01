@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    model_validator,
+)
 
+from app.core.resource_uri import parse_session_thread_uri
 from app.schemas.internal_v2.session import SessionDTO
+
+
+def _require_generation_source_uri(value: str) -> str:
+    # 来源允许 Session 或 Thread，保持历史字节和悬空引用，不查当前 catalog。
+    parse_session_thread_uri(value)
+    return value
+
+
+_GenerationSourceURI = Annotated[
+    str, AfterValidator(_require_generation_source_uri), PlainSerializer(_require_generation_source_uri),
+]
 
 
 class SessionCatalogNodeDTO(BaseModel):
@@ -138,7 +157,7 @@ class SessionGenerationUIPolicyDTO(BaseModel):
 
 
 class SessionGenerationActionConfigDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     generator_type: SessionGenerationGeneratorTypeDTO
     config: dict[str, object] = Field(default_factory=dict)
@@ -147,7 +166,7 @@ class SessionGenerationActionConfigDTO(BaseModel):
     session_strategy: SessionGenerationStrategyDTO
     title_template: str = Field(default="{generator.name}", min_length=1, max_length=500)
     path_template: list[str] = Field(default_factory=list, max_length=20)
-    created_from_uri: str | None = None
+    created_from_uri: _GenerationSourceURI | None = None
     gateway_id: str | None = None
     ui_policy: SessionGenerationUIPolicyDTO = Field(default_factory=SessionGenerationUIPolicyDTO)
     mount_missing: Literal["pause", "fail"] = "pause"

@@ -66,8 +66,6 @@ class PersistentTaskService:
             ))
             if not result.provider_available:
                 raise ValueError(result.reason)
-            if generation.created_from_uri is not None:
-                parse_session_thread_uri(generation.created_from_uri)
             generation = generation.model_copy(update={"gateway_id": get_current_gateway_id()})
             action = configuration.action.model_copy(update={"generation": generation})
         else:

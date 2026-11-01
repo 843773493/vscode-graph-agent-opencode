@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
-from app.core.resource_uri import parse_session_thread_uri
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.generator_import import (
@@ -218,8 +217,6 @@ async def import_generator(runtime: PersistentTaskRuntime, request: SessionGener
     generation = action.generation
     if generation.gateway_id != get_current_gateway_id():
         raise ValueError("旧生成器必须归属当前明确 Gateway")
-    if generation.created_from_uri is not None:
-        parse_session_thread_uri(generation.created_from_uri)
     definition = SessionGenerationValidateRequest(
         name=request.configuration.name, execution_workspace_id=runtime.store.workspace_id,
         **generation.model_dump(exclude={"created_from_uri", "gateway_id", "ui_policy", "mount_missing", "delete_outputs"}),
