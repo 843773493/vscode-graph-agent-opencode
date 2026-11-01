@@ -401,17 +401,18 @@ class AgentControlInbox:
         )
         if existing is not None:
             return existing
-        self._next_seq += 1
         command = AgentControlCommand(
             command_id=command_id,
             kind=kind,
             turn_stream_id=self.turn_stream_id,
             idempotency_key=idempotency_key,
             payload=dict(payload or {}),
-            control_seq=self._next_seq,
+            control_seq=self._next_seq + 1,
         )
+        # 控制日志落盘后才发布内存；写入失败仍可按原幂等键重试。
+        self._persist(command)
         self._commands[command_id] = command
-        self._persist()
+        self._next_seq = command.control_seq
         self._pending.put_nowait(command)
         return command
 
@@ -435,8 +436,8 @@ class AgentControlInbox:
             control_seq=command.control_seq,
             status=status,
         )
+        self._persist(updated)
         self._commands[command_id] = updated
-        self._persist()
         return updated
 
     def get(self, command_id: str) -> AgentControlCommand | None:
@@ -492,11 +493,12 @@ class AgentControlInbox:
             self._commands[command.command_id] = command
             self._next_seq = max(self._next_seq, command.control_seq)
 
-    def _persist(self) -> None:
+    def _persist(self, candidate: AgentControlCommand) -> None:
         if self._state_path is None:
             return
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self._state_path.with_suffix(".tmp")
+        commands = {**self._commands, candidate.command_id: candidate}
         payload = {
             "turn_stream_id": self.turn_stream_id,
             "session_id": self.session_id,
@@ -510,7 +512,7 @@ class AgentControlInbox:
                     "control_seq": command.control_seq,
                     "status": command.status,
                 }
-                for command in self.snapshot()
+                for command in sorted(commands.values(), key=lambda command: command.control_seq)
             ],
         }
         with temp_path.open("w", encoding="utf-8") as stream:

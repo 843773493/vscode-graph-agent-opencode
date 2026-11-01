@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
+    TurnControlCoordinator,
     TurnExecutionScope,
 )
 from app.services.infrastructure.external_resource_leases import (
@@ -29,7 +31,7 @@ from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 @pytest.fixture
-def runtime_context() -> tuple[MessageStreamStore, object, str, Path]:
+def runtime_context() -> tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path]:
     output_root = (
         Path.cwd()
         / "out/tests/integration/backend/agents/test_turn_message_stream_runtime"
@@ -56,7 +58,7 @@ def runtime_context() -> tuple[MessageStreamStore, object, str, Path]:
 
 @pytest.mark.asyncio
 async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_scope_propagation")
@@ -108,7 +110,7 @@ async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
 
 @pytest.mark.asyncio
 async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_concurrent_events")
@@ -139,7 +141,7 @@ async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
 
 @pytest.mark.asyncio
 async def test_model_call_local_deadline_does_not_cancel_turn(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     turn_scope = TurnExecutionScope("stream_timeout")
     model_scope = turn_scope.child("model-1", timeout_seconds=0.001)
@@ -153,7 +155,7 @@ async def test_model_call_local_deadline_does_not_cancel_turn(
 
 @pytest.mark.asyncio
 async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     _, _, _, resource_state_path = runtime_context
     manager = ExternalResourceLeaseLedger(state_path=resource_state_path)
@@ -191,7 +193,7 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
 
 @pytest.mark.asyncio
 async def test_control_race_accepts_interrupt_once_and_rejects_steer(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_control_race")
@@ -225,8 +227,83 @@ async def test_control_race_accepts_interrupt_once_and_rejects_steer(
 
 
 @pytest.mark.asyncio
+async def test_failed_control_acceptance_retries_once_before_interrupting_real_stream(
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, session_id, resource_state_path = runtime_context
+    writer = await store.open(
+        thread_id=store._path_resolver.main_thread_id(session_id),
+        session_id=session_id, turn_id="job_control_write_retry",
+    )
+    scope = TurnExecutionScope(writer.turn_stream_id)
+    state_path = resource_state_path.with_name("control.json")
+    state_path.unlink(missing_ok=True)
+    inbox = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=state_path)
+    coordinator = TurnControlCoordinator(scope, inbox, writer)
+    cancellations: list[str] = []
+    scope.register_abort(cancellations.append)
+    initial = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+    failure = OSError("控制日志原子替换失败")
+    replace = Path.replace
+
+    def fail_control_replace(source: Path, target: str | Path) -> Path:
+        if source == state_path.with_suffix(".tmp"):
+            raise failure
+        return replace(source, target)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "replace", fail_control_replace)
+            with pytest.raises(OSError) as caught:
+                await coordinator.submit_interrupt(command_id="cmd_retry", idempotency_key="idem_retry")
+        assert caught.value is failure
+        assert not scope.cancellation_signal.is_cancelled
+        assert cancellations == []
+        assert inbox.snapshot() == []
+        assert inbox._pending.empty()
+        assert not state_path.exists()
+        assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == initial
+
+        accepted, duplicate = await asyncio.gather(
+            coordinator.submit_interrupt(command_id="cmd_retry", idempotency_key="idem_retry"),
+            coordinator.submit_interrupt(command_id="cmd_duplicate", idempotency_key="idem_retry"),
+        )
+        assert accepted["type"] == "interrupt.requested"
+        assert accepted["command_id"] == "cmd_retry"
+        assert duplicate == {"status": "consumed", "command_id": "cmd_retry"}
+        assert cancellations == ["user_requested"]
+        assert scope.cancellation_signal.reason == "user_requested"
+        queued = await inbox.next()
+        assert queued.command_id == "cmd_retry"
+        assert queued.control_seq == 1
+        assert inbox._pending.empty()
+        assert await AgentLoopControlCoordinator(scope, inbox, writer).process(queued) == duplicate
+        restored = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=state_path)
+        assert restored.snapshot() == inbox.snapshot()
+        assert [command.status for command in restored.snapshot()] == ["consumed"]
+        assert restored._pending.empty()
+
+        await writer.close_interrupted("cmd_retry")
+        restarted = MessageStreamStore(path_resolver=store._path_resolver)
+        await restarted.open_existing(
+            session_id=session_id, thread_id=writer.thread_id,
+            turn_id="job_control_write_retry", turn_stream_id=writer.turn_stream_id,
+        )
+        events = await restarted.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+        interrupts = [event for event in events if event["type"] == "interrupt.requested"]
+        assert len(interrupts) == 1
+        assert interrupts[0]["event_id"] == "cmd_retry"
+        assert interrupts[0]["payload"]["interrupt_request_id"] == "cmd_retry"
+        assert (await restarted.get_state(writer.turn_stream_id))["stream_status"] == "interrupted"
+        assert cancellations == ["user_requested"]
+    finally:
+        await scope.close()
+
+
+@pytest.mark.asyncio
 async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_disconnect")
@@ -261,7 +338,7 @@ async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
 
 @pytest.mark.asyncio
 async def test_crash_after_interrupt_request_recovers_execution_lost(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_crash_recovery")
@@ -292,7 +369,7 @@ async def test_crash_after_interrupt_request_recovers_execution_lost(
 @pytest.mark.parametrize("native_path", ["/private-activity/detail.json", r"C:\private-activity\detail.json", r"\\server\private-activity\detail.json"])
 @pytest.mark.parametrize("error_type", [PermissionError, RuntimeError])
 async def test_activity_projection_failure_keeps_native_location_in_diagnostics(
-    runtime_context: tuple[MessageStreamStore, object, str, Path],
+    runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
     native_path: str, error_type: type[Exception], caplog: pytest.LogCaptureFixture,
 ) -> None:
     store, _, session_id, _ = runtime_context

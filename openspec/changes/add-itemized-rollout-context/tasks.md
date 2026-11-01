@@ -1422,3 +1422,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 经公开 Gateway 完整组 start（原 generation／成员前置条件）恢复并冷读 source／child，再保留原 safe-restart 和第二次冷读，最后重开真实 Workbench／child 续聊。实际 Backend PID 为3243224→3253678→3255504，三个 generation 及健康响应逐段对账；继承八个 canonical item 的身份、sequence、execution、Turn、hash／revision 和原 owner 均保持，后续源 Turn／tool 不进入前缀，源历史未被改写。五份 transport 与 sealed assembly/request_hash 对账（source四份、child一份）。
 - 最终独立矩阵 `bun run test:matrix -- --suite=integration-web-fork-prefix-recovery` 为1 passed／184.70秒，外层187.997秒、exit0；保留原360秒矩阵、60秒fork watchdog、4GiB每进程保护和共享独占闸门。较早的“安全重启后再强杀”候选也为1 passed／183.89秒，因正常关闭可能提前落盘而前移强杀后重新验收，不将旧时序当作首次关闭前证据。3679份采样代码／配置前后无变化，gitlink内部不在该采样中；正式Workbench构建来自共享工作树，有版本和main.js指纹，不称干净HEAD独立构建。
 - Ruff、真实Pyright零诊断、compileall及Node语法通过；独立只读复审最终无finding，原health generation疑问经权威health及启动env合同核实后撤回，审查未运行测试。准确命令、raw、源码指纹、进程清理和正式产物位置见 `out/tests/temp/fork_prefix_hard_exit_20261101/artifacts/verification.json`。仅证明已提交前缀在Linux Backend硬退出后的恢复与续聊，不代未提交fork／活动execution的崩溃、Gateway进程重启、Windows、同步入口或完整Section8；7.5／8.3及整体总门不勾选。未修改前端实现、公共fixture、长回归驱动或共享debug。
+
+
+### 2026-11-01 7.5／8.3 控制日志写入失败的发布顺序（部分）
+
+- `AgentControlInbox.accept/mark` 在原唯一写入链中先持久化候选命令，再发布内存、序号与待处理队列；保持原文件格式、同幂等键返回、command_id 覆盖及 control_seq 排序语义，不引入回滚、第二账本或自动重放。打开临时文件、fsync、原子替换三类故障在有／无已有命令及 consumed／rejected 两种终态下均保留原文件字节、内存状态和原异常；同 ID／幂等键重试后真正落盘、入队且序号连续，冷载入不自动消费。生产改动净增2行。
+- 原生产代码上的12项新单测及真实控制协调器组合负例均失败，修复后63个不同相关单测通过；首次单测批次62 passed、另1项因要求矩阵 runner 在 fixture 阶段拒绝，随后以原正式 suite 定向补验1 passed，不计拒绝为业务通过。消息流／控制组合14项、真实执行错误回归3项，以及既有Chat／Responses真实TCP中断和delta持久化竞争3项，共20个不同集成用例通过。组合测试经真实 coordinator 与 MessageStreamStore 验证失败不发命令／事件／取消，正常重试并并发重复提交只入队、记录和取消一次，再经 open_existing 冷读 interrupted；不手填控制或执行状态。
+- Ruff、真实Pyright零诊断及compileall通过；将本文件 fixture 的 object 标注迁齐为真实 SessionCatalogPathResolver，未改变装具行为。组合测试初版漏调冷读加载入口，在冷读前失败，修正调用方式后14项全部通过，原失败保留。所有测试有进程外超时与4GiB保护，集成沿用跨worktree独占闸门；每轮3230份采样代码／配置前后无变化。限定三文件的独立只读审查无finding，未运行测试。
+- 准确命令、原始输出、源码指纹、实际退出码及审查范围见 `out/tests/temp/control_inbox_commit_order_20261101/artifacts/verification.json`。本片不代完整控制恢复、OS崩溃、Gateway／Web、Windows、同步入口或Section8总验收；7.5／8.3与整体111/119仍未关闭。前端实现、公共fixture、长回归驱动、其它会话改动和共享暂存不纳入本片提交。
