@@ -1462,3 +1462,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 真实完整运行均保留：001 的产品三次调用完成，但测试误计 stream／checkpoint 双carrier，按正式择一及完整group修正；002 复现上述真实重复参数缺陷；003 修复后仍1 failed／223.09秒，180次Job轮询到限时仍running。其第三轮经历 ResponsesStreamOpenTimeoutError、RateLimitError 后回退成功，但回退模型传 `max_lines="none"` 被工具参数校验拒绝；最终模型调用由 teardown 取消，冷读／恢复续聊未执行。不得归为纯性能或宣称完整E2E通过；003 后仅补terminal guard与负例，以定向单测和真实HTTP补验，未再次请求外部Provider。补充负例首轮漏标既有 tool_test 用途，修正装具后通过，未放宽生产派发权限。
 - TODO（未完成）：外部 Provider 限流／开流长尾及回退工具参数纠错下的完整三文件链与安全重启续聊验收。保留既有轮询期限、严格身份／三组配对／四轮数量及响应断言；原始Provider错误随后被工具组完整性错误盖过最终分类的现象也保留作后续错误出口审计输入。独立只读审查范围内无finding，未跑测试；作者AST自查不替代7.5-F全局架构门。
 - 准确命令、源码前后指纹、raw／实际退出码、三轮存储保全、SDK事件与类型基线见 `out/tests/temp/provider_tool_loop_20261101/artifacts/verification.json` 及正式同名runs。此片不新增Web／Windows／同步完整Agent执行／fork／硬退出证据；7.5／8.3和整体111/119仍未完成。前端、公共fixture、长回归驱动、共享Debug及其它会话改动未纳入本片。
+
+
+### 2026-11-01 7.5-E Provider fallback 与残缺工具调用的失败边界（部分）
+
+- 新增独立后端产品入口测试，沿原 Session／消息／Job API、真实应用 lifespan、独立工作区及辅助服务生成关键状态；Provider 使用真实 TCP、LiteLLM／SDK，复用原 HTTP 服务、协议帧和唯一 SSE codec。HTTP 失败、工具输出前流失败均由备用 Chat 完成；残缺工具参数后失败则保留原 model.failed、原错误类别／请求日志及 canonical failed call，下一候选准备被原闭包检查拒绝，无备用 HTTP、真实工具执行或补造 tool_result。逐项核精确 owner、模型调用终态、冷 assembly／实际 HTTP 正文及封存 request_hash；内部热／冷事件相同，公开事件按正式 proto 投影对照，冷读不改 JSONL 原字节。
+- 最终新增3 passed／65.67秒（外层71.70秒），既有真实 HTTP Responses 工具循环及跨协议 fallback 的 sync／async 回归6 passed／39.09秒（外层46.57秒），均 exit0；原进程外180／120秒期限、4GiB数据段上限及共享集成独占闸门保持。Ruff、compileall及本 change strict 校验通过；真实 Pyright 新测试零诊断，helper 的4条诊断与完整 HEAD 归档基线按文件、规则、完整消息及表达式一致，不称完整类型全绿。早期 fixture 的 reasoning 声明、公开事件投影、虚构模型触发 fake_stream 及残缺参数构造问题均修正后补验，未修改生产逻辑或放宽断言；失败原件保留。
+- 澄清上一收据的最终错误分类：原 Provider 故障未被 runner cleanup 吞掉；残缺 canonical 调用使下一候选的准备阶段被安全边界拒绝。TODO：若需自动继续，须先明确上下文选集转换合同，不得静默隐藏失败历史或合成工具结果。本片不关闭此前真实外部 Provider 三文件工具链／冷恢复续聊缺口，也不新增 Gateway／Web／Windows／OS重启或完整 Section8 验收；7.5／8.3及整体111/119保持未完成。
+- 准确命令、源码前后指纹、原始输出、实际退出码、类型基线、失败归因及正式产物见 `out/tests/temp/provider_fallback_boundary_20261101/artifacts/verification.json`。本片只含本方两个测试文件及本收据，不含前端、公共 fixture、长回归驱动、共享 Debug 或其它会话独有改动；未作新的非作者独审，不以本片代替独审总门。

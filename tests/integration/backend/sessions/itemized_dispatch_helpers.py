@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from contextvars import copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -239,7 +239,7 @@ class NativeHTTPState:
     call_tool: bool = False
     response_text: str = "native-http-result"
     response_status: int = 200
-    responses_failure: Literal["http", "stream"] | None = None
+    responses_failure: Literal["http", "stream", "partial_tool"] | None = None
     output_tool_name: str | None = None
     reasoning_item: dict[str, object] | None = None
     request_ready: Event = field(default_factory=Event)
@@ -266,7 +266,7 @@ def responses_reply_frames(
     if reasoning_item is not None:
         output.append(reasoning_item)
     if call_tool:
-        arguments = {"path": "README.md"} if tool_name == "inspect_file" else {"answer": text}
+        arguments = {"path": "README.md"} if tool_name in {"inspect_file", "read_file"} else {"answer": text}
         output.append({
             "type": "function_call", "id": "fc-native", "call_id": "call-native",
             "name": tool_name, "arguments": json.dumps(arguments), "status": "completed",
@@ -291,7 +291,7 @@ def chat_reply_frames(
         delta = {"role": "assistant", "tool_calls": [{
             "index": 0, "id": "call-native", "type": "function",
             "function": {"name": tool_name, "arguments": json.dumps(
-                {"path": "README.md"} if tool_name == "inspect_file" else {"answer": text}
+                {"path": "README.md"} if tool_name in {"inspect_file", "read_file"} else {"answer": text}
             )},
         }]}
     return chat_completion_frames(
@@ -343,13 +343,22 @@ def native_http_server(
                 return
             if self.path == "/v1/responses":
                 frames = responses_reply_frames(
-                    ordinal, call_tool=(state.call_tool or state.output_tool_name is not None) and ordinal == 1,
+                    ordinal, call_tool=(state.call_tool or state.output_tool_name is not None or state.responses_failure == "partial_tool") and ordinal == 1,
                     text=state.response_text, tool_name=state.output_tool_name or "inspect_file",
                     reasoning_item=state.reasoning_item if ordinal == 1 else None,
                 )
                 protocol = "openai_responses_sse"
-                if state.responses_failure == "stream":
-                    frames = (frames[0], data_frame({
+                if state.responses_failure in {"stream", "partial_tool"}:
+                    # 参数已发出但尚未 done 时失败，不能在备用请求中偷放未闭合调用。
+                    prefix = frames[:1]
+                    if state.responses_failure == "partial_tool":
+                        delta = frames[2]
+                        assert delta.event == "response.function_call_arguments.delta"
+                        assert isinstance(delta.payload, dict) and isinstance(delta.payload["delta"], str)
+                        prefix = (*frames[:2], replace(delta, payload={
+                            **delta.payload, "delta": delta.payload["delta"][:-1],
+                        }))
+                    frames = (*prefix, data_frame({
                         "type": "error", "code": "server_error", "message": "native contract in-stream failure",
                         "param": None,
                     }, event="error"))
@@ -361,7 +370,7 @@ def native_http_server(
                 )
                 protocol = "openai_chat_sse"
             codec = get_protocol_codec(protocol)
-            if self.path == "/v1/responses" and state.responses_failure == "stream":
+            if self.path == "/v1/responses" and state.responses_failure in {"stream", "partial_tool"}:
                 for frame in frames:
                     codec.validate_frame(frame, label="native HTTP failing response")
             else:
