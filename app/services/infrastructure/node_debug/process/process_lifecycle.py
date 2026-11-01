@@ -7,6 +7,7 @@ import signal
 from collections.abc import Mapping
 from typing import Literal
 
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.node_debug.process.launch_claim import (
     NodeDebugClaimRecoveryDecision,
     claim_marked,
@@ -81,10 +82,11 @@ class NodeDebugProcessLifecycle:
         if self._runtimes.get(owner) is not None:
             return None
         session_id, thread_id = owner
-        claim = self._read_launch_claim(session_id, thread_id)
+        # 原 owner 锁覆盖读取、OS 核实及审计结算，取消不能遗弃原生访问。
+        claim = await run_sync_shielded(self._read_launch_claim, session_id, thread_id)
         if claim is None or claim.phase == "settled":
             return None
-        decision = decide_claim_recovery(claim)
+        decision = await run_sync_shielded(decide_claim_recovery, claim)
         if decision.outcome == "reconcile_required":
             if claim.phase != "reconcile_required":
                 # 只在“进入”该状态时写登记并留一条审计动作；状态本身可反复查询，
@@ -93,7 +95,8 @@ class NodeDebugProcessLifecycle:
                     claim, phase="reconcile_required", reason=decision.reason
                 )
                 await self._write_launch_claim(claim)
-                self._record_claim_action(
+                await run_sync_shielded(
+                    self._record_claim_action,
                     owner,
                     "reconcile_required",
                     f"调试实例无法核实，需人工核实后才能继续: {decision.reason}",
@@ -123,7 +126,8 @@ class NodeDebugProcessLifecycle:
                         reason=failure,
                     )
                 )
-                self._record_claim_action(
+                await run_sync_shielded(
+                    self._record_claim_action,
                     owner, "reconcile_required", failure, result="error"
                 )
                 self._notify_release_failed(
@@ -146,7 +150,8 @@ class NodeDebugProcessLifecycle:
         await self._write_launch_claim(
             claim_marked(claim, phase="settled", reason=decision.reason)
         )
-        self._record_claim_action(
+        await run_sync_shielded(
+            self._record_claim_action,
             owner,
             "reconcile_settled",
             f"已结清遗留调试实例登记: {decision.reason}",
@@ -169,18 +174,45 @@ class NodeDebugProcessLifecycle:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
         while True:
-            identity = probe_process_identity(pid)
-            if identity is None:
-                return "terminated"
-            comparison = identity.compare(
-                recorded_source=recorded_source,
+            state = await run_sync_shielded(
+                self._recorded_instance_state,
+                pid=pid, recorded_source=recorded_source,
                 recorded_start_marker=recorded_start_marker,
             )
-            if comparison != "match":
-                return "reused" if comparison == "mismatch" else "incomparable"
+            if state != "same":
+                return state
             if loop.time() >= deadline:
                 return "same"
             await asyncio.sleep(0.01)
+
+    @staticmethod
+    def _recorded_instance_state(
+        *, pid: int, recorded_source: str | None, recorded_start_marker: str,
+    ) -> Literal["terminated", "reused", "incomparable", "same"]:
+        identity = probe_process_identity(pid)
+        if identity is None:
+            return "terminated"
+        comparison = identity.compare(
+            recorded_source=recorded_source, recorded_start_marker=recorded_start_marker,
+        )
+        if comparison == "match":
+            return "same"
+        return "reused" if comparison == "mismatch" else "incomparable"
+
+    def _signal_recorded_instance(
+        self, *, pid: int, recorded_source: str | None,
+        recorded_start_marker: str, signal_number: int,
+    ) -> Literal["terminated", "reused", "incomparable", "same"]:
+        # 核对和信号在同一 worker 内连续执行，不拿异步等待之前的身份去终止 PID。
+        state = self._recorded_instance_state(
+            pid=pid, recorded_source=recorded_source, recorded_start_marker=recorded_start_marker,
+        )
+        if state == "same":
+            try:
+                os.kill(pid, signal_number)
+            except ProcessLookupError:
+                return "terminated"
+        return state
 
     async def terminate_verified_instance(
         self,
@@ -192,11 +224,12 @@ class NodeDebugProcessLifecycle:
         """只终止再次核实为同一实例的进程；PID 复用和事实不足一律不碰。"""
         if pid is None or recorded_start_marker is None:
             return False
-        state = await self.wait_for_recorded_instance(
+        state = await run_sync_shielded(
+            self._signal_recorded_instance,
             pid=pid,
             recorded_source=recorded_source,
             recorded_start_marker=recorded_start_marker,
-            timeout_seconds=0.0,
+            signal_number=signal.SIGTERM,
         )
         if state == "terminated":
             return True
@@ -204,10 +237,6 @@ class NodeDebugProcessLifecycle:
             return True
         if state == "incomparable":
             return False
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return True
         state = await self.wait_for_recorded_instance(
             pid=pid,
             recorded_source=recorded_source,
@@ -216,12 +245,15 @@ class NodeDebugProcessLifecycle:
         )
         if state != "same":
             return state in {"terminated", "reused"}
-        try:
-            # Windows 的 SIGTERM 由 TerminateProcess 实现，没有独立的 SIGKILL。
-            forced_termination_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-            os.kill(pid, forced_termination_signal)
-        except ProcessLookupError:
-            return True
+        # Windows 的 SIGTERM 由 TerminateProcess 实现，没有独立的 SIGKILL。
+        state = await run_sync_shielded(
+            self._signal_recorded_instance,
+            pid=pid, recorded_source=recorded_source,
+            recorded_start_marker=recorded_start_marker,
+            signal_number=getattr(signal, "SIGKILL", signal.SIGTERM),
+        )
+        if state != "same":
+            return state in {"terminated", "reused"}
         state = await self.wait_for_recorded_instance(
             pid=pid,
             recorded_source=recorded_source,
@@ -358,7 +390,7 @@ class NodeDebugProcessLifecycle:
                 )
         if process.returncode is not None:
             return None
-        return self.verify_process_gone(runtime)
+        return await run_sync_shielded(self.verify_process_gone, runtime)
 
     def verify_process_gone(
         self, runtime: NodeDebugRuntime

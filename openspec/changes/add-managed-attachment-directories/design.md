@@ -623,3 +623,7 @@ claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及�
 ### Node Debug 删除准备的 catalog 读取（5.4 部分收口）
 
 删除入口通过原 `NodeDebugSessionStore` 一次读取 main／已发布 child 并核对全部 owner，原 SQLite 连接的只读打开、查询、关闭和 catalog 路径校验在同一受保护 worker 中完成。空库或不支持的 schema 明确拒绝，不在删除准备中初始化或改写原件。读取等待不阻塞事件循环；取消仍等原读取及连接关闭结算，再由原删除 owner 释放 gate。准备成功之前不停止任何 runtime，不推进 fence、物理隔离或 drained 进度；取消后沿原 operation ID 恢复，原 locator 和 Session 原件保持。缺库、非文件、符号链接、重复 owner 及不可解析的 Thread 沿原合同明确拒绝，不扫描补建目录或增加另一套 catalog。后续 claim／manifest 的同步访问、原生 I/O 抢占及整个清理总期限仍 TODO。
+
+### Node Debug 冷恢复的原生核实与审计（5.4 部分收口）
+
+冷 owner 的原 claim 读取、恢复决策所需的操作系统身份访问、停止后的身份轮询及恢复审计沿既有受保护 worker 结算；原 owner 临界区覆盖排队、执行和取消等待。审计仍由原 SessionState 与 SessionStore 写入，不增加第二份状态或 writer。每次普通／强制信号在同一 worker 内先重新核对 PID 与原起始身份，再连续派发；等待期间 PID 已复用、消失或身份不可比时，不把上一次观察作为停止新实例的依据。活跃 runtime 最终 OS 核实也沿同一 worker。已有轮询期限与异常分类保持，原生 I/O 抢占、其它入口的同步读取／写入及整个关闭总期限仍 TODO。

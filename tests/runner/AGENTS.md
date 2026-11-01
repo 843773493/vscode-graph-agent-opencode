@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-debug-cold-recovery` 复用真实调试 API、Node/Inspector 与冷 service，核对 claim／OS 身份／恢复审计的原生等待、同 owner 竞争及取消结算，固定90秒／4GiB与原集成闸门；准入沿现有替身，不代 Session 删除 gate、Gateway、进程硬重启或 Windows。
+
 `integration-debug-catalog-drain` 经真实导航入队、Session 删除 owner 和 SQLite 验证 Node 调试 catalog 读取／关闭等待，原连接与 gate 结算后才允许取消或继续删除；固定60秒／4GiB及原独占闸门，不代真实 Gateway、外部调试进程、重启或整个 shutdown 期限。
 
 `integration-debug-claim-publication` 经真实调试 ASGI、Node/Inspector 与原 claim writer 验证三种启动阶段的写盘、重复取消、迟到故障及进程退出顺序；固定120秒/4GiB，沿原集成独占闸门，不代替 Gateway/Web、独立进程重启、Windows 或整个 shutdown 期限。

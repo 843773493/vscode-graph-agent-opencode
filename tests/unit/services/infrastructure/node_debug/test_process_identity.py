@@ -3,17 +3,59 @@ from __future__ import annotations
 import errno
 import logging
 import os
+import signal
 from pathlib import Path
 
 import psutil
 import pytest
 
-from app.services.infrastructure.node_debug.process import process_identity
+from app.services.infrastructure.node_debug.process import (
+    process_identity,
+    process_lifecycle,
+)
 from app.services.infrastructure.node_debug.process.process_identity import (
     IDENTITY_SOURCE_LINUX_PROC,
     IDENTITY_SOURCE_PSUTIL,
+    NodeDebugProcessIdentity,
     probe_process_identity,
 )
+from tests.unit.services.infrastructure.node_debug.test_node_debug_launch_claim import (
+    _make_service,
+)
+from tests.unit.services.infrastructure.node_debug.test_node_debug_launch_claim import (
+    session_tree as session_tree,  # noqa: PLC0414
+)
+
+
+@pytest.mark.parametrize("change", ["reused", "incomparable", "gone"])
+async def test_force_stop_rechecks_identity_after_the_original_wait(
+    tmp_path: Path, session_tree: tuple[object, Path, Path],
+    change: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _store, _root = _make_service(tmp_path, session_tree[0])
+    same = NodeDebugProcessIdentity(pid=4321, source=IDENTITY_SOURCE_LINUX_PROC, start_marker="original")
+    changed = (
+        None if change == "gone" else NodeDebugProcessIdentity(
+            pid=4321,
+            source=IDENTITY_SOURCE_PSUTIL if change == "incomparable" else same.source,
+            start_marker=same.start_marker if change == "incomparable" else "replacement",
+        )
+    )
+    probes = iter([same, same])
+    signals: list[tuple[int, int]] = []
+
+    def probe(_pid: int) -> NodeDebugProcessIdentity | None:
+        return next(probes, changed)
+
+    # 只缩短测试的原等待，身份在等待到期与下一次派发之间变化。
+    monkeypatch.setattr(process_lifecycle, "_RECONCILE_TERMINATE_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(process_lifecycle, "probe_process_identity", probe)
+    monkeypatch.setattr(process_lifecycle.os, "kill", lambda pid, value: signals.append((pid, value)))
+    terminated = await service._lifecycle.terminate_verified_instance(
+        pid=same.pid, recorded_source=same.source, recorded_start_marker=same.start_marker,
+    )
+    assert terminated is (change != "incomparable")
+    assert signals == [(same.pid, signal.SIGTERM)]
 
 
 @pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])

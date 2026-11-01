@@ -350,6 +350,25 @@ async def debug_receive_client(integration_workspace_root_path: str) -> AsyncIte
             nonlocal current
             if close_current:
                 await current.close()
+            else:
+                # 冷 owner 模拟旧 Backend 已消失；不能让旧 monitor 与新 owner 并写 claim。
+                # 这里只结束测试观察任务和连接，外部 Node 及持久记录保持原样。
+                runtimes = tuple(current._runtimes.values())
+                observers = tuple(
+                    task for runtime in runtimes
+                    for task in (runtime.process_task, runtime.stdout_task, runtime.stderr_task,
+                                 runtime.inspector.receiver_task, runtime.inspector.variable_hydration_task)
+                    if task is not None
+                )
+                for task in observers:
+                    if not task.done():
+                        task.cancel()
+                for result in await asyncio.gather(*observers, return_exceptions=True):
+                    if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                        raise result
+                for runtime in runtimes:
+                    if runtime.inspector.socket is not None:
+                        await runtime.inspector.socket.close()
             current = service()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
