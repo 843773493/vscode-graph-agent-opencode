@@ -67,6 +67,23 @@ def test_activation_scope_exposes_mixed_and_restart_candidate_boundaries():
     ) == "restart_workspace"
 
 
+@pytest.mark.parametrize("path", [
+    "/context/resource_activation",
+    "/context/resource_activation/default_boundary",
+    "/context/resource_activation/overrides",
+    "/context/resource_activation/overrides/workspace_agents",
+])
+def test_resource_activation_changes_publish_for_next_job_without_workspace_restart(path):
+    registry = workspace_config_policy()
+    decision, = registry.classify((path,))
+    assert decision.policy == "next_job" and decision.activation_scope == "next_job"
+    assert not decision.policy_missing
+    assert registry.restart_paths((path,)) == ()
+    # 此规则仅发布候选；执行层仍按原Turn冻结，不扩大到其它context配置。
+    unknown, = registry.classify(("/context/unknown",))
+    assert unknown.policy == "restart_workspace" and unknown.policy_missing
+
+
 def test_changed_json_paths_uses_declared_array_identity_or_array_root():
     previous = {"workspaces": [{"connection_id": "a", "host": "old"}]}
     current = {"workspaces": [{"connection_id": "a", "host": "new"}]}

@@ -1524,3 +1524,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 独立`test_model_call_source_freezing.py`复用默认Turn的唯一产品步骤和浏览器驱动，仅设置本文件工作区AGENTS为model_call。两模式各1场完整通过，六次实际model_stream请求核精确owner、工具配对/后继来源位置和封存hash；两组各三份assembly核真实API分页、UI展开完整selection/provenance、双facet原文、其余binding仍为Turn及安全重启后的历史不变。未同时修改其他来源，不能据标签与原绑定声称其变化时的完整混合策略行为已验证。
 - 默认Turn在`product-002`通过（同批新入口因40910占用setup拒绝）；同bind核空后仅补跑显式入口，`product-003`为1 passed/186.04秒、exit0。3578份采样源码前后稳定，进程外超时/4GiB和原集成独占闸门保持，未知占用进程未被终止。Ruff/Pyright零诊断、编译/Node语法通过；新矩阵注册只做加载解析，未称默认矩阵完整运行。
 - 本次显式复用已核2077份输入、全部资产SHA及固定干净上游的真实Workbench；两份已提交Python DTO差异不参与页面构建。原公共构建180秒超时及超时回收TODO未关闭，未放宽fixture或加入永久fallback。准确命令、原始输出、实际退出码、指纹、正式产物和作者结构审查见`out/tests/temp/model_call_source_freezing_20261101/artifacts/verification.json`。不代策略热更新、其他来源变化/Skill、团队、Windows、真实Provider或唯一Section8总验收；9.7、7.5、8.3、8.13及111/119保持未完成，前端/公共fixture/长回归驱动/共享Debug及他人暂存不纳入本片。
+
+### 2026-11-01 9.7 activation策略的真实文件热更新（部分）
+
+- 原策略表漏登记context.resource_activation，真实文件watcher经生命周期candidate applier将该变更拒为context需重启；4项策略反例及真实场景均复现。现仅在原workspace策略表和schema清单补齐对象/后代的next_job登记，沿现有执行active slot冻结合同保证新用户Turn或独立internal execution生效、同Turn不漂移；没有新策略枚举、配置参数、schema版本、发布链或兼容入口。
+- 31项定向策略/schema测试通过；最终真实watcher场景1 passed/60.32秒。Session、两轮消息、工具循环、三次模型调用和assembly均经原ASGI产品入口生成，模型复用model_stream。公开状态与事件核healthy、无需重启、精确changed/applied path、next_job和无deferred；同Turn后继请求逐字保留前缀、原assistant/tool配对和A来源，下一Turn采用model_call及B来源，当前文件改C后冷Saver仍逐字段保留原policy、owner、双facet与sealed request hash。
+- 原始运行均保留：004初版直接reload通过但绕过生产candidate applier，不算完整产品验收；006改为真实watcher后复现ConfigRestartRequiredError。扩大配置单测批次007在180秒外部期限退出124，未完成、未算通过；008只补直接相关31项并通过。009在配置修改前的首模型20秒阶段等待到期，并引出fixture读取未结算transport的teardown错误；010按既有同类fixture的45秒阶段等待通过，未改变产品执行期限。TODO：首轮模型准备的冷启动长尾根因仍未定位；扩大批次未完成范围保留，不通过放宽业务断言或产品期限掩盖。
+- Ruff、Pyright零诊断、compileall、严格规范校验通过；最终2873份源码（含configs）采样前后无变化。命令、原始输出/实际退出码、源码与产物hash、作者结构审查见`out/tests/temp/activation_policy_turn_20261101/artifacts/verification.json`。原策略模块316行、目录17个直接Python文件；测试generation目录6个，无新增目录和职责层。只做作者复核，无新增非作者独审。
+- 本片不新增Gateway/Web、独立Backend硬重启、Windows、同步SDK、真实Provider或完整Section8证据。9.7/7.5/8.3/8.13及整体111/119保持未完成，团队与MCP持有延期项继续原TODO；未改前端迁移、公共fixture、长回归驱动、共享debug或他人暂存。

@@ -30,6 +30,8 @@
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
     { "pattern": "/runtime/auxiliary_services/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/connection/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/context/resource_activation", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
+    { "pattern": "/context/resource_activation/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/gateway_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
