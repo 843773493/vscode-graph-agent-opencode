@@ -13,6 +13,7 @@ from app.core.session_control_store.copy_attachment_settlement import (
     transition_copy_attachment_settlement,
 )
 from app.core.session_lifecycle_gate import SessionOperationLease
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_queue import ExecutionQueueSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.attachment_blob_catalog.locator import (
@@ -196,22 +197,26 @@ class AttachmentIngestRecoveryMixin:
 
     async def recover_idle_session(self, session_id: str, *, messages: AttachmentMessageReader) -> tuple[str, ...]:
         """恢复一个已发布 Session；不抢占活上传，始终遵循 holder → gate 锁序。"""
+        def recover() -> tuple[str, ...]:
+            # 删除 journal 接管原 pin；成功 fork 回执不再解析已隔离的节点。
+            catalog = self._path_resolver.catalog_store
+            if catalog.find_operation_replay_delete(self._path_resolver.workspace_id, session_id) is not None:
+                return ()
+            # 没有删除原件的缺失仍须报错，不能把外部损坏当作已删除。
+            if catalog.get_node(session_id).state != "active":
+                return ()
+            return self.recover_session(session_id, messages=messages)
+
         async with self.deletion_holder.lock_for(session_id, wait=False) as holder:
             if not holder.acquired:
                 return ()
             async with self._gate.exclusive(session_id):
-                # 删除 journal 接管原 pin；成功 fork 回执不再解析已隔离的节点。
-                catalog = self._path_resolver.catalog_store
-                if catalog.find_operation_replay_delete(self._path_resolver.workspace_id, session_id) is not None:
-                    return ()
-                # 没有删除原件的缺失仍须报错，不能把外部损坏当作已删除。
-                if catalog.get_node(session_id).state != "active":
-                    return ()
-                return self.recover_session(session_id, messages=messages)
+                # holder 和 gate 覆盖排队、原生 I/O 及取消后的同一 worker 结算。
+                return await run_sync_shielded(recover)
 
     async def recover_pending_ingests(self, *, messages: AttachmentMessageReader) -> int:
         """启动时以权威 Session catalog 枚举，复用同一定点恢复入口。"""
-        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot()
+        _, nodes = await run_sync_shielded(self._path_resolver.catalog_store.read_nodes_snapshot)
         count = 0
         for node in nodes:
             if node.kind == "session" and node.state == "active":

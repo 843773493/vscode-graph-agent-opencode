@@ -351,6 +351,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 一个资源的真实释放未收到回执，其它无关资源也需要同一 owner 处理
 - **THEN** 无关资源能够独立推进，挂起操作保持唯一执行身份并交由原 owner 终止核实，不通过丢弃锁内任务或重发删除伪造进度
 
+#### Scenario: 附件启动或定点恢复等待同步存储
+
+- **WHEN** 原 catalog 快照、Session fresh 校验、canonical 读取或上传 pin 结算在线程池排队、等待存储锁或原生 I/O，期间调用者取消
+- **THEN** 同步访问在既有受保护 worker 中完成，事件循环继续调度；定点恢复的原 holder 与 Session gate 保持到该 worker 实际结束。启动快照取消后不继续处理 Session；已进入定点恢复的结算不在锁外继续，原存储错误和取消因果保留。重试沿原 pin 与唯一恢复入口核实，不把 worker 结束当成外部进程停止或整个 shutdown 已有硬期限
+
 #### Scenario: Windows 终止工具尚未返回
 
 - **WHEN** Terminal 原进程树停止链正在等待 `taskkill /T /F /PID` 回执

@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 附件目录准入、worker 结算、holder 和取消语义的测试与 fixture。
+- 附件目录准入与恢复、worker 结算、holder 和取消语义的测试与 fixture。
 
 # 不可修改内容
 

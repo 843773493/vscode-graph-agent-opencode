@@ -573,3 +573,9 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 共享创建链先持久保存原intent并取得原operation lease，再执行领域本地准备。Terminal在此阶段完成受管cwd准入、目录URI保存和绑定原终端身份的目录lease获取；最后才将原operation标为dispatching并调用外部创建。目录登记与lease获取复用原shielded worker和账本writer锁，目录holder、资源锁及Thread准入一直覆盖排队、原生写盘与取消结算，不增加账本或第二创建链。
 
 准备失败或取消时，仍在场的原调用能够证明从未调用外部创建，沿原未派发收尾持久提交deleted/verified、解除关联、结清已发布的目录lease及原operation。关闭等待同一准备结算，准备返回后重新核准入，禁止迟到创建。准备成功后真正派发而回执丢失，仍保留unknown、待核实operation和目录占用；不把本地准备的证明推广到Backend硬退出、旧调用消失或原生创建已派发的情况。原生I/O抢占及整个operation/shutdown总期限继续TODO，5.2／5.4保持未完成。
+
+### 附件启动与定点恢复的同步存储结算（5.4 部分收口）
+
+启动枚举的权威 catalog 快照，以及定点恢复的删除 journal／active 校验、canonical 引用读取、原件清理和 pin 接管结算，统一通过既有 `run_sync_shielded` 执行原同步恢复逻辑。定点恢复仍先取得原上传 holder 再取得 Session gate，两者覆盖线程池排队、真实 I/O 和取消结算；请求上下文随 worker 传递，存储使用原有线程安全连接，不建立另一恢复任务或消息事实。
+
+启动快照取消后不进入逐 Session 恢复；已进入定点恢复则等原 worker 结束后传播取消，存储失败保留原异常及取消因果。显式重试只处理原非终态 pin，成功结算不重复。当前 runtime generation 判断仍在事件循环中，未将 tracker 回调机械迁入线程；同步运行时关联对账、GC 账本写入、锁文件打开、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
