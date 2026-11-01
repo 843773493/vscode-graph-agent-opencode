@@ -5,13 +5,18 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 
 from app.core.resource_uri import resource_display_uri
+from app.schemas.internal_v2.node_debug import NodeDebugLaunchProfileDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session.fork import (
+    build_workspace_fork_config,
+)
 from tests.support.node_debug_dependencies import (
     node_debug_file_paths,
     permissive_node_debug_session_admission,
@@ -166,9 +171,28 @@ def test_capability_profiles_project_future_files_without_native_paths(
     assert profile["args"] == ["--fixture"]
     assert str(tmp_path) not in json.dumps(payload)
     assert not (tmp_path / "future").exists()
+    # fork 冻结内部配置输入，公开能力独立投影 URI，不把 DTO 当作运行配置。
+    frozen = build_workspace_fork_config(tmp_path, config.get_debug_runtime_config())
+    assert frozen.launch_profiles["future"].program == program
+    assert frozen.launch_profiles["future"].working_directory == directory
     # 能力查询不检查存在性；同一引用到真正启动校验时仍明确失败。
     with pytest.raises(FileNotFoundError, match="调试脚本不存在"):
         service._configuration_factory.resolve_script_path(profile["program"])
+
+
+@pytest.mark.parametrize("field", ["program", "working_directory"])
+@pytest.mark.parametrize("reference", [
+    "/private/debug-secret", r"C:\x\debug-secret", r"\\target\x\debug-secret",
+    "relative/debug-secret.mjs", "file:///private/debug-secret",
+    resource_display_uri(scope="user", scope_id="local", kind="config", tail_segments=("workspace",)),
+])
+def test_public_launch_profile_rejects_unresolved_references(field: str, reference: str) -> None:
+    with pytest.raises(ValidationError) as captured:
+        NodeDebugLaunchProfileDTO.model_validate({
+            "name": "node-test", "adapter": "node_inspector", "runtime": "node", "supported": True,
+            field: reference,
+        })
+    assert captured.value.errors()[0]["loc"] == (field,)
 
 
 def test_capability_profile_rejects_foreign_workspace_uri(tmp_path: Path) -> None:

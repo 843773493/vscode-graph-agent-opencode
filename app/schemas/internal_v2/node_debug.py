@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
+from app.core.resource_uri import parse_resource_uri
 from app.schemas.canonical_params import CanonicalThreadId
 
 NodeDebugStatus = Literal[
@@ -254,13 +255,28 @@ class NodeDebugActionRecordDTO(BaseModel):
     created_at: datetime
 
 
+def _launch_profile_uri(value: str) -> str:
+    # 空值表示由方案选择；公开能力不承载内部配置的原生路径输入。
+    if not value:
+        return value
+    parsed = parse_resource_uri(value)
+    if parsed.scope != "workspace" or parsed.kind != "files":
+        raise ValueError("调试启动能力必须引用工作区文件 URI")
+    return parsed.display_uri
+
+
+_LaunchProfileURI = Annotated[
+    str, AfterValidator(_launch_profile_uri), PlainSerializer(_launch_profile_uri),
+]
+
+
 class NodeDebugLaunchProfileDTO(BaseModel):
     name: str
     adapter: str
     runtime: str
     supported: bool
-    program: str = ""
-    working_directory: str = ""
+    program: _LaunchProfileURI = ""
+    working_directory: _LaunchProfileURI = ""
     args: list[str] = Field(default_factory=list)
 
 

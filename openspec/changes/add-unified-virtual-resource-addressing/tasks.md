@@ -1945,3 +1945,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 附件目录、消息输出和Turn文件引用共用原附件grammar的构造与序列化校验；普通输入继续接受相对路径、绝对路径、URI和内联上传。复用同一个AttachmentRef结构，未增加parser或存储链。消息详情与列表将内部ValidationError交原500出口，保留原业务404／409。
 - 产品入口生成三种普通输入及上传附件，32组复制后损坏与服务内校验失败均拒绝；修复后完整响应、canonical字节及封存request_hash不变。旧生产真实返回200并发布原生路径的反例已保留。76项模型检查、相关映射／附件回归251项、历史业务142项、消息检查点24项、历史／公开协议26项及原附件入口16项通过，各组有重叠，不相加。两份旧多媒体fixture的封存相对路径已迁为URI，原内容／媒体块断言保留。
 - Pyright六文件零诊断、compileall通过；Ruff仅保留messages.py原有13项Depends规则诊断，与HEAD逐项相同。两个较宽组合触及90秒保护，不计通过；定向协议检查26项58.64秒，单次冷导出12.48／12.65秒，作为后续fixture优化依据。命令、源码指纹、原始输出与退出码见 `out/tests/temp/attachment_uri_publication_20261101/artifacts/verification.json`。全部检查带外部期限及4GiB保护，集成沿原独占闸门；本片为ASGI与model_stream，不代Gateway业务代理、Web、Windows或硬重启。2.2／7.2保持未勾，整体51/53。
+
+### 2026-11-01 Node Debug 启动能力的 URI 发布（2.2／7.2部分收口）
+
+- 启动能力的program／working_directory在构造和序列化时复用唯一grammar，只接受工作区文件URI或原有空值；构造后赋值与model_copy不再绕过发布校验。fork迁用已有内部LaunchProfileConfig，删除公开DTO转换及重复supported判定，保留目标端三种路径输入、方案相对状态和Inspector非文件标签。
+- 原生产HTTP200发布原生路径的反例已保留；120项API／配置／fork检查、38项帧及配置发布回归、6项产品执行生成后的fork发布／恢复验收通过，真实OpenAPI与descriptor核对通过。Ruff通过；Pyright六文件28项诊断与完整HEAD归档逐项对照相同，无新增，不称全绿。
+- 命令、源码指纹、原始输出、退出码及基线比较见 `out/tests/temp/node_debug_profile_publication_20261101/artifacts/verification.json`。测试带外部超时／4GiB保护，产品矩阵沿原独占闸门；未代Gateway业务网络、Web、Windows或独立Backend硬重启。2.2／7.2保持未勾，整体51/53。

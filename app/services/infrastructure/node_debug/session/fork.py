@@ -21,12 +21,12 @@ from app.core.resource_uri import parse_session_thread_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
-    NodeDebugLaunchProfileDTO,
 )
 from app.services.infrastructure.node_debug.configuration.configuration_factory import (
     NodeDebugConfigurationFactory,
 )
 from app.services.infrastructure.node_debug.configuration.runtime_config import (
+    NodeDebugLaunchProfileConfig,
     parse_launch_profile_configs,
 )
 from app.services.infrastructure.node_debug.session.session_store import (
@@ -58,7 +58,7 @@ class NodeDebugWorkspaceForkConfig:
     workspace_id: str
     revision: str
     content_hash: str
-    launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO]
+    launch_profiles: Mapping[str, NodeDebugLaunchProfileConfig]
 
 
 def build_workspace_fork_config(
@@ -74,18 +74,7 @@ def build_workspace_fork_config(
     raw_profiles = debug_config.get("launch_profiles")
     if not isinstance(raw_profiles, Mapping):
         raise TypeError("runtime.debug.launch_profiles 必须是 mapping")
-    parsed_profiles = parse_launch_profile_configs(raw_profiles, fill_defaults=True)
-    profiles: dict[str, NodeDebugLaunchProfileDTO] = {}
-    for name, profile in parsed_profiles.items():
-        profiles[name] = NodeDebugLaunchProfileDTO(
-            name=name,
-            adapter=profile.adapter,
-            runtime=profile.runtime,
-            supported=(profile.adapter == "node_inspector" and profile.runtime == "node"),
-            program=profile.program,
-            working_directory=profile.working_directory,
-            args=list(profile.args),
-        )
+    profiles = parse_launch_profile_configs(raw_profiles, fill_defaults=True)
     return NodeDebugWorkspaceForkConfig(
         workspace_root=workspace_root.resolve(),
         workspace_id=load_or_create_workspace_id(workspace_root),
@@ -412,7 +401,7 @@ def validate_target_prepublication(
     target_workspace_config_revision: str,
     target_workspace_config_hash: str | None,
     target_workspace_id: str,
-    launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO],
+    launch_profiles: Mapping[str, NodeDebugLaunchProfileConfig],
     configuration_id_mapper: Callable[[str], str] | None = None,
 ) -> NodeDebugTargetPrepublication:
     """在 target 不可见 staging 中重验配置；失败时整个操作 fail-closed。"""
@@ -436,7 +425,7 @@ def validate_target_prepublication(
     validated: list[str] = []
     for artifact in snapshot.configuration_artifacts:
         configuration = artifact.configuration()
-        profile: NodeDebugLaunchProfileDTO | None = None
+        profile: NodeDebugLaunchProfileConfig | None = None
         profile_name = configuration.launch_profile_name
         if profile_name is not None:
             profile = launch_profiles.get(profile_name)
@@ -445,8 +434,7 @@ def validate_target_prepublication(
                     f"target launch profile 不存在: {profile_name}"
                 )
             if (
-                not profile.supported
-                or profile.adapter != "node_inspector"
+                profile.adapter != "node_inspector"
                 or profile.runtime != "node"
             ):
                 raise NodeDebugTargetValidationError(

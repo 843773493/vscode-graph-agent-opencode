@@ -16,7 +16,11 @@ from app.api import node_debug
 from app.api.deps import get_node_debug_service, verify_local_token
 from app.core.exceptions import ForbiddenError
 from app.core.trace_middleware import TraceMiddleware
-from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugCapabilitiesDTO,
+    NodeDebugLaunchProfileDTO,
+    NodeDebugStateDTO,
+)
 from app.services.infrastructure.node_debug.service import NodeDebugService
 
 SESSION_ID = "ses_00000000400070008000000000000001"
@@ -62,6 +66,38 @@ def boundary_client() -> Iterator[tuple[TestClient, Mock]]:
     application.dependency_overrides[get_node_debug_service] = lambda: service
     with TestClient(application, raise_server_exceptions=False, headers={"X-Request-ID": REQUEST_ID}) as client:
         yield client, service
+
+
+@pytest.mark.parametrize("field", ["program", "working_directory"])
+@pytest.mark.parametrize("native", NATIVE_PATHS)
+@pytest.mark.parametrize("mutation", ["assignment", "model_copy"])
+def test_capability_publication_rejects_mutated_native_reference(
+    boundary_client: tuple[TestClient, Mock], field: str, native: str,
+    mutation: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, service = boundary_client
+    profile = NodeDebugLaunchProfileDTO(
+        name="node-default", adapter="node_inspector", runtime="node", supported=True,
+    )
+    capabilities = NodeDebugCapabilitiesDTO(
+        enabled=True, default_adapter="node_inspector", launch_profiles=[profile],
+    )
+    if mutation == "assignment":
+        setattr(capabilities.launch_profiles[0], field, native)
+    else:
+        capabilities.launch_profiles[0] = profile.model_copy(update={field: native})
+    service.get_capabilities.return_value = capabilities
+
+    response = client.get(BASE + "/capabilities")
+
+    assert response.status_code == 500, response.text
+    assert response.headers["X-Request-ID"] == REQUEST_ID
+    assert response.json()["request_id"] == REQUEST_ID
+    assert "debug-secret" not in response.text
+    diagnostics = [record for record in caplog.records if record.exc_info]
+    assert len(diagnostics) == 1
+    assert "PydanticSerializationError" in caplog.text
+    service.get_capabilities.assert_called_once()
 
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation"), [

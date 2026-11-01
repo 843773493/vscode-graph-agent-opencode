@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,11 +13,14 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
-    NodeDebugLaunchProfileDTO,
     NodeDebugSessionManifestDTO,
+)
+from app.services.infrastructure.node_debug.configuration.runtime_config import (
+    NodeDebugLaunchProfileConfig,
 )
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceDriftError,
+    build_workspace_fork_config,
     capture_source_copy_snapshot,
     validate_target_prepublication,
 )
@@ -163,9 +167,10 @@ def test_capture_fails_closed_when_registered_source_drifts(
         )
 
 
+@pytest.mark.parametrize("profile_input", ["relative", "absolute", "uri"])
 def test_target_prepublication_rechecks_paths_profile_and_config_revision(
     source_store: tuple[NodeDebugSessionStore, Path],
-    tmp_path: Path,
+    tmp_path: Path, profile_input: str,
 ) -> None:
     store, _session_dir = source_store
     main_thread_id = store.path_resolver.main_thread_id(_SESSION_ID)
@@ -191,11 +196,11 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
         target_workspace_config_hash="config-hash-v1",
         target_workspace_id=node_debug_file_paths(tmp_path).workspace_id,
         launch_profiles={
-            "node-default": NodeDebugLaunchProfileDTO(
-                name="node-default",
+            "node-default": NodeDebugLaunchProfileConfig(
                 adapter="node_inspector",
                 runtime="node",
-                supported=True,
+                program="",
+                working_directory="",
             )
         },
     )
@@ -223,8 +228,8 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
             target_workspace_id=node_debug_file_paths(target_root).workspace_id,
             launch_profiles={},
         )
-    profiles = {"node-default": NodeDebugLaunchProfileDTO(
-        name="node-default", adapter="node_inspector", runtime="node", supported=True,
+    profiles = {"node-default": NodeDebugLaunchProfileConfig(
+        adapter="node_inspector", runtime="node", program="", working_directory="",
     )}
     with pytest.raises(RuntimeError, match="target 调试入口不存在"):
         validate_target_prepublication(
@@ -241,7 +246,7 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
     assert foreign.active_configuration_id is None
     assert foreign.validated_configuration_ids == (_CONFIGURATION_ID,)
 
-    # fork 的目标 profile URI 只在 target 解释，不回 source 查找同名文件。
+    # fork 的目标 profile 三种输入只在 target 解释，不回 source 查找同名文件。
     store.write_configuration(
         _SESSION_ID,
         _configuration(_CONFIGURATION_ID, "跟随目标 profile", "main.mjs").model_copy(
@@ -255,8 +260,17 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
         workspace_id=node_debug_file_paths(tmp_path).workspace_id,
     )
     target_paths = node_debug_file_paths(target_root)
-    profiles["node-default"].program = target_paths.resolve("main.mjs")[1]
-    profiles["node-default"].working_directory = target_paths.workspace_uri
+    program, directory = {
+        "relative": ("main.mjs", ""),
+        "absolute": (str(target_root / "main.mjs"), str(target_root)),
+        "uri": (target_paths.resolve("main.mjs")[1], target_paths.workspace_uri),
+    }[profile_input]
+    profiles["node-default"] = build_workspace_fork_config(target_root, {
+        "launch_profiles": {"node-default": {
+            "adapter": "node_inspector", "runtime": "node",
+            "program": program, "working_directory": directory,
+        }},
+    }).launch_profiles["node-default"]
     target_arguments = {
         "target_workspace_root": target_root,
         "target_workspace_config_revision": "target-debug-v2",
@@ -265,6 +279,8 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
     }
     result = validate_target_prepublication(profile_snapshot, **target_arguments)
     assert result.validated_configuration_ids == (_CONFIGURATION_ID,)
-    profiles["node-default"].program = node_debug_file_paths(tmp_path).resolve("main.mjs")[1]
+    profiles["node-default"] = replace(
+        profiles["node-default"], program=node_debug_file_paths(tmp_path).resolve("main.mjs")[1],
+    )
     with pytest.raises(RuntimeError, match="工作区与固定目标不符"):
         validate_target_prepublication(profile_snapshot, **target_arguments)
