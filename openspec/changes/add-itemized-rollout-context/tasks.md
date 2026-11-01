@@ -1494,3 +1494,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 恢复权限后真实点击重试，bootstrap核嵌套Session／Thread／工作区及request_id，完整历史、原canonical字节与输入草稿保持；随后原Thread续聊成功，原Turn除按正式当前视图重新投影的view坐标外每字段一致、原JSONL前缀不变，三份封存请求核真实transport正文／owner／request_hash及原工具配对。最终1 passed／138.56秒，外层141.78秒、exit0；3595项有范围受测源码前后无变化，独占集成闸门、外部600秒与4GiB保护保持，专用两端口可重绑定且锁权限已恢复。
 - Ruff、真实Pyright零诊断、Node语法检查与compileall通过；正式Workbench构建成功，保留产物main哈希、两份操作trace、阶段内存、截图及网络回执。首次产品轮因测试误读bootstrap的Session层级失败，已按正式DTO修正并完整补验；原失败保留，不计作通过。作者结构自查无finding，没有新的非作者独审。
 - 准确命令、原始输出、退出码、源码清单、初次失败归因及正式run路径见`out/tests/temp/web_history_storage_failure_20261101/artifacts/verification.json`。本片使用当前含未提交Workbench迁移的工作树，不宣称HEAD干净检出独立可复现；不改或夹带前端、公共fixture、矩阵／长回归driver、共享Debug及他人暂存。不新增Windows、真实外部Provider、同步transport、Backend重启、fork或全部Section8证据；整体111/119及延期项保持未完成。
+
+
+### 2026-11-01 7.5-F 全新进程的 v2-only 动态运行边界（部分）
+
+- 新增独立 `runtime_boundary/test_v2_only_runtime.py`，完整复用既有综合存储工作负载。只在本测试子进程启动时安装导入观察，拒绝整个一次性 `rollout_context.migration` 包；先记录再抛错，即使调用方捕获也会被最终审计发现。独立探针实际触发并捕获拒绝，验证观察有效；没有复制模型协议或产品流程。
+- 正式矩阵1 passed／351.83秒、exit0；原20次模型请求、并行工具/多次循环、两代fork、摘要、三次Backend安全重启、来源删除后的恢复和回退及封存hash断言完整通过。四代Backend均观察到原Saver、storage与mapping，12个非探针Python进程零旧链导入；原模型响应继续由model_stream提供。
+- 保留矩阵900秒／单进程4GiB、外层1020秒／4GiB、共享集成闸门及每次60秒fork监督器。2860份采样源码前后一致，已观察Python进程及本片五个服务端口均回收；Ruff、compileall、真实Pyright零诊断和矩阵注册检查通过。作者AST核对255份domain/rollout/mapping源码，最大795行、直接Python文件最多20个，storage无禁止的LangChain/mapping直接import，不把该核对称为独立审查。
+- 准确命令、raw／退出码、源码指纹、逐进程导入记录、原存储测量与清理证据见 `out/tests/temp/v2_runtime_boundary_20261101/artifacts/verification.json`。本片不证明全部双writer/projector/schema及7.5-F职责门，也不新增真实Provider、Web、Windows、同步完整执行或硬退出证据；7.5／8.3及整体111/119保持未完成。未改产品、前端、公共fixture、原长回归驱动或共享Debug；他人独有改动和共享暂存保留。
