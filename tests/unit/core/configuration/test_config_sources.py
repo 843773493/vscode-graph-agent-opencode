@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import errno
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
+from app.core import config_sources
 from app.core.config_sources import (
     ConfigSource,
     parse_stable_config_file,
@@ -176,7 +179,10 @@ def test_source_constructor_and_replace_reject_native_or_wrong_kind_uri(
     if uri:
         assert uri not in str(created.value)
     assert source.uri is None
-    assert [record.args for record in caplog.records] == [(uri,), (uri,)]
+    assert len(caplog.records) == 2
+    for record, original in zip(caplog.records, (created.value, replaced.value), strict=True):
+        assert record.exc_info and record.exc_info[1] is original
+        assert repr(uri) in record.getMessage()
 
 
 @pytest.mark.parametrize("uri", [
@@ -186,3 +192,30 @@ def test_source_constructor_and_replace_reject_native_or_wrong_kind_uri(
 def test_source_keeps_logical_uri_or_explicit_null_without_resolving(uri: str | None) -> None:
     source = ConfigSource(uri=uri, layer="inline", precedence=0, loaded=True)
     assert source.uri == uri and replace(source, loaded=False).uri == uri
+
+
+@pytest.mark.parametrize("uri", [
+    "/private-config/workspace.jsonc", r"C:\private-config\workspace.jsonc",
+    r"\\server\private-config\workspace.jsonc", "file:///private-config/workspace.jsonc",
+    "boxteam://workspace/ws_a/resources/files/root/workspace.jsonc",
+])
+def test_uri_rejection_survives_log_failure_with_original_error(
+    uri: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    originals: list[BaseException] = []
+    sink = OSError(errno.EIO, "诊断写入失败", "/private-config/log-sink")
+
+    def fail_log(*_args: object, **_kwargs: object) -> NoReturn:
+        original = sys.exception()
+        assert isinstance(original, ValueError)
+        originals.append(original)
+        raise sink
+
+    with monkeypatch.context() as fault:
+        fault.setattr(config_sources.logger, "error", fail_log)
+        with pytest.raises(ValueError) as failure:
+            config_sources.validate_config_source_uri(uri)
+    assert originals == [failure.value]
+    assert uri not in str(failure.value)
+    assert any("诊断日志输出失败" in note and "log-sink" in note for note in failure.value.__notes__)
+    assert config_sources.validate_config_source_uri(None) is None

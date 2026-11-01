@@ -12,13 +12,16 @@ from typing import NoReturn
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Request, Response
+from pydantic_core import PydanticSerializationError
 
 from app.api import config as config_api
 from app.api.deps import get_config_service, verify_local_token
+from app.core import config_sources
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.schemas.internal_v2.config import ConfigSourcesDTO
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
@@ -77,6 +80,75 @@ async def config_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
     finally:
         await service.close()
         store.close()
+
+
+@pytest.mark.parametrize("field", ["schema_uri", "source_uri"])
+@pytest.mark.parametrize("sink_fails", [False, True])
+@pytest.mark.asyncio
+async def test_copied_source_projection_rejects_native_uri_without_changing_owner(
+    config_case: ConfigCase, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, field: str, sink_fails: bool,
+) -> None:
+    case = config_case
+    config_bytes = case.config_path.read_bytes()
+    snapshot = case.service.get_snapshot()
+
+    def stored_rows() -> tuple[str, ...]:
+        with closing(case.store.connection()) as connection:
+            return tuple(connection.iterdump())
+
+    rows = stored_rows()
+    originals: list[BaseException] = []
+
+    def fail_log(*_args: object, exc_info: BaseException, **_kwargs: object) -> NoReturn:
+        originals.append(exc_info)
+        raise OSError(5, "诊断写入失败", "/private-config/log-sink")
+
+    async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test") as client:
+        baseline = await client.get("/api/v1/config/sources", headers={"X-Request-ID": "source-baseline"})
+        assert baseline.status_code == 200, baseline.text
+        original_data = baseline.json()["data"]
+        assert original_data["sources"] and original_data["revision"] == snapshot.revision
+        assert all(source["uri"] is None or source["uri"].startswith("boxteam://") for source in original_data["sources"])
+        assert baseline.headers["X-Request-ID"] == baseline.json()["request_id"] == "source-baseline"
+
+        for native in (
+            "/private-config/source.jsonc", r"C:\private-config\source.jsonc",
+            r"\\server\private-config\source.jsonc", "file:///private-config/source.jsonc",
+        ):
+            def corrupt_projection(*, _native: str = native, **payload: object) -> ConfigSourcesDTO:
+                result = ConfigSourcesDTO.model_validate(payload)
+                if field == "schema_uri":
+                    return result.model_copy(update={"schema_uri": _native})
+                result.sources[0] = result.sources[0].model_copy(update={"uri": _native})
+                return result
+
+            caplog.clear()
+            originals.clear()
+            with monkeypatch.context() as fault:
+                fault.setattr(config_api, "ConfigSourcesDTO", corrupt_projection)
+                if sink_fails:
+                    fault.setattr(config_sources.logger, "error", fail_log)
+                response = await client.get("/api/v1/config/sources", headers={"X-Request-ID": "source-rejected"})
+            assert response.status_code == 500, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-rejected"
+            assert "private-config" not in response.text
+            failures = [record.exc_info[1] for record in caplog.records if record.exc_info]
+            assert any(isinstance(error, PydanticSerializationError) for error in failures)
+            if sink_fails:
+                assert originals and all(isinstance(error, ValueError) for error in originals)
+                assert all(any("诊断日志输出失败" in note and "log-sink" in note
+                               for note in getattr(error, "__notes__", ())) for error in originals)
+            else:
+                assert any(isinstance(error, ValueError) for error in failures)
+                assert any(repr(native) in record.getMessage() for record in caplog.records)
+            assert case.service.get_snapshot() is snapshot
+            assert case.config_path.read_bytes() == config_bytes and stored_rows() == rows
+            recovered = await client.get("/api/v1/config/sources", headers={"X-Request-ID": "source-recovered"})
+            assert recovered.status_code == 200, recovered.text
+            assert recovered.headers["X-Request-ID"] == recovered.json()["request_id"] == "source-recovered"
+            assert recovered.json()["data"] == original_data
+            assert stored_rows() == rows
 
 
 @pytest.mark.parametrize("native", ["/private-config/source.jsonc", r"C:\private-config\source.jsonc", r"\\server\private-config\source.jsonc"])

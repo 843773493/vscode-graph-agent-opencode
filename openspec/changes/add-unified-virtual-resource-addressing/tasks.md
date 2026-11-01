@@ -1931,3 +1931,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原生产352项模型检查中283项非法引用反例失败、69项合法控制通过。最终728项不同定向检查通过：536项模型／任务API／Gateway设置检查、171项相关owner回归、20项公开协议合同，以及1项产品任务发布场景。产品场景经消息、Agent和model_stream生成关键历史，再通过任务API创建定义；四类复制后原生路径在原SQLite发布入口失败，五张任务表事实、canonical字节与封存请求owner/hash保持，解除故障后同revision更新恰好新增一个定义版本。Gateway设置还覆盖读取、合并、原profile写入及resolve，失败不改原文件，修复后同入口成功。
 - 持久任务与Gateway设置将内部序列化失败交原TraceMiddleware返回500、同一request_id及单次原诊断；原业务400／409与请求422保持。初版测试误要求grammar诊断包含输入原值、误把Windows拒绝原因当scheme错误，以及遗漏任务入口补全Gateway authority，均依据源码和原输出修正，失败原件保留；未放宽状态、归属、事务、诊断次数或恢复断言。536项结果复用第二轮未受后续测试断言修订影响的512项，并补跑全部64项相关函数（含40项重叠），不重复计数。
 - 14份Python文件完成Ruff、真实Pyright与compileall；与HEAD原件对照，保留既有15项Depends静态规则诊断和31项类型诊断，均无新增，不称全绿。严格OpenSpec 54／0通过；全部测试带外部硬超时及4GiB数据段保护，产品suite固定120秒并沿原集成闸门。准确命令、源码指纹、原始输出、退出码、schema／静态对照及作者自查见 `out/tests/temp/typed_uri_publication_20261101/artifacts/verification.json`。业务HTTP仍为ASGI、真实Gateway仅用于来源管理，不代业务代理、Web、Windows、独立进程重启或全仓URI审计；2.2／7.2继续未勾，整体51/53。
+
+### 2026-11-01 配置来源 URI 的构造与发布校验（2.2／7.2部分收口）
+
+- Workspace／Gateway 的来源 URI 与 schema URI 共用原 `validate_config_source_uri` 的构造及序列化合同，删除四处重复字段 validator；复制后及嵌套修改后的非法值在普通发布前拒绝，保留合法地址原字节、必填 nullable 字段、layer／precedence／revision。原拒绝复用 `report_failure`，日志次错留在原异常 notes，不替换原异常；未新增 parser、writer、schema 或迁移。
+- 最终357项不同定向检查通过（来源模型／core／Workspace owner及API297项、Gateway来源7项、公开协议31项、配置故障与恢复集成22项）；194项来源模型补验与297项重叠，不重复计数。新增集成在真实ConfigService与SQLite产生的来源上注入复制后坏值，覆盖POSIX／Windows／UNC／file URL、schema及嵌套来源和日志双错；核HTTP500／同request_id、配置快照身份、文件字节与SQLite全部行不变，解除故障后同入口恢复原响应。原实现126项发布拒绝与5项日志次错红测成立，6项合法控制通过。
+- 19模型的38份validation／serialization JSON Schema完全一致，compileall及OpenSpec strict（54项）通过；Ruff既存7项、真实Pyright既存1项与完整HEAD归档逐项对照无新增。首次HTTP测试4项失败归因于测试将repr日志当原生字节、误以为Pydantic包装错误携带原异常notes，修正观测后通过，未放宽HTTP／状态／身份断言。较宽Gateway回归在90秒外部保护下退出124，不计通过；随后按实际影响单独补验来源7项，未重跑整组。
+- 准确命令、3588份源码指纹、原始输出、实际退出码、静态基线及作者差异审查见 `out/tests/temp/config_source_publication_20261101/artifacts/verification.json`。所有检查均有外部超时及4GiB数据段保护，集成沿共享独占闸门；业务HTTP为进程内ASGI，不代独立Backend TCP／Gateway业务网络、Web、Windows或进程硬重启验收。2.2／7.2仍未勾，整体51/53；团队及MCP显式持有继续延期。

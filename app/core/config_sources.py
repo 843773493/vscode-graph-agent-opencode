@@ -6,10 +6,12 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import commentjson
+from pydantic import AfterValidator, PlainSerializer
 
+from app.core.failures import report_failure
 from app.core.resource_uri import parse_resource_uri
 
 logger = logging.getLogger(__name__)
@@ -33,11 +35,18 @@ def validate_config_source_uri(uri: str | None) -> str | None:
         parsed = parse_resource_uri(uri)
         if parsed.kind != "config":
             raise ValueError("配置来源引用必须指向 config 资源")
-    except ValueError:
+    except ValueError as error:
         # 普通错误只含 grammar 规则；非法原值仅留在具名原始诊断入口。
-        logger.exception("配置来源 URI 合同错误: uri=%r", uri)
+        report_failure(error, detail=f"配置来源 URI 合同错误: uri={uri!r}", diagnostic_logger=logger)
         raise
     return uri
+
+
+ConfigSourceURI = Annotated[
+    str | None,
+    AfterValidator(validate_config_source_uri),
+    PlainSerializer(validate_config_source_uri),
+]
 
 
 @dataclass(frozen=True, slots=True)

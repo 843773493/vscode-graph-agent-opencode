@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 from app.gateway.config.sources import _gateway_persisted_source_details
 from app.schemas.gateway.config import GatewayConfigSourceDTO, GatewayConfigSourcesDTO
@@ -84,3 +86,59 @@ def test_source_output_preserves_dangling_uri_null_and_revision_siblings(
     assert serialized["schema_uri"] == uri
     assert {key: serialized["sources"][0][key] for key in source} == source
     assert result_type.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.parametrize("source_type", [ConfigSourceDTO, GatewayConfigSourceDTO])
+@pytest.mark.parametrize("mode", ["python", "json", "json-text"])
+def test_copied_source_rejects_invalid_uri_at_publication(
+    source_type: type[ConfigSourceDTO | GatewayConfigSourceDTO], invalid_uri: str,
+    mode: Literal["python", "json", "json-text"],
+) -> None:
+    source = source_type(uri=None, layer="runtime_override", precedence=4, loaded=True)
+    broken = source.model_copy(update={"uri": invalid_uri})
+    with pytest.raises(PydanticSerializationError):
+        if mode == "json-text":
+            broken.model_dump_json()
+        else:
+            broken.model_dump(mode=mode)
+    assert source.uri is None
+
+
+@pytest.mark.parametrize("result_type", [ConfigSourcesDTO, GatewayConfigSourcesDTO])
+@pytest.mark.parametrize("field", ["schema_uri", "nested_source"])
+@pytest.mark.parametrize("mode", ["python", "json", "json-text"])
+def test_copied_envelope_and_nested_source_reject_invalid_uri_at_publication(
+    result_type: type[ConfigSourcesDTO | GatewayConfigSourcesDTO], invalid_uri: str,
+    field: str, mode: Literal["python", "json", "json-text"],
+) -> None:
+    result = result_type.model_validate({"revision": "r1", "schema_uri": None, "sources": [
+        {"uri": None, "layer": "runtime_override", "precedence": 4, "loaded": True},
+    ]})
+    before = result.model_dump_json()
+    if field == "schema_uri":
+        broken = result.model_copy(update={"schema_uri": invalid_uri})
+    else:
+        broken = result.model_copy(deep=True)
+        broken.sources[0].uri = invalid_uri
+    with pytest.raises(PydanticSerializationError):
+        if mode == "json-text":
+            broken.model_dump_json()
+        else:
+            broken.model_dump(mode=mode)
+    assert result.model_dump_json() == before
+
+
+@pytest.mark.parametrize("result_type", [ConfigSourcesDTO, GatewayConfigSourcesDTO])
+@pytest.mark.parametrize("uri", [
+    None, "boxteam://inline/boxteam_v1/resources/config/workspace_inline",
+    "boxteam://gateway_remote/workspace/ws_a/resources/config/workspace_override",
+])
+def test_copied_source_preserves_original_wire_and_metadata(
+    result_type: type[ConfigSourcesDTO | GatewayConfigSourcesDTO], uri: str | None,
+) -> None:
+    source = {"uri": uri, "layer": "user", "precedence": 2, "loaded": False,
+              "layer_revision": 7, "layer_digest": "digest", "source_generation": 9}
+    result = result_type.model_validate({"revision": "r1", "schema_uri": uri, "sources": [source]})
+    copied = result.model_copy(update={"schema_uri": uri, "sources": [result.sources[0].model_copy(update={"uri": uri})]})
+    assert copied.model_dump() == result.model_dump()
+    assert copied.model_dump_json() == result.model_dump_json()
