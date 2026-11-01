@@ -619,3 +619,7 @@ claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及�
 启动意图、spawn 身份、running、停止及冷恢复的 claim 写入统一等待既有受保护 worker，原会话存储仍是唯一 writer。活跃阶段在让出事件循环前通过原 tracker 登记本次提交的 blocker；持久提交后才更新真实 claim 的 blocker，原执行结束后移除提交 blocker。失败保留原持久事实与投影，不把尚未提交的候选当作已发布状态。重复取消等待同一写入及投影结算，保留首次取消与迟到存储错误。
 
 原 per-owner 锁和 Session 准入覆盖提交等待；冷恢复也在该 owner 锁内核实，活跃 runtime 的只读观察仍能在进程终止等待期间推进。spawn 身份和终态迁移共用原 state_lock，monitor 可观察真实退出，但不能先结清再被迟到的 spawned/running 覆盖。既有进程、lease 和 claim 身份不变，不新增恢复链或持久账本。同步读取、原生 I/O 抢占、无身份旧代接管及整个 operation／shutdown 总期限继续 TODO，5.2／5.4 保持未完成。
+
+### Node Debug 删除准备的 catalog 读取（5.4 部分收口）
+
+删除入口通过原 `NodeDebugSessionStore` 一次读取 main／已发布 child 并核对全部 owner，原 SQLite 连接的只读打开、查询、关闭和 catalog 路径校验在同一受保护 worker 中完成。空库或不支持的 schema 明确拒绝，不在删除准备中初始化或改写原件。读取等待不阻塞事件循环；取消仍等原读取及连接关闭结算，再由原删除 owner 释放 gate。准备成功之前不停止任何 runtime，不推进 fence、物理隔离或 drained 进度；取消后沿原 operation ID 恢复，原 locator 和 Session 原件保持。缺库、非文件、符号链接、重复 owner 及不可解析的 Thread 沿原合同明确拒绝，不扫描补建目录或增加另一套 catalog。后续 claim／manifest 的同步访问、原生 I/O 抢占及整个清理总期限仍 TODO。

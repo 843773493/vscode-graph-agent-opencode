@@ -5,7 +5,9 @@ from __future__ import annotations
 import errno
 import json
 import os
+import sqlite3
 from collections.abc import AsyncIterator, Callable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +16,8 @@ from typing import Literal
 import pytest
 
 from app.core.atomic_fs import native_io_path
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchClaimDTO,
@@ -79,6 +83,24 @@ async def debug_store() -> AsyncIterator[DebugStore]:
         ))
         directory = native_io_path(workspace.resolver.resolve_thread_node(session_id, thread_id) / "debug/node")
         yield DebugStore(store, session_id, thread_id, directory)
+
+
+@pytest.mark.parametrize("corruption", ["empty", "wrong-version"])
+def test_drain_catalog_rejects_invalid_schema_without_initializing_it(
+    debug_store: DebugStore, corruption: str,
+) -> None:
+    session_node = debug_store.store.path_resolver.resolve_session_node(debug_store.session_id)
+    catalog = session_node / CONTROL_DATABASE_NAME
+    if corruption == "empty":
+        catalog.write_bytes(b"")
+    else:
+        with closing(sqlite3.connect(catalog)) as connection:
+            connection.execute(f"PRAGMA user_version={SessionControlStore.SCHEMA_VERSION + 1}")
+            connection.commit()
+    original = catalog.read_bytes()
+    with pytest.raises((RuntimeError, KeyError)):
+        debug_store.store.session_thread_owners(debug_store.session_id)
+    assert catalog.read_bytes() == original
 
 
 def test_cold_store_reads_updates_and_deletes_with_long_configuration_path(debug_store: DebugStore) -> None:

@@ -10,12 +10,15 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.core.atomic_fs import native_io_path
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchClaimDTO,
     NodeDebugSessionManifestDTO,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import (
+    NodeDebugOwner,
     SessionNodePathResolver,
     resolve_debug_thread_node,
     resolve_node_debug_owner,
@@ -43,6 +46,35 @@ class NodeDebugSessionStore:
     def path_resolver(self) -> SessionNodePathResolver:
         """暴露受检目录索引解析器，供服务层入口统一归一 owner（含别名折叠）。"""
         return self._path_resolver
+
+    def session_thread_owners(self, session_id: str) -> tuple[NodeDebugOwner, ...]:
+        """删除前从权威 catalog 一次读取并核对全部 owner，不扫描线程目录。"""
+        resolver = self._path_resolver
+        session_node = resolver.resolve_session_node(session_id)
+        main_thread_id = resolver.main_thread_id(session_id)
+        control_path = session_node / CONTROL_DATABASE_NAME
+        if not control_path.is_file() or control_path.is_symlink():
+            raise RuntimeError(
+                "删除 Session 前 session control catalog 缺失或不是普通文件，"
+                "无法核实全部 thread owners: "
+                f"session_id={session_id}, main_thread_id={main_thread_id}, "
+                "artifact=session-control"
+            )
+        control = SessionControlStore(control_path, read_only=True)
+        try:
+            child_thread_ids = tuple(row.thread_id for row in control.list_child_thread_rows())
+        finally:
+            control.close()
+        thread_ids = (main_thread_id, *child_thread_ids)
+        if len(set(thread_ids)) != len(thread_ids):
+            raise RuntimeError(
+                "删除 Session 前 thread catalog 出现重复 owner，阻断物理隔离: "
+                f"session_id={session_id}, thread_ids={thread_ids!r}"
+            )
+        return tuple(
+            resolve_node_debug_owner(resolver, session_id=session_id, thread_id=thread_id).key
+            for thread_id in thread_ids
+        )
 
     def read_manifest(
         self, session_id: str, thread_id: str

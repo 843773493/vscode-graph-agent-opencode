@@ -636,3 +636,8 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 
 - **WHEN** 调试启动、停止或冷恢复的 claim 写入在线程池排队或等待原生存储，调用者取消、存储失败或对应进程真实退出
 - **THEN** 统一等待原受保护 worker，事件循环及无关请求继续推进；原 owner 准入保持至提交结算。活跃阶段提交前登记原 tracker 的提交 blocker，成功后更新持久 claim 投影再解除提交 blocker，失败不发布候选或遗留临时占用；卸载已经关闭准入时不得先落盘新活跃 claim。首次取消及迟到故障均保留，spawn 身份与终态沿原 state_lock 串行，真实退出不能被迟到的活跃阶段覆盖。不据此宣称同步读取无阻塞、原生 I/O 可抢占或整个 shutdown 已有硬期限
+
+#### Scenario: Node 调试删除准备等待 Thread catalog
+
+- **WHEN** Session 删除在 Node 调试排空前等待原 Thread catalog 查询或连接关闭，且调用方继续等待或取消原导航 worker
+- **THEN** 原存储 owner 在同一受保护 worker 中结清只读访问及连接，事件循环和无关 Session 继续可用。读取未结算时原删除 gate、locator、Session 原件与未完成进度保持，不停止 runtime、不推进 fence或物理隔离；取消结算后仍由原 operation ID 恢复并完成删除，原连接只关闭一次。缺失、非普通文件、符号链接、空库或不支持 schema 的 catalog 明确拒绝且不初始化、修复或改写原件，不扫描猜测 owner

@@ -12,7 +12,7 @@ session/
 │   ├── thread_owner.py          规范化 Session/Thread 身份并解析 catalog owner
 │   └── session_admission.py     会话级变更准入
 ├── 会话持久状态
-│   ├── session_store.py         manifest、launch claim 与方案配置文件读写
+│   ├── session_store.py         manifest、launch claim、方案文件与删除前 catalog owner 枚举
 │   ├── session_state.py         待安装断点、动作历史和运行态 manifest 更新
 │   └── snapshot.py              有界动作记录与 Node Debug 状态快照
 ├── 服务入口 mixin
@@ -44,6 +44,7 @@ session/
 # 规范
 
 - 文件按单一会话职责命名，只依赖会话领域模块、配置注册表与上层 schema。
+- 删除前的 main／child 枚举只从权威 catalog 取得，连接打开、查询、关闭和所有归属校验在同一受保护 worker 中结算；原 Session 删除 gate 覆盖整个等待，不扫描目录或在读取未结束时推进停止、fence及物理隔离。
 - 需要跨子包能力时通过明确的绝对模块路径导入，不反向依赖 `service.py`。
 - 失败必须直接抛出详细错误；修改本目录后运行 `uv run ruff check` 和对应 Node Debug 专项测试。
 - 代码注释使用中文，公开行为变更必须同步更新调用方和测试，不得建立双轨实现。

@@ -3,17 +3,25 @@
 承载 close/drain_session 两条停止入口：在 per-owner 临界区内串行停止在册
 runtime，并在删除物理隔离前定点核实 durable claim。由 NodeDebugService 继承
 （宿主必须提供 _runtimes、_runtimes_lock、_owner_lock、_lifecycle、_claim_runtime、
-_session_state），不反向依赖顶层 service.py。
+_session_state、_session_store），不反向依赖顶层 service.py。
 """
 
 from __future__ import annotations
 
-from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore
+from typing import TYPE_CHECKING
+
+from app.core.shielded_cleanup import run_sync_shielded
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.node_debug.session.session_store import (
+        NodeDebugSessionStore,
+    )
 
 
 class NodeDebugLifecycleEntryMixin:
     """关停/排空入口链路的方法族（由 NodeDebugService 继承）。"""
+
+    _session_store: NodeDebugSessionStore | None
 
     async def close(self) -> None:
         async with self._runtimes_lock:
@@ -36,41 +44,15 @@ class NodeDebugLifecycleEntryMixin:
         或残留 active claim 都向上抛错，让共享删除流保持源目录和 deleting
         record，禁止伪成功；不扫描物理 thread 目录，也不凭 PID/端口猜测 owner。
         """
-        if self._thread_path_resolver is None:
+        if self._session_store is None:
             raise RuntimeError(
                 "删除 Session 前排空 Node 调试 owner 需要 catalog resolver: "
                 f"session_id={session_id}"
             )
-        resolver = self._thread_path_resolver
-        session_node = resolver.resolve_session_node(session_id)
-        main_thread_id = resolver.main_thread_id(session_id)
-        control_path = session_node / CONTROL_DATABASE_NAME
-        if not control_path.is_file() or control_path.is_symlink():
-            raise RuntimeError(
-                "删除 Session 前 session control catalog 缺失或不是普通文件，"
-                "无法核实全部 thread owners: "
-                f"session_id={session_id}, main_thread_id={main_thread_id}, "
-                "artifact=session-control"
-            )
-        control = SessionControlStore(control_path)
-        try:
-            child_thread_ids = tuple(
-                row.thread_id for row in control.list_child_thread_rows()
-            )
-        finally:
-            control.close()
-
-        thread_ids = (main_thread_id, *child_thread_ids)
-        if len(set(thread_ids)) != len(thread_ids):
-            raise RuntimeError(
-                "删除 Session 前 thread catalog 出现重复 owner，阻断物理隔离: "
-                f"session_id={session_id}, thread_ids={thread_ids!r}"
-            )
-        for thread_id in thread_ids:
-            resolver.resolve_thread_node(session_id, thread_id)
-
-        for thread_id in thread_ids:
-            owner = self._owner_key(session_id, thread_id)
+        # 连接的打开、读取、关闭和路径核对留在同一 worker；取消也先结算再释放删除 gate。
+        owners = await run_sync_shielded(self._session_store.session_thread_owners, session_id)
+        # TODO(5.4)：后续 claim/manifest 的同步访问及整次排空期限仍须单独收口。
+        for owner in owners:
             async with self._owner_lock(owner):
                 runtime = self._runtimes.get(owner)
                 if runtime is not None:
