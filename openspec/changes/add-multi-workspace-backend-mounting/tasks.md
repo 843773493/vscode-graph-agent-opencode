@@ -257,3 +257,10 @@
 - 原真实双挂载历史场景同时覆盖 Backend 整组重启和 Gateway 完整关闭后新进程启动。关键 Session／Job／历史均由产品入口产生；核完整成员集合、唯一新 generation、新 Backend PID、各 mount 原 UUID／thread／历史，以及续轮实际模型请求的完整有序前缀和跨工作区404。Gateway 恢复沿用原 BOXTEAM_HOME 与唯一 root binding，不手工准备恢复状态。模型复用 model_stream。
 - 正式 `integration-shared-backend-history-restart` 矩阵2 passed／273.64秒、exit0，固定360秒／4GiB及集成独占闸门；原单次执行期限不变。Ruff及本 change strict校验通过，Pyright原4项诊断的完整消息／规则与既有raw相同、相关函数AST不变，无新增诊断，不称类型全绿。提取的Gateway重启方法已由新场景实际调用，原root binding场景其余操作／断言及其余51个顶层符号AST保持，未重复运行该旧场景。
 - 准确命令、启动前修改文件指纹、raw／退出码、正式双mount历史原件索引及作者AST核对见 `out/tests/temp/mounted_gateway_restart_20261030/artifacts/verification.json`。1240文件的首次采样发生于运行开始后约34秒，随后内容无变化，且首次采样无mtime晚于运行开始的文件；不称严格启动前全量快照。本片无产品／前端改动，不代Web、Windows、异常强杀恢复或4.3／8.2总验收，两个总门仍未勾；协作和MCP显式持有继续延期。
+
+### 2026-11-01 当前挂载边界补核（8.2 部分收口）
+
+- 定向身份／请求作用域／路径检查46 passed、1 Windows-only skipped；真实catalog owner和双mount集成12 passed／71.77秒，涵盖并发首次访问、原owner复用、构造失败、身份拒绝、真实执行与逆序关闭、事件／Trace／消息／后台任务／catalog锁隔离及独立配置候选。两次均有进程外期限与4GiB保护，集成沿共享独占闸门；3304个采样源码前后不变，未改业务期限或断言。
+- 对账当前主仓169个关键词路径，原15个工作区helper及23个生产直接消费者集合不变；逐项复核其中9个变化模块，原helper的AST不变。新Workbench上游gitlink内部不计主仓caller，主仓接线及新增测试仍登记差集。固定A05提交`aef566ae`对原七保护路径零修改；后续其它已授权切片对request_plan的归组及rpc变更单独登记，不误称整个仓库历史零修改、不恢复旧模块。
+- 现有完整组管理Web场景在独立Gateway启动绑定`40920`时遭遇端口占用（errno98），1 setup error／69.26秒，未进入浏览器步骤；原stderr明确完成启动后绑定失败并沿原lifespan回收。未修改公共fixture、另一会话驱动或前端，也未终止未知端口owner。此失败不计产品通过，8.2仍待当前完整客户端／固定候选闭包；4.3另行保持未完成。原四项Goal的8秒ready屏障及附件未知操作／总关闭期限TODO不重复运行、不计通过。
+- 命令、源码指纹、原始输出、实际退出码、caller差集和具名审查范围见 `out/tests/temp/mounted_audit_20261101/artifacts/verification.json`。首版审计脚本误以历史已下线模块仍是文件，失败原件保留；修正为登记原路径状态及新owner后审计通过，不改变产品。未重跑旧Windows／重启证据，不归档另一会话的Workbench变更。
