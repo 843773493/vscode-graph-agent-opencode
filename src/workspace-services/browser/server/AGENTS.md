@@ -62,6 +62,8 @@ context事件接纳的弹出页注册也归原队列排空；释放context后，
 
 页面下载的保存及成功／失败记录写盘也归原执行集合排空，activeDownloads仅用于资源保护，不能代替完成证明。已释放或替换的页面不再接纳下载事件；原回执未知时关闭保持unknown，原保存和写盘结束后才可显式重试核实。
 
+页面close事件的替代页激活、最后页状态保存及失败记录写盘也由同一执行集合排空；Manager采集检查点前须等待原事件，资源关闭超时保留unknown，不能在迟到激活或错误保存仍执行时发布verified。
+
 设备与网络仿真参数统一由`browserDeviceProfiles.js`解释，Session负责应用到CDP。`baseViewport/baseScreen`已应用设备方向，但不含自定义覆盖，尺寸为CSS像素；截图物理尺寸还需乘DPR。网络预设的单位及`-1`不限速语义写在`BrowserNetworkThrottleProfile`类型处，不能把字节吞吐当比特率或把响应头延迟当整次页面加载耗时。
 
 浏览器资源的`created_at`来自Manager接纳创建时的`browserCreatedAtIso`，早于该资源的`session.start()`完成；新资源也用该值初始化用户交互的空闲计算基线。下载的同名字段则属于`BrowserSavedDownload`，在`saveAs`成功后组装记录时生成，来源`url`不等于附件访问URI；保存文件成功与下载记录持久化完成是两个时刻。新增时间字段应在产生它的owner及类型处说明观察点，不能仅凭`created_at`推测业务含义。

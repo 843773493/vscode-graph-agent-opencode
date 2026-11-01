@@ -28,6 +28,8 @@ browser/
 
 `test_download_close.py`复用同一装具的文件隔离；正式run触发真实Chromium下载，原StateStore保存字节后仅暂扣回执。核关闭408、磁盘unknown、下载正文仍在且记录尚未发布、peer继续操作，以及放行原回执后同资源关闭才verified并发布原下载身份。定向pytest沿原独占闸门、外部超时和4GiB保护；不代表下载网络永久挂起、强制终止、Python业务owner、Gateway/Web或Windows。
 
+`test_page_close_drain.py`复用原装具并按当前文件隔离；正式创建与新增标签页生成两个真实页面，仅在原指针reset完成后暂停回执。由peer关闭原活动页面，核原生关闭已发生、资源关闭408及磁盘unknown；peer仍能操作，解除原回执后同资源重试才verified，并已保存原关闭事件的迟到激活错误。定向pytest沿原独占闸门、外部超时及4GiB保护；不代替Python业务owner、Gateway/Web、硬重启、Windows或完整shutdown验收。
+
 `test_browser_operation_receipts.py`通过正式Session、ASGI资源创建/管理与原工具operation运行真实Chromium脚本，先产生页面副作用再失败。仅在真实失败回执版本或首次记录提交处注入故障，核对原lease冷读仍待核实、原页面及版本保持、普通查询不结清，显式管理停止核实后才settle；完整失败仍保留原HTTP错误及正常释放语义。suite `integration-browser-operation-receipts`固定90秒/4GiB，不代表Gateway/主Web或独立Backend重启。
 
 同一文件的stop/delete场景让脚本忽略取消signal，在工具超时后继续原fetch；核对页面reset可用、关闭context后仍返回408且磁盘unknown、peer可读，以及放行原执行后同身份/版本重试终态。原页面只关闭一次，不将关闭context或工具超时当作脚本已结束；这仍不是Python业务owner挂起操作接管或强制终止验收。

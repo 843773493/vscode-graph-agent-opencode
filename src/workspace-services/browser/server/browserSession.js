@@ -1223,12 +1223,13 @@ export class BrowserSession extends EventEmitter {
       void this.handleDownload(download);
     });
     page.on("close", () => {
-      void this.handlePageClosed(pageId, page).catch((error) => {
+      // 替代页激活及失败记录写盘都属于原close事件，资源关闭须等待完整结算。
+      void this.operationQueue.track(this.handlePageClosed(pageId, page).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `处理标签页关闭事件失败: page_id=${pageId}, error=${message}`;
         logger.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
-      });
+      }));
     });
     if (activate) {
       await this.activatePage(pageId);

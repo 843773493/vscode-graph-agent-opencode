@@ -896,3 +896,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 页面下载复用原operation执行集合，保存及成功/失败结果写盘全程由同一句柄结算；activeDownloads不再被当作关闭完成证明。已释放或替换页面的迟到下载事件不启动保存；原context关闭后等待未结算时仍408/unknown，原执行完成后显式重试才核实终态，不新增队列或账本。
 - 新增5项单测，修改前4项反例失败、正常对照通过，未称完整归档变异；修复后相关Browser回归217 passed，Ruff/Pyright零诊断、编译/Node语法通过。真实Node/HTTP/Chromium下载与弹出页关闭2 passed/21.46秒：原StateStore实际保存正文后仅暂扣回执，核磁盘unknown、真实字节及原下载尚未发布、peer可操作，放行后原身份记录与同资源终态一致。2835份采样源码前后无变化，外部超时/4GiB及原集成闸门保持。
 - 准确命令、原始输出、退出码、指纹、正式产物及作者结构审查见`out/tests/temp/browser_download_drain_20261101/artifacts/verification.json`。不代原生保存强制抢占、下载网络永久挂起、整个operation/shutdown期限、Python业务owner、Gateway/Web或Windows；5.2/5.4及21/23保持未完成。前端、公共fixture、Section8长回归driver、共享Debug及他人暂存未改。
+
+### 2026-11-01 页面关闭事件的完整执行排空（5.4 部分收口）
+
+- 原close事件的替代页激活、最后页状态保存和失败记录写盘现纳入原operationQueue执行集合；没有新队列或账本。Manager先等原事件再采集检查点；stop/delete未排空仍408/unknown，原执行结算后显式重试才verified，既有身份复核和closing准入规则不变。
+- 修改前4项反例失败、正常对照通过（非完整归档变异）；修改后222项相关单测通过。新场景经正式创建、新标签及run入口生成真实Chromium页面，原指针reset先完成，仅暂扣回执；peer真实关闭原活动页，核关闭已发生但激活尚未结算、stop408与磁盘unknown、peer可用、释放原回执后同身份/版本重试verified，以及原迟到激活错误已持久保存。与下载、弹出页补验合计3 passed/28.36秒，源码2837份采样前后无变化。
+- Ruff、Pyright零诊断、compileall、Node语法及OpenSpec严格检查通过。准确命令、原始输出/退出码、源码指纹和作者结构审查在`out/tests/temp/browser_page_close_20261101/artifacts/`，正式场景产物沿测试镜像目录保留。未修改前端迁移、公共fixture、长回归驱动或共享debug；没有新增独立审查。
+- 此片不证明不合作执行可强制终止、Python业务owner接管、Gateway/Web、硬重启、Windows或整个operation/shutdown期限。5.2、5.4仍未完成，整体21/23。
