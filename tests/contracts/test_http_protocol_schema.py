@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
@@ -750,21 +751,47 @@ def test_context_http_structure_checks_preserve_identity_uri_budget_and_skill_ru
 ])
 def test_export_rejects_fresh_http_proto_drift_without_overwriting_snapshots(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
+    openapi_output: Path, openapi_export: Callable[[Path, Path], None],
 ) -> None:
     message = next(message for file in http_descriptor_bundle.file for message in file.message_type
                    if message.name == message_name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
     descriptor_set = tmp_path / "fresh.binpb"
     descriptor_set.write_bytes(http_descriptor_bundle.SerializeToString())
-    output = tmp_path / "generated"
-    for name in OPENAPI_SNAPSHOTS:
-        target = output / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"original snapshot\n")
-    result = _export(output, "--descriptor-set", str(descriptor_set))
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "公开结构与 proto 字段不一致" in result.stderr and "new_public_field" in result.stderr
-    assert all((output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
+    with pytest.raises(ValueError, match="公开结构与 proto 字段不一致") as caught:
+        openapi_export(openapi_output, descriptor_set)
+    assert "new_public_field" in str(caught.value)
+    assert message_name in str(caught.value)
+    assert all((openapi_output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
+
+
+def test_export_uses_current_descriptor_after_prior_rejection(
+    tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, http_openapi: JsonSchemaValue,
+    openapi_output: Path, openapi_export: Callable[[Path, Path], None],
+) -> None:
+    original = http_descriptor_bundle.SerializeToString()
+    message = next(message for file in http_descriptor_bundle.file for message in file.message_type
+                   if message.name == "SessionDTO")
+    message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
+    invalid = http_descriptor_bundle.SerializeToString()
+    descriptor = tmp_path / "candidate.binpb"
+    argv = sys.argv
+
+    descriptor.write_bytes(invalid)
+    with pytest.raises(ValueError, match="new_public_field"):
+        openapi_export(openapi_output, descriptor)
+    assert all((openapi_output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
+
+    descriptor.write_bytes(original)
+    openapi_export(openapi_output, descriptor)
+    published = {name: (openapi_output / name).read_bytes() for name in OPENAPI_SNAPSHOTS}
+    assert all(json.loads(value) == http_openapi for value in published.values())
+
+    descriptor.write_bytes(invalid)
+    with pytest.raises(ValueError, match="new_public_field"):
+        openapi_export(openapi_output, descriptor)
+    assert {name: (openapi_output / name).read_bytes() for name in OPENAPI_SNAPSHOTS} == published
+    assert sys.argv is argv
 
 
 def test_openapi_export_and_validation_only_use_isolated_output(

@@ -13,6 +13,7 @@
 
 ## 规范
 
+- HTTP批量descriptor漂移经共享`openapi_export` fixture调用真实`export_openapi_snapshot.main`，每次读取当前候选文件，保留逐用例异常原件及已有快照字节；不缓存校验结果。批量检查的证据为进程内真实导出，独立冷CLI的成功／validate-only、Workspace历史拒绝和Gateway运行组拒绝仍使用真实子进程，不将两者混称。快照准备统一使用`openapi_output`，每个测试仍独占输出目录。
 - 契约断言必须面向公开边界，不依赖内部类或私有实现。
 - `test_runner_cli.py` 同时核对矩阵 CLI 和 Bun 测试发现边界；仅在隔离哨兵项目中验证 Web／Workbench 自有测试会执行，固定上游、参考仓库和生成产物不执行，绝不运行真实上游测试。
 - Agent HTTP 结构核对四个真实路由的请求、列表及详情响应、嵌套 Provider 和候选 descriptor 漂移；导出产物只写入隔离输出，不改写客户端快照。

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
@@ -362,24 +360,15 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
+    openapi_output: Path, openapi_export: Callable[[Path, Path], None],
 ) -> None:
     file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v1" and file.name.endswith("/public.proto"))
     message = next(message for message in file.message_type if message.name == message_name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
     descriptor_set = tmp_path / "fresh.binpb"
     descriptor_set.write_bytes(http_descriptor_bundle.SerializeToString())
-    output = tmp_path / "generated"
-    for name in OPENAPI_SNAPSHOTS:
-        target = output / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"original snapshot\n")
-    command = [sys.executable, "-m", "scripts.export_openapi_snapshot", "--output-root", str(output),
-               "--descriptor-set", str(descriptor_set)]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-    (tmp_path / "export.stdout.log").write_text(result.stdout)
-    (tmp_path / "export.stderr.log").write_text(result.stderr)
-    (tmp_path / "export.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2) + "\n")
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "公开结构与 proto 字段不一致" in result.stderr and "new_public_field" in result.stderr
-    assert message_name in result.stderr
-    assert all((output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
+    with pytest.raises(ValueError, match="公开结构与 proto 字段不一致") as caught:
+        openapi_export(openapi_output, descriptor_set)
+    assert "new_public_field" in str(caught.value)
+    assert message_name in str(caught.value)
+    assert all((openapi_output / name).read_bytes() == b"original snapshot\n" for name in OPENAPI_SNAPSHOTS)
